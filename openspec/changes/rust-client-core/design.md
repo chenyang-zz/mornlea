@@ -16,7 +16,7 @@ Create the new crate guide and update `packages/engine/AGENTS.md`. Keep the old 
 
 ### Semantic continuity
 
-Move the meaning of the current Go `FrameSnapshot` and typed input/view families into Rust records; do not freeze Go internal layouts as the final contract. One session epoch and one confirmed frame revision cover every sampled view. Rust owns network decoding, mirrors, correction, mesh scheduling and capacity/revision policy. Godot Python applies typed views in bounded batches and owns presentation resources. Unsupported family negotiation fails closed.
+Move the meaning of the current Go `FrameSnapshot` and typed input/view families into Rust records; do not freeze Go internal layouts as the final contract. One session epoch and one coherent frame revision cover every sampled view. The frame revision also advances when an accepted Rust-owned local UI selection, cancellation, or panel transition changes a published view during a silent server session; confirmed gameplay mirrors remain unchanged until server publication. Rust owns network decoding, mirrors, correction, mesh scheduling and capacity/revision policy. Godot Python applies typed views in bounded batches and owns presentation resources. Unsupported family negotiation fails closed.
 
 Establish an inventory of frame/input/world/entity/UI/cue families under `testdata/runtime-migration/client/`, mapping each current source to Rust tests and required P8–P11 consumers. Publish versioned family contracts; leave new visual features disabled until their own changes pass. No production GDScript or Python raw ABI/wire access is introduced.
 
