@@ -320,6 +320,7 @@ type CaseSpec struct {
 	Family       string         `json:"family"`
 	Version      string         `json:"version"`
 	Operation    string         `json:"operation"`
+	Arguments    json.RawMessage `json:"arguments,omitempty"`
 	PacketKey    *PacketKeySpec `json:"packet_key,omitempty"`
 	Input        AssetRef       `json:"input"`
 	InputFormat  string         `json:"input_format"`
@@ -675,6 +676,23 @@ func validateCaseSpecConsumer(root string, c CaseSpec, families map[string]Famil
 			return "", fmt.Errorf("invalid checkpoint %q (must be u64 decimal string)", cp)
 		}
 	}
+	if strings.HasPrefix(c.Family, "save.") {
+		if c.PacketKey != nil {
+			return "", fmt.Errorf("save case %s must not carry packet_key", c.ID)
+		}
+		if c.RustConsumer != "mornlea_storage" {
+			return "", fmt.Errorf("save case %s rust_consumer must be mornlea_storage", c.ID)
+		}
+		if c.InputFormat != "binary" {
+			return "", fmt.Errorf("save case %s input_format must be binary", c.ID)
+		}
+		if len(c.Checkpoints) != 1 || c.Checkpoints[0] != "0" {
+			return "", fmt.Errorf("save case %s checkpoints must be [\"0\"]", c.ID)
+		}
+		if err := validateStorageArguments(c.Family, c.Operation, c.Arguments); err != nil {
+			return "", fmt.Errorf("save case %s arguments: %w", c.ID, err)
+		}
+	}
 
 	// Validate input asset
 	if err := validateAsset(root, c.Input, c.InputFormat == "json", inputMaxBytes); err != nil {
@@ -689,6 +707,21 @@ func validateCaseSpecConsumer(root string, c CaseSpec, families map[string]Famil
 	if c.Encoded != nil {
 		if err := validateAsset(root, *c.Encoded, false, MaxBinaryBytes); err != nil {
 			return "", fmt.Errorf("encoded asset %s: %w", c.Encoded.Path, err)
+		}
+	}
+	if strings.HasPrefix(c.Family, "save.") {
+		switch c.Operation {
+		case "decode", "order":
+			if c.Encoded != nil {
+				return "", fmt.Errorf("save case %s operation %s must not carry encoded asset", c.ID, c.Operation)
+			}
+		case "encode":
+			if kind == "ok" && c.Encoded == nil {
+				return "", fmt.Errorf("save case %s successful encode requires encoded asset", c.ID)
+			}
+			if kind == "error" && c.Encoded != nil {
+				return "", fmt.Errorf("save case %s error encode must not carry encoded asset", c.ID)
+			}
 		}
 	}
 

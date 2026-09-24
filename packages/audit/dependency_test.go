@@ -687,6 +687,7 @@ var oracleAllowedTestImports = map[string]bool{
 	"packages/server/storage/hostile":   true,
 	"packages/server/storage/passive":   true,
 	"packages/server/storage/region":    true,
+	"packages/server/storage/storagedef": true,
 }
 
 func validateOracleImports(filename, src string) error {
@@ -759,5 +760,21 @@ import _ "github.com/channing771/mornlea/packages/server/server"
 `
 	if err := validateOracleImports("runner_test.go", srcTestServer); err == nil {
 		t.Fatal("test oracle online server import must be rejected")
+	}
+
+	// 7. rejected ordinary .go storagedef import in oracle
+	srcProdStorageDef := `package main
+import _ "github.com/channing771/mornlea/packages/server/storage/storagedef"
+`
+	if err := validateOracleImports("inventory.go", srcProdStorageDef); err == nil {
+		t.Fatal("production oracle storagedef import must be rejected")
+	}
+
+	// 8. accepted _test.go storagedef import in oracle
+	srcTestStorageDef := `package main
+import _ "github.com/channing771/mornlea/packages/server/storage/storagedef"
+`
+	if err := validateOracleImports("storage_manifest_test.go", srcTestStorageDef); err != nil {
+		t.Fatalf("test oracle storagedef import should be accepted, got: %v", err)
 	}
 }
