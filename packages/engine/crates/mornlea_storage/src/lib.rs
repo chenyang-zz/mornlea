@@ -66,7 +66,7 @@ pub use hostile::{
 pub use identity::{PlayerId, checked_companion_id, checked_player_id};
 pub use items::{
     BACKPACK_SLOTS, HOTBAR_SLOTS, ITEM_ID_MAX, Inventory, ItemStack, MAX_STACK_COUNT,
-    item_max_durability, item_stack_limit,
+    checked_item_stack, item_max_durability, item_stack_limit,
 };
 pub use passive::{
     CURRENT_SCHEMA as PASSIVE_CURRENT_SCHEMA, ENVELOPE_VERSION as PASSIVE_ENVELOPE_VERSION,
