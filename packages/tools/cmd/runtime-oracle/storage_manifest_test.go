@@ -155,10 +155,16 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		t.Fatalf("load frozen manifest: %v", err)
 	}
 	wantSaveCases := map[string]bool{
-		"save.region/1/decode/bank-committed-gen1": true,
-		"save.region/1/decode/bank-standby-gen0":   true,
-		"save.region/1/decode/superblock-seed":     true,
-		"save.region/1/encode/bank-committed-gen1": true,
+		"save.region/1/decode/bank-committed-gen1":      true,
+		"save.region/1/decode/bank-standby-gen0":        true,
+		"save.region/1/decode/superblock-seed":          true,
+		"save.region/1/encode/bank-committed-gen1":      true,
+		"save.region/1/order/committed-newer-a":         true,
+		"save.region/1/order/committed-newer-b":         true,
+		"save.region/1/order/corrupt-fallback":          true,
+		"save.region/1/order/equal-divergent":           true,
+		"save.region/1/order/equal-identical":           true,
+		"save.region/1/order/standby-both":              true,
 	}
 	for _, c := range frozen.Cases {
 		if !strings.HasPrefix(c.Family, "save.") {
@@ -167,12 +173,18 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		if !wantSaveCases[c.ID] {
 			t.Fatalf("baseline carries unexpected save case %s", c.ID)
 		}
+		if c.Family != "save.region" {
+			t.Fatalf("save case %s has family %s, want save.region", c.ID, c.Family)
+		}
 	}
 	for id := range wantSaveCases {
 		found := false
 		for _, c := range frozen.Cases {
 			if c.ID == id {
 				found = true
+				if c.Family != "save.region" {
+					t.Fatalf("pinned save case %s has family %s, want save.region", id, c.Family)
+				}
 				break
 			}
 		}

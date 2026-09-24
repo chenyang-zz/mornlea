@@ -260,6 +260,7 @@ func BaselineConsumerRegistry() ConsumerRegistry {
 			Routes: map[ConsumerRoute]struct{}{
 				{FamilyID: "save.region", Version: "1", Operation: "decode"}: {},
 				{FamilyID: "save.region", Version: "1", Operation: "encode"}: {},
+				{FamilyID: "save.region", Version: "1", Operation: "order"}:  {},
 			},
 		},
 		"external:agent-contract": {

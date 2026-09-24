@@ -38,6 +38,11 @@ const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
         version: "1",
         operation: "encode",
     },
+    StorageRoute {
+        family: "save.region",
+        version: "1",
+        operation: "order",
+    },
 ];
 
 fn route_is_registered_for_case(case: &FrozenCase) -> bool {

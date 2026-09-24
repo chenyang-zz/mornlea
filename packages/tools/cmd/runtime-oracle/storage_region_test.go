@@ -711,9 +711,13 @@ func regionObservation(t *testing.T, observations []ExecutedObservation, id stri
 func regionRunnerManifest(t *testing.T, root string, candidates []regionCandidate) Inventory {
 	t.Helper()
 	merged := regionManifest(t, root, candidates)
+	wantIDs := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		wantIDs[candidate.Spec.ID] = true
+	}
 	var regionCases []CaseSpec
 	for _, c := range merged.Cases {
-		if c.Family == regionFamily {
+		if c.Family == regionFamily && wantIDs[c.ID] {
 			regionCases = append(regionCases, c)
 		}
 	}
@@ -933,10 +937,15 @@ func TestStorageRegionOrderArgumentsValidate(t *testing.T) {
 	}
 }
 
-func TestStorageRegionOrderBaselineLacksRouteUntilIntegration(t *testing.T) {
-	route := ConsumerRoute{FamilyID: regionFamily, Version: regionVersion, Operation: "order"}
-	if storageRouteRegistered(BaselineConsumerRegistry(), route) {
-		t.Fatal("baseline registry must not register order until controller integration")
+func TestStorageRegionOrderBaselineCarriesRegisteredRoute(t *testing.T) {
+	root := mustRepoRoot(t)
+	candidates := regionOrderCandidates(t)
+	selection := regionOrderSelection(t, root, candidates)
+	registry := BaselineConsumerRegistry()
+	for _, route := range selection.Routes {
+		if !storageRouteRegistered(registry, route) {
+			t.Fatalf("baseline registry missing route %s/%s/%s after integration", route.FamilyID, route.Version, route.Operation)
+		}
 	}
 }
 
