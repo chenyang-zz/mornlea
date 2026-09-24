@@ -43,3 +43,9 @@ No runtime gate is claimed by this planning change. At implementation closure, n
 - RED: `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_legacy_queue --locked` discovered 1 test and failed because `companions-v2.bin` retained a queue whose `id` was all zero while command, plan, and FIFO already matched the Go fixture.
 - GREEN: the same command passed 1/1 after assigning `queue.id = body.id` before the nonempty predicate in `decode_legacy_payload`. `runtime_contract companion_` passed 6/6. `make rust` exited 0. `go test ./packages/server/storage/companion -count=1` passed.
 - Review: controller self-review. The v2/v3/v4 fixtures now compare full ordered queue content, and the two v4 queues keep distinct body IDs. No fixture or Go source changed.
+
+## Node 1.2
+
+- RED: `safety_companion_bounds` `sixty_five_bodies_report_count_before_an_invalid_body` failed with `companion record: 0: unsupported companion dimension 9` instead of a count error, showing the body scan ran before the 64-body gate.
+- GREEN: the same test target passed 6/6 after `canonical_v5_parts` checks body count, lifecycle-set length, and queue count before cloning. The maximum legal aggregate encodes to exactly 393,904 bytes. `runtime_contract companion_` passed 6/6. `go test ./packages/server/storage/companion -count=1` passed.
+- Review: controller self-review. Count precedence is pinned by an invalid first body inside a 65-body request. No fixture or Go source changed.

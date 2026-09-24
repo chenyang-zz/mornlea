@@ -1222,6 +1222,27 @@ fn canonical_v5_parts(
             "not a canonical UUIDv4",
         ));
     }
+    // Count gates run before any clone or per-record scan. A 65-body request
+    // must report the count even when the first body is also invalid, and an
+    // oversized queue list must not be copied in order to discover that.
+    if save.records.len() > MAX_STORED {
+        return Err(corrupt(
+            "companion count",
+            format!("{} exceeds limit {MAX_STORED}", save.records.len()),
+        ));
+    }
+    if save.lifecycles.len() != save.records.len() {
+        return Err(corrupt(
+            "companion lifecycles",
+            "set does not match records",
+        ));
+    }
+    if save.queues.len() > MAX_ACTIVE {
+        return Err(corrupt(
+            "companion queues",
+            format!("{} exceeds limit {MAX_ACTIVE}", save.queues.len()),
+        ));
+    }
     let mut records = save.records.clone();
     records.sort_by_key(|left| left.id.to_bytes());
     for (index, body) in records.iter().enumerate() {
