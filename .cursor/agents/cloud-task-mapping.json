@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "note": "Maps project subagent names to Cloud Agent Task subagent_type until custom names are accepted in the Task tool enum.",
+  "agents": {
+    "implementer": {
+      "subagent_type": "generalPurpose",
+      "readonly": false
+    },
+    "spec-reviewer": {
+      "subagent_type": "generalPurpose",
+      "readonly": true
+    },
+    "quality-reviewer": {
+      "subagent_type": "generalPurpose",
+      "readonly": true
+    },
+    "verifier": {
+      "subagent_type": "generalPurpose",
+      "readonly": true
+    }
+  }
+}

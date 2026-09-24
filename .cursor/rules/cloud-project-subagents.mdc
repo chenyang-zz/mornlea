@@ -1,0 +1,39 @@
+---
+description: Dispatch project-defined subagents from .cursor/agents in Cloud Agents when Task rejects custom subagent_type names.
+alwaysApply: true
+---
+
+# Cloud project subagents
+
+Project subagents are defined under `.cursor/agents/<name>.md`. In Cloud Agents, the `Task` tool may only accept built-in `subagent_type` values. When the user or workflow invokes a project subagent (for example `/implementer`, `/spec-reviewer`, or natural language naming that role), dispatch it as follows.
+
+## Dispatch algorithm
+
+1. Resolve `<name>` to `.cursor/agents/<name>.md`. If missing, list `.cursor/agents/*.md` and ask which role to use.
+2. Parse YAML frontmatter (`name`, `description`, `model`, `readonly`, `is_background`).
+3. Read `subagent_type` and `readonly` defaults from `.cursor/agents/cloud-task-mapping.json` for that `<name>`. If the name is absent, use `generalPurpose` and `readonly: false`.
+4. Build the Task `prompt` with three sections:
+   - **Role**: paste the markdown body from the agent file (below the frontmatter).
+   - **Task brief**: paste the controller's delegation brief (paths, constraints, validation, integration point).
+   - **Readonly**: when `readonly` is true, state that the subagent must not edit files or run state-changing shell commands.
+5. Call `Task` with `description` set to the agent `name`, `subagent_type` from the mapping, and optional `model` from frontmatter when it is not `inherit`.
+6. If a future `Task` call accepts `subagent_type: <name>` directly, prefer that over the mapping and drop the bridge for that name.
+
+## Built-in mapping (keep in sync with `cloud-task-mapping.json`)
+
+| Project subagent | Task `subagent_type` | Readonly |
+| --- | --- | --- |
+| `implementer` | `generalPurpose` | no |
+| `spec-reviewer` | `generalPurpose` | yes |
+| `quality-reviewer` | `generalPurpose` | yes |
+| `verifier` | `generalPurpose` | yes |
+
+## Concurrency
+
+Follow root `AGENTS.md`: at most three concurrent subagents; do not delegate for parallel speed alone.
+
+## Explicit invocation examples
+
+- `/implementer <brief>` → Task mapping row for `implementer`
+- `/spec-reviewer review task N against the change spec` → `spec-reviewer`
+- `/verifier re-run the validation bullets from the ledger` → `verifier`
