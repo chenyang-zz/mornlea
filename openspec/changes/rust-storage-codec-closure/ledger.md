@@ -58,6 +58,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - `save.region` now carries the four seed cases. The other six `save.*` families remain at zero cases.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 1.4a closed
+
+- Commits: `58a2669e` order producer and Rust `select_region_bank` execution; `f88b9d31` controller integration of `save.region/1/order` and the six reviewed assets.
+- Split check: `58a2669e` touches only `storage_region_test.go` and `storage_corpus/region.rs`. Registry, dispatcher, manifest, assets, and baseline pins landed in `f88b9d31`.
+- Review of `5a5791b4..f88b9d31` approved. No Critical or Important findings.
+- Minor findings held for the final review: route-table comments still describe the seed; `region_corpus_executes_integrated_seed_cases` now also executes order rows.
+- `save.region` now carries the four seed cases plus six order cases. The other six `save.*` families remain at zero cases. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates: `go test ./packages/tools/cmd/runtime-oracle -race -count=1` pass; Rust `region_order_` executes the six integrated cases.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections

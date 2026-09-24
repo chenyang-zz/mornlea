@@ -17,7 +17,7 @@
 - [x] 1.1 [Validate exact storage arguments and safe candidate selections](plans/01-evidence.md#node-1-1). Go `inventory.go`, `storage_manifest_test.go`, export ID table; run nonempty `^TestStorageSelection`.
 - [x] 1.2 [Register the Rust storage corpus consumer and typed digest](plans/01-evidence.md#node-1-2). Shared `runtime_corpus.rs`, tests guide and storage corpus skeleton; run digest/parser tests plus existing derived consumers.
 - [x] 1.3 [Execute the first region bank and superblock routes](plans/01-evidence.md#node-1-3). Go `storage_region_test.go`, Rust `storage_corpus/region.rs`; controller integrates reviewed candidates before the nonempty Rust region gate.
-- [ ] 1.4a [Execute committed-bank ordering and fallback](plans/05-dispatch-slices.md#node-1-4a). Add one real `order` route, integrate reviewed candidate, run nonempty region order gate.
+- [x] 1.4a [Execute committed-bank ordering and fallback](plans/05-dispatch-slices.md#node-1-4a). Add one real `order` route, integrate reviewed candidate, run nonempty region order gate.
 - [ ] 1.4b [Execute region geometry and corruption cases](plans/05-dispatch-slices.md#node-1-4b). Reseal semantic CRC mutations, integrate reviewed candidate, run nonempty region corruption gate.
 
 ## 2. Player and metadata
