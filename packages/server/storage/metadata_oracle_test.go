@@ -25,7 +25,7 @@ const (
 	metadataCorpusRelDir    = "testdata/runtime-migration/cases/storage/world-metadata"
 	metadataProducerTestRel = "packages/server/storage/metadata_oracle_test.go"
 	metadataCodecSourceRel  = "packages/server/storage/metadata.go"
-	metadataPinnedExportDir = "/tmp/runtime-oracle-metadata-2.4"
+	metadataPinnedExportDir = "/tmp/runtime-oracle-metadata-2.4-fix"
 	metadataSelectionManifest = "selection.json"
 	metadataRustConsumer    = "mornlea_storage"
 	metadataRuntimeOracleExportDirEnv = "RUNTIME_ORACLE_EXPORT_DIR"
@@ -561,13 +561,8 @@ func metadataExportSelection(t *testing.T, root string, candidates []metadataCan
 	}
 	var assets []metadataGeneratedAsset
 	assets = append(assets, metadataGeneratedAsset{RelativePath: metadataSelectionManifest, Data: manifestBytes})
-	seen := make(map[string]struct{})
 	for _, candidate := range candidates {
 		for relative, data := range candidate.Assets {
-			if _, ok := seen[relative]; ok {
-				continue
-			}
-			seen[relative] = struct{}{}
 			assets = append(assets, metadataGeneratedAsset{RelativePath: relative, Data: data})
 		}
 	}
@@ -675,8 +670,43 @@ func TestMetadataOracle(t *testing.T) {
 	if child == "" {
 		t.Fatal("pinned export directory did not publish a candidate")
 	}
-	if _, err := os.Stat(filepath.Join(child, metadataSelectionManifest)); err != nil {
+	selectionPath := filepath.Join(child, metadataSelectionManifest)
+	if _, err := os.Stat(selectionPath); err != nil {
 		t.Fatalf("selection manifest missing after export: %v", err)
+	}
+	for _, candidate := range candidates {
+		for relative, want := range candidate.Assets {
+			got, err := os.ReadFile(filepath.Join(child, filepath.FromSlash(relative)))
+			if err != nil {
+				t.Fatalf("read exported asset %s: %v", relative, err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("exported asset %s on-disk bytes differ from payload", relative)
+			}
+		}
+	}
+	var selection metadataSelection
+	selectionBytes, err := os.ReadFile(selectionPath)
+	if err != nil {
+		t.Fatalf("read selection manifest: %v", err)
+	}
+	if err := json.Unmarshal(selectionBytes, &selection); err != nil {
+		t.Fatalf("parse selection manifest: %v", err)
+	}
+	for _, caseSpec := range selection.Cases {
+		refs := []metadataAssetRef{caseSpec.Input, caseSpec.Expected}
+		if caseSpec.Encoded != nil {
+			refs = append(refs, *caseSpec.Encoded)
+		}
+		for _, ref := range refs {
+			data, err := os.ReadFile(filepath.Join(child, filepath.FromSlash(ref.Path)))
+			if err != nil {
+				t.Fatalf("read selection asset %s: %v", ref.Path, err)
+			}
+			if metadataDigestOf(data) != ref.SHA256 {
+				t.Fatalf("selection hash mismatch for %s", ref.Path)
+			}
+		}
 	}
 }
 
@@ -875,6 +905,50 @@ func metadataCreateAssetParents(producerChild string, assets []metadataGenerated
 	return nil
 }
 
+func metadataVerifyExportedAssets(producerChild string, assets []metadataGeneratedAsset) error {
+	var selection metadataSelection
+	manifestParsed := false
+	for _, asset := range assets {
+		target := filepath.Join(producerChild, filepath.FromSlash(asset.RelativePath))
+		onDisk, err := os.ReadFile(target)
+		if err != nil {
+			return fmt.Errorf("metadata oracle: read exported asset %s: %w", asset.RelativePath, err)
+		}
+		if !bytes.Equal(onDisk, asset.Data) {
+			return fmt.Errorf("metadata oracle: exported asset %s bytes differ from payload", asset.RelativePath)
+		}
+		if asset.RelativePath == metadataSelectionManifest {
+			if err := json.Unmarshal(onDisk, &selection); err != nil {
+				return fmt.Errorf("metadata oracle: parse exported selection: %w", err)
+			}
+			manifestParsed = true
+		}
+	}
+	if !manifestParsed {
+		return fmt.Errorf("metadata oracle: selection manifest missing from export assets")
+	}
+	digests := make(map[string]string, len(assets))
+	for _, asset := range assets {
+		digests[asset.RelativePath] = metadataDigestOf(asset.Data)
+	}
+	for _, caseSpec := range selection.Cases {
+		refs := []metadataAssetRef{caseSpec.Input, caseSpec.Expected}
+		if caseSpec.Encoded != nil {
+			refs = append(refs, *caseSpec.Encoded)
+		}
+		for _, ref := range refs {
+			digest, ok := digests[ref.Path]
+			if !ok {
+				return fmt.Errorf("metadata oracle: selection references missing export asset %s", ref.Path)
+			}
+			if digest != ref.SHA256 {
+				return fmt.Errorf("metadata oracle: selection hash mismatch for %s: got %s, want %s", ref.Path, digest, ref.SHA256)
+			}
+		}
+	}
+	return nil
+}
+
 func metadataRecheckExportContainment(repoRoot, exportRoot, producerChild string) error {
 	resolvedExport, err := filepath.EvalSymlinks(exportRoot)
 	if err != nil {
@@ -962,6 +1036,21 @@ func metadataExportGeneratedAssets(repoRoot, exportRoot, producerID string, asse
 	if liveExisting {
 		return "", fmt.Errorf("metadata oracle: live-path write rejected: export ancestor %s is inside repository", existing)
 	}
+	for component := existing; ; component = filepath.Dir(component) {
+		if component == "/" || component == "." || component == filepath.Dir(component) {
+			break
+		}
+		if component == "/var" || component == "/tmp" || component == "/etc" {
+			break
+		}
+		info, statErr := os.Lstat(component)
+		if statErr != nil {
+			return "", fmt.Errorf("metadata oracle: stat export path %s: %w", component, statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("metadata oracle: symlink component rejected: %s", component)
+		}
+	}
 	if err := metadataCreateExportRoot(absExport, existing, missing); err != nil {
 		return "", err
 	}
@@ -988,6 +1077,9 @@ func metadataExportGeneratedAssets(repoRoot, exportRoot, producerID string, asse
 		if err := f.Close(); err != nil {
 			return "", fmt.Errorf("metadata oracle: close asset %s: %w", asset.RelativePath, err)
 		}
+	}
+	if err := metadataVerifyExportedAssets(producerChild, assets); err != nil {
+		return "", err
 	}
 	return producerChild, nil
 }
