@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -38,6 +40,9 @@ const (
 	playerDecodeExhaustionMaxID    = playerFamily + "/" + playerVersion + "/decode/exhaustion-maxi"
 	playerEncodeV9CanonicalID      = playerFamily + "/" + playerVersion + "/encode/v9-canonical"
 	playerEncodeCapacityMinusOneID = playerFamily + "/" + playerVersion + "/encode/capacity-minus-one"
+
+	playerRespawnTailBytes = 1 + 12 + 4
+	playerArmorTailBytes   = int(core.ArmorSlotCount) * 5
 )
 
 type playerCaseArguments struct {
@@ -358,12 +363,29 @@ func playerExhaustionMaxSave() player.PlayerSave {
 	return save
 }
 
-func playerAbsentRespawnDirtySave() player.PlayerSave {
+func resealPlayerEnvelopeCRC(wire []byte) {
+	table := crc32.MakeTable(crc32.Castagnoli)
+	hasher := crc32.New(table)
+	_, _ = hasher.Write(wire[8:40])
+	_, _ = hasher.Write(wire[player.EnvelopeLength:])
+	binary.LittleEndian.PutUint32(wire[40:44], hasher.Sum32())
+}
+
+func playerAbsentRespawnDirtyInput(t *testing.T) []byte {
+	t.Helper()
 	save := playerRoundTripAltSave()
 	save.RespawnPresent = false
-	save.RespawnPosition = [3]float32{1, 2, 3}
-	save.RespawnDimension = core.Overworld
-	return save
+	wire := bytes.Clone(mustEncodePlayerSave(t, save))
+	respawnStart := len(wire) - playerArmorTailBytes - playerRespawnTailBytes
+	if wire[respawnStart] != 0 {
+		t.Fatalf("respawn flag byte = %d, want 0", wire[respawnStart])
+	}
+	binary.LittleEndian.PutUint32(wire[respawnStart+1:], math.Float32bits(1))
+	binary.LittleEndian.PutUint32(wire[respawnStart+5:], math.Float32bits(2))
+	binary.LittleEndian.PutUint32(wire[respawnStart+9:], math.Float32bits(3))
+	binary.LittleEndian.PutUint32(wire[respawnStart+13:], uint32(core.Overworld))
+	resealPlayerEnvelopeCRC(wire)
+	return wire
 }
 
 func mustEncodePlayerSave(t *testing.T, save player.PlayerSave) []byte {
@@ -461,7 +483,7 @@ func playerCurrentCandidates(t *testing.T) []playerCandidate {
 	roundTripAlt := mustEncodePlayerSave(t, playerRoundTripAltSave())
 	rawArmor := mustEncodePlayerSave(t, playerRawArmorSave())
 	exhaustionMax := mustEncodePlayerSave(t, playerExhaustionMaxSave())
-	absentRespawn := mustEncodePlayerSave(t, playerAbsentRespawnDirtySave())
+	absentRespawn := playerAbsentRespawnDirtyInput(t)
 
 	canonicalEncode := buildPlayerCandidate(t, playerEncodeV9CanonicalID, "encode", v9Fixture, argsDecode, nil)
 	capacity := uint32(len(canonicalEncode.Encoded) - 1)
@@ -713,13 +735,12 @@ func TestStoragePlayerCurrentEncodePreservesSourceSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode encode input: %v", err)
 	}
-	before := storedPlayerToSave(stored)
-	clone := clonePlayerSave(before)
-	_, _, err = runPlayerEncode(encodeCase.Spec, input)
-	if err != nil {
-		t.Fatalf("runPlayerEncode: %v", err)
+	save := storedPlayerToSave(stored)
+	before := clonePlayerSave(save)
+	if _, err := player.Encode(save); err != nil {
+		t.Fatalf("player.Encode: %v", err)
 	}
-	if !reflect.DeepEqual(clone, before) {
+	if !reflect.DeepEqual(before, save) {
 		t.Fatal("encode path mutated the source PlayerSave")
 	}
 }

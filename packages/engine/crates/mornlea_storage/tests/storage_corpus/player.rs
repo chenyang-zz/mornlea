@@ -330,21 +330,50 @@ fn execute_player_decode(case: &FrozenCase, args: &PlayerArguments) -> Result<()
     }
 }
 
+fn assert_output_too_small_fields(
+    case: &FrozenCase,
+    needed: usize,
+    available: usize,
+) -> Result<(), String> {
+    let want_needed = case
+        .normalized
+        .get("needed")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| format!("case {} missing needed", case.id))?;
+    let want_available = case
+        .normalized
+        .get("available")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| format!("case {} missing available", case.id))?;
+    if needed as u64 != want_needed || available as u64 != want_available {
+        return Err(format!(
+            "case {} output_too_small fields mismatch: got needed {needed} available {available}, want needed {want_needed} available {want_available}",
+            case.id
+        ));
+    }
+    Ok(())
+}
+
 fn execute_player_encode(case: &FrozenCase, args: &PlayerArguments) -> Result<(), String> {
     let stored = decode_player(args.player_id, &case.input).map_err(|err| err.to_string())?;
     let digest_value = stored_player_value(&stored);
     let save = stored_to_save(&stored);
     let needed = player_encoded_len(&save).map_err(|err| err.to_string())?;
-    let mut encoded = vec![0u8; needed];
-    let written = encode_player_into(&save, &mut encoded).map_err(|err| err.to_string())?;
-    encoded.truncate(written);
-
-    if let Some(capacity) = args.capacity {
-        if (capacity as usize) < encoded.len() {
+    let buf_len = args.capacity.map(|cap| cap as usize).unwrap_or(needed);
+    let mut encoded = vec![0u8; buf_len];
+    let written = match encode_player_into(&save, &mut encoded) {
+        Err(StorageError::OutputTooSmall {
+            needed: want_needed,
+            available: want_available,
+        }) => {
             assert_error_category(case, "output_too_small")?;
+            assert_output_too_small_fields(case, want_needed, want_available)?;
             return Ok(());
         }
-    }
+        Err(err) => return Err(err.to_string()),
+        Ok(len) => len,
+    };
+    encoded.truncate(written);
 
     if case.normalized.get("kind").and_then(JsonValue::as_str) == Some("ok") {
         expected_value_digest(case, &digest_value)?;
