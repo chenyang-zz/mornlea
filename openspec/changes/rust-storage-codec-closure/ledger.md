@@ -68,6 +68,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates: `go test ./packages/tools/cmd/runtime-oracle -race -count=1` pass; Rust `region_order_` executes the six integrated cases.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 1.4b closed
+
+- Commits: `4b384054` region corruption producer and Rust decode execution; `57553b0d` controller integration of the sixteen reviewed decode assets.
+- Split check: `4b384054` touches only `storage_region_test.go` and `storage_corpus/region.rs`. Manifest, assets, baseline pins, and the `future_version` category landed in `57553b0d`. No new route. Production codecs unchanged.
+- Review of `69de5fb1..57553b0d` approved. No Critical or Important findings.
+- Minor findings held for the final review: `protocol_frame_test.go` comment still says two sentinels; `TestStorageRegionCorruptOrderBankSwapFailsStaleDigest` discards `mustRepoRoot`; the corruption filter is broader than the sixteen labels.
+- `save.region` now carries 26 cases (4 seed + 6 order + 16 corruption). The other six `save.*` families remain at zero cases. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates: `go test ./packages/tools/cmd/runtime-oracle -race -count=1` pass; Rust `region_corrupt_` executes the sixteen integrated cases; controller confirmation after review: `runtime_contract region_`, full `storage_corpus`, `mornlea_domain`/`mornlea_protocol`/`mornlea_engine` tests (134 passed), and `go test ./packages/audit -count=1` pass.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
