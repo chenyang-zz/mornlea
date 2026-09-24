@@ -42,6 +42,7 @@ const (
 	playerEncodeCapacityMinusOneID = playerFamily + "/" + playerVersion + "/encode/capacity-minus-one"
 
 	playerLegacyEarlyExportDir = "/tmp/runtime-oracle-player-legacy-early-2.2b"
+	playerLegacyLateExportDir  = "/tmp/runtime-oracle-player-legacy-late-2.2c"
 
 	playerDecodeV1FixtureID            = playerFamily + "/1/decode/v1-fixture"
 	playerDecodeV1TruncatedPayloadID   = playerFamily + "/1/decode/truncated-payload"
@@ -52,6 +53,16 @@ const (
 	playerDecodeV4FixtureID            = playerFamily + "/4/decode/v4-fixture"
 	playerDecodeV4InvalidVersionFutureID = playerFamily + "/4/decode/invalid-version-future"
 	playerEncodeV4LegacyReencodeID     = playerFamily + "/" + playerVersion + "/encode/v4-fixture-reencode"
+
+	playerDecodeV5FixtureID            = playerFamily + "/5/decode/v5-fixture"
+	playerDecodeV5CorruptCRCID         = playerFamily + "/5/decode/corrupt-crc"
+	playerDecodeV6FixtureID            = playerFamily + "/6/decode/v6-fixture"
+	playerDecodeV6TruncatedPayloadID   = playerFamily + "/6/decode/truncated-payload"
+	playerDecodeV7FixtureID            = playerFamily + "/7/decode/v7-fixture"
+	playerDecodeV7InvalidVersionZeroID = playerFamily + "/7/decode/invalid-version-zero"
+	playerDecodeV8FixtureID            = playerFamily + "/8/decode/v8-fixture"
+	playerDecodeV8InvalidVersionFutureID = playerFamily + "/8/decode/invalid-version-future"
+	playerEncodeV8LegacyReencodeID     = playerFamily + "/" + playerVersion + "/encode/v8-fixture-reencode"
 
 	playerRespawnTailBytes = 1 + 12 + 4
 	playerArmorTailBytes   = int(core.ArmorSlotCount) * 5
@@ -323,7 +334,7 @@ func playerCorpusRoutes() map[ConsumerRoute]GoOperation {
 		{FamilyID: playerFamily, Version: playerVersion, Operation: "decode"}: runPlayerDecode,
 		{FamilyID: playerFamily, Version: playerVersion, Operation: "encode"}: runPlayerEncode,
 	}
-	for _, version := range []string{"1", "2", "3", "4"} {
+	for _, version := range []string{"1", "2", "3", "4", "5", "6", "7", "8"} {
 		routes[ConsumerRoute{FamilyID: playerFamily, Version: version, Operation: "decode"}] = runPlayerDecode
 	}
 	return routes
@@ -339,6 +350,14 @@ func playerCurrentRoutes() []ConsumerRoute {
 func playerLegacyEarlyRoutes() []ConsumerRoute {
 	routes := playerCurrentRoutes()
 	for _, version := range []string{"1", "2", "3", "4"} {
+		routes = append(routes, ConsumerRoute{FamilyID: playerFamily, Version: version, Operation: "decode"})
+	}
+	return routes
+}
+
+func playerLegacyLateRoutes() []ConsumerRoute {
+	routes := playerCurrentRoutes()
+	for _, version := range []string{"5", "6", "7", "8"} {
 		routes = append(routes, ConsumerRoute{FamilyID: playerFamily, Version: version, Operation: "decode"})
 	}
 	return routes
@@ -578,6 +597,28 @@ func playerLegacyEarlyCandidates(t *testing.T) []playerCandidate {
 		buildPlayerCandidate(t, playerDecodeV4FixtureID, "decode", "4", v4, argsDecode, nil),
 		buildPlayerCandidate(t, playerDecodeV4InvalidVersionFutureID, "decode", "4", playerWireWithSchema(v4, 10), argsDecode, nil),
 		buildPlayerCandidate(t, playerEncodeV4LegacyReencodeID, "encode", playerVersion, v4, argsDecode, nil),
+	}
+}
+
+func playerLegacyLateCandidates(t *testing.T) []playerCandidate {
+	t.Helper()
+	root := mustRepoRoot(t)
+	argsDecode := playerArgumentsJSON(nil)
+	v5 := readPlayerLegacyFixture(t, root, 5)
+	v6 := readPlayerLegacyFixture(t, root, 6)
+	v7 := readPlayerLegacyFixture(t, root, 7)
+	v8 := readPlayerLegacyFixture(t, root, 8)
+
+	return []playerCandidate{
+		buildPlayerCandidate(t, playerDecodeV5FixtureID, "decode", "5", v5, argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV5CorruptCRCID, "decode", "5", playerCorruptCRCWire(v5), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV6FixtureID, "decode", "6", v6, argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV6TruncatedPayloadID, "decode", "6", playerTruncatedWire(v6, 1), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV7FixtureID, "decode", "7", v7, argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV7InvalidVersionZeroID, "decode", "7", playerWireWithSchema(v7, 0), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV8FixtureID, "decode", "8", v8, argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV8InvalidVersionFutureID, "decode", "8", playerWireWithSchema(v8, 10), argsDecode, nil),
+		buildPlayerCandidate(t, playerEncodeV8LegacyReencodeID, "encode", playerVersion, v8, argsDecode, nil),
 	}
 }
 
@@ -1104,6 +1145,288 @@ func TestStoragePlayerLegacyEarlyExportToPinnedDirectory(t *testing.T) {
 	}
 	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
 	child := exportPlayerSelectionCandidate(t, root, playerLegacyEarlyCandidates(t), playerLegacyEarlyRoutes())
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
+	}
+	if _, err := readStorageSelection(child); err != nil {
+		t.Fatalf("reload exported selection: %v", err)
+	}
+}
+
+func TestStoragePlayerLegacyLateArgumentsValidate(t *testing.T) {
+	if err := validateStorageArguments(playerFamily, "decode", playerArgumentsJSON(nil)); err != nil {
+		t.Fatalf("validate player decode arguments: %v", err)
+	}
+}
+
+func TestStoragePlayerLegacyLateProducerExecutesEveryCase(t *testing.T) {
+	root := mustRepoRoot(t)
+	candidates := playerLegacyLateCandidates(t)
+	manifest := playerRunnerManifest(t, root, candidates, playerLegacyLateRoutes())
+	staged := playerScratchRoot(t, candidates)
+
+	observations, err := RunStorageCases(staged, manifest, playerCorpusRoutes())
+	if err != nil {
+		t.Fatalf("RunStorageCases: %v", err)
+	}
+	if len(observations) != len(candidates) {
+		t.Fatalf("produced %d observations, want %d", len(observations), len(candidates))
+	}
+	for _, candidate := range candidates {
+		obs := playerObservation(t, observations, candidate.Spec.ID)
+		got, err := outcomeToStorageSave(obs.Outcome)
+		if err != nil {
+			t.Fatalf("case %s: %v", candidate.Spec.ID, err)
+		}
+		if !storageSaveOutcomesEqual(got, candidate.Expect) {
+			t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
+		}
+	}
+}
+
+func TestStoragePlayerLegacyLateV5HealthPinnedFromDecode(t *testing.T) {
+	root := mustRepoRoot(t)
+	v5 := readPlayerLegacyFixture(t, root, 5)
+	stored, err := player.Decode(playerFixtureID(), v5)
+	if err != nil {
+		t.Fatalf("decode v5 fixture: %v", err)
+	}
+	if !stored.NeedsRewrite {
+		t.Fatal("historical v5 decode must set needs_rewrite")
+	}
+	candidates := playerLegacyLateCandidates(t)
+	var fixtureCase playerCandidate
+	for _, candidate := range candidates {
+		if candidate.Spec.ID == playerDecodeV5FixtureID {
+			fixtureCase = candidate
+			break
+		}
+	}
+	if fixtureCase.Spec.ID == "" {
+		t.Fatal("missing v5 fixture decode case")
+	}
+	if stored.Health == 0 {
+		t.Fatal("v5 fixture health must be observed from decode, not assumed zero")
+	}
+	wantDigest := storageValueSHA256(playerStoredValueTree(stored))
+	if fixtureCase.Expect.ValueSHA256 != wantDigest {
+		t.Fatalf("v5 digest must pin decoded health %d", stored.Health)
+	}
+}
+
+func TestStoragePlayerLegacyLateV7HungerSaturationExhaustionPinnedFromDecode(t *testing.T) {
+	root := mustRepoRoot(t)
+	v7 := readPlayerLegacyFixture(t, root, 7)
+	stored, err := player.Decode(playerFixtureID(), v7)
+	if err != nil {
+		t.Fatalf("decode v7 fixture: %v", err)
+	}
+	if !stored.NeedsRewrite {
+		t.Fatal("historical v7 decode must set needs_rewrite")
+	}
+	if stored.Hunger != 12 || stored.SaturationMilli != 2500 || stored.ExhaustionMilli != 1750 {
+		t.Fatalf("v7 hunger state = (%d,%d,%d), want (12,2500,1750)",
+			stored.Hunger, stored.SaturationMilli, stored.ExhaustionMilli)
+	}
+	if stored.RespawnPresent {
+		t.Fatal("v7 fixture must decode with absent respawn")
+	}
+	if stored.RespawnPosition != [3]float32{0, 0, 0} || stored.RespawnDimension != 0 {
+		t.Fatal("absent v7 respawn tail must normalize to documented zero defaults")
+	}
+	candidates := playerLegacyLateCandidates(t)
+	var fixtureCase playerCandidate
+	for _, candidate := range candidates {
+		if candidate.Spec.ID == playerDecodeV7FixtureID {
+			fixtureCase = candidate
+			break
+		}
+	}
+	wantDigest := storageValueSHA256(playerStoredValueTree(stored))
+	if fixtureCase.Expect.ValueSHA256 != wantDigest {
+		t.Fatal("v7 digest must pin hunger, saturation, exhaustion, and absent respawn defaults")
+	}
+}
+
+func TestStoragePlayerLegacyLateV8RespawnPresentPinnedFromDecode(t *testing.T) {
+	root := mustRepoRoot(t)
+	v8 := readPlayerLegacyFixture(t, root, 8)
+	stored, err := player.Decode(playerFixtureID(), v8)
+	if err != nil {
+		t.Fatalf("decode v8 fixture: %v", err)
+	}
+	if !stored.NeedsRewrite {
+		t.Fatal("historical v8 decode must set needs_rewrite")
+	}
+	if !stored.RespawnPresent {
+		t.Fatal("v8 fixture must decode with respawn present")
+	}
+	candidates := playerLegacyLateCandidates(t)
+	var fixtureCase playerCandidate
+	for _, candidate := range candidates {
+		if candidate.Spec.ID == playerDecodeV8FixtureID {
+			fixtureCase = candidate
+			break
+		}
+	}
+	wantDigest := storageValueSHA256(playerStoredValueTree(stored))
+	if fixtureCase.Expect.ValueSHA256 != wantDigest {
+		t.Fatal("v8 digest must pin respawn-present migration")
+	}
+}
+
+func TestStoragePlayerLegacyLateNeedsRewriteOnEveryHistoricalDecode(t *testing.T) {
+	candidates := playerLegacyLateCandidates(t)
+	for _, candidate := range candidates {
+		if candidate.Spec.Operation != "decode" || candidate.Expect.Kind != "ok" {
+			continue
+		}
+		input := candidate.Assets[candidate.Spec.Input.Path]
+		stored, err := player.Decode(playerFixtureID(), input)
+		if err != nil {
+			t.Fatalf("case %s: %v", candidate.Spec.ID, err)
+		}
+		if !stored.NeedsRewrite {
+			t.Fatalf("case %s: historical decode must set needs_rewrite", candidate.Spec.ID)
+		}
+	}
+}
+
+func TestStoragePlayerLegacyLateHealthDigestMutationFailsComparison(t *testing.T) {
+	candidates := playerLegacyLateCandidates(t)
+	var fixtureCase playerCandidate
+	for _, candidate := range candidates {
+		if candidate.Spec.ID == playerDecodeV5FixtureID {
+			fixtureCase = candidate
+			break
+		}
+	}
+	stale := fixtureCase.Expect
+	input := fixtureCase.Assets[fixtureCase.Spec.Input.Path]
+	stored, err := player.Decode(playerFixtureID(), input)
+	if err != nil {
+		t.Fatalf("decode v5 fixture: %v", err)
+	}
+	stored.Health++
+	stale.ValueSHA256 = storageValueSHA256(playerStoredValueTree(stored))
+	outcome, _, err := runPlayerDecode(fixtureCase.Spec, input)
+	if err != nil {
+		t.Fatalf("runPlayerDecode: %v", err)
+	}
+	got, err := outcomeToStorageSave(outcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storageSaveOutcomesEqual(got, stale) {
+		t.Fatal("health mutation still matches stale expected digest")
+	}
+}
+
+func TestStoragePlayerLegacyLateNeedsRewriteDigestMutationFailsComparison(t *testing.T) {
+	candidates := playerLegacyLateCandidates(t)
+	var fixtureCase playerCandidate
+	for _, candidate := range candidates {
+		if candidate.Spec.ID == playerDecodeV8FixtureID {
+			fixtureCase = candidate
+			break
+		}
+	}
+	stale := fixtureCase.Expect
+	input := fixtureCase.Assets[fixtureCase.Spec.Input.Path]
+	stored, err := player.Decode(playerFixtureID(), input)
+	if err != nil {
+		t.Fatalf("decode v8 fixture: %v", err)
+	}
+	stored.NeedsRewrite = false
+	stale.ValueSHA256 = storageValueSHA256(playerStoredValueTree(stored))
+	outcome, _, err := runPlayerDecode(fixtureCase.Spec, input)
+	if err != nil {
+		t.Fatalf("runPlayerDecode: %v", err)
+	}
+	got, err := outcomeToStorageSave(outcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storageSaveOutcomesEqual(got, stale) {
+		t.Fatal("needs_rewrite mutation still matches stale expected digest")
+	}
+}
+
+func TestStoragePlayerLegacyLateEncodePreservesSourceSave(t *testing.T) {
+	candidates := playerLegacyLateCandidates(t)
+	var encodeCase playerCandidate
+	for _, candidate := range candidates {
+		if candidate.Spec.ID == playerEncodeV8LegacyReencodeID {
+			encodeCase = candidate
+			break
+		}
+	}
+	if encodeCase.Spec.ID == "" {
+		t.Fatal("missing v8 legacy re-encode case")
+	}
+	input := encodeCase.Assets[encodeCase.Spec.Input.Path]
+	_, wantID, err := parsePlayerArguments(encodeCase.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := player.Decode(wantID, input)
+	if err != nil {
+		t.Fatalf("decode encode input: %v", err)
+	}
+	if !stored.NeedsRewrite {
+		t.Fatal("historical v8 input must decode with needs_rewrite true")
+	}
+	save := storedPlayerToSave(stored)
+	before := clonePlayerSave(save)
+	if _, err := player.Encode(save); err != nil {
+		t.Fatalf("player.Encode: %v", err)
+	}
+	if !reflect.DeepEqual(before, save) {
+		t.Fatal("encode path mutated the source PlayerSave")
+	}
+}
+
+func TestStoragePlayerLegacyLateExportUnsetWritesNothing(t *testing.T) {
+	root := mustRepoRoot(t)
+	t.Setenv(runtimeOracleExportDirEnv, "")
+	before, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = exportPlayerSelectionCandidate(t, root, playerLegacyLateCandidates(t), playerLegacyLateRoutes())
+	after, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatal("unset export must not mutate repository tree")
+	}
+}
+
+func TestStoragePlayerLegacyLateCandidatesExportForReview(t *testing.T) {
+	root := mustRepoRoot(t)
+	exportRoot := filepath.Join(t.TempDir(), "player-legacy-late-export-parent")
+	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
+	child := exportPlayerSelectionCandidate(t, root, playerLegacyLateCandidates(t), playerLegacyLateRoutes())
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
+	}
+	if _, err := readStorageSelection(child); err != nil {
+		t.Fatalf("reload exported selection: %v", err)
+	}
+}
+
+func TestStoragePlayerLegacyLateExportToPinnedDirectory(t *testing.T) {
+	root := mustRepoRoot(t)
+	exportRoot := playerLegacyLateExportDir
+	producerChild := filepath.Join(exportRoot, filepath.FromSlash("runtime-oracle/storage-player"))
+	if _, err := os.Lstat(producerChild); err == nil {
+		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat pinned producer child: %v", err)
+	}
+	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
+	child := exportPlayerSelectionCandidate(t, root, playerLegacyLateCandidates(t), playerLegacyLateRoutes())
 	if child == "" {
 		t.Fatal("export root unset after explicit env")
 	}
