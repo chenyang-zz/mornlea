@@ -78,6 +78,14 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates: `go test ./packages/tools/cmd/runtime-oracle -race -count=1` pass; Rust `region_corrupt_` executes the sixteen integrated cases; controller confirmation after review: `runtime_contract region_`, full `storage_corpus`, `mornlea_domain`/`mornlea_protocol`/`mornlea_engine` tests (134 passed), and `go test ./packages/audit -count=1` pass.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 2.1 closed
+
+- Commit: `99465548` adds `player_encoded_len`, `encode_player_into`, and `SliceWriter`. `encode_player` allocates that length and calls the caller-buffer writer.
+- Review of `2571b26a..99465548` approved. No Critical or Important findings. The reported clippy failure is `clippy::collapsible_if` in `tests/storage_corpus/region.rs`, which this commit does not touch.
+- Minor findings held for the final review: the payload-cap assertion only excludes `PLAYER_MAX_PAYLOAD`; the `AGENTS.md` boundary note names `player_encoded_len` as the writer; `encoded_len` and `encode_into` repeat the preflight; the absent-respawn branch dropped the residue comment.
+- Gates reported by the implementer: `player_buffer` 8/8, `runtime_contract player_` 11/11. No save-family case count change. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
