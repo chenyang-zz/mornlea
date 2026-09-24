@@ -121,7 +121,7 @@ fn sixty_four_inactive_bodies_encode() {
 
 #[test]
 fn four_active_queues_encode_and_a_fifth_active_rejects() {
-    let records: Vec<_> = (1..=4).map(|index| body(index)).collect();
+    let records: Vec<_> = (1..=4).map(body).collect();
     let lifecycles = records
         .iter()
         .map(|body| lifecycle(body.id, true, 1))
@@ -136,7 +136,7 @@ fn four_active_queues_encode_and_a_fifth_active_rejects() {
         .collect();
     encode_companions(&save(records, lifecycles, queues)).expect("four active queues");
 
-    let records: Vec<_> = (1..=5).map(|index| body(index)).collect();
+    let records: Vec<_> = (1..=5).map(body).collect();
     let lifecycles = records
         .iter()
         .map(|body| lifecycle(body.id, true, 1))

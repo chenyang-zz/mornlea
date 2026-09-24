@@ -24,7 +24,7 @@
 
 ## 3. Shared current-value rules
 
-- [ ] 3.1 [Delegate UUID validation and expose checked IDs](plans/02-values.md#node-3-1). Modify `src/{identity,lib}.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_domain_values --locked identity_`.
+- [x] 3.1 [Delegate UUID validation and expose checked IDs](plans/02-values.md#node-3-1). Modify `src/{identity,lib}.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_domain_values --locked identity_`.
 - [ ] 3.2 [Delegate ordinary item rules while preserving raw armor](plans/02-values.md#node-3-2). Modify `src/{items,lib}.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_domain_values --locked stack_`.
 - [ ] 3.3 [Validate compact sections through domain constructors](plans/02-values.md#node-3-3). Modify `src/{chunk,lib}.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_domain_values --locked section_`.
 

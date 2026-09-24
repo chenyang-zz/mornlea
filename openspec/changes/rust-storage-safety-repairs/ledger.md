@@ -61,3 +61,9 @@ No runtime gate is claimed by this planning change. At implementation closure, n
 - RED: `safety_chunk_aggregate` `logical_` accepted schema 1 bytes for an active furnace on air.
 - GREEN: `logical_` and the full `safety_chunk_aggregate` target passed 2/2 after `encode_logical` checks dimension, nonzero revision, and `validate_chunk` before allocating a writer. `runtime_contract chunk_` passed 10/10.
 - Review: controller self-review. Schemas 1 through 9 reject the same invalid aggregate, including schemas that omit furnace or chest fields. No fixture or Go source changed.
+
+## Node 3.1
+
+- RED: `safety_domain_values` `identity_` failed to compile because `checked_player_id` and `checked_companion_id` were absent. The same test already asserted canonical bytes, zero/wrong-version/wrong-variant rejection, and storage `is_valid` equality with `mornlea_domain::PlayerId::try_from_bytes`.
+- GREEN: `identity_` passed 1/1. Full `runtime_contract` passed 68/68. `cargo clippy -p mornlea_storage --all-targets --locked -- -D warnings` passed after replacing two redundant test closures.
+- Audit: removed the version-nibble and variant-mask checks from `PlayerId::is_valid` in `src/identity.rs`. Those bits now exist only in `mornlea_domain::identity::is_uuid_v4`. Storage calls `PlayerId::try_from_bytes` and `CompanionId::try_from_bytes`. The all-zero hostile target stays a raw format sentinel and is not passed through `checked_player_id`.

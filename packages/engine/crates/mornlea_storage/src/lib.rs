@@ -63,7 +63,7 @@ pub use hostile::{
     MAX_HOSTILE_MOBS, SCHEMA_V1 as HOSTILE_SCHEMA_V1, decode as decode_hostile_mobs,
     encode as encode_hostile_mobs,
 };
-pub use identity::PlayerId;
+pub use identity::{PlayerId, checked_companion_id, checked_player_id};
 pub use items::{
     BACKPACK_SLOTS, HOTBAR_SLOTS, ITEM_ID_MAX, Inventory, ItemStack, MAX_STACK_COUNT,
     item_max_durability, item_stack_limit,
