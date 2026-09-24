@@ -612,14 +612,39 @@ mod tests {
             .collect()
     }
 
+    const LEGACY_EARLY_INTEGRATED_CASE_IDS: &[&str] = &[
+        "save.player/1/decode/truncated-payload",
+        "save.player/1/decode/v1-fixture",
+        "save.player/2/decode/corrupt-crc",
+        "save.player/2/decode/v2-fixture",
+        "save.player/3/decode/invalid-version-zero",
+        "save.player/3/decode/v3-fixture",
+        "save.player/4/decode/invalid-version-future",
+        "save.player/4/decode/v4-fixture",
+        "save.player/9/encode/v4-fixture-reencode",
+    ];
+
     #[test]
     fn player_legacy_early_executes_integrated_manifest_cases() {
         let cases = player_cases_from_manifest()
             .into_iter()
             .filter(|case| player_legacy_early_case(&case.id))
             .collect::<Vec<_>>();
-        if cases.is_empty() {
-            return;
+        let found: BTreeMap<&str, &FrozenCase> = cases
+            .iter()
+            .map(|case| (case.id.as_str(), case))
+            .collect();
+        for id in LEGACY_EARLY_INTEGRATED_CASE_IDS {
+            if !found.contains_key(id) {
+                panic!("integrated manifest missing legacy early case {id}");
+            }
+        }
+        if cases.len() != LEGACY_EARLY_INTEGRATED_CASE_IDS.len() {
+            panic!(
+                "integrated manifest has {} legacy early cases, want {}",
+                cases.len(),
+                LEGACY_EARLY_INTEGRATED_CASE_IDS.len()
+            );
         }
         execute_player_cases(&cases);
     }

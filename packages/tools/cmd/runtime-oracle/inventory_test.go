@@ -484,6 +484,10 @@ func TestContractInventoryRejectsKnownConsumerOnUnsupportedRoute(t *testing.T) {
 		"mornlea_storage": {
 			Kind: ConsumerRust,
 			Routes: map[ConsumerRoute]struct{}{
+				{FamilyID: "save.player", Version: "1", Operation: "decode"}: {},
+				{FamilyID: "save.player", Version: "2", Operation: "decode"}: {},
+				{FamilyID: "save.player", Version: "3", Operation: "decode"}: {},
+				{FamilyID: "save.player", Version: "4", Operation: "decode"}: {},
 				{FamilyID: "save.player", Version: "9", Operation: "decode"}: {},
 				{FamilyID: "save.player", Version: "9", Operation: "encode"}: {},
 				{FamilyID: "save.region", Version: "1", Operation: "decode"}: {},

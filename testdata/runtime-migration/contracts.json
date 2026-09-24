@@ -4035,16 +4035,25 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/storage_player_test.go",
-          "sha256": "sha256:8c7671a56e98279b97b5dffb6fb07a43e4a2f9aa94ed634c1ada3b229031c8c6"
+          "sha256": "sha256:f826896c1f2db0c8de3f605807801bf49fc9f0e8d79651c3256e003f13811c01"
         }
       ],
       "cases": [
+        "save.player/1/decode/truncated-payload",
+        "save.player/1/decode/v1-fixture",
+        "save.player/2/decode/corrupt-crc",
+        "save.player/2/decode/v2-fixture",
+        "save.player/3/decode/invalid-version-zero",
+        "save.player/3/decode/v3-fixture",
+        "save.player/4/decode/invalid-version-future",
+        "save.player/4/decode/v4-fixture",
         "save.player/9/decode/absent-respawn-dirty-tail",
         "save.player/9/decode/exhaustion-maxi",
         "save.player/9/decode/raw-armor-triple",
         "save.player/9/decode/v9-fixture",
         "save.player/9/decode/v9-roundtrip-alt",
         "save.player/9/encode/capacity-minus-one",
+        "save.player/9/encode/v4-fixture-reencode",
         "save.player/9/encode/v9-canonical"
       ]
     },
@@ -27654,6 +27663,182 @@
       "rust_consumer": "mornlea_protocol"
     },
     {
+      "id": "save.player/1/decode/truncated-payload",
+      "family": "save.player",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_1_decode_truncated-payload.input.bin",
+        "sha256": "sha256:cdbc7e7bee0df78bc6ffd4cbc4e96a703a7d38ef5044e22b53883e9d8eb8d7e5"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_1_decode_truncated-payload.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/1/decode/v1-fixture",
+      "family": "save.player",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_1_decode_v1-fixture.input.bin",
+        "sha256": "sha256:b6e58761ea17aa0568d8826d5eb6c73acc9d1ce4c7ccdead2aa6d9f5725d2c43"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_1_decode_v1-fixture.expected.json",
+        "sha256": "sha256:11f617a82d464e6ed7875dcd0b9f0d71620cb49b84a757df89197c23cfd12ba7"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/2/decode/corrupt-crc",
+      "family": "save.player",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_2_decode_corrupt-crc.input.bin",
+        "sha256": "sha256:835b95ad908bdbec03b4c7ad993c542b49898a212ab195e043217b37c14c1185"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_2_decode_corrupt-crc.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/2/decode/v2-fixture",
+      "family": "save.player",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_2_decode_v2-fixture.input.bin",
+        "sha256": "sha256:b57ef74085adbcd22a284bd757e847bdebb4ed3163e8610d793fb55d4846def8"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_2_decode_v2-fixture.expected.json",
+        "sha256": "sha256:eb36b2bd35b67daf779340dfd3d5c67596ffa136c473db30fdc2cb1c8031be8b"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/3/decode/invalid-version-zero",
+      "family": "save.player",
+      "version": "3",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_3_decode_invalid-version-zero.input.bin",
+        "sha256": "sha256:b999dcaea11ee60a9a82d0c29ecfb703a2de09ee45a836a68153ac66a38d59da"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_3_decode_invalid-version-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/3/decode/v3-fixture",
+      "family": "save.player",
+      "version": "3",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_3_decode_v3-fixture.input.bin",
+        "sha256": "sha256:66f27fbe651a54966ff6281a6507a48c17b195bb446ba50aa015e14a577c8dda"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_3_decode_v3-fixture.expected.json",
+        "sha256": "sha256:8f429b00ed9653d6f719ff71c6f1c614878ae0908c5ab6bc8fd22e735bf3861b"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/4/decode/invalid-version-future",
+      "family": "save.player",
+      "version": "4",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_4_decode_invalid-version-future.input.bin",
+        "sha256": "sha256:9c1216995910328e0694009e08c8e6ae4b6d2dfdd4daa6055a0a939570c0fc64"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_4_decode_invalid-version-future.expected.json",
+        "sha256": "sha256:a525fa8b2a3a83c483dde06e0e9a39ddaff1890264a44785949a3bc757098e51"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/4/decode/v4-fixture",
+      "family": "save.player",
+      "version": "4",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_4_decode_v4-fixture.input.bin",
+        "sha256": "sha256:bd04d189cb6365a8d0dd2aecbbd26c26d28c5e7c13f809667998bd4282dcfd06"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_4_decode_v4-fixture.expected.json",
+        "sha256": "sha256:8f429b00ed9653d6f719ff71c6f1c614878ae0908c5ab6bc8fd22e735bf3861b"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
       "id": "save.player/9/decode/absent-respawn-dirty-tail",
       "family": "save.player",
       "version": "9",
@@ -27780,6 +27965,32 @@
       "expected": {
         "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_capacity-minus-one.expected.json",
         "sha256": "sha256:cd926131f8ba6174825a296b9232683f5b6b0346a0c52814f85c1750d38ca01b"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/9/encode/v4-fixture-reencode",
+      "family": "save.player",
+      "version": "9",
+      "operation": "encode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_v4-fixture-reencode.input.bin",
+        "sha256": "sha256:bd04d189cb6365a8d0dd2aecbbd26c26d28c5e7c13f809667998bd4282dcfd06"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_v4-fixture-reencode.expected.json",
+        "sha256": "sha256:4795bc50254e859708fcd1efe9b517801c3801f5414855c330afb8f54caf87ff"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_v4-fixture-reencode.encoded.bin",
+        "sha256": "sha256:47211ce135d27147360b2f1f4a9de3717c53a8367854154cced463b2fcf3867e"
       },
       "checkpoints": [
         "0"
