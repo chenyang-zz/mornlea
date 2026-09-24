@@ -3,8 +3,8 @@
 mod support;
 
 use mornlea_storage::{
-    ContainerSnapshot, DropSlot, StorageError, StorageKind, decode_chunk, decode_chunk_logical,
-    encode_chunk, encode_chunk_at_schema, encode_chunk_logical,
+    ContainerSnapshot, DropSlot, ItemStack, StorageError, StorageKind, decode_chunk,
+    decode_chunk_logical, encode_chunk, encode_chunk_at_schema, encode_chunk_logical,
 };
 use support::chunk_safety::{
     LAST_BLOCK_INDEX, activate_chest, activate_furnace, empty_save, set_section_block,
@@ -184,5 +184,127 @@ fn assert_corrupt_logical(
     match encode_chunk_logical(key, revision, chunk, schema) {
         Err(StorageError::Corrupt(_)) => {}
         other => panic!("schema {schema}: expected corrupt, got {other:?}"),
+    }
+}
+
+#[test]
+fn logical_legacy_tool_drop_reserializes_without_current_stack_admission() {
+    let mut save = empty_save();
+    save.chunk.drops[0] = DropSlot {
+        generation: 1,
+        active: true,
+        stack: ItemStack {
+            item: 10,
+            count: 2,
+            durability: 0,
+        },
+        ..DropSlot::default()
+    };
+    for schema in 2..=4 {
+        let bytes = encode_chunk_logical(save.key, save.revision, &save.chunk, schema)
+            .unwrap_or_else(|err| panic!("schema {schema}: {err}"));
+        let decoded = decode_chunk_logical(save.key, save.revision, schema, &bytes)
+            .unwrap_or_else(|err| panic!("decode schema {schema}: {err}"));
+        assert_eq!(decoded, save.chunk);
+        assert!(matches!(
+            encode_chunk_at_schema(&save, schema),
+            Err(StorageError::Corrupt(_))
+        ));
+    }
+}
+
+#[test]
+fn logical_historical_schemas_reject_omitted_nondefault_state() {
+    let mut drop = empty_save();
+    drop.chunk.drops[0] = DropSlot {
+        generation: 1,
+        active: true,
+        stack: ItemStack {
+            item: 1,
+            count: 1,
+            durability: 0,
+        },
+        ..DropSlot::default()
+    };
+    let mut furnace = empty_save();
+    set_section_block(&mut furnace, 0, 9);
+    activate_furnace(&mut furnace, 0, 0);
+    let mut chest = empty_save();
+    set_section_block(&mut chest, 0, 11);
+    activate_chest(&mut chest, 0, 0);
+    let mut durability = empty_save();
+    durability.chunk.drops[0] = DropSlot {
+        stack: ItemStack {
+            item: 10,
+            count: 1,
+            durability: 131,
+        },
+        ..drop.chunk.drops[0]
+    };
+    let mut inactive_drop = empty_save();
+    inactive_drop.chunk.drops[0].generation = 1;
+    let mut inactive_furnace = empty_save();
+    inactive_furnace.chunk.furnaces[0].generation = 1;
+    let mut inactive_chest = empty_save();
+    inactive_chest.chunk.chests[0].generation = 1;
+    for (save, schemas) in [
+        (&drop, 1..=1),
+        (&furnace, 1..=3),
+        (&chest, 1..=5),
+        (&durability, 2..=4),
+        (&inactive_drop, 1..=1),
+        (&inactive_furnace, 1..=3),
+        (&inactive_chest, 1..=5),
+    ] {
+        for schema in schemas {
+            assert_corrupt_logical(save.key, save.revision, &save.chunk, schema);
+            assert!(matches!(
+                encode_chunk_at_schema(save, schema),
+                Err(StorageError::Corrupt(_))
+            ));
+        }
+    }
+}
+
+#[test]
+fn logical_omitted_drop_precedes_later_container_failure() {
+    let mut save = empty_save();
+    save.chunk.drops[0].generation = 1;
+    activate_furnace(&mut save, 0, 0);
+    for result in [
+        encode_chunk_logical(save.key, save.revision, &save.chunk, 1),
+        encode_chunk_at_schema(&save, 1),
+    ] {
+        match result {
+            Err(StorageError::Corrupt(detail)) => assert!(detail.starts_with("drop slot:")),
+            other => panic!("expected drop corruption first, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn logical_historical_envelope_rejects_inactive_tool_durability_migration() {
+    let mut save = empty_save();
+    save.chunk.drops[0] = DropSlot {
+        generation: 1,
+        stack: ItemStack {
+            item: 10,
+            count: 1,
+            durability: 0,
+        },
+        ..DropSlot::default()
+    };
+    encode_chunk_at_schema(&save, 9).expect("current inactive drop is valid");
+    for schema in 2..=4 {
+        let raw = encode_chunk_logical(save.key, save.revision, &save.chunk, schema)
+            .expect("raw historical logical payload reserializes");
+        assert_eq!(
+            decode_chunk_logical(save.key, save.revision, schema, &raw).unwrap(),
+            save.chunk,
+        );
+        assert!(matches!(
+            encode_chunk_at_schema(&save, schema),
+            Err(StorageError::Corrupt(_))
+        ));
     }
 }

@@ -1,8 +1,8 @@
 //! Item and inventory value rules shared by the entity save families.
 //!
 //! Ordinary stack, limit, and durability rules come from `mornlea_domain`.
-//! The numeric constants that remain name furnace wire fields or fixed slot
-//! counts. Player armor is not an ordinary stack and is not admitted here.
+//! The numeric constants that remain name furnace fuel, test wire items, or
+//! fixed slot counts. Player armor is not an ordinary stack and is not admitted here.
 
 /// Stable global item number. Numbering is protocol-stable and append-only.
 pub type ItemId = u16;
@@ -17,14 +17,6 @@ pub(crate) const ITEM_STONE: ItemId = 1;
 pub(crate) const ITEM_STONE_PICKAXE: ItemId = 10;
 /// Furnace fuel and the empty-fuel sentinel used by the chunk slot layout.
 pub(crate) const ITEM_COAL: ItemId = 5;
-pub(crate) const ITEM_RAW_IRON: ItemId = 6;
-pub(crate) const ITEM_IRON_INGOT: ItemId = 7;
-pub(crate) const ITEM_SAND: ItemId = 18;
-pub(crate) const ITEM_GLASS: ItemId = 23;
-pub(crate) const ITEM_BRICK: ItemId = 24;
-pub(crate) const ITEM_CLAY: ItemId = 27;
-pub(crate) const ITEM_RAW_BEEF: ItemId = 53;
-pub(crate) const ITEM_COOKED_BEEF: ItemId = 54;
 
 /// Exclusive upper bound of the legal item numbering.
 pub const ITEM_ID_MAX: ItemId = 66;
