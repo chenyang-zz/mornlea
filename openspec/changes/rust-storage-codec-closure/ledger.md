@@ -32,6 +32,18 @@ The controller used Superpowers brainstorming and writing-plans with the project
 
 This codec change claims no implementation or runtime gate. At implementation closure, node 5.2 records actual discovered/executed case counts, all gate outputs, source/result SHAs, review and rollback evidence.
 
+## Implementation evidence
+
+### Node 1.1 — source-bound save selections
+
+- Added `CaseSpec.arguments`, save-case structural checks in `validateCaseSpecConsumer`, `validateStorageArguments`, `StorageSelection`, `readStorageSelection`, and `mergeStorageSelections` in runtime-oracle (production stdlib-only).
+- Added `storage_manifest_test.go` with `^TestStorageSelection` coverage for argument validation, candidate read/merge rejections, merge preservation, export-unset no-op, and test-only `storagedef` import.
+- Extended `validProducerIDs` for storage producers; audit whitelists `packages/server/storage/storagedef` for oracle `_test.go` only.
+- Validation:
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestStorageSelection' -count=1` — pass
+  - `go test ./packages/tools/cmd/runtime-oracle -count=1` — pass
+  - `go test ./packages/audit -run '^TestRuntimeOracleInternalDependencies$' -count=1` — pass
+
 ## Accepted safety handoff
 
 - The safety change closed 8/8 tasks after independent whole-change review and macOS acceptance: 104/104 storage tests, `make rust-check`, `make dev-check`, `make test-race`, independent audit, and 128/128 strict OpenSpec items before archive. Neither production Go storage code nor existing migration fixtures changed. Four safety requirements and 11 scenarios were synced into `openspec/specs/rust-runtime-foundation/spec.md`; strict validation after archive passed 127/127 items.
