@@ -20,7 +20,7 @@
 ## 2. Chunk publication
 
 - [x] 2.1 [Apply aggregate validity to current chunk encode](plans/01-admission.md#node-2-1). Modify `src/chunk.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_chunk_aggregate --locked current_`.
-- [ ] 2.2 [Close logical and historical-schema encoder bypasses](plans/01-admission.md#node-2-2). Modify `src/chunk.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_chunk_aggregate --locked logical_`.
+- [x] 2.2 [Close logical and historical-schema encoder bypasses](plans/01-admission.md#node-2-2). Modify `src/chunk.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_chunk_aggregate --locked logical_`.
 
 ## 3. Shared current-value rules
 

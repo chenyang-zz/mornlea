@@ -3,7 +3,8 @@
 mod support;
 
 use mornlea_storage::{
-    ContainerSnapshot, DropSlot, StorageError, StorageKind, decode_chunk, encode_chunk,
+    ContainerSnapshot, DropSlot, StorageError, StorageKind, decode_chunk, decode_chunk_logical,
+    encode_chunk, encode_chunk_at_schema, encode_chunk_logical,
 };
 use support::chunk_safety::{
     LAST_BLOCK_INDEX, activate_chest, activate_furnace, empty_save, set_section_block,
@@ -125,4 +126,63 @@ fn current_encoder_rejects_unreadable_aggregates_and_keeps_valid_ones() {
     activate_furnace(&mut mixed, 0, 0);
     activate_chest(&mut mixed, 0, 4096);
     assert_round_trip(&mixed);
+}
+
+#[test]
+fn logical_encoders_reject_the_same_invalid_aggregates() {
+    let mut furnace_on_air = empty_save();
+    activate_furnace(&mut furnace_on_air, 0, 0);
+    let mut duplicate_chests = empty_save();
+    set_section_block(&mut duplicate_chests, 0, 11);
+    activate_chest(&mut duplicate_chests, 0, 0);
+    activate_chest(&mut duplicate_chests, 1, 0);
+    for save in [&furnace_on_air, &duplicate_chests] {
+        let before = save.chunk.clone();
+        for schema in 1u32..=9 {
+            assert_corrupt_logical(save.key, save.revision, &save.chunk, schema);
+            assert!(matches!(
+                encode_chunk_at_schema(save, schema),
+                Err(StorageError::Corrupt(_))
+            ));
+        }
+        assert_eq!(save.chunk, before);
+    }
+
+    let valid = empty_save();
+    assert!(encode_chunk_logical(valid.key, 0, &valid.chunk, 9).is_err());
+    let mut bad_dimension = valid.clone();
+    bad_dimension.key.dimension = 2;
+    assert!(encode_chunk_logical(bad_dimension.key, 1, &bad_dimension.chunk, 9).is_err());
+    assert!(encode_chunk_logical(valid.key, 1, &valid.chunk, 0).is_err());
+    assert!(encode_chunk_logical(valid.key, 1, &valid.chunk, 10).is_err());
+
+    let mut last = empty_save();
+    set_section_block(&mut last, LAST_BLOCK_INDEX, 9);
+    activate_furnace(&mut last, 0, LAST_BLOCK_INDEX);
+    let before = last.chunk.clone();
+    let encoded =
+        encode_chunk_logical(last.key, last.revision, &last.chunk, 9).expect("last index");
+    assert_eq!(last.chunk, before);
+    let decoded = decode_chunk_logical(last.key, last.revision, 9, &encoded).expect("decode last");
+    assert_eq!(decoded, last.chunk);
+
+    for schema in 1u32..=9 {
+        let encoded = encode_chunk_logical(valid.key, valid.revision, &valid.chunk, schema)
+            .unwrap_or_else(|err| panic!("schema {schema}: {err}"));
+        let decoded = decode_chunk_logical(valid.key, valid.revision, schema, &encoded)
+            .unwrap_or_else(|err| panic!("decode schema {schema}: {err}"));
+        assert_eq!(decoded, valid.chunk, "schema {schema}");
+    }
+}
+
+fn assert_corrupt_logical(
+    key: mornlea_storage::ChunkKey,
+    revision: u64,
+    chunk: &mornlea_storage::Chunk,
+    schema: u32,
+) {
+    match encode_chunk_logical(key, revision, chunk, schema) {
+        Err(StorageError::Corrupt(_)) => {}
+        other => panic!("schema {schema}: expected corrupt, got {other:?}"),
+    }
 }

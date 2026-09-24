@@ -450,7 +450,19 @@ pub fn encode_logical(
             format!("unsupported schema {schema}"),
         ));
     }
-    validate_chunk_shape(chunk)?;
+    if key.dimension != OVERWORLD && key.dimension != DEPTHS {
+        return Err(corrupt(
+            "chunk dimension",
+            format!("unsupported chunk dimension {}", key.dimension),
+        ));
+    }
+    if revision == 0 {
+        return Err(corrupt("chunk revision", "zero revision"));
+    }
+    // Historical schemas omit some slot arrays on disk. The in-memory chunk is
+    // still a current aggregate, so a diagnostic encoder must not drop an
+    // active container by choosing an older schema.
+    validate_chunk(chunk)?;
 
     let mut logical = ByteWriter::new();
     logical.bytes(&LOGICAL_MAGIC);
