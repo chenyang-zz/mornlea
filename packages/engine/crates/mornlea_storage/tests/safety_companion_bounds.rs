@@ -1,5 +1,8 @@
 //! Constructed v5 companion saves reject unbounded aggregates before cloning.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+
 use mornlea_storage::{
     COMPANION_MAX_FIFO_ENTRIES, COMPANION_MAX_FILE_LENGTH, COMPANION_MAX_PLAN_STEPS,
     COMPANION_MAX_STORED, COMPANION_MAX_SUMMARY_BYTES, COMPANION_MAX_TASK_COMMAND_BYTES,
@@ -8,6 +11,40 @@ use mornlea_storage::{
     StorageError, StoredCompanionLifecycle, StoredCompanionQueue, StoredCompanionTask,
     decode_companions, encode_companions,
 };
+
+struct MeasuredAllocator;
+
+thread_local! {
+    static MEASURE_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
+    static LARGEST_ALLOCATION: Cell<usize> = const { Cell::new(0) };
+}
+
+#[global_allocator]
+static ALLOCATOR: MeasuredAllocator = MeasuredAllocator;
+
+unsafe impl GlobalAlloc for MeasuredAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let _ = MEASURE_ALLOCATIONS.try_with(|enabled| {
+            if enabled.get() {
+                let _ = LARGEST_ALLOCATION
+                    .try_with(|largest| largest.set(largest.get().max(layout.size())));
+            }
+        });
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+fn largest_allocation_during(f: impl FnOnce()) -> usize {
+    LARGEST_ALLOCATION.with(|largest| largest.set(0));
+    MEASURE_ALLOCATIONS.with(|enabled| enabled.set(true));
+    f();
+    MEASURE_ALLOCATIONS.with(|enabled| enabled.set(false));
+    LARGEST_ALLOCATION.with(Cell::get)
+}
 
 fn companion_id(last: u8) -> PlayerId {
     PlayerId::from_bytes([
@@ -108,6 +145,22 @@ fn sixty_five_bodies_report_count_before_an_invalid_body() {
     let mut save = inactive_pair(COMPANION_MAX_STORED + 1);
     save.records[0].dimension = 9;
     assert_corrupt(&save, "companion count");
+}
+
+#[test]
+fn oversized_lifecycle_summary_rejects_without_copying_the_summary() {
+    let record = body(1);
+    let mut memory = lifecycle(record.id, true, 1);
+    memory.memory_revision = 1;
+    memory.memory_operation_id = agent_id(0x81);
+    memory.summary = "s".repeat(COMPANION_MAX_SUMMARY_BYTES + 1);
+    let input = save(vec![record], vec![memory], Vec::new());
+
+    let largest = largest_allocation_during(|| assert_corrupt(&input, "summary"));
+    assert!(
+        largest <= COMPANION_MAX_SUMMARY_BYTES,
+        "rejection allocated {largest} bytes, including a copy of the oversized summary"
+    );
 }
 
 #[test]

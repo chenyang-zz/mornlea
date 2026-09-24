@@ -1243,7 +1243,9 @@ fn canonical_v5_parts(
             format!("{} exceeds limit {MAX_ACTIVE}", save.queues.len()),
         ));
     }
-    let mut records = save.records.clone();
+    // Sort bounded references so malformed variable-length payloads are never
+    // copied before the complete aggregate has passed admission.
+    let mut records: Vec<_> = save.records.iter().collect();
     records.sort_by_key(|left| left.id.to_bytes());
     for (index, body) in records.iter().enumerate() {
         validate_body(body)
@@ -1252,13 +1254,7 @@ fn canonical_v5_parts(
             return Err(corrupt("companion records", "duplicate companion ID"));
         }
     }
-    if save.lifecycles.len() != records.len() {
-        return Err(corrupt(
-            "companion lifecycles",
-            "set does not match records",
-        ));
-    }
-    let mut lifecycles = save.lifecycles.clone();
+    let mut lifecycles: Vec<_> = save.lifecycles.iter().collect();
     lifecycles.sort_by_key(|left| left.id.to_bytes());
     let mut active: Vec<PlayerId> = Vec::new();
     for (index, lifecycle) in lifecycles.iter().enumerate() {
@@ -1283,9 +1279,9 @@ fn canonical_v5_parts(
             format!("{} exceeds limit {MAX_ACTIVE}", active.len()),
         ));
     }
-    validate_queues(&save.queues, &records, CURRENT_SCHEMA)
+    validate_queues(&save.queues, &save.records, CURRENT_SCHEMA)
         .map_err(|detail| corrupt("companion queues", detail))?;
-    let mut queues = save.queues.clone();
+    let mut queues: Vec<_> = save.queues.iter().collect();
     queues.sort_by_key(|left| left.id.to_bytes());
     for queue in &queues {
         if !queue.summary.is_empty() {
@@ -1301,7 +1297,11 @@ fn canonical_v5_parts(
             ));
         }
     }
-    Ok((records, lifecycles, queues))
+    Ok((
+        records.into_iter().cloned().collect(),
+        lifecycles.into_iter().cloned().collect(),
+        queues.into_iter().cloned().collect(),
+    ))
 }
 
 /// Validates bounded plan text: valid UTF-8, no control characters, within the
