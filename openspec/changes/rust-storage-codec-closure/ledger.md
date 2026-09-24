@@ -165,6 +165,15 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 44/44 including nonempty `hostile_`; `runtime_contract hostile_` 9/9.
 - Architecture skill: no change. The short-capacity field check and the absent-target rule are already in the corpus contract and the hostile writer note.
 
+## 2026-09-24 — SDD execution: node 3.3 closed
+
+- Commits: `4827ffbf` passive caller-buffer writer; `7497d3cc` deletes unused `ByteWriter::zeroes`.
+- Review of `817a07b6..4827ffbf` required that deletion. The fix re-review of `7497d3cc` approved. No remaining Critical or Important findings.
+- Held for the final review, outside this node: eight pre-existing `storage_corpus` clippy lints (`redundant-field-names`, `collapsible-if`, `needless-return`) in the player, region, metadata, and hostile executors.
+- No save-family case count change. Schema stays v1. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates: `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test passive_buffer --locked` 10/10; `cargo clippy -p mornlea_storage --lib --locked -- -D warnings` pass. `runtime_contract passive_` 7/7 and `go test ./packages/server/storage/passive -count=1` were reported by the implementer.
+- Architecture skill: no change. The caller-buffer rule is already recorded for the other noncompressed writers.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
