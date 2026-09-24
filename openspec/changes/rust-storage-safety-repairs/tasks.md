@@ -30,4 +30,4 @@
 
 ## 4. Integrated acceptance
 
-- [ ] 4.1 [Close safety evidence and downstream consumers](plans/03-closure.md#node-4-1). Review crate guide and run full storage target, `make rust-check`, `make dev-check`, `make test-race`, `go test ./packages/audit -count=1`, and `openspec validate --all --strict --no-interactive`; record actual counts and SHA in `ledger.md`.
+- [x] 4.1 [Close safety evidence and downstream consumers](plans/03-closure.md#node-4-1). Review crate guide and run full storage target, `make rust-check`, `make dev-check`, `make test-race`, `go test ./packages/audit -count=1`, and `openspec validate --all --strict --no-interactive`; record actual counts and SHA in `ledger.md`.
