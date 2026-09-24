@@ -27,3 +27,17 @@
 - Artifact reconciliation: `proposal.md`, `design.md` and task 1.1 now require complete F1 evidence rather than treating the baseline archive or a stale `rust-runtime-foundation` link as completion.
 - Orchestration: the controller performed the bounded planning correction directly because the artifacts and prerequisite ruling are tightly coupled; no implementation or delegated worker was started.
 - Architecture skill: no change. This is an application of the existing target-architecture and migration-seam rules, not a new stable cross-task convention.
+
+## 2026-09-24 — Superpowers F2 planning execution
+
+- Baseline: `e951a4eb8d2b713fa83054b66f404ae104ea3dbe` on `dev` after `git pull origin dev` (already up to date).
+- User scope: execute `rust-authoritative-server` planning with Superpowers (`brainstorming`, `writing-plans`) and project implementation-orchestration; outputs stay in this OpenSpec change, not `docs/superpowers/`.
+- Approach ruling: three options considered — (A) defer detailed packets until F1 closes, (B) high-level tasks only, (C) full execution-contract plus linked `plans/` like F1/storage successors. **Recommended and selected: C** so workers have frozen interfaces and oracles while implementation remains blocked on task 1.1.
+- Artifacts added: [execution-contract.md](execution-contract.md), eight packets under [plans/](plans/), Superpowers-style [tasks.md](tasks.md) index with slice nodes 2.1a–2.1c, refreshed prerequisite wording in `proposal.md` and `design.md`.
+- Orchestration: controller performed planning directly; no implementation worker, no `mornlea_server` crate, no runtime corpus writes.
+- F1 gate inspection (planning-time): archived successors present in tree; `rust-storage-codec-closure` still open; archived `rust-runtime-foundation` tasks 5.2–5.14 and 6.3–6.6 still unchecked — **task 1.1 would record blocked today**.
+- Validation (planning structure only):
+  - `npx --yes @fission-ai/openspec@1.7.0 validate rust-authoritative-server --strict --no-interactive`: valid.
+  - `npx --yes @fission-ai/openspec@1.7.0 validate --all --strict --no-interactive`: 127 passed, 0 failed.
+  - Local link scan: all `plans/*.md` and task anchors resolve within the change directory.
+- Architecture skill: no change; inventory and single-core transport rules restate existing target-architecture boundaries.
