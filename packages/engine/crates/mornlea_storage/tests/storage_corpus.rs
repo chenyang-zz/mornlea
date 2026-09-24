@@ -139,17 +139,15 @@ fn storage_corpus_rejects_empty_selection() {
 #[test]
 fn storage_corpus_rejects_unregistered_route() {
     let case = FrozenCase {
-        id: "save.player/9/decode/sample".to_string(),
+        id: "save.player/9/order/sample".to_string(),
         family: "save.player".to_string(),
         version: "9".to_string(),
         consumer: CorpusConsumer::Storage,
         packet_key: None,
-        operation: "decode".to_string(),
-        arguments: serde_json::json!({
-            "requested_player_id": "0123456789abcdef0123456789abcdef"
-        }),
+        operation: "order".to_string(),
+        arguments: serde_json::json!({}),
         input_format: runtime_corpus::InputFormat::Binary,
-        input: vec![0x00],
+        input: vec![],
         input_json: None,
         normalized: serde_json::json!({"kind": "error", "category": "corrupt"}),
         encoded: None,
@@ -159,6 +157,16 @@ fn storage_corpus_rejects_unregistered_route() {
     assert!(
         err.is_err(),
         "cases on unregistered routes must fail before codec execution"
+    );
+    let payload = err.unwrap_err();
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("");
+    assert!(
+        message.contains("unregistered storage route"),
+        "expected unregistered-route panic, got: {message}"
     );
 }
 
