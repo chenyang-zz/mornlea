@@ -72,6 +72,7 @@ pub use passive::{
     CURRENT_SCHEMA as PASSIVE_CURRENT_SCHEMA, ENVELOPE_VERSION as PASSIVE_ENVELOPE_VERSION,
     MAX_FILE_LENGTH as PASSIVE_MAX_FILE_LENGTH, MAX_PASSIVE_MOBS, PassiveMob, PassiveMobs,
     PassiveMobsSave, decode as decode_passive_mobs, encode as encode_passive_mobs,
+    encode_passive_mobs_into, passive_mobs_encoded_len,
 };
 pub use player::{
     CURRENT_SCHEMA as PLAYER_CURRENT_SCHEMA, ENVELOPE_LENGTH as PLAYER_ENVELOPE_LENGTH,

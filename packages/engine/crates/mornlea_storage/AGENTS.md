@@ -51,6 +51,13 @@ the next section.
 | player identity | `src/identity.rs` | — | `PlayerId` UUIDv4 wrapper shared by the entity families |
 | item rules | `src/items.rs` | — | Wire item IDs and fixed slot counts. Ordinary stack limits and durability delegate to `mornlea_domain`; `checked_item_stack` rejects any other triple. Player armor stays a raw triple |
 
+## `save.passive` output boundary (`src/passive.rs`)
+
+- `passive_mobs_encoded_len` and `encode_passive_mobs_into` write the exact v1
+  aggregate length into a caller buffer and preserve any tail. A short buffer
+  returns `StorageError::OutputTooSmall` without writing; invalid input reports
+  corruption before capacity and likewise leaves the entire buffer unchanged.
+
 ## `save.hostile` output boundary (`src/hostile.rs`)
 
 - `hostile_mobs_encoded_len` and `encode_hostile_mobs_into` write the exact v2
