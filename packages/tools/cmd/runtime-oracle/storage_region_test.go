@@ -481,6 +481,23 @@ func regionManifest(t *testing.T, root string, candidates []regionCandidate) Inv
 		t.Fatalf("load frozen manifest: %v", err)
 	}
 	selection := regionSelection(t, root, candidates)
+	integrated := true
+	for _, want := range selection.Cases {
+		found := false
+		for _, existing := range base.Cases {
+			if existing.ID == want.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			integrated = false
+			break
+		}
+	}
+	if integrated {
+		return base
+	}
 	merged, err := mergeStorageSelections(root, base, selection)
 	if err != nil {
 		t.Fatalf("merge region selection: %v", err)
@@ -580,14 +597,14 @@ func TestStorageRegionSeedArgumentsValidate(t *testing.T) {
 	}
 }
 
-func TestStorageRegionBaselineRejectsUnregisteredRoute(t *testing.T) {
+func TestStorageRegionBaselineCarriesRegisteredRoutes(t *testing.T) {
 	root := mustRepoRoot(t)
 	candidates := regionSeedCandidates(t)
 	selection := regionSelection(t, root, candidates)
 	registry := BaselineConsumerRegistry()
 	for _, route := range selection.Routes {
-		if storageRouteRegistered(registry, route) {
-			t.Fatalf("baseline registry already carries route %s/%s/%s before integration", route.FamilyID, route.Version, route.Operation)
+		if !storageRouteRegistered(registry, route) {
+			t.Fatalf("baseline registry missing route %s/%s/%s after integration", route.FamilyID, route.Version, route.Operation)
 		}
 	}
 }
@@ -676,6 +693,51 @@ func TestStorageRegionCandidatesExportForReview(t *testing.T) {
 	root := mustRepoRoot(t)
 	exportRoot := filepath.Join(t.TempDir(), "region-export-parent")
 	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
+	candidates := regionSeedCandidates(t)
+	child := exportRegionSelectionCandidate(t, root, candidates)
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
+	}
+	if _, err := readStorageSelection(child); err != nil {
+		t.Fatalf("reload exported selection: %v", err)
+	}
+}
+
+// TestStorageRegionWriteIntegratedManifest encodes the merged region selection
+// into MORNLEA_WRITE_INVENTORY after ReconcileWorking. The controller sets
+// that path to the tracked contracts file.
+func TestStorageRegionWriteIntegratedManifest(t *testing.T) {
+	dest := strings.TrimSpace(os.Getenv("MORNLEA_WRITE_INVENTORY"))
+	if dest == "" {
+		t.Skip("MORNLEA_WRITE_INVENTORY unset")
+	}
+	root := mustRepoRoot(t)
+	merged := regionManifest(t, root, regionSeedCandidates(t))
+	families, live, err := Discover(root)
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if _, err := ReconcileWorking(root, merged, families, live, BaselineConsumerRegistry(), BaselineNegativeCoverageExceptions()); err != nil {
+		t.Fatalf("reconcile merged manifest: %v", err)
+	}
+	encoded, err := encodeInventory(merged)
+	if err != nil {
+		t.Fatalf("encode inventory: %v", err)
+	}
+	if err := os.WriteFile(dest, append(encoded, '\n'), 0o644); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+}
+
+// TestStorageRegionExportFromEnvironment writes the reviewed selection and
+// assets when RUNTIME_ORACLE_EXPORT_DIR is set outside the test. The
+// controller uses this hook to integrate tracked manifest assets.
+func TestStorageRegionExportFromEnvironment(t *testing.T) {
+	exportRoot := strings.TrimSpace(os.Getenv(runtimeOracleExportDirEnv))
+	if exportRoot == "" {
+		t.Skip("RUNTIME_ORACLE_EXPORT_DIR unset")
+	}
+	root := mustRepoRoot(t)
 	candidates := regionSeedCandidates(t)
 	child := exportRegionSelectionCandidate(t, root, candidates)
 	if child == "" {

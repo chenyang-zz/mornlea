@@ -4051,9 +4051,18 @@
         {
           "path": "packages/server/storage/region/region_format_test.go",
           "sha256": "sha256:fba650f85d1084bb8266cbdaa4c93952afeb0138e918e1e26da8aa44743c3232"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/storage_region_test.go",
+          "sha256": "sha256:c5ce4d58016c4139174b7b4a8783bdcf6c970f13641e26f83e2487cd791d8c40"
         }
       ],
-      "cases": null
+      "cases": [
+        "save.region/1/decode/bank-committed-gen1",
+        "save.region/1/decode/bank-standby-gen0",
+        "save.region/1/decode/superblock-seed",
+        "save.region/1/encode/bank-committed-gen1"
+      ]
     },
     {
       "id": "save.world-metadata",
@@ -27605,6 +27614,114 @@
         "0"
       ],
       "rust_consumer": "mornlea_protocol"
+    },
+    {
+      "id": "save.region/1/decode/bank-committed-gen1",
+      "family": "save.region",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {
+        "dimension": -3,
+        "x": -1,
+        "z": 2,
+        "file_size": "65536",
+        "component": "bank"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-committed-gen1.input.bin",
+        "sha256": "sha256:e254fdbd9b07b3640cab85bb4fd842864187f80df13ab6201bfcb9d3a246410f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-committed-gen1.expected.json",
+        "sha256": "sha256:a1a2a2523451b3b13cb34c7affe2416a6d8985ebfd01bdc840bef2ef0bf9e129"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.region/1/decode/bank-standby-gen0",
+      "family": "save.region",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {
+        "dimension": -3,
+        "x": -1,
+        "z": 2,
+        "file_size": "61440",
+        "component": "bank"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-standby-gen0.input.bin",
+        "sha256": "sha256:c9ad37bac0c6898d8ab0734d4bf7c55bb2b3fb0e4598bc372441002de9634e4a"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-standby-gen0.expected.json",
+        "sha256": "sha256:0d05aa26a50172710ed1f895c783a5c01caf5da861bbf0a6e55bbb1071d555f7"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.region/1/decode/superblock-seed",
+      "family": "save.region",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {
+        "dimension": -3,
+        "x": -1,
+        "z": 2,
+        "file_size": "65536",
+        "component": "superblock"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_superblock-seed.input.bin",
+        "sha256": "sha256:ed78a60ab2731cde5aa1fba829335d0ed9d83e6ef4d4ec1cae5a950ed8300bae"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_superblock-seed.expected.json",
+        "sha256": "sha256:99c3f6421192bb7cc5adfae0bae3dfe6da2d4fcb9141b65708849ce50411b719"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.region/1/encode/bank-committed-gen1",
+      "family": "save.region",
+      "version": "1",
+      "operation": "encode",
+      "arguments": {
+        "dimension": -3,
+        "x": -1,
+        "z": 2,
+        "file_size": "65536",
+        "component": "bank"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_encode_bank-committed-gen1.input.bin",
+        "sha256": "sha256:e254fdbd9b07b3640cab85bb4fd842864187f80df13ab6201bfcb9d3a246410f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_encode_bank-committed-gen1.expected.json",
+        "sha256": "sha256:2b96931ab03564f2acdb2dc114895527c5c7ebae77a55274a01206b1450041d5"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_encode_bank-committed-gen1.encoded.bin",
+        "sha256": "sha256:e254fdbd9b07b3640cab85bb4fd842864187f80df13ab6201bfcb9d3a246410f"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
     }
   ]
 }

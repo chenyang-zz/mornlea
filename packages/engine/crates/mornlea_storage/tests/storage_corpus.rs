@@ -18,29 +18,34 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct StorageRoute {
-    family: String,
-    version: String,
-    operation: String,
+    family: &'static str,
+    version: &'static str,
+    operation: &'static str,
 }
 
 /// Closed route table for save corpus execution. Node 1.3 appends the first
 /// real `save.region` routes after the controller integrates reviewed assets.
-const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[];
-
-fn route_for_case(case: &FrozenCase) -> StorageRoute {
+const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
     StorageRoute {
-        family: case.family.clone(),
-        version: case.version.clone(),
-        operation: case.operation.clone(),
-    }
-}
+        family: "save.region",
+        version: "1",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.region",
+        version: "1",
+        operation: "encode",
+    },
+];
 
-fn route_is_registered(route: &StorageRoute) -> bool {
-    REGISTERED_STORAGE_ROUTES
-        .iter()
-        .any(|registered| registered == route)
+fn route_is_registered_for_case(case: &FrozenCase) -> bool {
+    REGISTERED_STORAGE_ROUTES.iter().any(|route| {
+        route.family == case.family
+            && route.version == case.version
+            && route.operation == case.operation
+    })
 }
 
 /// Executes every selected storage case through the registered route table.
@@ -60,15 +65,29 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
             "case {} names no operation",
             case.id
         );
-        let route = route_for_case(case);
         assert!(
-            route_is_registered(&route),
+            route_is_registered_for_case(case),
             "unregistered storage route {}/{}/{} for case {}",
-            route.family,
-            route.version,
-            route.operation,
+            case.family,
+            case.version,
+            case.operation,
             case.id
         );
+    }
+    let region_cases: Vec<FrozenCase> = cases
+        .iter()
+        .filter(|case| case.family == "save.region")
+        .cloned()
+        .collect();
+    if !region_cases.is_empty() {
+        region::execute_region_cases(&region_cases);
+    }
+    let other = cases
+        .iter()
+        .filter(|case| case.family != "save.region")
+        .count();
+    if other > 0 {
+        panic!("storage corpus has {other} case(s) on families without a dispatcher");
     }
 }
 

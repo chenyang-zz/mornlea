@@ -132,7 +132,11 @@ func Discover(root string) ([]Family, Identities, error) {
 			[]string{"packages/server/storage/metadata.go", "packages/server/storage/metadata_test.go"}),
 		saveFamily(root, "save.region", strconv.Itoa(regionCurrent), []string{strconv.Itoa(regionCurrent)},
 			"packages/server/storage/region/region_format.go",
-			[]string{"packages/server/storage/region/region_format.go", "packages/server/storage/region/region_format_test.go"}),
+			[]string{
+				"packages/server/storage/region/region_format.go",
+				"packages/server/storage/region/region_format_test.go",
+				"packages/tools/cmd/runtime-oracle/storage_region_test.go",
+			}),
 		{
 			ID: "kernel.pathfind", Kind: "kernel", Role: "event",
 			CurrentVersion: "1", SupportedVersions: []string{"1"},
