@@ -1260,12 +1260,52 @@ mod tests {
         ]
     }
 
+    const ADVERSARIAL_INTEGRATED_CASE_IDS: &[&str] = &[
+        "save.player/9/decode/wrong-requested-id",
+        "save.player/9/decode/revision-zero",
+        "save.player/9/decode/invalid-version-zero",
+        "save.player/9/decode/invalid-version-future",
+        "save.player/9/decode/truncated-header",
+        "save.player/9/decode/truncated-payload",
+        "save.player/9/decode/trailing-byte",
+        "save.player/9/decode/corrupt-crc",
+        "save.player/9/decode/payload-over-1mib",
+        "save.player/9/decode/invalid-health",
+        "save.player/9/decode/invalid-pitch",
+        "save.player/9/decode/invalid-respawn-flag",
+    ];
+
     #[test]
     fn player_adversarial_case_ids_recognized() {
         assert!(player_adversarial_case(
             "save.player/9/decode/wrong-requested-id"
         ));
         assert!(!player_adversarial_case("save.player/9/decode/v9-fixture"));
+    }
+
+    #[test]
+    fn player_adversarial_executes_integrated_manifest_cases() {
+        let cases = player_cases_from_manifest()
+            .into_iter()
+            .filter(|case| player_adversarial_case(&case.id))
+            .collect::<Vec<_>>();
+        let found: BTreeMap<&str, &FrozenCase> = cases
+            .iter()
+            .map(|case| (case.id.as_str(), case))
+            .collect();
+        for id in ADVERSARIAL_INTEGRATED_CASE_IDS {
+            if !found.contains_key(id) {
+                panic!("integrated manifest missing adversarial case {id}");
+            }
+        }
+        if cases.len() != ADVERSARIAL_INTEGRATED_CASE_IDS.len() {
+            panic!(
+                "integrated manifest has {} adversarial cases, want {}",
+                cases.len(),
+                ADVERSARIAL_INTEGRATED_CASE_IDS.len()
+            );
+        }
+        execute_player_cases(&cases);
     }
 
     #[test]
