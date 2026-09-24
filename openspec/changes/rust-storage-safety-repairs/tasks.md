@@ -14,7 +14,7 @@
 
 ## 1. Companion admission
 
-- [ ] 1.1 [Preserve v2–v4 queue owner and ordered content](plans/01-admission.md#node-1-1). Modify `src/companion.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_legacy_queue --locked`.
+- [x] 1.1 [Preserve v2–v4 queue owner and ordered content](plans/01-admission.md#node-1-1). Modify `src/companion.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_legacy_queue --locked`.
 - [ ] 1.2 [Reject oversized and mismatched v5 aggregates before clone](plans/01-admission.md#node-1-2). Modify `src/companion.rs`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_companion_bounds --locked`.
 
 ## 2. Chunk publication

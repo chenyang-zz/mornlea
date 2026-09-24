@@ -378,8 +378,12 @@ fn decode_legacy_payload(
             records.push(body);
             continue;
         }
-        let queue = decode_queue_sections(reader, schema)
+        let mut queue = decode_queue_sections(reader, schema)
             .map_err(|detail| corrupt("companion record", format!("{index}: {detail}")))?;
+        // The queue section has no owner field. Bind it to this body before
+        // deciding whether the section is empty, so a later consumer cannot
+        // attach the work to the wrong record by queue order.
+        queue.id = body.id;
         if queue.has_current || !queue.pending.is_empty() || !queue.summary.is_empty() {
             queues.push(queue);
         }

@@ -36,3 +36,10 @@ No runtime gate is claimed by this planning change. At implementation closure, n
 - Execution shape: strict subagent-driven development. Implementer role is `superpowers-implementer`; review role is `superpowers-reviewer`. Nodes run serially because `companion.rs`, `chunk.rs` and `lib.rs` overlap. At most one implementer edits the tree at a time.
 - Readiness: yes to packet completeness, requirement trace (1.1–4.1), signature agreement, acyclic serial order, settled rejection policy, real negative boundaries, independent node rejection, and preservation of the clean tree. Pre-flight found no plan contradiction that blocks node 1.1. `openspec` CLI is absent in this environment and will be installed at node 4.1 from the documented `@fission-ai/openspec@1.7.0` pin.
 - Architecture skill: no change.
+
+## Node 1.1
+
+- Project subagents `superpowers-implementer` and `superpowers-reviewer` are not dispatchable in this session (Task rejects that subagent type). The user directed the controller to continue and run the node commands directly. The controller implemented node 1.1 in place and did not substitute a generic subagent.
+- RED: `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_legacy_queue --locked` discovered 1 test and failed because `companions-v2.bin` retained a queue whose `id` was all zero while command, plan, and FIFO already matched the Go fixture.
+- GREEN: the same command passed 1/1 after assigning `queue.id = body.id` before the nonempty predicate in `decode_legacy_payload`. `runtime_contract companion_` passed 6/6. `make rust` exited 0. `go test ./packages/server/storage/companion -count=1` passed.
+- Review: controller self-review. The v2/v3/v4 fixtures now compare full ordered queue content, and the two v4 queues keep distinct body IDs. No fixture or Go source changed.
