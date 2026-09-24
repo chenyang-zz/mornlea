@@ -32,6 +32,15 @@ The controller used Superpowers brainstorming and writing-plans with the project
 
 This codec change claims no implementation or runtime gate. At implementation closure, node 5.2 records actual discovered/executed case counts, all gate outputs, source/result SHAs, review and rollback evidence.
 
+## 2026-09-24 — SDD execution: node 1.1 closed
+
+- Orchestration: `superpowers-implementer` + `superpowers-reviewer` via Cloud bridge (`.cursor/rules/cloud-project-subagents.mdc`); reviewer model `grok-4.7-xhigh`, implementer `composer-2.5`.
+- Commits: `b4991d0b` initial selection infra; `0b4504a5` test-only merge/read; `526c0c1c` candidate symlink walk aligned with `exportGeneratedAssets`.
+- Review: first pass found production `cmd/runtime-oracle` build break (merge in prod calling test-only `validProducerIDs`); fixed by moving read/merge to `storage_selection_test.go`. Re-review approved after symlink walk fix.
+- Gates: `go build ./packages/tools/cmd/runtime-oracle`; `go test ./packages/tools/cmd/runtime-oracle -run '^TestStorageSelection' -count=1`; `go test ./packages/audit -run '^TestRuntimeOracleInternalDependencies$' -count=1`.
+- Node 1.2 dispatched in background (`superpowers-implementer`).
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
@@ -43,6 +52,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
   - `go test ./packages/tools/cmd/runtime-oracle -run '^TestStorageSelection' -count=1` — pass
   - `go test ./packages/tools/cmd/runtime-oracle -count=1` — pass
   - `go test ./packages/audit -run '^TestRuntimeOracleInternalDependencies$' -count=1` — pass
+
+### Node 1.2 — Rust storage corpus consumer
+
+- Added `CorpusConsumer::Storage` / `mornlea_storage` to `packages/engine/tests/runtime_corpus.rs` and the closed consumer map in `packages/engine/tests/AGENTS.md`.
+- Added `packages/engine/crates/mornlea_storage/tests/storage_corpus.rs` with an empty route table, zero-case rejection, unregistered-route rejection, and manifest loader acceptance for `mornlea_storage`.
+- Added `StorageValueV1` encoder and cross-language golden tree digest in `tests/storage_corpus/value_digest.rs`; Go oracle `TestStorageValueV1CrossLanguageGoldenTree` in `storage_value_digest_test.go` pins `sha256:9afe6b3bc14a7b3daa74b6be41bc34d2357ac15a874c92a20a8f84c3bf66206b`.
+- Validation:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test storage_corpus --locked` — 7/7 pass
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_domain -p mornlea_protocol -p mornlea_engine --tests --locked` — pass
+  - `go test ./packages/tools/cmd/runtime-oracle -run TestStorageValueV1CrossLanguageGoldenTree -count=1` — pass
 
 ## Accepted safety handoff
 
