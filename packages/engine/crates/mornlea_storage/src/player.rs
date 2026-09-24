@@ -5,9 +5,9 @@
 //! the end and older files keep their byte layout. Only v9 is written; older
 //! schemas are read once and migrated to the current normalized result.
 
-use crate::bytes::{ByteReader, ByteWriter};
+use crate::bytes::{ByteReader, SliceWriter};
 use crate::crc32c::crc32c_join;
-use crate::error::{StorageResult, corrupt, future_version};
+use crate::error::{StorageError, StorageResult, corrupt, future_version};
 use crate::identity::PlayerId;
 use crate::items::{BACKPACK_SLOTS, HOTBAR_SLOTS, Inventory, ItemStack, item_max_durability};
 
@@ -39,6 +39,16 @@ const RESPAWN_BYTES: usize = 1 + 12 + 4;
 const ARMOR_BYTES: usize = 4 * 5;
 
 const MAGIC: [u8; 4] = *b"MCPL";
+const V9_FIXED_WITHOUT_NAME_AND_SAFE: usize = 4
+    + 16
+    + 8
+    + 1
+    + HOTBAR_BYTES
+    + BACKPACK_BYTES
+    + HEALTH_BYTES
+    + HUNGER_BYTES
+    + RESPAWN_BYTES
+    + ARMOR_BYTES;
 const MAX_HEALTH: u8 = 20;
 const MAX_HUNGER: u8 = 20;
 const SATURATION_MILLI_PER_POINT: u16 = 1000;
@@ -98,30 +108,66 @@ pub struct PlayerSave {
     pub armor: [ItemStack; 4],
 }
 
-/// Encodes one player as the stable MCPL v1 envelope at the current schema.
-pub fn encode(save: &PlayerSave) -> StorageResult<Vec<u8>> {
+/// Reports the exact on-disk byte length for a valid v9 player save.
+pub fn encoded_len(save: &PlayerSave) -> StorageResult<usize> {
     validate_save(save)?;
-    let payload = encode_v9(save);
-    if payload.len() > MAX_PAYLOAD {
+    let payload = v9_payload_len(save)?;
+    if payload > MAX_PAYLOAD {
         return Err(corrupt(
             "player payload",
-            format!("{} exceeds limit {MAX_PAYLOAD}", payload.len()),
+            format!("{payload} exceeds limit {MAX_PAYLOAD}"),
         ));
     }
-    let mut encoded = ByteWriter::new();
-    encoded.bytes(&MAGIC);
-    encoded.u32(ENVELOPE_VERSION);
-    encoded.u32(CURRENT_SCHEMA);
-    encoded.bytes(&save.player_id.to_bytes());
-    encoded.u64(save.revision);
-    encoded.u32(payload.len() as u32);
-    let crc_start = encoded.len();
-    encoded.u32(0);
-    let mut bytes = encoded.into_vec();
-    bytes.extend_from_slice(&payload);
-    let checksum = crc32c_join(&[&bytes[8..crc_start], &payload]);
-    bytes[crc_start..crc_start + 4].copy_from_slice(&checksum.to_le_bytes());
-    Ok(bytes)
+    ENVELOPE_LENGTH
+        .checked_add(payload)
+        .ok_or_else(|| corrupt("player record", "length overflows"))
+}
+
+/// Writes a complete MCPL v9 record into `dst`, preserving any tail beyond
+/// the returned length.
+pub fn encode_into(save: &PlayerSave, dst: &mut [u8]) -> StorageResult<usize> {
+    validate_save(save)?;
+    let payload = v9_payload_len(save)?;
+    if payload > MAX_PAYLOAD {
+        return Err(corrupt(
+            "player payload",
+            format!("{payload} exceeds limit {MAX_PAYLOAD}"),
+        ));
+    }
+    let needed = ENVELOPE_LENGTH
+        .checked_add(payload)
+        .ok_or_else(|| corrupt("player record", "length overflows"))?;
+    if dst.len() < needed {
+        return Err(StorageError::OutputTooSmall {
+            needed,
+            available: dst.len(),
+        });
+    }
+    let crc_offset = {
+        let mut writer = SliceWriter::new(&mut dst[..needed]);
+        writer.bytes(&MAGIC);
+        writer.u32(ENVELOPE_VERSION);
+        writer.u32(CURRENT_SCHEMA);
+        writer.bytes(&save.player_id.to_bytes());
+        writer.u64(save.revision);
+        writer.u32(payload as u32);
+        let crc_offset = writer.pos();
+        writer.u32(0);
+        write_v9_payload(&mut writer, save);
+        debug_assert_eq!(writer.pos(), needed);
+        crc_offset
+    };
+    let checksum = crc32c_join(&[&dst[8..40], &dst[ENVELOPE_LENGTH..needed]]);
+    SliceWriter::new(&mut dst[..needed]).patch_u32(crc_offset, checksum);
+    Ok(needed)
+}
+
+/// Encodes one player as the stable MCPL v1 envelope at the current schema.
+pub fn encode(save: &PlayerSave) -> StorageResult<Vec<u8>> {
+    let needed = encoded_len(save)?;
+    let mut buf = vec![0u8; needed];
+    encode_into(save, &mut buf)?;
+    Ok(buf)
 }
 
 /// Decodes and validates one player, migrating older schemas to the current
@@ -277,90 +323,91 @@ impl PlayerDto {
     }
 }
 
-fn encode_v9(save: &PlayerSave) -> Vec<u8> {
-    let mut payload = encode_v8(save);
+fn v9_payload_len(save: &PlayerSave) -> StorageResult<usize> {
+    let name_len = save.display_name.len();
+    let mut len = V9_FIXED_WITHOUT_NAME_AND_SAFE
+        .checked_add(name_len)
+        .ok_or_else(|| corrupt("player payload", "length overflows"))?;
+    if save.safe.is_some() {
+        len = len
+            .checked_add(16)
+            .ok_or_else(|| corrupt("player payload", "length overflows"))?;
+    }
+    Ok(len)
+}
+
+fn write_v9_payload(writer: &mut SliceWriter<'_>, save: &PlayerSave) {
+    write_v8_payload(writer, save);
     for stack in &save.armor {
-        append_stack_bytes(&mut payload, stack);
+        writer.u16(stack.item);
+        writer.u8(stack.count);
+        writer.u16(stack.durability);
     }
-    payload
 }
 
-fn append_stack_bytes(payload: &mut Vec<u8>, stack: &ItemStack) {
-    payload.extend_from_slice(&stack.item.to_le_bytes());
-    payload.push(stack.count);
-    payload.extend_from_slice(&stack.durability.to_le_bytes());
-}
-
-fn encode_v8(save: &PlayerSave) -> Vec<u8> {
-    let mut payload = encode_v7(save);
+fn write_v8_payload(writer: &mut SliceWriter<'_>, save: &PlayerSave) {
+    write_v7_payload(writer, save);
     if !save.respawn_present {
-        // Present=0 zeroes the position and dimension bytes so the same logical
-        // state always encodes to the same bytes regardless of caller residue.
-        payload.resize(payload.len() + RESPAWN_BYTES, 0);
-        return payload;
+        writer.zeroes(RESPAWN_BYTES);
+        return;
     }
-    payload.push(1);
+    writer.u8(1);
     for value in save.respawn_position {
-        payload.extend_from_slice(&value.to_bits().to_le_bytes());
+        writer.f32(value);
     }
-    payload.extend_from_slice(&(save.respawn_dimension as u32).to_le_bytes());
-    payload
+    writer.u32(save.respawn_dimension as u32);
 }
 
-fn encode_v7(save: &PlayerSave) -> Vec<u8> {
-    let mut payload = encode_v5(save);
-    payload.push(save.hunger);
-    payload.extend_from_slice(&save.saturation_milli.to_le_bytes());
-    payload.extend_from_slice(&save.exhaustion_milli.to_le_bytes());
-    payload
+fn write_v7_payload(writer: &mut SliceWriter<'_>, save: &PlayerSave) {
+    write_v5_payload(writer, save);
+    writer.u8(save.hunger);
+    writer.u16(save.saturation_milli);
+    writer.u16(save.exhaustion_milli);
 }
 
-fn encode_v5(save: &PlayerSave) -> Vec<u8> {
-    let mut payload = encode_v4(save);
-    payload.push(save.health);
-    payload
+fn write_v5_payload(writer: &mut SliceWriter<'_>, save: &PlayerSave) {
+    write_v4_payload(writer, save);
+    writer.u8(save.health);
 }
 
-fn encode_v4(save: &PlayerSave) -> Vec<u8> {
-    let mut payload = ByteWriter::new();
+fn write_v4_payload(writer: &mut SliceWriter<'_>, save: &PlayerSave) {
     let name = save.display_name.as_bytes();
-    payload.u32(name.len() as u32);
-    payload.bytes(name);
-    append_location(&mut payload, &save.current);
-    payload.f32(save.yaw);
-    payload.f32(save.pitch);
+    writer.u32(name.len() as u32);
+    writer.bytes(name);
+    write_location(writer, &save.current);
+    writer.f32(save.yaw);
+    writer.f32(save.pitch);
     match &save.safe {
-        None => payload.u8(0),
+        None => writer.u8(0),
         Some(safe) => {
-            payload.u8(1);
-            append_location(&mut payload, safe);
+            writer.u8(1);
+            write_location(writer, safe);
         }
     }
-    append_hotbar(&mut payload, &save.inventory.hotbar);
+    write_hotbar(writer, &save.inventory.hotbar);
     for stack in &save.inventory.backpack {
-        append_stack(&mut payload, stack);
+        write_stack(writer, stack);
     }
-    payload.into_vec()
 }
 
-fn append_location(encoded: &mut ByteWriter, location: &PlayerLocation) {
-    encoded.u32(location.dimension as u32);
+fn write_location(writer: &mut SliceWriter<'_>, location: &PlayerLocation) {
+    writer.u32(location.dimension as u32);
     for value in location.position {
-        encoded.f32(value);
+        writer.f32(value);
     }
 }
 
-fn append_hotbar(encoded: &mut ByteWriter, hotbar: &crate::items::Hotbar) {
-    encoded.u8(hotbar.selected);
+fn write_hotbar(writer: &mut SliceWriter<'_>, hotbar: &crate::items::Hotbar) {
+    writer.u8(hotbar.selected);
     for stack in &hotbar.slots {
-        append_stack(encoded, stack);
+        write_stack(writer, stack);
     }
 }
 
-fn append_stack(encoded: &mut ByteWriter, stack: &ItemStack) {
-    encoded.u16(stack.item);
-    encoded.u8(stack.count);
-    encoded.u16(stack.durability);
+fn write_stack(writer: &mut SliceWriter<'_>, stack: &ItemStack) {
+    writer.u16(stack.item);
+    writer.u8(stack.count);
+    writer.u16(stack.durability);
 }
 
 fn decode_payload(

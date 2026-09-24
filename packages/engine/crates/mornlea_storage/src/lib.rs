@@ -77,6 +77,7 @@ pub use player::{
     CURRENT_SCHEMA as PLAYER_CURRENT_SCHEMA, ENVELOPE_LENGTH as PLAYER_ENVELOPE_LENGTH,
     MAX_PAYLOAD as PLAYER_MAX_PAYLOAD, OLDEST_SCHEMA as PLAYER_OLDEST_SCHEMA, PlayerLocation,
     PlayerSave, StoredPlayer, decode as decode_player, encode as encode_player,
+    encoded_len as player_encoded_len, encode_into as encode_player_into,
     schema_readable as player_schema_readable,
 };
 pub use region::{

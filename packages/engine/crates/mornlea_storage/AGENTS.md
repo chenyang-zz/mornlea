@@ -22,6 +22,8 @@ not depend on `mornlea_protocol`, `mornlea_engine`, `mornlea_client`, or
 
 - `ByteReader`/`ByteWriter` are the single little-endian byte layer for every
   family; fixed-width integers match the on-disk layout exactly.
+- `SliceWriter` is the caller-buffer cursor used only after a length preflight
+  proves the reserved prefix fits.
 - `crc32c`/`crc32c_join` are the Castagnoli CRC-32C used by every envelope.
   They hash header slices plus payload without materializing the
   concatenation, and are public so contract tests can reseal a mutated
@@ -63,6 +65,13 @@ the next section.
 - The Go region codec remains the read-only format authority during migration.
   Rust decoding rejects invalid extents, reserved bytes and padding without
   repair; a zero-generation bank is standby and cannot be selected as committed.
+
+## `save.player` output boundary (`src/player.rs`)
+
+- `encode_into` and `player_encoded_len` write the exact v9 record length into a
+  caller buffer and preserve any tail. A short buffer returns
+  `StorageError::OutputTooSmall` without writing; invalid input reports
+  corruption before capacity and likewise leaves the entire buffer unchanged.
 
 ## `save.chunk` compression boundary (`src/chunk.rs`)
 
