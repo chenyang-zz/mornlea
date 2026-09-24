@@ -48,7 +48,8 @@ or Agent process packages. These boundaries are enforced by `packages/audit`
   `save.player/5/decode`, `save.player/6/decode`, `save.player/7/decode`,
   `save.player/8/decode`, `save.player/9/decode`, `save.player/9/encode`,
   `save.region/1/decode`,
-  `save.region/1/encode`, and `save.region/1/order`.
+  `save.region/1/encode`, and `save.region/1/order`; and `save.world-metadata/1/decode`
+  through `save.world-metadata/6/decode` plus `save.world-metadata/6/encode`.
 - Enforcement: `TestContractInventoryReconcilesFrozenCorpus`,
   `TestContractInventoryWorkingReportsZeroCaseFamilies`,
   `TestContractInventoryCompleteRejectsZeroCaseFamilies`,

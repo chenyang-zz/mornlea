@@ -16,6 +16,9 @@ mod region;
 #[path = "storage_corpus/player.rs"]
 mod player;
 
+#[path = "storage_corpus/metadata.rs"]
+mod metadata;
+
 use runtime_corpus::{load_cases_for_consumer, CorpusConsumer, FrozenCase, try_load_cases_from_root};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -96,6 +99,41 @@ const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
         version: "1",
         operation: "order",
     },
+    StorageRoute {
+        family: "save.world-metadata",
+        version: "1",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.world-metadata",
+        version: "2",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.world-metadata",
+        version: "3",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.world-metadata",
+        version: "4",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.world-metadata",
+        version: "5",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.world-metadata",
+        version: "6",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.world-metadata",
+        version: "6",
+        operation: "encode",
+    },
 ];
 
 fn route_is_registered_for_case(case: &FrozenCase) -> bool {
@@ -148,9 +186,21 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
     if !player_cases.is_empty() {
         player::execute_player_cases(&player_cases);
     }
+    let metadata_cases: Vec<FrozenCase> = cases
+        .iter()
+        .filter(|case| case.family == "save.world-metadata")
+        .cloned()
+        .collect();
+    if !metadata_cases.is_empty() {
+        metadata::execute_metadata_cases(&metadata_cases);
+    }
     let other = cases
         .iter()
-        .filter(|case| case.family != "save.region" && case.family != "save.player")
+        .filter(|case| {
+            case.family != "save.region"
+                && case.family != "save.player"
+                && case.family != "save.world-metadata"
+        })
         .count();
     if other > 0 {
         panic!("storage corpus has {other} case(s) on families without a dispatcher");
@@ -317,4 +367,49 @@ fn storage_corpus_loader_accepts_storage_consumer_in_manifest() {
         .expect("loader must accept mornlea_storage consumer");
     assert_eq!(cases.len(), 1);
     assert_eq!(cases[0].consumer, CorpusConsumer::Storage);
+}
+
+const METADATA_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.world-metadata/1/decode/v1-canonical",
+    "save.world-metadata/2/decode/v2-canonical",
+    "save.world-metadata/3/decode/v3-canonical",
+    "save.world-metadata/4/decode/v4-canonical",
+    "save.world-metadata/5/decode/v5-canonical",
+    "save.world-metadata/5/decode/wrong-dimension-count",
+    "save.world-metadata/6/decode/corrupt-crc",
+    "save.world-metadata/6/decode/invalid-difficulty-3",
+    "save.world-metadata/6/decode/invalid-version-future",
+    "save.world-metadata/6/decode/invalid-version-zero",
+    "save.world-metadata/6/decode/trailing-byte",
+    "save.world-metadata/6/decode/truncated-record",
+    "save.world-metadata/6/decode/v6-weather-255",
+    "save.world-metadata/6/decode/wrong-header",
+    "save.world-metadata/6/encode/v6-boundary",
+];
+
+#[test]
+fn metadata_corpus_executes_all_integrated_case_ids() {
+    use std::collections::BTreeMap;
+
+    let cases: Vec<FrozenCase> = load_cases_for_consumer(CorpusConsumer::Storage)
+        .into_iter()
+        .filter(|case| case.family == "save.world-metadata")
+        .collect();
+    let found: BTreeMap<&str, &FrozenCase> = cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect();
+    for id in METADATA_INTEGRATED_CASE_IDS {
+        if !found.contains_key(id) {
+            panic!("integrated manifest missing metadata case {id}");
+        }
+    }
+    if cases.len() != METADATA_INTEGRATED_CASE_IDS.len() {
+        panic!(
+            "integrated manifest has {} save.world-metadata cases, want {}",
+            cases.len(),
+            METADATA_INTEGRATED_CASE_IDS.len()
+        );
+    }
+    metadata::execute_metadata_cases(&cases);
 }

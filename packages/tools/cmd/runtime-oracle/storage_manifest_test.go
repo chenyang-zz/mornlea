@@ -218,6 +218,21 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.player/9/encode/v4-fixture-reencode":               true,
 		"save.player/9/encode/v8-fixture-reencode":               true,
 		"save.player/9/encode/v9-canonical":                      true,
+		"save.world-metadata/1/decode/v1-canonical":                true,
+		"save.world-metadata/2/decode/v2-canonical":                true,
+		"save.world-metadata/3/decode/v3-canonical":                true,
+		"save.world-metadata/4/decode/v4-canonical":                true,
+		"save.world-metadata/5/decode/v5-canonical":                true,
+		"save.world-metadata/5/decode/wrong-dimension-count":       true,
+		"save.world-metadata/6/decode/corrupt-crc":                 true,
+		"save.world-metadata/6/decode/invalid-difficulty-3":        true,
+		"save.world-metadata/6/decode/invalid-version-future":      true,
+		"save.world-metadata/6/decode/invalid-version-zero":        true,
+		"save.world-metadata/6/decode/trailing-byte":               true,
+		"save.world-metadata/6/decode/truncated-record":            true,
+		"save.world-metadata/6/decode/v6-weather-255":              true,
+		"save.world-metadata/6/decode/wrong-header":                true,
+		"save.world-metadata/6/encode/v6-boundary":                 true,
 	}
 	for _, c := range frozen.Cases {
 		if !strings.HasPrefix(c.Family, "save.") {
@@ -226,8 +241,8 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		if !wantSaveCases[c.ID] {
 			t.Fatalf("baseline carries unexpected save case %s", c.ID)
 		}
-		if c.Family != "save.region" && c.Family != "save.player" {
-			t.Fatalf("save case %s has family %s, want save.region or save.player", c.ID, c.Family)
+		if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" {
+			t.Fatalf("save case %s has family %s, want save.region, save.player, or save.world-metadata", c.ID, c.Family)
 		}
 	}
 	for id := range wantSaveCases {
@@ -238,6 +253,9 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 				wantFamily := "save.region"
 				if strings.HasPrefix(id, "save.player/") {
 					wantFamily = "save.player"
+				}
+				if strings.HasPrefix(id, "save.world-metadata/") {
+					wantFamily = "save.world-metadata"
 				}
 				if c.Family != wantFamily {
 					t.Fatalf("pinned save case %s has family %s, want %s", id, c.Family, wantFamily)

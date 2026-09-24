@@ -132,7 +132,11 @@ func Discover(root string) ([]Family, Identities, error) {
 			"packages/server/storage/passive/passive_codec.go", versionedBins("packages/server/storage/passive/testdata", "passive-mobs", passiveSupported)),
 		saveFamily(root, "save.world-metadata", strconv.Itoa(metadataCurrent), intsToStrings(metadataSupported),
 			"packages/server/storage/metadata.go",
-			[]string{"packages/server/storage/metadata.go", "packages/server/storage/metadata_test.go"}),
+			[]string{
+				"packages/server/storage/metadata.go",
+				"packages/server/storage/metadata_oracle_test.go",
+				"packages/server/storage/metadata_test.go",
+			}),
 		saveFamily(root, "save.region", strconv.Itoa(regionCurrent), []string{strconv.Itoa(regionCurrent)},
 			"packages/server/storage/region/region_format.go",
 			[]string{

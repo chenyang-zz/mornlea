@@ -271,6 +271,13 @@ func BaselineConsumerRegistry() ConsumerRegistry {
 				{FamilyID: "save.region", Version: "1", Operation: "decode"}: {},
 				{FamilyID: "save.region", Version: "1", Operation: "encode"}: {},
 				{FamilyID: "save.region", Version: "1", Operation: "order"}:  {},
+				{FamilyID: "save.world-metadata", Version: "1", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "2", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "3", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "4", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "5", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "6", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "6", Operation: "encode"}: {},
 			},
 		},
 		"external:agent-contract": {

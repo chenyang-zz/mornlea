@@ -262,7 +262,7 @@ fn execute_metadata_encode(case: &FrozenCase, args: &MetadataArguments) -> Resul
     let required = world_metadata_encoded_len(&metadata).map_err(|err| err.to_string())?;
     let mut buf = vec![0u8; required];
     if let Some(capacity) = args.capacity {
-        if capacity as usize < required {
+        if (capacity as usize) < required {
             assert_error_category(case, "output_too_small")?;
             return Ok(());
         }
@@ -309,10 +309,6 @@ mod tests {
     use super::*;
     use mornlea_storage::{METADATA_CURRENT_VERSION, encode_world_metadata};
 
-    fn spawn_anchor() -> MetadataChunkPos {
-        MetadataChunkPos { x: 5, z: -6 }
-    }
-
     fn boundary_metadata() -> Metadata {
         Metadata {
             format_version: METADATA_CURRENT_VERSION,
@@ -349,6 +345,15 @@ mod tests {
             encoded: None,
             category: "save".to_string(),
         }
+    }
+
+    #[test]
+    fn metadata_corpus_rejects_zero_case_selection() {
+        let err = std::panic::catch_unwind(|| execute_metadata_cases(&[]));
+        assert!(
+            err.is_err(),
+            "zero-case metadata selection must fail before codec execution"
+        );
     }
 
     #[test]
