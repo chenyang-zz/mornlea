@@ -90,6 +90,22 @@ pub fn player_legacy_late_case(id: &str) -> bool {
         || id == "save.player/9/encode/v8-fixture-reencode"
 }
 
+/// Adversarial v9 decode cases exported in node 2.2d (integrated separately).
+pub fn player_adversarial_case(id: &str) -> bool {
+    id.starts_with("save.player/9/decode/wrong-requested-id")
+        || id == "save.player/9/decode/revision-zero"
+        || id == "save.player/9/decode/invalid-version-zero"
+        || id == "save.player/9/decode/invalid-version-future"
+        || id == "save.player/9/decode/truncated-header"
+        || id == "save.player/9/decode/truncated-payload"
+        || id == "save.player/9/decode/trailing-byte"
+        || id == "save.player/9/decode/corrupt-crc"
+        || id == "save.player/9/decode/payload-over-1mib"
+        || id == "save.player/9/decode/invalid-health"
+        || id == "save.player/9/decode/invalid-pitch"
+        || id == "save.player/9/decode/invalid-respawn-flag"
+}
+
 fn route_is_registered(case: &FrozenCase) -> bool {
     PLAYER_REGISTERED_ROUTES.iter().any(|route| {
         route.family == case.family
@@ -1063,5 +1079,265 @@ mod tests {
         let written = encode_player_into(save, &mut buf).expect("encode");
         buf.truncate(written);
         buf
+    }
+
+    const ENVELOPE_LENGTH: usize = 44;
+    const MAX_PAYLOAD: u32 = 1 << 20;
+    const MAX_HEALTH: u8 = 20;
+    const PLAYER_ARMOR_TAIL: usize = 20;
+    const PLAYER_RESPAWN_TAIL: usize = 17;
+    const PLAYER_HUNGER_TAIL: usize = 5;
+    const PLAYER_HEALTH_TAIL: usize = 1;
+
+    fn reseal_player_envelope_crc(wire: &mut [u8]) {
+        use mornlea_storage::crc32c_join;
+        let checksum = crc32c_join(&[&wire[8..40], &wire[ENVELOPE_LENGTH..]]);
+        wire[40..44].copy_from_slice(&checksum.to_le_bytes());
+    }
+
+    fn player_alternate_requested_id_hex() -> String {
+        let mut bytes = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x46, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
+        bytes[15] ^= 1;
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn player_arguments_json_for_hex(hex_id: &str) -> serde_json::Value {
+        serde_json::json!({ "requested_player_id": hex_id })
+    }
+
+    fn player_truncated_header_wire(wire: &[u8]) -> Vec<u8> {
+        let end = ENVELOPE_LENGTH.saturating_sub(1).min(wire.len());
+        wire[..end].to_vec()
+    }
+
+    fn player_trailing_byte_wire(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        out.push(0);
+        out
+    }
+
+    fn player_wire_revision_zero(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        out[28..36].fill(0);
+        reseal_player_envelope_crc(&mut out);
+        out
+    }
+
+    fn player_declared_payload_over_1mib(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        out[36..40].copy_from_slice(&(MAX_PAYLOAD + 1).to_le_bytes());
+        out
+    }
+
+    fn player_health_byte_offset(wire_len: usize) -> usize {
+        wire_len - PLAYER_ARMOR_TAIL - PLAYER_RESPAWN_TAIL - PLAYER_HUNGER_TAIL - PLAYER_HEALTH_TAIL
+    }
+
+    fn player_wire_invalid_health(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        let offset = player_health_byte_offset(out.len());
+        out[offset] = MAX_HEALTH + 1;
+        reseal_player_envelope_crc(&mut out);
+        out
+    }
+
+    fn player_wire_invalid_pitch(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        out[72..76].copy_from_slice(&2.0f32.to_le_bytes());
+        reseal_player_envelope_crc(&mut out);
+        out
+    }
+
+    fn player_wire_invalid_respawn_flag(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        let offset = out.len() - PLAYER_ARMOR_TAIL - PLAYER_RESPAWN_TAIL;
+        out[offset] = 2;
+        reseal_player_envelope_crc(&mut out);
+        out
+    }
+
+    fn adversarial_decode_error_case(id: &str, input: Vec<u8>, category: &str) -> FrozenCase {
+        FrozenCase {
+            id: id.to_string(),
+            family: "save.player".to_string(),
+            version: "9".to_string(),
+            consumer: CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "decode".to_string(),
+            arguments: player_arguments_json(),
+            input_format: InputFormat::Binary,
+            input,
+            input_json: None,
+            normalized: serde_json::json!({
+                "kind": "error",
+                "category": category
+            }),
+            encoded: None,
+            category: category.to_string(),
+        }
+    }
+
+    fn player_adversarial_fixture_cases() -> Vec<FrozenCase> {
+        let base = encode_player_fixture(&fixture_player_save(7));
+        let wrong_args = player_arguments_json_for_hex(&player_alternate_requested_id_hex());
+        vec![
+            FrozenCase {
+                id: "save.player/9/decode/wrong-requested-id".to_string(),
+                family: "save.player".to_string(),
+                version: "9".to_string(),
+                consumer: CorpusConsumer::Storage,
+                packet_key: None,
+                operation: "decode".to_string(),
+                arguments: wrong_args,
+                input_format: InputFormat::Binary,
+                input: base.clone(),
+                input_json: None,
+                normalized: serde_json::json!({
+                    "kind": "error",
+                    "category": "corrupt"
+                }),
+                encoded: None,
+                category: "corrupt".to_string(),
+            },
+            adversarial_decode_error_case(
+                "save.player/9/decode/revision-zero",
+                player_wire_revision_zero(&base),
+                "corrupt",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/invalid-version-zero",
+                player_wire_with_schema(&base, 0),
+                "corrupt",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/invalid-version-future",
+                player_wire_with_schema(&base, 10),
+                "future_version",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/truncated-header",
+                player_truncated_header_wire(&base),
+                "corrupt",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/truncated-payload",
+                player_truncated_wire(&base, 1),
+                "corrupt",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/trailing-byte",
+                player_trailing_byte_wire(&base),
+                "corrupt",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/corrupt-crc",
+                player_corrupt_crc_wire(&base),
+                "corrupt",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/payload-over-1mib",
+                player_declared_payload_over_1mib(&base),
+                "corrupt",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/invalid-health",
+                player_wire_invalid_health(&base),
+                "corrupt",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/invalid-pitch",
+                player_wire_invalid_pitch(&base),
+                "corrupt",
+            ),
+            adversarial_decode_error_case(
+                "save.player/9/decode/invalid-respawn-flag",
+                player_wire_invalid_respawn_flag(&base),
+                "corrupt",
+            ),
+        ]
+    }
+
+    #[test]
+    fn player_adversarial_case_ids_recognized() {
+        assert!(player_adversarial_case(
+            "save.player/9/decode/wrong-requested-id"
+        ));
+        assert!(!player_adversarial_case("save.player/9/decode/v9-fixture"));
+    }
+
+    #[test]
+    fn player_adversarial_executes_fixture_cases() {
+        let cases = player_adversarial_fixture_cases();
+        assert_eq!(cases.len(), 12, "adversarial fixture case count");
+        execute_player_cases(&cases);
+    }
+
+    #[test]
+    fn player_adversarial_armor_digest_mutation_fails_comparison() {
+        let base = encode_player_fixture(&fixture_player_save(7));
+        let player_id = fixture_player_id();
+        let stored = decode_player(player_id, &base).expect("decode adversarial base");
+        let mut stale = stored.clone();
+        stale.armor[0].item += 1;
+        let case = FrozenCase {
+            id: "save.player/9/decode/v9-roundtrip-alt".to_string(),
+            family: "save.player".to_string(),
+            version: "9".to_string(),
+            consumer: CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "decode".to_string(),
+            arguments: player_arguments_json(),
+            input_format: InputFormat::Binary,
+            input: base,
+            input_json: None,
+            normalized: serde_json::json!({
+                "kind": "ok",
+                "category": "save",
+                "value_sha256": value_sha256(&stored_player_value(&stale))
+            }),
+            encoded: None,
+            category: "save".to_string(),
+        };
+        let err = execute_player_case(&case).expect_err("stale armor digest must fail");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn player_adversarial_needs_rewrite_digest_mutation_fails_comparison() {
+        let base = encode_player_fixture(&fixture_player_save(7));
+        let player_id = fixture_player_id();
+        let stored = decode_player(player_id, &base).expect("decode adversarial base");
+        let mut stale = stored;
+        stale.needs_rewrite = true;
+        let case = FrozenCase {
+            id: "save.player/9/decode/v9-roundtrip-alt".to_string(),
+            family: "save.player".to_string(),
+            version: "9".to_string(),
+            consumer: CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "decode".to_string(),
+            arguments: player_arguments_json(),
+            input_format: InputFormat::Binary,
+            input: base,
+            input_json: None,
+            normalized: serde_json::json!({
+                "kind": "ok",
+                "category": "save",
+                "value_sha256": value_sha256(&stored_player_value(&stale))
+            }),
+            encoded: None,
+            category: "save".to_string(),
+        };
+        let err = execute_player_case(&case).expect_err("stale needs_rewrite digest must fail");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
     }
 }

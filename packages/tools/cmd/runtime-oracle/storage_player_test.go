@@ -43,6 +43,20 @@ const (
 
 	playerLegacyEarlyExportDir = "/tmp/runtime-oracle-player-legacy-early-2.2b"
 	playerLegacyLateExportDir  = "/tmp/runtime-oracle-player-legacy-late-2.2c"
+	playerAdversarialExportDir = "/tmp/runtime-oracle-player-adversarial-2.2d"
+
+	playerDecodeWrongRequestedID            = playerFamily + "/" + playerVersion + "/decode/wrong-requested-id"
+	playerDecodeRevisionZeroID              = playerFamily + "/" + playerVersion + "/decode/revision-zero"
+	playerDecodeV9InvalidVersionZeroID      = playerFamily + "/" + playerVersion + "/decode/invalid-version-zero"
+	playerDecodeV9InvalidVersionFutureID    = playerFamily + "/" + playerVersion + "/decode/invalid-version-future"
+	playerDecodeTruncatedHeaderID           = playerFamily + "/" + playerVersion + "/decode/truncated-header"
+	playerDecodeV9TruncatedPayloadID        = playerFamily + "/" + playerVersion + "/decode/truncated-payload"
+	playerDecodeTrailingByteID              = playerFamily + "/" + playerVersion + "/decode/trailing-byte"
+	playerDecodeV9CorruptCRCID              = playerFamily + "/" + playerVersion + "/decode/corrupt-crc"
+	playerDecodePayloadOver1MiBID           = playerFamily + "/" + playerVersion + "/decode/payload-over-1mib"
+	playerDecodeInvalidHealthID             = playerFamily + "/" + playerVersion + "/decode/invalid-health"
+	playerDecodeInvalidPitchID              = playerFamily + "/" + playerVersion + "/decode/invalid-pitch"
+	playerDecodeInvalidRespawnFlagID        = playerFamily + "/" + playerVersion + "/decode/invalid-respawn-flag"
 
 	playerDecodeV1FixtureID            = playerFamily + "/1/decode/v1-fixture"
 	playerDecodeV1TruncatedPayloadID   = playerFamily + "/1/decode/truncated-payload"
@@ -66,6 +80,8 @@ const (
 
 	playerRespawnTailBytes = 1 + 12 + 4
 	playerArmorTailBytes   = int(core.ArmorSlotCount) * 5
+	playerHungerTailBytes  = 1 + 2 + 2
+	playerHealthTailBytes  = 1
 )
 
 type playerCaseArguments struct {
@@ -99,7 +115,11 @@ func playerIDFromRequestedHex(text string) (core.PlayerID, error) {
 }
 
 func playerArgumentsJSON(capacity *uint32) json.RawMessage {
-	args := playerCaseArguments{RequestedPlayerID: playerFixtureIDHex}
+	return playerArgumentsJSONForRequestedHex(playerFixtureIDHex, capacity)
+}
+
+func playerArgumentsJSONForRequestedHex(hexID string, capacity *uint32) json.RawMessage {
+	args := playerCaseArguments{RequestedPlayerID: hexID}
 	if capacity != nil {
 		args.Capacity = capacity
 	}
@@ -108,6 +128,12 @@ func playerArgumentsJSON(capacity *uint32) json.RawMessage {
 		panic(err)
 	}
 	return raw
+}
+
+func playerAlternateRequestedIDHex() string {
+	id := playerFixtureID()
+	id[15] ^= 1
+	return hex.EncodeToString(id[:])
 }
 
 func parsePlayerArguments(c CaseSpec) (playerCaseArguments, core.PlayerID, error) {
@@ -482,6 +508,104 @@ func playerWireWithSchema(wire []byte, schema uint32) []byte {
 		binary.LittleEndian.PutUint32(out[8:12], schema)
 	}
 	return out
+}
+
+func playerTruncatedHeaderWire(wire []byte) []byte {
+	if len(wire) <= 1 {
+		return bytes.Clone(wire)
+	}
+	end := player.EnvelopeLength - 1
+	if end > len(wire) {
+		end = len(wire)
+	}
+	return bytes.Clone(wire[:end])
+}
+
+func playerTrailingByteWire(wire []byte) []byte {
+	return append(bytes.Clone(wire), 0)
+}
+
+func playerWireRevisionZero(wire []byte) []byte {
+	out := bytes.Clone(wire)
+	if len(out) >= 36 {
+		clear(out[28:36])
+		resealPlayerEnvelopeCRC(out)
+	}
+	return out
+}
+
+func playerDeclaredPayloadOver1MiBWire(wire []byte) []byte {
+	out := bytes.Clone(wire)
+	if len(out) >= 40 {
+		binary.LittleEndian.PutUint32(out[36:], player.MaxPayload+1)
+	}
+	return out
+}
+
+func playerHealthByteOffset(wireLen int) int {
+	return wireLen - playerArmorTailBytes - playerRespawnTailBytes - playerHungerTailBytes - playerHealthTailBytes
+}
+
+func playerWireInvalidHealth(wire []byte) []byte {
+	out := bytes.Clone(wire)
+	offset := playerHealthByteOffset(len(out))
+	if offset >= 0 && offset < len(out) {
+		out[offset] = core.MaxHealth + 1
+		resealPlayerEnvelopeCRC(out)
+	}
+	return out
+}
+
+func playerWireInvalidPitch(wire []byte) []byte {
+	out := bytes.Clone(wire)
+	if len(out) > 72 {
+		binary.LittleEndian.PutUint32(out[72:], math.Float32bits(2))
+		resealPlayerEnvelopeCRC(out)
+	}
+	return out
+}
+
+func playerWireInvalidRespawnFlag(wire []byte) []byte {
+	out := bytes.Clone(wire)
+	offset := len(out) - playerArmorTailBytes - playerRespawnTailBytes
+	if offset >= 0 && offset < len(out) {
+		out[offset] = 2
+		resealPlayerEnvelopeCRC(out)
+	}
+	return out
+}
+
+func playerAdversarialBaseWire(t *testing.T) []byte {
+	t.Helper()
+	return mustEncodePlayerSave(t, playerRoundTripAltSave())
+}
+
+func playerAdversarialRoutes() []ConsumerRoute {
+	return []ConsumerRoute{
+		{FamilyID: playerFamily, Version: playerVersion, Operation: "decode"},
+	}
+}
+
+func playerAdversarialCandidates(t *testing.T) []playerCandidate {
+	t.Helper()
+	base := playerAdversarialBaseWire(t)
+	argsDecode := playerArgumentsJSON(nil)
+	wrongArgs := playerArgumentsJSONForRequestedHex(playerAlternateRequestedIDHex(), nil)
+
+	return []playerCandidate{
+		buildPlayerCandidate(t, playerDecodeWrongRequestedID, "decode", playerVersion, base, wrongArgs, nil),
+		buildPlayerCandidate(t, playerDecodeRevisionZeroID, "decode", playerVersion, playerWireRevisionZero(base), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV9InvalidVersionZeroID, "decode", playerVersion, playerWireWithSchema(base, 0), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV9InvalidVersionFutureID, "decode", playerVersion, playerWireWithSchema(base, 10), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeTruncatedHeaderID, "decode", playerVersion, playerTruncatedHeaderWire(base), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV9TruncatedPayloadID, "decode", playerVersion, playerTruncatedWire(base, 1), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeTrailingByteID, "decode", playerVersion, playerTrailingByteWire(base), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeV9CorruptCRCID, "decode", playerVersion, playerCorruptCRCWire(base), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodePayloadOver1MiBID, "decode", playerVersion, playerDeclaredPayloadOver1MiBWire(base), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeInvalidHealthID, "decode", playerVersion, playerWireInvalidHealth(base), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeInvalidPitchID, "decode", playerVersion, playerWireInvalidPitch(base), argsDecode, nil),
+		buildPlayerCandidate(t, playerDecodeInvalidRespawnFlagID, "decode", playerVersion, playerWireInvalidRespawnFlag(base), argsDecode, nil),
+	}
 }
 
 func buildPlayerCandidate(
@@ -1427,6 +1551,163 @@ func TestStoragePlayerLegacyLateExportToPinnedDirectory(t *testing.T) {
 	}
 	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
 	child := exportPlayerSelectionCandidate(t, root, playerLegacyLateCandidates(t), playerLegacyLateRoutes())
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
+	}
+	if _, err := readStorageSelection(child); err != nil {
+		t.Fatalf("reload exported selection: %v", err)
+	}
+}
+
+func TestStoragePlayerAdversarialArgumentsValidate(t *testing.T) {
+	if err := validateStorageArguments(playerFamily, "decode", playerArgumentsJSON(nil)); err != nil {
+		t.Fatalf("validate player decode arguments: %v", err)
+	}
+	alt := playerArgumentsJSONForRequestedHex(playerAlternateRequestedIDHex(), nil)
+	if err := validateStorageArguments(playerFamily, "decode", alt); err != nil {
+		t.Fatalf("validate alternate requested_player_id: %v", err)
+	}
+}
+
+func TestStoragePlayerAdversarialProducerExecutesEveryCase(t *testing.T) {
+	root := mustRepoRoot(t)
+	candidates := playerAdversarialCandidates(t)
+	if len(candidates) != 12 {
+		t.Fatalf("adversarial candidate count = %d, want 12", len(candidates))
+	}
+	manifest := playerRunnerManifest(t, root, candidates, playerAdversarialRoutes())
+	staged := playerScratchRoot(t, candidates)
+
+	observations, err := RunStorageCases(staged, manifest, playerCorpusRoutes())
+	if err != nil {
+		t.Fatalf("RunStorageCases: %v", err)
+	}
+	if len(observations) != len(candidates) {
+		t.Fatalf("produced %d observations, want %d", len(observations), len(candidates))
+	}
+	for _, candidate := range candidates {
+		obs := playerObservation(t, observations, candidate.Spec.ID)
+		got, err := outcomeToStorageSave(obs.Outcome)
+		if err != nil {
+			t.Fatalf("case %s: %v", candidate.Spec.ID, err)
+		}
+		if !storageSaveOutcomesEqual(got, candidate.Expect) {
+			t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
+		}
+	}
+}
+
+func TestStoragePlayerAdversarialFutureVersionCategory(t *testing.T) {
+	for _, candidate := range playerAdversarialCandidates(t) {
+		if candidate.Spec.ID != playerDecodeV9InvalidVersionFutureID {
+			continue
+		}
+		if candidate.Expect.Kind != "error" || candidate.Expect.Category != "future_version" {
+			t.Fatalf("future schema case outcome %#v, want future_version error", candidate.Expect)
+		}
+		return
+	}
+	t.Fatal("missing invalid-version-future adversarial case")
+}
+
+func TestStoragePlayerAdversarialArmorDigestMutationFailsComparison(t *testing.T) {
+	base := playerAdversarialBaseWire(t)
+	spec := CaseSpec{
+		ID: playerDecodeV9RoundTripAltID, Family: playerFamily, Version: playerVersion,
+		Operation: "decode", Arguments: playerArgumentsJSON(nil), InputFormat: "binary",
+		Checkpoints: []string{"0"}, RustConsumer: storageConsumerName,
+	}
+	stored, err := player.Decode(playerFixtureID(), base)
+	if err != nil {
+		t.Fatalf("decode adversarial base wire: %v", err)
+	}
+	stale := storageSaveOutcome{
+		Kind: "ok", Category: "save", ValueSHA256: storageValueSHA256(playerStoredValueTree(stored)),
+	}
+	stored.Armor[0].Item++
+	stale.ValueSHA256 = storageValueSHA256(playerStoredValueTree(stored))
+	outcome, _, err := runPlayerDecode(spec, base)
+	if err != nil {
+		t.Fatalf("runPlayerDecode: %v", err)
+	}
+	got, err := outcomeToStorageSave(outcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storageSaveOutcomesEqual(got, stale) {
+		t.Fatal("armor item mutation still matches stale expected digest")
+	}
+}
+
+func TestStoragePlayerAdversarialNeedsRewriteDigestMutationFailsComparison(t *testing.T) {
+	base := playerAdversarialBaseWire(t)
+	spec := CaseSpec{
+		ID: playerDecodeV9RoundTripAltID, Family: playerFamily, Version: playerVersion,
+		Operation: "decode", Arguments: playerArgumentsJSON(nil), InputFormat: "binary",
+		Checkpoints: []string{"0"}, RustConsumer: storageConsumerName,
+	}
+	stored, err := player.Decode(playerFixtureID(), base)
+	if err != nil {
+		t.Fatalf("decode adversarial base wire: %v", err)
+	}
+	stale := storageSaveOutcome{
+		Kind: "ok", Category: "save", ValueSHA256: storageValueSHA256(playerStoredValueTree(stored)),
+	}
+	stored.NeedsRewrite = true
+	stale.ValueSHA256 = storageValueSHA256(playerStoredValueTree(stored))
+	outcome, _, err := runPlayerDecode(spec, base)
+	if err != nil {
+		t.Fatalf("runPlayerDecode: %v", err)
+	}
+	got, err := outcomeToStorageSave(outcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storageSaveOutcomesEqual(got, stale) {
+		t.Fatal("needs_rewrite mutation still matches stale expected digest")
+	}
+}
+
+func TestStoragePlayerAdversarialExportUnsetWritesNothing(t *testing.T) {
+	root := mustRepoRoot(t)
+	t.Setenv(runtimeOracleExportDirEnv, "")
+	before, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = exportPlayerSelectionCandidate(t, root, playerAdversarialCandidates(t), playerAdversarialRoutes())
+	after, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatal("export with unset env wrote into repository")
+	}
+}
+
+func TestStoragePlayerAdversarialCandidatesExportForReview(t *testing.T) {
+	root := mustRepoRoot(t)
+	t.Setenv(runtimeOracleExportDirEnv, t.TempDir())
+	child := exportPlayerSelectionCandidate(t, root, playerAdversarialCandidates(t), playerAdversarialRoutes())
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
+	}
+	if _, err := readStorageSelection(child); err != nil {
+		t.Fatalf("reload exported selection: %v", err)
+	}
+}
+
+func TestStoragePlayerAdversarialExportToPinnedDirectory(t *testing.T) {
+	root := mustRepoRoot(t)
+	exportRoot := playerAdversarialExportDir
+	producerChild := filepath.Join(exportRoot, filepath.FromSlash("runtime-oracle/storage-player"))
+	if _, err := os.Lstat(producerChild); err == nil {
+		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat pinned producer child: %v", err)
+	}
+	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
+	child := exportPlayerSelectionCandidate(t, root, playerAdversarialCandidates(t), playerAdversarialRoutes())
 	if child == "" {
 		t.Fatal("export root unset after explicit env")
 	}
