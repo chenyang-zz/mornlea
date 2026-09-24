@@ -381,95 +381,12 @@ impl ChunkCodec {
     }
 
     fn decode_envelope(&mut self, payload: &[u8]) -> StorageResult<LogicalPayload> {
-        let mut envelope = ByteReader::new(payload);
-        let magic = envelope
-            .array::<4>()
-            .map_err(|detail| corrupt("envelope magic", detail))?;
-        if magic != ENVELOPE_MAGIC {
-            return Err(corrupt("envelope magic", "unexpected magic"));
-        }
-        let version = envelope
-            .u32()
-            .map_err(|detail| corrupt("envelope version", detail))?;
-        if version > ENVELOPE_VERSION {
-            return Err(future_version("envelope version", version));
-        }
-        if version != ENVELOPE_VERSION {
-            return Err(corrupt(
-                "envelope version",
-                format!("unsupported envelope version {version}"),
-            ));
-        }
-        let schema = envelope
-            .u32()
-            .map_err(|detail| corrupt("envelope schema", detail))?;
-        if schema > CURRENT_SCHEMA {
-            return Err(future_version("chunk schema", schema));
-        }
-        if schema < OLDEST_SCHEMA {
-            return Err(corrupt(
-                "chunk schema",
-                format!("unsupported chunk schema {schema}"),
-            ));
-        }
-        let key = decode_key(&mut envelope).map_err(|detail| corrupt("envelope key", detail))?;
-        let revision = envelope
-            .u64()
-            .map_err(|detail| corrupt("envelope revision", detail))?;
-        if revision == 0 {
-            return Err(corrupt("envelope revision", "zero revision"));
-        }
-        let compression = envelope
-            .u32()
-            .map_err(|detail| corrupt("compression ID", detail))?;
-        if compression != COMPRESSION_ZSTD {
-            return Err(corrupt(
-                "compression ID",
-                format!("unknown compression ID {compression}"),
-            ));
-        }
-        let decoded_length = envelope
-            .u32()
-            .map_err(|detail| corrupt("decoded length", detail))?
-            as usize;
-        if decoded_length > MAX_DECODED_CHUNK {
-            return Err(corrupt(
-                "decoded length",
-                format!("{decoded_length} exceeds limit {MAX_DECODED_CHUNK}"),
-            ));
-        }
-        let compressed_length = envelope
-            .u32()
-            .map_err(|detail| corrupt("compressed length", detail))?
-            as usize;
-        if compressed_length > MAX_COMPRESSED_CHUNK as usize {
-            return Err(corrupt(
-                "compressed length",
-                format!("{compressed_length} exceeds limit {MAX_COMPRESSED_CHUNK}"),
-            ));
-        }
-        if envelope.remaining() != compressed_length {
-            return Err(corrupt(
-                "compressed length",
-                "does not match the envelope remainder",
-            ));
-        }
-        let compressed = envelope
-            .take_bytes(compressed_length)
-            .map_err(|detail| corrupt("compressed bytes", detail))?;
-
-        self.logical_scratch =
-            decompress_with(compressed, decoded_length, Some(&mut self.decompressor))?;
-        if self.logical_scratch.len() != decoded_length {
-            return Err(corrupt(
-                "decoded length",
-                "does not match the decompressed payload",
-            ));
-        }
+        let envelope = parse_and_decompress_envelope(payload, Some(&mut self.decompressor))?;
+        self.logical_scratch = envelope.bytes;
         Ok(LogicalPayload {
-            key,
-            revision,
-            schema,
+            key: envelope.key,
+            revision: envelope.revision,
+            schema: envelope.schema,
             bytes: Vec::new(),
         })
     }
@@ -614,6 +531,13 @@ pub fn decode(key: ChunkKey, revision: u64, payload: &[u8]) -> StorageResult<Dec
 /// exactness can be proven byte for byte against [`encode_logical`]. Every
 /// length and version bound is checked before any allocation or decompression.
 pub fn decode_envelope(payload: &[u8]) -> StorageResult<LogicalPayload> {
+    parse_and_decompress_envelope(payload, None)
+}
+
+fn parse_and_decompress_envelope(
+    payload: &[u8],
+    decompressor: Option<&mut zstd::bulk::Decompressor<'_>>,
+) -> StorageResult<LogicalPayload> {
     let mut envelope = ByteReader::new(payload);
     let magic = envelope
         .array::<4>()
@@ -690,7 +614,7 @@ pub fn decode_envelope(payload: &[u8]) -> StorageResult<LogicalPayload> {
         .take_bytes(compressed_length)
         .map_err(|detail| corrupt("compressed bytes", detail))?;
 
-    let bytes = decompress_with(compressed, decoded_length, None)?;
+    let bytes = decompress_with(compressed, decoded_length, decompressor)?;
     if bytes.len() != decoded_length {
         return Err(corrupt(
             "decoded length",
