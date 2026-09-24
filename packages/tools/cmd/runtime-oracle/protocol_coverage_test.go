@@ -689,14 +689,14 @@ func TestProtocolCorpusNonProtocolEvidenceUnchanged(t *testing.T) {
 			protocolCases++
 		case strings.HasPrefix(c.Family, "save."):
 			saveCases++
-			if c.Family != "save.region" {
-				t.Fatalf("save case %s has family %s, want save.region", c.ID, c.Family)
+			if c.Family != "save.region" && c.Family != "save.player" {
+				t.Fatalf("save case %s has family %s, want save.region or save.player", c.ID, c.Family)
 			}
 		default:
 			t.Fatalf("case %s belongs to no reviewed corpus slice", c.ID)
 		}
 	}
-	if domainCases != 534 || agentCases != 154 || protocolCases != 436 || saveCases != 26 {
+	if domainCases != 534 || agentCases != 154 || protocolCases != 436 || saveCases != 33 {
 		t.Fatalf("corpus totals drifted: domain %d, agent %d, protocol %d, save %d", domainCases, agentCases, protocolCases, saveCases)
 	}
 	if _, err := ReconcileWorking(root, frozen, families, live, BaselineConsumerRegistry(), BaselineNegativeCoverageExceptions()); err != nil {

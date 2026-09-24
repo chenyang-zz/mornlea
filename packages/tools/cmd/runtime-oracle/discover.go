@@ -120,7 +120,10 @@ func Discover(root string) ([]Family, Identities, error) {
 		saveFamily(root, "save.chunk", strconv.Itoa(chunkCurrent), intsToStrings(chunkSupported),
 			"packages/server/storage/chunk/chunk_codec.go", versionedBins("packages/server/storage/chunk/testdata", "chunk", chunkSupported)),
 		saveFamily(root, "save.player", strconv.Itoa(playerCurrent), intsToStrings(playerSupported),
-			"packages/server/storage/player/player_codec.go", versionedBins("packages/server/storage/player/testdata", "player", playerSupported)),
+			"packages/server/storage/player/player_codec.go", append(
+				versionedBins("packages/server/storage/player/testdata", "player", playerSupported),
+				"packages/tools/cmd/runtime-oracle/storage_player_test.go",
+			)),
 		saveFamily(root, "save.companion", strconv.Itoa(companionCurrent), intsToStrings(companionSupported),
 			"packages/server/storage/companion/companion_codec.go", versionedBins("packages/server/storage/companion/testdata", "companions", companionSupported)),
 		saveFamily(root, "save.hostile", strconv.Itoa(hostileCurrent), intsToStrings(hostileSupported),

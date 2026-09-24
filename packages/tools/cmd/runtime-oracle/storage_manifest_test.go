@@ -181,6 +181,13 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.region/1/order/equal-divergent":                    true,
 		"save.region/1/order/equal-identical":                    true,
 		"save.region/1/order/standby-both":                       true,
+		"save.player/9/decode/absent-respawn-dirty-tail":         true,
+		"save.player/9/decode/exhaustion-maxi":                   true,
+		"save.player/9/decode/raw-armor-triple":                  true,
+		"save.player/9/decode/v9-fixture":                        true,
+		"save.player/9/decode/v9-roundtrip-alt":                  true,
+		"save.player/9/encode/capacity-minus-one":                true,
+		"save.player/9/encode/v9-canonical":                      true,
 	}
 	for _, c := range frozen.Cases {
 		if !strings.HasPrefix(c.Family, "save.") {
@@ -189,8 +196,8 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		if !wantSaveCases[c.ID] {
 			t.Fatalf("baseline carries unexpected save case %s", c.ID)
 		}
-		if c.Family != "save.region" {
-			t.Fatalf("save case %s has family %s, want save.region", c.ID, c.Family)
+		if c.Family != "save.region" && c.Family != "save.player" {
+			t.Fatalf("save case %s has family %s, want save.region or save.player", c.ID, c.Family)
 		}
 	}
 	for id := range wantSaveCases {
@@ -198,8 +205,12 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		for _, c := range frozen.Cases {
 			if c.ID == id {
 				found = true
-				if c.Family != "save.region" {
-					t.Fatalf("pinned save case %s has family %s, want save.region", id, c.Family)
+				wantFamily := "save.region"
+				if strings.HasPrefix(id, "save.player/") {
+					wantFamily = "save.player"
+				}
+				if c.Family != wantFamily {
+					t.Fatalf("pinned save case %s has family %s, want %s", id, c.Family, wantFamily)
 				}
 				break
 			}

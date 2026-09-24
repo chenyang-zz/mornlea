@@ -13,6 +13,9 @@ mod value_digest;
 #[path = "storage_corpus/region.rs"]
 mod region;
 
+#[path = "storage_corpus/player.rs"]
+mod player;
+
 use runtime_corpus::{load_cases_for_consumer, CorpusConsumer, FrozenCase, try_load_cases_from_root};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,6 +31,16 @@ struct StorageRoute {
 /// Closed route table for save corpus execution. Node 1.3 appends the first
 /// real `save.region` routes after the controller integrates reviewed assets.
 const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
+    StorageRoute {
+        family: "save.player",
+        version: "9",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.player",
+        version: "9",
+        operation: "encode",
+    },
     StorageRoute {
         family: "save.region",
         version: "1",
@@ -87,9 +100,17 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
     if !region_cases.is_empty() {
         region::execute_region_cases(&region_cases);
     }
+    let player_cases: Vec<FrozenCase> = cases
+        .iter()
+        .filter(|case| case.family == "save.player")
+        .cloned()
+        .collect();
+    if !player_cases.is_empty() {
+        player::execute_player_cases(&player_cases);
+    }
     let other = cases
         .iter()
-        .filter(|case| case.family != "save.region")
+        .filter(|case| case.family != "save.region" && case.family != "save.player")
         .count();
     if other > 0 {
         panic!("storage corpus has {other} case(s) on families without a dispatcher");

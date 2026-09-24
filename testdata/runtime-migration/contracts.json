@@ -3994,6 +3994,10 @@
       "numeric_semantics": "little-endian integers; CRC integrity; exact byte round-trip; no implicit repair",
       "sources": [
         {
+          "path": "packages/server/storage/player/player_codec.go",
+          "sha256": "sha256:08577c08977c35877394e1bb924ef989a04a10ce5e902c8057593a16ab234d86"
+        },
+        {
           "path": "packages/server/storage/player/testdata/player-v1.bin",
           "sha256": "sha256:b6e58761ea17aa0568d8826d5eb6c73acc9d1ce4c7ccdead2aa6d9f5725d2c43"
         },
@@ -4028,9 +4032,21 @@
         {
           "path": "packages/server/storage/player/testdata/player-v9.bin",
           "sha256": "sha256:319688a67e844c1a51a734985a42aef39194d58d7f32ce3cc023bfe9ca5d6188"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/storage_player_test.go",
+          "sha256": "sha256:8c7671a56e98279b97b5dffb6fb07a43e4a2f9aa94ed634c1ada3b229031c8c6"
         }
       ],
-      "cases": null
+      "cases": [
+        "save.player/9/decode/absent-respawn-dirty-tail",
+        "save.player/9/decode/exhaustion-maxi",
+        "save.player/9/decode/raw-armor-triple",
+        "save.player/9/decode/v9-fixture",
+        "save.player/9/decode/v9-roundtrip-alt",
+        "save.player/9/encode/capacity-minus-one",
+        "save.player/9/encode/v9-canonical"
+      ]
     },
     {
       "id": "save.region",
@@ -27636,6 +27652,165 @@
         "0"
       ],
       "rust_consumer": "mornlea_protocol"
+    },
+    {
+      "id": "save.player/9/decode/absent-respawn-dirty-tail",
+      "family": "save.player",
+      "version": "9",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_absent-respawn-dirty-tail.input.bin",
+        "sha256": "sha256:f246ab7fdf3d52816a2a09caeb3d25c3d951882955b2bd6c63b2b919b863b6b7"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_absent-respawn-dirty-tail.expected.json",
+        "sha256": "sha256:9c49b7108f89ccf8f3a4a3b332703c2fdf194bef298c540857f7094428bb235d"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/9/decode/exhaustion-maxi",
+      "family": "save.player",
+      "version": "9",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_exhaustion-maxi.input.bin",
+        "sha256": "sha256:7b7bc3a6d5e185700564df5531c16a9d45a2de3ffdc3a4610cf4129d90c349e3"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_exhaustion-maxi.expected.json",
+        "sha256": "sha256:e2a13fa8605c2b74ffa5e7cad588b2272740dcbecad41c2943a0bb217cc5287f"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/9/decode/raw-armor-triple",
+      "family": "save.player",
+      "version": "9",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_raw-armor-triple.input.bin",
+        "sha256": "sha256:1513071081fd9dbfe277a569723b68b25426f422a0c6c3d2234030b88d8952d4"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_raw-armor-triple.expected.json",
+        "sha256": "sha256:260174dab9c2325c7015e1b7c1d47b70f81a689b278ed0910dc055442c127ad5"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/9/decode/v9-fixture",
+      "family": "save.player",
+      "version": "9",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_v9-fixture.input.bin",
+        "sha256": "sha256:319688a67e844c1a51a734985a42aef39194d58d7f32ce3cc023bfe9ca5d6188"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_v9-fixture.expected.json",
+        "sha256": "sha256:38972cea3912e342137fa7d0a673a3121ef691cd03092b3ce9807a7eeb097c10"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/9/decode/v9-roundtrip-alt",
+      "family": "save.player",
+      "version": "9",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_v9-roundtrip-alt.input.bin",
+        "sha256": "sha256:fc4f40badba74e444b7009cafc0eeaecac632919e3a4bcbacca1a936da54d861"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_decode_v9-roundtrip-alt.expected.json",
+        "sha256": "sha256:5e647cf89f30cc870477785a21382f5b0cdf8752cb5f45e9004723cea9b7e42a"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/9/encode/capacity-minus-one",
+      "family": "save.player",
+      "version": "9",
+      "operation": "encode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff",
+        "capacity": 316
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_capacity-minus-one.input.bin",
+        "sha256": "sha256:319688a67e844c1a51a734985a42aef39194d58d7f32ce3cc023bfe9ca5d6188"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_capacity-minus-one.expected.json",
+        "sha256": "sha256:cd926131f8ba6174825a296b9232683f5b6b0346a0c52814f85c1750d38ca01b"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/9/encode/v9-canonical",
+      "family": "save.player",
+      "version": "9",
+      "operation": "encode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_v9-canonical.input.bin",
+        "sha256": "sha256:319688a67e844c1a51a734985a42aef39194d58d7f32ce3cc023bfe9ca5d6188"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_v9-canonical.expected.json",
+        "sha256": "sha256:78ec5957bd6abac24bb60a88a1cf0463f687191ca1f341c9a94fa3d3f54a3cd7"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_v9-canonical.encoded.bin",
+        "sha256": "sha256:319688a67e844c1a51a734985a42aef39194d58d7f32ce3cc023bfe9ca5d6188"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
     },
     {
       "id": "save.region/1/decode/bank-committed-gen1",
