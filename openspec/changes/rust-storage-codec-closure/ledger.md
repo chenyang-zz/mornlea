@@ -126,6 +126,15 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus player_` 19/19 including nonempty `player_adversarial_`; `runtime_contract player_` 11/11.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 2.3 closed
+
+- Commits: `c6a6104a` raw weather preservation and the 78-byte caller-buffer writer; `bba927e0` renames the contract test so it no longer claims weather rejection.
+- Review of `a0b97020..c6a6104a` found one Important naming defect, closed by `bba927e0`. The rename re-review approved. No remaining Critical or Important findings.
+- Minor finding held for the final review: the metadata boundary note says every invalid input is corruption, while a future schema returns `FutureVersion`.
+- No save-family case count change. Schema stays v6. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported by the implementer: `metadata_buffer` 10/10; `runtime_contract metadata_` 6/6 after the rename; `go test ./packages/server/storage -run '^TestMetadata'` pass.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
