@@ -48,6 +48,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates: Go `TestStorageValueV1CrossLanguageGoldenTree`; Rust downstream `mornlea_domain`/`mornlea_protocol`/`mornlea_engine` tests per implementer report.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 1.3 closed
+
+- Commits: `4f4e24aa` region seed producer; `45924f37` controller integration of `save.region/1/decode` and `save.region/1/encode`; `2d2eb04b` removed the tracked-manifest writer and recorded the consumer in the runtime-oracle guide; `54da4405` retargeted the three baseline pins.
+- Split check: `4f4e24aa` adds the producer, `region.rs`, the runner helper, and a `storage_corpus.rs` module declaration. Registry, Discover, assets, and dispatcher delegation landed in `45924f37`.
+- Re-review of `45924f37..54da4405` approved. No Critical or Important findings remain.
+- Minor findings held for the final review: helper file outside the named set; duplicate export test; encode arm returns before a non-ok category compare; superblock encode has no corpus row; duplicated route tables; comments that name the node; stale empty-selection test name; malformed-hash test accepts any error; export-unset test counts only the repository root; save-case pin matches ID before family; protocol totals comment omits the save count.
+- Gates: `go test ./packages/tools/cmd/runtime-oracle -race -count=1` pass after the pin update; `go test ./packages/audit -count=1` pass; `cargo test -p mornlea_storage --test storage_corpus --locked` 8/8 pass; downstream `mornlea_domain` / `mornlea_protocol` / `mornlea_engine` tests pass.
+- `save.region` now carries the four seed cases. The other six `save.*` families remain at zero cases.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
