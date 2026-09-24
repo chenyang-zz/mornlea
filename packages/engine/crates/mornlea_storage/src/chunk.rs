@@ -1530,9 +1530,8 @@ mod tests {
         assert!(split_legacy_tool_drop_stacks(&mut drops).is_err());
     }
 
-    /// A slot that survives `validate_save` but points at a block that is not a
-    /// furnace must be rejected on the decode side, where the chunk's blocks are
-    /// known.
+    /// An active slot that points at air is not a readable aggregate, so the
+    /// encoder rejects it before any bytes are published.
     #[test]
     fn active_container_slots_must_point_at_their_block() {
         let mut chunk = air_chunk();
@@ -1555,11 +1554,7 @@ mod tests {
             revision: 1,
             chunk: chunk.clone(),
         };
-        let encoded = encode(&save).expect("an air-pointing furnace slot is still a valid save");
-        assert!(matches!(
-            decode(save.key, save.revision, &encoded),
-            Err(StorageError::Corrupt(_))
-        ));
+        assert!(matches!(encode(&save), Err(StorageError::Corrupt(_))));
 
         let mut chunk = air_chunk();
         chunk.chests[0] = ChestSlot {
@@ -1577,10 +1572,6 @@ mod tests {
             revision: 1,
             chunk,
         };
-        let encoded = encode(&save).expect("an air-pointing chest slot is still a valid save");
-        assert!(matches!(
-            decode(save.key, save.revision, &encoded),
-            Err(StorageError::Corrupt(_))
-        ));
+        assert!(matches!(encode(&save), Err(StorageError::Corrupt(_))));
     }
 }
