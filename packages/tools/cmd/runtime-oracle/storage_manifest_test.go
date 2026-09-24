@@ -189,6 +189,14 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.player/3/decode/v3-fixture":                        true,
 		"save.player/4/decode/invalid-version-future":            true,
 		"save.player/4/decode/v4-fixture":                        true,
+		"save.player/5/decode/corrupt-crc":                       true,
+		"save.player/5/decode/v5-fixture":                        true,
+		"save.player/6/decode/truncated-payload":                 true,
+		"save.player/6/decode/v6-fixture":                        true,
+		"save.player/7/decode/invalid-version-zero":              true,
+		"save.player/7/decode/v7-fixture":                        true,
+		"save.player/8/decode/invalid-version-future":            true,
+		"save.player/8/decode/v8-fixture":                        true,
 		"save.player/9/decode/absent-respawn-dirty-tail":         true,
 		"save.player/9/decode/exhaustion-maxi":                   true,
 		"save.player/9/decode/raw-armor-triple":                  true,
@@ -196,6 +204,7 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.player/9/decode/v9-roundtrip-alt":                  true,
 		"save.player/9/encode/capacity-minus-one":                true,
 		"save.player/9/encode/v4-fixture-reencode":               true,
+		"save.player/9/encode/v8-fixture-reencode":               true,
 		"save.player/9/encode/v9-canonical":                      true,
 	}
 	for _, c := range frozen.Cases {

@@ -45,7 +45,9 @@ or Agent process packages. These boundaries are enforced by `packages/audit`
   `agent.mcp/v1/agent-contract`; `external:runtime-authority` →
   `domain.input/45/order`; and `mornlea_storage` → `save.player/1/decode`,
   `save.player/2/decode`, `save.player/3/decode`, `save.player/4/decode`,
-  `save.player/9/decode`, `save.player/9/encode`, `save.region/1/decode`,
+  `save.player/5/decode`, `save.player/6/decode`, `save.player/7/decode`,
+  `save.player/8/decode`, `save.player/9/decode`, `save.player/9/encode`,
+  `save.region/1/decode`,
   `save.region/1/encode`, and `save.region/1/order`.
 - Enforcement: `TestContractInventoryReconcilesFrozenCorpus`,
   `TestContractInventoryWorkingReportsZeroCaseFamilies`,

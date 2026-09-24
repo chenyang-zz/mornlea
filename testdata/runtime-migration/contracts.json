@@ -4035,7 +4035,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/storage_player_test.go",
-          "sha256": "sha256:f826896c1f2db0c8de3f605807801bf49fc9f0e8d79651c3256e003f13811c01"
+          "sha256": "sha256:29416891a3bd575369281d43cea30616d021934681252b371468939bd9d1f86c"
         }
       ],
       "cases": [
@@ -4047,6 +4047,14 @@
         "save.player/3/decode/v3-fixture",
         "save.player/4/decode/invalid-version-future",
         "save.player/4/decode/v4-fixture",
+        "save.player/5/decode/corrupt-crc",
+        "save.player/5/decode/v5-fixture",
+        "save.player/6/decode/truncated-payload",
+        "save.player/6/decode/v6-fixture",
+        "save.player/7/decode/invalid-version-zero",
+        "save.player/7/decode/v7-fixture",
+        "save.player/8/decode/invalid-version-future",
+        "save.player/8/decode/v8-fixture",
         "save.player/9/decode/absent-respawn-dirty-tail",
         "save.player/9/decode/exhaustion-maxi",
         "save.player/9/decode/raw-armor-triple",
@@ -4054,6 +4062,7 @@
         "save.player/9/decode/v9-roundtrip-alt",
         "save.player/9/encode/capacity-minus-one",
         "save.player/9/encode/v4-fixture-reencode",
+        "save.player/9/encode/v8-fixture-reencode",
         "save.player/9/encode/v9-canonical"
       ]
     },
@@ -27839,6 +27848,182 @@
       "rust_consumer": "mornlea_storage"
     },
     {
+      "id": "save.player/5/decode/corrupt-crc",
+      "family": "save.player",
+      "version": "5",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_5_decode_corrupt-crc.input.bin",
+        "sha256": "sha256:30f78f06c9725b18d4e0689b652502edb0b147d757cb03e9dceb30a5d4cef508"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_5_decode_corrupt-crc.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/5/decode/v5-fixture",
+      "family": "save.player",
+      "version": "5",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_5_decode_v5-fixture.input.bin",
+        "sha256": "sha256:6e82a565a94da378e7d4cd6bb1556a54766817d6c475a7844feb279e693e1928"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_5_decode_v5-fixture.expected.json",
+        "sha256": "sha256:91cf1d6c3d0098914dc0692e355152afe4dd7f563a8db87f17f81ebb9d445c5a"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/6/decode/truncated-payload",
+      "family": "save.player",
+      "version": "6",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_6_decode_truncated-payload.input.bin",
+        "sha256": "sha256:7ae27decb8a9840ea3a8f48aa6e994f5fbf26d6a9617caf48d63be34a67fc02a"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_6_decode_truncated-payload.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/6/decode/v6-fixture",
+      "family": "save.player",
+      "version": "6",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_6_decode_v6-fixture.input.bin",
+        "sha256": "sha256:3389932b08d9a7fbca11d505c1b1d8061699a09396d8cfe0f2879d58a3242f1b"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_6_decode_v6-fixture.expected.json",
+        "sha256": "sha256:91cf1d6c3d0098914dc0692e355152afe4dd7f563a8db87f17f81ebb9d445c5a"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/7/decode/invalid-version-zero",
+      "family": "save.player",
+      "version": "7",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_7_decode_invalid-version-zero.input.bin",
+        "sha256": "sha256:c7cc6d2199a547932d774f5b10f61757c0a15e1bb652813cf4d6ac79a5233bf2"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_7_decode_invalid-version-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/7/decode/v7-fixture",
+      "family": "save.player",
+      "version": "7",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_7_decode_v7-fixture.input.bin",
+        "sha256": "sha256:4e8186ff1831067126fb99915582fe2bc7e9b39f2772ca2a986c427094e89b57"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_7_decode_v7-fixture.expected.json",
+        "sha256": "sha256:1e450b74afe0fcd6b54e521b741d9939c14ccab928901369d40b5b3bb430b50a"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/8/decode/invalid-version-future",
+      "family": "save.player",
+      "version": "8",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_8_decode_invalid-version-future.input.bin",
+        "sha256": "sha256:742f90df7ac0a6471a3bea1408c82affc28db5fdad37f6f19e1a43b2767ca2df"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_8_decode_invalid-version-future.expected.json",
+        "sha256": "sha256:a525fa8b2a3a83c483dde06e0e9a39ddaff1890264a44785949a3bc757098e51"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/8/decode/v8-fixture",
+      "family": "save.player",
+      "version": "8",
+      "operation": "decode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_8_decode_v8-fixture.input.bin",
+        "sha256": "sha256:741ccc4e313a52e3abbc2680dbc71abc20800c2d6eb9f0bfb82e2b22ff958b62"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_8_decode_v8-fixture.expected.json",
+        "sha256": "sha256:9a62371d136f89123460a5c7128e8fcde9f85094731a203aa097e28cbc2ebefa"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
       "id": "save.player/9/decode/absent-respawn-dirty-tail",
       "family": "save.player",
       "version": "9",
@@ -27996,6 +28181,32 @@
         "0"
       ],
       "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.player/9/encode/v8-fixture-reencode",
+      "family": "save.player",
+      "version": "9",
+      "operation": "encode",
+      "arguments": {
+        "requested_player_id": "00112233445546778899aabbccddeeff"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_v8-fixture-reencode.input.bin",
+        "sha256": "sha256:741ccc4e313a52e3abbc2680dbc71abc20800c2d6eb9f0bfb82e2b22ff958b62"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_v8-fixture-reencode.expected.json",
+        "sha256": "sha256:742456b62778cb91e8e191f1bb1254bbff73925a563fca9f76fede643c6052a4"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage",
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_v8-fixture-reencode.encoded.bin",
+        "sha256": "sha256:907be9ce7b8ee91f98711e827a3b0f4b7a6a0f805a26e4815e0697915a44779c"
+      }
     },
     {
       "id": "save.player/9/encode/v9-canonical",

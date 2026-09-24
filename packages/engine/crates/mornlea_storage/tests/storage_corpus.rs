@@ -53,6 +53,26 @@ const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
     },
     StorageRoute {
         family: "save.player",
+        version: "5",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.player",
+        version: "6",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.player",
+        version: "7",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.player",
+        version: "8",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.player",
         version: "9",
         operation: "decode",
     },

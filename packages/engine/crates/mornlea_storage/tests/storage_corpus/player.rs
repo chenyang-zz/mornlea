@@ -756,11 +756,48 @@ mod tests {
         execute_player_cases(&cases);
     }
 
+    const LEGACY_LATE_INTEGRATED_CASE_IDS: &[&str] = &[
+        "save.player/5/decode/corrupt-crc",
+        "save.player/5/decode/v5-fixture",
+        "save.player/6/decode/truncated-payload",
+        "save.player/6/decode/v6-fixture",
+        "save.player/7/decode/invalid-version-zero",
+        "save.player/7/decode/v7-fixture",
+        "save.player/8/decode/invalid-version-future",
+        "save.player/8/decode/v8-fixture",
+        "save.player/9/encode/v8-fixture-reencode",
+    ];
+
     #[test]
     fn player_legacy_late_case_ids_recognized() {
         assert!(player_legacy_late_case("save.player/5/decode/v5-fixture"));
         assert!(player_legacy_late_case("save.player/9/encode/v8-fixture-reencode"));
         assert!(!player_legacy_late_case("save.player/4/decode/v4-fixture"));
+    }
+
+    #[test]
+    fn player_legacy_late_executes_integrated_manifest_cases() {
+        let cases = player_cases_from_manifest()
+            .into_iter()
+            .filter(|case| player_legacy_late_case(&case.id))
+            .collect::<Vec<_>>();
+        let found: BTreeMap<&str, &FrozenCase> = cases
+            .iter()
+            .map(|case| (case.id.as_str(), case))
+            .collect();
+        for id in LEGACY_LATE_INTEGRATED_CASE_IDS {
+            if !found.contains_key(id) {
+                panic!("integrated manifest missing legacy late case {id}");
+            }
+        }
+        if cases.len() != LEGACY_LATE_INTEGRATED_CASE_IDS.len() {
+            panic!(
+                "integrated manifest has {} legacy late cases, want {}",
+                cases.len(),
+                LEGACY_LATE_INTEGRATED_CASE_IDS.len()
+            );
+        }
+        execute_player_cases(&cases);
     }
 
     #[test]
