@@ -145,6 +145,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/server/storage -run '^TestMetadataOracle$'` pass; `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 37/37 including nonempty `metadata_`; `runtime_contract metadata_` 6/6.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 3.1 closed
+
+- Commits: `98595344` hostile caller-buffer writer; `ec8b8845` rejects a nonzero absent-target id instead of writing zeros.
+- Ruling: an absent target is encoded only when its player id is already zero. Encode and decode share that rule. A uniform nonzero id is corrupt, matching Go `validateHostileRecord`. Health 0 stays rejected.
+- Review of `6704c75a..98595344` found that repair. The fix re-review of `ec8b8845` approved. No remaining Critical or Important findings.
+- Minor findings held for the final review: the CRC patch uses `copy_from_slice` instead of `SliceWriter::patch_u32`; length validation runs more than once per encode.
+- No save-family case count change. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the fix: `hostile_buffer` 13/13; `runtime_contract hostile_` 9/9; `go test ./packages/server/storage/hostile -count=1` pass.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
