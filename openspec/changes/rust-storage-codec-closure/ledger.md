@@ -41,6 +41,13 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Node 1.2 dispatched in background (`superpowers-implementer`).
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 1.2 closed
+
+- Commits: `be5cc843` consumer + digest; `a6817f0a` empty-selection fail-closed; `8a1d9a43` ledger validation record.
+- Review fix: full `cargo test -p mornlea_storage --test storage_corpus` exits non-zero (`storage_corpus_rejects_empty_selection`); filtered `value_digest::` 2/2 pass. Matches protocol empty-selection polarity until node 1.3 registers routes.
+- Gates: Go `TestStorageValueV1CrossLanguageGoldenTree`; Rust downstream `mornlea_domain`/`mornlea_protocol`/`mornlea_engine` tests per implementer report.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
