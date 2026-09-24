@@ -1,6 +1,10 @@
 //! Player identity shared by the entity save families.
 //!
-//! Mirrors `core.PlayerID`: a stable UUIDv4 stored as sixteen raw bytes.
+//! The raw sixteen bytes stay a format value, including the all-zero sentinel
+//! hostile saves use for an absent target. Current UUIDv4 admission is owned
+//! by `mornlea_domain` and is reached only through the checked conversions.
+
+use crate::error::{StorageResult, corrupt};
 
 /// A stable UUIDv4 player identifier.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -22,11 +26,26 @@ impl PlayerId {
         self.0 == [0u8; 16]
     }
 
-    /// Reports whether this is a non-zero UUIDv4: version nibble 4 and variant
-    /// bits `10`, matching `core.PlayerID.Valid`.
-    pub const fn is_valid(&self) -> bool {
-        (self.0[6] >> 4) == 4 && (self.0[8] & 0xc0) == 0x80
+    /// Reports whether the domain player constructor accepts these bytes.
+    ///
+    /// The version and variant masks live in `mornlea_domain`. This wrapper
+    /// does not repeat them, and it does not invent an absent domain identity
+    /// for the all-zero format sentinel.
+    pub fn is_valid(&self) -> bool {
+        mornlea_domain::PlayerId::try_from_bytes(self.0).is_ok()
     }
+}
+
+/// Converts a raw save identity into a domain player identity.
+pub fn checked_player_id(raw: PlayerId) -> StorageResult<mornlea_domain::PlayerId> {
+    mornlea_domain::PlayerId::try_from_bytes(raw.to_bytes())
+        .map_err(|_| corrupt("player ID", "not UUIDv4"))
+}
+
+/// Converts a raw save identity into a domain companion identity.
+pub fn checked_companion_id(raw: PlayerId) -> StorageResult<mornlea_domain::CompanionId> {
+    mornlea_domain::CompanionId::try_from_bytes(raw.to_bytes())
+        .map_err(|_| corrupt("companion ID", "not UUIDv4"))
 }
 
 #[cfg(test)]

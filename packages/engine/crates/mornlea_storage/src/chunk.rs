@@ -35,11 +35,8 @@
 //! [`crate::crc32c`].
 
 use crate::bytes::{ByteReader, ByteWriter};
-use crate::error::{StorageResult, corrupt, future_version};
-use crate::items::{
-    ITEM_BRICK, ITEM_CLAY, ITEM_COAL, ITEM_COOKED_BEEF, ITEM_GLASS, ITEM_IRON_INGOT, ITEM_NONE,
-    ITEM_RAW_BEEF, ITEM_RAW_IRON, ITEM_SAND, ItemStack, item_max_durability,
-};
+use crate::error::{StorageError, StorageResult, corrupt, future_version};
+use crate::items::{ITEM_COAL, ITEM_NONE, ItemStack, item_max_durability};
 use crate::region::{ChunkKey, MAX_COMPRESSED_CHUNK};
 
 /// Schema written by the current encoder.
@@ -85,9 +82,6 @@ const FURNACE_BURN_TICKS: u16 = 1600;
 const OVERWORLD: i32 = 0;
 const DEPTHS: i32 = 1;
 
-/// Exclusive upper bound of the legal block numbering, matching
-/// `core.BlockIDMax`.
-const BLOCK_ID_MAX: u16 = 90;
 const FURNACE_BLOCK: u16 = 9;
 const CHEST_BLOCK: u16 = 11;
 
@@ -271,8 +265,10 @@ pub fn encode_at_schema(save: &ChunkSave, schema: u32) -> StorageResult<Vec<u8>>
             format!("unsupported schema {schema}"),
         ));
     }
-    validate_save(save)?;
-    let logical = encode_logical(save.key, save.revision, &save.chunk, schema)?;
+    validate_save(save, schema)?;
+    // The current-value check has already converted all 24 sections. Older
+    // layouts still need a losslessness check, but never another section pass.
+    let logical = append_logical(save.key, save.revision, &save.chunk, schema);
     if logical.len() > MAX_DECODED_CHUNK {
         return Err(corrupt(
             "decoded chunk",
@@ -450,8 +446,23 @@ pub fn encode_logical(
             format!("unsupported schema {schema}"),
         ));
     }
-    validate_chunk_shape(chunk)?;
+    if key.dimension != OVERWORLD && key.dimension != DEPTHS {
+        return Err(corrupt(
+            "chunk dimension",
+            format!("unsupported chunk dimension {}", key.dimension),
+        ));
+    }
+    if revision == 0 {
+        return Err(corrupt("chunk revision", "zero revision"));
+    }
+    // A logical payload may be raw historical data, including pre-v5 tool
+    // drops. Admission uses its declared layout before appending bytes.
+    validate_chunk_at_schema(chunk, schema, schema)?;
+    Ok(append_logical(key, revision, chunk, schema))
+}
 
+/// Appends only after the caller has admitted both values and schema fidelity.
+fn append_logical(key: ChunkKey, revision: u64, chunk: &Chunk, schema: u32) -> Vec<u8> {
     let mut logical = ByteWriter::new();
     logical.bytes(&LOGICAL_MAGIC);
     logical.u32(schema);
@@ -481,7 +492,7 @@ pub fn encode_logical(
             append_chest_slot(&mut logical, chest);
         }
     }
-    Ok(logical.into_vec())
+    logical.into_vec()
 }
 
 /// Parses one `MCGC` logical payload at `schema` without migrating it.
@@ -706,9 +717,10 @@ fn split_legacy_tool_drop_stacks(drops: &mut [DropSlot]) -> StorageResult<()> {
 
 /// Rejects a save that could never be read back, before any allocation.
 ///
-/// The dimension allowlist and the fixed slot counts are checked here; the
-/// per-section and per-slot value rules are checked by the shared validators.
-fn validate_save(save: &ChunkSave) -> StorageResult<()> {
+/// Key and revision admission stay here. Section, drop, furnace, chest, and
+/// active-container checks are the same `validate_chunk` path decode uses, so
+/// an encoder cannot publish a chunk the decoder would reject.
+fn validate_save(save: &ChunkSave, output_schema: u32) -> StorageResult<()> {
     if save.revision == 0 {
         return Err(corrupt("chunk revision", "zero revision"));
     }
@@ -718,31 +730,7 @@ fn validate_save(save: &ChunkSave) -> StorageResult<()> {
             format!("unsupported chunk dimension {}", save.key.dimension),
         ));
     }
-    validate_chunk_shape(&save.chunk)?;
-    for (index, section) in save.chunk.sections.iter().enumerate() {
-        validate_container_snapshot(section, index)?;
-    }
-    for (slot, drop) in save.chunk.drops.iter().enumerate() {
-        validate_drop_slot(drop)
-            .map_err(|detail| corrupt("drop slot", format!("{slot}: {detail}")))?;
-    }
-    for (slot, furnace) in save.chunk.furnaces.iter().enumerate() {
-        if !furnace.is_valid() {
-            return Err(corrupt(
-                "furnace slot",
-                format!("{slot} is not a valid fixed slot"),
-            ));
-        }
-    }
-    for (slot, chest) in save.chunk.chests.iter().enumerate() {
-        if !chest.is_valid() {
-            return Err(corrupt(
-                "chest slot",
-                format!("{slot} is not a valid fixed slot"),
-            ));
-        }
-    }
-    Ok(())
+    validate_chunk_at_schema(&save.chunk, CURRENT_SCHEMA, output_schema)
 }
 
 /// Rejects a chunk whose fixed slot arrays have the wrong length.
@@ -781,9 +769,63 @@ fn validate_chunk_shape(chunk: &Chunk) -> StorageResult<()> {
 /// The derived height map the Go side rebuilds here is not persisted, so it is
 /// not modeled.
 fn validate_chunk(chunk: &Chunk) -> StorageResult<()> {
+    validate_chunk_at_schema(chunk, CURRENT_SCHEMA, CURRENT_SCHEMA)
+}
+
+/// Validates one raw aggregate and refuses fields its output layout would lose.
+/// A whole-envelope writer admits current values; a direct logical writer
+/// admits historical values using their own drop rule.
+fn validate_chunk_at_schema(
+    chunk: &Chunk,
+    value_schema: u32,
+    output_schema: u32,
+) -> StorageResult<()> {
     validate_chunk_shape(chunk)?;
-    for (index, section) in chunk.sections.iter().enumerate() {
-        validate_container_snapshot(section, index)?;
+    // One domain section per snapshot. Active containers read `block_at`
+    // instead of scanning the 98,304 cells into a dense buffer.
+    let mut sections = Vec::with_capacity(chunk.sections.len());
+    for (index, snapshot) in chunk.sections.iter().enumerate() {
+        sections.push(checked_section(snapshot).map_err(|err| match err {
+            StorageError::Corrupt(detail) => {
+                let detail = detail.strip_prefix("section: ").unwrap_or(detail.as_str());
+                corrupt("section", format!("{index}: {detail}"))
+            }
+            other => other,
+        })?);
+    }
+    for (slot, drop) in chunk.drops.iter().enumerate() {
+        (if value_schema < 5 {
+            validate_legacy_drop_slot(drop)
+        } else {
+            validate_drop_slot(drop)
+        })
+        .map_err(|detail| corrupt("drop slot", format!("{slot}: {detail}")))?;
+        if output_schema < 2 && *drop != DropSlot::default() {
+            return Err(corrupt(
+                "drop slot",
+                format!("{slot}: schema omits nondefault drop"),
+            ));
+        }
+        if output_schema < 5 && drop.stack.durability != 0 {
+            return Err(corrupt(
+                "drop slot",
+                format!("{slot}: schema omits durability"),
+            ));
+        }
+        // Pre-v5 migration fills zero durability even in inactive tool drops.
+        // Current-value envelope encoding must not publish bytes that decode
+        // into a different inactive slot; raw logical reserialization is exempt.
+        if value_schema == CURRENT_SCHEMA
+            && (2..5).contains(&output_schema)
+            && !drop.active
+            && drop.stack.durability == 0
+            && item_max_durability(drop.stack.item).is_some()
+        {
+            return Err(corrupt(
+                "drop slot",
+                format!("{slot}: legacy migration would change inactive tool durability"),
+            ));
+        }
     }
     let mut seen_furnaces: Vec<u32> = Vec::new();
     for (slot, furnace) in chunk.furnaces.iter().enumerate() {
@@ -791,6 +833,12 @@ fn validate_chunk(chunk: &Chunk) -> StorageResult<()> {
             return Err(corrupt(
                 "furnace slot",
                 format!("{slot} is not a valid fixed slot"),
+            ));
+        }
+        if output_schema < 4 && *furnace != FurnaceSlot::default() {
+            return Err(corrupt(
+                "furnace slot",
+                format!("{slot}: schema omits nondefault furnace"),
             ));
         }
         if !furnace.active {
@@ -809,7 +857,7 @@ fn validate_chunk(chunk: &Chunk) -> StorageResult<()> {
             ));
         }
         seen_furnaces.push(furnace.block_index);
-        if container_block(&chunk.sections[section], local) != Some(FURNACE_BLOCK) {
+        if sections[section].block_at(local) != Some(FURNACE_BLOCK) {
             return Err(corrupt(
                 "furnace slot",
                 format!("{slot} does not point at a furnace block"),
@@ -822,6 +870,12 @@ fn validate_chunk(chunk: &Chunk) -> StorageResult<()> {
             return Err(corrupt(
                 "chest slot",
                 format!("{slot} is not a valid fixed slot"),
+            ));
+        }
+        if output_schema < 6 && *chest != ChestSlot::default() {
+            return Err(corrupt(
+                "chest slot",
+                format!("{slot}: schema omits nondefault chest"),
             ));
         }
         if !chest.active {
@@ -840,7 +894,7 @@ fn validate_chunk(chunk: &Chunk) -> StorageResult<()> {
             ));
         }
         seen_chests.push(chest.block_index);
-        if container_block(&chunk.sections[section], local) != Some(CHEST_BLOCK) {
+        if sections[section].block_at(local) != Some(CHEST_BLOCK) {
             return Err(corrupt(
                 "chest slot",
                 format!("{slot} does not point at a chest block"),
@@ -858,24 +912,15 @@ fn valid_furnace_input(stack: ItemStack) -> bool {
     if stack.item == ITEM_NONE {
         return true;
     }
-    matches!(
-        stack.item,
-        ITEM_RAW_IRON | ITEM_SAND | ITEM_CLAY | ITEM_RAW_BEEF
-    )
+    mornlea_domain::smelting_output(stack.item).is_some()
 }
 
-/// Reports whether the output slot is empty or holds a fixed smelting product.
-///
-/// The whitelist must cover every `SmeltingOutput` product: a missing entry
-/// makes an otherwise valid furnace unsavable.
+/// Reports whether the output slot is empty or holds a smelting product.
 fn valid_furnace_output(stack: ItemStack) -> bool {
     if !stack.is_valid() {
         return false;
     }
-    matches!(
-        stack.item,
-        ITEM_NONE | ITEM_IRON_INGOT | ITEM_GLASS | ITEM_BRICK | ITEM_COOKED_BEEF
-    )
+    stack.item == ITEM_NONE || mornlea_domain::is_smelting_product(stack.item)
 }
 
 /// Splits a compact chunk block index into a section index and a linear index
@@ -888,21 +933,12 @@ fn split_block_index(index: u32) -> Option<(usize, usize)> {
     Some((index / BLOCKS_PER_SECTION, index % BLOCKS_PER_SECTION))
 }
 
-/// Reads the block at a section-linear index, or `None` when the snapshot
-/// cannot answer.
-fn container_block(snapshot: &ContainerSnapshot, index: usize) -> Option<u16> {
-    match snapshot.kind {
-        StorageKind::Single => Some(snapshot.single),
-        StorageKind::Indexed => {
-            let slot = read_packed(&snapshot.packed, snapshot.bits, index)? as usize;
-            snapshot.palette.get(slot).copied()
-        }
-        StorageKind::Direct => Some(read_packed(&snapshot.packed, snapshot.bits, index)? as u16),
-    }
-}
-
 /// Reads the raw slot at a section-linear index from the non-crossing word
 /// layout: `64 / bits` slots per word, the remaining bits unused.
+///
+/// Production association reads `PalettedSection::block_at`. This helper stays
+/// for the layout unit test.
+#[cfg(test)]
 fn read_packed(packed: &[u64], bits: u8, index: usize) -> Option<u32> {
     // Only the three storage widths reach here, but the shift and mask below
     // would be undefined for a zero or out-of-range width, so guard anyway.
@@ -922,44 +958,55 @@ fn words_for(bits: u8) -> usize {
     BLOCKS_PER_SECTION.div_ceil(per_word)
 }
 
-/// Rejects a section snapshot that could not be rebuilt into a container.
-fn validate_container_snapshot(snapshot: &ContainerSnapshot, section: usize) -> StorageResult<()> {
+/// Converts one raw section into a domain section.
+///
+/// Mode residue is checked once here. Palette order, packed bits, registered
+/// blocks, and palette indexes are decided by the domain constructors, which
+/// read the compact arrays directly and do not expand the section.
+pub fn checked_section(raw: &ContainerSnapshot) -> StorageResult<mornlea_domain::PalettedSection> {
+    reject_section_residue(raw)?;
+    let converted = match raw.kind {
+        StorageKind::Single => mornlea_domain::PalettedSection::single(raw.single),
+        StorageKind::Indexed => mornlea_domain::PalettedSection::indexed(
+            raw.bits,
+            raw.palette.clone().into_boxed_slice(),
+            raw.packed.clone().into_boxed_slice(),
+        ),
+        StorageKind::Direct => {
+            mornlea_domain::PalettedSection::direct(raw.packed.clone().into_boxed_slice())
+        }
+    };
+    converted.map_err(|_| corrupt("section", "domain section rejected the snapshot"))
+}
+
+/// Rejects mode residue before a domain constructor sees the snapshot.
+///
+/// A single section must carry no packed payload, an indexed section must
+/// carry no single value and the exact palette/word shape, and a direct
+/// section must carry no single value and no palette. Registration and
+/// per-cell scans stay in the domain constructor.
+fn reject_section_residue(snapshot: &ContainerSnapshot) -> StorageResult<()> {
     match snapshot.kind {
         StorageKind::Single => {
             if snapshot.bits != 0 || !snapshot.palette.is_empty() || !snapshot.packed.is_empty() {
-                return Err(corrupt(
-                    "section",
-                    format!("{section}: single storage has compressed payload"),
-                ));
-            }
-            if snapshot.single >= BLOCK_ID_MAX {
-                return Err(corrupt(
-                    "section",
-                    format!(
-                        "{section}: single block ID {} is unregistered",
-                        snapshot.single
-                    ),
-                ));
+                return Err(corrupt("section", "single storage has compressed payload"));
             }
         }
         StorageKind::Indexed => {
             if snapshot.bits != 4 && snapshot.bits != 8 {
                 return Err(corrupt(
                     "section",
-                    format!("{section}: indexed bits {} is invalid", snapshot.bits),
+                    format!("indexed bits {} is invalid", snapshot.bits),
                 ));
             }
             if snapshot.single != 0 {
-                return Err(corrupt(
-                    "section",
-                    format!("{section}: indexed storage has a single value"),
-                ));
+                return Err(corrupt("section", "indexed storage has a single value"));
             }
             if snapshot.palette.is_empty() || snapshot.palette.len() > 1usize << snapshot.bits {
                 return Err(corrupt(
                     "section",
                     format!(
-                        "{section}: palette length {} is invalid for {} bits",
+                        "palette length {} is invalid for {} bits",
                         snapshot.palette.len(),
                         snapshot.bits
                     ),
@@ -969,79 +1016,35 @@ fn validate_container_snapshot(snapshot: &ContainerSnapshot, section: usize) -> 
                 return Err(corrupt(
                     "section",
                     format!(
-                        "{section}: packed length {}, want {}",
+                        "packed length {}, want {}",
                         snapshot.packed.len(),
                         words_for(snapshot.bits)
                     ),
                 ));
-            }
-            let mut seen: Vec<u16> = Vec::with_capacity(snapshot.palette.len());
-            for id in &snapshot.palette {
-                if *id >= BLOCK_ID_MAX {
-                    return Err(corrupt(
-                        "section",
-                        format!("{section}: palette block ID {id} is unregistered"),
-                    ));
-                }
-                if seen.contains(id) {
-                    return Err(corrupt(
-                        "section",
-                        format!("{section}: duplicate palette block ID {id}"),
-                    ));
-                }
-                seen.push(*id);
-            }
-            for index in 0..BLOCKS_PER_SECTION {
-                let slot = read_packed(&snapshot.packed, snapshot.bits, index).unwrap_or(u32::MAX);
-                if slot as usize >= snapshot.palette.len() {
-                    return Err(corrupt(
-                        "section",
-                        format!(
-                            "{section}: palette slot {slot} at block {index} exceeds the palette"
-                        ),
-                    ));
-                }
             }
         }
         StorageKind::Direct => {
             if snapshot.bits != DIRECT_BITS {
                 return Err(corrupt(
                     "section",
-                    format!("{section}: direct bits {} is invalid", snapshot.bits),
+                    format!("direct bits {} is invalid", snapshot.bits),
                 ));
             }
             if snapshot.single != 0 || !snapshot.palette.is_empty() {
                 return Err(corrupt(
                     "section",
-                    format!("{section}: direct storage has a palette or single value"),
+                    "direct storage has a palette or single value",
                 ));
             }
             if snapshot.packed.len() != words_for(DIRECT_BITS) {
                 return Err(corrupt(
                     "section",
                     format!(
-                        "{section}: packed length {}, want {}",
+                        "packed length {}, want {}",
                         snapshot.packed.len(),
                         words_for(DIRECT_BITS)
                     ),
                 ));
-            }
-            for (index, word) in snapshot.packed.iter().enumerate() {
-                if word >> 60 != 0 {
-                    return Err(corrupt(
-                        "section",
-                        format!("{section}: direct word {index} has unused high bits"),
-                    ));
-                }
-            }
-            for index in 0..BLOCKS_PER_SECTION {
-                let id = read_packed(&snapshot.packed, DIRECT_BITS, index).unwrap_or(u32::MAX);
-                if id >= u32::from(BLOCK_ID_MAX) {
-                    return Err(corrupt(
-                        "section",
-                        format!("{section}: direct block ID {id} at block {index} is unregistered"),
-                    ));
-                }
             }
         }
     }
@@ -1196,8 +1199,14 @@ fn decode_legacy_drop_slot(reader: &mut ByteReader<'_>) -> Result<DropSlot, Stri
     drop.block_index = reader.u32()?;
     drop.age_ticks = reader.u32()?;
     drop.pickup_delay_ticks = reader.u8()?;
+    validate_legacy_drop_slot(&drop)?;
+    Ok(drop)
+}
+
+/// Applies the pre-v5 drop rule before durability and tool-count migration.
+fn validate_legacy_drop_slot(drop: &DropSlot) -> Result<(), String> {
     if !drop.active {
-        return Ok(drop);
+        return Ok(());
     }
     if drop.generation == 0 {
         return Err("active drop slot has zero generation".to_owned());
@@ -1214,12 +1223,12 @@ fn decode_legacy_drop_slot(reader: &mut ByteReader<'_>) -> Result<DropSlot, Stri
         if drop.stack.count < 1 || drop.stack.count > crate::items::MAX_STACK_COUNT {
             return Err("legacy tool drop stack is invalid".to_owned());
         }
-        return Ok(drop);
+        return Ok(());
     }
     if !drop.stack.is_valid() {
         return Err("drop stack is invalid".to_owned());
     }
-    Ok(drop)
+    Ok(())
 }
 
 /// Checks an active drop slot's fixed field bounds; an inactive slot keeps only
@@ -1573,9 +1582,8 @@ mod tests {
         assert!(split_legacy_tool_drop_stacks(&mut drops).is_err());
     }
 
-    /// A slot that survives `validate_save` but points at a block that is not a
-    /// furnace must be rejected on the decode side, where the chunk's blocks are
-    /// known.
+    /// An active slot that points at air is not a readable aggregate, so the
+    /// encoder rejects it before any bytes are published.
     #[test]
     fn active_container_slots_must_point_at_their_block() {
         let mut chunk = air_chunk();
@@ -1598,11 +1606,7 @@ mod tests {
             revision: 1,
             chunk: chunk.clone(),
         };
-        let encoded = encode(&save).expect("an air-pointing furnace slot is still a valid save");
-        assert!(matches!(
-            decode(save.key, save.revision, &encoded),
-            Err(StorageError::Corrupt(_))
-        ));
+        assert!(matches!(encode(&save), Err(StorageError::Corrupt(_))));
 
         let mut chunk = air_chunk();
         chunk.chests[0] = ChestSlot {
@@ -1620,10 +1624,6 @@ mod tests {
             revision: 1,
             chunk,
         };
-        let encoded = encode(&save).expect("an air-pointing chest slot is still a valid save");
-        assert!(matches!(
-            decode(save.key, save.revision, &encoded),
-            Err(StorageError::Corrupt(_))
-        ));
+        assert!(matches!(encode(&save), Err(StorageError::Corrupt(_))));
     }
 }

@@ -2799,8 +2799,9 @@ fn chunk_encode_rejects_invalid_saves() {
     assert!(encode_chunk(&broken_furnace).is_err());
 }
 
-/// A slot that is itself valid but points at a block that is not its container
-/// block is rejected on the decode side, where the chunk's blocks are known.
+/// A slot that is itself valid but points at the wrong block, or shares its
+/// block with another active slot, is rejected by the encoder. Decode uses the
+/// same aggregate check, so those saves never become bytes.
 #[test]
 fn chunk_decode_rejects_container_slots_pointing_at_the_wrong_block() {
     let mut chunk = synthetic_chunk();
@@ -2810,10 +2811,7 @@ fn chunk_decode_rejects_container_slots_pointing_at_the_wrong_block() {
         revision: 33,
         chunk: chunk.clone(),
     };
-    let encoded = encode_chunk(&save).expect("the slot value itself is valid");
-    let err = decode_chunk(save.key, save.revision, &encoded)
-        .expect_err("a furnace slot pointing at air was accepted");
-    assert!(matches!(err, StorageError::Corrupt(_)), "error = {err}");
+    assert!(matches!(encode_chunk(&save), Err(StorageError::Corrupt(_))));
 
     chunk.furnaces[0].block_index = 2 * 4096;
     chunk.chests[0].block_index = 2 * 4096 + 200;
@@ -2822,10 +2820,7 @@ fn chunk_decode_rejects_container_slots_pointing_at_the_wrong_block() {
         revision: 34,
         chunk: chunk.clone(),
     };
-    let encoded = encode_chunk(&save).expect("the slot value itself is valid");
-    let err = decode_chunk(save.key, save.revision, &encoded)
-        .expect_err("a chest slot pointing at a furnace block was accepted");
-    assert!(matches!(err, StorageError::Corrupt(_)), "error = {err}");
+    assert!(matches!(encode_chunk(&save), Err(StorageError::Corrupt(_))));
 
     // Two active furnaces sharing one block index are rejected too.
     let mut shared = synthetic_chunk();
@@ -2840,10 +2835,7 @@ fn chunk_decode_rejects_container_slots_pointing_at_the_wrong_block() {
         revision: 35,
         chunk: shared,
     };
-    let encoded = encode_chunk(&save).expect("each slot value is valid on its own");
-    let err = decode_chunk(save.key, save.revision, &encoded)
-        .expect_err("two furnaces sharing a block index were accepted");
-    assert!(matches!(err, StorageError::Corrupt(_)), "error = {err}");
+    assert!(matches!(encode_chunk(&save), Err(StorageError::Corrupt(_))));
 }
 
 /// The frame header and the trailing content checksum are the two parts of the

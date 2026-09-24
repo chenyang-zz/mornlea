@@ -24,7 +24,7 @@ pub use chunk::{
     Chunk, ChunkSave, ContainerSnapshot, DecodedChunk, DropSlot,
     ENVELOPE_LENGTH as CHUNK_ENVELOPE_LENGTH, ENVELOPE_VERSION as CHUNK_ENVELOPE_VERSION,
     FurnaceSlot, LogicalPayload, MAX_DECODED_CHUNK as CHUNK_MAX_DECODED_CHUNK,
-    OLDEST_SCHEMA as CHUNK_OLDEST_SCHEMA, StorageKind, decode as decode_chunk,
+    OLDEST_SCHEMA as CHUNK_OLDEST_SCHEMA, StorageKind, checked_section, decode as decode_chunk,
     decode_envelope as decode_chunk_envelope, decode_logical as decode_chunk_logical,
     encode as encode_chunk, encode_at_schema as encode_chunk_at_schema,
     encode_logical as encode_chunk_logical,
@@ -63,10 +63,10 @@ pub use hostile::{
     MAX_HOSTILE_MOBS, SCHEMA_V1 as HOSTILE_SCHEMA_V1, decode as decode_hostile_mobs,
     encode as encode_hostile_mobs,
 };
-pub use identity::PlayerId;
+pub use identity::{PlayerId, checked_companion_id, checked_player_id};
 pub use items::{
     BACKPACK_SLOTS, HOTBAR_SLOTS, ITEM_ID_MAX, Inventory, ItemStack, MAX_STACK_COUNT,
-    item_max_durability, item_stack_limit,
+    checked_item_stack, item_max_durability, item_stack_limit,
 };
 pub use passive::{
     CURRENT_SCHEMA as PASSIVE_CURRENT_SCHEMA, ENVELOPE_VERSION as PASSIVE_ENVELOPE_VERSION,

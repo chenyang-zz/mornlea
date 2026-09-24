@@ -40,6 +40,12 @@ A constructed v5 Rust companion save SHALL admit at most 64 bodies and matching 
 - **THEN** it MUST reject before publishing bytes
 - **AND** a save at every legal structural maximum MUST remain at or below 393,904 bytes
 
+#### Scenario: Oversized lifecycle text is rejected before copying
+
+- **GIVEN** an otherwise valid active lifecycle with a summary above 2,048 bytes
+- **WHEN** Rust attempts encoding
+- **THEN** it MUST reject the save without copying the oversized summary or publishing bytes
+
 ### Requirement: Every chunk encoder applies aggregate validity
 
 Every public Rust chunk encoder SHALL reject an active furnace or chest whose block index is outside 0..98,303, whose block is the wrong kind, or whose kind-specific active index duplicates another slot. It SHALL validate the fixed 24-section, 32-drop, 32-furnace and 16-chest shapes and every section and slot before compression or output publication. A rejected encoder MUST NOT silently produce bytes a Rust or Go decoder would reject.
@@ -55,6 +61,13 @@ Every public Rust chunk encoder SHALL reject an active furnace or chest whose bl
 - **GIVEN** a matching block at index 98,303, an active slot at index 98,304, or two active same-kind slots sharing one index
 - **WHEN** Rust validates the chunk
 - **THEN** only the first case SHALL be accepted
+
+#### Scenario: Historical output preserves representable state
+
+- **GIVEN** a valid current chunk containing a drop, furnace, chest, or durability field omitted by a requested older schema
+- **WHEN** Rust requests historical envelope or logical encoding
+- **THEN** it MUST reject rather than silently discard or change that state
+- **AND** a raw pre-v5 logical chunk with a valid legacy multi-item tool drop SHALL remain exactly reserializable at its declared schema
 
 ### Requirement: Current save values use one domain rule source
 

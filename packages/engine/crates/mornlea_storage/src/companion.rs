@@ -378,8 +378,12 @@ fn decode_legacy_payload(
             records.push(body);
             continue;
         }
-        let queue = decode_queue_sections(reader, schema)
+        let mut queue = decode_queue_sections(reader, schema)
             .map_err(|detail| corrupt("companion record", format!("{index}: {detail}")))?;
+        // The queue section has no owner field. Bind it to this body before
+        // deciding whether the section is empty, so a later consumer cannot
+        // attach the work to the wrong record by queue order.
+        queue.id = body.id;
         if queue.has_current || !queue.pending.is_empty() || !queue.summary.is_empty() {
             queues.push(queue);
         }
@@ -1218,7 +1222,30 @@ fn canonical_v5_parts(
             "not a canonical UUIDv4",
         ));
     }
-    let mut records = save.records.clone();
+    // Count gates run before any clone or per-record scan. A 65-body request
+    // must report the count even when the first body is also invalid, and an
+    // oversized queue list must not be copied in order to discover that.
+    if save.records.len() > MAX_STORED {
+        return Err(corrupt(
+            "companion count",
+            format!("{} exceeds limit {MAX_STORED}", save.records.len()),
+        ));
+    }
+    if save.lifecycles.len() != save.records.len() {
+        return Err(corrupt(
+            "companion lifecycles",
+            "set does not match records",
+        ));
+    }
+    if save.queues.len() > MAX_ACTIVE {
+        return Err(corrupt(
+            "companion queues",
+            format!("{} exceeds limit {MAX_ACTIVE}", save.queues.len()),
+        ));
+    }
+    // Sort bounded references so malformed variable-length payloads are never
+    // copied before the complete aggregate has passed admission.
+    let mut records: Vec<_> = save.records.iter().collect();
     records.sort_by_key(|left| left.id.to_bytes());
     for (index, body) in records.iter().enumerate() {
         validate_body(body)
@@ -1227,13 +1254,7 @@ fn canonical_v5_parts(
             return Err(corrupt("companion records", "duplicate companion ID"));
         }
     }
-    if save.lifecycles.len() != records.len() {
-        return Err(corrupt(
-            "companion lifecycles",
-            "set does not match records",
-        ));
-    }
-    let mut lifecycles = save.lifecycles.clone();
+    let mut lifecycles: Vec<_> = save.lifecycles.iter().collect();
     lifecycles.sort_by_key(|left| left.id.to_bytes());
     let mut active: Vec<PlayerId> = Vec::new();
     for (index, lifecycle) in lifecycles.iter().enumerate() {
@@ -1258,9 +1279,9 @@ fn canonical_v5_parts(
             format!("{} exceeds limit {MAX_ACTIVE}", active.len()),
         ));
     }
-    validate_queues(&save.queues, &records, CURRENT_SCHEMA)
+    validate_queues(&save.queues, &save.records, CURRENT_SCHEMA)
         .map_err(|detail| corrupt("companion queues", detail))?;
-    let mut queues = save.queues.clone();
+    let mut queues: Vec<_> = save.queues.iter().collect();
     queues.sort_by_key(|left| left.id.to_bytes());
     for queue in &queues {
         if !queue.summary.is_empty() {
@@ -1276,7 +1297,11 @@ fn canonical_v5_parts(
             ));
         }
     }
-    Ok((records, lifecycles, queues))
+    Ok((
+        records.into_iter().cloned().collect(),
+        lifecycles.into_iter().cloned().collect(),
+        queues.into_iter().cloned().collect(),
+    ))
 }
 
 /// Validates bounded plan text: valid UTF-8, no control characters, within the

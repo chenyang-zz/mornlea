@@ -47,7 +47,7 @@ the next section.
 | `save.companion` | `src/companion.rs` | v5 | v1..v4 stay read-only migration input; v5 adds a 16-byte agent namespace plus per-record lifecycle mirrors and tombstones |
 | `save.player` | `src/player.rs` | v9 | every schema is a tail append; decoding peels fixed tails off the end so older files keep their layout |
 | player identity | `src/identity.rs` | — | `PlayerId` UUIDv4 wrapper shared by the entity families |
-| item rules | `src/items.rs` | — | Stable item numbering plus the stack-limit and durability tables the entity bodies validate against |
+| item rules | `src/items.rs` | — | Wire item IDs and fixed slot counts. Ordinary stack limits and durability delegate to `mornlea_domain`; `checked_item_stack` rejects any other triple. Player armor stays a raw triple |
 
 ## `save.region` output boundary (`src/region.rs`)
 
