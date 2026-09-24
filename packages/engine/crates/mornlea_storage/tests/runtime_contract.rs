@@ -1552,7 +1552,7 @@ fn metadata_v5_with_wrong_dimension_count_is_rejected() {
 }
 
 #[test]
-fn metadata_v6_with_invalid_difficulty_or_weather_is_rejected() {
+fn metadata_v6_rejects_invalid_difficulty_and_preserves_raw_weather() {
     for difficulty in [3u8, 255] {
         let mut payload = Vec::new();
         append_u64(&mut payload, 1);
