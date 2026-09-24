@@ -86,6 +86,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported by the implementer: `player_buffer` 8/8, `runtime_contract player_` 11/11. No save-family case count change. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 2.2a closed
+
+- Commits: `e585e87e` current player producer and Rust module; `8d010bf5` dirty absent-respawn input, encode snapshot, and `OutputTooSmall` field check; `05075af2` integration of seven `save.player` cases; `5c907fd9` unregistered-route specimen moved to `save.player/9/order`.
+- Split check: `e585e87e` and `8d010bf5` touch only `storage_player_test.go` and `storage_corpus/player.rs`. Registry, dispatcher, manifest, and assets landed in `05075af2`. `5c907fd9` touches only `storage_corpus.rs`.
+- Reviews of the producer, the fix, the integration, and the route fix approved. The integration Important finding is closed by `5c907fd9`. No remaining Critical or Important findings.
+- Minor findings held for the final review: export-unset compares the repository root entry count; encode re-decode checks only `needs_rewrite`; the encode success arm returns when `kind` is `error`; `05075af2` carries a `Co-authored-by` trailer; `contracts.json` has no trailing newline; the storage-vocabulary comment still says two sentinels after `output_too_small` was added; the route-table comment still describes only region.
+- `save.player` has 7 cases on `/9/decode` and `/9/encode`. `save.region` stays at 26. The other five `save.*` families remain at zero. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 13/13 including nonempty `player_`; `runtime_contract player_` 11/11. The route fix reran `storage_corpus` 13/13.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
