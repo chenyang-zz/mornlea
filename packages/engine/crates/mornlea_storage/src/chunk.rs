@@ -706,8 +706,9 @@ fn split_legacy_tool_drop_stacks(drops: &mut [DropSlot]) -> StorageResult<()> {
 
 /// Rejects a save that could never be read back, before any allocation.
 ///
-/// The dimension allowlist and the fixed slot counts are checked here; the
-/// per-section and per-slot value rules are checked by the shared validators.
+/// Key and revision admission stay here. Section, drop, furnace, chest, and
+/// active-container checks are the same `validate_chunk` path decode uses, so
+/// an encoder cannot publish a chunk the decoder would reject.
 fn validate_save(save: &ChunkSave) -> StorageResult<()> {
     if save.revision == 0 {
         return Err(corrupt("chunk revision", "zero revision"));
@@ -718,31 +719,7 @@ fn validate_save(save: &ChunkSave) -> StorageResult<()> {
             format!("unsupported chunk dimension {}", save.key.dimension),
         ));
     }
-    validate_chunk_shape(&save.chunk)?;
-    for (index, section) in save.chunk.sections.iter().enumerate() {
-        validate_container_snapshot(section, index)?;
-    }
-    for (slot, drop) in save.chunk.drops.iter().enumerate() {
-        validate_drop_slot(drop)
-            .map_err(|detail| corrupt("drop slot", format!("{slot}: {detail}")))?;
-    }
-    for (slot, furnace) in save.chunk.furnaces.iter().enumerate() {
-        if !furnace.is_valid() {
-            return Err(corrupt(
-                "furnace slot",
-                format!("{slot} is not a valid fixed slot"),
-            ));
-        }
-    }
-    for (slot, chest) in save.chunk.chests.iter().enumerate() {
-        if !chest.is_valid() {
-            return Err(corrupt(
-                "chest slot",
-                format!("{slot} is not a valid fixed slot"),
-            ));
-        }
-    }
-    Ok(())
+    validate_chunk(&save.chunk)
 }
 
 /// Rejects a chunk whose fixed slot arrays have the wrong length.
@@ -784,6 +761,10 @@ fn validate_chunk(chunk: &Chunk) -> StorageResult<()> {
     validate_chunk_shape(chunk)?;
     for (index, section) in chunk.sections.iter().enumerate() {
         validate_container_snapshot(section, index)?;
+    }
+    for (slot, drop) in chunk.drops.iter().enumerate() {
+        validate_drop_slot(drop)
+            .map_err(|detail| corrupt("drop slot", format!("{slot}: {detail}")))?;
     }
     let mut seen_furnaces: Vec<u32> = Vec::new();
     for (slot, furnace) in chunk.furnaces.iter().enumerate() {

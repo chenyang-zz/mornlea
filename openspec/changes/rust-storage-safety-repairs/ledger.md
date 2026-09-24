@@ -49,3 +49,9 @@ No runtime gate is claimed by this planning change. At implementation closure, n
 - RED: `safety_companion_bounds` `sixty_five_bodies_report_count_before_an_invalid_body` failed with `companion record: 0: unsupported companion dimension 9` instead of a count error, showing the body scan ran before the 64-body gate.
 - GREEN: the same test target passed 6/6 after `canonical_v5_parts` checks body count, lifecycle-set length, and queue count before cloning. The maximum legal aggregate encodes to exactly 393,904 bytes. `runtime_contract companion_` passed 6/6. `go test ./packages/server/storage/companion -count=1` passed.
 - Review: controller self-review. Count precedence is pinned by an invalid first body inside a 65-body request. No fixture or Go source changed.
+
+## Node 2.1
+
+- RED: `safety_chunk_aggregate` `current_` encoded an active furnace on air (`Ok` bytes) because `validate_save` stopped at slot shape.
+- GREEN: `current_` passed 1/1 after `validate_chunk` gained the drop-slot loop and `validate_save` delegates to it after key and revision checks. `runtime_contract chunk_` passed 10/10. `go test ./packages/server/storage/chunk -count=1` passed.
+- Ruling: `runtime_contract.rs` was listed read-only, but `chunk_decode_rejects_container_slots_pointing_at_the_wrong_block` required the encoder to publish the invalid aggregate. That expectation is the bypass this node closes, so the test now expects `StorageError::Corrupt` from `encode_chunk`. No fixture or Go source changed.
