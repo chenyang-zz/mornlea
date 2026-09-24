@@ -1205,8 +1205,8 @@ func TestStoragePlayerLegacyLateV5HealthPinnedFromDecode(t *testing.T) {
 	if fixtureCase.Spec.ID == "" {
 		t.Fatal("missing v5 fixture decode case")
 	}
-	if stored.Health == 0 {
-		t.Fatal("v5 fixture health must be observed from decode, not assumed zero")
+	if stored.Health != 13 {
+		t.Fatalf("v5 fixture health must decode to 13, got %d", stored.Health)
 	}
 	wantDigest := storageValueSHA256(playerStoredValueTree(stored))
 	if fixtureCase.Expect.ValueSHA256 != wantDigest {

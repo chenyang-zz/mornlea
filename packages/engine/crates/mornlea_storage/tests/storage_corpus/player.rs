@@ -775,7 +775,7 @@ mod tests {
         let player_id = fixture_player_id();
         let stored = decode_player(player_id, &v5).expect("decode v5 fixture");
         assert!(stored.needs_rewrite, "historical v5 decode must set needs_rewrite");
-        assert_ne!(stored.health, 0, "v5 health must come from fixture decode");
+        assert_eq!(stored.health, 13, "v5 health must decode to 13 from fixture");
         let case = legacy_decode_ok_case("save.player/5/decode/v5-fixture", "5", v5);
         let digest = value_sha256(&stored_player_value(&stored));
         assert_eq!(
