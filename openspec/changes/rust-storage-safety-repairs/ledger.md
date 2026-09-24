@@ -28,3 +28,11 @@ The main controller used Superpowers brainstorming and writing-plans with the pr
 - `git diff --check`: exit 0 before staging; staged diff is checked again before the planning commit.
 
 No runtime gate is claimed by this planning change. At implementation closure, node 4.1 replaces this section with actual command output, discovered/executed counts, accepted result SHA, independent review and rollback evidence.
+
+## Implementation readiness
+
+- Fetched `origin/dev` at `107e4db90b91d69e19e943ed4f8fb0c66209e6b3`; local `dev` matched and the worktree was clean. Implementation branch: `cursor/rust-storage-safety-repairs-90bb`. Pre-safety SHA for the node 4.1 consumer diff is `107e4db90b91d69e19e943ed4f8fb0c66209e6b3`.
+- Isolation: this cloud checkout is the isolated workspace (`GIT_DIR` equals `GIT_COMMON`). No nested git worktree was created. Status stays in `tasks.md` plus this ledger; no `.superpowers/sdd` progress store.
+- Execution shape: strict subagent-driven development. Implementer role is `superpowers-implementer`; review role is `superpowers-reviewer`. Nodes run serially because `companion.rs`, `chunk.rs` and `lib.rs` overlap. At most one implementer edits the tree at a time.
+- Readiness: yes to packet completeness, requirement trace (1.1–4.1), signature agreement, acyclic serial order, settled rejection policy, real negative boundaries, independent node rejection, and preservation of the clean tree. Pre-flight found no plan contradiction that blocks node 1.1. `openspec` CLI is absent in this environment and will be installed at node 4.1 from the documented `@fission-ai/openspec@1.7.0` pin.
+- Architecture skill: no change.
