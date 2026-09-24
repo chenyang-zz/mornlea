@@ -111,10 +111,6 @@ impl ByteWriter {
         self.data.extend_from_slice(value);
     }
 
-    pub(crate) fn zeroes(&mut self, length: usize) {
-        self.data.resize(self.data.len() + length, 0);
-    }
-
     pub(crate) fn len(&self) -> usize {
         self.data.len()
     }
