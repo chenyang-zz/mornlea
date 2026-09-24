@@ -1097,8 +1097,10 @@ func TestStoragePlayerLegacyEarlyExportToPinnedDirectory(t *testing.T) {
 	root := mustRepoRoot(t)
 	exportRoot := playerLegacyEarlyExportDir
 	producerChild := filepath.Join(exportRoot, filepath.FromSlash("runtime-oracle/storage-player"))
-	if err := os.RemoveAll(producerChild); err != nil {
-		t.Fatalf("remove stale export child: %v", err)
+	if _, err := os.Lstat(producerChild); err == nil {
+		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat pinned producer child: %v", err)
 	}
 	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
 	child := exportPlayerSelectionCandidate(t, root, playerLegacyEarlyCandidates(t), playerLegacyEarlyRoutes())
