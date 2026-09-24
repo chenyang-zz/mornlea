@@ -96,6 +96,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 13/13 including nonempty `player_`; `runtime_contract player_` 11/11. The route fix reran `storage_corpus` 13/13.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 2.2b closed
+
+- Commits: `533c575e` v1–v4 producer and Rust executor; `e00ebab2` pinned export no longer deletes the candidate; `46116e5f` integration of nine early player cases and decode routes 1–4.
+- Split check: `533c575e` and `e00ebab2` touch only the player producer and `storage_corpus/player.rs`. Registry, dispatcher routes, manifest, and assets landed in `46116e5f`.
+- Reviews of the producer, the export fix, and the integration approved. No remaining Critical or Important findings.
+- Minor findings held for the final review: unused v9 decode route on the early selection; dead `playerManifest`; Go negative cases do not pin `corrupt` / `future_version`; `Co-authored-by` trailers on `533c575e`, `e00ebab2`, and `46116e5f`. The 2.2a note that `contracts.json` lacked a trailing newline is closed: `46116e5f` ends the file with a newline.
+- `save.player` now has 16 cases. `save.region` stays at 26. The other five `save.*` families remain at zero. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus player_` 6/6 including nonempty `player_legacy_early_`; `runtime_contract player_` 11/11.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
