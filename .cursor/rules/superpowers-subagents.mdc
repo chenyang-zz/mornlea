@@ -1,0 +1,7 @@
+---
+alwaysApply: true
+---
+
+# Cursor Superpowers subagents
+
+When using Superpowers for development in Cursor, dispatch the implementer role through the project Cursor subagent `superpowers-implementer` in `.cursor/agents/superpowers-implementer.md` and the code review role through `superpowers-reviewer` in `.cursor/agents/superpowers-reviewer.md`. This includes `subagent-driven-development`. Do not substitute a generic subagent, plugin default agent, or the controller for either role. If the required project subagent is unavailable, stop that dispatch and report it. The root `AGENTS.md` is the project-wide source of this rule.

@@ -4,6 +4,10 @@
 
 Agent guidance accumulates along the ancestor chain. The nearest `AGENTS.md` adds rules for its subtree, but scoped guidance must not weaken the global safety, correctness, ownership, or validation requirements in this file.
 
+## Cursor Superpowers subagents
+
+When using the Superpowers plugin for development in Cursor, dispatch its implementer role through this project's Cursor subagent `superpowers-implementer` (`.cursor/agents/superpowers-implementer.md`) and its code review role through `superpowers-reviewer` (`.cursor/agents/superpowers-reviewer.md`). This includes the implementer and reviewer in `subagent-driven-development`. A generic subagent, plugin default agent, or the controller itself does not fulfill either role. If the corresponding project subagent is unavailable, stop that role's dispatch and report the missing configuration.
+
 ## Project and contracts
 
 Mornlea's current production implementation is an independent voxel game written primarily in Go 1.26. The root `go.work` coordinates six modules: `packages/contracts`, `packages/shared`, `packages/server`, `packages/client`, `packages/tools`, and `packages/audit`; each module path begins with `github.com/channing771/mornlea/packages/<unit>`, and the repository root is not a Go module. The repository contains the custom client, authoritative server, world storage, physics, the Rust `mornlea_engine` numerical engine, and the Rust `mornlea_client` wgpu renderer. The intended final runtime is documented in [`docs/architecture-target.md`](docs/architecture-target.md): Rust owns the real-time server and client core, while Godot uses embedded Python for presentation. It is not compatible with the official Minecraft protocol, saves, or copyrighted assets.
