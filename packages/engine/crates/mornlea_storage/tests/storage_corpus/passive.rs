@@ -258,7 +258,6 @@ fn execute_passive_encode(case: &FrozenCase, args: &PassiveArguments) -> Result<
     }
 
     let mobs = decode_passive_mobs(&case.input).map_err(|err| err.to_string())?;
-    let digest = value_sha256(&passive_mobs_value(&mobs));
     let mut save = PassiveMobsSave {
         revision: mobs.revision,
         records: mobs.records.clone(),
@@ -291,21 +290,23 @@ fn execute_passive_encode(case: &FrozenCase, args: &PassiveArguments) -> Result<
             if round.records != mobs.records {
                 return Err(format!("case {} encode round-trip record drift", case.id));
             }
-            if let Some(expected_encoded) = &case.encoded {
-                if expected_encoded.as_slice() != encoded {
-                    return Err(format!("case {} encoded asset mismatch", case.id));
+            expected_value_digest(case, &passive_mobs_value(&mobs))?;
+            if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64) {
+                if length as usize != encoded.len() {
+                    return Err(format!(
+                        "case {} encoded length {}, want {}",
+                        case.id,
+                        encoded.len(),
+                        length
+                    ));
                 }
             }
-            let expected_digest = case
-                .normalized
-                .get("value_sha256")
-                .and_then(JsonValue::as_str)
-                .ok_or_else(|| format!("case {} missing value_sha256", case.id))?;
-            if digest != expected_digest {
-                return Err(format!(
-                    "case {} value digest mismatch: got {digest}, want {expected_digest}",
-                    case.id
-                ));
+            let encoded_ref = case
+                .encoded
+                .as_ref()
+                .ok_or_else(|| format!("case {} missing encoded asset", case.id))?;
+            if encoded_ref.as_slice() != encoded {
+                return Err(format!("case {} encoded asset mismatch", case.id));
             }
             Ok(())
         }

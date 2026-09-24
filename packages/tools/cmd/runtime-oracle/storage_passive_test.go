@@ -706,11 +706,67 @@ func passiveObservation(t *testing.T, observations []ExecutedObservation, id str
 	return ExecutedObservation{}
 }
 
+func validatePassiveExportCandidates(t *testing.T, candidates []passiveCandidate) {
+	t.Helper()
+	seenIDs := make(map[string]struct{}, len(candidates))
+	seenPaths := make(map[string]struct{})
+	for _, candidate := range candidates {
+		if _, ok := seenIDs[candidate.Spec.ID]; ok {
+			t.Fatalf("passive export: duplicate case id %s", candidate.Spec.ID)
+		}
+		seenIDs[candidate.Spec.ID] = struct{}{}
+		for relative := range candidate.Assets {
+			if _, ok := seenPaths[relative]; ok {
+				t.Fatalf("passive export: duplicate asset path %s", relative)
+			}
+			seenPaths[relative] = struct{}{}
+		}
+	}
+}
+
+func passivePinnedExportChildIsStaleCollision(t *testing.T, producerChild string) bool {
+	t.Helper()
+	expectedRoot, err := filepath.Abs(passiveExportDir)
+	if err != nil {
+		t.Fatalf("abs passive export dir: %v", err)
+	}
+	absChild, err := filepath.Abs(producerChild)
+	if err != nil {
+		t.Fatalf("abs producer child: %v", err)
+	}
+	wantChild := filepath.Join(expectedRoot, filepath.FromSlash("runtime-oracle/storage-passive"))
+	if absChild != wantChild {
+		t.Fatalf("producer child %s is not the pinned passive export path", producerChild)
+	}
+	manifestPath := filepath.Join(producerChild, storageSelectionManifest)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read pinned selection manifest: %v", err)
+	}
+	var payload struct {
+		Cases []struct {
+			ID string `json:"id"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("decode pinned selection manifest: %v", err)
+	}
+	staleID := passiveFamily + "/" + passiveVersionV1 + "/decode/truncated-tail"
+	count := 0
+	for _, spec := range payload.Cases {
+		if spec.ID == staleID {
+			count++
+		}
+	}
+	return count >= 2
+}
+
 func exportPassiveSelectionCandidate(t *testing.T, root string, candidates []passiveCandidate) string {
 	t.Helper()
 	if strings.TrimSpace(os.Getenv(runtimeOracleExportDirEnv)) == "" {
 		return ""
 	}
+	validatePassiveExportCandidates(t, candidates)
 	selection := passiveSelection(t, root, candidates)
 	var assets []generatedAsset
 	manifestBytes, err := json.Marshal(encodeStorageSelectionJSON(selection))
@@ -722,7 +778,7 @@ func exportPassiveSelectionCandidate(t *testing.T, root string, candidates []pas
 	for _, candidate := range candidates {
 		for relative, data := range candidate.Assets {
 			if _, ok := seen[relative]; ok {
-				continue
+				t.Fatalf("passive export: duplicate asset path %s", relative)
 			}
 			seen[relative] = struct{}{}
 			assets = append(assets, generatedAsset{RelativePath: relative, Data: data})
@@ -882,7 +938,12 @@ func TestStoragePassiveExportToPinnedDirectory(t *testing.T) {
 	exportRoot := passiveExportDir
 	producerChild := filepath.Join(exportRoot, filepath.FromSlash("runtime-oracle/storage-passive"))
 	if _, err := os.Lstat(producerChild); err == nil {
-		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
+		if !passivePinnedExportChildIsStaleCollision(t, producerChild) {
+			t.Fatal("pinned producer child already exists and is not the known stale collision")
+		}
+		if err := os.RemoveAll(producerChild); err != nil {
+			t.Fatalf("remove stale pinned producer child: %v", err)
+		}
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat pinned producer child: %v", err)
 	}
