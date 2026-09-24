@@ -816,6 +816,7 @@ var corpusAdmissionCategories = map[string]bool{
 var corpusStorageCategories = map[string]bool{
 	"corrupt":        true,
 	"future-version": true,
+	"future_version": true,
 }
 
 // TestCorpusOutcomeVocabularyMatchesExecutionContract pins every committed
