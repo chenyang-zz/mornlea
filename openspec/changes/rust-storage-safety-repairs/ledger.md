@@ -79,3 +79,19 @@ No runtime gate is claimed by this planning change. At implementation closure, n
 - RED: the in-progress `checked_section` path failed to compile because `validate_chunk` matched `StorageError` without importing it. `section_checked_conversions_preserve_compact_views_and_reject_residue` was already the behavioral oracle: single air and block 89, indexed 4-bit and 8-bit compact views, direct 15-bit words, and `Corrupt` for block 90, empty/duplicate/oversized palettes, wrong word counts, out-of-range slots, high direct bits, and single/indexed/direct residue.
 - GREEN: `safety_domain_values section_` passed 1/1. `safety_chunk_aggregate` passed 2/2. `runtime_contract chunk_` passed 10/10. `cargo test -p mornlea_domain --locked` passed 272 tests across 18 suites plus empty doc-tests. `cargo clippy -p mornlea_storage --all-targets --locked -- -D warnings` exited 0. `cargo fmt -p mornlea_storage -- --check` exited 0.
 - Call path: `reject_section_residue` runs once before `PalettedSection::single`, `indexed`, or `direct`. Registered blocks, duplicate palette entries, palette indexes, and direct high bits stay in those constructors. `validate_chunk` converts each of the 24 section snapshots once and reads active furnace and chest blocks only through `block_at`. No 98,304-cell buffer is allocated. The local `container_block` scan and the unused `BLOCK_ID_MAX` copy were removed. `read_packed` remains `cfg(test)` for the word-layout unit test. Palette order is copied as stored.
+
+## Node 4.1
+
+- Code SHA before this evidence commit: `51808294194edbd025dc13820634251fd737511f`.
+- `cargo fmt --all --check`: exit 0.
+- `cargo test -p mornlea_storage --tests --locked -- --list` discovered 99 tests: lib 19, `runtime_contract` 68, `safety_chunk_aggregate` 2, `safety_companion_bounds` 6, `safety_domain_values` 3, `safety_legacy_queue` 1.
+- `cargo test -p mornlea_storage --tests --locked`: 99 passed.
+- `make rust-check`: exit 0.
+- `make dev-check`: exit 2. `go vet ./packages/client/...` stops because `packages/client/cmd/mornlea/capture` imports `app`, and every file in `app` is `//go:build darwin`. This Linux host cannot compile that package. Linux CI excludes those graphical packages in `scripts/ci/run-linux-quality.sh`. No Go production file in this change.
+- `make test-race`: exit 2 after `packages/contracts`, `packages/shared`, and `packages/server` passed, including `packages/server/server` in 288.375s and `packages/server/storage/chunk` in 3.501s. The client module then failed setup on the same darwin-only `app` import, plus `render` symbols that live in darwin files. The make loop stopped before tools and audit.
+- Follow-up on this host: `go test ./packages/tools/... -race` passed, including `runtime-oracle` in 275.007s. `go test ./packages/audit -count=1` passed in 16.877s. `go test ./packages/audit -race -count=1` passed in 63.297s.
+- `openspec validate --all --strict --no-interactive`: 128 passed, 0 failed. The CLI is `@fission-ai/openspec@1.7.0` installed under `$HOME/.local` because a global npm install was denied.
+- `git diff --check`: exit 0. `git diff --exit-code 107e4db90b91d69e19e943ed4f8fb0c66209e6b3..HEAD -- testdata/runtime-migration packages/server/storage`: exit 0.
+- Public checked conversions are consumed by `mornlea_storage` tests only. `AGENTS.md` item-rules row now says ordinary limits delegate to the domain and armor stays raw.
+- Full `make dev-check` and `make test-race` did not pass on this Linux host, so node 4.1 stays open. Codec closure does not start.
+- Architecture skill: no change.
