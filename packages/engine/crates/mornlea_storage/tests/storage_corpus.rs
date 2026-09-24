@@ -10,6 +10,9 @@ mod runtime_corpus;
 #[path = "storage_corpus/value_digest.rs"]
 mod value_digest;
 
+#[path = "storage_corpus/region.rs"]
+mod region;
+
 use runtime_corpus::{load_cases_for_consumer, CorpusConsumer, FrozenCase, try_load_cases_from_root};
 use std::fs;
 use std::path::{Path, PathBuf};
