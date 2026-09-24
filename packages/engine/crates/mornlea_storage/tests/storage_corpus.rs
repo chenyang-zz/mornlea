@@ -22,6 +22,9 @@ mod metadata;
 #[path = "storage_corpus/hostile.rs"]
 mod hostile;
 
+#[path = "storage_corpus/passive.rs"]
+mod passive;
+
 use runtime_corpus::{load_cases_for_consumer, CorpusConsumer, FrozenCase, try_load_cases_from_root};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -152,6 +155,16 @@ const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
         version: "2",
         operation: "encode",
     },
+    StorageRoute {
+        family: "save.passive",
+        version: "1",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.passive",
+        version: "1",
+        operation: "encode",
+    },
 ];
 
 fn route_is_registered_for_case(case: &FrozenCase) -> bool {
@@ -220,6 +233,14 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
     if !hostile_cases.is_empty() {
         hostile::execute_hostile_cases(&hostile_cases);
     }
+    let passive_cases: Vec<FrozenCase> = cases
+        .iter()
+        .filter(|case| case.family == "save.passive")
+        .cloned()
+        .collect();
+    if !passive_cases.is_empty() {
+        passive::execute_passive_cases(&passive_cases);
+    }
     let other = cases
         .iter()
         .filter(|case| {
@@ -227,6 +248,7 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
                 && case.family != "save.player"
                 && case.family != "save.world-metadata"
                 && case.family != "save.hostile"
+                && case.family != "save.passive"
         })
         .count();
     if other > 0 {
@@ -519,4 +541,104 @@ fn hostile_corpus_executes_all_integrated_case_ids() {
         );
     }
     hostile::execute_hostile_cases(&cases);
+}
+
+const PASSIVE_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.passive/1/decode/corrupt-bool",
+    "save.passive/1/decode/corrupt-count-payload",
+    "save.passive/1/decode/corrupt-crc",
+    "save.passive/1/decode/corrupt-descending-ids",
+    "save.passive/1/decode/corrupt-dimension",
+    "save.passive/1/decode/corrupt-duplicate-id",
+    "save.passive/1/decode/corrupt-envelope-future",
+    "save.passive/1/decode/corrupt-envelope-zero",
+    "save.passive/1/decode/corrupt-health-above",
+    "save.passive/1/decode/corrupt-health-zero",
+    "save.passive/1/decode/corrupt-inf-velocity",
+    "save.passive/1/decode/corrupt-magic",
+    "save.passive/1/decode/corrupt-nan-position",
+    "save.passive/1/decode/corrupt-nan-yaw",
+    "save.passive/1/decode/corrupt-payload-length",
+    "save.passive/1/decode/corrupt-reserved-00",
+    "save.passive/1/decode/corrupt-reserved-01",
+    "save.passive/1/decode/corrupt-reserved-02",
+    "save.passive/1/decode/corrupt-reserved-03",
+    "save.passive/1/decode/corrupt-reserved-04",
+    "save.passive/1/decode/corrupt-reserved-05",
+    "save.passive/1/decode/corrupt-reserved-06",
+    "save.passive/1/decode/corrupt-reserved-07",
+    "save.passive/1/decode/corrupt-reserved-08",
+    "save.passive/1/decode/corrupt-reserved-09",
+    "save.passive/1/decode/corrupt-reserved-10",
+    "save.passive/1/decode/corrupt-reserved-11",
+    "save.passive/1/decode/corrupt-reserved-12",
+    "save.passive/1/decode/corrupt-reserved-13",
+    "save.passive/1/decode/corrupt-reserved-14",
+    "save.passive/1/decode/corrupt-reserved-15",
+    "save.passive/1/decode/corrupt-reserved-16",
+    "save.passive/1/decode/corrupt-reserved-17",
+    "save.passive/1/decode/corrupt-reserved-18",
+    "save.passive/1/decode/corrupt-reserved-19",
+    "save.passive/1/decode/corrupt-reserved-20",
+    "save.passive/1/decode/corrupt-reserved-21",
+    "save.passive/1/decode/corrupt-reserved-22",
+    "save.passive/1/decode/corrupt-reserved-23",
+    "save.passive/1/decode/corrupt-reserved-24",
+    "save.passive/1/decode/corrupt-reserved-25",
+    "save.passive/1/decode/corrupt-reserved-26",
+    "save.passive/1/decode/corrupt-reserved-27",
+    "save.passive/1/decode/corrupt-reserved-28",
+    "save.passive/1/decode/corrupt-reserved-29",
+    "save.passive/1/decode/corrupt-revision-zero",
+    "save.passive/1/decode/corrupt-y-at-top",
+    "save.passive/1/decode/corrupt-y-below",
+    "save.passive/1/decode/corrupt-zero-id",
+    "save.passive/1/decode/count-33",
+    "save.passive/1/decode/empty",
+    "save.passive/1/decode/health-max-boundary",
+    "save.passive/1/decode/health-min-boundary",
+    "save.passive/1/decode/invalid-version-future",
+    "save.passive/1/decode/invalid-version-zero",
+    "save.passive/1/decode/max-records",
+    "save.passive/1/decode/trailing-byte",
+    "save.passive/1/decode/truncated-fixture",
+    "save.passive/1/decode/truncated-header-only",
+    "save.passive/1/decode/truncated-short-record",
+    "save.passive/1/decode/truncated-tail",
+    "save.passive/1/decode/v1-fixture",
+    "save.passive/1/decode/y-max-boundary",
+    "save.passive/1/decode/y-min-boundary",
+    "save.passive/1/encode/capacity-minus-one",
+    "save.passive/1/encode/count-33",
+    "save.passive/1/encode/empty",
+    "save.passive/1/encode/max-records",
+    "save.passive/1/encode/unsorted-canonical",
+    "save.passive/1/encode/v1-fixture-exact",
+];
+
+#[test]
+fn passive_corpus_executes_all_integrated_case_ids() {
+    use std::collections::BTreeMap;
+
+    let cases: Vec<FrozenCase> = load_cases_for_consumer(CorpusConsumer::Storage)
+        .into_iter()
+        .filter(|case| case.family == "save.passive")
+        .collect();
+    let found: BTreeMap<&str, &FrozenCase> = cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect();
+    for id in PASSIVE_INTEGRATED_CASE_IDS {
+        if !found.contains_key(id) {
+            panic!("integrated manifest missing passive case {id}");
+        }
+    }
+    if cases.len() != PASSIVE_INTEGRATED_CASE_IDS.len() {
+        panic!(
+            "integrated manifest has {} save.passive cases, want {}",
+            cases.len(),
+            PASSIVE_INTEGRATED_CASE_IDS.len()
+        );
+    }
+    passive::execute_passive_cases(&cases);
 }

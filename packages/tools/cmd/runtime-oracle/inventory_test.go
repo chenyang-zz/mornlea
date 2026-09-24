@@ -507,6 +507,8 @@ func TestContractInventoryRejectsKnownConsumerOnUnsupportedRoute(t *testing.T) {
 				{FamilyID: "save.hostile", Version: "1", Operation: "decode"}:       {},
 				{FamilyID: "save.hostile", Version: "2", Operation: "decode"}:       {},
 				{FamilyID: "save.hostile", Version: "2", Operation: "encode"}:       {},
+				{FamilyID: "save.passive", Version: "1", Operation: "decode"}:       {},
+				{FamilyID: "save.passive", Version: "1", Operation: "encode"}:       {},
 			},
 		},
 		"external:agent-contract": {

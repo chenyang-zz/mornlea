@@ -283,6 +283,76 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.hostile/2/encode/unsorted-canonical":                 true,
 		"save.hostile/2/encode/v1-fixture-reencode":                true,
 		"save.hostile/2/encode/v2-fixture-exact":                   true,
+		"save.passive/1/decode/corrupt-bool":                       true,
+		"save.passive/1/decode/corrupt-count-payload":              true,
+		"save.passive/1/decode/corrupt-crc":                        true,
+		"save.passive/1/decode/corrupt-descending-ids":             true,
+		"save.passive/1/decode/corrupt-dimension":                  true,
+		"save.passive/1/decode/corrupt-duplicate-id":               true,
+		"save.passive/1/decode/corrupt-envelope-future":            true,
+		"save.passive/1/decode/corrupt-envelope-zero":              true,
+		"save.passive/1/decode/corrupt-health-above":               true,
+		"save.passive/1/decode/corrupt-health-zero":                true,
+		"save.passive/1/decode/corrupt-inf-velocity":               true,
+		"save.passive/1/decode/corrupt-magic":                      true,
+		"save.passive/1/decode/corrupt-nan-position":               true,
+		"save.passive/1/decode/corrupt-nan-yaw":                    true,
+		"save.passive/1/decode/corrupt-payload-length":             true,
+		"save.passive/1/decode/corrupt-reserved-00":                true,
+		"save.passive/1/decode/corrupt-reserved-01":                true,
+		"save.passive/1/decode/corrupt-reserved-02":                true,
+		"save.passive/1/decode/corrupt-reserved-03":                true,
+		"save.passive/1/decode/corrupt-reserved-04":                true,
+		"save.passive/1/decode/corrupt-reserved-05":                true,
+		"save.passive/1/decode/corrupt-reserved-06":                true,
+		"save.passive/1/decode/corrupt-reserved-07":                true,
+		"save.passive/1/decode/corrupt-reserved-08":                true,
+		"save.passive/1/decode/corrupt-reserved-09":                true,
+		"save.passive/1/decode/corrupt-reserved-10":                true,
+		"save.passive/1/decode/corrupt-reserved-11":                true,
+		"save.passive/1/decode/corrupt-reserved-12":                true,
+		"save.passive/1/decode/corrupt-reserved-13":                true,
+		"save.passive/1/decode/corrupt-reserved-14":                true,
+		"save.passive/1/decode/corrupt-reserved-15":                true,
+		"save.passive/1/decode/corrupt-reserved-16":                true,
+		"save.passive/1/decode/corrupt-reserved-17":                true,
+		"save.passive/1/decode/corrupt-reserved-18":                true,
+		"save.passive/1/decode/corrupt-reserved-19":                true,
+		"save.passive/1/decode/corrupt-reserved-20":                true,
+		"save.passive/1/decode/corrupt-reserved-21":                true,
+		"save.passive/1/decode/corrupt-reserved-22":                true,
+		"save.passive/1/decode/corrupt-reserved-23":                true,
+		"save.passive/1/decode/corrupt-reserved-24":                true,
+		"save.passive/1/decode/corrupt-reserved-25":                true,
+		"save.passive/1/decode/corrupt-reserved-26":                true,
+		"save.passive/1/decode/corrupt-reserved-27":                true,
+		"save.passive/1/decode/corrupt-reserved-28":                true,
+		"save.passive/1/decode/corrupt-reserved-29":                true,
+		"save.passive/1/decode/corrupt-revision-zero":              true,
+		"save.passive/1/decode/corrupt-y-at-top":                   true,
+		"save.passive/1/decode/corrupt-y-below":                    true,
+		"save.passive/1/decode/corrupt-zero-id":                    true,
+		"save.passive/1/decode/count-33":                           true,
+		"save.passive/1/decode/empty":                              true,
+		"save.passive/1/decode/health-max-boundary":                true,
+		"save.passive/1/decode/health-min-boundary":                true,
+		"save.passive/1/decode/invalid-version-future":             true,
+		"save.passive/1/decode/invalid-version-zero":               true,
+		"save.passive/1/decode/max-records":                        true,
+		"save.passive/1/decode/trailing-byte":                      true,
+		"save.passive/1/decode/truncated-fixture":                  true,
+		"save.passive/1/decode/truncated-header-only":              true,
+		"save.passive/1/decode/truncated-short-record":             true,
+		"save.passive/1/decode/truncated-tail":                     true,
+		"save.passive/1/decode/v1-fixture":                         true,
+		"save.passive/1/decode/y-max-boundary":                     true,
+		"save.passive/1/decode/y-min-boundary":                     true,
+		"save.passive/1/encode/capacity-minus-one":                 true,
+		"save.passive/1/encode/count-33":                           true,
+		"save.passive/1/encode/empty":                              true,
+		"save.passive/1/encode/max-records":                        true,
+		"save.passive/1/encode/unsorted-canonical":                 true,
+		"save.passive/1/encode/v1-fixture-exact":                   true,
 	}
 	for _, c := range frozen.Cases {
 		if !strings.HasPrefix(c.Family, "save.") {
@@ -291,8 +361,8 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		if !wantSaveCases[c.ID] {
 			t.Fatalf("baseline carries unexpected save case %s", c.ID)
 		}
-		if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" {
-			t.Fatalf("save case %s has family %s, want save.region, save.player, save.world-metadata, or save.hostile", c.ID, c.Family)
+		if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" && c.Family != "save.passive" {
+			t.Fatalf("save case %s has family %s, want save.region, save.player, save.world-metadata, save.hostile, or save.passive", c.ID, c.Family)
 		}
 	}
 	for id := range wantSaveCases {
@@ -309,6 +379,9 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 				}
 				if strings.HasPrefix(id, "save.hostile/") {
 					wantFamily = "save.hostile"
+				}
+				if strings.HasPrefix(id, "save.passive/") {
+					wantFamily = "save.passive"
 				}
 				if c.Family != wantFamily {
 					t.Fatalf("pinned save case %s has family %s, want %s", id, c.Family, wantFamily)

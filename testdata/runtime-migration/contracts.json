@@ -4026,11 +4026,90 @@
       "numeric_semantics": "little-endian integers; CRC integrity; exact byte round-trip; no implicit repair",
       "sources": [
         {
+          "path": "packages/server/storage/passive/passive_codec.go",
+          "sha256": "sha256:f874be149f705dd78aac642bed26a9ba4b59cc394dcfac2bbd9aa2b4cb59357c"
+        },
+        {
           "path": "packages/server/storage/passive/testdata/passive-mobs-v1.bin",
           "sha256": "sha256:844081e4cde9678543762350e95aa5aacc4f363b5806fb788caa9a9d4e417281"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/storage_passive_test.go",
+          "sha256": "sha256:45f0248bba9273c9c1f9fedb709a9fce965595f17cbce853ac4e9f2994bd06e5"
         }
       ],
-      "cases": null
+      "cases": [
+        "save.passive/1/decode/corrupt-bool",
+        "save.passive/1/decode/corrupt-count-payload",
+        "save.passive/1/decode/corrupt-crc",
+        "save.passive/1/decode/corrupt-descending-ids",
+        "save.passive/1/decode/corrupt-dimension",
+        "save.passive/1/decode/corrupt-duplicate-id",
+        "save.passive/1/decode/corrupt-envelope-future",
+        "save.passive/1/decode/corrupt-envelope-zero",
+        "save.passive/1/decode/corrupt-health-above",
+        "save.passive/1/decode/corrupt-health-zero",
+        "save.passive/1/decode/corrupt-inf-velocity",
+        "save.passive/1/decode/corrupt-magic",
+        "save.passive/1/decode/corrupt-nan-position",
+        "save.passive/1/decode/corrupt-nan-yaw",
+        "save.passive/1/decode/corrupt-payload-length",
+        "save.passive/1/decode/corrupt-reserved-00",
+        "save.passive/1/decode/corrupt-reserved-01",
+        "save.passive/1/decode/corrupt-reserved-02",
+        "save.passive/1/decode/corrupt-reserved-03",
+        "save.passive/1/decode/corrupt-reserved-04",
+        "save.passive/1/decode/corrupt-reserved-05",
+        "save.passive/1/decode/corrupt-reserved-06",
+        "save.passive/1/decode/corrupt-reserved-07",
+        "save.passive/1/decode/corrupt-reserved-08",
+        "save.passive/1/decode/corrupt-reserved-09",
+        "save.passive/1/decode/corrupt-reserved-10",
+        "save.passive/1/decode/corrupt-reserved-11",
+        "save.passive/1/decode/corrupt-reserved-12",
+        "save.passive/1/decode/corrupt-reserved-13",
+        "save.passive/1/decode/corrupt-reserved-14",
+        "save.passive/1/decode/corrupt-reserved-15",
+        "save.passive/1/decode/corrupt-reserved-16",
+        "save.passive/1/decode/corrupt-reserved-17",
+        "save.passive/1/decode/corrupt-reserved-18",
+        "save.passive/1/decode/corrupt-reserved-19",
+        "save.passive/1/decode/corrupt-reserved-20",
+        "save.passive/1/decode/corrupt-reserved-21",
+        "save.passive/1/decode/corrupt-reserved-22",
+        "save.passive/1/decode/corrupt-reserved-23",
+        "save.passive/1/decode/corrupt-reserved-24",
+        "save.passive/1/decode/corrupt-reserved-25",
+        "save.passive/1/decode/corrupt-reserved-26",
+        "save.passive/1/decode/corrupt-reserved-27",
+        "save.passive/1/decode/corrupt-reserved-28",
+        "save.passive/1/decode/corrupt-reserved-29",
+        "save.passive/1/decode/corrupt-revision-zero",
+        "save.passive/1/decode/corrupt-y-at-top",
+        "save.passive/1/decode/corrupt-y-below",
+        "save.passive/1/decode/corrupt-zero-id",
+        "save.passive/1/decode/count-33",
+        "save.passive/1/decode/empty",
+        "save.passive/1/decode/health-max-boundary",
+        "save.passive/1/decode/health-min-boundary",
+        "save.passive/1/decode/invalid-version-future",
+        "save.passive/1/decode/invalid-version-zero",
+        "save.passive/1/decode/max-records",
+        "save.passive/1/decode/trailing-byte",
+        "save.passive/1/decode/truncated-fixture",
+        "save.passive/1/decode/truncated-header-only",
+        "save.passive/1/decode/truncated-short-record",
+        "save.passive/1/decode/truncated-tail",
+        "save.passive/1/decode/v1-fixture",
+        "save.passive/1/decode/y-max-boundary",
+        "save.passive/1/decode/y-min-boundary",
+        "save.passive/1/encode/capacity-minus-one",
+        "save.passive/1/encode/count-33",
+        "save.passive/1/encode/empty",
+        "save.passive/1/encode/max-records",
+        "save.passive/1/encode/unsorted-canonical",
+        "save.passive/1/encode/v1-fixture-exact"
+      ]
     },
     {
       "id": "save.player",
@@ -28778,6 +28857,1424 @@
       "encoded": {
         "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_v2-fixture-exact.encoded.bin",
         "sha256": "sha256:1b1c55e5e8688339a3bd7b13e6546a94b5dcfffe2453e06199862eda24175705"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-bool",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-bool.input.bin",
+        "sha256": "sha256:043e8bfe9e6ca94a8d8d10fe66de26217e9324767897f07179618ec4e7e849e0"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-bool.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-count-payload",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-count-payload.input.bin",
+        "sha256": "sha256:83904e2c2d5271f4833a47ee5cc9730841d94ef0cb3bcbc47df63c10fb23c29c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-count-payload.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-crc",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-crc.input.bin",
+        "sha256": "sha256:9294846efbf20de7c6ff99ccf4bc00acb48e91056e50ff65b1eff43c4258610f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-crc.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-descending-ids",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-descending-ids.input.bin",
+        "sha256": "sha256:86ba0c4eb6f0a28a7528436551e55f92995bde90ce5e7e67fd7c817c07dc6bb1"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-descending-ids.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-dimension",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-dimension.input.bin",
+        "sha256": "sha256:3af4a6f5c11d5a334d0d49d178d3df5d081b3a0a554fc7db04d37c095fdfccc1"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-dimension.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-duplicate-id",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-duplicate-id.input.bin",
+        "sha256": "sha256:114e56c7ef98f23372b1601bbaf00a56e9dbbe840565d9f46ce41c0bc45b7b58"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-duplicate-id.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-envelope-future",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-envelope-future.input.bin",
+        "sha256": "sha256:7f34770edc4ab0faeefe1f67ac34c0d8a4ff9a433130272cd85fab399c52b5af"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-envelope-future.expected.json",
+        "sha256": "sha256:a525fa8b2a3a83c483dde06e0e9a39ddaff1890264a44785949a3bc757098e51"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-envelope-zero",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-envelope-zero.input.bin",
+        "sha256": "sha256:79c201c4e2748452b7823dabdcd17b524fb63a59eebcf2c94cb3674670dfb5c6"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-envelope-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-health-above",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-health-above.input.bin",
+        "sha256": "sha256:cf1c485b88134247f8c3439831596b7534b4bd7f7e07c7851d2096f8666395c5"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-health-above.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-health-zero",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-health-zero.input.bin",
+        "sha256": "sha256:d4622e763dd1d3c4299e8b752776e35f19b6b0b5533d62e98b2e793c75f3ddf7"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-health-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-inf-velocity",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-inf-velocity.input.bin",
+        "sha256": "sha256:2762fa5d04a8b61df5d716ba2f2caec6e131c76279a7847f386ad3bf66ba4529"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-inf-velocity.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-magic",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-magic.input.bin",
+        "sha256": "sha256:8ed98941544be3de86fb148e98240abc2c234e4ab49dbd34c4d9a60b4b27d84b"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-magic.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-nan-position",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-nan-position.input.bin",
+        "sha256": "sha256:c114c8526887852d54e8ec925cf13a49109246bcb501052dbe2eaa180ceff394"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-nan-position.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-nan-yaw",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-nan-yaw.input.bin",
+        "sha256": "sha256:45ef21a0b585dd5085d3bfb94ee0b75ebeeb37f1137d24667ac0e30d5ae791b8"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-nan-yaw.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-payload-length",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-payload-length.input.bin",
+        "sha256": "sha256:8d34c4f187997dcfc3e08e25013fa55ac4ca1dec276225ff8fae8f64ee325f9f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-payload-length.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-00",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-00.input.bin",
+        "sha256": "sha256:658366618bcbc4936a6ad25bbf393805cc9706744371b3aac3a02dd1f9792921"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-00.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-01",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-01.input.bin",
+        "sha256": "sha256:cefdf5ada3587b9f0ba7a49e2ffac3365913160959521d8550a9719fa95e4cec"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-01.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-02",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-02.input.bin",
+        "sha256": "sha256:4f11802a96b29dad1a5668d7147a8af23e317df0983dadae5c562d851db33456"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-02.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-03",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-03.input.bin",
+        "sha256": "sha256:a8d26ba9863433870e7e60cf81d6a93061aeff240a9599510ba9092bec8b0441"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-03.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-04",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-04.input.bin",
+        "sha256": "sha256:8937b5b2f0f2f596fb697f7e5d58a128ce0e8d23009d5db03c7e8653a374dce1"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-04.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-05",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-05.input.bin",
+        "sha256": "sha256:834a5d7119bf65e27af996499d2c9cc465309ea60f42fb442de45220c178e433"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-05.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-06",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-06.input.bin",
+        "sha256": "sha256:5c96d3e1c1a2cd54469551ac7671811a253c3325f6da9e0702865ea9ed271533"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-06.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-07",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-07.input.bin",
+        "sha256": "sha256:436dc6fea8c2b91e3d1857833efca7e961932ee399aab562bb790e56a82e5c15"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-07.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-08",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-08.input.bin",
+        "sha256": "sha256:c0e1a15ae62f29d920a29b46d06927b3090b5db245713c395140689167d950ba"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-08.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-09",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-09.input.bin",
+        "sha256": "sha256:809c4943e4d6afc7960d671b67ff0093e72bce9b18cb08bc73bcc3a4882b1f7b"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-09.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-10",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-10.input.bin",
+        "sha256": "sha256:f5de9d12bc8a771bb3d22c8ee9bc42d11ec23a544db7d695dcf75fcb8551aa7c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-10.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-11",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-11.input.bin",
+        "sha256": "sha256:6b6b478c9fdd115a5eb697b4f5f76e2837fcc2a02e06e2dfecd9606be29ca176"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-11.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-12",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-12.input.bin",
+        "sha256": "sha256:55e3299c699cf903c50ab91a3b2b4584b61da3c9993f221736edd284238a7d1f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-12.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-13",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-13.input.bin",
+        "sha256": "sha256:af9e0adeeb5e94ec36377b5a1546345ef9145b4a944cbb1f01253f45b89afce4"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-13.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-14",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-14.input.bin",
+        "sha256": "sha256:6f0fddf8e9333b011a0a7ad959b218bdc87fcb1720c455bd31169c7f6277ff03"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-14.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-15",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-15.input.bin",
+        "sha256": "sha256:01308ae9a3aee7bcceb9779f969b9625dc9b4b4b38ba90b023be01deebb17794"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-15.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-16",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-16.input.bin",
+        "sha256": "sha256:274125b13dd6f9af62ae219622e09e379ce3bb6981db973f2a96d4bc862cb792"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-16.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-17",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-17.input.bin",
+        "sha256": "sha256:4808cdee3866ae7d339bc5b90fe13f768cdec70541c3f7cabbe3496d3e5ed496"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-17.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-18",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-18.input.bin",
+        "sha256": "sha256:5312389d0825813cde6056df63613417b32ff8d8246bdafdfe73d1fd1a29ebcf"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-18.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-19",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-19.input.bin",
+        "sha256": "sha256:69a9c9a349a13e5c143c55d56ff63fd9b81d4fab23057ae8dff5a4160f77d22b"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-19.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-20",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-20.input.bin",
+        "sha256": "sha256:ab77d7d8f7b2c64621aec3c495dce333d34ef3d2dffdc0a8a093d9bc207b3863"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-20.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-21",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-21.input.bin",
+        "sha256": "sha256:d2d76d420952176a8eaee53497135a3a5ed6fa67917b5701e20f8cc04c96d3e2"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-21.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-22",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-22.input.bin",
+        "sha256": "sha256:fc8bd3624a3e0733df9d9c8c20833a6530d1d58f3c41e23a5b807ef0a22aa075"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-22.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-23",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-23.input.bin",
+        "sha256": "sha256:a1654a436851b30f7a5a00af20fcddec4c244e16b98d74dc4439c1de3718f3ee"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-23.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-24",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-24.input.bin",
+        "sha256": "sha256:48b489356a8e4c89538d0b08fbea65ef56e9e5dc9cd6f4ef87f6183c8af8cfc4"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-24.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-25",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-25.input.bin",
+        "sha256": "sha256:fe3ef449df552c3e93a2cde202b68d13950d29efd6a176a608abf8dfe3fef1d2"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-25.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-26",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-26.input.bin",
+        "sha256": "sha256:08a3a563f54b8f2540d1430bc14fbad7372ba172b86d4c9316629b672e0d6d31"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-26.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-27",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-27.input.bin",
+        "sha256": "sha256:4ed82ac053a741fa95b5389e1b99999e7d4b513f393fb04262f408da4ca0211a"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-27.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-28",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-28.input.bin",
+        "sha256": "sha256:333ca5228d4a391cef9787059dee02d138a58d45b1774099227186ac20af337d"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-28.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-reserved-29",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-29.input.bin",
+        "sha256": "sha256:4e7944c0f2807ddac36b6ddeecab91811e1ed98c2711b6cd669d5145ba70382d"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-reserved-29.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-revision-zero",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-revision-zero.input.bin",
+        "sha256": "sha256:27c79169e5a3435581007a7ad53119c36cea03180fc05f21fa9bd9bdda853375"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-revision-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-y-at-top",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-y-at-top.input.bin",
+        "sha256": "sha256:8aba9011c202637d27f898bd0a9c21b6d556e4a7e0cae7bbfc151a1f033ad7da"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-y-at-top.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-y-below",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-y-below.input.bin",
+        "sha256": "sha256:60d7a16ac067f5fd0cb875c2d92ad90033f1ec9fa722351fa5d38a5eab07d3cd"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-y-below.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/corrupt-zero-id",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-zero-id.input.bin",
+        "sha256": "sha256:a7549bb4c5ae25ad5b413a703f050e2008f7a58006e34ed876b1788eacf7f25e"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_corrupt-zero-id.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/count-33",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_count-33.input.bin",
+        "sha256": "sha256:30b8b3d5718942ab2939a585434b193b27bc7eb338c09ca754541cce2d26f292"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_count-33.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/empty",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_empty.input.bin",
+        "sha256": "sha256:fb0c01884d7446bc7e9785ca743e414523eec1d8409a254e964c10c067213427"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_empty.expected.json",
+        "sha256": "sha256:b6e540de88266dce5fc47731c0034b569524f413c1f087f304b8da300195fc38"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/health-max-boundary",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_health-max-boundary.input.bin",
+        "sha256": "sha256:6710076066aef0d567b6b1304208806fc1b222db0f886d512d6cf4dd2d0d0890"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_health-max-boundary.expected.json",
+        "sha256": "sha256:3fa0d09739b564f924b9460d40d9d8f353f76a5a6edd5a5cc8da8fa0c8579e48"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/health-min-boundary",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_health-min-boundary.input.bin",
+        "sha256": "sha256:00c19873d36707f8e0d58121349c6787d288f5ab5ca146dbbc8d66c9d9b9ff13"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_health-min-boundary.expected.json",
+        "sha256": "sha256:d85e2b58f14c3a08f638b8afcdc2ce02d9be43185007ea16b4141b62b2b2db24"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/invalid-version-future",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_invalid-version-future.input.bin",
+        "sha256": "sha256:f843caa58ab63596ca64d14486470eb6ca8903cbe651d429e1e1ebe2ce4a7212"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_invalid-version-future.expected.json",
+        "sha256": "sha256:a525fa8b2a3a83c483dde06e0e9a39ddaff1890264a44785949a3bc757098e51"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/invalid-version-zero",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_invalid-version-zero.input.bin",
+        "sha256": "sha256:b724bdfc5a2680b56c87e9d032b555315df394ec4e86aed2b8305d97e6b69b4b"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_invalid-version-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/max-records",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_max-records.input.bin",
+        "sha256": "sha256:cacc51291df32567603d42340c2f8ffbdb51e585a5e35be426c81efa34b2ec62"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_max-records.expected.json",
+        "sha256": "sha256:9f02d6c086683fbaa804f29024b630ef5390dbae2674168789cfd4bae67a8ffb"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/trailing-byte",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_trailing-byte.input.bin",
+        "sha256": "sha256:4e24e49ed0cd5d885bb7e2b618b90a6cb33c094b01b6331ef0991214805ea620"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_trailing-byte.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/truncated-fixture",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_truncated-fixture.input.bin",
+        "sha256": "sha256:aaae24ba887faf2d7835d054a5d5d75b96a04ffac3ff1802dd49e0561c947158"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_truncated-fixture.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/truncated-header-only",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_truncated-header-only.input.bin",
+        "sha256": "sha256:4dc08c45983838214d2042fc770b9ed8a9235e01289ec33f457c0110185db267"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_truncated-header-only.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/truncated-short-record",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_truncated-short-record.input.bin",
+        "sha256": "sha256:1b7434698dbc87788dbddefc7d3bf759b4a8763ec488efe6180079967811c76e"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_truncated-short-record.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/truncated-tail",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_truncated-tail.input.bin",
+        "sha256": "sha256:9b57e47f16f42d6b941cc375cb875679774d6982d499032742ff2dce4be02ed1"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_truncated-tail.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/v1-fixture",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_v1-fixture.input.bin",
+        "sha256": "sha256:844081e4cde9678543762350e95aa5aacc4f363b5806fb788caa9a9d4e417281"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_v1-fixture.expected.json",
+        "sha256": "sha256:09bf1d2a2a62d2841a8c5d64c1886fbf51a9878ea19e6238f9c0a0bcbe3002c7"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/y-max-boundary",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_y-max-boundary.input.bin",
+        "sha256": "sha256:8fa97183c89ad9adf049ebf33e7995325dd760747d82be60c64403adf1d7742f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_y-max-boundary.expected.json",
+        "sha256": "sha256:b9653c27c85324fb1c3e411051732c2e2723c84425ca8af9c41dbba0d3fdfcab"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/decode/y-min-boundary",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_y-min-boundary.input.bin",
+        "sha256": "sha256:2a62329f41c3ef4707cb58a5cd301c22dcd47f89fecfa7bad0201f8ffc01ee0c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_decode_y-min-boundary.expected.json",
+        "sha256": "sha256:406dc121de1c818817ead542252b9388b876009ab70c8bae22596fd0a70f5eac"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/encode/capacity-minus-one",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "encode",
+      "arguments": {
+        "capacity": 247
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_capacity-minus-one.input.bin",
+        "sha256": "sha256:844081e4cde9678543762350e95aa5aacc4f363b5806fb788caa9a9d4e417281"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_capacity-minus-one.expected.json",
+        "sha256": "sha256:fb2b0f089738692882e9210ddc375fda95d9ceb12ab6fbb7175a5d098cb58172"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/encode/count-33",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_count-33.input.bin",
+        "sha256": "sha256:844081e4cde9678543762350e95aa5aacc4f363b5806fb788caa9a9d4e417281"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_count-33.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/encode/empty",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_empty.input.bin",
+        "sha256": "sha256:fb0c01884d7446bc7e9785ca743e414523eec1d8409a254e964c10c067213427"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_empty.expected.json",
+        "sha256": "sha256:21ca129070edbc69ea7ad8310b7707bb30e5d834224ac817db0069711aaaecd4"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_empty.encoded.bin",
+        "sha256": "sha256:fb0c01884d7446bc7e9785ca743e414523eec1d8409a254e964c10c067213427"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/encode/max-records",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_max-records.input.bin",
+        "sha256": "sha256:cacc51291df32567603d42340c2f8ffbdb51e585a5e35be426c81efa34b2ec62"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_max-records.expected.json",
+        "sha256": "sha256:276b5fb0e642d1aa3ccb3e7f711d9f3125488b144f6f07b9c4e7e82ecdf58cb5"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_max-records.encoded.bin",
+        "sha256": "sha256:cacc51291df32567603d42340c2f8ffbdb51e585a5e35be426c81efa34b2ec62"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/encode/unsorted-canonical",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_unsorted-canonical.input.bin",
+        "sha256": "sha256:844081e4cde9678543762350e95aa5aacc4f363b5806fb788caa9a9d4e417281"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_unsorted-canonical.expected.json",
+        "sha256": "sha256:98bae8f2eb7100388e53574ce8a9e62b0f916d0ee6cb499811c4758bedde36d0"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_unsorted-canonical.encoded.bin",
+        "sha256": "sha256:844081e4cde9678543762350e95aa5aacc4f363b5806fb788caa9a9d4e417281"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.passive/1/encode/v1-fixture-exact",
+      "family": "save.passive",
+      "version": "1",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_v1-fixture-exact.input.bin",
+        "sha256": "sha256:844081e4cde9678543762350e95aa5aacc4f363b5806fb788caa9a9d4e417281"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_v1-fixture-exact.expected.json",
+        "sha256": "sha256:98bae8f2eb7100388e53574ce8a9e62b0f916d0ee6cb499811c4758bedde36d0"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/passive/save.passive_1_encode_v1-fixture-exact.encoded.bin",
+        "sha256": "sha256:844081e4cde9678543762350e95aa5aacc4f363b5806fb788caa9a9d4e417281"
       },
       "checkpoints": [
         "0"
