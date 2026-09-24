@@ -265,16 +265,9 @@ pub fn encode_at_schema(save: &ChunkSave, schema: u32) -> StorageResult<Vec<u8>>
             format!("unsupported schema {schema}"),
         ));
     }
-    validate_save(save, schema)?;
-    // The current-value check has already converted all 24 sections. Older
-    // layouts still need a losslessness check, but never another section pass.
+    let logical_len = chunk_logical_len(save, schema)?;
     let logical = append_logical(save.key, save.revision, &save.chunk, schema);
-    if logical.len() > MAX_DECODED_CHUNK {
-        return Err(corrupt(
-            "decoded chunk",
-            format!("{} exceeds limit {MAX_DECODED_CHUNK}", logical.len()),
-        ));
-    }
+    debug_assert_eq!(logical.len(), logical_len);
     let compressed = compress(&logical)?;
     if compressed.len() > MAX_COMPRESSED_CHUNK as usize {
         return Err(corrupt(
@@ -434,6 +427,121 @@ pub fn decode_envelope(payload: &[u8]) -> StorageResult<LogicalPayload> {
 /// [`encode_at_schema`] writes the current schema; the older schemas exist so a
 /// contract test can re-serialize a decoded legacy chunk and compare it byte for
 /// byte with the logical bytes its fixture carried.
+/// Reports the exact `MCGC` logical payload length for a current [`ChunkSave`]
+/// at `schema`, after one aggregate and representability check.
+///
+/// Direct [`encode_logical`] keeps separate raw admission for historical tool
+/// drops; this preflight is for current-value envelope encoding only.
+pub fn chunk_logical_len(save: &ChunkSave, schema: u32) -> StorageResult<usize> {
+    if !(OLDEST_SCHEMA..=CURRENT_SCHEMA).contains(&schema) {
+        return Err(corrupt(
+            "chunk schema",
+            format!("unsupported schema {schema}"),
+        ));
+    }
+    validate_save(save, schema)?;
+    logical_payload_len(&save.chunk, schema)
+}
+
+/// Wire length of one logical payload after validation; no dense block expansion.
+fn logical_payload_len(chunk: &Chunk, schema: u32) -> StorageResult<usize> {
+    let mut total = LOGICAL_HEADER_LEN;
+    for (index, section) in chunk.sections.iter().enumerate() {
+        total = total
+            .checked_add(section_wire_len(section)?)
+            .ok_or_else(|| corrupt("logical payload length", "overflow"))?;
+        if total > MAX_DECODED_CHUNK {
+            return Err(corrupt(
+                "decoded chunk",
+                format!("{total} exceeds limit {MAX_DECODED_CHUNK} at section {index}"),
+            ));
+        }
+    }
+    if schema >= 2 {
+        let drop_bytes = if schema >= 5 {
+            DROP_SLOT_WITH_DURABILITY_LEN
+        } else {
+            DROP_SLOT_LEGACY_LEN
+        };
+        total = total
+            .checked_add(
+                DROPS_PER_CHUNK
+                    .checked_mul(drop_bytes)
+                    .ok_or_else(|| corrupt("logical payload length", "overflow"))?,
+            )
+            .ok_or_else(|| corrupt("logical payload length", "overflow"))?;
+        if total > MAX_DECODED_CHUNK {
+            return Err(corrupt(
+                "decoded chunk",
+                format!("{total} exceeds limit {MAX_DECODED_CHUNK} after drops"),
+            ));
+        }
+    }
+    if schema >= 4 {
+        total = total
+            .checked_add(
+                FURNACES_PER_CHUNK
+                    .checked_mul(FURNACE_SLOT_LEN)
+                    .ok_or_else(|| corrupt("logical payload length", "overflow"))?,
+            )
+            .ok_or_else(|| corrupt("logical payload length", "overflow"))?;
+        if total > MAX_DECODED_CHUNK {
+            return Err(corrupt(
+                "decoded chunk",
+                format!("{total} exceeds limit {MAX_DECODED_CHUNK} after furnaces"),
+            ));
+        }
+    }
+    if schema >= 6 {
+        total = total
+            .checked_add(
+                CHESTS_PER_CHUNK
+                    .checked_mul(CHEST_SLOT_LEN)
+                    .ok_or_else(|| corrupt("logical payload length", "overflow"))?,
+            )
+            .ok_or_else(|| corrupt("logical payload length", "overflow"))?;
+        if total > MAX_DECODED_CHUNK {
+            return Err(corrupt(
+                "decoded chunk",
+                format!("{total} exceeds limit {MAX_DECODED_CHUNK} after chests"),
+            ));
+        }
+    }
+    Ok(total)
+}
+
+/// `MCGC` header: magic, schema, key, revision, and section count.
+const LOGICAL_HEADER_LEN: usize = 32;
+const DROP_SLOT_LEGACY_LEN: usize = 17;
+const DROP_SLOT_WITH_DURABILITY_LEN: usize = 19;
+const FURNACE_SLOT_LEN: usize = 21;
+const CHEST_SLOT_LEN: usize = 144;
+
+/// Fixed-prefix section record plus palette and packed payload sizes.
+fn section_wire_len(section: &ContainerSnapshot) -> StorageResult<usize> {
+    let palette_bytes = section
+        .palette
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| corrupt("section wire length", "overflow"))?;
+    let packed_bytes = section
+        .packed
+        .len()
+        .checked_mul(8)
+        .ok_or_else(|| corrupt("section wire length", "overflow"))?;
+    let base = 16usize;
+    base.checked_add(palette_bytes)
+        .and_then(|n| n.checked_add(packed_bytes))
+        .ok_or_else(|| corrupt("section wire length", "overflow"))
+}
+
+/// Hidden wire sum without validation; contract tests use this to prove the
+/// decoded cap and checked arithmetic on impossible shapes.
+#[doc(hidden)]
+pub fn chunk_logical_wire_len_for_test(chunk: &Chunk, schema: u32) -> StorageResult<usize> {
+    logical_payload_len(chunk, schema)
+}
+
 pub fn encode_logical(
     key: ChunkKey,
     revision: u64,

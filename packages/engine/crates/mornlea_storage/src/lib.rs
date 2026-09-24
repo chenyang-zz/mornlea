@@ -19,15 +19,17 @@ mod player;
 mod region;
 mod world_metadata;
 
+#[doc(hidden)]
+pub use chunk::chunk_logical_wire_len_for_test;
 pub use chunk::{
     COMPRESSION_ZSTD as CHUNK_COMPRESSION_ZSTD, CURRENT_SCHEMA as CHUNK_CURRENT_SCHEMA, ChestSlot,
     Chunk, ChunkSave, ContainerSnapshot, DecodedChunk, DropSlot,
     ENVELOPE_LENGTH as CHUNK_ENVELOPE_LENGTH, ENVELOPE_VERSION as CHUNK_ENVELOPE_VERSION,
     FurnaceSlot, LogicalPayload, MAX_DECODED_CHUNK as CHUNK_MAX_DECODED_CHUNK,
-    OLDEST_SCHEMA as CHUNK_OLDEST_SCHEMA, StorageKind, checked_section, decode as decode_chunk,
-    decode_envelope as decode_chunk_envelope, decode_logical as decode_chunk_logical,
-    encode as encode_chunk, encode_at_schema as encode_chunk_at_schema,
-    encode_logical as encode_chunk_logical,
+    OLDEST_SCHEMA as CHUNK_OLDEST_SCHEMA, StorageKind, checked_section, chunk_logical_len,
+    decode as decode_chunk, decode_envelope as decode_chunk_envelope,
+    decode_logical as decode_chunk_logical, encode as encode_chunk,
+    encode_at_schema as encode_chunk_at_schema, encode_logical as encode_chunk_logical,
 };
 pub use companion::{
     CURRENT_SCHEMA as COMPANION_CURRENT_SCHEMA, CompanionBody, CompanionSave,
