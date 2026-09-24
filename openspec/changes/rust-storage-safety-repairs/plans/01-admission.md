@@ -1,0 +1,55 @@
+# Admission packets
+
+Common baseline: protocol completion merged at `81a56bb8`; at implementation start record current HEAD and a clean/dirty file inventory before touching code. Read root, engine and storage `AGENTS.md`. Rust source root below is `packages/engine/crates/mornlea_storage`. The Go files named below are read-only authority. Every node follows: write its exact regression, run its named test and observe the stated baseline failure, implement the stated algorithm, rerun the focused and downstream tests, give the controller the red/green output and one scoped commit. The controller updates `tasks.md` and `ledger.md`; do not modify tracked fixtures or the runtime-migration manifest.
+
+<a id="node-1-1"></a>
+## Node 1.1 — legacy queue owner
+
+**Prerequisites:** archived domain event, protocol and region changes are already present; no sibling implementation prerequisite. **Deliverable:** decoded v2/v3/v4 nonempty queues carry the containing body ID. **Editable:** `src/companion.rs`, new `tests/safety_legacy_queue.rs`. **Read-only:** Go `packages/server/storage/companion/companion_codec.go`, its v2/v3/v4 committed binaries, existing Rust `tests/runtime_contract.rs`. No corpus/manifest edits.
+
+**Existing interface:** `decode_companions(&[u8]) -> StorageResult<StoredCompanions>`; `StoredCompanions.records: Vec<CompanionBody>` and `.queues: Vec<StoredCompanionQueue>`, whose `id: PlayerId` is the owner. No new public API.
+
+**Test table:** for v2/v3/v4 fixtures, expect `source_schema=2/3/4`, `revision=41/43/47`, exactly 2 bodies, 1/1/2 queues, and each retained queue ID equal to the body whose queue fields were parsed. Compare each current task command, plan steps/state/index/ticks/reason, FIFO order and v4 summary to the Go decoder; an empty queue remains absent. Include two distinct nonempty v4 queues so assigning the first body ID to both fails. Decode must leave fixture bytes unchanged. Baseline red: at least one retained queue ID is all zero. The current count-only test passes and is insufficient.
+
+**Algorithm:** in the legacy body loop, after `decode_queue_sections(reader, schema)` succeeds and before the nonempty predicate, assign `queue.id = body.id`; do not infer identity from queue order after the loop. Schema v1 creates no queue. Preserve existing parse/error order and all payload fields.
+
+**Commands:** discover `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_legacy_queue --locked -- --list`; red then green with the same command without `-- --list`; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test runtime_contract --locked companion_` and `go test ./packages/server/storage/companion -count=1` after the required clean-checkout `make rust`. Expected green: nonzero new test set and existing companion tests. **Commit:** `fix(storage): preserve legacy companion queue owners`. **Rollback:** revert this node only; no format/version/data migration.
+
+<a id="node-1-2"></a>
+## Node 1.2 — bounded companion aggregate
+
+**Prerequisite:** 1.1. **Deliverable:** constructed v5 saves reject count and membership failures before proportional clone/sort and retain the exact accepted set. **Editable:** `src/companion.rs`, new `tests/safety_companion_bounds.rs`. **Read-only:** Go `packages/server/storage/companion/companion_v5.go` and its v5 tests.
+
+**Existing interface:** `encode_companions(&CompanionSave) -> StorageResult<Vec<u8>>`; `CompanionSave { revision:u64, agent_namespace_id:Identity, records:Vec<CompanionBody>, lifecycles:Vec<StoredCompanionLifecycle>, queues:Vec<StoredCompanionQueue> }`. Preserve this signature and canonical bytes.
+
+**Concrete cases:** build valid UUIDv4 IDs by fixing version/variant bytes and varying the last two bytes, then valid tombstones. 64 inactive bodies with 64 matched lifecycles encode; 65 bodies plus 65 lifecycles returns `Corrupt` before record cloning; four active with matching queues encode, fifth active rejects. A missing/extra/duplicate lifecycle, duplicate body, orphan queue, inactive queue, duplicate queue, 17 FIFO entries, 5,001 plan steps, 1,025-byte command and 2,049-byte summary each reject without bytes. Construct the Go v5 test's maximum legal 64-body/4-active case and assert its exact maximum 393,904-byte length; a larger legal witness cannot exist if the independent bounds are enforced. Include unsorted valid IDs and assert canonical output order and unchanged input. For a count precedence test, make the first body otherwise invalid in a 65-body request: the result must report count, proving no per-body scan. Baseline red: 65 bodies are cloned and sorted before eventual rejection or a later length check.
+
+**Algorithm:** check revision then namespace; test `records.len() > 64`, `lifecycles.len() != records.len()`, and `queues.len() > 4` before any clone, sort or per-record loop. Then validate bodies and unique IDs, lifecycle set and shape, active count <=4, each queue ID unique and active, task/text bounds, and checked total encoded length <=393,904. Preserve existing Go-aligned validation categories and the current canonical sorted byte order. A test-only allocation probe may assert zero allocations inside the 65-body rejection call after inputs are constructed; the count-before-invalid-body oracle is mandatory even if allocation instrumentation is unavailable.
+
+**Commands:** discover and red/green `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_companion_bounds --locked`; run the existing Rust `runtime_contract companion_` filter and `go test ./packages/server/storage/companion -count=1`. **Commit:** `fix(storage): bound companion save admission`. **Rollback:** revert this node; no online work or schema change.
+
+<a id="node-2-1"></a>
+## Node 2.1 — full current encoder aggregate
+
+**Prerequisite:** 1.2 only for serial file ownership; semantically independent. **Deliverable:** `encode_chunk` rejects active containers that `decode_chunk` rejects. **Editable:** `src/chunk.rs`, new `tests/safety_chunk_aggregate.rs`, new `tests/support/chunk_safety.rs` for one reusable 24-section fixture builder. **Read-only:** Go `packages/server/storage/chunk/chunk_codec_container.go`, `chunk_codec_logical.go`, Rust `runtime_contract.rs`.
+
+**Existing signatures:** `encode_chunk(&ChunkSave) -> StorageResult<Vec<u8>>`; `decode_chunk(ChunkKey,u64,&[u8]) -> StorageResult<DecodedChunk>`; `validate_chunk(&Chunk) -> StorageResult<()>` is private and already used by decode. The helper builds 24 valid single-air sections, 32 empty drops, 32 empty furnaces, 16 empty chests, key dimension 0, revision 1. Set a matching furnace or chest block in one section before marking its slot active.
+
+**Test rows under the `current_` prefix:** active furnace on air; active chest on air; furnace on chest block; chest on furnace block; duplicate active furnace index; duplicate active chest index; index 98,304; matching block at index 98,303; valid mixed furnace+chest; invalid inactive slot shape; invalid last drop; wrong 23/25 section or 31/33 drop or 31/33 furnace or 15/17 chest shape; indexed palette pointing beyond its words. All invalid rows return `Corrupt` before compression; valid rows encode and decode to the same fields. The first four and duplicates are red on the current encoder while decode rejects their output.
+
+**Algorithm:** first add the existing `validate_drop_slot` loop to `validate_chunk`, which currently checks sections/furnaces/chests but omits drops. Then replace `validate_save`'s partial per-slot scan with `validate_chunk(&save.chunk)` after key/revision validation. Preserve shape -> sections -> drops -> furnaces -> chests -> active association precedence. Do not reimplement association in the encoder. No output on error.
+
+**Commands:** discover and red/green `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_chunk_aggregate --locked current_`; run `runtime_contract chunk_` and `go test ./packages/server/storage/chunk -count=1`. **Commit:** `fix(storage): validate constructed chunk aggregates`. **Rollback:** revert this node; diagnostic schema encoder remains addressed by 2.2.
+
+<a id="node-2-2"></a>
+## Node 2.2 — logical and historical encoder closure
+
+**Prerequisite:** 2.1. **Deliverable:** every public chunk encode layer has the same aggregate verdict. **Editable:** `src/chunk.rs`, add `logical_` rows to `tests/safety_chunk_aggregate.rs`; `tests/support/chunk_safety.rs` is read-only unless the controller accepts a helper correction. **Read-only:** Go chunk codec and committed v1..v9 fixtures.
+
+**Existing signatures:** `encode_chunk_logical(ChunkKey,u64,&Chunk,u32) -> StorageResult<Vec<u8>>` and `encode_chunk_at_schema(&ChunkSave,u32) -> StorageResult<Vec<u8>>`; `encode_chunk` consumes the latter at schema 9.
+
+**Test rows under the `logical_` prefix:** use one fixture with active furnace on air and one with duplicate chests; call logical encoder at every supported schema 1..9 and whole historical encoder for each version. All reject, including schemas that omit furnace/chest fields, because a caller cannot use a diagnostic historical encoder to drop active current state. Also pin wrong schema 0/10, revision 0, invalid dimension, correct last index, valid schema-specific logical byte round trip and unchanged original chunk. Baseline red: direct logical encoding writes bytes for the invalid aggregate despite 2.1's current-encoder fix.
+
+**Algorithm:** after schema admission, validate key dimension 0/1 and revision >0, then call the same `validate_chunk` before constructing `ByteWriter`. Keep exact valid logical layout and version-specific omission rules. `encode_at_schema` remains a fallible diagnostic API, never a silent downgrade path.
+
+**Commands:** discover and red/green `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test safety_chunk_aggregate --locked logical_`; run full `safety_chunk_aggregate` and `runtime_contract chunk_`. **Commit:** `fix(storage): close chunk logical encode bypass`. **Rollback:** revert this node without changing 2.1.
