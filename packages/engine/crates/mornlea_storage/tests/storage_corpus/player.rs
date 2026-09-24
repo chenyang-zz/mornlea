@@ -32,7 +32,35 @@ pub const PLAYER_REGISTERED_ROUTES: &[PlayerRoute] = &[
         version: "9",
         operation: "encode",
     },
+    PlayerRoute {
+        family: "save.player",
+        version: "1",
+        operation: "decode",
+    },
+    PlayerRoute {
+        family: "save.player",
+        version: "2",
+        operation: "decode",
+    },
+    PlayerRoute {
+        family: "save.player",
+        version: "3",
+        operation: "decode",
+    },
+    PlayerRoute {
+        family: "save.player",
+        version: "4",
+        operation: "decode",
+    },
 ];
+
+pub fn player_legacy_early_case(id: &str) -> bool {
+    id.starts_with("save.player/1/decode/")
+        || id.starts_with("save.player/2/decode/")
+        || id.starts_with("save.player/3/decode/")
+        || id.starts_with("save.player/4/decode/")
+        || id == "save.player/9/encode/v4-fixture-reencode"
+}
 
 fn route_is_registered(case: &FrozenCase) -> bool {
     PLAYER_REGISTERED_ROUTES.iter().any(|route| {
@@ -406,12 +434,238 @@ fn execute_player_encode(case: &FrozenCase, args: &PlayerArguments) -> Result<()
 mod tests {
     use super::*;
     use crate::runtime_corpus::{load_cases_for_consumer, CorpusConsumer};
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn read_go_fixture(relative: &str) -> Vec<u8> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../packages/")
+            .join(relative);
+        fs::read(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+    }
+
+    fn fixture_player_id() -> PlayerId {
+        PlayerId::from_bytes([
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x46, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ])
+    }
+
+    fn player_arguments_json() -> serde_json::Value {
+        serde_json::json!({
+            "requested_player_id": "00112233445546778899aabbccddeeff"
+        })
+    }
+
+    fn player_truncated_wire(wire: &[u8], drop_tail: usize) -> Vec<u8> {
+        if drop_tail == 0 || drop_tail >= wire.len() {
+            return wire.to_vec();
+        }
+        wire[..wire.len() - drop_tail].to_vec()
+    }
+
+    fn player_corrupt_crc_wire(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        if out.len() > 40 {
+            out[40] ^= 0xff;
+        }
+        out
+    }
+
+    fn player_wire_with_schema(wire: &[u8], schema: u32) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        if out.len() >= 12 {
+            out[8..12].copy_from_slice(&schema.to_le_bytes());
+        }
+        out
+    }
+
+    fn legacy_decode_ok_case(id: &str, version: &str, input: Vec<u8>) -> FrozenCase {
+        let player_id = fixture_player_id();
+        let stored = decode_player(player_id, &input).unwrap_or_else(|err| {
+            panic!("case {id} decode fixture: {err}");
+        });
+        FrozenCase {
+            id: id.to_string(),
+            family: "save.player".to_string(),
+            version: version.to_string(),
+            consumer: CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "decode".to_string(),
+            arguments: player_arguments_json(),
+            input_format: InputFormat::Binary,
+            input: input.clone(),
+            input_json: None,
+            normalized: serde_json::json!({
+                "kind": "ok",
+                "category": "save",
+                "value_sha256": value_sha256(&stored_player_value(&stored))
+            }),
+            encoded: None,
+            category: "save".to_string(),
+        }
+    }
+
+    fn legacy_decode_error_case(
+        id: &str,
+        version: &str,
+        input: Vec<u8>,
+        category: &str,
+    ) -> FrozenCase {
+        FrozenCase {
+            id: id.to_string(),
+            family: "save.player".to_string(),
+            version: version.to_string(),
+            consumer: CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "decode".to_string(),
+            arguments: player_arguments_json(),
+            input_format: InputFormat::Binary,
+            input: input,
+            input_json: None,
+            normalized: serde_json::json!({
+                "kind": "error",
+                "category": category
+            }),
+            encoded: None,
+            category: category.to_string(),
+        }
+    }
+
+    fn legacy_encode_v4_reencode_case(v4_fixture: Vec<u8>) -> FrozenCase {
+        let player_id = fixture_player_id();
+        let stored = decode_player(player_id, &v4_fixture).expect("decode v4 fixture");
+        assert!(
+            stored.needs_rewrite,
+            "historical v4 input must decode with needs_rewrite true"
+        );
+        let digest_value = stored_player_value(&stored);
+        let save = stored_to_save(&stored);
+        let needed = player_encoded_len(&save).expect("encoded len");
+        let mut encoded = vec![0u8; needed];
+        let written = encode_player_into(&save, &mut encoded).expect("encode v4 migration");
+        encoded.truncate(written);
+        FrozenCase {
+            id: "save.player/9/encode/v4-fixture-reencode".to_string(),
+            family: "save.player".to_string(),
+            version: "9".to_string(),
+            consumer: CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "encode".to_string(),
+            arguments: player_arguments_json(),
+            input_format: InputFormat::Binary,
+            input: v4_fixture,
+            input_json: None,
+            normalized: serde_json::json!({
+                "kind": "ok",
+                "category": "save",
+                "value_sha256": value_sha256(&digest_value),
+                "length": encoded.len()
+            }),
+            encoded: Some(encoded),
+            category: "save".to_string(),
+        }
+    }
+
+    fn player_legacy_early_fixture_cases() -> Vec<FrozenCase> {
+        let v1 = read_go_fixture("server/storage/player/testdata/player-v1.bin");
+        let v2 = read_go_fixture("server/storage/player/testdata/player-v2.bin");
+        let v3 = read_go_fixture("server/storage/player/testdata/player-v3.bin");
+        let v4 = read_go_fixture("server/storage/player/testdata/player-v4.bin");
+        vec![
+            legacy_decode_ok_case("save.player/1/decode/v1-fixture", "1", v1.clone()),
+            legacy_decode_error_case(
+                "save.player/1/decode/truncated-payload",
+                "1",
+                player_truncated_wire(&v1, 1),
+                "corrupt",
+            ),
+            legacy_decode_ok_case("save.player/2/decode/v2-fixture", "2", v2.clone()),
+            legacy_decode_error_case(
+                "save.player/2/decode/corrupt-crc",
+                "2",
+                player_corrupt_crc_wire(&v2),
+                "corrupt",
+            ),
+            legacy_decode_ok_case("save.player/3/decode/v3-fixture", "3", v3.clone()),
+            legacy_decode_error_case(
+                "save.player/3/decode/invalid-version-zero",
+                "3",
+                player_wire_with_schema(&v3, 0),
+                "corrupt",
+            ),
+            legacy_decode_ok_case("save.player/4/decode/v4-fixture", "4", v4.clone()),
+            legacy_decode_error_case(
+                "save.player/4/decode/invalid-version-future",
+                "4",
+                player_wire_with_schema(&v4, 10),
+                "future_version",
+            ),
+            legacy_encode_v4_reencode_case(v4),
+        ]
+    }
 
     fn player_cases_from_manifest() -> Vec<FrozenCase> {
         load_cases_for_consumer(CorpusConsumer::Storage)
             .into_iter()
             .filter(|case| case.family == "save.player")
             .collect()
+    }
+
+    #[test]
+    fn player_legacy_early_executes_integrated_manifest_cases() {
+        let cases = player_cases_from_manifest()
+            .into_iter()
+            .filter(|case| player_legacy_early_case(&case.id))
+            .collect::<Vec<_>>();
+        if cases.is_empty() {
+            return;
+        }
+        execute_player_cases(&cases);
+    }
+
+    #[test]
+    fn player_legacy_early_executes_fixture_cases() {
+        let cases = player_legacy_early_fixture_cases();
+        execute_player_cases(&cases);
+    }
+
+    #[test]
+    fn player_legacy_early_armor_digest_mutation_fails_comparison() {
+        let v3 = read_go_fixture("server/storage/player/testdata/player-v3.bin");
+        let mut case = legacy_decode_ok_case("save.player/3/decode/v3-fixture", "3", v3);
+        let player_id = fixture_player_id();
+        let mut stored = decode_player(player_id, &case.input).expect("decode v3 fixture");
+        stored.armor[0].item += 1;
+        case.normalized = serde_json::json!({
+            "kind": "ok",
+            "category": "save",
+            "value_sha256": value_sha256(&stored_player_value(&stored))
+        });
+        let err = execute_player_case(&case).expect_err("stale armor digest must fail");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn player_legacy_early_needs_rewrite_digest_mutation_fails_comparison() {
+        let v4 = read_go_fixture("server/storage/player/testdata/player-v4.bin");
+        let mut case = legacy_decode_ok_case("save.player/4/decode/v4-fixture", "4", v4);
+        let player_id = fixture_player_id();
+        let mut stored = decode_player(player_id, &case.input).expect("decode v4 fixture");
+        stored.needs_rewrite = false;
+        case.normalized = serde_json::json!({
+            "kind": "ok",
+            "category": "save",
+            "value_sha256": value_sha256(&stored_player_value(&stored))
+        });
+        let err = execute_player_case(&case).expect_err("stale needs_rewrite digest must fail");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
