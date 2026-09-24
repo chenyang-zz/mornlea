@@ -193,6 +193,15 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported by the implementer: `chunk_codec logical_` 13/13; `runtime_contract chunk_` 10/10; `cargo clippy -p mornlea_storage --lib -- -D warnings` pass.
 - Architecture skill: no change. The current-value preflight versus raw historical admission split is already in the design.
 
+## 2026-09-24 — SDD execution: node 4.2 closed
+
+- Commits: `5aaa54cd` reusable `ChunkCodec`; `bf3415d6` shares the envelope parser; `0cd29a78` returns the helper's decompressed bytes.
+- Review of `220b0942..5aaa54cd` required one parser. The first fix still returned an empty `LogicalPayload.bytes`. The second fix re-review of `0cd29a78` approved. No remaining Critical or Important findings. One caller-thread bulk context satisfies the one-worker rule because `NbWorkers(1)` is unsupported without `zstdmt`.
+- Minor findings held for the final review: `AGENTS.md` dropped the `chunk_logical_len` sentence when the context clause was added; recovery does not decode a valid frame after every named failure; scratch reuse still allocates a fresh logical buffer.
+- No save-family case count change. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the return-shape fix: `chunk_codec context_` 6/6; `logical_` 13/13; `runtime_contract chunk_` 10/10. `make rust` passed on `5aaa54cd`.
+- Architecture skill: no change. The reusable context and the single envelope parser are local to this codec.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
