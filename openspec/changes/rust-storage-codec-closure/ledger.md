@@ -174,6 +174,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates: `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test passive_buffer --locked` 10/10; `cargo clippy -p mornlea_storage --lib --locked -- -D warnings` pass. `runtime_contract passive_` 7/7 and `go test ./packages/server/storage/passive -count=1` were reported by the implementer.
 - Architecture skill: no change. The caller-buffer rule is already recorded for the other noncompressed writers.
 
+## 2026-09-24 — SDD execution: node 3.4 closed
+
+- Commits: `307e1f64` passive v1 producer and Rust executor; `1621544d` rejects a shared case id or asset path and checks encode `length`; `363e8261` skips a reviewed pinned export; `03922a38` integration of seventy `save.passive` cases and decode/encode route 1.
+- Split check: `307e1f64`, `1621544d`, and `363e8261` touch only `storage_passive_test.go` and `storage_corpus/passive.rs`. Registry, dispatcher, Discover, manifest, and assets landed in `03922a38`.
+- Reviews of the producer, both fixes, and the integration approved. The colliding export, the missing encode `length` check, and the fatal pinned-child test are closed. No remaining Critical or Important findings.
+- Minor finding held for the final review: `validatePassiveExportCandidates` has no subtest that shares an id or asset path and asserts no child is created.
+- `save.passive` has 70 cases. `save.region` stays at 26. `save.player` stays at 37. `save.world-metadata` stays at 15. `save.hostile` stays at 50. Save total is 198. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`. Schema stays v1.
+- Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 51/51 including nonempty `passive_`; `runtime_contract passive_` 7/7.
+- Architecture skill: no change. The external-candidate handoff and the noncompressed writer rule are already recorded.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections

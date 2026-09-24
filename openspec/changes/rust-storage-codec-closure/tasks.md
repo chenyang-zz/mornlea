@@ -35,7 +35,7 @@
 - [x] 3.1 [Add hostile canonical bounded writer](plans/02-records.md#node-3-1). Rust `src/{hostile,lib}.rs`, `tests/hostile_buffer.rs`; run Rust `--test hostile_buffer`.
 - [x] 3.2 [Execute hostile v1/v2 corpus](plans/02-records.md#node-3-2). Go `storage_hostile_test.go`, Rust `storage_corpus/hostile.rs`; run Go `^TestStorageHostile` and Rust `storage_corpus hostile_`.
 - [x] 3.3 [Add passive canonical bounded writer](plans/02-records.md#node-3-3). Rust `src/{passive,lib}.rs`, `tests/passive_buffer.rs`; run Rust `--test passive_buffer`.
-- [ ] 3.4 [Execute passive v1 corpus](plans/02-records.md#node-3-4). Go `storage_passive_test.go`, Rust `storage_corpus/passive.rs`; run Go `^TestStoragePassive` and Rust `storage_corpus passive_`.
+- [x] 3.4 [Execute passive v1 corpus](plans/02-records.md#node-3-4). Go `storage_passive_test.go`, Rust `storage_corpus/passive.rs`; run Go `^TestStorage passive` and Rust `storage_corpus passive_`.
 
 ## 4. Chunk and companion aggregates
 
