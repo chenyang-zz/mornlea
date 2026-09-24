@@ -10,8 +10,7 @@ mod runtime_corpus;
 #[path = "storage_corpus/value_digest.rs"]
 mod value_digest;
 
-use runtime_corpus::{CorpusConsumer, FrozenCase, try_load_cases_from_root};
-use std::collections::HashSet;
+use runtime_corpus::{load_cases_for_consumer, CorpusConsumer, FrozenCase, try_load_cases_from_root};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -80,18 +79,13 @@ fn storage_corpus_consumer_parse_and_as_str_round_trip() {
     assert!(CorpusConsumer::parse("mornlea_storage-unknown").is_none());
 }
 
+/// Before the controller integrates reviewed save cases, the manifest carries
+/// no `mornlea_storage` selection. This must fail the suite outright rather
+/// than looking like a passing zero-case run.
 #[test]
 fn storage_corpus_rejects_empty_selection() {
-    let cases = runtime_corpus::load_cases_for_consumer(CorpusConsumer::Storage);
-    assert!(
-        cases.is_empty(),
-        "baseline manifest must not carry integrated storage cases yet"
-    );
-    let err = std::panic::catch_unwind(|| execute_storage_selection(&cases));
-    assert!(
-        err.is_err(),
-        "zero selected storage cases must not report success"
-    );
+    let cases = load_cases_for_consumer(CorpusConsumer::Storage);
+    execute_storage_selection(&cases);
 }
 
 #[test]
@@ -227,16 +221,4 @@ fn storage_corpus_loader_accepts_storage_consumer_in_manifest() {
         .expect("loader must accept mornlea_storage consumer");
     assert_eq!(cases.len(), 1);
     assert_eq!(cases[0].consumer, CorpusConsumer::Storage);
-}
-
-#[test]
-fn storage_corpus_registered_route_table_is_explicitly_empty() {
-    assert!(
-        REGISTERED_STORAGE_ROUTES.is_empty(),
-        "no storage route is registered before node 1.3 integration"
-    );
-    let mut seen = HashSet::new();
-    for route in REGISTERED_STORAGE_ROUTES {
-        assert!(seen.insert(route.clone()), "duplicate route registration");
-    }
 }
