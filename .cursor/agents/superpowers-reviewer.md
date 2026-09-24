@@ -1,6 +1,6 @@
 ---
 name: superpowers-reviewer
-model: grok-4.6[effort=low,fast=false]
+model: grok-4.7[context=256k,reasoning_effort=xhigh,fast=false]
 description: Superpowers subagent-driven-development reviewer for Mornlea. Read-only task-scoped spec-compliance and code-quality gate, also used for the final whole-branch review; cites file:line evidence and calibrates severity.
 ---
 

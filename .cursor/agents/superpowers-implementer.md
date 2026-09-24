@@ -1,6 +1,6 @@
 ---
 name: superpowers-implementer
-model: grok-4.6[effort=low,fast=false]
+model: composer-2.5[fast=false]
 description: Superpowers subagent-driven-development implementer for Mornlea. Executes exactly one planned task with test-first development, focused validation, a scoped commit, self-review, and a status report.
 ---
 
