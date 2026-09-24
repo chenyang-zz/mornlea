@@ -465,6 +465,10 @@ func validateExternalCandidateRoot(repoRoot, candidateDir string) error {
 		if component == "/" || component == filepath.Dir(component) {
 			break
 		}
+		// Match exportGeneratedAssets: /tmp may be a symlink to /private/tmp on macOS.
+		if component == "/var" || component == "/tmp" || component == "/etc" {
+			break
+		}
 		info, statErr := os.Lstat(component)
 		if statErr != nil {
 			return fmt.Errorf("runtime-oracle: stat candidate path %s: %w", component, statErr)
