@@ -106,6 +106,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus player_` 6/6 including nonempty `player_legacy_early_`; `runtime_contract player_` 11/11.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 2.2c closed
+
+- Commits: `ea757ad3` v5–v8 producer and Rust executor; `80150f48` v5 health pinned at 13; `39574c0c` integration of nine late player cases and decode routes 5–8.
+- Split check: `ea757ad3` and `80150f48` touch only the player producer and `storage_corpus/player.rs`. Registry, dispatcher routes, manifest, and assets landed in `39574c0c`.
+- Reviews of the producer, the health pin, and the integration approved. The health-pin review's commit-trailer finding is the same hook-injected `Co-authored-by` already held; `80150f48` was pushed, so the message was not rewritten.
+- Minor findings held for the final review: v8 pin omits the fixture respawn position and dimension; Rust v6 success path does not assert `needs_rewrite`; the v4 and v8 re-encode helpers are duplicated; the late export test does not list the nine ids.
+- `save.player` now has 25 cases. `save.region` stays at 26. The other five `save.*` families remain at zero. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus player_` 14/14 including nonempty `player_legacy_late_`; `runtime_contract player_` 11/11.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections

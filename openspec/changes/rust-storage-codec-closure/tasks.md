@@ -25,7 +25,7 @@
 - [x] 2.1 [Add exact player caller-buffer writer](plans/02-records.md#node-2-1). Rust `src/{bytes,player,lib}.rs`, `tests/player_buffer.rs`; run `cargo test -p mornlea_storage --test player_buffer --locked` with the pinned workspace manifest.
 - [x] 2.2a [Execute player v9 and current writer cases](plans/05-dispatch-slices.md#node-2-2a). Add real current decode/encode routes and nonempty Go/Rust gates.
 - [x] 2.2b [Execute player v1–v4 migrations](plans/05-dispatch-slices.md#node-2-2b). Add four historical decode routes and one current re-encode case.
-- [ ] 2.2c [Execute player v5–v8 migrations](plans/05-dispatch-slices.md#node-2-2c). Add four historical decode routes and current re-encode case.
+- [x] 2.2c [Execute player v5–v8 migrations](plans/05-dispatch-slices.md#node-2-2c). Add four historical decode routes and current re-encode case.
 - [ ] 2.2d [Close player malformed and boundary corpus](plans/05-dispatch-slices.md#node-2-2d). Add CRC, length, schema, ID, respawn and rewrite mutations.
 - [ ] 2.3 [Preserve raw metadata and add atomic writer](plans/02-records.md#node-2-3). Rust `src/{world_metadata,lib}.rs`, `tests/metadata_buffer.rs`; run Rust `--test metadata_buffer`.
 - [ ] 2.4 [Execute metadata v1..v6 and invalid corpus](plans/02-records.md#node-2-4). Go package-local `packages/server/storage/metadata_oracle_test.go`, Rust `storage_corpus/metadata.rs`; run Go `^TestMetadataOracle` and Rust `storage_corpus metadata_`.
