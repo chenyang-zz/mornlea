@@ -266,20 +266,15 @@ pub fn decode(data: &[u8]) -> StorageResult<HostileMobs> {
     Ok(HostileMobs { revision, records })
 }
 
-/// Encode-time validation: an absent target may carry arbitrary in-memory
-/// `player_id` bytes; the wire form always zeroes that field.
 fn validate_record_for_encode(record: &HostileMob) -> Result<(), String> {
-    validate_record_fields(record, false)
+    validate_record_fields(record)
 }
 
 fn validate_record(record: &HostileMob) -> Result<(), String> {
-    validate_record_fields(record, true)
+    validate_record_fields(record)
 }
 
-fn validate_record_fields(
-    record: &HostileMob,
-    require_zero_absent_target: bool,
-) -> Result<(), String> {
+fn validate_record_fields(record: &HostileMob) -> Result<(), String> {
     if record.id == 0 {
         return Err("zero hostile ID".to_owned());
     }
@@ -339,13 +334,7 @@ fn validate_record_fields(
     }
     if !record.has_target {
         if !record.player_id.is_zero() {
-            let bytes = record.player_id.to_bytes();
-            let uniform = bytes
-                .first()
-                .is_some_and(|&lead| bytes.iter().all(|&b| b == lead));
-            if require_zero_absent_target || !uniform {
-                return Err("hostile without target keeps player ID".to_owned());
-            }
+            return Err("hostile without target keeps player ID".to_owned());
         }
         return Ok(());
     }
@@ -371,11 +360,7 @@ fn append_record_slice(writer: &mut SliceWriter<'_>, record: &HostileMob) {
     writer.u8(record.hurt_cooldown);
     writer.u8(record.burn_cooldown);
     writer.u8(u8::from(record.has_target));
-    if record.has_target {
-        writer.bytes(&record.player_id.to_bytes());
-    } else {
-        writer.zeroes(16);
-    }
+    writer.bytes(&record.player_id.to_bytes());
     writer.u64(record.next_repath_ticks);
     writer.u16(record.distant_ticks);
     writer.u8(record.kind);

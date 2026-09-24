@@ -150,18 +150,14 @@ fn distant_ticks_six_hundred_accepted_six_hundred_one_rejected() {
 }
 
 #[test]
-fn target_absent_nonzero_raw_encodes_zero_target_present_invalid_uuid_rejected() {
+fn target_absent_nonzero_raw_rejected_target_present_invalid_uuid_rejected() {
     let mut absent_garbage = base_mob(1);
     absent_garbage.has_target = false;
     absent_garbage.player_id = PlayerId::from_bytes([0xFF; 16]);
-    let encoded = encode_hostile_mobs(&valid_save(vec![absent_garbage])).expect("encode");
-    let has_target_offset = 32 + 45;
-    assert_eq!(encoded[has_target_offset], 0);
-    assert!(
-        encoded[has_target_offset + 1..has_target_offset + 17]
-            .iter()
-            .all(|&b| b == 0)
-    );
+    assert!(matches!(
+        encode_hostile_mobs(&valid_save(vec![absent_garbage])),
+        Err(StorageError::Corrupt { .. })
+    ));
 
     let mut bad_target = base_mob(2);
     bad_target.has_target = true;
