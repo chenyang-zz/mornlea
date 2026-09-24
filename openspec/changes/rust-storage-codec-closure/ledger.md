@@ -135,6 +135,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported by the implementer: `metadata_buffer` 10/10; `runtime_contract metadata_` 6/6 after the rename; `go test ./packages/server/storage -run '^TestMetadata'` pass.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 2.4 closed
+
+- Commits: `5e0abae4` metadata producer and Rust module; `25c7ef45` export-guard fix; `91894f49` integration of fifteen `save.world-metadata` cases and decode routes 1..6 plus encode 6.
+- Split check: `5e0abae4` and `25c7ef45` touch only `metadata_oracle_test.go` and `storage_corpus/metadata.rs`. Registry, dispatcher, Discover, manifest, and assets landed in `91894f49`.
+- Reviews of the producer, the export fix, and the integration approved. The four Important export-guard findings are closed by `25c7ef45`. No remaining Critical or Important findings.
+- Minor findings held for the final review: the weather mutation is compared with the v4 digest; the dimension-count comment states both offsets 49 and 53; encode returns on the category string without comparing `needed`, `available`, or `length`.
+- `save.world-metadata` has 15 cases. `save.region` stays at 26. `save.player` stays at 37. The other four `save.*` families remain at zero. Save total is 78. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`. Schema stays v6.
+- Gates reported for the integration commit: `go test ./packages/server/storage -run '^TestMetadataOracle$'` pass; `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 37/37 including nonempty `metadata_`; `runtime_contract metadata_` 6/6.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections

@@ -28,7 +28,7 @@
 - [x] 2.2c [Execute player v5–v8 migrations](plans/05-dispatch-slices.md#node-2-2c). Add four historical decode routes and current re-encode case.
 - [x] 2.2d [Close player malformed and boundary corpus](plans/05-dispatch-slices.md#node-2-2d). Add CRC, length, schema, ID, respawn and rewrite mutations.
 - [x] 2.3 [Preserve raw metadata and add atomic writer](plans/02-records.md#node-2-3). Rust `src/{world_metadata,lib}.rs`, `tests/metadata_buffer.rs`; run Rust `--test metadata_buffer`.
-- [ ] 2.4 [Execute metadata v1..v6 and invalid corpus](plans/02-records.md#node-2-4). Go package-local `packages/server/storage/metadata_oracle_test.go`, Rust `storage_corpus/metadata.rs`; run Go `^TestMetadataOracle` and Rust `storage_corpus metadata_`.
+- [x] 2.4 [Execute metadata v1..v6 and invalid corpus](plans/02-records.md#node-2-4). Go package-local `packages/server/storage/metadata_oracle_test.go`, Rust `storage_corpus/metadata.rs`; run Go `^TestMetadataOracle` and Rust `storage_corpus metadata_`.
 
 ## 3. Entity record families
 
