@@ -1003,7 +1003,7 @@ func TestChunkMigrationOracleEarly(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "live-path") {
 		t.Fatalf("expected live-path rejection, got: %v", err)
 	}
-	handoffRoot := chunkPinnedExportDir
+	handoffRoot := filepath.Join(t.TempDir(), "chunk-oracle-export")
 	t.Setenv(chunkRuntimeOracleExportDirEnv, handoffRoot)
 	child := chunkExportSelection(t, root, candidates)
 	if child == "" {
