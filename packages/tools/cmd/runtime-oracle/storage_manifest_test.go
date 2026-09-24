@@ -233,6 +233,56 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.world-metadata/6/decode/v6-weather-255":              true,
 		"save.world-metadata/6/decode/wrong-header":                true,
 		"save.world-metadata/6/encode/v6-boundary":                 true,
+		"save.hostile/1/decode/truncated-tail":                     true,
+		"save.hostile/1/decode/v1-fixture":                         true,
+		"save.hostile/2/decode/cooldown-20":                        true,
+		"save.hostile/2/decode/corrupt-absent-target-keeps-id":     true,
+		"save.hostile/2/decode/corrupt-attack-cooldown":            true,
+		"save.hostile/2/decode/corrupt-bool":                       true,
+		"save.hostile/2/decode/corrupt-burn-cooldown":              true,
+		"save.hostile/2/decode/corrupt-count-payload":              true,
+		"save.hostile/2/decode/corrupt-crc":                        true,
+		"save.hostile/2/decode/corrupt-descending-ids":             true,
+		"save.hostile/2/decode/corrupt-dimension":                  true,
+		"save.hostile/2/decode/corrupt-distant-above":              true,
+		"save.hostile/2/decode/corrupt-duplicate-id":               true,
+		"save.hostile/2/decode/corrupt-envelope-future":            true,
+		"save.hostile/2/decode/corrupt-envelope-zero":              true,
+		"save.hostile/2/decode/corrupt-health-above":               true,
+		"save.hostile/2/decode/corrupt-health-zero":                true,
+		"save.hostile/2/decode/corrupt-hurt-cooldown":              true,
+		"save.hostile/2/decode/corrupt-inf-velocity":               true,
+		"save.hostile/2/decode/corrupt-kind-above":                 true,
+		"save.hostile/2/decode/corrupt-magic":                      true,
+		"save.hostile/2/decode/corrupt-nan-position":               true,
+		"save.hostile/2/decode/corrupt-nan-yaw":                    true,
+		"save.hostile/2/decode/corrupt-payload-length":             true,
+		"save.hostile/2/decode/corrupt-revision-zero":              true,
+		"save.hostile/2/decode/corrupt-target-bad-variant":         true,
+		"save.hostile/2/decode/corrupt-target-bad-version":         true,
+		"save.hostile/2/decode/corrupt-target-zero-id":             true,
+		"save.hostile/2/decode/corrupt-y-at-top":                   true,
+		"save.hostile/2/decode/corrupt-y-below":                    true,
+		"save.hostile/2/decode/corrupt-zero-id":                    true,
+		"save.hostile/2/decode/count-65":                           true,
+		"save.hostile/2/decode/empty":                              true,
+		"save.hostile/2/decode/invalid-version-future":             true,
+		"save.hostile/2/decode/invalid-version-zero":               true,
+		"save.hostile/2/decode/max-records":                       true,
+		"save.hostile/2/decode/trailing-byte":                      true,
+		"save.hostile/2/decode/truncated-header-only":              true,
+		"save.hostile/2/decode/truncated-short-record":             true,
+		"save.hostile/2/decode/truncated-tail":                     true,
+		"save.hostile/2/decode/v2-fixture":                         true,
+		"save.hostile/2/decode/y-max-boundary":                     true,
+		"save.hostile/2/decode/y-min-boundary":                     true,
+		"save.hostile/2/encode/capacity-minus-one":                 true,
+		"save.hostile/2/encode/count-65":                           true,
+		"save.hostile/2/encode/empty":                              true,
+		"save.hostile/2/encode/max-records":                        true,
+		"save.hostile/2/encode/unsorted-canonical":                 true,
+		"save.hostile/2/encode/v1-fixture-reencode":                true,
+		"save.hostile/2/encode/v2-fixture-exact":                   true,
 	}
 	for _, c := range frozen.Cases {
 		if !strings.HasPrefix(c.Family, "save.") {
@@ -241,8 +291,8 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		if !wantSaveCases[c.ID] {
 			t.Fatalf("baseline carries unexpected save case %s", c.ID)
 		}
-		if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" {
-			t.Fatalf("save case %s has family %s, want save.region, save.player, or save.world-metadata", c.ID, c.Family)
+		if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" {
+			t.Fatalf("save case %s has family %s, want save.region, save.player, save.world-metadata, or save.hostile", c.ID, c.Family)
 		}
 	}
 	for id := range wantSaveCases {
@@ -256,6 +306,9 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 				}
 				if strings.HasPrefix(id, "save.world-metadata/") {
 					wantFamily = "save.world-metadata"
+				}
+				if strings.HasPrefix(id, "save.hostile/") {
+					wantFamily = "save.hostile"
 				}
 				if c.Family != wantFamily {
 					t.Fatalf("pinned save case %s has family %s, want %s", id, c.Family, wantFamily)

@@ -3944,15 +3944,74 @@
       "numeric_semantics": "little-endian integers; CRC integrity; exact byte round-trip; no implicit repair",
       "sources": [
         {
+          "path": "packages/server/storage/hostile/hostile_codec.go",
+          "sha256": "sha256:04b1f1304084cfe50460de2c76c2d089550d5d8e0275c0f35e5d094978f9b096"
+        },
+        {
           "path": "packages/server/storage/hostile/testdata/hostile-mobs-v1.bin",
           "sha256": "sha256:d63d0e433499587da31f7896031adff6e65e21adbb067bbce27e124053b6c7b5"
         },
         {
           "path": "packages/server/storage/hostile/testdata/hostile-mobs-v2.bin",
           "sha256": "sha256:1b1c55e5e8688339a3bd7b13e6546a94b5dcfffe2453e06199862eda24175705"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/storage_hostile_test.go",
+          "sha256": "sha256:17296f1b5182a3b504b12ce16e3ac123ba5296bca2ca49c653e711233f5407c6"
         }
       ],
-      "cases": null
+      "cases": [
+        "save.hostile/1/decode/truncated-tail",
+        "save.hostile/1/decode/v1-fixture",
+        "save.hostile/2/decode/cooldown-20",
+        "save.hostile/2/decode/corrupt-absent-target-keeps-id",
+        "save.hostile/2/decode/corrupt-attack-cooldown",
+        "save.hostile/2/decode/corrupt-bool",
+        "save.hostile/2/decode/corrupt-burn-cooldown",
+        "save.hostile/2/decode/corrupt-count-payload",
+        "save.hostile/2/decode/corrupt-crc",
+        "save.hostile/2/decode/corrupt-descending-ids",
+        "save.hostile/2/decode/corrupt-dimension",
+        "save.hostile/2/decode/corrupt-distant-above",
+        "save.hostile/2/decode/corrupt-duplicate-id",
+        "save.hostile/2/decode/corrupt-envelope-future",
+        "save.hostile/2/decode/corrupt-envelope-zero",
+        "save.hostile/2/decode/corrupt-health-above",
+        "save.hostile/2/decode/corrupt-health-zero",
+        "save.hostile/2/decode/corrupt-hurt-cooldown",
+        "save.hostile/2/decode/corrupt-inf-velocity",
+        "save.hostile/2/decode/corrupt-kind-above",
+        "save.hostile/2/decode/corrupt-magic",
+        "save.hostile/2/decode/corrupt-nan-position",
+        "save.hostile/2/decode/corrupt-nan-yaw",
+        "save.hostile/2/decode/corrupt-payload-length",
+        "save.hostile/2/decode/corrupt-revision-zero",
+        "save.hostile/2/decode/corrupt-target-bad-variant",
+        "save.hostile/2/decode/corrupt-target-bad-version",
+        "save.hostile/2/decode/corrupt-target-zero-id",
+        "save.hostile/2/decode/corrupt-y-at-top",
+        "save.hostile/2/decode/corrupt-y-below",
+        "save.hostile/2/decode/corrupt-zero-id",
+        "save.hostile/2/decode/count-65",
+        "save.hostile/2/decode/empty",
+        "save.hostile/2/decode/invalid-version-future",
+        "save.hostile/2/decode/invalid-version-zero",
+        "save.hostile/2/decode/max-records",
+        "save.hostile/2/decode/trailing-byte",
+        "save.hostile/2/decode/truncated-header-only",
+        "save.hostile/2/decode/truncated-short-record",
+        "save.hostile/2/decode/truncated-tail",
+        "save.hostile/2/decode/v2-fixture",
+        "save.hostile/2/decode/y-max-boundary",
+        "save.hostile/2/decode/y-min-boundary",
+        "save.hostile/2/encode/capacity-minus-one",
+        "save.hostile/2/encode/count-65",
+        "save.hostile/2/encode/empty",
+        "save.hostile/2/encode/max-records",
+        "save.hostile/2/encode/unsorted-canonical",
+        "save.hostile/2/encode/v1-fixture-reencode",
+        "save.hostile/2/encode/v2-fixture-exact"
+      ]
     },
     {
       "id": "save.passive",
@@ -27704,6 +27763,1028 @@
       "rust_consumer": "mornlea_protocol"
     },
     {
+      "id": "save.hostile/1/decode/truncated-tail",
+      "family": "save.hostile",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_1_decode_truncated-tail.input.bin",
+        "sha256": "sha256:9d7b2fde2a83af41b74711be8356157e9e08b1062d6be53e44c1b96db96cde02"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_1_decode_truncated-tail.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/1/decode/v1-fixture",
+      "family": "save.hostile",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_1_decode_v1-fixture.input.bin",
+        "sha256": "sha256:d63d0e433499587da31f7896031adff6e65e21adbb067bbce27e124053b6c7b5"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_1_decode_v1-fixture.expected.json",
+        "sha256": "sha256:1bd2c57e8939dd4ebdf228f8765afc1a4073ee2e614d5210a8549fd00663fd14"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/cooldown-20",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_cooldown-20.input.bin",
+        "sha256": "sha256:b173a8fb0d502ef30f0e3034652776d9e06c371aa467d46fda75253f1ac384b9"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_cooldown-20.expected.json",
+        "sha256": "sha256:ba60166ab6800036aa808d0022b55b43d3a29bf7f52d729c1b5d3095ad83c0ab"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-absent-target-keeps-id",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-absent-target-keeps-id.input.bin",
+        "sha256": "sha256:6b72e3fc2d977beb4d91640df91ac9211e9c32ba4e00ded2155146e3c7de9018"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-absent-target-keeps-id.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-attack-cooldown",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-attack-cooldown.input.bin",
+        "sha256": "sha256:4b166477fa8f549465dc14c78c5c136b3d44ca3da26be11ab3ebc06cbdfd012e"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-attack-cooldown.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-bool",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-bool.input.bin",
+        "sha256": "sha256:07ade5d8c929e41dea2632479fdfa02d1d942c472d651d5f9c83124bb4f9c3ae"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-bool.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-burn-cooldown",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-burn-cooldown.input.bin",
+        "sha256": "sha256:909208cd2da93d21c03efc8f0b5f7862edf470961415eddc4306c4b8c3c93e7b"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-burn-cooldown.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-count-payload",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-count-payload.input.bin",
+        "sha256": "sha256:72543f8043746595877fd7a7c4a482c24ec3b2117504305bf01f0940c633b94c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-count-payload.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-crc",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-crc.input.bin",
+        "sha256": "sha256:dbde9692eaa1a8ad25f5b03be618714c652136c3737d63b6e3821514add3c9d3"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-crc.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-descending-ids",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-descending-ids.input.bin",
+        "sha256": "sha256:9fae2c739e6dfa81a518ef8fd58e434adf44e8436d51e114d41f3ccf3a12362a"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-descending-ids.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-dimension",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-dimension.input.bin",
+        "sha256": "sha256:229a7337e8d880921c621c245b95bb6b892fbc6af8cf56ed77354971c3b86079"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-dimension.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-distant-above",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-distant-above.input.bin",
+        "sha256": "sha256:2d428946bc30837f6c6e52df03d86f3f1217559430d94fb6dd5d3476dd6a73e9"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-distant-above.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-duplicate-id",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-duplicate-id.input.bin",
+        "sha256": "sha256:06205d8841812866709d4fcd2c876f51e0a95e47f27373a8c7f37f20528fe35e"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-duplicate-id.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-envelope-future",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-envelope-future.input.bin",
+        "sha256": "sha256:f43b40044c9b4704c1d8bc4f1b7ce006f08b6f7614f4ffab0448ddae3301699c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-envelope-future.expected.json",
+        "sha256": "sha256:a525fa8b2a3a83c483dde06e0e9a39ddaff1890264a44785949a3bc757098e51"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-envelope-zero",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-envelope-zero.input.bin",
+        "sha256": "sha256:a26f4dd4120af4e2ba23c905f147e4956489a6d2a5e4ecd45f8a1dd59132af68"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-envelope-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-health-above",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-health-above.input.bin",
+        "sha256": "sha256:a9ae29b62ca47bcd032232f8487db2dc283590edadd7ffdba1dd440b3626bb8c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-health-above.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-health-zero",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-health-zero.input.bin",
+        "sha256": "sha256:ebaf22c4482e5e949d2561d076e0299b38e75d8dc8c5776fe0ad6db0d9933489"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-health-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-hurt-cooldown",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-hurt-cooldown.input.bin",
+        "sha256": "sha256:b829009cada529fc3b24e7ffc044b72ddbc3b6adc3e7fa6e94ba82778290252b"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-hurt-cooldown.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-inf-velocity",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-inf-velocity.input.bin",
+        "sha256": "sha256:14f8f76bc64aa51e7f2dbc9292505e5371cf92eb86998c50950e85ff05a6a071"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-inf-velocity.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-kind-above",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-kind-above.input.bin",
+        "sha256": "sha256:c4728e1db8513be800bc4308fb7bc37501852c850849e3a465ba9969a2526e97"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-kind-above.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-magic",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-magic.input.bin",
+        "sha256": "sha256:d91708c1d5c143fbc55a72ce5b691143e30fccc14fe8298acd4d8ae9d0e7ea5e"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-magic.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-nan-position",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-nan-position.input.bin",
+        "sha256": "sha256:df95d22956a63442a7cce413f3faec8a52e8ee4bcf99e9ee9706feeaea103795"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-nan-position.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-nan-yaw",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-nan-yaw.input.bin",
+        "sha256": "sha256:6f6d6895a37cdfd451a56b87d080c19a6303c8787a65d9c6c1dac396048c5fdd"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-nan-yaw.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-payload-length",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-payload-length.input.bin",
+        "sha256": "sha256:8085f9d027452ca518314d2f76e02bc98534b0e020d579a319bb041f647de1b3"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-payload-length.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-revision-zero",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-revision-zero.input.bin",
+        "sha256": "sha256:33c2e7e656878af8dd51a1657b8aabe45c3de946096aea17222ad538e8f9dc21"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-revision-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-target-bad-variant",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-target-bad-variant.input.bin",
+        "sha256": "sha256:aea746c158f3b3e7562544d1fd05755cf5d3d9b00a97aa8f03d941f1e6cadd7a"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-target-bad-variant.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-target-bad-version",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-target-bad-version.input.bin",
+        "sha256": "sha256:5e5fdfb7e4a53be72dbecebf73a23d21471432ecf9b529b33504cd9808ae6f51"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-target-bad-version.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-target-zero-id",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-target-zero-id.input.bin",
+        "sha256": "sha256:a64bc47adfa52d2dbcb220a12c5dfdc4e422ae0af4dce18b71efb55421e35a53"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-target-zero-id.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-y-at-top",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-y-at-top.input.bin",
+        "sha256": "sha256:4bef675f87aa78992505e6c08db9fb362fc1bbea3ce29f221e34b8f140d26448"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-y-at-top.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-y-below",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-y-below.input.bin",
+        "sha256": "sha256:3ab90e35b9d587ba3486c4eefeb8ecf59cbdcbae3e9248aa9318949df89340b6"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-y-below.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/corrupt-zero-id",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-zero-id.input.bin",
+        "sha256": "sha256:08759db6b3fa6d16be2a297ffcd39f3fc4ad1b541f06bbd11b772027f1caea11"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_corrupt-zero-id.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/count-65",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_count-65.input.bin",
+        "sha256": "sha256:2e1abae76dde4b2c3d5e6399e9e1e5e9d999cbb4a3edf5acfbb67b689b12ff14"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_count-65.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/empty",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_empty.input.bin",
+        "sha256": "sha256:e314e6588e2cf595220a34db6b77f04e6bb70187825b3757a7bc0eabb992b75f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_empty.expected.json",
+        "sha256": "sha256:b6e540de88266dce5fc47731c0034b569524f413c1f087f304b8da300195fc38"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/invalid-version-future",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_invalid-version-future.input.bin",
+        "sha256": "sha256:b11dc9598ef97240e56b919b8f084a319854a714beee84c17f4e4ff55c7b0dde"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_invalid-version-future.expected.json",
+        "sha256": "sha256:a525fa8b2a3a83c483dde06e0e9a39ddaff1890264a44785949a3bc757098e51"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/invalid-version-zero",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_invalid-version-zero.input.bin",
+        "sha256": "sha256:fbcb82c19541420bddc1f1f11efc5a0a8dd95f4c14b2ef05830bbb549e5f504c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_invalid-version-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/max-records",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_max-records.input.bin",
+        "sha256": "sha256:4ca22eb088c7de03497dff47b24df80f1fbd36e95c4cc7df3ade8d42b33b2f72"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_max-records.expected.json",
+        "sha256": "sha256:6f517ed6debfcaa70d0a6c5b22d7dfc17f2d1299207e4b4208e25b40b48df52b"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/trailing-byte",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_trailing-byte.input.bin",
+        "sha256": "sha256:d1ecaf1e6e4cd8f77be82512f5f567cd0344fd840c1c5f3294d6064ad8e872ae"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_trailing-byte.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/truncated-header-only",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_truncated-header-only.input.bin",
+        "sha256": "sha256:5376ef7dfc19ee58375bbe754157e05f99c31a7835a4a7bfe06b8a2da182c499"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_truncated-header-only.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/truncated-short-record",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_truncated-short-record.input.bin",
+        "sha256": "sha256:54902b59e386ecc507a17f93d57ed7bbcdc850e61d7d521c7dc84ef6d1c60679"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_truncated-short-record.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/truncated-tail",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_truncated-tail.input.bin",
+        "sha256": "sha256:e8b158bc55a250cba2da8c10b77e764f06bc3d84c0cdaf871d111cd9b854a56a"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_truncated-tail.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/v2-fixture",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_v2-fixture.input.bin",
+        "sha256": "sha256:1b1c55e5e8688339a3bd7b13e6546a94b5dcfffe2453e06199862eda24175705"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_v2-fixture.expected.json",
+        "sha256": "sha256:c565fa34f1e686970468fc4eda83278f84e9123cf4c6a4f2bba9ce3b8b14a4ff"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/y-max-boundary",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_y-max-boundary.input.bin",
+        "sha256": "sha256:d0a799f1753dc9900a3e27344672f38269592cbaff539e8348e43ff9236e4b99"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_y-max-boundary.expected.json",
+        "sha256": "sha256:8474d605d4ee7fd86e4d68ed70444da25885a685c6b2a997c470c567ca0eb61d"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/decode/y-min-boundary",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_y-min-boundary.input.bin",
+        "sha256": "sha256:5a161e57db22732b510ab613165a7dd86894282843fa5cdb5136b74ba4909127"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_decode_y-min-boundary.expected.json",
+        "sha256": "sha256:a1b792fce8349e1f1e4a0eeeb3f033dbcb20f21644394ba8229a80a91f0b27bc"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/encode/capacity-minus-one",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "encode",
+      "arguments": {
+        "capacity": 250
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_capacity-minus-one.input.bin",
+        "sha256": "sha256:1b1c55e5e8688339a3bd7b13e6546a94b5dcfffe2453e06199862eda24175705"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_capacity-minus-one.expected.json",
+        "sha256": "sha256:4ac000fb09f51b41dd33cd02770264d5fc38b3228f9a77d966d5e276be21183a"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/encode/count-65",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_count-65.input.bin",
+        "sha256": "sha256:1b1c55e5e8688339a3bd7b13e6546a94b5dcfffe2453e06199862eda24175705"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_count-65.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/encode/empty",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_empty.input.bin",
+        "sha256": "sha256:e314e6588e2cf595220a34db6b77f04e6bb70187825b3757a7bc0eabb992b75f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_empty.expected.json",
+        "sha256": "sha256:21ca129070edbc69ea7ad8310b7707bb30e5d834224ac817db0069711aaaecd4"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_empty.encoded.bin",
+        "sha256": "sha256:e314e6588e2cf595220a34db6b77f04e6bb70187825b3757a7bc0eabb992b75f"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/encode/max-records",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_max-records.input.bin",
+        "sha256": "sha256:4ca22eb088c7de03497dff47b24df80f1fbd36e95c4cc7df3ade8d42b33b2f72"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_max-records.expected.json",
+        "sha256": "sha256:e6e99aaeae6bee786d96faad5a44232dea5b80f845ba9ba7356ca0f89813fd37"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_max-records.encoded.bin",
+        "sha256": "sha256:4ca22eb088c7de03497dff47b24df80f1fbd36e95c4cc7df3ade8d42b33b2f72"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/encode/unsorted-canonical",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_unsorted-canonical.input.bin",
+        "sha256": "sha256:1b1c55e5e8688339a3bd7b13e6546a94b5dcfffe2453e06199862eda24175705"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_unsorted-canonical.expected.json",
+        "sha256": "sha256:9616fcd8ba5ab5771663a2dcbd9ae92d28fa3f69dc30100ee5dafbd727eada4b"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_unsorted-canonical.encoded.bin",
+        "sha256": "sha256:1b1c55e5e8688339a3bd7b13e6546a94b5dcfffe2453e06199862eda24175705"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/encode/v1-fixture-reencode",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_v1-fixture-reencode.input.bin",
+        "sha256": "sha256:d63d0e433499587da31f7896031adff6e65e21adbb067bbce27e124053b6c7b5"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_v1-fixture-reencode.expected.json",
+        "sha256": "sha256:f1ff5ae7027a93ec31b5cbc41e595ced6493e6eb7bca13cb9556608057a6e281"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_v1-fixture-reencode.encoded.bin",
+        "sha256": "sha256:5935395839da44a2ecf763d066465efaea036ab51094ec44a3a5c4e5d9332596"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.hostile/2/encode/v2-fixture-exact",
+      "family": "save.hostile",
+      "version": "2",
+      "operation": "encode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_v2-fixture-exact.input.bin",
+        "sha256": "sha256:1b1c55e5e8688339a3bd7b13e6546a94b5dcfffe2453e06199862eda24175705"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_v2-fixture-exact.expected.json",
+        "sha256": "sha256:9616fcd8ba5ab5771663a2dcbd9ae92d28fa3f69dc30100ee5dafbd727eada4b"
+      },
+      "encoded": {
+        "path": "testdata/runtime-migration/cases/storage/hostile/save.hostile_2_encode_v2-fixture-exact.encoded.bin",
+        "sha256": "sha256:1b1c55e5e8688339a3bd7b13e6546a94b5dcfffe2453e06199862eda24175705"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
       "id": "save.player/1/decode/truncated-payload",
       "family": "save.player",
       "version": "1",
@@ -28435,8 +29516,8 @@
       "version": "9",
       "operation": "encode",
       "arguments": {
-        "requested_player_id": "00112233445546778899aabbccddeeff",
-        "capacity": 316
+        "capacity": 316,
+        "requested_player_id": "00112233445546778899aabbccddeeff"
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/player/save.player_9_encode_capacity-minus-one.input.bin",
@@ -28536,11 +29617,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-committed-gen1.input.bin",
@@ -28562,11 +29643,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-extent-past-file-size.input.bin",
@@ -28588,11 +29669,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-extent-u32-overflow.input.bin",
@@ -28614,11 +29695,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-header-reserved-nonzero.input.bin",
@@ -28640,11 +29721,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-invalid-checksum.input.bin",
@@ -28666,11 +29747,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-offset-inside-headers.input.bin",
@@ -28692,11 +29773,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-overlapping-extents.input.bin",
@@ -28718,11 +29799,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "1114112",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-payload-over-1mib.input.bin",
@@ -28744,11 +29825,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-short.input.bin",
@@ -28770,11 +29851,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "61440",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-standby-gen0.input.bin",
@@ -28796,11 +29877,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-trailing.input.bin",
@@ -28822,11 +29903,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-trailing-padding-nonzero.input.bin",
@@ -28848,11 +29929,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-version-future-2.input.bin",
@@ -28874,11 +29955,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-version-zero.input.bin",
@@ -28900,11 +29981,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-wrong-magic.input.bin",
@@ -28926,11 +30007,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "bank",
         "dimension": 0,
-        "x": -1,
-        "z": 2,
         "file_size": "69632",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_bank-wrong-signed-key.input.bin",
@@ -28952,11 +30033,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "superblock",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "superblock"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_superblock-seed.input.bin",
@@ -28978,11 +30059,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "superblock",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "superblock"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_superblock-short.input.bin",
@@ -29004,11 +30085,11 @@
       "version": "1",
       "operation": "decode",
       "arguments": {
+        "component": "superblock",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "superblock"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_decode_superblock-trailing.input.bin",
@@ -29030,11 +30111,11 @@
       "version": "1",
       "operation": "encode",
       "arguments": {
+        "component": "bank",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "bank"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_encode_bank-committed-gen1.input.bin",
@@ -29060,11 +30141,11 @@
       "version": "1",
       "operation": "order",
       "arguments": {
+        "component": "banks",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "banks"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_order_committed-newer-a.input.bin",
@@ -29086,11 +30167,11 @@
       "version": "1",
       "operation": "order",
       "arguments": {
+        "component": "banks",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "banks"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_order_committed-newer-b.input.bin",
@@ -29112,11 +30193,11 @@
       "version": "1",
       "operation": "order",
       "arguments": {
+        "component": "banks",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "banks"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_order_corrupt-fallback.input.bin",
@@ -29138,11 +30219,11 @@
       "version": "1",
       "operation": "order",
       "arguments": {
+        "component": "banks",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "banks"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_order_equal-divergent.input.bin",
@@ -29164,11 +30245,11 @@
       "version": "1",
       "operation": "order",
       "arguments": {
+        "component": "banks",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "banks"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_order_equal-identical.input.bin",
@@ -29190,11 +30271,11 @@
       "version": "1",
       "operation": "order",
       "arguments": {
+        "component": "banks",
         "dimension": -3,
-        "x": -1,
-        "z": 2,
         "file_size": "65536",
-        "component": "banks"
+        "x": -1,
+        "z": 2
       },
       "input": {
         "path": "testdata/runtime-migration/cases/storage/region/save.region_1_order_standby-both.input.bin",

@@ -19,6 +19,9 @@ mod player;
 #[path = "storage_corpus/metadata.rs"]
 mod metadata;
 
+#[path = "storage_corpus/hostile.rs"]
+mod hostile;
+
 use runtime_corpus::{load_cases_for_consumer, CorpusConsumer, FrozenCase, try_load_cases_from_root};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -134,6 +137,21 @@ const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
         version: "6",
         operation: "encode",
     },
+    StorageRoute {
+        family: "save.hostile",
+        version: "1",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.hostile",
+        version: "2",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.hostile",
+        version: "2",
+        operation: "encode",
+    },
 ];
 
 fn route_is_registered_for_case(case: &FrozenCase) -> bool {
@@ -194,12 +212,21 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
     if !metadata_cases.is_empty() {
         metadata::execute_metadata_cases(&metadata_cases);
     }
+    let hostile_cases: Vec<FrozenCase> = cases
+        .iter()
+        .filter(|case| case.family == "save.hostile")
+        .cloned()
+        .collect();
+    if !hostile_cases.is_empty() {
+        hostile::execute_hostile_cases(&hostile_cases);
+    }
     let other = cases
         .iter()
         .filter(|case| {
             case.family != "save.region"
                 && case.family != "save.player"
                 && case.family != "save.world-metadata"
+                && case.family != "save.hostile"
         })
         .count();
     if other > 0 {
@@ -412,4 +439,84 @@ fn metadata_corpus_executes_all_integrated_case_ids() {
         );
     }
     metadata::execute_metadata_cases(&cases);
+}
+
+const HOSTILE_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.hostile/1/decode/truncated-tail",
+    "save.hostile/1/decode/v1-fixture",
+    "save.hostile/2/decode/cooldown-20",
+    "save.hostile/2/decode/corrupt-absent-target-keeps-id",
+    "save.hostile/2/decode/corrupt-attack-cooldown",
+    "save.hostile/2/decode/corrupt-bool",
+    "save.hostile/2/decode/corrupt-burn-cooldown",
+    "save.hostile/2/decode/corrupt-count-payload",
+    "save.hostile/2/decode/corrupt-crc",
+    "save.hostile/2/decode/corrupt-descending-ids",
+    "save.hostile/2/decode/corrupt-dimension",
+    "save.hostile/2/decode/corrupt-distant-above",
+    "save.hostile/2/decode/corrupt-duplicate-id",
+    "save.hostile/2/decode/corrupt-envelope-future",
+    "save.hostile/2/decode/corrupt-envelope-zero",
+    "save.hostile/2/decode/corrupt-health-above",
+    "save.hostile/2/decode/corrupt-health-zero",
+    "save.hostile/2/decode/corrupt-hurt-cooldown",
+    "save.hostile/2/decode/corrupt-inf-velocity",
+    "save.hostile/2/decode/corrupt-kind-above",
+    "save.hostile/2/decode/corrupt-magic",
+    "save.hostile/2/decode/corrupt-nan-position",
+    "save.hostile/2/decode/corrupt-nan-yaw",
+    "save.hostile/2/decode/corrupt-payload-length",
+    "save.hostile/2/decode/corrupt-revision-zero",
+    "save.hostile/2/decode/corrupt-target-bad-variant",
+    "save.hostile/2/decode/corrupt-target-bad-version",
+    "save.hostile/2/decode/corrupt-target-zero-id",
+    "save.hostile/2/decode/corrupt-y-at-top",
+    "save.hostile/2/decode/corrupt-y-below",
+    "save.hostile/2/decode/corrupt-zero-id",
+    "save.hostile/2/decode/count-65",
+    "save.hostile/2/decode/empty",
+    "save.hostile/2/decode/invalid-version-future",
+    "save.hostile/2/decode/invalid-version-zero",
+    "save.hostile/2/decode/max-records",
+    "save.hostile/2/decode/trailing-byte",
+    "save.hostile/2/decode/truncated-header-only",
+    "save.hostile/2/decode/truncated-short-record",
+    "save.hostile/2/decode/truncated-tail",
+    "save.hostile/2/decode/v2-fixture",
+    "save.hostile/2/decode/y-max-boundary",
+    "save.hostile/2/decode/y-min-boundary",
+    "save.hostile/2/encode/capacity-minus-one",
+    "save.hostile/2/encode/count-65",
+    "save.hostile/2/encode/empty",
+    "save.hostile/2/encode/max-records",
+    "save.hostile/2/encode/unsorted-canonical",
+    "save.hostile/2/encode/v1-fixture-reencode",
+    "save.hostile/2/encode/v2-fixture-exact",
+];
+
+#[test]
+fn hostile_corpus_executes_all_integrated_case_ids() {
+    use std::collections::BTreeMap;
+
+    let cases: Vec<FrozenCase> = load_cases_for_consumer(CorpusConsumer::Storage)
+        .into_iter()
+        .filter(|case| case.family == "save.hostile")
+        .collect();
+    let found: BTreeMap<&str, &FrozenCase> = cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect();
+    for id in HOSTILE_INTEGRATED_CASE_IDS {
+        if !found.contains_key(id) {
+            panic!("integrated manifest missing hostile case {id}");
+        }
+    }
+    if cases.len() != HOSTILE_INTEGRATED_CASE_IDS.len() {
+        panic!(
+            "integrated manifest has {} save.hostile cases, want {}",
+            cases.len(),
+            HOSTILE_INTEGRATED_CASE_IDS.len()
+        );
+    }
+    hostile::execute_hostile_cases(&cases);
 }

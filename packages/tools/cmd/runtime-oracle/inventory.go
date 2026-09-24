@@ -278,6 +278,9 @@ func BaselineConsumerRegistry() ConsumerRegistry {
 				{FamilyID: "save.world-metadata", Version: "5", Operation: "decode"}: {},
 				{FamilyID: "save.world-metadata", Version: "6", Operation: "decode"}: {},
 				{FamilyID: "save.world-metadata", Version: "6", Operation: "encode"}: {},
+				{FamilyID: "save.hostile", Version: "1", Operation: "decode"}:       {},
+				{FamilyID: "save.hostile", Version: "2", Operation: "decode"}:       {},
+				{FamilyID: "save.hostile", Version: "2", Operation: "encode"}:       {},
 			},
 		},
 		"external:agent-contract": {
