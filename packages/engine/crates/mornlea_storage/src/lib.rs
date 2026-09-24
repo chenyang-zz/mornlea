@@ -61,7 +61,7 @@ pub use hostile::{
     CURRENT_SCHEMA as HOSTILE_CURRENT_SCHEMA, ENVELOPE_VERSION as HOSTILE_ENVELOPE_VERSION,
     HostileMob, HostileMobs, HostileMobsSave, MAX_FILE_LENGTH as HOSTILE_MAX_FILE_LENGTH,
     MAX_HOSTILE_MOBS, SCHEMA_V1 as HOSTILE_SCHEMA_V1, decode as decode_hostile_mobs,
-    encode as encode_hostile_mobs,
+    encode as encode_hostile_mobs, encode_hostile_mobs_into, hostile_mobs_encoded_len,
 };
 pub use identity::{PlayerId, checked_companion_id, checked_player_id};
 pub use items::{
