@@ -7,7 +7,7 @@
 use super::value_digest::{Value, value_sha256};
 use mornlea_storage::{
     decode_region_bank, decode_superblock, encode_region_bank_into, encode_superblock_into,
-    RegionBank, RegionEntry, RegionKey, StorageError,
+    select_region_bank, BANK_SIZE, RegionBank, RegionEntry, RegionKey, StorageError,
 };
 use crate::runtime_corpus::{FrozenCase, InputFormat};
 use serde_json::Value as JsonValue;
@@ -31,6 +31,11 @@ pub const REGION_REGISTERED_ROUTES: &[RegionRoute] = &[
         family: "save.region",
         version: "1",
         operation: "encode",
+    },
+    RegionRoute {
+        family: "save.region",
+        version: "1",
+        operation: "order",
     },
 ];
 
@@ -169,6 +174,16 @@ fn superblock_value() -> Value {
     Value::Object(BTreeMap::new())
 }
 
+fn order_value(selected_index: usize, bank: &RegionBank) -> Value {
+    let mut fields = BTreeMap::new();
+    fields.insert("bank".to_string(), bank_value(bank));
+    fields.insert(
+        "selected_index".to_string(),
+        Value::Unsigned(selected_index as u64),
+    );
+    Value::Object(fields)
+}
+
 fn expected_value_digest(case: &FrozenCase, value: &Value) -> Result<(), String> {
     let expected = case
         .normalized
@@ -231,22 +246,62 @@ pub fn execute_region_cases(cases: &[FrozenCase]) {
 
 pub fn execute_region_case(case: &FrozenCase) -> Result<(), String> {
     let (args, key) = parse_region_arguments(case)?;
-    let schema = region_schema_version(&case.input)?;
-    let want_version: u32 = case
-        .version
-        .parse()
-        .map_err(|_| format!("case {} has invalid version", case.id))?;
-    if schema != want_version {
+    match case.operation.as_str() {
+        "order" => execute_region_order(case, &args, key),
+        "decode" | "encode" => {
+            let schema = region_schema_version(&case.input)?;
+            let want_version: u32 = case
+                .version
+                .parse()
+                .map_err(|_| format!("case {} has invalid version", case.id))?;
+            if schema != want_version {
+                return Err(format!(
+                    "case {} input schema {schema}, want {want_version}",
+                    case.id
+                ));
+            }
+            match case.operation.as_str() {
+                "decode" => execute_region_decode(case, &args, key),
+                "encode" => execute_region_encode(case, &args, key),
+                other => Err(format!("unsupported region operation {other}")),
+            }
+        }
+        other => Err(format!("unsupported region operation {other}")),
+    }
+}
+
+fn execute_region_order(
+    case: &FrozenCase,
+    args: &RegionArguments,
+    key: RegionKey,
+) -> Result<(), String> {
+    if args.component != "banks" {
         return Err(format!(
-            "case {} input schema {schema}, want {want_version}",
+            "case {} order requires component \"banks\"",
             case.id
         ));
     }
-
-    match case.operation.as_str() {
-        "decode" => execute_region_decode(case, &args, key),
-        "encode" => execute_region_encode(case, &args, key),
-        other => Err(format!("unsupported region operation {other}")),
+    if case.input.len() != 2 * BANK_SIZE {
+        return Err(format!(
+            "case {} order input length {}, want {}",
+            case.id,
+            case.input.len(),
+            2 * BANK_SIZE
+        ));
+    }
+    let (bank_a_bytes, bank_b_bytes) = case.input.split_at(BANK_SIZE);
+    let bank_a = decode_region_bank(key, bank_a_bytes, args.file_size);
+    let bank_b = decode_region_bank(key, bank_b_bytes, args.file_size);
+    match select_region_bank(bank_a, bank_b) {
+        Ok((bank, index)) => {
+            assert_ok_outcome(case)?;
+            expected_value_digest(case, &order_value(index, &bank))
+        }
+        Err(err) => {
+            let category = storage_error_category(&err)
+                .ok_or_else(|| format!("unclassified rejection: {err}"))?;
+            assert_error_category(case, category)
+        }
     }
 }
 
@@ -363,25 +418,34 @@ mod tests {
             version: "1".to_string(),
             consumer: CorpusConsumer::Storage,
             packet_key: None,
-            operation: "order".to_string(),
+            operation: "inspect".to_string(),
             arguments: serde_json::json!({
                 "dimension": -3,
                 "x": -1,
                 "z": 2,
                 "file_size": "65536",
-                "component": "banks"
+                "component": "bank"
             }),
             input_format: InputFormat::Binary,
-            input: vec![0x00; 57344],
+            input: vec![0x00; BANK_SIZE],
             input_json: None,
             normalized: serde_json::json!({"kind":"ok","category":"save","value_sha256":"sha256:00"}),
             encoded: None,
             category: "save".to_string(),
         };
         let err = std::panic::catch_unwind(|| execute_region_cases(std::slice::from_ref(&case)));
-        assert!(
-            err.is_err(),
-            "order route must stay unregistered in node 1.3"
-        );
+        assert!(err.is_err(), "unknown region routes must fail before dispatch");
+    }
+
+    #[test]
+    fn region_order_executes_integrated_order_cases() {
+        let cases = region_cases_from_manifest()
+            .into_iter()
+            .filter(|case| case.operation == "order")
+            .collect::<Vec<_>>();
+        if cases.is_empty() {
+            panic!("no integrated save.region order cases");
+        }
+        execute_region_cases(&cases);
     }
 }

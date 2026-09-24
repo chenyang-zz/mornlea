@@ -39,6 +39,13 @@ const (
 	regionBankStandbyDecodeID    = regionFamily + "/" + regionVersion + "/decode/bank-standby-gen0"
 	regionBankCommittedDecodeID  = regionFamily + "/" + regionVersion + "/decode/bank-committed-gen1"
 	regionBankCommittedEncodeID  = regionFamily + "/" + regionVersion + "/encode/bank-committed-gen1"
+
+	regionOrderCommittedNewerAID   = regionFamily + "/" + regionVersion + "/order/committed-newer-a"
+	regionOrderCommittedNewerBID   = regionFamily + "/" + regionVersion + "/order/committed-newer-b"
+	regionOrderCorruptFallbackID   = regionFamily + "/" + regionVersion + "/order/corrupt-fallback"
+	regionOrderStandbyBothID       = regionFamily + "/" + regionVersion + "/order/standby-both"
+	regionOrderEqualIdenticalID    = regionFamily + "/" + regionVersion + "/order/equal-identical"
+	regionOrderEqualDivergentID    = regionFamily + "/" + regionVersion + "/order/equal-divergent"
 )
 
 type regionCaseArguments struct {
@@ -79,7 +86,11 @@ func regionStandbyBank() region.Bank {
 }
 
 func regionCommittedBank() region.Bank {
-	bank := region.Bank{Generation: 1}
+	return regionBankWithGeneration(1)
+}
+
+func regionBankWithGeneration(generation uint64) region.Bank {
+	bank := region.Bank{Generation: generation}
 	bank.Entries[0] = region.Entry{
 		OffsetSector:  15,
 		SectorCount:   1,
@@ -113,6 +124,40 @@ func regionBankValueTree(bank region.Bank) storageValueNode {
 
 func regionSuperblockValueTree() storageValueNode {
 	return storageValueObject(map[string]storageValueNode{})
+}
+
+func regionOrderValueTree(selectedIndex int, bank region.Bank) storageValueNode {
+	return storageValueObject(map[string]storageValueNode{
+		"bank":           regionBankValueTree(bank),
+		"selected_index": storageValueUnsigned(uint64(selectedIndex)),
+	})
+}
+
+func regionOrderInput(bankA, bankB []byte) []byte {
+	if len(bankA) != region.BankSize || len(bankB) != region.BankSize {
+		panic("region order banks must each be BankSize bytes")
+	}
+	out := make([]byte, 2*region.BankSize)
+	copy(out[:region.BankSize], bankA)
+	copy(out[region.BankSize:], bankB)
+	return out
+}
+
+func regionCorruptBankBytes(valid []byte) []byte {
+	if len(valid) != region.BankSize {
+		panic("corrupt bank input must be BankSize bytes")
+	}
+	corrupted := bytes.Clone(valid)
+	corrupted[len(corrupted)-1] ^= 0xff
+	return corrupted
+}
+
+func encodeRegionBankBytes(t *testing.T, key region.RegionKey, bank region.Bank) []byte {
+	block, err := region.EncodeRegionBank(key, bank)
+	if err != nil {
+		t.Fatalf("encode region bank: %v", err)
+	}
+	return block[:]
 }
 
 func parseRegionArguments(c CaseSpec) (regionCaseArguments, region.RegionKey, int64, error) {
@@ -295,10 +340,41 @@ func runRegionEncode(c CaseSpec, input []byte) (Outcome, []byte, error) {
 	}, encoded, nil
 }
 
+func runRegionOrder(c CaseSpec, input []byte) (Outcome, []byte, error) {
+	args, key, fileSize, err := parseRegionArguments(c)
+	if err != nil {
+		return Outcome{}, nil, fmt.Errorf("runtime-oracle: case %s: %w", c.ID, err)
+	}
+	if args.Component != "banks" {
+		return Outcome{}, nil, fmt.Errorf("runtime-oracle: case %s: order requires component \"banks\"", c.ID)
+	}
+	if len(input) != 2*region.BankSize {
+		return Outcome{}, nil, fmt.Errorf(
+			"runtime-oracle: case %s: order input length %d, want %d",
+			c.ID, len(input), 2*region.BankSize,
+		)
+	}
+	bankABytes := input[:region.BankSize]
+	bankBBytes := input[region.BankSize:]
+	bankA, errA := region.DecodeRegionBank(key, bankABytes, fileSize)
+	bankB, errB := region.DecodeRegionBank(key, bankBBytes, fileSize)
+	selected, index, err := region.SelectRegionBank(bankA, errA, bankB, errB)
+	if err != nil {
+		category, ok := regionStorageErrorCategory(err)
+		if !ok {
+			return Outcome{}, nil, fmt.Errorf("runtime-oracle: case %s: unclassified rejection: %w", c.ID, err)
+		}
+		return Outcome{Kind: "error", Category: category}, nil, nil
+	}
+	digest := storageValueSHA256(regionOrderValueTree(index, selected))
+	return Outcome{Kind: "ok", Category: "save", Fields: map[string]any{"value_sha256": digest}}, nil, nil
+}
+
 func regionCorpusRoutes() map[ConsumerRoute]GoOperation {
 	return map[ConsumerRoute]GoOperation{
 		{FamilyID: regionFamily, Version: regionVersion, Operation: "decode"}: runRegionDecode,
 		{FamilyID: regionFamily, Version: regionVersion, Operation: "encode"}: runRegionEncode,
+		{FamilyID: regionFamily, Version: regionVersion, Operation: "order"}: runRegionOrder,
 	}
 }
 
@@ -307,6 +383,14 @@ func regionSeedRoutes() []ConsumerRoute {
 		{FamilyID: regionFamily, Version: regionVersion, Operation: "decode"},
 		{FamilyID: regionFamily, Version: regionVersion, Operation: "encode"},
 	}
+}
+
+func regionOrderRoutes() []ConsumerRoute {
+	routes := regionSeedRoutes()
+	routes = append(routes, ConsumerRoute{
+		FamilyID: regionFamily, Version: regionVersion, Operation: "order",
+	})
+	return routes
 }
 
 func regionArgumentsJSON(component, fileSize string) json.RawMessage {
@@ -321,6 +405,10 @@ func regionArgumentsJSON(component, fileSize string) json.RawMessage {
 		panic(err)
 	}
 	return raw
+}
+
+func regionOrderArgumentsJSON(fileSize string) json.RawMessage {
+	return regionArgumentsJSON("banks", fileSize)
 }
 
 func outcomeToStorageSave(out Outcome) (storageSaveOutcome, error) {
@@ -448,6 +536,93 @@ func regionSeedCandidates(t *testing.T) []regionCandidate {
 	}
 }
 
+func regionOrderCandidates(t *testing.T) []regionCandidate {
+	t.Helper()
+	key := regionSeedKey()
+	fileSize := regionFileSizeOccupiedEntry
+
+	build := func(id string, bankA, bankB []byte) regionCandidate {
+		input := regionOrderInput(bankA, bankB)
+		args := regionOrderArgumentsJSON(fileSize)
+		spec := CaseSpec{
+			ID:           id,
+			Family:       regionFamily,
+			Version:      regionVersion,
+			Operation:    "order",
+			Arguments:    args,
+			InputFormat:  "binary",
+			Checkpoints:  []string{"0"},
+			RustConsumer: storageConsumerName,
+		}
+		outcome, _, err := runRegionOrder(spec, input)
+		if err != nil {
+			t.Fatalf("execute %s: %v", id, err)
+		}
+		saveOutcome, err := outcomeToStorageSave(outcome)
+		if err != nil {
+			t.Fatalf("normalize %s: %v", id, err)
+		}
+		expectedBytes, err := marshalStorageSaveOutcome(saveOutcome)
+		if err != nil {
+			t.Fatalf("marshal expected %s: %v", id, err)
+		}
+		stem := strings.ReplaceAll(id, "/", "_")
+		inputRel := filepath.ToSlash(filepath.Join(regionCorpusRelDir, stem+".input.bin"))
+		expectedRel := filepath.ToSlash(filepath.Join(regionCorpusRelDir, stem+".expected.json"))
+		assets := map[string][]byte{
+			inputRel:    input,
+			expectedRel: expectedBytes,
+		}
+		spec.Input = AssetRef{Path: inputRel, SHA256: digestOf(t, input)}
+		spec.Expected = AssetRef{Path: expectedRel, SHA256: digestOf(t, expectedBytes)}
+		return regionCandidate{Spec: spec, Assets: assets, Expect: saveOutcome}
+	}
+
+	standby := encodeRegionBankBytes(t, key, regionStandbyBank())
+	gen1 := encodeRegionBankBytes(t, key, regionBankWithGeneration(1))
+	gen2 := encodeRegionBankBytes(t, key, regionBankWithGeneration(2))
+	corruptGen1 := regionCorruptBankBytes(gen1)
+
+	divergentB := regionBankWithGeneration(1)
+	divergentB.Entries[0].PayloadLength = 1
+	divergentGen1B := encodeRegionBankBytes(t, key, divergentB)
+
+	return []regionCandidate{
+		build(regionOrderCommittedNewerAID, gen2, gen1),
+		build(regionOrderCommittedNewerBID, gen1, gen2),
+		build(regionOrderCorruptFallbackID, corruptGen1, gen1),
+		build(regionOrderStandbyBothID, standby, standby),
+		build(regionOrderEqualIdenticalID, gen1, gen1),
+		build(regionOrderEqualDivergentID, gen1, divergentGen1B),
+	}
+}
+
+func regionOrderSelection(t *testing.T, root string, candidates []regionCandidate) StorageSelection {
+	t.Helper()
+	cases := make([]CaseSpec, 0, len(candidates))
+	for _, candidate := range candidates {
+		cases = append(cases, candidate.Spec)
+	}
+	sources := []SourceSpec{
+		{Path: regionProducerTestRel},
+		{Path: regionFormatSourceRel},
+	}
+	for index := range sources {
+		hash, err := hashFile(filepath.Join(root, filepath.FromSlash(sources[index].Path)))
+		if err != nil {
+			t.Fatalf("hash source %s: %v", sources[index].Path, err)
+		}
+		sources[index].SHA256 = hash
+	}
+	sort.Slice(cases, func(i, j int) bool { return cases[i].ID < cases[j].ID })
+	return StorageSelection{
+		ProducerID: regionProducerID,
+		Cases:      cases,
+		Sources:    sources,
+		Routes:     regionOrderRoutes(),
+	}
+}
+
 func regionSelection(t *testing.T, root string, candidates []regionCandidate) StorageSelection {
 	t.Helper()
 	cases := make([]CaseSpec, 0, len(candidates))
@@ -556,6 +731,35 @@ func regionRunnerManifest(t *testing.T, root string, candidates []regionCandidat
 		}
 	}
 	return merged
+}
+
+func exportRegionOrderSelectionCandidate(t *testing.T, root string, candidates []regionCandidate) string {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv(runtimeOracleExportDirEnv)) == "" {
+		return ""
+	}
+	selection := regionOrderSelection(t, root, candidates)
+	var assets []generatedAsset
+	manifestBytes, err := json.Marshal(encodeStorageSelectionJSON(selection))
+	if err != nil {
+		t.Fatalf("marshal selection: %v", err)
+	}
+	assets = append(assets, generatedAsset{RelativePath: storageSelectionManifest, Data: manifestBytes})
+	seen := make(map[string]struct{})
+	for _, candidate := range candidates {
+		for relative, data := range candidate.Assets {
+			if _, ok := seen[relative]; ok {
+				continue
+			}
+			seen[relative] = struct{}{}
+			assets = append(assets, generatedAsset{RelativePath: relative, Data: data})
+		}
+	}
+	exportRoot, err := exportGeneratedAssets(root, strings.TrimSpace(os.Getenv(runtimeOracleExportDirEnv)), regionProducerID, assets)
+	if err != nil {
+		t.Fatalf("export region order selection: %v", err)
+	}
+	return exportRoot
 }
 
 func exportRegionSelectionCandidate(t *testing.T, root string, candidates []regionCandidate) string {
@@ -714,6 +918,164 @@ func TestStorageRegionExportFromEnvironment(t *testing.T) {
 	root := mustRepoRoot(t)
 	candidates := regionSeedCandidates(t)
 	child := exportRegionSelectionCandidate(t, root, candidates)
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
+	}
+	if _, err := readStorageSelection(child); err != nil {
+		t.Fatalf("reload exported selection: %v", err)
+	}
+}
+
+func TestStorageRegionOrderArgumentsValidate(t *testing.T) {
+	args := regionOrderArgumentsJSON(regionFileSizeOccupiedEntry)
+	if err := validateStorageArguments(regionFamily, "order", args); err != nil {
+		t.Fatalf("validate region order arguments: %v", err)
+	}
+}
+
+func TestStorageRegionOrderBaselineLacksRouteUntilIntegration(t *testing.T) {
+	route := ConsumerRoute{FamilyID: regionFamily, Version: regionVersion, Operation: "order"}
+	if storageRouteRegistered(BaselineConsumerRegistry(), route) {
+		t.Fatal("baseline registry must not register order until controller integration")
+	}
+}
+
+func TestStorageRegionOrderProducerExecutesEveryCase(t *testing.T) {
+	root := mustRepoRoot(t)
+	candidates := regionOrderCandidates(t)
+	selection := regionOrderSelection(t, root, candidates)
+	staged := regionScratchRoot(t, candidates)
+
+	observations, err := RunStorageCases(staged, inventoryFromOrderSelection(t, root, selection), regionCorpusRoutes())
+	if err != nil {
+		t.Fatalf("RunStorageCases: %v", err)
+	}
+	if len(observations) != len(candidates) {
+		t.Fatalf("produced %d observations, want %d", len(observations), len(candidates))
+	}
+	for _, candidate := range candidates {
+		obs := regionObservation(t, observations, candidate.Spec.ID)
+		got, err := outcomeToStorageSave(obs.Outcome)
+		if err != nil {
+			t.Fatalf("case %s: %v", candidate.Spec.ID, err)
+		}
+		if !storageSaveOutcomesEqual(got, candidate.Expect) {
+			t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
+		}
+	}
+}
+
+func inventoryFromOrderSelection(t *testing.T, root string, selection StorageSelection) Inventory {
+	t.Helper()
+	base, err := LoadInventory(filepath.Join(root, filepath.FromSlash(InventoryRelPath)))
+	if err != nil {
+		t.Fatalf("load frozen manifest: %v", err)
+	}
+	merged := base
+	regionCases := append([]CaseSpec(nil), selection.Cases...)
+	sort.Slice(regionCases, func(i, j int) bool { return regionCases[i].ID < regionCases[j].ID })
+	merged.Cases = regionCases
+	caseIDs := make([]string, 0, len(regionCases))
+	for _, c := range regionCases {
+		caseIDs = append(caseIDs, c.ID)
+	}
+	for index := range merged.Families {
+		if merged.Families[index].ID != regionFamily {
+			merged.Families[index].Cases = nil
+			continue
+		}
+		merged.Families[index].Cases = caseIDs
+		sourceByPath := make(map[string]string, len(merged.Families[index].Sources))
+		for _, source := range merged.Families[index].Sources {
+			sourceByPath[source.Path] = source.SHA256
+		}
+		for _, source := range selection.Sources {
+			sourceByPath[source.Path] = source.SHA256
+		}
+		updated := make([]SourceSpec, 0, len(sourceByPath))
+		for path, hash := range sourceByPath {
+			updated = append(updated, SourceSpec{Path: path, SHA256: hash})
+		}
+		sort.Slice(updated, func(i, j int) bool { return updated[i].Path < updated[j].Path })
+		merged.Families[index].Sources = updated
+	}
+	return merged
+}
+
+func TestStorageRegionOrderRunnerRejectsUnregisteredRoute(t *testing.T) {
+	root := mustRepoRoot(t)
+	candidates := regionOrderCandidates(t)
+	selection := regionOrderSelection(t, root, candidates)
+	staged := regionScratchRoot(t, candidates)
+	manifest := inventoryFromOrderSelection(t, root, selection)
+
+	decodeOnly := map[ConsumerRoute]GoOperation{
+		{FamilyID: regionFamily, Version: regionVersion, Operation: "decode"}: runRegionDecode,
+	}
+	if _, err := RunStorageCases(staged, manifest, decodeOnly); err == nil {
+		t.Fatal("expected unregistered order route rejection")
+	}
+}
+
+func TestStorageRegionOrderRejectsShortInputBeforeExport(t *testing.T) {
+	root := mustRepoRoot(t)
+	candidates := regionOrderCandidates(t)
+	if len(candidates) == 0 {
+		t.Fatal("expected order candidates")
+	}
+	shortInput := candidates[0].Assets[candidates[0].Spec.Input.Path]
+	if len(shortInput) != 2*region.BankSize {
+		t.Fatalf("order candidate input length %d", len(shortInput))
+	}
+	half := shortInput[:region.BankSize]
+	selection := regionOrderSelection(t, root, candidates)
+	selection.Cases[0].Input.SHA256 = digestOf(t, half)
+	dir := t.TempDir()
+	writeStorageSelectionCandidate(t, dir, selection)
+	full := filepath.Join(dir, filepath.FromSlash(selection.Cases[0].Input.Path))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, half, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	families, _, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	familiesByID := make(map[string]Family, len(families))
+	for _, family := range families {
+		familiesByID[family.ID] = family
+	}
+	registry := storageRegistryWithRoutes(regionOrderRoutes())
+	_, err = validateCaseSpecConsumer(dir, selection.Cases[0], familiesByID, registry)
+	if err == nil || !strings.Contains(err.Error(), "57344") {
+		t.Fatalf("expected short region order input rejection, got %v", err)
+	}
+}
+
+func TestStorageRegionOrderCandidatesExportForReview(t *testing.T) {
+	root := mustRepoRoot(t)
+	exportRoot := filepath.Join(t.TempDir(), "region-order-export")
+	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
+	candidates := regionOrderCandidates(t)
+	child := exportRegionOrderSelectionCandidate(t, root, candidates)
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
+	}
+	if _, err := readStorageSelection(child); err != nil {
+		t.Fatalf("reload exported selection: %v", err)
+	}
+}
+
+func TestStorageRegionOrderExportFromEnvironment(t *testing.T) {
+	exportRoot := strings.TrimSpace(os.Getenv(runtimeOracleExportDirEnv))
+	if exportRoot == "" {
+		t.Skip("RUNTIME_ORACLE_EXPORT_DIR unset")
+	}
+	root := mustRepoRoot(t)
+	candidates := regionOrderCandidates(t)
+	child := exportRegionOrderSelectionCandidate(t, root, candidates)
 	if child == "" {
 		t.Fatal("export root unset after explicit env")
 	}
