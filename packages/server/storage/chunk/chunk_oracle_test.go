@@ -967,13 +967,44 @@ func TestChunkMigrationOracleEarly(t *testing.T) {
 		t.Fatal("v4 fixture must preserve furnace state")
 	}
 	full, _ := core.ItemMaxDurability(core.ItemStonePickaxe)
+	wantTool := core.ItemStack{Item: core.ItemStonePickaxe, Count: 1, Durability: full}
+	toolChunk := codecFixtureChunk(key.Pos)
+	blockIndex, ok := world.ChunkBlockIndex(core.BlockPos{
+		X: key.Pos.X << core.SectionShift, Y: 5, Z: key.Pos.Z << core.SectionShift,
+	})
+	if !ok {
+		t.Fatal("fixture block index missing for legacy v4 tool pin")
+	}
+	toolChunk.SetDrop(5, world.DropSlot{
+		Generation: 11, Active: true,
+		Stack:      core.ItemStack{Item: core.ItemStonePickaxe, Count: 2},
+		BlockIndex: blockIndex, AgeTicks: 101, PickupDelayTicks: 9,
+	})
+	toolDecoded, err := Decode(key, chunkFixtureRevision, legacyV4ChunkPayload(t, key, chunkFixtureRevision, toolChunk))
+	if err != nil {
+		t.Fatalf("legacy v4 tool payload: %v", err)
+	}
+	if !toolDecoded.Migrated {
+		t.Fatal("legacy v4 tool stack must migrate")
+	}
+	witnessedSingles := 0
 	for slot := range core.DropsPerChunk {
-		stack := v4.Chunk.Drop(slot).Stack
+		stack := toolDecoded.Chunk.Drop(slot).Stack
 		if stack.Item == core.ItemStonePickaxe && stack.Count > 1 {
-			t.Fatalf("v4 legacy tool stack must be split, slot %d count=%d", slot, stack.Count)
+			t.Fatalf("legacy v4 tool stack must be split, slot %d count=%d", slot, stack.Count)
 		}
-		if stack.Item == core.ItemStonePickaxe && stack.Count == 1 && stack.Durability != full {
-			t.Fatalf("v4 legacy tool durability slot %d = %d, want %d", slot, stack.Durability, full)
+		if stack == wantTool {
+			witnessedSingles++
+		}
+	}
+	if witnessedSingles != 2 {
+		t.Fatalf("legacy v4 tool split want 2 full-durability singles, got %d", witnessedSingles)
+	}
+	for _, slot := range []int{0, 5} {
+		drop := toolDecoded.Chunk.Drop(slot)
+		if drop.Stack != wantTool || drop.BlockIndex != blockIndex ||
+			drop.AgeTicks != 101 || drop.PickupDelayTicks != 9 {
+			t.Fatalf("legacy v4 tool split slot %d = %+v", slot, drop)
 		}
 	}
 	okCase := candidates[0]
