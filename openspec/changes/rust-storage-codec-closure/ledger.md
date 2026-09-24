@@ -155,6 +155,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the fix: `hostile_buffer` 13/13; `runtime_contract hostile_` 9/9; `go test ./packages/server/storage/hostile -count=1` pass.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 3.2 closed
+
+- Commits: `220f7271` hostile v1/v2 producer and Rust executor; `cb017d34` cooldown 20 and short-capacity `needed`/`available`; `37f51f3f` integration of fifty `save.hostile` cases and decode routes 1–2 plus encode route 2.
+- Split check: `220f7271` and `cb017d34` touch only `storage_hostile_test.go` and `storage_corpus/hostile.rs`. Registry, dispatcher, Discover, manifest, and assets landed in `37f51f3f`.
+- Reviews of the producer, the cooldown pin, and the integration approved. The two Important findings are closed by `cb017d34`. No remaining Critical or Important findings.
+- Minor findings held for the final review: the local v2 fixture test executes a digest it just built; a successful encode compares the encoded asset without reading `length`.
+- `save.hostile` has 50 cases. `save.region` stays at 26. `save.player` stays at 37. `save.world-metadata` stays at 15. The other three `save.*` families remain at zero. Save total is 128. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 44/44 including nonempty `hostile_`; `runtime_contract hostile_` 9/9.
+- Architecture skill: no change. The short-capacity field check and the absent-target rule are already in the corpus contract and the hostile writer note.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
