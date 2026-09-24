@@ -56,12 +56,14 @@ This codec change claims no implementation or runtime gate. At implementation cl
 ### Node 1.2 — Rust storage corpus consumer
 
 - Added `CorpusConsumer::Storage` / `mornlea_storage` to `packages/engine/tests/runtime_corpus.rs` and the closed consumer map in `packages/engine/tests/AGENTS.md`.
-- Added `packages/engine/crates/mornlea_storage/tests/storage_corpus.rs` with an empty route table, zero-case rejection, unregistered-route rejection, and manifest loader acceptance for `mornlea_storage`.
+- Added `packages/engine/crates/mornlea_storage/tests/storage_corpus.rs` with an empty route table, uncaught zero-case rejection via `load_cases_for_consumer` + `execute_storage_selection`, unregistered-route rejection, and manifest loader acceptance for `mornlea_storage`.
 - Added `StorageValueV1` encoder and cross-language golden tree digest in `tests/storage_corpus/value_digest.rs`; Go oracle `TestStorageValueV1CrossLanguageGoldenTree` in `storage_value_digest_test.go` pins `sha256:9afe6b3bc14a7b3daa74b6be41bc34d2357ac15a874c92a20a8f84c3bf66206b`.
-- Validation:
-  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test storage_corpus --locked` — 7/7 pass
-  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_domain -p mornlea_protocol -p mornlea_engine --tests --locked` — pass
-  - `go test ./packages/tools/cmd/runtime-oracle -run TestStorageValueV1CrossLanguageGoldenTree -count=1` — pass
+- Review fix (`a6817f0a`): removed green tests that treated empty route table / caught empty-selection panic as success; `storage_corpus_rejects_empty_selection` now fails the suite when the manifest has no storage cases (matches protocol empty-selection polarity). Task 1.2 rechecked pending controller acceptance after fix.
+- Validation (post-fix):
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test storage_corpus --locked value_digest::` — 2/2 pass
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test storage_corpus --locked` — exit 101 (5 pass, 1 fail: `storage_corpus_rejects_empty_selection` panics `storage corpus selection executed zero cases`)
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_domain -p mornlea_protocol -p mornlea_engine --tests --locked` — pass (prior node 1.2 gate)
+  - `go test ./packages/tools/cmd/runtime-oracle -run TestStorageValueV1CrossLanguageGoldenTree -count=1` — pass (prior node 1.2 gate)
 
 ## Accepted safety handoff
 
