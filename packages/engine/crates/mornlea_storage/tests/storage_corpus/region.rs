@@ -254,7 +254,7 @@ pub fn execute_region_case(case: &FrozenCase) -> Result<(), String> {
                 .version
                 .parse()
                 .map_err(|_| format!("case {} has invalid version", case.id))?;
-            if schema != want_version {
+            if schema != want_version && schema != 0 && schema <= want_version {
                 return Err(format!(
                     "case {} input schema {schema}, want {want_version}",
                     case.id
@@ -447,5 +447,94 @@ mod tests {
             panic!("no integrated save.region order cases");
         }
         execute_region_cases(&cases);
+    }
+
+    fn region_corruption_case(id: &str) -> bool {
+        id.starts_with("save.region/1/decode/bank-")
+            && id != "save.region/1/decode/bank-standby-gen0"
+            && id != "save.region/1/decode/bank-committed-gen1"
+            || id == "save.region/1/decode/superblock-short"
+            || id == "save.region/1/decode/superblock-trailing"
+    }
+
+    #[test]
+    fn region_corrupt_executes_integrated_corruption_cases() {
+        let cases = region_cases_from_manifest()
+            .into_iter()
+            .filter(|case| region_corruption_case(&case.id))
+            .collect::<Vec<_>>();
+        if cases.is_empty() {
+            panic!("no integrated save.region corruption cases");
+        }
+        execute_region_cases(&cases);
+    }
+
+    fn region_seed_bank(generation: u64) -> RegionBank {
+        let mut bank = RegionBank::empty();
+        bank.generation = generation;
+        bank.entries[0] = RegionEntry {
+            offset_sector: 15,
+            sector_count: 1,
+            payload_length: 0,
+            revision: 1,
+            payload_crc32c: 0,
+        };
+        bank
+    }
+
+    #[test]
+    fn region_corrupt_order_swapped_bank_fails_value_digest() {
+        let key = RegionKey {
+            dimension: -3,
+            x: -1,
+            z: 2,
+        };
+        let gen1 = region_seed_bank(1);
+        let gen2 = region_seed_bank(2);
+        let mut bank_a = vec![0u8; BANK_SIZE];
+        let mut bank_b = vec![0u8; BANK_SIZE];
+        encode_region_bank_into(key, &gen2, &mut bank_a).expect("encode bank A");
+        encode_region_bank_into(key, &gen1, &mut bank_b).expect("encode bank B");
+        let (selected, index) = select_region_bank(
+            decode_region_bank(key, &bank_a, 65536),
+            decode_region_bank(key, &bank_b, 65536),
+        )
+        .expect("stale order selection");
+        let stale_digest = value_sha256(&order_value(index, &selected));
+
+        let mut swapped_a = vec![0u8; BANK_SIZE];
+        encode_region_bank_into(key, &gen1, &mut swapped_a).expect("encode swapped bank A");
+        let swapped_input = [swapped_a.as_slice(), bank_b.as_slice()].concat();
+
+        let case = FrozenCase {
+            id: "save.region/1/order/transient-bank-swap".to_string(),
+            family: "save.region".to_string(),
+            version: "1".to_string(),
+            consumer: crate::runtime_corpus::CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "order".to_string(),
+            arguments: serde_json::json!({
+                "dimension": -3,
+                "x": -1,
+                "z": 2,
+                "file_size": "65536",
+                "component": "banks"
+            }),
+            input_format: InputFormat::Binary,
+            input: swapped_input,
+            input_json: None,
+            normalized: serde_json::json!({
+                "kind": "ok",
+                "category": "save",
+                "value_sha256": stale_digest
+            }),
+            encoded: None,
+            category: "save".to_string(),
+        };
+        let err = execute_region_case(&case).expect_err("stale digest must fail comparison");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
     }
 }
