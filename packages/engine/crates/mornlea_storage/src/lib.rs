@@ -77,7 +77,7 @@ pub use player::{
     CURRENT_SCHEMA as PLAYER_CURRENT_SCHEMA, ENVELOPE_LENGTH as PLAYER_ENVELOPE_LENGTH,
     MAX_PAYLOAD as PLAYER_MAX_PAYLOAD, OLDEST_SCHEMA as PLAYER_OLDEST_SCHEMA, PlayerLocation,
     PlayerSave, StoredPlayer, decode as decode_player, encode as encode_player,
-    encoded_len as player_encoded_len, encode_into as encode_player_into,
+    encode_into as encode_player_into, encoded_len as player_encoded_len,
     schema_readable as player_schema_readable,
 };
 pub use region::{
@@ -90,8 +90,9 @@ pub use region::{
 pub use world_metadata::{
     CURRENT_VERSION as METADATA_CURRENT_VERSION, ChunkPos as MetadataChunkPos, Metadata,
     V1 as METADATA_V1, V2 as METADATA_V2, V3 as METADATA_V3, V4 as METADATA_V4, V5 as METADATA_V5,
-    decode as decode_world_metadata, encode as encode_world_metadata, valid_difficulty,
-    valid_weather,
+    decode as decode_world_metadata, encode as encode_world_metadata,
+    encode_into as encode_world_metadata_into, encoded_len as world_metadata_encoded_len,
+    valid_difficulty, valid_weather,
 };
 
 /// Workspace crate identity consumed by the foundation registration tests.

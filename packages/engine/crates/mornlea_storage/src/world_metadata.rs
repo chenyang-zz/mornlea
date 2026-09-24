@@ -5,9 +5,9 @@
 //! missing fields as their documented migration defaults. Decoding normalizes
 //! to the current version; encoding only ever writes the current version.
 
-use crate::bytes::ByteWriter;
+use crate::bytes::SliceWriter;
 use crate::crc32c::crc32c;
-use crate::error::{StorageResult, corrupt, future_version};
+use crate::error::{StorageError, StorageResult, corrupt, future_version};
 
 /// Schema written by the current encoder.
 pub const CURRENT_VERSION: u32 = 6;
@@ -31,6 +31,8 @@ const V1_PAYLOAD_LENGTH: usize = 20;
 const DIMENSION_COUNT: u32 = 2;
 /// Seed salt used when a legacy file carries no dimension table.
 const DEPTHS_SEED_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
+/// Exact on-disk byte length for a valid current-schema metadata record.
+const RECORD_LENGTH: usize = HEADER_LENGTH + PAYLOAD_LENGTH + CHECKSUM_LENGTH;
 
 const MAGIC: [u8; 4] = *b"MCGM";
 const WEATHER_CLEAR: u8 = 0;
@@ -59,7 +61,7 @@ pub struct Metadata {
     pub world_time_ticks: u64,
     /// Display phase offset, persisted from v3.
     pub day_phase_offset: u64,
-    /// `0` clear, `1` rain, `2` thunder; persisted from v4.
+    /// Weather kind byte persisted from v4; the codec preserves any raw value.
     pub weather_kind: u8,
     /// Remaining ticks of the current weather segment, persisted from v4.
     pub weather_ticks_remaining: u32,
@@ -71,11 +73,7 @@ pub struct Metadata {
     pub difficulty: u8,
 }
 
-/// Encodes `metadata` as the current-schema world metadata record.
-///
-/// Only the current version may be written: re-encoding a legacy record at its
-/// old version would freeze the migration gap onto disk.
-pub fn encode(metadata: &Metadata) -> StorageResult<Vec<u8>> {
+fn validate_encode(metadata: &Metadata) -> StorageResult<()> {
     if metadata.format_version > CURRENT_VERSION {
         return Err(future_version("metadata version", metadata.format_version));
     }
@@ -91,38 +89,60 @@ pub fn encode(metadata: &Metadata) -> StorageResult<Vec<u8>> {
             format!("{}", metadata.difficulty),
         ));
     }
-    if !valid_weather(metadata.weather_kind) {
-        return Err(corrupt(
-            "metadata weather kind",
-            format!("{}", metadata.weather_kind),
-        ));
-    }
+    Ok(())
+}
 
-    let mut encoded = ByteWriter::new();
-    encoded.bytes(&MAGIC);
-    encoded.u32(metadata.format_version);
-    encoded.u32(PAYLOAD_LENGTH as u32);
-    encoded.u64(metadata.seed as u64);
-    encoded.u32(metadata.spawn_dimension as u32);
-    encoded.u32(metadata.spawn_anchor.x as u32);
-    encoded.u32(metadata.spawn_anchor.z as u32);
-    encoded.u64(metadata.world_time_ticks);
-    encoded.u64(metadata.day_phase_offset);
-    // Weather is a v4 tail append: the kind byte first, then remaining ticks.
-    encoded.u8(metadata.weather_kind);
-    encoded.u32(metadata.weather_ticks_remaining);
-    // The dimension table is a v5 tail append: two dimensions followed by the
-    // depths spawn anchor and its seed salt.
-    encoded.u32(DIMENSION_COUNT);
-    encoded.u32(metadata.depths_spawn_anchor.x as u32);
-    encoded.u32(metadata.depths_spawn_anchor.z as u32);
-    encoded.u64(metadata.depths_seed_salt);
-    // Difficulty is the v6 tail append over the v5 payload.
-    encoded.u8(metadata.difficulty);
-    debug_assert_eq!(encoded.len() - HEADER_LENGTH, PAYLOAD_LENGTH);
-    let mut bytes = encoded.into_vec();
-    let checksum = crc32c(&bytes);
-    bytes.extend_from_slice(&checksum.to_le_bytes());
+/// Reports the exact on-disk byte length for a valid current-schema metadata record.
+pub fn encoded_len(metadata: &Metadata) -> StorageResult<usize> {
+    validate_encode(metadata)?;
+    Ok(RECORD_LENGTH)
+}
+
+/// Writes a complete current-schema metadata record into `dst`, preserving any
+/// tail beyond the returned length.
+pub fn encode_into(metadata: &Metadata, dst: &mut [u8]) -> StorageResult<usize> {
+    validate_encode(metadata)?;
+    if dst.len() < RECORD_LENGTH {
+        return Err(StorageError::OutputTooSmall {
+            needed: RECORD_LENGTH,
+            available: dst.len(),
+        });
+    }
+    let checksum_offset = {
+        let mut writer = SliceWriter::new(&mut dst[..RECORD_LENGTH]);
+        writer.bytes(&MAGIC);
+        writer.u32(metadata.format_version);
+        writer.u32(PAYLOAD_LENGTH as u32);
+        writer.u64(metadata.seed as u64);
+        writer.u32(metadata.spawn_dimension as u32);
+        writer.u32(metadata.spawn_anchor.x as u32);
+        writer.u32(metadata.spawn_anchor.z as u32);
+        writer.u64(metadata.world_time_ticks);
+        writer.u64(metadata.day_phase_offset);
+        writer.u8(metadata.weather_kind);
+        writer.u32(metadata.weather_ticks_remaining);
+        writer.u32(DIMENSION_COUNT);
+        writer.u32(metadata.depths_spawn_anchor.x as u32);
+        writer.u32(metadata.depths_spawn_anchor.z as u32);
+        writer.u64(metadata.depths_seed_salt);
+        writer.u8(metadata.difficulty);
+        debug_assert_eq!(writer.pos(), RECORD_LENGTH - CHECKSUM_LENGTH);
+        writer.pos()
+    };
+    let checksum = crc32c(&dst[..checksum_offset]);
+    dst[checksum_offset..checksum_offset + CHECKSUM_LENGTH]
+        .copy_from_slice(&checksum.to_le_bytes());
+    Ok(RECORD_LENGTH)
+}
+
+/// Encodes `metadata` as the current-schema world metadata record.
+///
+/// Only the current version may be written: re-encoding a legacy record at its
+/// old version would freeze the migration gap onto disk.
+pub fn encode(metadata: &Metadata) -> StorageResult<Vec<u8>> {
+    let needed = encoded_len(metadata)?;
+    let mut bytes = vec![0u8; needed];
+    encode_into(metadata, &mut bytes)?;
     Ok(bytes)
 }
 
@@ -205,12 +225,6 @@ pub fn decode(encoded: &[u8]) -> StorageResult<Metadata> {
     if version >= V4 {
         metadata.weather_kind = payload[36];
         metadata.weather_ticks_remaining = u32_at(payload, 37);
-        if !valid_weather(metadata.weather_kind) {
-            return Err(corrupt(
-                "metadata weather kind",
-                format!("{}", metadata.weather_kind),
-            ));
-        }
     }
     if version >= V5 {
         let dimension_count = u32_at(payload, 41);

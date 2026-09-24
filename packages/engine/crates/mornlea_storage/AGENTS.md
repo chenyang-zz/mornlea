@@ -66,6 +66,15 @@ the next section.
   Rust decoding rejects invalid extents, reserved bytes and padding without
   repair; a zero-generation bank is standby and cannot be selected as committed.
 
+## `save.world-metadata` output boundary (`src/world_metadata.rs`)
+
+- `encode_world_metadata_into` and `world_metadata_encoded_len` write the exact
+  v6 record length into a caller buffer and preserve any tail. A short buffer
+  returns `StorageError::OutputTooSmall` without writing; invalid input reports
+  corruption before capacity and likewise leaves the entire buffer unchanged.
+  The codec preserves raw weather bytes; difficulty validation stays on the
+  wire path.
+
 ## `save.player` output boundary (`src/player.rs`)
 
 - `encode_into` and `player_encoded_len` write the exact v9 record length into a
