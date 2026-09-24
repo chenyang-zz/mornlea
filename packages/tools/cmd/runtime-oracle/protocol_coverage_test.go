@@ -678,7 +678,7 @@ func TestProtocolCorpusNonProtocolEvidenceUnchanged(t *testing.T) {
 	defer assertTrackedCorpusUnchanged(t, root, before)
 	frozen := loadProtocolClosureInventory(t, root)
 
-	domainCases, agentCases, protocolCases := 0, 0, 0
+	domainCases, agentCases, protocolCases, saveCases := 0, 0, 0, 0
 	for _, c := range frozen.Cases {
 		switch {
 		case strings.HasPrefix(c.Family, "domain."):
@@ -687,12 +687,17 @@ func TestProtocolCorpusNonProtocolEvidenceUnchanged(t *testing.T) {
 			agentCases++
 		case strings.HasPrefix(c.Family, protocolFamilyPrefix):
 			protocolCases++
+		case strings.HasPrefix(c.Family, "save."):
+			saveCases++
+			if c.Family != "save.region" {
+				t.Fatalf("save case %s has family %s, want save.region", c.ID, c.Family)
+			}
 		default:
 			t.Fatalf("case %s belongs to no reviewed corpus slice", c.ID)
 		}
 	}
-	if domainCases != 534 || agentCases != 154 || protocolCases != 436 {
-		t.Fatalf("corpus totals drifted: domain %d, agent %d, protocol %d", domainCases, agentCases, protocolCases)
+	if domainCases != 534 || agentCases != 154 || protocolCases != 436 || saveCases != 4 {
+		t.Fatalf("corpus totals drifted: domain %d, agent %d, protocol %d, save %d", domainCases, agentCases, protocolCases, saveCases)
 	}
 	if _, err := ReconcileWorking(root, frozen, families, live, BaselineConsumerRegistry(), BaselineNegativeCoverageExceptions()); err != nil {
 		t.Fatalf("frozen inventory no longer reconciles the non-protocol evidence: %v", err)

@@ -145,7 +145,7 @@ func TestStorageSelectionValidateCaseSpecRejectsWrongRegionOrderInputSize(t *tes
 	}
 }
 
-func TestStorageSelectionBaselineHasNoSaveCases(t *testing.T) {
+func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 	root, err := RepositoryRoot()
 	if err != nil {
 		t.Fatalf("repository root: %v", err)
@@ -154,9 +154,30 @@ func TestStorageSelectionBaselineHasNoSaveCases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load frozen manifest: %v", err)
 	}
+	wantSaveCases := map[string]bool{
+		"save.region/1/decode/bank-committed-gen1": true,
+		"save.region/1/decode/bank-standby-gen0":   true,
+		"save.region/1/decode/superblock-seed":     true,
+		"save.region/1/encode/bank-committed-gen1": true,
+	}
 	for _, c := range frozen.Cases {
-		if strings.HasPrefix(c.Family, "save.") {
-			t.Fatalf("baseline unexpectedly carries save case %s", c.ID)
+		if !strings.HasPrefix(c.Family, "save.") {
+			continue
+		}
+		if !wantSaveCases[c.ID] {
+			t.Fatalf("baseline carries unexpected save case %s", c.ID)
+		}
+	}
+	for id := range wantSaveCases {
+		found := false
+		for _, c := range frozen.Cases {
+			if c.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("baseline missing pinned save case %s", id)
 		}
 	}
 }
