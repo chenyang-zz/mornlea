@@ -352,7 +352,7 @@ impl ChunkCodec {
             envelope.key,
             envelope.revision,
             envelope.schema,
-            &self.logical_scratch,
+            &envelope.bytes,
         ) {
             Ok(chunk) => chunk,
             Err(err) => {
@@ -381,14 +381,7 @@ impl ChunkCodec {
     }
 
     fn decode_envelope(&mut self, payload: &[u8]) -> StorageResult<LogicalPayload> {
-        let envelope = parse_and_decompress_envelope(payload, Some(&mut self.decompressor))?;
-        self.logical_scratch = envelope.bytes;
-        Ok(LogicalPayload {
-            key: envelope.key,
-            revision: envelope.revision,
-            schema: envelope.schema,
-            bytes: Vec::new(),
-        })
+        parse_and_decompress_envelope(payload, Some(&mut self.decompressor))
     }
 
     fn compress_logical(&mut self) -> StorageResult<()> {
