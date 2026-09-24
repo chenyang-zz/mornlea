@@ -62,6 +62,7 @@ const (
 	hostileDecodeYMinID            = hostileFamily + "/" + hostileVersionV2 + "/decode/y-min-boundary"
 	hostileDecodeYMaxID            = hostileFamily + "/" + hostileVersionV2 + "/decode/y-max-boundary"
 	hostileDecodeCount65ID      = hostileFamily + "/" + hostileVersionV2 + "/decode/count-65"
+	hostileDecodeCooldown20ID   = hostileFamily + "/" + hostileVersionV2 + "/decode/cooldown-20"
 	hostileDecodeV1TruncatedID  = hostileFamily + "/" + hostileVersionV1 + "/decode/truncated-tail"
 	hostileDecodeInvalidVersionFutureID = hostileFamily + "/" + hostileVersionV2 + "/decode/invalid-version-future"
 
@@ -458,6 +459,18 @@ func hostileYBoundaryWire(t *testing.T, y float32) []byte {
 	return encoded
 }
 
+func hostileCooldown20Wire(t *testing.T) []byte {
+	record := hostile.StoredHostileMob{
+		ID: 0x10, Dimension: core.Overworld, Health: 5,
+		AttackCooldown: hostileCooldownPeriod,
+	}
+	encoded, err := hostile.Encode(hostile.HostileMobsSave{Revision: 11, Records: []hostile.StoredHostileMob{record}})
+	if err != nil {
+		t.Fatalf("encode cooldown-20 witness: %v", err)
+	}
+	return encoded
+}
+
 func hostileCount65HeaderWire() []byte {
 	oversizedCount := make([]byte, 32)
 	copy(oversizedCount, "MHST")
@@ -646,6 +659,7 @@ func hostileCandidates(t *testing.T) []hostileCandidate {
 		buildHostileCandidate(t, hostileDecodeMaxRecordsID, "decode", hostileVersionV2, maxWire, args, nil),
 		buildHostileCandidate(t, hostileDecodeYMinID, "decode", hostileVersionV2, hostileYBoundaryWire(t, float32(core.MinY)), args, nil),
 		buildHostileCandidate(t, hostileDecodeYMaxID, "decode", hostileVersionV2, hostileYBoundaryWire(t, 319.5), args, nil),
+		buildHostileCandidate(t, hostileDecodeCooldown20ID, "decode", hostileVersionV2, hostileCooldown20Wire(t), args, nil),
 		buildHostileCandidate(t, hostileDecodeCount65ID, "decode", hostileVersionV2, hostileCount65HeaderWire(), args, nil),
 		buildHostileCandidate(t, hostileDecodeV1TruncatedID, "decode", hostileVersionV1, v1[:len(v1)-1], args, nil),
 		canonical,
@@ -801,7 +815,7 @@ func TestStorageHostileArgumentsValidate(t *testing.T) {
 func TestStorageHostileProducerExecutesEveryCase(t *testing.T) {
 	root := mustRepoRoot(t)
 	candidates := hostileCandidates(t)
-	const wantCases = 49
+	const wantCases = 50
 	if len(candidates) != wantCases {
 		t.Fatalf("candidate count = %d, want %d", len(candidates), wantCases)
 	}

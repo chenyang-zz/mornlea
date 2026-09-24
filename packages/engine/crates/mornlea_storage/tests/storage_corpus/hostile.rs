@@ -179,6 +179,30 @@ fn assert_error_category(case: &FrozenCase, category: &str) -> Result<(), String
     }
 }
 
+fn assert_output_too_small_fields(
+    case: &FrozenCase,
+    needed: usize,
+    available: usize,
+) -> Result<(), String> {
+    let want_needed = case
+        .normalized
+        .get("needed")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| format!("case {} missing needed", case.id))?;
+    let want_available = case
+        .normalized
+        .get("available")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| format!("case {} missing available", case.id))?;
+    if needed as u64 != want_needed || available as u64 != want_available {
+        return Err(format!(
+            "case {} output_too_small fields mismatch: got needed {needed} available {available}, want needed {want_needed} available {want_available}",
+            case.id
+        ));
+    }
+    Ok(())
+}
+
 pub fn execute_hostile_cases(cases: &[FrozenCase]) {
     if cases.is_empty() {
         panic!("hostile corpus selection executed zero cases");
@@ -274,17 +298,23 @@ fn execute_hostile_encode(case: &FrozenCase, args: &HostileArguments) -> Result<
         save.records = fixture_hostile_records_shuffled();
     }
     let required = hostile_mobs_encoded_len(&save).map_err(|err| err.to_string())?;
-    let mut buf = vec![0u8; required];
-    if let Some(capacity) = args.capacity {
-        if (capacity as usize) < required {
+    let buf_len = args.capacity.map(|cap| cap as usize).unwrap_or(required);
+    let mut buf = vec![0u8; buf_len];
+    match encode_hostile_mobs_into(&save, &mut buf) {
+        Err(StorageError::OutputTooSmall {
+            needed: want_needed,
+            available: want_available,
+        }) => {
             assert_error_category(case, "output_too_small")?;
+            assert_output_too_small_fields(case, want_needed, want_available)?;
             return Ok(());
         }
-        if capacity as usize > buf.len() {
-            buf.resize(capacity as usize, 0);
+        Err(err) => {
+            let category = storage_error_category(&err)
+                .ok_or_else(|| format!("unclassified encode rejection: {err}"))?;
+            assert_error_category(case, category)?;
+            return Ok(());
         }
-    }
-    match encode_hostile_mobs_into(&save, &mut buf) {
         Ok(written) => {
             assert_ok_outcome(case)?;
             let encoded = &buf[..written];
@@ -309,11 +339,6 @@ fn execute_hostile_encode(case: &FrozenCase, args: &HostileArguments) -> Result<
                 ));
             }
             Ok(())
-        }
-        Err(err) => {
-            let category = storage_error_category(&err)
-                .ok_or_else(|| format!("unclassified encode rejection: {err}"))?;
-            assert_error_category(case, category)
         }
     }
 }
