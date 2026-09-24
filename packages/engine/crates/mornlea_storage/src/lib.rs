@@ -24,7 +24,7 @@ pub use chunk::{
     Chunk, ChunkSave, ContainerSnapshot, DecodedChunk, DropSlot,
     ENVELOPE_LENGTH as CHUNK_ENVELOPE_LENGTH, ENVELOPE_VERSION as CHUNK_ENVELOPE_VERSION,
     FurnaceSlot, LogicalPayload, MAX_DECODED_CHUNK as CHUNK_MAX_DECODED_CHUNK,
-    OLDEST_SCHEMA as CHUNK_OLDEST_SCHEMA, StorageKind, decode as decode_chunk,
+    OLDEST_SCHEMA as CHUNK_OLDEST_SCHEMA, StorageKind, checked_section, decode as decode_chunk,
     decode_envelope as decode_chunk_envelope, decode_logical as decode_chunk_logical,
     encode as encode_chunk, encode_at_schema as encode_chunk_at_schema,
     encode_logical as encode_chunk_logical,

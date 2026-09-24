@@ -4,7 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use mornlea_storage::{
-    ItemStack, PlayerId, PlayerSave, StorageError, decode_player, encode_player,
+    ContainerSnapshot, ItemStack, PlayerId, PlayerSave, StorageError, StorageKind, checked_section,
+    decode_player, encode_player,
 };
 
 fn bytes(version: u8, variant: u8, last: u8) -> [u8; 16] {
@@ -176,6 +177,138 @@ fn stack_ordinary_rules_follow_domain_and_armor_stays_raw() {
     assert_eq!(round.armor[1].item, u16::MAX);
     assert_eq!(round.armor[1].count, u8::MAX);
     assert_eq!(round.armor[1].durability, u16::MAX);
+}
+
+const SECTION_CELLS: usize = 4096;
+
+fn packed_words(bits: u8, slots: &[(usize, u64)]) -> Vec<u64> {
+    let per_word = 64 / bits as usize;
+    let mut words = vec![0u64; SECTION_CELLS.div_ceil(per_word)];
+    for &(index, slot) in slots {
+        words[index / per_word] |= slot << ((index % per_word) * bits as usize);
+    }
+    words
+}
+
+fn single_section(block: u16) -> ContainerSnapshot {
+    ContainerSnapshot {
+        kind: StorageKind::Single,
+        bits: 0,
+        single: block,
+        palette: Vec::new(),
+        packed: Vec::new(),
+    }
+}
+
+fn indexed_section(bits: u8, palette: Vec<u16>, packed: Vec<u64>) -> ContainerSnapshot {
+    ContainerSnapshot {
+        kind: StorageKind::Indexed,
+        bits,
+        single: 0,
+        palette,
+        packed,
+    }
+}
+
+fn direct_section(packed: Vec<u64>) -> ContainerSnapshot {
+    ContainerSnapshot {
+        kind: StorageKind::Direct,
+        bits: 15,
+        single: 0,
+        palette: Vec::new(),
+        packed,
+    }
+}
+
+fn assert_section_corrupt(raw: &ContainerSnapshot) {
+    assert!(matches!(
+        checked_section(raw),
+        Err(StorageError::Corrupt(_))
+    ));
+}
+
+#[test]
+fn section_checked_conversions_preserve_compact_views_and_reject_residue() {
+    for block in [0u16, 89] {
+        let raw = single_section(block);
+        let section = checked_section(&raw).expect("registered single section");
+        assert_eq!(section.as_single(), Some(block));
+        assert_eq!(section.as_indexed(), None);
+        assert_eq!(section.as_direct(), None);
+        assert_eq!(section.block_at(0), Some(block));
+        assert_eq!(section.block_at(100), Some(block));
+        assert_eq!(section.block_at(SECTION_CELLS - 1), Some(block));
+    }
+    assert_section_corrupt(&single_section(90));
+
+    let mut nonzero_bits = single_section(0);
+    nonzero_bits.bits = 4;
+    assert_section_corrupt(&nonzero_bits);
+    let mut leftover_palette = single_section(0);
+    leftover_palette.palette = vec![0];
+    assert_section_corrupt(&leftover_palette);
+    let mut leftover_packed = single_section(0);
+    leftover_packed.packed = vec![0];
+    assert_section_corrupt(&leftover_packed);
+
+    let palette4 = vec![18u16, 0];
+    let packed4 = packed_words(4, &[(0, 0), (1, 1), (SECTION_CELLS - 1, 0)]);
+    let raw4 = indexed_section(4, palette4.clone(), packed4.clone());
+    let section4 = checked_section(&raw4).expect("4-bit section");
+    let (bits, palette, words) = section4.as_indexed().expect("indexed view");
+    assert_eq!(bits, 4);
+    assert_eq!(palette, palette4.as_slice());
+    assert_eq!(words, packed4.as_slice());
+    assert_eq!(section4.as_single(), None);
+    assert_eq!(section4.block_at(0), Some(18));
+    assert_eq!(section4.block_at(1), Some(0));
+    assert_eq!(section4.block_at(SECTION_CELLS - 1), Some(18));
+
+    let palette8: Vec<u16> = (0..90).collect();
+    let packed8 = packed_words(8, &[(0, 89), (100, 18), (SECTION_CELLS - 1, 0)]);
+    let raw8 = indexed_section(8, palette8.clone(), packed8.clone());
+    let section8 = checked_section(&raw8).expect("8-bit section");
+    let (bits, palette, words) = section8.as_indexed().expect("indexed view");
+    assert_eq!(bits, 8);
+    assert_eq!(palette, palette8.as_slice());
+    assert_eq!(words, packed8.as_slice());
+    assert_eq!(words.len(), 512);
+    assert_eq!(section8.block_at(0), Some(89));
+    assert_eq!(section8.block_at(100), Some(18));
+    assert_eq!(section8.block_at(SECTION_CELLS - 1), Some(0));
+
+    let packed_direct = packed_words(15, &[(0, 0), (100, 9), (SECTION_CELLS - 1, 89)]);
+    let raw_direct = direct_section(packed_direct.clone());
+    let section_direct = checked_section(&raw_direct).expect("direct section");
+    assert_eq!(section_direct.as_direct(), Some(packed_direct.as_slice()));
+    assert_eq!(section_direct.as_single(), None);
+    assert_eq!(section_direct.as_indexed(), None);
+    assert_eq!(section_direct.block_at(0), Some(0));
+    assert_eq!(section_direct.block_at(100), Some(9));
+    assert_eq!(section_direct.block_at(SECTION_CELLS - 1), Some(89));
+
+    assert_section_corrupt(&indexed_section(4, Vec::new(), packed_words(4, &[])));
+    assert_section_corrupt(&indexed_section(4, vec![0, 0], packed_words(4, &[])));
+    assert_section_corrupt(&indexed_section(4, (0..17).collect(), packed_words(4, &[])));
+    assert_section_corrupt(&indexed_section(4, vec![0, 1], vec![0u64; 255]));
+    assert_section_corrupt(&indexed_section(4, vec![0, 1], vec![0u64; 257]));
+    assert_section_corrupt(&indexed_section(4, vec![0, 1], packed_words(4, &[(5, 2)])));
+    assert_section_corrupt(&indexed_section(4, vec![0, 90], packed_words(4, &[])));
+    let mut nonzero_single = indexed_section(4, vec![0], packed_words(4, &[]));
+    nonzero_single.single = 1;
+    assert_section_corrupt(&nonzero_single);
+
+    let mut high_bits = packed_words(15, &[(0, 89)]);
+    high_bits[7] |= 1 << 60;
+    assert_section_corrupt(&direct_section(high_bits));
+    assert_section_corrupt(&direct_section(packed_words(15, &[(0, 90)])));
+    assert_section_corrupt(&direct_section(vec![0u64; 1023]));
+    let mut direct_single = direct_section(packed_words(15, &[]));
+    direct_single.single = 1;
+    assert_section_corrupt(&direct_single);
+    let mut direct_palette = direct_section(packed_words(15, &[]));
+    direct_palette.palette = vec![0];
+    assert_section_corrupt(&direct_palette);
 }
 
 fn raw_table_agrees() -> bool {
