@@ -2,7 +2,7 @@
 
 ## Scope and baseline
 
-- Planning baseline: `d929eb9560bb310b249f443e48c404aee1f6ff6e` on `dev`, initially clean. This change is downstream of the accepted `rust-storage-safety-repairs` result SHA, which does not yet exist; implementation must capture it before node 1.1.
+- Planning baseline: `d929eb9560bb310b249f443e48c404aee1f6ff6e` on `dev`, initially clean. The accepted safety evidence is `ba0165896b78daaa2a50c03364dc4b912382d117`; the integration baseline after specification sync and archive is `eb04eacf7f338bc11aa3b0fc606cea5267dc0c12`. Begin implementation from that archive baseline or a descendant, and use it as the `<accepted-safety-sha>` for later source and fixture diff gates. The completed safety change is [archived](../archive/2026-09-24-rust-storage-safety-repairs/ledger.md).
 - The completed region-bank format implementation is read-only here. All seven `save.*` families currently have zero cases in `testdata/runtime-migration/contracts.json`; existing Rust fixture tests do not make the frozen corpus complete. F2 remains blocked on the later integrated F1, numerical/pathfinding and zero-gap gates.
 - No protocol, save, ABI, benchmark or region-format version changes are planned. No production Go codec, committed source fixture or live world write is authorized by this change.
 
@@ -30,4 +30,10 @@ The controller used Superpowers brainstorming and writing-plans with the project
 - Current frozen corpus inspection: each of seven `save.*` families has 0 declared and 0 actual cases; the plan does not claim any implementation coverage.
 - `git diff --check`: exit 0 before staging; staged diff is checked again before the planning commit.
 
-No implementation or runtime gate is claimed. At implementation closure, node 5.2 records actual discovered/executed case counts, all gate outputs, source/result SHAs, review and rollback evidence.
+This codec change claims no implementation or runtime gate. At implementation closure, node 5.2 records actual discovered/executed case counts, all gate outputs, source/result SHAs, review and rollback evidence.
+
+## Accepted safety handoff
+
+- The safety change closed 8/8 tasks after independent whole-change review and macOS acceptance: 104/104 storage tests, `make rust-check`, `make dev-check`, `make test-race`, independent audit, and 128/128 strict OpenSpec items before archive. Neither production Go storage code nor existing migration fixtures changed. Four safety requirements and 11 scenarios were synced into `openspec/specs/rust-runtime-foundation/spec.md`; strict validation after archive passed 127/127 items.
+- The review exposed a distinction that codec workers must preserve: direct historical logical chunk encoding admits exactly reserializable raw pre-v5 multi-item tool drops, while current-value preflight and envelope encoding reject values that an older target schema would omit or alter. Nodes 4.1 and 4.2 now specify one complete current aggregate/schema validation per encode and a private already-validated appender. Node 4.4 starts from a borrowed-field safety validator that rejects oversized lifecycle summaries before copying, but still needs an exact allocation-free length preflight.
+- This handoff changes prerequisite evidence and the linked aggregate packets; it does not complete any codec task or populate the seven zero-case `save.*` families. Architecture skill: no change.
