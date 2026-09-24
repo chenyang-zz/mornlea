@@ -184,6 +184,15 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 51/51 including nonempty `passive_`; `runtime_contract passive_` 7/7.
 - Architecture skill: no change. The external-candidate handoff and the noncompressed writer rule are already recorded.
 
+## 2026-09-24 — SDD execution: node 4.1 closed
+
+- Commit: `cf15c529` adds `chunk_logical_len` and routes `encode_at_schema` through that preflight plus an already-validated appender.
+- Review of `7bffedbc..cf15c529` approved. No Critical or Important findings. The Go private logical builder only writes the current schema, and those widths match the preflight. Node 4.3 owns the historical logical-byte oracle.
+- Minor findings held for the final review: `chunk_codec` warns that `LAST_BLOCK_INDEX` is unused; `chunk_logical_len` carries the serialization doc comment that belongs on `encode_logical`.
+- No save-family case count change. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported by the implementer: `chunk_codec logical_` 13/13; `runtime_contract chunk_` 10/10; `cargo clippy -p mornlea_storage --lib -- -D warnings` pass.
+- Architecture skill: no change. The current-value preflight versus raw historical admission split is already in the design.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
