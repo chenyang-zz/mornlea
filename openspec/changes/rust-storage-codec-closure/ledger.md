@@ -116,6 +116,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus player_` 14/14 including nonempty `player_legacy_late_`; `runtime_contract player_` 11/11.
 - Architecture skill: no change.
 
+## 2026-09-24 — SDD execution: node 2.2d closed
+
+- Commits: `4a81b8a6` adversarial player producer and Rust executor; `e78f3e0c` integration of twelve `save.player/9/decode` cases. No new route.
+- Split check: `4a81b8a6` touches only `storage_player_test.go` and `storage_corpus/player.rs`. Manifest, assets, and the nonempty gate landed in `e78f3e0c`.
+- Reviews of the producer and the integration approved. No Critical or Important findings.
+- Minor findings held for the final review: schema and declared-length wires keep a stale CRC; `player_adversarial_case` uses `starts_with` for one id.
+- `save.player` now has 37 cases. `save.region` stays at 26. The other five `save.*` families remain at zero. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus player_` 19/19 including nonempty `player_adversarial_`; `runtime_contract player_` 11/11.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
