@@ -7,7 +7,8 @@ native ABI, network transports, or storage codecs; production files have an
 empty allowed internal import set. Only `_test.go` files are permitted to import
 designated offline codec, world, companion, and storage packages
 (`shared/network/codec`, `shared/network/protocol`, `shared/core`,
-`shared/world`, `shared/companion`, `shared/pathfind`, `shared/nativeabi`, and
+`shared/world`, `shared/companion`, `shared/pathfind`, `shared/nativeabi`,
+`server/storage/storagedef`, and
 `server/storage/{chunk,player,companion,hostile,passive,region}`). Neither
 production nor test files may import `server/server`, file stores, client/render,
 or Agent process packages. These boundaries are enforced by `packages/audit`

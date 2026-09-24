@@ -61,6 +61,13 @@ func TestStorageSelectionValidateStorageArguments(t *testing.T) {
 			t.Fatalf("expected capacity on decode error, got %v", err)
 		}
 	})
+	t.Run("rejects order on non-region family", func(t *testing.T) {
+		raw := json.RawMessage(`{"requested_player_id":"0123456789abcdef0123456789abcdef"}`)
+		err := validateStorageArguments("save.player", "order", raw)
+		if err == nil || !strings.Contains(err.Error(), "save.region") {
+			t.Fatalf("expected order family rejection, got %v", err)
+		}
+	})
 	t.Run("accepts valid player decode", func(t *testing.T) {
 		raw := json.RawMessage(`{"requested_player_id":"0123456789abcdef0123456789abcdef"}`)
 		if err := validateStorageArguments("save.player", "decode", raw); err != nil {
@@ -86,6 +93,55 @@ func TestStorageSelectionValidateCaseSpecRejectsMalformedSaveCase(t *testing.T) 
 	bad.Arguments = json.RawMessage(`{"requested_player_id":"not-a-valid-player-id"}`)
 	if err := validateCaseSpec(root, bad, families); err == nil {
 		t.Fatal("expected malformed save arguments to fail validateCaseSpec")
+	}
+}
+
+func TestStorageSelectionValidateCaseSpecConsumerRejectsMalformedSaveCase(t *testing.T) {
+	root, err := RepositoryRoot()
+	if err != nil {
+		t.Fatalf("repository root: %v", err)
+	}
+	families, _, err := Discover(root)
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	familiesByID := make(map[string]Family, len(families))
+	for _, family := range families {
+		familiesByID[family.ID] = family
+	}
+	bad := storageSampleCase(t, root, "save.player", "decode")
+	bad.Arguments = json.RawMessage(`{"requested_player_id":"not-a-valid-player-id"}`)
+	_, err = validateCaseSpecConsumer(root, bad, familiesByID, BaselineConsumerRegistry())
+	if err == nil {
+		t.Fatal("expected malformed save arguments to fail validateCaseSpecConsumer")
+	}
+}
+
+func TestStorageSelectionValidateCaseSpecRejectsWrongRegionOrderInputSize(t *testing.T) {
+	root, err := RepositoryRoot()
+	if err != nil {
+		t.Fatalf("repository root: %v", err)
+	}
+	external := t.TempDir()
+	caseSpec := storageSampleCase(t, root, "save.region", "order")
+	writeCandidateAsset(t, external, caseSpec.Input.Path, []byte{0x00})
+	writeCandidateAsset(t, external, caseSpec.Expected.Path, []byte(`{"kind":"error","category":"corrupt"}`))
+	families, _, err := Discover(root)
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	familiesByID := make(map[string]Family, len(families))
+	for _, family := range families {
+		familiesByID[family.ID] = family
+	}
+	registry := storageRegistryWithRoutes([]ConsumerRoute{{
+		FamilyID:  caseSpec.Family,
+		Version:   caseSpec.Version,
+		Operation: caseSpec.Operation,
+	}})
+	_, err = validateCaseSpecConsumer(external, caseSpec, familiesByID, registry)
+	if err == nil || !strings.Contains(err.Error(), "57344") {
+		t.Fatalf("expected wrong region order input size error, got %v", err)
 	}
 }
 
@@ -187,6 +243,25 @@ func TestStorageSelectionReadRejectsInvalidCandidate(t *testing.T) {
 		_, err := readStorageSelection(dir)
 		if err == nil || !strings.Contains(err.Error(), "checkpoints") {
 			t.Fatalf("expected checkpoint error, got %v", err)
+		}
+	})
+
+	t.Run("symlink ancestor", func(t *testing.T) {
+		parent := t.TempDir()
+		realDir := filepath.Join(parent, "real")
+		if err := os.Mkdir(realDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		symlinkDir := filepath.Join(parent, "symlink-ancestor")
+		if err := os.Symlink(realDir, symlinkDir); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(symlinkDir, "candidate")
+		selection := storageSampleSelection(t, root, "save.player", "decode")
+		writeStorageSelectionCandidate(t, dir, selection)
+		_, err := readStorageSelection(dir)
+		if err == nil || !strings.Contains(err.Error(), "symlink ancestor") {
+			t.Fatalf("expected symlink ancestor error, got %v", err)
 		}
 	})
 }

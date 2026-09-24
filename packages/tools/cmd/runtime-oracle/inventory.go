@@ -316,18 +316,18 @@ type Family struct {
 
 // CaseSpec defines one executable test case in the corpus.
 type CaseSpec struct {
-	ID           string         `json:"id"`
-	Family       string         `json:"family"`
-	Version      string         `json:"version"`
-	Operation    string         `json:"operation"`
+	ID           string          `json:"id"`
+	Family       string          `json:"family"`
+	Version      string          `json:"version"`
+	Operation    string          `json:"operation"`
 	Arguments    json.RawMessage `json:"arguments,omitempty"`
-	PacketKey    *PacketKeySpec `json:"packet_key,omitempty"`
-	Input        AssetRef       `json:"input"`
-	InputFormat  string         `json:"input_format"`
-	Expected     AssetRef       `json:"expected"`
-	Encoded      *AssetRef      `json:"encoded,omitempty"`
-	Checkpoints  []string       `json:"checkpoints"`
-	RustConsumer string         `json:"rust_consumer"`
+	PacketKey    *PacketKeySpec  `json:"packet_key,omitempty"`
+	Input        AssetRef        `json:"input"`
+	InputFormat  string          `json:"input_format"`
+	Expected     AssetRef        `json:"expected"`
+	Encoded      *AssetRef       `json:"encoded,omitempty"`
+	Checkpoints  []string        `json:"checkpoints"`
+	RustConsumer string          `json:"rust_consumer"`
 }
 
 // PacketKeySpec identifies a wire packet direction, state, and ID.
@@ -696,6 +696,9 @@ func validateCaseSpecConsumer(root string, c CaseSpec, families map[string]Famil
 
 	// Validate input asset
 	if err := validateAsset(root, c.Input, c.InputFormat == "json", inputMaxBytes); err != nil {
+		return "", fmt.Errorf("input asset %s: %w", c.Input.Path, err)
+	}
+	if err := validateSaveCaseInputConstraints(root, c); err != nil {
 		return "", fmt.Errorf("input asset %s: %w", c.Input.Path, err)
 	}
 	// Validate expected asset (always JSON) and extract kind
