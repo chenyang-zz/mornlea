@@ -42,8 +42,9 @@ or Agent process packages. These boundaries are enforced by `packages/audit`
   `domain.values/current/admit`, `domain.command_control/current/admit`,
   `domain.command_inventory/current/admit`, and `domain.event/1/admit`;
   `external:agent-contract` → `agent.http/v1/agent-contract` and
-  `agent.mcp/v1/agent-contract`; and `external:runtime-authority` →
-  `domain.input/45/order`.
+  `agent.mcp/v1/agent-contract`; `external:runtime-authority` →
+  `domain.input/45/order`; and `mornlea_storage` → `save.region/1/decode` and
+  `save.region/1/encode`.
 - Enforcement: `TestContractInventoryReconcilesFrozenCorpus`,
   `TestContractInventoryWorkingReportsZeroCaseFamilies`,
   `TestContractInventoryCompleteRejectsZeroCaseFamilies`,

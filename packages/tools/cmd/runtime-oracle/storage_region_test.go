@@ -703,32 +703,6 @@ func TestStorageRegionCandidatesExportForReview(t *testing.T) {
 	}
 }
 
-// TestStorageRegionWriteIntegratedManifest encodes the merged region selection
-// into MORNLEA_WRITE_INVENTORY after ReconcileWorking. The controller sets
-// that path to the tracked contracts file.
-func TestStorageRegionWriteIntegratedManifest(t *testing.T) {
-	dest := strings.TrimSpace(os.Getenv("MORNLEA_WRITE_INVENTORY"))
-	if dest == "" {
-		t.Skip("MORNLEA_WRITE_INVENTORY unset")
-	}
-	root := mustRepoRoot(t)
-	merged := regionManifest(t, root, regionSeedCandidates(t))
-	families, live, err := Discover(root)
-	if err != nil {
-		t.Fatalf("discover: %v", err)
-	}
-	if _, err := ReconcileWorking(root, merged, families, live, BaselineConsumerRegistry(), BaselineNegativeCoverageExceptions()); err != nil {
-		t.Fatalf("reconcile merged manifest: %v", err)
-	}
-	encoded, err := encodeInventory(merged)
-	if err != nil {
-		t.Fatalf("encode inventory: %v", err)
-	}
-	if err := os.WriteFile(dest, append(encoded, '\n'), 0o644); err != nil {
-		t.Fatalf("write inventory: %v", err)
-	}
-}
-
 // TestStorageRegionExportFromEnvironment writes the reviewed selection and
 // assets when RUNTIME_ORACLE_EXPORT_DIR is set outside the test. The
 // controller uses this hook to integrate tracked manifest assets.
