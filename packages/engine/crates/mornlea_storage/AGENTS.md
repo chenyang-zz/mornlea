@@ -132,9 +132,9 @@ the next section.
   convergence without reaching into private state, following the precedent set
   by `crc32c`. `encode`/`decode` are the whole envelope, `decode_envelope` is
   the header plus frame, `encode_logical`/`decode_logical` are the `MCGC`
-  payload, `chunk_logical_len` preflights the exact logical byte length for a
-  current value at a target schema, and `encode_at_schema` is the encoder at
-  any supported schema.
+  payload, `encode_at_schema` is the encoder at any supported schema, and
+  [`ChunkCodec`] owns one reusable zstd context pair plus bounded scratch for
+  caller-buffer encode and decode.
 - `Chunk` deliberately carries no position. The Go `world.Chunk` carries its
   own `Pos`, so the Go encoder rejects a save whose chunk position disagrees
   with the requested key; here the key on `ChunkSave` is the single source of

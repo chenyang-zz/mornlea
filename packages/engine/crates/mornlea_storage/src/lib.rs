@@ -23,7 +23,7 @@ mod world_metadata;
 pub use chunk::chunk_logical_wire_len_for_test;
 pub use chunk::{
     COMPRESSION_ZSTD as CHUNK_COMPRESSION_ZSTD, CURRENT_SCHEMA as CHUNK_CURRENT_SCHEMA, ChestSlot,
-    Chunk, ChunkSave, ContainerSnapshot, DecodedChunk, DropSlot,
+    Chunk, ChunkCodec, ChunkSave, ContainerSnapshot, DecodedChunk, DropSlot,
     ENVELOPE_LENGTH as CHUNK_ENVELOPE_LENGTH, ENVELOPE_VERSION as CHUNK_ENVELOPE_VERSION,
     FurnaceSlot, LogicalPayload, MAX_DECODED_CHUNK as CHUNK_MAX_DECODED_CHUNK,
     OLDEST_SCHEMA as CHUNK_OLDEST_SCHEMA, StorageKind, checked_section, chunk_logical_len,
