@@ -1,0 +1,531 @@
+//! Executable `save.player` corpus routes for `mornlea_storage`.
+//!
+//! Node 2.2a seeds current-schema decode and encode evidence. The shared
+//! dispatcher in `storage_corpus.rs` delegates here once the controller
+//! registers the reviewed routes against integrated manifest assets.
+
+use super::value_digest::{Value, value_sha256};
+use mornlea_storage::{
+    Inventory, ItemStack, PlayerId, PlayerLocation, PlayerSave, StoredPlayer, StorageError,
+    decode_player, encode_player_into, player_encoded_len,
+};
+use crate::runtime_corpus::{FrozenCase, InputFormat};
+use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct PlayerRoute {
+    pub family: &'static str,
+    pub version: &'static str,
+    pub operation: &'static str,
+}
+
+/// Routes the player module executes once reviewed assets are integrated.
+pub const PLAYER_REGISTERED_ROUTES: &[PlayerRoute] = &[
+    PlayerRoute {
+        family: "save.player",
+        version: "9",
+        operation: "decode",
+    },
+    PlayerRoute {
+        family: "save.player",
+        version: "9",
+        operation: "encode",
+    },
+];
+
+fn route_is_registered(case: &FrozenCase) -> bool {
+    PLAYER_REGISTERED_ROUTES.iter().any(|route| {
+        route.family == case.family
+            && route.version == case.version
+            && route.operation == case.operation
+    })
+}
+
+#[derive(Debug)]
+struct PlayerArguments {
+    player_id: PlayerId,
+    capacity: Option<u32>,
+}
+
+fn parse_player_arguments(case: &FrozenCase) -> Result<PlayerArguments, String> {
+    let obj = case
+        .arguments
+        .as_object()
+        .ok_or_else(|| format!("case {} arguments must be an object", case.id))?;
+    let id_text = obj
+        .get("requested_player_id")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| format!("case {} missing requested_player_id", case.id))?;
+    if id_text.len() != 32
+        || !id_text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "case {} requested_player_id must be 32 lowercase hex digits",
+            case.id
+        ));
+    }
+    let mut id_bytes = [0u8; 16];
+    for (index, chunk) in id_text.as_bytes().chunks(2).enumerate() {
+        if index >= 16 {
+            break;
+        }
+        let text = std::str::from_utf8(chunk).map_err(|_| "invalid hex")?;
+        id_bytes[index] = u8::from_str_radix(text, 16).map_err(|_| "invalid hex")?;
+    }
+    let capacity = match obj.get("capacity") {
+        None => None,
+        Some(value) => Some(read_u32_json(value)?),
+    };
+    Ok(PlayerArguments {
+        player_id: PlayerId::from_bytes(id_bytes),
+        capacity,
+    })
+}
+
+fn read_u32_json(value: &JsonValue) -> Result<u32, String> {
+    value
+        .as_u64()
+        .and_then(|number| u32::try_from(number).ok())
+        .ok_or_else(|| "capacity must be an unsigned integer".to_string())
+}
+
+fn player_schema_version(input: &[u8]) -> Result<u32, String> {
+    if input.len() < 12 {
+        return Err("input shorter than schema header".to_string());
+    }
+    Ok(u32::from_le_bytes(input[8..12].try_into().expect("slice length")))
+}
+
+fn storage_error_category(err: &StorageError) -> Option<&'static str> {
+    match err {
+        StorageError::Corrupt(_) => Some("corrupt"),
+        StorageError::FutureVersion(_) => Some("future_version"),
+        StorageError::OutputTooSmall { .. } => Some("output_too_small"),
+    }
+}
+
+fn item_stack_value(stack: &ItemStack) -> Value {
+    let mut fields = BTreeMap::new();
+    fields.insert("count".to_string(), Value::Unsigned(stack.count as u64));
+    fields.insert(
+        "durability".to_string(),
+        Value::Unsigned(stack.durability as u64),
+    );
+    fields.insert("item".to_string(), Value::Unsigned(stack.item as u64));
+    Value::Object(fields)
+}
+
+fn location_value(location: &PlayerLocation) -> Value {
+    let mut fields = BTreeMap::new();
+    fields.insert("dimension".to_string(), Value::Signed(location.dimension as i64));
+    fields.insert(
+        "position".to_string(),
+        Value::Array(
+            location
+                .position
+                .iter()
+                .map(|component| Value::F32(*component))
+                .collect(),
+        ),
+    );
+    Value::Object(fields)
+}
+
+fn inventory_value(inventory: &Inventory) -> Value {
+    let hotbar_slots = inventory
+        .hotbar
+        .slots
+        .iter()
+        .map(item_stack_value)
+        .collect::<Vec<_>>();
+    let mut hotbar = BTreeMap::new();
+    hotbar.insert(
+        "selected".to_string(),
+        Value::Unsigned(inventory.hotbar.selected as u64),
+    );
+    hotbar.insert("slots".to_string(), Value::Array(hotbar_slots));
+    let backpack = inventory
+        .backpack
+        .iter()
+        .map(item_stack_value)
+        .collect::<Vec<_>>();
+    let mut fields = BTreeMap::new();
+    fields.insert("backpack".to_string(), Value::Array(backpack));
+    fields.insert("hotbar".to_string(), Value::Object(hotbar));
+    Value::Object(fields)
+}
+
+fn stored_player_value(stored: &StoredPlayer) -> Value {
+    let safe = match &stored.safe {
+        None => Value::Null,
+        Some(location) => location_value(location),
+    };
+    let armor = stored.armor.iter().map(item_stack_value).collect::<Vec<_>>();
+    let mut fields = BTreeMap::new();
+    fields.insert("armor".to_string(), Value::Array(armor));
+    fields.insert("current".to_string(), location_value(&stored.current));
+    fields.insert("display_name".to_string(), Value::Utf8(stored.display_name.clone()));
+    fields.insert(
+        "exhaustion_milli".to_string(),
+        Value::Unsigned(stored.exhaustion_milli as u64),
+    );
+    fields.insert("health".to_string(), Value::Unsigned(stored.health as u64));
+    fields.insert("hunger".to_string(), Value::Unsigned(stored.hunger as u64));
+    fields.insert("inventory".to_string(), inventory_value(&stored.inventory));
+    fields.insert("needs_rewrite".to_string(), Value::Bool(stored.needs_rewrite));
+    fields.insert("pitch".to_string(), Value::F32(stored.pitch));
+    fields.insert(
+        "player_id".to_string(),
+        Value::Bytes(stored.player_id.to_bytes().to_vec()),
+    );
+    fields.insert(
+        "respawn_dimension".to_string(),
+        Value::Signed(stored.respawn_dimension as i64),
+    );
+    fields.insert(
+        "respawn_position".to_string(),
+        Value::Array(
+            stored
+                .respawn_position
+                .iter()
+                .map(|component| Value::F32(*component))
+                .collect(),
+        ),
+    );
+    fields.insert(
+        "respawn_present".to_string(),
+        Value::Bool(stored.respawn_present),
+    );
+    fields.insert("revision".to_string(), Value::Unsigned(stored.revision));
+    fields.insert("safe".to_string(), safe);
+    fields.insert(
+        "saturation_milli".to_string(),
+        Value::Unsigned(stored.saturation_milli as u64),
+    );
+    fields.insert("yaw".to_string(), Value::F32(stored.yaw));
+    Value::Object(fields)
+}
+
+fn stored_to_save(stored: &StoredPlayer) -> PlayerSave {
+    PlayerSave {
+        player_id: stored.player_id,
+        revision: stored.revision,
+        display_name: stored.display_name.clone(),
+        current: stored.current.clone(),
+        yaw: stored.yaw,
+        pitch: stored.pitch,
+        safe: stored.safe.clone(),
+        inventory: stored.inventory,
+        health: stored.health,
+        hunger: stored.hunger,
+        saturation_milli: stored.saturation_milli,
+        exhaustion_milli: stored.exhaustion_milli,
+        respawn_present: stored.respawn_present,
+        respawn_position: stored.respawn_position,
+        respawn_dimension: stored.respawn_dimension,
+        armor: stored.armor,
+    }
+}
+
+fn expected_value_digest(case: &FrozenCase, value: &Value) -> Result<(), String> {
+    let expected = case
+        .normalized
+        .get("value_sha256")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| format!("case {} missing value_sha256", case.id))?;
+    let actual = value_sha256(value);
+    if actual != expected {
+        return Err(format!(
+            "case {} value digest mismatch: got {actual}, want {expected}",
+            case.id
+        ));
+    }
+    Ok(())
+}
+
+fn assert_ok_outcome(case: &FrozenCase) -> Result<(), String> {
+    match case.normalized.get("kind").and_then(JsonValue::as_str) {
+        Some("ok") => Ok(()),
+        _ => Err(format!("case {} expected kind ok", case.id)),
+    }
+}
+
+fn assert_error_category(case: &FrozenCase, category: &str) -> Result<(), String> {
+    match case.normalized.get("category").and_then(JsonValue::as_str) {
+        Some(value) if value == category => Ok(()),
+        other => Err(format!(
+            "case {} category mismatch: got {:?}, want {category}",
+            case.id, other
+        )),
+    }
+}
+
+pub fn execute_player_cases(cases: &[FrozenCase]) {
+    if cases.is_empty() {
+        panic!("player corpus selection executed zero cases");
+    }
+    for case in cases {
+        assert_eq!(
+            case.family, "save.player",
+            "case {} is not a save.player row",
+            case.id
+        );
+        assert_eq!(
+            case.input_format,
+            InputFormat::Binary,
+            "case {} must use binary input",
+            case.id
+        );
+        assert!(
+            route_is_registered(case),
+            "unregistered player route {}/{}/{} for case {}",
+            case.family, case.version, case.operation, case.id
+        );
+        execute_player_case(case).unwrap_or_else(|err| {
+            panic!("case {} failed: {err}", case.id);
+        });
+    }
+}
+
+pub fn execute_player_case(case: &FrozenCase) -> Result<(), String> {
+    let args = parse_player_arguments(case)?;
+    match case.operation.as_str() {
+        "decode" => execute_player_decode(case, &args),
+        "encode" => execute_player_encode(case, &args),
+        other => Err(format!("unsupported player operation {other}")),
+    }
+}
+
+fn execute_player_decode(case: &FrozenCase, args: &PlayerArguments) -> Result<(), String> {
+    let schema = player_schema_version(&case.input)?;
+    let want_version: u32 = case
+        .version
+        .parse()
+        .map_err(|_| format!("case {} has invalid version", case.id))?;
+    if schema != want_version && schema != 0 && schema <= want_version {
+        return Err(format!(
+            "case {} input schema {schema}, want {want_version}",
+            case.id
+        ));
+    }
+    match decode_player(args.player_id, &case.input) {
+        Ok(stored) => {
+            assert_ok_outcome(case)?;
+            if schema != want_version {
+                return Err(format!(
+                    "case {} accepted input schema {schema}, want {want_version}",
+                    case.id
+                ));
+            }
+            expected_value_digest(case, &stored_player_value(&stored))
+        }
+        Err(err) => {
+            let category = storage_error_category(&err)
+                .ok_or_else(|| format!("unclassified rejection: {err}"))?;
+            assert_error_category(case, category)
+        }
+    }
+}
+
+fn execute_player_encode(case: &FrozenCase, args: &PlayerArguments) -> Result<(), String> {
+    let stored = decode_player(args.player_id, &case.input).map_err(|err| err.to_string())?;
+    let digest_value = stored_player_value(&stored);
+    let save = stored_to_save(&stored);
+    let needed = player_encoded_len(&save).map_err(|err| err.to_string())?;
+    let mut encoded = vec![0u8; needed];
+    let written = encode_player_into(&save, &mut encoded).map_err(|err| err.to_string())?;
+    encoded.truncate(written);
+
+    if let Some(capacity) = args.capacity {
+        if (capacity as usize) < encoded.len() {
+            assert_error_category(case, "output_too_small")?;
+            return Ok(());
+        }
+    }
+
+    if case.normalized.get("kind").and_then(JsonValue::as_str) == Some("ok") {
+        expected_value_digest(case, &digest_value)?;
+        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64) {
+            if length as usize != encoded.len() {
+                return Err(format!(
+                    "case {} encoded length {}, want {}",
+                    case.id,
+                    encoded.len(),
+                    length
+                ));
+            }
+        }
+        let encoded_ref = case
+            .encoded
+            .as_ref()
+            .ok_or_else(|| format!("case {} missing encoded asset", case.id))?;
+        if encoded_ref.as_slice() != encoded.as_slice() {
+            return Err(format!("case {} encoded bytes mismatch", case.id));
+        }
+        let round = decode_player(save.player_id, &encoded).map_err(|err| err.to_string())?;
+        if round.needs_rewrite {
+            return Err(format!("case {} encoded output needs rewrite", case.id));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime_corpus::{load_cases_for_consumer, CorpusConsumer};
+
+    fn player_cases_from_manifest() -> Vec<FrozenCase> {
+        load_cases_for_consumer(CorpusConsumer::Storage)
+            .into_iter()
+            .filter(|case| case.family == "save.player")
+            .collect()
+    }
+
+    #[test]
+    fn player_current_executes_integrated_cases() {
+        let cases = player_cases_from_manifest();
+        if cases.is_empty() {
+            panic!("no integrated save.player cases");
+        }
+        execute_player_cases(&cases);
+    }
+
+    #[test]
+    fn player_current_armor_digest_mutation_fails_comparison() {
+        let encoded = encode_player_fixture(&player_raw_armor_save());
+        let player_id = PlayerId::from_bytes([
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x46, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ]);
+        let stored = decode_player(player_id, &encoded).expect("decode armor fixture");
+        let mut stale = stored;
+        stale.armor[0].item += 1;
+        let case = FrozenCase {
+            id: "save.player/9/decode/raw-armor-triple".to_string(),
+            family: "save.player".to_string(),
+            version: "9".to_string(),
+            consumer: CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "decode".to_string(),
+            arguments: serde_json::json!({
+                "requested_player_id": "00112233445546778899aabbccddeeff"
+            }),
+            input_format: InputFormat::Binary,
+            input: encoded,
+            input_json: None,
+            normalized: serde_json::json!({
+                "kind": "ok",
+                "category": "save",
+                "value_sha256": value_sha256(&stored_player_value(&stale))
+            }),
+            encoded: None,
+            category: "save".to_string(),
+        };
+        let err = execute_player_case(&case).expect_err("stale armor digest must fail");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn player_raw_armor_save() -> PlayerSave {
+        let mut save = fixture_player_save(7);
+        save.armor[0] = ItemStack {
+            item: 4242,
+            count: 65,
+            durability: 999,
+        };
+        save
+    }
+
+    fn fixture_player_save(revision: u64) -> PlayerSave {
+        let mut inventory = Inventory::default();
+        inventory.hotbar.selected = 3;
+        inventory.hotbar.slots[0] = ItemStack {
+            item: 1,
+            count: 64,
+            durability: 0,
+        };
+        inventory.hotbar.slots[4] = ItemStack {
+            item: 10,
+            count: 1,
+            durability: 131,
+        };
+        inventory.hotbar.slots[6] = ItemStack {
+            item: 3,
+            count: 1,
+            durability: 0,
+        };
+        inventory.backpack[0] = ItemStack {
+            item: 2,
+            count: 12,
+            durability: 0,
+        };
+        inventory.backpack[7] = ItemStack {
+            item: 11,
+            count: 1,
+            durability: 250,
+        };
+        inventory.backpack[26] = ItemStack {
+            item: 1,
+            count: 5,
+            durability: 0,
+        };
+        PlayerSave {
+            player_id: PlayerId::from_bytes([
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x46, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                0xdd, 0xee, 0xff,
+            ]),
+            revision,
+            display_name: "Chen".to_owned(),
+            current: PlayerLocation {
+                dimension: 0,
+                position: [2.5, 70.0, -3.5],
+            },
+            yaw: 1.25,
+            pitch: -0.5,
+            safe: Some(PlayerLocation {
+                dimension: 0,
+                position: [1.5, 65.0, -2.5],
+            }),
+            inventory,
+            health: 13,
+            hunger: 12,
+            saturation_milli: 2500,
+            exhaustion_milli: 1750,
+            respawn_present: true,
+            respawn_position: [7.0, 65.0, -9.0],
+            respawn_dimension: 0,
+            armor: [
+                ItemStack {
+                    item: 58,
+                    count: 1,
+                    durability: 165,
+                },
+                ItemStack {
+                    item: 59,
+                    count: 1,
+                    durability: 0,
+                },
+                ItemStack {
+                    item: 60,
+                    count: 0,
+                    durability: 165,
+                },
+                ItemStack::default(),
+            ],
+        }
+    }
+
+    fn encode_player_fixture(save: &PlayerSave) -> Vec<u8> {
+        let needed = player_encoded_len(save).expect("encoded len");
+        let mut buf = vec![0u8; needed];
+        let written = encode_player_into(save, &mut buf).expect("encode");
+        buf.truncate(written);
+        buf
+    }
+}
