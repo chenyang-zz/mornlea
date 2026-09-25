@@ -27,7 +27,7 @@ const (
 	chunkProducerTestRel      = "packages/server/storage/chunk/chunk_oracle_test.go"
 	chunkCodecSourceRel       = "packages/server/storage/chunk/chunk_codec.go"
 	chunkPinnedExportDir      = "/tmp/runtime-oracle-chunk-4.3a"
-	chunkPinnedExportDirLate  = "/tmp/runtime-oracle-chunk-4.3b-late"
+	chunkPinnedExportDirLate  = "/tmp/runtime-oracle-chunk-4.3b-late-fix"
 	chunkSelectionManifest    = "selection.json"
 	chunkRustConsumer         = "mornlea_storage"
 	chunkRuntimeOracleExportDirEnv = "RUNTIME_ORACLE_EXPORT_DIR"
@@ -457,7 +457,7 @@ func chunkRoutes() []chunkConsumerRoute {
 }
 
 func chunkLateRoutes() []chunkConsumerRoute {
-	routes := chunkRoutes()
+	var routes []chunkConsumerRoute
 	for version := 9; version >= 5; version-- {
 		routes = append(routes, chunkConsumerRoute{
 			FamilyID: chunkFamily, Version: strconv.Itoa(version), Operation: "decode",
@@ -1163,8 +1163,12 @@ func TestChunkMigrationOracleLate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantFluid := fluidFixtureChunk(t, key.Pos)
 	if countFluidCells(v9.Chunk) != len(fluidBlockIDs) {
 		t.Fatalf("v9 fixture fluid cells = %d, want %d", countFluidCells(v9.Chunk), len(fluidBlockIDs))
+	}
+	if v9.Chunk.Hash() != wantFluid.Hash() {
+		t.Fatal("v9 fixture block registry mismatch")
 	}
 	if v9.Migrated {
 		t.Fatal("v9 fixture decode must not mark migrated for current wire")
@@ -1194,6 +1198,25 @@ func TestChunkMigrationOracleLate(t *testing.T) {
 	child := chunkExportSelection(t, root, candidates, chunkLateRoutes())
 	if child == "" {
 		t.Fatal("export did not publish late candidates")
+	}
+	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
+		t.Fatalf("selection manifest missing: %v", err)
+	}
+}
+
+func TestChunkMigrationOracleLateExportToPinnedDirectory(t *testing.T) {
+	root := chunkRepoRoot(t)
+	exportRoot := chunkPinnedExportDirLate
+	producerChild := filepath.Join(exportRoot, filepath.FromSlash(chunkProducerID))
+	if _, err := os.Lstat(producerChild); err == nil {
+		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat pinned producer child: %v", err)
+	}
+	t.Setenv(chunkRuntimeOracleExportDirEnv, exportRoot)
+	child := chunkExportSelection(t, root, chunkLateCandidates(t), chunkLateRoutes())
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
 	}
 	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
 		t.Fatalf("selection manifest missing: %v", err)
