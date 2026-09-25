@@ -61,6 +61,6 @@ The catalog SHALL label existing and target-only surfaces. A planned signature, 
 
 #### Scenario: F2 server crate has not landed
 
-- **GIVEN** the map describes `ServerCore::advance_tick` but no accepted server implementation SHA exists
+- **GIVEN** the map describes a target server tick interface but no accepted server implementation SHA exists
 - **WHEN** F2 readiness is reported
 - **THEN** it MUST remain a target contract and F2 MUST retain its existing prerequisites and real replay/failure gates
