@@ -6,9 +6,9 @@
 //! strictly ascending ID order and the CRC-32C covers the identity fields plus
 //! the payload, never the magic or the checksum bytes themselves.
 
-use crate::bytes::{ByteReader, ByteWriter, is_zero};
+use crate::bytes::{ByteReader, SliceWriter, is_zero};
 use crate::crc32c::crc32c_join;
-use crate::error::{StorageResult, corrupt, future_version};
+use crate::error::{StorageError, StorageResult, corrupt, future_version};
 
 /// Maximum number of records one passive-mob save may hold.
 pub const MAX_PASSIVE_MOBS: usize = 32;
@@ -59,10 +59,76 @@ pub struct PassiveMobsSave {
     pub records: Vec<PassiveMob>,
 }
 
+/// Reports the exact on-disk byte length for a valid passive-mob aggregate.
+pub fn passive_mobs_encoded_len(save: &PassiveMobsSave) -> StorageResult<usize> {
+    let sorted_indices = prepare_encode_indices(save)?;
+    let count = sorted_indices.len();
+    let payload_length = count
+        .checked_mul(RECORD_LENGTH)
+        .ok_or_else(|| corrupt("passive payload length", "overflow"))?;
+    let total = HEADER_LENGTH
+        .checked_add(payload_length)
+        .ok_or_else(|| corrupt("passive file length", "overflow"))?;
+    if total > MAX_FILE_LENGTH {
+        return Err(corrupt(
+            "passive file length",
+            format!("{total} exceeds limit {MAX_FILE_LENGTH}"),
+        ));
+    }
+    Ok(total)
+}
+
+/// Writes a complete passive-mob aggregate into `dst`, preserving any tail
+/// beyond the returned length. Validation and capacity checks precede the
+/// first write, so failure publishes no bytes.
+pub fn encode_passive_mobs_into(save: &PassiveMobsSave, dst: &mut [u8]) -> StorageResult<usize> {
+    let sorted_indices = prepare_encode_indices(save)?;
+    let needed = passive_mobs_encoded_len(save)?;
+    if dst.len() < needed {
+        return Err(StorageError::OutputTooSmall {
+            needed,
+            available: dst.len(),
+        });
+    }
+    let count = sorted_indices.len();
+    let payload_length = count * RECORD_LENGTH;
+    const CRC_OFFSET: usize = 28;
+    {
+        let mut writer = SliceWriter::new(&mut dst[..needed]);
+        writer.bytes(&MAGIC);
+        writer.u32(ENVELOPE_VERSION);
+        writer.u32(CURRENT_SCHEMA);
+        writer.u64(save.revision);
+        writer.u32(count as u32);
+        writer.u32(payload_length as u32);
+        writer.u32(0);
+        debug_assert_eq!(writer.pos(), HEADER_LENGTH);
+    }
+    {
+        let mut writer = SliceWriter::new(&mut dst[HEADER_LENGTH..needed]);
+        for index in &sorted_indices {
+            append_record_slice(&mut writer, &save.records[*index]);
+        }
+        debug_assert_eq!(writer.pos(), payload_length);
+    }
+    let checksum = crc32c_join(&[&dst[8..CRC_OFFSET], &dst[HEADER_LENGTH..needed]]);
+    SliceWriter::new(&mut dst[..needed]).patch_u32(CRC_OFFSET, checksum);
+    Ok(needed)
+}
+
 /// Encodes a passive-mob aggregate into its canonical on-disk form.
 ///
-/// The caller's slice is never mutated: records are sorted into a copy.
+/// The caller's `records` slice is never mutated: emission order is canonical
+/// ascending ID only.
 pub fn encode(save: &PassiveMobsSave) -> StorageResult<Vec<u8>> {
+    let needed = passive_mobs_encoded_len(save)?;
+    let mut bytes = vec![0u8; needed];
+    encode_passive_mobs_into(save, &mut bytes)?;
+    Ok(bytes)
+}
+
+/// Validates count and records, then returns indices sorted by passive ID.
+fn prepare_encode_indices(save: &PassiveMobsSave) -> StorageResult<Vec<usize>> {
     if save.revision == 0 {
         return Err(corrupt("passive revision", "zero revision"));
     }
@@ -72,40 +138,24 @@ pub fn encode(save: &PassiveMobsSave) -> StorageResult<Vec<u8>> {
             format!("{} exceeds limit {MAX_PASSIVE_MOBS}", save.records.len()),
         ));
     }
-    let mut records = save.records.clone();
-    records.sort_by_key(|record| record.id);
-    for (index, record) in records.iter().enumerate() {
+    for (index, record) in save.records.iter().enumerate() {
         validate_record(record)
             .map_err(|detail| corrupt("passive record", format!("{index}: {detail}")))?;
-        if index > 0 && records[index - 1].id == record.id {
+    }
+    let mut sorted_indices: Vec<usize> = Vec::new();
+    sorted_indices
+        .try_reserve_exact(save.records.len())
+        .map_err(|_| corrupt("passive count", "index reservation failed"))?;
+    sorted_indices.extend(0..save.records.len());
+    sorted_indices.sort_by_key(|&index| save.records[index].id);
+    for index in 1..sorted_indices.len() {
+        let prev = save.records[sorted_indices[index - 1]].id;
+        let current = save.records[sorted_indices[index]].id;
+        if prev == current {
             return Err(corrupt("passive records", "duplicate passive ID"));
         }
     }
-
-    let mut encoded = ByteWriter::new();
-    encoded.bytes(&MAGIC);
-    encoded.u32(ENVELOPE_VERSION);
-    encoded.u32(CURRENT_SCHEMA);
-    encoded.u64(save.revision);
-    encoded.u32(records.len() as u32);
-    encoded.u32((records.len() * RECORD_LENGTH) as u32);
-    encoded.u32(0);
-    for record in &records {
-        append_record(&mut encoded, record);
-    }
-    // The count bound above already keeps this unreachable; it stays as the
-    // encoder-side mirror of the decoder gate so output can never exceed the
-    // documented file ceiling.
-    if encoded.len() > MAX_FILE_LENGTH {
-        return Err(corrupt(
-            "passive file length",
-            format!("{} exceeds limit {MAX_FILE_LENGTH}", encoded.len()),
-        ));
-    }
-    let mut bytes = encoded.into_vec();
-    let checksum = crc32c_join(&[&bytes[8..28], &bytes[HEADER_LENGTH..]]);
-    bytes[28..32].copy_from_slice(&checksum.to_le_bytes());
-    Ok(bytes)
+    Ok(sorted_indices)
 }
 
 /// Decodes a passive-mob aggregate. File length, count, and payload length are
@@ -234,19 +284,19 @@ fn validate_record(record: &PassiveMob) -> Result<(), String> {
     Ok(())
 }
 
-fn append_record(encoded: &mut ByteWriter, record: &PassiveMob) {
-    encoded.u64(record.id);
-    encoded.u32(record.dimension as u32);
+fn append_record_slice(writer: &mut SliceWriter<'_>, record: &PassiveMob) {
+    writer.u64(record.id);
+    writer.u32(record.dimension as u32);
     for value in record.position {
-        encoded.f32(value);
+        writer.f32(value);
     }
     for value in record.velocity {
-        encoded.f32(value);
+        writer.f32(value);
     }
-    encoded.u8(u8::from(record.on_ground));
-    encoded.f32(record.yaw);
-    encoded.u8(record.health);
-    encoded.zeroes(RESERVED_LENGTH);
+    writer.u8(u8::from(record.on_ground));
+    writer.f32(record.yaw);
+    writer.u8(record.health);
+    writer.zeroes(RESERVED_LENGTH);
 }
 
 fn decode_record(reader: &mut ByteReader<'_>) -> Result<PassiveMob, String> {

@@ -87,6 +87,13 @@ impl ByteWriter {
         Self { data: Vec::new() }
     }
 
+    /// Reuses a caller-owned allocation after the caller has validated the
+    /// complete record, avoiding a fresh logical buffer on every encode.
+    pub(crate) fn from_vec(mut data: Vec<u8>) -> Self {
+        data.clear();
+        Self { data }
+    }
+
     pub(crate) fn u8(&mut self, value: u8) {
         self.data.push(value);
     }
@@ -103,24 +110,71 @@ impl ByteWriter {
         self.data.extend_from_slice(&value.to_le_bytes());
     }
 
+    pub(crate) fn bytes(&mut self, value: &[u8]) {
+        self.data.extend_from_slice(value);
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<u8> {
+        self.data
+    }
+}
+
+/// Infallible little-endian writer into a caller-reserved prefix of `dst`.
+///
+/// Every method assumes the caller already proved `pos + write_len <= dst.len()`.
+pub(crate) struct SliceWriter<'a> {
+    dst: &'a mut [u8],
+    pos: usize,
+}
+
+impl<'a> SliceWriter<'a> {
+    pub(crate) fn new(dst: &'a mut [u8]) -> Self {
+        Self { dst, pos: 0 }
+    }
+
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
+
+    pub(crate) fn u8(&mut self, value: u8) {
+        self.dst[self.pos] = value;
+        self.pos += 1;
+    }
+
+    pub(crate) fn u16(&mut self, value: u16) {
+        self.dst[self.pos..self.pos + 2].copy_from_slice(&value.to_le_bytes());
+        self.pos += 2;
+    }
+
+    pub(crate) fn u32(&mut self, value: u32) {
+        self.dst[self.pos..self.pos + 4].copy_from_slice(&value.to_le_bytes());
+        self.pos += 4;
+    }
+
+    pub(crate) fn u64(&mut self, value: u64) {
+        self.dst[self.pos..self.pos + 8].copy_from_slice(&value.to_le_bytes());
+        self.pos += 8;
+    }
+
     pub(crate) fn f32(&mut self, value: f32) {
         self.u32(value.to_bits());
     }
 
     pub(crate) fn bytes(&mut self, value: &[u8]) {
-        self.data.extend_from_slice(value);
+        let end = self.pos + value.len();
+        self.dst[self.pos..end].copy_from_slice(value);
+        self.pos = end;
     }
 
     pub(crate) fn zeroes(&mut self, length: usize) {
-        self.data.resize(self.data.len() + length, 0);
+        let end = self.pos + length;
+        self.dst[self.pos..end].fill(0);
+        self.pos = end;
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    pub(crate) fn into_vec(self) -> Vec<u8> {
-        self.data
+    /// Rewrites one little-endian `u32` inside the prefix already written.
+    pub(crate) fn patch_u32(&mut self, at: usize, value: u32) {
+        self.dst[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
 }
 

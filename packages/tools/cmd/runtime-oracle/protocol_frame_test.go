@@ -814,8 +814,10 @@ var corpusAdmissionCategories = map[string]bool{
 // corpusStorageCategories is the frozen storage vocabulary: the Go storage
 // sentinels are normalized to these two values instead of their error prose.
 var corpusStorageCategories = map[string]bool{
-	"corrupt":        true,
-	"future-version": true,
+	"corrupt":          true,
+	"future-version":   true,
+	"future_version":   true,
+	"output_too_small": true,
 }
 
 // TestCorpusOutcomeVocabularyMatchesExecutionContract pins every committed

@@ -6,9 +6,9 @@
 //! CRC-32C covers the identity fields plus the payload, never the magic or the
 //! checksum bytes.
 
-use crate::bytes::{ByteReader, ByteWriter};
+use crate::bytes::{ByteReader, SliceWriter};
 use crate::crc32c::crc32c_join;
-use crate::error::{StorageResult, corrupt, future_version};
+use crate::error::{StorageError, StorageResult, corrupt, future_version};
 use crate::identity::PlayerId;
 use crate::items::{Inventory, ItemStack};
 
@@ -182,91 +182,243 @@ pub struct CompanionSave {
     pub queues: Vec<StoredCompanionQueue>,
 }
 
+/// Writes a complete companion aggregate into `dst`, preserving any tail beyond
+/// the returned length. Validation and capacity checks precede the first write,
+/// so failure publishes no bytes.
+pub fn encode_into(save: &CompanionSave, dst: &mut [u8]) -> StorageResult<usize> {
+    let plan = prepare_companion_encode_plan(save)?;
+    let payload_length = companion_payload_length(save, &plan)?;
+    let needed = HEADER_LENGTH
+        .checked_add(payload_length)
+        .ok_or_else(|| corrupt("companion file length", "overflow"))?;
+    if needed > MAX_FILE_LENGTH {
+        return Err(corrupt(
+            "companion file length",
+            format!("{needed} exceeds limit {MAX_FILE_LENGTH}"),
+        ));
+    }
+    if dst.len() < needed {
+        return Err(StorageError::OutputTooSmall {
+            needed,
+            available: dst.len(),
+        });
+    }
+    const CRC_OFFSET: usize = 28;
+    let count = plan.record_indices.len();
+    {
+        let mut writer = SliceWriter::new(&mut dst[..needed]);
+        writer.bytes(&MAGIC);
+        writer.u32(ENVELOPE_VERSION);
+        writer.u32(CURRENT_SCHEMA);
+        writer.u64(save.revision);
+        writer.u32(count as u32);
+        writer.u32(payload_length as u32);
+        writer.u32(0);
+        debug_assert_eq!(writer.pos(), HEADER_LENGTH);
+    }
+    {
+        let mut writer = SliceWriter::new(&mut dst[HEADER_LENGTH..needed]);
+        writer.bytes(&save.agent_namespace_id.to_bytes());
+        write_companion_payload_records(save, &plan, &mut writer);
+        debug_assert_eq!(writer.pos(), payload_length);
+    }
+    let checksum = crc32c_join(&[&dst[8..CRC_OFFSET], &dst[HEADER_LENGTH..needed]]);
+    SliceWriter::new(&mut dst[..needed]).patch_u32(CRC_OFFSET, checksum);
+    Ok(needed)
+}
+
 /// Encodes a companion aggregate into its canonical v5 on-disk form.
 pub fn encode(save: &CompanionSave) -> StorageResult<Vec<u8>> {
-    let (records, lifecycles, queues) = canonical_v5_parts(save)?;
-    let mut payload_length = Identity::default().to_bytes().len();
-    for body in &records {
-        let lifecycle = lifecycles
-            .iter()
-            .find(|candidate| candidate.id == body.id)
-            .expect("canonical lifecycles cover every record");
-        payload_length += RECORD_LENGTH + 1 + 8;
-        if !lifecycle.active {
-            payload_length += Identity::default().to_bytes().len();
-            continue;
-        }
-        payload_length += 8 + Identity::default().to_bytes().len();
-        payload_length += SUMMARY_PREFIX_LENGTH + lifecycle.summary.len();
-        if let Some(queue) = queues.iter().find(|candidate| candidate.id == body.id) {
-            if queue.has_current {
-                payload_length += task_encoded_length(&queue.current);
-            }
-            if !queue.pending.is_empty() {
-                payload_length += fifo_encoded_length(&queue.pending);
+    let needed = encoded_len(save)?;
+    let mut bytes = vec![0u8; needed];
+    encode_into(save, &mut bytes)?;
+    Ok(bytes)
+}
+
+/// Sorted emission indices produced by admission; consumed by length preflight
+/// and the caller-buffer writer in canonical ID order.
+struct CompanionEncodePlan {
+    record_indices: Vec<usize>,
+    lifecycle_indices: Vec<usize>,
+    queue_indices: Vec<usize>,
+}
+
+/// Reports the exact on-disk byte length for a valid v5 companion aggregate,
+/// including the envelope, without materializing encoded bytes.
+pub fn encoded_len(save: &CompanionSave) -> StorageResult<usize> {
+    let plan = prepare_companion_encode_plan(save)?;
+    let payload_length = companion_payload_length(save, &plan)?;
+    let total = HEADER_LENGTH
+        .checked_add(payload_length)
+        .ok_or_else(|| corrupt("companion file length", "overflow"))?;
+    if total > MAX_FILE_LENGTH {
+        return Err(corrupt(
+            "companion file length",
+            format!("{total} exceeds limit {MAX_FILE_LENGTH}"),
+        ));
+    }
+    Ok(total)
+}
+
+fn prepare_companion_encode_plan(save: &CompanionSave) -> StorageResult<CompanionEncodePlan> {
+    if save.revision == 0 {
+        return Err(corrupt("companion revision", "zero revision"));
+    }
+    if !save.agent_namespace_id.is_valid() {
+        return Err(corrupt(
+            "companion agent namespace",
+            "not a canonical UUIDv4",
+        ));
+    }
+    if save.records.len() > MAX_STORED {
+        return Err(corrupt(
+            "companion count",
+            format!("{} exceeds limit {MAX_STORED}", save.records.len()),
+        ));
+    }
+    if save.lifecycles.len() != save.records.len() {
+        return Err(corrupt(
+            "companion lifecycles",
+            "set does not match records",
+        ));
+    }
+    if save.queues.len() > MAX_ACTIVE {
+        return Err(corrupt(
+            "companion queues",
+            format!("{} exceeds limit {MAX_ACTIVE}", save.queues.len()),
+        ));
+    }
+
+    let mut record_indices: Vec<usize> = Vec::new();
+    record_indices
+        .try_reserve_exact(save.records.len())
+        .map_err(|_| corrupt("companion count", "index reservation failed"))?;
+    record_indices.extend(0..save.records.len());
+    record_indices.sort_by_key(|&index| save.records[index].id.to_bytes());
+    for (position, &index) in record_indices.iter().enumerate() {
+        validate_body(&save.records[index])
+            .map_err(|detail| corrupt("companion record", format!("{position}: {detail}")))?;
+        if position > 0 {
+            let previous = save.records[record_indices[position - 1]].id;
+            if previous == save.records[index].id {
+                return Err(corrupt("companion records", "duplicate companion ID"));
             }
         }
     }
 
-    let mut encoded = ByteWriter::new();
-    encoded.bytes(&MAGIC);
-    encoded.u32(ENVELOPE_VERSION);
-    encoded.u32(CURRENT_SCHEMA);
-    encoded.u64(save.revision);
-    encoded.u32(records.len() as u32);
-    encoded.u32(payload_length as u32);
-    encoded.u32(0);
-    encoded.bytes(&save.agent_namespace_id.to_bytes());
-    for body in &records {
-        let lifecycle = lifecycles
-            .iter()
-            .find(|candidate| candidate.id == body.id)
-            .expect("canonical lifecycles cover every record");
-        append_body(&mut encoded, body);
-        let queue = queues.iter().find(|candidate| candidate.id == body.id);
-        let mut flags = 0u8;
+    let mut lifecycle_indices: Vec<usize> = Vec::new();
+    lifecycle_indices
+        .try_reserve_exact(save.lifecycles.len())
+        .map_err(|_| corrupt("companion count", "index reservation failed"))?;
+    lifecycle_indices.extend(0..save.lifecycles.len());
+    lifecycle_indices.sort_by_key(|&index| save.lifecycles[index].id.to_bytes());
+    let mut active: Vec<PlayerId> = Vec::new();
+    for (position, &index) in lifecycle_indices.iter().enumerate() {
+        let lifecycle = &save.lifecycles[index];
+        if position > 0 {
+            let previous = save.lifecycles[lifecycle_indices[position - 1]].id;
+            if previous == lifecycle.id {
+                return Err(corrupt("companion lifecycles", "duplicate ID"));
+            }
+        }
+        if lifecycle.id != save.records[record_indices[position]].id {
+            return Err(corrupt(
+                "companion lifecycles",
+                "set does not match records",
+            ));
+        }
+        validate_v5_lifecycle(lifecycle)
+            .map_err(|detail| corrupt("companion lifecycle", format!("{position}: {detail}")))?;
         if lifecycle.active {
-            flags |= FLAG_ACTIVE;
-        }
-        if lifecycle.active && queue.is_some_and(|queue| queue.has_current) {
-            flags |= FLAG_HAS_TASK;
-        }
-        if lifecycle.active && queue.is_some_and(|queue| !queue.pending.is_empty()) {
-            flags |= FLAG_HAS_FIFO;
-        }
-        encoded.u8(flags);
-        encoded.u64(lifecycle.memory_epoch);
-        if !lifecycle.active {
-            encoded.bytes(&lifecycle.tombstone_operation_id.to_bytes());
-            continue;
-        }
-        encoded.u64(lifecycle.memory_revision);
-        encoded.bytes(&lifecycle.memory_operation_id.to_bytes());
-        encoded.u16(lifecycle.summary.len() as u16);
-        encoded.bytes(lifecycle.summary.as_bytes());
-        if flags & FLAG_HAS_TASK != 0 {
-            append_task(
-                &mut encoded,
-                &queue.expect("task flag implies a queue").current,
-            );
-        }
-        if flags & FLAG_HAS_FIFO != 0 {
-            append_fifo(
-                &mut encoded,
-                &queue.expect("FIFO flag implies a queue").pending,
-            );
+            active.push(lifecycle.id);
         }
     }
-    if encoded.len() != HEADER_LENGTH + payload_length || encoded.len() > MAX_FILE_LENGTH {
+    if active.len() > MAX_ACTIVE {
         return Err(corrupt(
-            "companion file length",
-            format!("{} exceeds limit {MAX_FILE_LENGTH}", encoded.len()),
+            "companion active count",
+            format!("{} exceeds limit {MAX_ACTIVE}", active.len()),
         ));
     }
-    let mut bytes = encoded.into_vec();
-    let checksum = crc32c_join(&[&bytes[8..28], &bytes[HEADER_LENGTH..]]);
-    bytes[28..32].copy_from_slice(&checksum.to_le_bytes());
-    Ok(bytes)
+
+    validate_queues(&save.queues, &save.records, CURRENT_SCHEMA)
+        .map_err(|detail| corrupt("companion queues", detail))?;
+
+    let mut queue_indices: Vec<usize> = Vec::new();
+    queue_indices
+        .try_reserve_exact(save.queues.len())
+        .map_err(|_| corrupt("companion queues", "index reservation failed"))?;
+    queue_indices.extend(0..save.queues.len());
+    queue_indices.sort_by_key(|&index| save.queues[index].id.to_bytes());
+    for &index in &queue_indices {
+        let queue = &save.queues[index];
+        if !queue.summary.is_empty() {
+            return Err(corrupt(
+                "companion queues",
+                "v5 queue carries legacy summary",
+            ));
+        }
+        if !active.contains(&queue.id) {
+            return Err(corrupt(
+                "companion queues",
+                "inactive companion carries task or FIFO",
+            ));
+        }
+    }
+
+    Ok(CompanionEncodePlan {
+        record_indices,
+        lifecycle_indices,
+        queue_indices,
+    })
+}
+
+fn companion_payload_length(
+    save: &CompanionSave,
+    plan: &CompanionEncodePlan,
+) -> StorageResult<usize> {
+    let namespace_bytes = save.agent_namespace_id.to_bytes().len();
+    let mut payload_length = namespace_bytes;
+    for (position, &record_index) in plan.record_indices.iter().enumerate() {
+        let body = &save.records[record_index];
+        let lifecycle = &save.lifecycles[plan.lifecycle_indices[position]];
+        let mut record_length = RECORD_LENGTH
+            .checked_add(1)
+            .and_then(|value| value.checked_add(8))
+            .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+        if !lifecycle.active {
+            record_length = record_length
+                .checked_add(Identity::default().to_bytes().len())
+                .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+        } else {
+            record_length = record_length
+                .checked_add(8)
+                .and_then(|value| value.checked_add(Identity::default().to_bytes().len()))
+                .and_then(|value| value.checked_add(SUMMARY_PREFIX_LENGTH))
+                .and_then(|value| value.checked_add(lifecycle.summary.len()))
+                .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+            let queue = plan
+                .queue_indices
+                .iter()
+                .map(|&index| &save.queues[index])
+                .find(|candidate| candidate.id == body.id);
+            if let Some(queue) = queue {
+                if queue.has_current {
+                    record_length = record_length
+                        .checked_add(task_encoded_length(&queue.current))
+                        .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+                }
+                if !queue.pending.is_empty() {
+                    record_length = record_length
+                        .checked_add(fifo_encoded_length(&queue.pending))
+                        .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+                }
+            }
+        }
+        payload_length = payload_length
+            .checked_add(record_length)
+            .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+    }
+    Ok(payload_length)
 }
 
 /// Decodes a companion aggregate, migrating v1..v4 read-only.
@@ -645,32 +797,106 @@ fn fifo_encoded_length(pending: &[String]) -> usize {
     length
 }
 
-fn append_task(encoded: &mut ByteWriter, task: &StoredCompanionTask) {
-    encoded.u16(task.command.len() as u16);
-    encoded.bytes(task.command.as_bytes());
-    encoded.u16(task.plan_steps.len() as u16);
-    for step in &task.plan_steps {
-        append_plan_step(encoded, step);
+fn write_companion_payload_records(
+    save: &CompanionSave,
+    plan: &CompanionEncodePlan,
+    writer: &mut SliceWriter<'_>,
+) {
+    for (position, &record_index) in plan.record_indices.iter().enumerate() {
+        let body = &save.records[record_index];
+        let lifecycle = &save.lifecycles[plan.lifecycle_indices[position]];
+        append_body_slice(writer, body);
+        let queue = plan
+            .queue_indices
+            .iter()
+            .map(|&index| &save.queues[index])
+            .find(|candidate| candidate.id == body.id);
+        let mut flags = 0u8;
+        if lifecycle.active {
+            flags |= FLAG_ACTIVE;
+        }
+        if lifecycle.active && queue.is_some_and(|queue| queue.has_current) {
+            flags |= FLAG_HAS_TASK;
+        }
+        if lifecycle.active && queue.is_some_and(|queue| !queue.pending.is_empty()) {
+            flags |= FLAG_HAS_FIFO;
+        }
+        writer.u8(flags);
+        writer.u64(lifecycle.memory_epoch);
+        if !lifecycle.active {
+            writer.bytes(&lifecycle.tombstone_operation_id.to_bytes());
+            continue;
+        }
+        writer.u64(lifecycle.memory_revision);
+        writer.bytes(&lifecycle.memory_operation_id.to_bytes());
+        writer.u16(lifecycle.summary.len() as u16);
+        writer.bytes(lifecycle.summary.as_bytes());
+        if flags & FLAG_HAS_TASK != 0 {
+            append_task_slice(writer, &queue.expect("task flag implies a queue").current);
+        }
+        if flags & FLAG_HAS_FIFO != 0 {
+            append_fifo_slice(writer, &queue.expect("FIFO flag implies a queue").pending);
+        }
     }
-    encoded.u32(task.step_index as u32);
-    encoded.u8(task.state);
-    encoded.u8(task.fail_reason);
-    encoded.u64(task.start_tick);
-    encoded.u64(task.deadline_ticks);
 }
 
-fn append_plan_step(encoded: &mut ByteWriter, step: &PlanStep) {
-    encoded.u8(step.kind);
+fn append_task_slice(writer: &mut SliceWriter<'_>, task: &StoredCompanionTask) {
+    writer.u16(task.command.len() as u16);
+    writer.bytes(task.command.as_bytes());
+    writer.u16(task.plan_steps.len() as u16);
+    for step in &task.plan_steps {
+        append_plan_step_slice(writer, step);
+    }
+    writer.u32(task.step_index as u32);
+    writer.u8(task.state);
+    writer.u8(task.fail_reason);
+    writer.u64(task.start_tick);
+    writer.u64(task.deadline_ticks);
+}
+
+fn append_plan_step_slice(writer: &mut SliceWriter<'_>, step: &PlanStep) {
+    writer.u8(step.kind);
     if step.kind == PLAN_STEP_FOLLOW {
-        encoded.bytes(&step.player_id.to_bytes());
+        writer.bytes(&step.player_id.to_bytes());
         return;
     }
-    encoded.u32(step.x as u32);
-    encoded.u32(step.y as u32);
-    encoded.u32(step.z as u32);
+    writer.u32(step.x as u32);
+    writer.u32(step.y as u32);
+    writer.u32(step.z as u32);
     if step.kind == PLAN_STEP_PLACE {
-        encoded.u16(step.block);
+        writer.u16(step.block);
     }
+}
+
+fn append_fifo_slice(writer: &mut SliceWriter<'_>, pending: &[String]) {
+    writer.u16(pending.len() as u16);
+    for command in pending {
+        writer.u16(command.len() as u16);
+        writer.bytes(command.as_bytes());
+    }
+}
+
+fn append_body_slice(writer: &mut SliceWriter<'_>, body: &CompanionBody) {
+    writer.bytes(&body.id.to_bytes());
+    writer.u32(body.dimension as u32);
+    for value in body.position {
+        writer.f32(value);
+    }
+    writer.f32(body.yaw);
+    writer.f32(body.pitch);
+    writer.u8(body.inventory.hotbar.selected);
+    for stack in &body.inventory.hotbar.slots {
+        append_stack_slice(writer, stack);
+    }
+    for stack in &body.inventory.backpack {
+        append_stack_slice(writer, stack);
+    }
+}
+
+fn append_stack_slice(writer: &mut SliceWriter<'_>, stack: &ItemStack) {
+    writer.u16(stack.item);
+    writer.u8(stack.count);
+    writer.u16(stack.durability);
 }
 
 fn decode_task(reader: &mut ByteReader<'_>, schema: u32) -> Result<StoredCompanionTask, String> {
@@ -791,14 +1017,6 @@ fn decode_step_coord(reader: &mut ByteReader<'_>, field: &str) -> Result<i32, St
         .map_err(|detail| format!("companion plan step {field}: {detail}"))
 }
 
-fn append_fifo(encoded: &mut ByteWriter, pending: &[String]) {
-    encoded.u16(pending.len() as u16);
-    for command in pending {
-        encoded.u16(command.len() as u16);
-        encoded.bytes(command.as_bytes());
-    }
-}
-
 fn decode_fifo(reader: &mut ByteReader<'_>) -> Result<Vec<String>, String> {
     let count = reader
         .u16()
@@ -827,29 +1045,6 @@ fn decode_fifo(reader: &mut ByteReader<'_>) -> Result<Vec<String>, String> {
         pending.push(command);
     }
     Ok(pending)
-}
-
-fn append_body(encoded: &mut ByteWriter, body: &CompanionBody) {
-    encoded.bytes(&body.id.to_bytes());
-    encoded.u32(body.dimension as u32);
-    for value in body.position {
-        encoded.f32(value);
-    }
-    encoded.f32(body.yaw);
-    encoded.f32(body.pitch);
-    encoded.u8(body.inventory.hotbar.selected);
-    for stack in &body.inventory.hotbar.slots {
-        append_stack(encoded, stack);
-    }
-    for stack in &body.inventory.backpack {
-        append_stack(encoded, stack);
-    }
-}
-
-fn append_stack(encoded: &mut ByteWriter, stack: &ItemStack) {
-    encoded.u16(stack.item);
-    encoded.u8(stack.count);
-    encoded.u16(stack.durability);
 }
 
 fn decode_body(reader: &mut ByteReader<'_>) -> Result<CompanionBody, String> {

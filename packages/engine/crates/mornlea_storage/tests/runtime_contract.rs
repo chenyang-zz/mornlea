@@ -1552,7 +1552,7 @@ fn metadata_v5_with_wrong_dimension_count_is_rejected() {
 }
 
 #[test]
-fn metadata_v6_with_invalid_difficulty_or_weather_is_rejected() {
+fn metadata_v6_rejects_invalid_difficulty_and_preserves_raw_weather() {
     for difficulty in [3u8, 255] {
         let mut payload = Vec::new();
         append_u64(&mut payload, 1);
@@ -1580,7 +1580,14 @@ fn metadata_v6_with_invalid_difficulty_or_weather_is_rejected() {
         append_u64(&mut payload, 0);
         append_u8(&mut payload, weather);
         append_u32(&mut payload, 0);
-        assert!(decode_world_metadata(&seal_metadata(METADATA_V4, payload)).is_err());
+        append_u32(&mut payload, 2);
+        append_u32(&mut payload, 0);
+        append_u32(&mut payload, 0);
+        append_u64(&mut payload, 0);
+        append_u8(&mut payload, 0);
+        let decoded = decode_world_metadata(&seal_metadata(METADATA_CURRENT_VERSION, payload))
+            .expect("raw weather bytes must decode");
+        assert_eq!(decoded.weather_kind, weather);
     }
 }
 
@@ -1594,9 +1601,6 @@ fn metadata_encode_rejects_non_current_version() {
     let mut invalid_difficulty = default_metadata();
     invalid_difficulty.difficulty = 3;
     assert!(encode_world_metadata(&invalid_difficulty).is_err());
-    let mut invalid_weather = default_metadata();
-    invalid_weather.weather_kind = 3;
-    assert!(encode_world_metadata(&invalid_weather).is_err());
 }
 
 fn default_metadata() -> Metadata {

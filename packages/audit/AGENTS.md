@@ -23,3 +23,8 @@
 ## 定点验证
 
 - 依赖边界与全部架构守卫：`go test ./packages/audit -count=1`。
+- `packages/tools/cmd/runtime-oracle` production sources stay stdlib-only; test
+  files may import `packages/server/storage/storagedef` for save error-class
+  checks. That import is whitelisted only in `dependency_test.go`
+  `oracleAllowedTestImports` and is enforced by
+  `TestRuntimeOracleInternalDependencies`.

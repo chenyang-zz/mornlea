@@ -7,7 +7,8 @@ native ABI, network transports, or storage codecs; production files have an
 empty allowed internal import set. Only `_test.go` files are permitted to import
 designated offline codec, world, companion, and storage packages
 (`shared/network/codec`, `shared/network/protocol`, `shared/core`,
-`shared/world`, `shared/companion`, `shared/pathfind`, `shared/nativeabi`, and
+`shared/world`, `shared/companion`, `shared/pathfind`, `shared/nativeabi`,
+`server/storage/storagedef`, and
 `server/storage/{chunk,player,companion,hostile,passive,region}`). Neither
 production nor test files may import `server/server`, file stores, client/render,
 or Agent process packages. These boundaries are enforced by `packages/audit`
@@ -41,8 +42,19 @@ or Agent process packages. These boundaries are enforced by `packages/audit`
   `domain.values/current/admit`, `domain.command_control/current/admit`,
   `domain.command_inventory/current/admit`, and `domain.event/1/admit`;
   `external:agent-contract` → `agent.http/v1/agent-contract` and
-  `agent.mcp/v1/agent-contract`; and `external:runtime-authority` →
-  `domain.input/45/order`.
+  `agent.mcp/v1/agent-contract`; `external:runtime-authority` →
+  `domain.input/45/order`; and `mornlea_storage` → `save.player/1/decode`,
+  `save.player/2/decode`, `save.player/3/decode`, `save.player/4/decode`,
+  `save.player/5/decode`, `save.player/6/decode`, `save.player/7/decode`,
+  `save.player/8/decode`, `save.player/9/decode`, `save.player/9/encode`,
+  `save.region/1/decode`,
+  `save.region/1/encode`, and `save.region/1/order`; `save.world-metadata/1/decode`
+  through `save.world-metadata/6/decode` plus `save.world-metadata/6/encode`; and
+  `save.hostile/1/decode`, `save.hostile/2/decode`, and `save.hostile/2/encode`; and
+  `save.passive/1/decode` and `save.passive/1/encode`; and `save.chunk/1/decode`
+  through `save.chunk/9/decode` plus `save.chunk/9/encode`; and
+  `save.companion/1/decode` through `save.companion/4/decode`, plus
+  `save.companion/5/decode` and `save.companion/5/encode`.
 - Enforcement: `TestContractInventoryReconcilesFrozenCorpus`,
   `TestContractInventoryWorkingReportsZeroCaseFamilies`,
   `TestContractInventoryCompleteRejectsZeroCaseFamilies`,
@@ -870,6 +882,7 @@ only discriminator the manifest carries.
 ```bash
 go test ./packages/tools/cmd/runtime-oracle -run TestContractInventory -count=1
 go test ./packages/tools/cmd/runtime-oracle -list TestContractInventory
+go test ./packages/tools/cmd/runtime-oracle -run '^TestStorageCorpus' -count=1
 go test ./packages/tools/cmd/runtime-oracle -run '^TestProtocolOracleFrame' -count=1
 go test ./packages/tools/cmd/runtime-oracle -run '^TestProtocolInventoryPublicationOracle' -count=1
 go test ./packages/tools/cmd/runtime-oracle -run '^TestProtocolRemotePlayersOracle' -count=1

@@ -5,6 +5,7 @@ use mornlea_storage::{
     StorageKind,
 };
 
+#[allow(dead_code)]
 pub const LAST_BLOCK_INDEX: u32 = 24 * 4096 - 1;
 
 pub fn empty_save() -> ChunkSave {

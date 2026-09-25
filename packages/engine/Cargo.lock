@@ -990,6 +990,7 @@ name = "mornlea_storage"
 version = "0.1.0"
 dependencies = [
  "mornlea_domain",
+ "serde",
  "serde_json",
  "sha2",
  "zstd",

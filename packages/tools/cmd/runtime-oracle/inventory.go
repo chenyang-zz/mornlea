@@ -16,7 +16,7 @@ import (
 
 const (
 	inventorySchemaVersion = 2
-	BaselineSourceRevision = "b6043f004176055a2e39a98508b662691c3e4ef7"
+	BaselineSourceRevision = "f75dfcf4db03eebdbf07deb5e3ff512e6c417a28"
 	MaxManifestBytes       = 4 * 1024 * 1024
 	MaxCaseJSONBytes       = 256 * 1024
 	MaxBinaryBytes         = 4 * 1024 * 1024
@@ -255,6 +255,52 @@ func BaselineConsumerRegistry() ConsumerRegistry {
 				{FamilyID: "domain.event", Version: "1", Operation: "admit"}:                   {},
 			},
 		},
+		"mornlea_storage": {
+			Kind: ConsumerRust,
+			Routes: map[ConsumerRoute]struct{}{
+				{FamilyID: "save.player", Version: "1", Operation: "decode"}:         {},
+				{FamilyID: "save.player", Version: "2", Operation: "decode"}:         {},
+				{FamilyID: "save.player", Version: "3", Operation: "decode"}:         {},
+				{FamilyID: "save.player", Version: "4", Operation: "decode"}:         {},
+				{FamilyID: "save.player", Version: "5", Operation: "decode"}:         {},
+				{FamilyID: "save.player", Version: "6", Operation: "decode"}:         {},
+				{FamilyID: "save.player", Version: "7", Operation: "decode"}:         {},
+				{FamilyID: "save.player", Version: "8", Operation: "decode"}:         {},
+				{FamilyID: "save.player", Version: "9", Operation: "decode"}:         {},
+				{FamilyID: "save.player", Version: "9", Operation: "encode"}:         {},
+				{FamilyID: "save.region", Version: "1", Operation: "decode"}:         {},
+				{FamilyID: "save.region", Version: "1", Operation: "encode"}:         {},
+				{FamilyID: "save.region", Version: "1", Operation: "order"}:          {},
+				{FamilyID: "save.world-metadata", Version: "1", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "2", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "3", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "4", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "5", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "6", Operation: "decode"}: {},
+				{FamilyID: "save.world-metadata", Version: "6", Operation: "encode"}: {},
+				{FamilyID: "save.hostile", Version: "1", Operation: "decode"}:        {},
+				{FamilyID: "save.hostile", Version: "2", Operation: "decode"}:        {},
+				{FamilyID: "save.hostile", Version: "2", Operation: "encode"}:        {},
+				{FamilyID: "save.passive", Version: "1", Operation: "decode"}:        {},
+				{FamilyID: "save.passive", Version: "1", Operation: "encode"}:        {},
+				{FamilyID: "save.chunk", Version: "1", Operation: "decode"}:          {},
+				{FamilyID: "save.chunk", Version: "2", Operation: "decode"}:          {},
+				{FamilyID: "save.chunk", Version: "3", Operation: "decode"}:          {},
+				{FamilyID: "save.chunk", Version: "4", Operation: "decode"}:          {},
+				{FamilyID: "save.chunk", Version: "5", Operation: "decode"}:          {},
+				{FamilyID: "save.chunk", Version: "6", Operation: "decode"}:          {},
+				{FamilyID: "save.chunk", Version: "7", Operation: "decode"}:          {},
+				{FamilyID: "save.chunk", Version: "8", Operation: "decode"}:          {},
+				{FamilyID: "save.chunk", Version: "9", Operation: "decode"}:          {},
+				{FamilyID: "save.chunk", Version: "9", Operation: "encode"}:          {},
+				{FamilyID: "save.companion", Version: "1", Operation: "decode"}:      {},
+				{FamilyID: "save.companion", Version: "2", Operation: "decode"}:      {},
+				{FamilyID: "save.companion", Version: "3", Operation: "decode"}:      {},
+				{FamilyID: "save.companion", Version: "4", Operation: "decode"}:      {},
+				{FamilyID: "save.companion", Version: "5", Operation: "decode"}:      {},
+				{FamilyID: "save.companion", Version: "5", Operation: "encode"}:      {},
+			},
+		},
 		"external:agent-contract": {
 			Kind: ConsumerExternalGo,
 			Routes: map[ConsumerRoute]struct{}{
@@ -316,17 +362,18 @@ type Family struct {
 
 // CaseSpec defines one executable test case in the corpus.
 type CaseSpec struct {
-	ID           string         `json:"id"`
-	Family       string         `json:"family"`
-	Version      string         `json:"version"`
-	Operation    string         `json:"operation"`
-	PacketKey    *PacketKeySpec `json:"packet_key,omitempty"`
-	Input        AssetRef       `json:"input"`
-	InputFormat  string         `json:"input_format"`
-	Expected     AssetRef       `json:"expected"`
-	Encoded      *AssetRef      `json:"encoded,omitempty"`
-	Checkpoints  []string       `json:"checkpoints"`
-	RustConsumer string         `json:"rust_consumer"`
+	ID           string          `json:"id"`
+	Family       string          `json:"family"`
+	Version      string          `json:"version"`
+	Operation    string          `json:"operation"`
+	Arguments    json.RawMessage `json:"arguments,omitempty"`
+	PacketKey    *PacketKeySpec  `json:"packet_key,omitempty"`
+	Input        AssetRef        `json:"input"`
+	InputFormat  string          `json:"input_format"`
+	Expected     AssetRef        `json:"expected"`
+	Encoded      *AssetRef       `json:"encoded,omitempty"`
+	Checkpoints  []string        `json:"checkpoints"`
+	RustConsumer string          `json:"rust_consumer"`
 }
 
 // PacketKeySpec identifies a wire packet direction, state, and ID.
@@ -675,9 +722,29 @@ func validateCaseSpecConsumer(root string, c CaseSpec, families map[string]Famil
 			return "", fmt.Errorf("invalid checkpoint %q (must be u64 decimal string)", cp)
 		}
 	}
+	if strings.HasPrefix(c.Family, "save.") {
+		if c.PacketKey != nil {
+			return "", fmt.Errorf("save case %s must not carry packet_key", c.ID)
+		}
+		if c.RustConsumer != "mornlea_storage" {
+			return "", fmt.Errorf("save case %s rust_consumer must be mornlea_storage", c.ID)
+		}
+		if c.InputFormat != "binary" {
+			return "", fmt.Errorf("save case %s input_format must be binary", c.ID)
+		}
+		if len(c.Checkpoints) != 1 || c.Checkpoints[0] != "0" {
+			return "", fmt.Errorf("save case %s checkpoints must be [\"0\"]", c.ID)
+		}
+		if err := validateStorageArguments(c.Family, c.Operation, c.Arguments); err != nil {
+			return "", fmt.Errorf("save case %s arguments: %w", c.ID, err)
+		}
+	}
 
 	// Validate input asset
 	if err := validateAsset(root, c.Input, c.InputFormat == "json", inputMaxBytes); err != nil {
+		return "", fmt.Errorf("input asset %s: %w", c.Input.Path, err)
+	}
+	if err := validateSaveCaseInputConstraints(root, c); err != nil {
 		return "", fmt.Errorf("input asset %s: %w", c.Input.Path, err)
 	}
 	// Validate expected asset (always JSON) and extract kind
@@ -689,6 +756,21 @@ func validateCaseSpecConsumer(root string, c CaseSpec, families map[string]Famil
 	if c.Encoded != nil {
 		if err := validateAsset(root, *c.Encoded, false, MaxBinaryBytes); err != nil {
 			return "", fmt.Errorf("encoded asset %s: %w", c.Encoded.Path, err)
+		}
+	}
+	if strings.HasPrefix(c.Family, "save.") {
+		switch c.Operation {
+		case "decode", "order":
+			if c.Encoded != nil {
+				return "", fmt.Errorf("save case %s operation %s must not carry encoded asset", c.ID, c.Operation)
+			}
+		case "encode":
+			if kind == "ok" && c.Encoded == nil {
+				return "", fmt.Errorf("save case %s successful encode requires encoded asset", c.ID)
+			}
+			if kind == "error" && c.Encoded != nil {
+				return "", fmt.Errorf("save case %s error encode must not carry encoded asset", c.ID)
+			}
 		}
 	}
 

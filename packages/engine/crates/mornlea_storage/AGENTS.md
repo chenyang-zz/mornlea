@@ -22,6 +22,8 @@ not depend on `mornlea_protocol`, `mornlea_engine`, `mornlea_client`, or
 
 - `ByteReader`/`ByteWriter` are the single little-endian byte layer for every
   family; fixed-width integers match the on-disk layout exactly.
+- `SliceWriter` is the caller-buffer cursor used only after a length preflight
+  proves the reserved prefix fits.
 - `crc32c`/`crc32c_join` are the Castagnoli CRC-32C used by every envelope.
   They hash header slices plus payload without materializing the
   concatenation, and are public so contract tests can reseal a mutated
@@ -49,6 +51,30 @@ the next section.
 | player identity | `src/identity.rs` | — | `PlayerId` UUIDv4 wrapper shared by the entity families |
 | item rules | `src/items.rs` | — | Wire item IDs and fixed slot counts. Ordinary stack limits and durability delegate to `mornlea_domain`; `checked_item_stack` rejects any other triple. Player armor stays a raw triple |
 
+## `save.companion` output boundary (`src/companion.rs`)
+
+- `companions_encoded_len` reports the exact v5 envelope length after the same
+  admission checks as `encode_companions`, without building encoded bytes.
+- `encode_companions_into` writes that exact length into a caller buffer and
+  preserves any tail. A short buffer returns `StorageError::OutputTooSmall`
+  without writing; invalid input reports corruption before capacity and likewise
+  leaves the entire buffer unchanged.
+
+## `save.passive` output boundary (`src/passive.rs`)
+
+- `passive_mobs_encoded_len` and `encode_passive_mobs_into` write the exact v1
+  aggregate length into a caller buffer and preserve any tail. A short buffer
+  returns `StorageError::OutputTooSmall` without writing; invalid input reports
+  corruption before capacity and likewise leaves the entire buffer unchanged.
+
+## `save.hostile` output boundary (`src/hostile.rs`)
+
+- `hostile_mobs_encoded_len` and `encode_hostile_mobs_into` write the exact v2
+  aggregate length into a caller buffer and preserve any tail. A short buffer
+  returns `StorageError::OutputTooSmall` without writing; invalid input reports
+  corruption before capacity and likewise leaves the entire buffer unchanged.
+  An absent target is encoded only when its player id is already zero.
+
 ## `save.region` output boundary (`src/region.rs`)
 
 - `RegionBank.entries` is a boxed array of exactly 1024 slots. Use
@@ -63,6 +89,22 @@ the next section.
 - The Go region codec remains the read-only format authority during migration.
   Rust decoding rejects invalid extents, reserved bytes and padding without
   repair; a zero-generation bank is standby and cannot be selected as committed.
+
+## `save.world-metadata` output boundary (`src/world_metadata.rs`)
+
+- `encode_world_metadata_into` and `world_metadata_encoded_len` write the exact
+  v6 record length into a caller buffer and preserve any tail. A short buffer
+  returns `StorageError::OutputTooSmall` without writing; invalid input reports
+  corruption before capacity and likewise leaves the entire buffer unchanged.
+  The codec preserves raw weather bytes; difficulty validation stays on the
+  wire path.
+
+## `save.player` output boundary (`src/player.rs`)
+
+- `encode_into` and `player_encoded_len` write the exact v9 record length into a
+  caller buffer and preserve any tail. A short buffer returns
+  `StorageError::OutputTooSmall` without writing; invalid input reports
+  corruption before capacity and likewise leaves the entire buffer unchanged.
 
 ## `save.chunk` compression boundary (`src/chunk.rs`)
 
@@ -99,7 +141,9 @@ the next section.
   convergence without reaching into private state, following the precedent set
   by `crc32c`. `encode`/`decode` are the whole envelope, `decode_envelope` is
   the header plus frame, `encode_logical`/`decode_logical` are the `MCGC`
-  payload, and `encode_at_schema` is the encoder at any supported schema.
+  payload, `encode_at_schema` is the encoder at any supported schema, and
+  [`ChunkCodec`] owns one reusable zstd context pair plus bounded scratch for
+  caller-buffer encode and decode.
 - `Chunk` deliberately carries no position. The Go `world.Chunk` carries its
   own `Pos`, so the Go encoder rejects a save whose chunk position disagrees
   with the requested key; here the key on `ChunkSave` is the single source of

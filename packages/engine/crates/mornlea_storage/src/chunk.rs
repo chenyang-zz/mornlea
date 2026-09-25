@@ -34,7 +34,7 @@
 //! without reaching into private state, following the precedent set by
 //! [`crate::crc32c`].
 
-use crate::bytes::{ByteReader, ByteWriter};
+use crate::bytes::{ByteReader, ByteWriter, SliceWriter};
 use crate::error::{StorageError, StorageResult, corrupt, future_version};
 use crate::items::{ITEM_COAL, ITEM_NONE, ItemStack, item_max_durability};
 use crate::region::{ChunkKey, MAX_COMPRESSED_CHUNK};
@@ -222,6 +222,199 @@ pub struct ChunkSave {
     pub chunk: Chunk,
 }
 
+/// One caller-owned chunk compression and decompression context.
+///
+/// The struct owns bounded logical and compressed scratch plus one zstd context
+/// pair reused across calls. It is not `Sync`: one context belongs to one caller,
+/// and the `&mut self` borrow serializes access without an internal lock.
+pub struct ChunkCodec {
+    compressor: zstd::bulk::Compressor<'static>,
+    decompressor: zstd::bulk::Decompressor<'static>,
+    logical_scratch: Vec<u8>,
+    compressed_scratch: Vec<u8>,
+}
+
+impl ChunkCodec {
+    /// Creates the zstd context pair and scratch buffers this codec reuses.
+    pub fn try_new() -> StorageResult<Self> {
+        let mut compressor = zstd::bulk::Compressor::new(COMPRESSION_LEVEL)
+            .map_err(|err| corrupt("create zstd compressor", err))?;
+        compressor
+            .set_parameter(zstd::zstd_safe::CParameter::ChecksumFlag(true))
+            .map_err(|err| corrupt("enable zstd checksum", err))?;
+        compressor
+            .set_parameter(zstd::zstd_safe::CParameter::ContentSizeFlag(true))
+            .map_err(|err| corrupt("enable zstd content size", err))?;
+
+        let mut decompressor = zstd::bulk::Decompressor::new()
+            .map_err(|err| corrupt("create zstd decompressor", err))?;
+        let window_log = MAX_DECODED_CHUNK.trailing_zeros();
+        decompressor
+            .set_parameter(zstd::zstd_safe::DParameter::WindowLogMax(window_log))
+            .map_err(|err| corrupt("configure zstd window", err))?;
+
+        Ok(Self {
+            compressor,
+            decompressor,
+            logical_scratch: Vec::new(),
+            compressed_scratch: Vec::new(),
+        })
+    }
+
+    /// Encodes one current-schema chunk into `dst` and returns the bytes written.
+    ///
+    /// [`chunk_logical_len`] is the sole current-value validator; the logical
+    /// payload is appended through the private already-validated writer without
+    /// calling [`validate_save`] or [`encode_logical`] again.
+    pub fn encode_into(&mut self, save: &ChunkSave, dst: &mut [u8]) -> StorageResult<usize> {
+        self.logical_scratch.clear();
+        self.compressed_scratch.clear();
+        let schema = CURRENT_SCHEMA;
+        let logical_len = match chunk_logical_len(save, schema) {
+            Ok(len) => len,
+            Err(err) => {
+                self.clear_visible_scratch();
+                return Err(err);
+            }
+        };
+        fill_logical_scratch(
+            &mut self.logical_scratch,
+            save.key,
+            save.revision,
+            &save.chunk,
+            schema,
+        );
+        debug_assert_eq!(self.logical_scratch.len(), logical_len);
+
+        if let Err(err) = self.compress_logical() {
+            self.clear_visible_scratch();
+            return Err(err);
+        }
+
+        let frame_len = self.compressed_scratch.len();
+        if frame_len > MAX_COMPRESSED_CHUNK as usize {
+            self.clear_visible_scratch();
+            return Err(corrupt(
+                "compressed chunk",
+                format!("{frame_len} exceeds limit {MAX_COMPRESSED_CHUNK}"),
+            ));
+        }
+        let total = ENVELOPE_LENGTH
+            .checked_add(frame_len)
+            .ok_or_else(|| corrupt("chunk envelope length", "overflow"))?;
+        if dst.len() < total {
+            self.clear_visible_scratch();
+            return Err(StorageError::OutputTooSmall {
+                needed: total,
+                available: dst.len(),
+            });
+        }
+
+        write_envelope(
+            &mut dst[..total],
+            schema,
+            save.key,
+            save.revision,
+            logical_len,
+            &self.compressed_scratch,
+        )?;
+        Ok(total)
+    }
+
+    /// Verifies one envelope and returns an owned chunk normalized to the current schema.
+    pub fn decode(
+        &mut self,
+        key: ChunkKey,
+        revision: u64,
+        payload: &[u8],
+    ) -> StorageResult<DecodedChunk> {
+        self.logical_scratch.clear();
+        self.compressed_scratch.clear();
+        if revision == 0 {
+            self.clear_visible_scratch();
+            return Err(corrupt("chunk revision", "zero requested revision"));
+        }
+        let envelope = match self.decode_envelope(payload) {
+            Ok(envelope) => envelope,
+            Err(err) => {
+                self.clear_visible_scratch();
+                return Err(err);
+            }
+        };
+        if envelope.key != key || envelope.revision != revision {
+            self.clear_visible_scratch();
+            return Err(corrupt(
+                "chunk envelope",
+                "key or revision does not match request",
+            ));
+        }
+        let chunk = match decode_logical(
+            envelope.key,
+            envelope.revision,
+            envelope.schema,
+            &envelope.bytes,
+        ) {
+            Ok(chunk) => chunk,
+            Err(err) => {
+                self.clear_visible_scratch();
+                return Err(err);
+            }
+        };
+        let (chunk, migrated) = match migrate(envelope.schema, chunk) {
+            Ok(pair) => pair,
+            Err(err) => {
+                self.clear_visible_scratch();
+                return Err(err);
+            }
+        };
+        if let Err(err) = validate_chunk(&chunk) {
+            self.clear_visible_scratch();
+            return Err(err);
+        }
+        Ok(DecodedChunk {
+            key: envelope.key,
+            revision: envelope.revision,
+            schema: CURRENT_SCHEMA,
+            chunk,
+            migrated,
+        })
+    }
+
+    fn decode_envelope(&mut self, payload: &[u8]) -> StorageResult<LogicalPayload> {
+        parse_and_decompress_envelope(payload, Some(&mut self.decompressor))
+    }
+
+    fn compress_logical(&mut self) -> StorageResult<()> {
+        self.compressed_scratch.clear();
+        let logical_len = self.logical_scratch.len();
+        let bound = zstd::zstd_safe::compress_bound(logical_len);
+        if bound > MAX_COMPRESSED_CHUNK as usize {
+            return Err(corrupt(
+                "compressed chunk",
+                format!("compress bound {bound} exceeds limit {MAX_COMPRESSED_CHUNK}"),
+            ));
+        }
+        self.compressor
+            .context_mut()
+            .set_pledged_src_size(Some(logical_len as u64))
+            .map_err(|err| corrupt("pledge zstd source size", err))?;
+        self.compressed_scratch
+            .try_reserve(bound)
+            .map_err(|_| corrupt("compressed scratch", "allocation failed"))?;
+        let written = self
+            .compressor
+            .compress_to_buffer(&self.logical_scratch, &mut self.compressed_scratch)
+            .map_err(|err| corrupt("compress chunk", err))?;
+        self.compressed_scratch.truncate(written);
+        Ok(())
+    }
+
+    fn clear_visible_scratch(&mut self) {
+        self.logical_scratch.clear();
+        self.compressed_scratch.clear();
+    }
+}
+
 /// A decoded chunk normalized to the current schema.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedChunk {
@@ -265,16 +458,9 @@ pub fn encode_at_schema(save: &ChunkSave, schema: u32) -> StorageResult<Vec<u8>>
             format!("unsupported schema {schema}"),
         ));
     }
-    validate_save(save, schema)?;
-    // The current-value check has already converted all 24 sections. Older
-    // layouts still need a losslessness check, but never another section pass.
+    let logical_len = chunk_logical_len(save, schema)?;
     let logical = append_logical(save.key, save.revision, &save.chunk, schema);
-    if logical.len() > MAX_DECODED_CHUNK {
-        return Err(corrupt(
-            "decoded chunk",
-            format!("{} exceeds limit {MAX_DECODED_CHUNK}", logical.len()),
-        ));
-    }
+    debug_assert_eq!(logical.len(), logical_len);
     let compressed = compress(&logical)?;
     if compressed.len() > MAX_COMPRESSED_CHUNK as usize {
         return Err(corrupt(
@@ -338,6 +524,13 @@ pub fn decode(key: ChunkKey, revision: u64, payload: &[u8]) -> StorageResult<Dec
 /// exactness can be proven byte for byte against [`encode_logical`]. Every
 /// length and version bound is checked before any allocation or decompression.
 pub fn decode_envelope(payload: &[u8]) -> StorageResult<LogicalPayload> {
+    parse_and_decompress_envelope(payload, None)
+}
+
+fn parse_and_decompress_envelope(
+    payload: &[u8],
+    decompressor: Option<&mut zstd::bulk::Decompressor<'_>>,
+) -> StorageResult<LogicalPayload> {
     let mut envelope = ByteReader::new(payload);
     let magic = envelope
         .array::<4>()
@@ -414,7 +607,7 @@ pub fn decode_envelope(payload: &[u8]) -> StorageResult<LogicalPayload> {
         .take_bytes(compressed_length)
         .map_err(|detail| corrupt("compressed bytes", detail))?;
 
-    let bytes = decompress(compressed, decoded_length)?;
+    let bytes = decompress_with(compressed, decoded_length, decompressor)?;
     if bytes.len() != decoded_length {
         return Err(corrupt(
             "decoded length",
@@ -434,6 +627,121 @@ pub fn decode_envelope(payload: &[u8]) -> StorageResult<LogicalPayload> {
 /// [`encode_at_schema`] writes the current schema; the older schemas exist so a
 /// contract test can re-serialize a decoded legacy chunk and compare it byte for
 /// byte with the logical bytes its fixture carried.
+/// Reports the exact `MCGC` logical payload length for a current [`ChunkSave`]
+/// at `schema`, after one aggregate and representability check.
+///
+/// Direct [`encode_logical`] keeps separate raw admission for historical tool
+/// drops; this preflight is for current-value envelope encoding only.
+pub fn chunk_logical_len(save: &ChunkSave, schema: u32) -> StorageResult<usize> {
+    if !(OLDEST_SCHEMA..=CURRENT_SCHEMA).contains(&schema) {
+        return Err(corrupt(
+            "chunk schema",
+            format!("unsupported schema {schema}"),
+        ));
+    }
+    validate_save(save, schema)?;
+    logical_payload_len(&save.chunk, schema)
+}
+
+/// Wire length of one logical payload after validation; no dense block expansion.
+fn logical_payload_len(chunk: &Chunk, schema: u32) -> StorageResult<usize> {
+    let mut total = LOGICAL_HEADER_LEN;
+    for (index, section) in chunk.sections.iter().enumerate() {
+        total = total
+            .checked_add(section_wire_len(section)?)
+            .ok_or_else(|| corrupt("logical payload length", "overflow"))?;
+        if total > MAX_DECODED_CHUNK {
+            return Err(corrupt(
+                "decoded chunk",
+                format!("{total} exceeds limit {MAX_DECODED_CHUNK} at section {index}"),
+            ));
+        }
+    }
+    if schema >= 2 {
+        let drop_bytes = if schema >= 5 {
+            DROP_SLOT_WITH_DURABILITY_LEN
+        } else {
+            DROP_SLOT_LEGACY_LEN
+        };
+        total = total
+            .checked_add(
+                DROPS_PER_CHUNK
+                    .checked_mul(drop_bytes)
+                    .ok_or_else(|| corrupt("logical payload length", "overflow"))?,
+            )
+            .ok_or_else(|| corrupt("logical payload length", "overflow"))?;
+        if total > MAX_DECODED_CHUNK {
+            return Err(corrupt(
+                "decoded chunk",
+                format!("{total} exceeds limit {MAX_DECODED_CHUNK} after drops"),
+            ));
+        }
+    }
+    if schema >= 4 {
+        total = total
+            .checked_add(
+                FURNACES_PER_CHUNK
+                    .checked_mul(FURNACE_SLOT_LEN)
+                    .ok_or_else(|| corrupt("logical payload length", "overflow"))?,
+            )
+            .ok_or_else(|| corrupt("logical payload length", "overflow"))?;
+        if total > MAX_DECODED_CHUNK {
+            return Err(corrupt(
+                "decoded chunk",
+                format!("{total} exceeds limit {MAX_DECODED_CHUNK} after furnaces"),
+            ));
+        }
+    }
+    if schema >= 6 {
+        total = total
+            .checked_add(
+                CHESTS_PER_CHUNK
+                    .checked_mul(CHEST_SLOT_LEN)
+                    .ok_or_else(|| corrupt("logical payload length", "overflow"))?,
+            )
+            .ok_or_else(|| corrupt("logical payload length", "overflow"))?;
+        if total > MAX_DECODED_CHUNK {
+            return Err(corrupt(
+                "decoded chunk",
+                format!("{total} exceeds limit {MAX_DECODED_CHUNK} after chests"),
+            ));
+        }
+    }
+    Ok(total)
+}
+
+/// `MCGC` header: magic, schema, key, revision, and section count.
+const LOGICAL_HEADER_LEN: usize = 32;
+const DROP_SLOT_LEGACY_LEN: usize = 17;
+const DROP_SLOT_WITH_DURABILITY_LEN: usize = 19;
+const FURNACE_SLOT_LEN: usize = 21;
+const CHEST_SLOT_LEN: usize = 144;
+
+/// Fixed-prefix section record plus palette and packed payload sizes.
+fn section_wire_len(section: &ContainerSnapshot) -> StorageResult<usize> {
+    let palette_bytes = section
+        .palette
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| corrupt("section wire length", "overflow"))?;
+    let packed_bytes = section
+        .packed
+        .len()
+        .checked_mul(8)
+        .ok_or_else(|| corrupt("section wire length", "overflow"))?;
+    let base = 16usize;
+    base.checked_add(palette_bytes)
+        .and_then(|n| n.checked_add(packed_bytes))
+        .ok_or_else(|| corrupt("section wire length", "overflow"))
+}
+
+/// Hidden wire sum without validation; contract tests use this to prove the
+/// decoded cap and checked arithmetic on impossible shapes.
+#[doc(hidden)]
+pub fn chunk_logical_wire_len_for_test(chunk: &Chunk, schema: u32) -> StorageResult<usize> {
+    logical_payload_len(chunk, schema)
+}
+
 pub fn encode_logical(
     key: ChunkKey,
     revision: u64,
@@ -464,6 +772,29 @@ pub fn encode_logical(
 /// Appends only after the caller has admitted both values and schema fidelity.
 fn append_logical(key: ChunkKey, revision: u64, chunk: &Chunk, schema: u32) -> Vec<u8> {
     let mut logical = ByteWriter::new();
+    write_logical_payload(&mut logical, key, revision, chunk, schema);
+    logical.into_vec()
+}
+
+fn fill_logical_scratch(
+    scratch: &mut Vec<u8>,
+    key: ChunkKey,
+    revision: u64,
+    chunk: &Chunk,
+    schema: u32,
+) {
+    let mut logical = ByteWriter::from_vec(std::mem::take(scratch));
+    write_logical_payload(&mut logical, key, revision, chunk, schema);
+    *scratch = logical.into_vec();
+}
+
+fn write_logical_payload(
+    logical: &mut ByteWriter,
+    key: ChunkKey,
+    revision: u64,
+    chunk: &Chunk,
+    schema: u32,
+) {
     logical.bytes(&LOGICAL_MAGIC);
     logical.u32(schema);
     logical.u32(key.dimension as u32);
@@ -472,27 +803,47 @@ fn append_logical(key: ChunkKey, revision: u64, chunk: &Chunk, schema: u32) -> V
     logical.u64(revision);
     logical.u32(SECTIONS_PER_CHUNK as u32);
     for (index, section) in chunk.sections.iter().enumerate() {
-        append_section(&mut logical, index as u32, section);
+        append_section(logical, index as u32, section);
     }
-    // Drop slots appear from schema 2 and carry item durability from schema 5.
     if schema >= 2 {
         for drop in &chunk.drops {
-            append_drop_slot(&mut logical, drop, schema >= 5);
+            append_drop_slot(logical, drop, schema >= 5);
         }
     }
-    // Furnace slots appear from schema 4.
     if schema >= 4 {
         for furnace in &chunk.furnaces {
-            append_furnace_slot(&mut logical, furnace);
+            append_furnace_slot(logical, furnace);
         }
     }
-    // Chest slots appear from schema 6.
     if schema >= 6 {
         for chest in &chunk.chests {
-            append_chest_slot(&mut logical, chest);
+            append_chest_slot(logical, chest);
         }
     }
-    logical.into_vec()
+}
+
+fn write_envelope(
+    dst: &mut [u8],
+    schema: u32,
+    key: ChunkKey,
+    revision: u64,
+    logical_len: usize,
+    compressed: &[u8],
+) -> StorageResult<()> {
+    let mut writer = SliceWriter::new(dst);
+    writer.bytes(&ENVELOPE_MAGIC);
+    writer.u32(ENVELOPE_VERSION);
+    writer.u32(schema);
+    writer.u32(key.dimension as u32);
+    writer.u32(key.x as u32);
+    writer.u32(key.z as u32);
+    writer.u64(revision);
+    writer.u32(COMPRESSION_ZSTD);
+    writer.u32(logical_len as u32);
+    writer.u32(compressed.len() as u32);
+    writer.bytes(compressed);
+    debug_assert_eq!(writer.pos(), ENVELOPE_LENGTH + compressed.len());
+    Ok(())
 }
 
 /// Parses one `MCGC` logical payload at `schema` without migrating it.
@@ -1327,11 +1678,19 @@ fn compress(logical: &[u8]) -> StorageResult<Vec<u8>> {
 /// Decompresses one zstd frame into a destination of exactly `decoded_length`
 /// bytes, matching the Go `DecodeAll` call. The frame's own content checksum is
 /// verified, so a truncated or altered frame is rejected here.
-fn decompress(compressed: &[u8], decoded_length: usize) -> StorageResult<Vec<u8>> {
-    zstd::bulk::decompress(compressed, decoded_length)
-        .map_err(|err| corrupt("decompress chunk", err))
+fn decompress_with(
+    compressed: &[u8],
+    decoded_length: usize,
+    decompressor: Option<&mut zstd::bulk::Decompressor<'_>>,
+) -> StorageResult<Vec<u8>> {
+    match decompressor {
+        Some(context) => context
+            .decompress(compressed, decoded_length)
+            .map_err(|err| corrupt("decompress chunk", err)),
+        None => zstd::bulk::decompress(compressed, decoded_length)
+            .map_err(|err| corrupt("decompress chunk", err)),
+    }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,6 +1790,30 @@ mod tests {
         assert_eq!(decoded.chunk, save.chunk);
         assert_eq!(decoded.schema, CURRENT_SCHEMA);
         assert!(!decoded.migrated);
+    }
+
+    #[test]
+    fn reusable_codec_keeps_logical_scratch_allocation() {
+        let save = ChunkSave {
+            key: ChunkKey {
+                dimension: OVERWORLD,
+                x: 1,
+                z: 2,
+            },
+            revision: 1,
+            chunk: air_chunk(),
+        };
+        let mut codec = ChunkCodec::try_new().expect("create codec");
+        let mut output = [0u8; 4096];
+        codec.encode_into(&save, &mut output).expect("first encode");
+        let original = codec.logical_scratch.as_ptr();
+        let capacity = codec.logical_scratch.capacity();
+        assert!(capacity > 0);
+        codec
+            .encode_into(&save, &mut output)
+            .expect("second encode");
+        assert_eq!(codec.logical_scratch.as_ptr(), original);
+        assert_eq!(codec.logical_scratch.capacity(), capacity);
     }
 
     #[test]

@@ -1,0 +1,6 @@
+{
+  "kind": "error",
+  "category": "output_too_small",
+  "needed": 28672,
+  "available": 28671
+}

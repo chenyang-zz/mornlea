@@ -59,6 +59,15 @@ var validProducerIDs = map[string]bool{
 	"runtime-oracle/domain-event-objects":           true,
 	"runtime-oracle/domain-event-chat":              true,
 	"runtime-oracle/domain-event-manifest":          true,
+	"runtime-oracle/storage-player":                 true,
+	"runtime-oracle/storage-chunk":                  true,
+	"runtime-oracle/storage-region":                 true,
+	"runtime-oracle/storage-world-metadata":         true,
+	"runtime-oracle/storage-hostile":                true,
+	"runtime-oracle/storage-passive":                true,
+	"runtime-oracle/storage-companion":              true,
+	"storage/metadata":                              true,
+	"chunk/migration":                               true,
 	"companion/agent-contract":                      true,
 }
 

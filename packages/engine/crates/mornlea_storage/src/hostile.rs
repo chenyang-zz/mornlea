@@ -5,9 +5,9 @@
 //! v1 file is read in as a nightcrawler and stays byte-identical until the
 //! next normal save rewrites it as v2.
 
-use crate::bytes::{ByteReader, ByteWriter};
+use crate::bytes::{ByteReader, SliceWriter};
 use crate::crc32c::crc32c_join;
-use crate::error::{StorageResult, corrupt, future_version};
+use crate::error::{StorageError, StorageResult, corrupt, future_version};
 use crate::identity::PlayerId;
 
 /// Maximum number of records one hostile-mob save may hold.
@@ -75,10 +75,76 @@ pub struct HostileMobsSave {
     pub records: Vec<HostileMob>,
 }
 
+/// Reports the exact on-disk byte length for a valid hostile-mob aggregate.
+pub fn hostile_mobs_encoded_len(save: &HostileMobsSave) -> StorageResult<usize> {
+    let sorted_indices = prepare_encode_indices(save)?;
+    let count = sorted_indices.len();
+    let payload_length = count
+        .checked_mul(RECORD_LENGTH)
+        .ok_or_else(|| corrupt("hostile payload length", "overflow"))?;
+    let total = HEADER_LENGTH
+        .checked_add(payload_length)
+        .ok_or_else(|| corrupt("hostile file length", "overflow"))?;
+    if total > MAX_FILE_LENGTH {
+        return Err(corrupt(
+            "hostile file length",
+            format!("{total} exceeds limit {MAX_FILE_LENGTH}"),
+        ));
+    }
+    Ok(total)
+}
+
+/// Writes a complete hostile-mob aggregate into `dst`, preserving any tail
+/// beyond the returned length. Validation and capacity checks precede the
+/// first write, so failure publishes no bytes.
+pub fn encode_hostile_mobs_into(save: &HostileMobsSave, dst: &mut [u8]) -> StorageResult<usize> {
+    let sorted_indices = prepare_encode_indices(save)?;
+    let needed = hostile_mobs_encoded_len(save)?;
+    if dst.len() < needed {
+        return Err(StorageError::OutputTooSmall {
+            needed,
+            available: dst.len(),
+        });
+    }
+    let count = sorted_indices.len();
+    let payload_length = count * RECORD_LENGTH;
+    const CRC_OFFSET: usize = 28;
+    {
+        let mut writer = SliceWriter::new(&mut dst[..needed]);
+        writer.bytes(&MAGIC);
+        writer.u32(ENVELOPE_VERSION);
+        writer.u32(CURRENT_SCHEMA);
+        writer.u64(save.revision);
+        writer.u32(count as u32);
+        writer.u32(payload_length as u32);
+        writer.u32(0);
+        debug_assert_eq!(writer.pos(), HEADER_LENGTH);
+    }
+    {
+        let mut writer = SliceWriter::new(&mut dst[HEADER_LENGTH..needed]);
+        for index in &sorted_indices {
+            append_record_slice(&mut writer, &save.records[*index]);
+        }
+        debug_assert_eq!(writer.pos(), payload_length);
+    }
+    let checksum = crc32c_join(&[&dst[8..CRC_OFFSET], &dst[HEADER_LENGTH..needed]]);
+    dst[CRC_OFFSET..CRC_OFFSET + 4].copy_from_slice(&checksum.to_le_bytes());
+    Ok(needed)
+}
+
 /// Encodes a hostile-mob aggregate into its canonical v2 on-disk form.
 ///
-/// The caller's slice is never mutated: records are sorted into a copy.
+/// The caller's `records` slice is never mutated: emission order is canonical
+/// ascending ID only.
 pub fn encode(save: &HostileMobsSave) -> StorageResult<Vec<u8>> {
+    let needed = hostile_mobs_encoded_len(save)?;
+    let mut bytes = vec![0u8; needed];
+    encode_hostile_mobs_into(save, &mut bytes)?;
+    Ok(bytes)
+}
+
+/// Validates count and records, then returns indices sorted by hostile ID.
+fn prepare_encode_indices(save: &HostileMobsSave) -> StorageResult<Vec<usize>> {
     if save.revision == 0 {
         return Err(corrupt("hostile revision", "zero revision"));
     }
@@ -88,40 +154,24 @@ pub fn encode(save: &HostileMobsSave) -> StorageResult<Vec<u8>> {
             format!("{} exceeds limit {MAX_HOSTILE_MOBS}", save.records.len()),
         ));
     }
-    let mut records = save.records.clone();
-    records.sort_by_key(|record| record.id);
-    for (index, record) in records.iter().enumerate() {
-        validate_record(record)
+    for (index, record) in save.records.iter().enumerate() {
+        validate_record_for_encode(record)
             .map_err(|detail| corrupt("hostile record", format!("{index}: {detail}")))?;
-        if index > 0 && records[index - 1].id == record.id {
+    }
+    let mut sorted_indices: Vec<usize> = Vec::new();
+    sorted_indices
+        .try_reserve_exact(save.records.len())
+        .map_err(|_| corrupt("hostile count", "index reservation failed"))?;
+    sorted_indices.extend(0..save.records.len());
+    sorted_indices.sort_by_key(|&index| save.records[index].id);
+    for index in 1..sorted_indices.len() {
+        let prev = save.records[sorted_indices[index - 1]].id;
+        let current = save.records[sorted_indices[index]].id;
+        if prev == current {
             return Err(corrupt("hostile records", "duplicate hostile ID"));
         }
     }
-
-    let mut encoded = ByteWriter::new();
-    encoded.bytes(&MAGIC);
-    encoded.u32(ENVELOPE_VERSION);
-    encoded.u32(CURRENT_SCHEMA);
-    encoded.u64(save.revision);
-    encoded.u32(records.len() as u32);
-    encoded.u32((records.len() * RECORD_LENGTH) as u32);
-    encoded.u32(0);
-    for record in &records {
-        append_record(&mut encoded, record);
-    }
-    // The count bound above already keeps this unreachable; it stays as the
-    // encoder-side mirror of the decoder gate so output can never exceed the
-    // documented file ceiling.
-    if encoded.len() > MAX_FILE_LENGTH {
-        return Err(corrupt(
-            "hostile file length",
-            format!("{} exceeds limit {MAX_FILE_LENGTH}", encoded.len()),
-        ));
-    }
-    let mut bytes = encoded.into_vec();
-    let checksum = crc32c_join(&[&bytes[8..28], &bytes[HEADER_LENGTH..]]);
-    bytes[28..32].copy_from_slice(&checksum.to_le_bytes());
-    Ok(bytes)
+    Ok(sorted_indices)
 }
 
 /// Decodes a hostile-mob aggregate. File length, count, and payload length are
@@ -216,7 +266,15 @@ pub fn decode(data: &[u8]) -> StorageResult<HostileMobs> {
     Ok(HostileMobs { revision, records })
 }
 
+fn validate_record_for_encode(record: &HostileMob) -> Result<(), String> {
+    validate_record_fields(record)
+}
+
 fn validate_record(record: &HostileMob) -> Result<(), String> {
+    validate_record_fields(record)
+}
+
+fn validate_record_fields(record: &HostileMob) -> Result<(), String> {
     if record.id == 0 {
         return Err("zero hostile ID".to_owned());
     }
@@ -286,26 +344,26 @@ fn validate_record(record: &HostileMob) -> Result<(), String> {
     Ok(())
 }
 
-fn append_record(encoded: &mut ByteWriter, record: &HostileMob) {
-    encoded.u64(record.id);
-    encoded.u32(record.dimension as u32);
+fn append_record_slice(writer: &mut SliceWriter<'_>, record: &HostileMob) {
+    writer.u64(record.id);
+    writer.u32(record.dimension as u32);
     for value in record.position {
-        encoded.f32(value);
+        writer.f32(value);
     }
     for value in record.velocity {
-        encoded.f32(value);
+        writer.f32(value);
     }
-    encoded.u8(u8::from(record.on_ground));
-    encoded.f32(record.yaw);
-    encoded.u8(record.health);
-    encoded.u8(record.attack_cooldown);
-    encoded.u8(record.hurt_cooldown);
-    encoded.u8(record.burn_cooldown);
-    encoded.u8(u8::from(record.has_target));
-    encoded.bytes(&record.player_id.to_bytes());
-    encoded.u64(record.next_repath_ticks);
-    encoded.u16(record.distant_ticks);
-    encoded.u8(record.kind);
+    writer.u8(u8::from(record.on_ground));
+    writer.f32(record.yaw);
+    writer.u8(record.health);
+    writer.u8(record.attack_cooldown);
+    writer.u8(record.hurt_cooldown);
+    writer.u8(record.burn_cooldown);
+    writer.u8(u8::from(record.has_target));
+    writer.bytes(&record.player_id.to_bytes());
+    writer.u64(record.next_repath_ticks);
+    writer.u16(record.distant_ticks);
+    writer.u8(record.kind);
 }
 
 fn decode_record(reader: &mut ByteReader<'_>, schema: u32) -> Result<HostileMob, String> {
