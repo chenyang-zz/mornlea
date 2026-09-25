@@ -202,3 +202,23 @@
 - Ruling: the controller is the refresh authority for this derived artifact. Whenever a tracked hashed source changes, the affected `sources[].sha256` entries are refreshed in the same commit, following the archived storage/protocol pattern ("per-family commits keep the existing equal source-revision fields and update exact `Family.Sources` hashes"). `source_revision` stays `f75dfcf4db03eebdbf07deb5e3ff512e6c417a28`; cases and corpus assets remain exclusive to the closure node.
 - `9f7e3801` applies rustfmt and gofmt (required by the closure gates, previously red on 38 files and 2 Go producers) and refreshes the four drifted source hashes. `go test ./packages/tools/cmd/runtime-oracle -count=1` is green again.
 - Consequence for remaining nodes: any node whose editable set includes `src/collision.rs`, `src/step.rs`, `src/raycast.rs`, `src/worldgen.rs`, `src/fluid_eval.rs`, `src/fluid_rescan.rs`, `src/lod.rs`, `src/greedy/mod.rs` or `packages/engine/include/mornlea_engine.h` must land the matching hash refresh, and the package-wide runtime-oracle run is part of that node's evidence rather than only the filtered kernel test.
+
+## 2026-09-25 — Node 2.6 runtime tree provider
+
+- Predecessor SHA: `0ca11ac5`
+- Result SHA: `f6d7ee0e`
+- Implementation summary:
+  - `src/native/tree.rs` implements `NativeTree` for `TreeOp`, admitting roots exactly as the legacy ABI does (X/Z ±2 must be representable, root Y in `-64..=311`, all seeds accepted) before any geometry read, evaluating through the read-only `worldgen::visit_tree_blocks` seam into a fixed 128-record local stage, and returning `TreeBlocks::from_parts` on success or `KernelError::OutputInvariant` when the visitor reports an overflow — never truncating or returning a partial tree.
+  - `src/native/mod.rs` widens the `tree` module to `pub` so integration tests can name the provider.
+  - `tests/native_contract/tree_blocks.rs` covers root Y and X/Z edges on both sides, strict `(dy, dz, dx)` ordering with offset and block-id domains, seed-selected trunk heights 5/6/7 and the fluffy crown, record-count bounds across 32 seeds and 5 roots, and the shared constructor's oversize-length rejection.
+  - `tests/numerical_migration/tree_blocks.rs` pins ordered `(dx, dy, dz, block)` literal sequences for the height 5/6/7 and fluffy-crown families, matching the Go observations record for record, plus determinism and seed divergence.
+  - `packages/tools/cmd/runtime-oracle/kernel_tree_blocks_test.go` freezes ordered geometry observations for seeds 0/1 at both root-Y bounds and both representable horizontal extremes, and exercises recovered failures with canary-protected untouched output.
+- Verification:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked tree_blocks`: passed (6 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test numerical_migration --locked tree_blocks`: passed (6 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --lib --locked tree_blocks`: passed (8 tests passed).
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelTreeBlocks' -count=1`: passed.
+  - `go test ./packages/tools/cmd/runtime-oracle -count=1`: passed (source-hash reconciliation intact).
+  - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`, `cargo fmt --all --check`, `gofmt -l ./packages`: all clean.
+- Review: Task Reviewer subagent approved after the controller ruled on one plan-mandated deviation: the dispatch brief listed "long output" as a recovered failure, but the frozen tree ABI is at-least-capacity (`src/ffi.rs` rejects only `output_len < needed`), so a larger buffer correctly succeeds with an untouched suffix. The brief was pattern-matched from the chunk/probe exact-length semantics and is amended here; the implementation stands. Two minor findings deferred to the final whole-branch review (no negative or extreme seed pins the no-seed-validation rule; ~250 lines of record literals duplicated across the Go and Rust pins).
+- Rollback: Revert `f6d7ee0e`.
