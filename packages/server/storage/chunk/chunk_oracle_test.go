@@ -27,6 +27,7 @@ const (
 	chunkProducerTestRel      = "packages/server/storage/chunk/chunk_oracle_test.go"
 	chunkCodecSourceRel       = "packages/server/storage/chunk/chunk_codec.go"
 	chunkPinnedExportDir      = "/tmp/runtime-oracle-chunk-4.3a"
+	chunkPinnedExportDirLate  = "/tmp/runtime-oracle-chunk-4.3b-late"
 	chunkSelectionManifest    = "selection.json"
 	chunkRustConsumer         = "mornlea_storage"
 	chunkRuntimeOracleExportDirEnv = "RUNTIME_ORACLE_EXPORT_DIR"
@@ -455,6 +456,37 @@ func chunkRoutes() []chunkConsumerRoute {
 	return routes
 }
 
+func chunkLateRoutes() []chunkConsumerRoute {
+	routes := chunkRoutes()
+	for version := 9; version >= 5; version-- {
+		routes = append(routes, chunkConsumerRoute{
+			FamilyID: chunkFamily, Version: strconv.Itoa(version), Operation: "decode",
+		})
+	}
+	return routes
+}
+
+func chunkLateCandidates(t *testing.T) []chunkCandidate {
+	t.Helper()
+	v5 := chunkReadFixture(t, "chunk-v5.bin")
+	v6 := chunkReadFixture(t, "chunk-v6.bin")
+	v7 := chunkReadFixture(t, "chunk-v7.bin")
+	v8 := chunkReadFixture(t, "chunk-v8.bin")
+	v9 := chunkReadFixture(t, "chunk-v9.bin")
+	return []chunkCandidate{
+		chunkBuildCandidate(t, chunkFamily+"/5/decode/v5-fixture", "5", v5),
+		chunkBuildCandidate(t, chunkFamily+"/5/decode/corrupt-crc", "5", chunkCorruptCompressedWire(v5)),
+		chunkBuildCandidate(t, chunkFamily+"/6/decode/v6-fixture", "6", v6),
+		chunkBuildCandidate(t, chunkFamily+"/6/decode/truncated-payload", "6", chunkTruncatedWire(v6, 1)),
+		chunkBuildCandidate(t, chunkFamily+"/7/decode/v7-fixture", "7", v7),
+		chunkBuildCandidate(t, chunkFamily+"/7/decode/invalid-version-zero", "7", chunkWireWithSchema(v7, 0)),
+		chunkBuildCandidate(t, chunkFamily+"/8/decode/v8-fixture", "8", v8),
+		chunkBuildCandidate(t, chunkFamily+"/8/decode/invalid-version-future", "8", chunkWireWithSchema(v8, 10)),
+		chunkBuildCandidate(t, chunkFamily+"/9/decode/v9-fixture", "9", v9),
+		chunkBuildCandidate(t, chunkFamily+"/9/decode/truncated-payload", "9", chunkTruncatedWire(v9, 1)),
+	}
+}
+
 func chunkEarlyCandidates(t *testing.T) []chunkCandidate {
 	t.Helper()
 	v1 := chunkReadFixture(t, "chunk-v1.bin")
@@ -473,7 +505,7 @@ func chunkEarlyCandidates(t *testing.T) []chunkCandidate {
 	}
 }
 
-func buildChunkOracleSelection(t *testing.T, root string, candidates []chunkCandidate) chunkSelection {
+func buildChunkOracleSelection(t *testing.T, root string, candidates []chunkCandidate, routes []chunkConsumerRoute) chunkSelection {
 	t.Helper()
 	cases := make([]chunkCaseSpec, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -493,16 +525,16 @@ func buildChunkOracleSelection(t *testing.T, root string, candidates []chunkCand
 		ProducerID: chunkProducerID,
 		Cases:      cases,
 		Sources:    sources,
-		Routes:     chunkRoutes(),
+		Routes:     routes,
 	}
 }
 
-func chunkExportSelection(t *testing.T, root string, candidates []chunkCandidate) string {
+func chunkExportSelection(t *testing.T, root string, candidates []chunkCandidate, routes []chunkConsumerRoute) string {
 	t.Helper()
 	if strings.TrimSpace(os.Getenv(chunkRuntimeOracleExportDirEnv)) == "" {
 		return ""
 	}
-	selection := buildChunkOracleSelection(t, root, candidates)
+	selection := buildChunkOracleSelection(t, root, candidates, routes)
 	manifestBytes, err := json.Marshal(selection)
 	if err != nil {
 		t.Fatalf("marshal selection: %v", err)
@@ -1025,7 +1057,7 @@ func TestChunkMigrationOracleEarly(t *testing.T) {
 	if chunkValueSHA256(chunkDecodedValueTree(staleDrop)) == okCase.Expect.ValueSHA256 {
 		t.Fatal("drop slot mutation did not change digest")
 	}
-	if chunkExportSelection(t, root, candidates) != "" {
+	if chunkExportSelection(t, root, candidates, chunkRoutes()) != "" {
 		t.Fatal("export must not run when env unset")
 	}
 	contained := filepath.Join(root, "chunk-export-probe")
@@ -1036,7 +1068,7 @@ func TestChunkMigrationOracleEarly(t *testing.T) {
 	}
 	handoffRoot := filepath.Join(t.TempDir(), "chunk-oracle-export")
 	t.Setenv(chunkRuntimeOracleExportDirEnv, handoffRoot)
-	child := chunkExportSelection(t, root, candidates)
+	child := chunkExportSelection(t, root, candidates, chunkRoutes())
 	if child == "" {
 		t.Fatal("pinned export directory did not publish a candidate")
 	}
@@ -1054,5 +1086,116 @@ func TestChunkMigrationOracleEarly(t *testing.T) {
 				t.Fatalf("exported asset %s bytes differ", relative)
 			}
 		}
+	}
+}
+
+func TestChunkMigrationOracleLate(t *testing.T) {
+	t.Setenv(chunkRuntimeOracleExportDirEnv, "")
+	root := chunkRepoRoot(t)
+	candidates := chunkLateCandidates(t)
+	key := chunkFixtureKey()
+	for _, candidate := range candidates {
+		input := candidate.Assets[candidate.Spec.Input.Path]
+		got, err := chunkRunDecode(candidate.Spec, input)
+		if err != nil {
+			t.Fatalf("decode %s: %v", candidate.Spec.ID, err)
+		}
+		if !chunkOutcomesEqual(got, candidate.Expect) {
+			t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
+		}
+	}
+	v5, err := Decode(key, chunkFixtureRevision, chunkReadFixture(t, "chunk-v5.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFurnace := furnaceFixtureChunk(t, key.Pos)
+	if v5.Chunk.Hash() != wantFurnace.Hash() || v5.Chunk.DropsHash() != wantFurnace.DropsHash() {
+		t.Fatal("v5 fixture blocks or drops mismatch")
+	}
+	for slot := range core.FurnacesPerChunk {
+		if v5.Chunk.Furnace(slot) != wantFurnace.Furnace(slot) {
+			t.Fatalf("v5 fixture furnace slot %d mismatch", slot)
+		}
+	}
+	empty := world.NewChunk(key.Pos)
+	for slot := range core.ChestsPerChunk {
+		if v5.Chunk.Chest(slot) != empty.Chest(slot) {
+			t.Fatalf("v5 fixture chest slot %d must stay empty", slot)
+		}
+	}
+	wantDrops := dropFixtureChunk(t, key.Pos)
+	for slot := range core.DropsPerChunk {
+		gotDrop := v5.Chunk.Drop(slot)
+		wantDrop := wantDrops.Drop(slot)
+		if gotDrop != wantDrop {
+			t.Fatalf("v5 fixture drop slot %d = %+v, want %+v", slot, gotDrop, wantDrop)
+		}
+	}
+	v6, err := Decode(key, chunkFixtureRevision, chunkReadFixture(t, "chunk-v6.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantChest := chestFixtureChunk(t, key.Pos)
+	if v6.Chunk.Hash() != wantChest.Hash() || v6.Chunk.DropsHash() != wantChest.DropsHash() {
+		t.Fatal("v6 fixture blocks or drops mismatch")
+	}
+	for slot := range core.FurnacesPerChunk {
+		if v6.Chunk.Furnace(slot) != wantChest.Furnace(slot) {
+			t.Fatalf("v6 fixture furnace slot %d mismatch", slot)
+		}
+	}
+	for slot := range core.ChestsPerChunk {
+		if v6.Chunk.Chest(slot) != wantChest.Chest(slot) {
+			t.Fatalf("v6 fixture chest slot %d = %+v, want %+v", slot, v6.Chunk.Chest(slot), wantChest.Chest(slot))
+		}
+	}
+	v8, err := Decode(key, chunkFixtureRevision, chunkReadFixture(t, "chunk-v8.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countFluidCells(v8.Chunk) != 0 {
+		t.Fatal("v8 fixture must not inject synthetic water")
+	}
+	if v8.Chunk.Hash() != wantChest.Hash() {
+		t.Fatal("v8 fixture block registry mismatch")
+	}
+	v9, err := Decode(key, chunkFixtureRevision, chunkReadFixture(t, "chunk-v9.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countFluidCells(v9.Chunk) != len(fluidBlockIDs) {
+		t.Fatalf("v9 fixture fluid cells = %d, want %d", countFluidCells(v9.Chunk), len(fluidBlockIDs))
+	}
+	if v9.Migrated {
+		t.Fatal("v9 fixture decode must not mark migrated for current wire")
+	}
+	okCase := candidates[0]
+	okDecoded, err := Decode(key, chunkFixtureRevision, okCase.Assets[okCase.Spec.Input.Path])
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := okDecoded
+	stale.Chunk.SetBlock(0, 5, 0, core.StoneID)
+	if chunkValueSHA256(chunkDecodedValueTree(stale)) == okCase.Expect.ValueSHA256 {
+		t.Fatal("section mutation did not change digest")
+	}
+	staleDrop := okDecoded
+	drop := staleDrop.Chunk.Drop(0)
+	drop.AgeTicks++
+	staleDrop.Chunk.SetDrop(0, drop)
+	if chunkValueSHA256(chunkDecodedValueTree(staleDrop)) == okCase.Expect.ValueSHA256 {
+		t.Fatal("drop slot mutation did not change digest")
+	}
+	if chunkExportSelection(t, root, candidates, chunkLateRoutes()) != "" {
+		t.Fatal("export must not run when env unset")
+	}
+	handoffRoot := filepath.Join(t.TempDir(), "chunk-oracle-late-export")
+	t.Setenv(chunkRuntimeOracleExportDirEnv, handoffRoot)
+	child := chunkExportSelection(t, root, candidates, chunkLateRoutes())
+	if child == "" {
+		t.Fatal("export did not publish late candidates")
+	}
+	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
+		t.Fatalf("selection manifest missing: %v", err)
 	}
 }

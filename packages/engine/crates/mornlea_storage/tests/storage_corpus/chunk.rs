@@ -7,9 +7,10 @@
 use super::value_digest::{Value, value_sha256};
 use crate::runtime_corpus::{FrozenCase, InputFormat};
 use mornlea_storage::{
-    ChestSlot, ChunkKey, ContainerSnapshot, DecodedChunk, DropSlot, FurnaceSlot, ItemStack,
-    StorageError, decode_chunk,
+    ChestSlot, ChunkKey, ChunkSave, ContainerSnapshot, DecodedChunk, DropSlot, FurnaceSlot, ItemStack,
+    StorageError, decode_chunk, decode_chunk_envelope, encode_chunk,
 };
+const CHUNK_CURRENT_SCHEMA: u32 = 9;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
@@ -42,6 +43,36 @@ pub const CHUNK_REGISTERED_ROUTES: &[ChunkRoute] = &[
         version: "4",
         operation: "decode",
     },
+    ChunkRoute {
+        family: "save.chunk",
+        version: "5",
+        operation: "decode",
+    },
+    ChunkRoute {
+        family: "save.chunk",
+        version: "6",
+        operation: "decode",
+    },
+    ChunkRoute {
+        family: "save.chunk",
+        version: "7",
+        operation: "decode",
+    },
+    ChunkRoute {
+        family: "save.chunk",
+        version: "8",
+        operation: "decode",
+    },
+    ChunkRoute {
+        family: "save.chunk",
+        version: "9",
+        operation: "decode",
+    },
+    ChunkRoute {
+        family: "save.chunk",
+        version: "9",
+        operation: "encode",
+    },
 ];
 
 pub fn chunk_legacy_early_case(id: &str) -> bool {
@@ -49,6 +80,21 @@ pub fn chunk_legacy_early_case(id: &str) -> bool {
         || id.starts_with("save.chunk/2/decode/")
         || id.starts_with("save.chunk/3/decode/")
         || id.starts_with("save.chunk/4/decode/")
+}
+
+pub fn chunk_legacy_late_case(id: &str) -> bool {
+    id.starts_with("save.chunk/5/decode/")
+        || id.starts_with("save.chunk/6/decode/")
+        || id.starts_with("save.chunk/7/decode/")
+        || id.starts_with("save.chunk/8/decode/")
+        || id.starts_with("save.chunk/9/decode/v9-fixture")
+        || id.starts_with("save.chunk/9/decode/truncated-payload")
+}
+
+pub fn chunk_current_case(id: &str) -> bool {
+    id.starts_with("save.chunk/9/decode/v9-fluid-fixture")
+        || id.starts_with("save.chunk/9/decode/v9-chest-registry")
+        || id.starts_with("save.chunk/9/encode/")
 }
 
 fn route_is_registered(case: &FrozenCase) -> bool {
@@ -232,7 +278,10 @@ pub fn decoded_chunk_value(decoded: &DecodedChunk) -> Value {
     let mut fields = BTreeMap::new();
     fields.insert("key".to_string(), chunk_key_value(&decoded.key));
     fields.insert("revision".to_string(), Value::Unsigned(decoded.revision));
-    fields.insert("schema".to_string(), Value::Unsigned(decoded.schema as u64));
+    fields.insert(
+        "schema".to_string(),
+        Value::Unsigned(CHUNK_CURRENT_SCHEMA as u64),
+    );
     fields.insert("migrated".to_string(), Value::Bool(decoded.migrated));
     fields.insert("chunk".to_string(), chunk_body_value(&decoded.chunk));
     Value::Object(fields)
@@ -306,8 +355,55 @@ pub fn execute_chunk_case(case: &FrozenCase) -> Result<(), String> {
     let args = parse_chunk_arguments(case)?;
     match case.operation.as_str() {
         "decode" => execute_chunk_decode(case, &args),
+        "encode" => execute_chunk_encode(case, &args),
         other => Err(format!("unsupported chunk operation {other}")),
     }
+}
+
+fn assert_logical_length(case: &FrozenCase, length: usize) -> Result<(), String> {
+    let want = case
+        .normalized
+        .get("logical_length")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| format!("case {} missing logical_length", case.id))?;
+    if length as u64 != want {
+        return Err(format!(
+            "case {} logical_length {}, want {}",
+            case.id,
+            length,
+            want
+        ));
+    }
+    Ok(())
+}
+
+fn execute_chunk_encode(case: &FrozenCase, args: &ChunkArguments) -> Result<(), String> {
+    let decoded = decode_chunk(args.key, args.revision, &case.input)
+        .map_err(|err| err.to_string())?;
+    let digest_value = decoded_chunk_value(&decoded);
+    let save = ChunkSave {
+        key: args.key,
+        revision: args.revision,
+        chunk: decoded.chunk.clone(),
+    };
+    let frame = encode_chunk(&save).map_err(|err| err.to_string())?;
+    if case.normalized.get("kind").and_then(JsonValue::as_str) == Some("ok") {
+        expected_value_digest(case, &digest_value)?;
+        let envelope = decode_chunk_envelope(&frame).map_err(|err| err.to_string())?;
+        assert_logical_length(case, envelope.bytes.len())?;
+        let encoded_ref = case
+            .encoded
+            .as_ref()
+            .ok_or_else(|| format!("case {} missing encoded asset", case.id))?;
+        if encoded_ref.as_slice() != envelope.bytes.as_slice() {
+            return Err(format!("case {} logical bytes mismatch", case.id));
+        }
+        let round = decode_chunk(save.key, save.revision, &frame).map_err(|err| err.to_string())?;
+        if round.migrated {
+            return Err(format!("case {} encoded output marked migrated", case.id));
+        }
+    }
+    Ok(())
 }
 
 fn execute_chunk_decode(case: &FrozenCase, args: &ChunkArguments) -> Result<(), String> {
@@ -577,5 +673,116 @@ mod tests {
         ] {
             assert!(chunk_legacy_early_case(id), "missing early id {id}");
         }
+    }
+
+    fn chunk_legacy_late_fixture_cases() -> Vec<FrozenCase> {
+        let v5 = read_go_fixture("server/storage/chunk/testdata/chunk-v5.bin");
+        let v6 = read_go_fixture("server/storage/chunk/testdata/chunk-v6.bin");
+        let v7 = read_go_fixture("server/storage/chunk/testdata/chunk-v7.bin");
+        let v8 = read_go_fixture("server/storage/chunk/testdata/chunk-v8.bin");
+        let v9 = read_go_fixture("server/storage/chunk/testdata/chunk-v9.bin");
+        vec![
+            legacy_decode_ok_case("save.chunk/5/decode/v5-fixture", "5", v5.clone()),
+            legacy_decode_error_case(
+                "save.chunk/5/decode/corrupt-crc",
+                "5",
+                chunk_corrupt_compressed_wire(&v5),
+                "corrupt",
+            ),
+            legacy_decode_ok_case("save.chunk/6/decode/v6-fixture", "6", v6.clone()),
+            legacy_decode_error_case(
+                "save.chunk/6/decode/truncated-payload",
+                "6",
+                chunk_truncated_wire(&v6, 1),
+                "corrupt",
+            ),
+            legacy_decode_ok_case("save.chunk/7/decode/v7-fixture", "7", v7.clone()),
+            legacy_decode_error_case(
+                "save.chunk/7/decode/invalid-version-zero",
+                "7",
+                chunk_wire_with_schema(&v7, 0),
+                "corrupt",
+            ),
+            legacy_decode_ok_case("save.chunk/8/decode/v8-fixture", "8", v8.clone()),
+            legacy_decode_error_case(
+                "save.chunk/8/decode/invalid-version-future",
+                "8",
+                chunk_wire_with_schema(&v8, 10),
+                "future_version",
+            ),
+            legacy_decode_ok_case("save.chunk/9/decode/v9-fixture", "9", v9.clone()),
+            legacy_decode_error_case(
+                "save.chunk/9/decode/truncated-payload",
+                "9",
+                chunk_truncated_wire(&v9, 1),
+                "corrupt",
+            ),
+        ]
+    }
+
+    #[test]
+    fn chunk_legacy_late_routes_recognize_registered_paths() {
+        assert!(route_is_registered(&FrozenCase {
+            id: "save.chunk/7/decode/v7-fixture".to_string(),
+            family: "save.chunk".to_string(),
+            version: "7".to_string(),
+            consumer: crate::runtime_corpus::CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "decode".to_string(),
+            arguments: chunk_arguments_json(),
+            input_format: InputFormat::Binary,
+            input: vec![],
+            input_json: None,
+            normalized: JsonValue::Object(serde_json::Map::new()),
+            encoded: None,
+            category: "save".to_string(),
+        }));
+    }
+
+    #[test]
+    fn chunk_legacy_late_fixture_cases_execute_locally() {
+        let cases = chunk_legacy_late_fixture_cases();
+        assert_eq!(cases.len(), 10);
+        for case in &cases {
+            execute_chunk_case(case).expect("local late chunk fixture");
+        }
+    }
+
+    #[test]
+    fn chunk_legacy_late_case_ids_match_go_producer() {
+        for id in [
+            "save.chunk/5/decode/v5-fixture",
+            "save.chunk/5/decode/corrupt-crc",
+            "save.chunk/6/decode/v6-fixture",
+            "save.chunk/6/decode/truncated-payload",
+            "save.chunk/7/decode/v7-fixture",
+            "save.chunk/7/decode/invalid-version-zero",
+            "save.chunk/8/decode/v8-fixture",
+            "save.chunk/8/decode/invalid-version-future",
+            "save.chunk/9/decode/v9-fixture",
+            "save.chunk/9/decode/truncated-payload",
+        ] {
+            assert!(chunk_legacy_late_case(id), "missing late id {id}");
+        }
+    }
+
+    #[test]
+    fn chunk_current_routes_recognize_registered_paths() {
+        assert!(chunk_current_case("save.chunk/9/encode/v9-fixture-exact"));
+        assert!(route_is_registered(&FrozenCase {
+            id: "save.chunk/9/encode/v9-fixture-exact".to_string(),
+            family: "save.chunk".to_string(),
+            version: "9".to_string(),
+            consumer: crate::runtime_corpus::CorpusConsumer::Storage,
+            packet_key: None,
+            operation: "encode".to_string(),
+            arguments: chunk_arguments_json(),
+            input_format: InputFormat::Binary,
+            input: vec![],
+            input_json: None,
+            normalized: JsonValue::Object(serde_json::Map::new()),
+            encoded: None,
+            category: "save".to_string(),
+        }));
     }
 }
