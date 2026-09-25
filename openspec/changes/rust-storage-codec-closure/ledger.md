@@ -232,6 +232,15 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 69/69 including nonempty `chunk_adversarial_` and `chunk_cross_`; `runtime_contract chunk_` 10/10. The integration reviewer compared manifest objects and asset bytes and did not re-run those commands.
 - Architecture skill: no change. The chunk gate partition and the Rust-to-Go frame handoff are already in the corpus contract.
 
+## 2026-09-25 — SDD execution: node 4.4 closed
+
+- Commits: `30c8b4ed` adds `companions_encoded_len` and the borrowed index plan; `ce38014c` moves the companion length note below the family catalog table.
+- Review of `4b612aa3..30c8b4ed` required that table repair. Re-review of `ce38014c` approved. No remaining Critical or Important findings.
+- Minor findings held for the final review: the one-active case builds an inactive lifecycle; the duplicate-lifecycle case shares a body id and never reaches the lifecycle gate; the plan comment says the caller-buffer writer already consumes the indices.
+- No save-family case count change. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`. `encode` is unchanged.
+- Gates reported for `30c8b4ed`: `companion_buffer preflight_` 6/6; `runtime_contract companion_` 6/6; `cargo clippy -p mornlea_storage --lib -- -D warnings` pass. The guide fix is docs-only.
+- Architecture skill: no change. The borrowed length preflight follows the same writer rule as the other noncompressed families.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
