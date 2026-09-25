@@ -222,6 +222,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 63/63 including nonempty `chunk_legacy_late_` and `chunk_current_`; `runtime_contract chunk_` 10/10. The reviewer did not re-run those commands.
 - Architecture skill: no change. The external compact-export handoff is already the corpus-contract rule.
 
+## 2026-09-25 — SDD execution: node 4.3c closed
+
+- Commits: `91de8daa` adversarial and cross producers; `00c408d7` cross-export, repo exclusion, and recovery decode; `84be0f19` integration of fourteen `save.chunk` decode cases.
+- Approved candidates: compact `/tmp/runtime-oracle-chunk-4.3c-adversarial-fix/chunk/migration/` (13 cases) and `/tmp/runtime-oracle-chunk-4.3c-cross-fix/chunk/migration/` (one Go decode of the 180-byte Rust v9 frame). The non-fix trees were not imported.
+- Reviews of the producer, the export fix, and the integration approved. No remaining Critical or Important findings.
+- Minor findings held for the final review: the external cross selection lists decode routes 9 through 5; `LAST_BLOCK_INDEX` still warns in `chunk_codec`; the frame-export ancestor walk is not executed when the export variable is unset.
+- `save.chunk` has 35 cases. `save.region` stays at 26. `save.player` stays at 37. `save.world-metadata` stays at 15. `save.hostile` stays at 50. `save.passive` stays at 70. Save total is 233. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`. Decode routes stay 1–9 and encode route 9.
+- Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 69/69 including nonempty `chunk_adversarial_` and `chunk_cross_`; `runtime_contract chunk_` 10/10. The integration reviewer compared manifest objects and asset bytes and did not re-run those commands.
+- Architecture skill: no change. The chunk gate partition and the Rust-to-Go frame handoff are already in the corpus contract.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections

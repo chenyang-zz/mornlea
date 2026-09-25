@@ -43,7 +43,7 @@
 - [x] 4.2 [Add caller-owned chunk compression and bounded decode](plans/03-aggregates.md#node-4-2). Rust `src/{chunk,lib}.rs`, `tests/chunk_codec.rs`; run Rust `--test chunk_codec context_`.
 - [x] 4.3a [Execute chunk v1–v4 migrations](plans/05-dispatch-slices.md#node-4-3a). Package-local Go builder, four decode routes, nonempty Rust gate.
 - [x] 4.3b [Execute chunk v5–v9 and current output](plans/05-dispatch-slices.md#node-4-3b). Add late decode/current encode routes and logical-byte evidence.
-- [ ] 4.3c [Close chunk cross-decode and rejection matrix](plans/05-dispatch-slices.md#node-4-3c). Go decode a Rust-produced frame, then run bounded corruption cases.
+- [x] 4.3c [Close chunk cross-decode and rejection matrix](plans/05-dispatch-slices.md#node-4-3c). Go decode a Rust-produced frame, then run bounded corruption cases.
 - [ ] 4.4 [Preflight companion length and canonical index plan](plans/03-aggregates.md#node-4-4). Rust `src/{companion,lib}.rs`, `tests/companion_buffer.rs`; run Rust `--test companion_buffer preflight_`.
 - [ ] 4.5 [Add companion atomic caller-buffer writer](plans/03-aggregates.md#node-4-5). Rust `src/{companion,lib}.rs`, `tests/companion_buffer.rs`; run Rust `--test companion_buffer writer_`.
 - [ ] 4.6a [Execute companion v1–v4 history](plans/05-dispatch-slices.md#node-4-6a). Prove legacy owner, task, FIFO and summary without v5 bootstrap.
