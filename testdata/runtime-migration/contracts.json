@@ -3853,6 +3853,14 @@
       "numeric_semantics": "little-endian integers; CRC integrity; exact byte round-trip; no implicit repair",
       "sources": [
         {
+          "path": "packages/server/storage/chunk/chunk_codec.go",
+          "sha256": "sha256:3659073ad23439915e6df0898939f0261a0acba0c1143e0899795f44a30be728"
+        },
+        {
+          "path": "packages/server/storage/chunk/chunk_oracle_test.go",
+          "sha256": "sha256:5f4ba5e71f09ab83b50dcecdc8a17dd5f831b9949d08bf51c57235a8d9b94a9c"
+        },
+        {
           "path": "packages/server/storage/chunk/testdata/chunk-v1.bin",
           "sha256": "sha256:fb482fbaf4468154898f6f5841873ab0f53c4e20a94eac9d28a3a3273d4a5387"
         },
@@ -3889,7 +3897,16 @@
           "sha256": "sha256:ec762d1160fedbc3c548fadc4a90f0a8791a6cb53e0729ab0d43bbb0cf4a713e"
         }
       ],
-      "cases": null
+      "cases": [
+        "save.chunk/1/decode/truncated-payload",
+        "save.chunk/1/decode/v1-fixture",
+        "save.chunk/2/decode/corrupt-crc",
+        "save.chunk/2/decode/v2-fixture",
+        "save.chunk/3/decode/invalid-version-zero",
+        "save.chunk/3/decode/v3-fixture",
+        "save.chunk/4/decode/invalid-version-future",
+        "save.chunk/4/decode/v4-fixture"
+      ]
     },
     {
       "id": "save.companion",
@@ -27840,6 +27857,206 @@
         "0"
       ],
       "rust_consumer": "mornlea_protocol"
+    },
+    {
+      "id": "save.chunk/1/decode/truncated-payload",
+      "family": "save.chunk",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {
+        "dimension": 0,
+        "revision": "19",
+        "x": -3,
+        "z": 7
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_1_decode_truncated-payload.input.bin",
+        "sha256": "sha256:2e98849bd64a7e3863e48f70153d49362d35d32b452207bbf78aea869b07f78f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_1_decode_truncated-payload.expected.json",
+        "sha256": "sha256:dcbd0bcf3d42e105a0b07d54d542648d1d0c931675f8007915810b24d09f7378"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.chunk/1/decode/v1-fixture",
+      "family": "save.chunk",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {
+        "dimension": 0,
+        "revision": "19",
+        "x": -3,
+        "z": 7
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_1_decode_v1-fixture.input.bin",
+        "sha256": "sha256:fb482fbaf4468154898f6f5841873ab0f53c4e20a94eac9d28a3a3273d4a5387"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_1_decode_v1-fixture.expected.json",
+        "sha256": "sha256:c73ed3092015a5e60e2cde55091174d7693e29425e17c4909c4eda386b4183cb"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.chunk/2/decode/corrupt-crc",
+      "family": "save.chunk",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {
+        "dimension": 0,
+        "revision": "19",
+        "x": -3,
+        "z": 7
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_2_decode_corrupt-crc.input.bin",
+        "sha256": "sha256:58657e7d0ee8daef8cc31a03ccc1dccb0fb181228b40cb73bfbe8d4b43a61f20"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_2_decode_corrupt-crc.expected.json",
+        "sha256": "sha256:dcbd0bcf3d42e105a0b07d54d542648d1d0c931675f8007915810b24d09f7378"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.chunk/2/decode/v2-fixture",
+      "family": "save.chunk",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {
+        "dimension": 0,
+        "revision": "19",
+        "x": -3,
+        "z": 7
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_2_decode_v2-fixture.input.bin",
+        "sha256": "sha256:07b4553db0db57a3c0a86e42c80e1fe838b86e1dbbd6026f0d8fb721e37a8696"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_2_decode_v2-fixture.expected.json",
+        "sha256": "sha256:8ffe1941cde9268db74cf804bac6d15d3b666924b41a3bf213f7f45744d54f30"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.chunk/3/decode/invalid-version-zero",
+      "family": "save.chunk",
+      "version": "3",
+      "operation": "decode",
+      "arguments": {
+        "dimension": 0,
+        "revision": "19",
+        "x": -3,
+        "z": 7
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_3_decode_invalid-version-zero.input.bin",
+        "sha256": "sha256:ba63e9f401ce8a6c9e517131bedbabcebe2c4f24f9f48259e4ea256b05115269"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_3_decode_invalid-version-zero.expected.json",
+        "sha256": "sha256:dcbd0bcf3d42e105a0b07d54d542648d1d0c931675f8007915810b24d09f7378"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.chunk/3/decode/v3-fixture",
+      "family": "save.chunk",
+      "version": "3",
+      "operation": "decode",
+      "arguments": {
+        "dimension": 0,
+        "revision": "19",
+        "x": -3,
+        "z": 7
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_3_decode_v3-fixture.input.bin",
+        "sha256": "sha256:c8cfb5a4511dbc95eced4fc57b799e84aed90f7427eebdaff3be413d052727be"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_3_decode_v3-fixture.expected.json",
+        "sha256": "sha256:8ffe1941cde9268db74cf804bac6d15d3b666924b41a3bf213f7f45744d54f30"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.chunk/4/decode/invalid-version-future",
+      "family": "save.chunk",
+      "version": "4",
+      "operation": "decode",
+      "arguments": {
+        "dimension": 0,
+        "revision": "19",
+        "x": -3,
+        "z": 7
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_4_decode_invalid-version-future.input.bin",
+        "sha256": "sha256:b0640a504fbe52c4c955f08106a62adfe7fb56737e54d61cdec8e3fdf2407678"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_4_decode_invalid-version-future.expected.json",
+        "sha256": "sha256:a64a0a45fdf9d35f8ff6c540cfef6d53f196cec533d856fc016dcd6208c88252"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.chunk/4/decode/v4-fixture",
+      "family": "save.chunk",
+      "version": "4",
+      "operation": "decode",
+      "arguments": {
+        "dimension": 0,
+        "revision": "19",
+        "x": -3,
+        "z": 7
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_4_decode_v4-fixture.input.bin",
+        "sha256": "sha256:c4a313076ef51e93ac0e598001e3c5d3a0e8bf0fa110ce149e6a721645307e48"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_4_decode_v4-fixture.expected.json",
+        "sha256": "sha256:07f34d1644bf1eacdf29b44234f9e15f26683a10bdad74ed089829323236496a"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
     },
     {
       "id": "save.hostile/1/decode/truncated-tail",

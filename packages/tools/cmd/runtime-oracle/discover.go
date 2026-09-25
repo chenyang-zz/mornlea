@@ -118,7 +118,10 @@ func Discover(root string) ([]Family, Identities, error) {
 		protocolFamily(root, "protocol.frame", "input", protocolVersionText, "packages/shared/network/codec/frame.go",
 			[]string{"packages/shared/network/codec/frame.go", "packages/shared/network/codec/frame_test.go"}),
 		saveFamily(root, "save.chunk", strconv.Itoa(chunkCurrent), intsToStrings(chunkSupported),
-			"packages/server/storage/chunk/chunk_codec.go", versionedBins("packages/server/storage/chunk/testdata", "chunk", chunkSupported)),
+			"packages/server/storage/chunk/chunk_codec.go", append(
+				versionedBins("packages/server/storage/chunk/testdata", "chunk", chunkSupported),
+				"packages/server/storage/chunk/chunk_oracle_test.go",
+			)),
 		saveFamily(root, "save.player", strconv.Itoa(playerCurrent), intsToStrings(playerSupported),
 			"packages/server/storage/player/player_codec.go", append(
 				versionedBins("packages/server/storage/player/testdata", "player", playerSupported),

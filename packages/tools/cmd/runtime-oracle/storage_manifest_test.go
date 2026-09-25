@@ -353,6 +353,14 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.passive/1/encode/max-records":                        true,
 		"save.passive/1/encode/unsorted-canonical":                 true,
 		"save.passive/1/encode/v1-fixture-exact":                   true,
+		"save.chunk/1/decode/truncated-payload":                    true,
+		"save.chunk/1/decode/v1-fixture":                           true,
+		"save.chunk/2/decode/corrupt-crc":                          true,
+		"save.chunk/2/decode/v2-fixture":                           true,
+		"save.chunk/3/decode/invalid-version-zero":                 true,
+		"save.chunk/3/decode/v3-fixture":                           true,
+		"save.chunk/4/decode/invalid-version-future":               true,
+		"save.chunk/4/decode/v4-fixture":                           true,
 	}
 	for _, c := range frozen.Cases {
 		if !strings.HasPrefix(c.Family, "save.") {
@@ -361,8 +369,8 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		if !wantSaveCases[c.ID] {
 			t.Fatalf("baseline carries unexpected save case %s", c.ID)
 		}
-		if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" && c.Family != "save.passive" {
-			t.Fatalf("save case %s has family %s, want save.region, save.player, save.world-metadata, save.hostile, or save.passive", c.ID, c.Family)
+		if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" && c.Family != "save.passive" && c.Family != "save.chunk" {
+			t.Fatalf("save case %s has family %s, want save.region, save.player, save.world-metadata, save.hostile, save.passive, or save.chunk", c.ID, c.Family)
 		}
 	}
 	for id := range wantSaveCases {
@@ -382,6 +390,9 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 				}
 				if strings.HasPrefix(id, "save.passive/") {
 					wantFamily = "save.passive"
+				}
+				if strings.HasPrefix(id, "save.chunk/") {
+					wantFamily = "save.chunk"
 				}
 				if c.Family != wantFamily {
 					t.Fatalf("pinned save case %s has family %s, want %s", id, c.Family, wantFamily)

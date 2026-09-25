@@ -25,6 +25,9 @@ mod hostile;
 #[path = "storage_corpus/passive.rs"]
 mod passive;
 
+#[path = "storage_corpus/chunk.rs"]
+mod chunk;
+
 use runtime_corpus::{load_cases_for_consumer, CorpusConsumer, FrozenCase, try_load_cases_from_root};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -165,6 +168,26 @@ const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
         version: "1",
         operation: "encode",
     },
+    StorageRoute {
+        family: "save.chunk",
+        version: "1",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.chunk",
+        version: "2",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.chunk",
+        version: "3",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.chunk",
+        version: "4",
+        operation: "decode",
+    },
 ];
 
 fn route_is_registered_for_case(case: &FrozenCase) -> bool {
@@ -241,6 +264,14 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
     if !passive_cases.is_empty() {
         passive::execute_passive_cases(&passive_cases);
     }
+    let chunk_cases: Vec<FrozenCase> = cases
+        .iter()
+        .filter(|case| case.family == "save.chunk")
+        .cloned()
+        .collect();
+    if !chunk_cases.is_empty() {
+        chunk::execute_chunk_cases(&chunk_cases);
+    }
     let other = cases
         .iter()
         .filter(|case| {
@@ -249,6 +280,7 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
                 && case.family != "save.world-metadata"
                 && case.family != "save.hostile"
                 && case.family != "save.passive"
+                && case.family != "save.chunk"
         })
         .count();
     if other > 0 {
@@ -641,4 +673,42 @@ fn passive_corpus_executes_all_integrated_case_ids() {
         );
     }
     passive::execute_passive_cases(&cases);
+}
+
+const CHUNK_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.chunk/1/decode/truncated-payload",
+    "save.chunk/1/decode/v1-fixture",
+    "save.chunk/2/decode/corrupt-crc",
+    "save.chunk/2/decode/v2-fixture",
+    "save.chunk/3/decode/invalid-version-zero",
+    "save.chunk/3/decode/v3-fixture",
+    "save.chunk/4/decode/invalid-version-future",
+    "save.chunk/4/decode/v4-fixture",
+];
+
+#[test]
+fn chunk_legacy_early_corpus_executes_all_integrated_case_ids() {
+    use std::collections::BTreeMap;
+
+    let cases: Vec<FrozenCase> = load_cases_for_consumer(CorpusConsumer::Storage)
+        .into_iter()
+        .filter(|case| case.family == "save.chunk")
+        .collect();
+    let found: BTreeMap<&str, &FrozenCase> = cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect();
+    for id in CHUNK_INTEGRATED_CASE_IDS {
+        if !found.contains_key(id) {
+            panic!("integrated manifest missing chunk case {id}");
+        }
+    }
+    if cases.len() != CHUNK_INTEGRATED_CASE_IDS.len() {
+        panic!(
+            "integrated manifest has {} save.chunk cases, want {}",
+            cases.len(),
+            CHUNK_INTEGRATED_CASE_IDS.len()
+        );
+    }
+    chunk::execute_chunk_cases(&cases);
 }
