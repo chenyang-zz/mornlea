@@ -17,7 +17,7 @@ pub(crate) mod pathfind;
 #[allow(dead_code)]
 pub mod physics;
 #[allow(dead_code)]
-pub(crate) mod raycast;
+pub mod raycast;
 #[allow(dead_code)]
 pub(crate) mod tree;
 #[allow(dead_code)]

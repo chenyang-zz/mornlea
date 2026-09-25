@@ -13,18 +13,18 @@ pub(crate) struct RaycastBatch {
 
 type Vector = [f32; 3];
 
-struct RaycastInput {
-    origin: Vector,
-    direction: Vector,
-    maximum: f32,
+pub(crate) struct RaycastInput {
+    pub(crate) origin: Vector,
+    pub(crate) direction: Vector,
+    pub(crate) maximum: f32,
 }
 
-struct RaycastCursor {
-    state: u8,
-    cell: [i32; 3],
-    step: [i32; 3],
-    delta: Vector,
-    maximum: Vector,
+pub(crate) struct RaycastCursor {
+    pub(crate) state: u8,
+    pub(crate) cell: [i32; 3],
+    pub(crate) step: [i32; 3],
+    pub(crate) delta: Vector,
+    pub(crate) maximum: Vector,
 }
 
 impl RaycastInput {
@@ -68,7 +68,7 @@ impl RaycastCursor {
         }
     }
 
-    fn start(input: &RaycastInput) -> Self {
+    pub(crate) fn start(input: &RaycastInput) -> Self {
         let mut cursor = Self {
             state: 1,
             cell: input.origin.map(floor_to_i32),
