@@ -9,10 +9,10 @@ pub(crate) const COLLISION_STEP_HEIGHT_OFFSET: usize = 36;
 
 type Vector = [f32; 3];
 
-#[derive(Clone, Copy, Debug, Default)]
-struct Bounds {
-    minimum: Vector,
-    maximum: Vector,
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Bounds {
+    pub minimum: Vector,
+    pub maximum: Vector,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -33,6 +33,36 @@ struct CollisionInput<'a> {
     dimensions: [u32; 3],
 }
 
+pub(crate) trait CollisionCells {
+    fn loaded(&self, position: [i32; 3]) -> bool;
+    fn count(&self, position: [i32; 3]) -> usize;
+    fn bounds(&self, position: [i32; 3], index: usize) -> Bounds;
+    fn unknown_bounds(&self, position: [i32; 3]) -> Bounds {
+        block_bounds(
+            position,
+            Bounds {
+                minimum: [0.0; 3],
+                maximum: [1.0; 3],
+            },
+        )
+    }
+}
+
+pub(crate) struct CollisionInputData<'a, C: CollisionCells> {
+    pub(crate) cells: &'a C,
+    pub(crate) position: Vector,
+    pub(crate) displacement: Vector,
+    pub(crate) began_grounded: bool,
+    pub(crate) step_height: f32,
+}
+
+pub(crate) struct FinalResult {
+    pub position: Vector,
+    pub clipped: [bool; 3],
+    pub on_ground: bool,
+    pub used_step: bool,
+    pub hit_unknown: bool,
+}
 #[derive(Clone, Copy)]
 struct Cell<'a> {
     bytes: &'a [u8],
@@ -108,6 +138,22 @@ impl<'a> CollisionInput<'a> {
     }
 }
 
+
+impl<'a> CollisionCells for CollisionInput<'a> {
+    fn loaded(&self, position: [i32; 3]) -> bool {
+        self.cell(position).loaded()
+    }
+    fn count(&self, position: [i32; 3]) -> usize {
+        self.cell(position).count()
+    }
+    fn bounds(&self, position: [i32; 3], index: usize) -> Bounds {
+        self.cell(position).bounds(index)
+    }
+    fn unknown_bounds(&self, position: [i32; 3]) -> Bounds {
+        self.cell(position).unknown_bounds()
+    }
+}
+
 impl Cell<'_> {
     fn loaded(&self) -> bool {
         self.bytes[0] == 1
@@ -173,13 +219,33 @@ pub(crate) fn resolve_collision_parts(
 }
 
 fn resolve_collision_input(input: CollisionInput<'_>) -> [u8; 16] {
-    let mut ordinary = resolve_move(&input);
+    let data = CollisionInputData {
+        cells: &input,
+        position: input.position,
+        displacement: input.displacement,
+        began_grounded: input.began_grounded,
+        step_height: input.step_height,
+    };
+    let result = resolve_move_and_step(&data);
+    encode_result(
+        MoveResult {
+            position: result.position,
+            clipped: result.clipped,
+            on_ground: result.on_ground,
+            hit_unknown: result.hit_unknown,
+        },
+        result.used_step,
+    )
+}
+
+pub(crate) fn resolve_move_and_step<C: CollisionCells>(input: &CollisionInputData<'_, C>) -> FinalResult {
+    let mut ordinary = resolve_move(input);
     let mut used_step = false;
     if (ordinary.clipped[0] || ordinary.clipped[2])
         && (input.began_grounded || ordinary.on_ground)
         && (input.displacement[0] != 0.0 || input.displacement[2] != 0.0)
     {
-        let (stepped, accepted) = resolve_step_move(&input);
+        let (stepped, accepted) = resolve_step_move(input);
         if accepted
             && horizontal_distance_squared(input.position, stepped.position)
                 > horizontal_distance_squared(input.position, ordinary.position)
@@ -188,10 +254,16 @@ fn resolve_collision_input(input: CollisionInput<'_>) -> [u8; 16] {
             used_step = true;
         }
     }
-    encode_result(ordinary, used_step)
+    FinalResult {
+        position: ordinary.position,
+        clipped: ordinary.clipped,
+        on_ground: ordinary.on_ground,
+        used_step,
+        hit_unknown: ordinary.hit_unknown,
+    }
 }
 
-fn resolve_move(input: &CollisionInput<'_>) -> MoveResult {
+fn resolve_move<C: CollisionCells>(input: &CollisionInputData<'_, C>) -> MoveResult {
     let mut result = MoveResult {
         position: input.position,
         ..MoveResult::default()
@@ -213,8 +285,8 @@ fn resolve_move(input: &CollisionInput<'_>) -> MoveResult {
     result
 }
 
-fn clip_axis(
-    input: &CollisionInput<'_>,
+fn clip_axis<C: CollisionCells>(
+    input: &CollisionInputData<'_, C>,
     feet_position: Vector,
     axis: usize,
     requested: f32,
@@ -241,10 +313,10 @@ fn clip_axis(
     for y in i64::from(minimum_y)..=i64::from(maximum_y) {
         for x in i64::from(minimum_x)..=i64::from(maximum_x) {
             for z in i64::from(minimum_z)..=i64::from(maximum_z) {
-                let cell = input.cell([x as i32, y as i32, z as i32]);
-                if !cell.loaded() {
+                let pos = [x as i32, y as i32, z as i32];
+                if !input.cells.loaded(pos) {
                     let (candidate, blocks) =
-                        clip_against(feet_position, player, axis, moved, cell.unknown_bounds());
+                        clip_against(feet_position, player, axis, moved, input.cells.unknown_bounds(pos));
                     if blocks {
                         hit_unknown = true;
                         moved = candidate;
@@ -252,9 +324,9 @@ fn clip_axis(
                     }
                     continue;
                 }
-                for index in 0..cell.count() {
+                for index in 0..input.cells.count(pos) {
                     let (candidate, blocks) =
-                        clip_against(feet_position, player, axis, moved, cell.bounds(index));
+                        clip_against(feet_position, player, axis, moved, input.cells.bounds(pos, index));
                     if blocks {
                         moved = candidate;
                         was_clipped = true;
@@ -372,7 +444,7 @@ fn overlaps_other_axes(left: Bounds, right: Bounds, axis: usize) -> bool {
     true
 }
 
-fn bounds_are_collision_free(input: &CollisionInput<'_>, position: Vector) -> (bool, bool) {
+fn bounds_are_collision_free<C: CollisionCells>(input: &CollisionInputData<'_, C>, position: Vector) -> (bool, bool) {
     let player = player_bounds(position);
     let (minimum_x, maximum_x) = block_range(player.minimum[0], player.maximum[0]);
     let (minimum_y, maximum_y) = block_range(player.minimum[1], player.maximum[1]);
@@ -380,12 +452,12 @@ fn bounds_are_collision_free(input: &CollisionInput<'_>, position: Vector) -> (b
     for y in i64::from(minimum_y)..=i64::from(maximum_y) {
         for x in i64::from(minimum_x)..=i64::from(maximum_x) {
             for z in i64::from(minimum_z)..=i64::from(maximum_z) {
-                let cell = input.cell([x as i32, y as i32, z as i32]);
-                if !cell.loaded() {
+                let pos = [x as i32, y as i32, z as i32];
+                if !input.cells.loaded(pos) {
                     return (false, true);
                 }
-                for index in 0..cell.count() {
-                    if bounds_overlap(player, cell.bounds(index)) {
+                for index in 0..input.cells.count(pos) {
+                    if bounds_overlap(player, input.cells.bounds(pos, index)) {
                         return (false, false);
                     }
                 }
@@ -414,7 +486,7 @@ fn horizontal_distance_squared(from: Vector, to: Vector) -> f32 {
     delta_x * delta_x + delta_z * delta_z
 }
 
-fn resolve_step_move(input: &CollisionInput<'_>) -> (MoveResult, bool) {
+fn resolve_step_move<C: CollisionCells>(input: &CollisionInputData<'_, C>) -> (MoveResult, bool) {
     let mut result = MoveResult {
         position: input.position,
         ..MoveResult::default()

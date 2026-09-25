@@ -3,7 +3,7 @@
 pub mod contracts;
 
 #[allow(dead_code)]
-pub(crate) mod collision;
+pub mod collision;
 #[allow(dead_code)]
 pub(crate) mod fluid_eval;
 #[allow(dead_code)]
