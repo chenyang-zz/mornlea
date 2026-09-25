@@ -7,8 +7,9 @@
 use super::value_digest::{Value, value_sha256};
 use crate::runtime_corpus::{FrozenCase, InputFormat};
 use mornlea_storage::{
-    CompanionBody, Inventory, ItemStack, PlanStep, StorageError, StoredCompanionLifecycle,
-    StoredCompanionQueue, StoredCompanionTask, StoredCompanions, decode_companions,
+    CompanionBody, CompanionSave, Inventory, ItemStack, PlanStep, StorageError,
+    StoredCompanionLifecycle, StoredCompanionQueue, StoredCompanionTask, StoredCompanions,
+    companions_encoded_len, decode_companions, encode_companions_into,
 };
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -43,7 +44,46 @@ pub const COMPANION_REGISTERED_ROUTES: &[CompanionRoute] = &[
         version: "4",
         operation: "decode",
     },
+    CompanionRoute {
+        family: "save.companion",
+        version: "5",
+        operation: "decode",
+    },
+    CompanionRoute {
+        family: "save.companion",
+        version: "5",
+        operation: "encode",
+    },
 ];
+
+/// Current-schema v5 cases exported in node 4.6b (integrated separately).
+pub fn companion_current_case(id: &str) -> bool {
+    id == "save.companion/5/decode/v5-fixture"
+        || id == "save.companion/5/decode/v5-roundtrip-alt"
+        || id == "save.companion/5/decode/max-legal-size"
+        || id == "save.companion/5/encode/v5-canonical"
+        || id == "save.companion/5/encode/capacity-minus-one"
+}
+
+/// Adversarial v5 decode cases exported in node 4.6b (integrated separately).
+pub fn companion_adversarial_case(id: &str) -> bool {
+    id.starts_with("save.companion/5/decode/body-count-")
+        || id == "save.companion/5/decode/active-count-five"
+        || id == "save.companion/5/decode/duplicate-lifecycle"
+        || id == "save.companion/5/decode/missing-lifecycle"
+        || id == "save.companion/5/decode/orphan-queue"
+        || id == "save.companion/5/decode/inactive-queue"
+        || id == "save.companion/5/decode/command-over-limit"
+        || id == "save.companion/5/decode/plan-steps-over-limit"
+        || id == "save.companion/5/decode/fifo-over-limit"
+        || id == "save.companion/5/decode/summary-over-limit"
+        || id == "save.companion/5/decode/invalid-version-zero"
+        || id == "save.companion/5/decode/invalid-version-future"
+        || id == "save.companion/5/decode/truncated-header"
+        || id == "save.companion/5/decode/trailing-byte"
+        || id == "save.companion/5/decode/corrupt-crc"
+        || id == "save.companion/5/decode/malformed-uuid"
+}
 
 pub fn companion_legacy_case(id: &str) -> bool {
     id.starts_with("save.companion/1/decode/")
@@ -302,7 +342,72 @@ pub fn execute_companion_cases(cases: &[FrozenCase]) {
     }
 }
 
+#[derive(Debug)]
+struct CompanionArguments {
+    capacity: Option<u32>,
+}
+
+fn parse_companion_arguments(case: &FrozenCase) -> Result<CompanionArguments, String> {
+    let obj = case
+        .arguments
+        .as_object()
+        .ok_or_else(|| format!("case {} arguments must be an object", case.id))?;
+    let capacity = match obj.get("capacity") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|number| u32::try_from(number).ok())
+                .ok_or_else(|| format!("case {} capacity must be u32", case.id))?,
+        ),
+    };
+    Ok(CompanionArguments { capacity })
+}
+
+fn stored_to_save(stored: &StoredCompanions) -> CompanionSave {
+    CompanionSave {
+        revision: stored.revision,
+        agent_namespace_id: stored.agent_namespace_id,
+        records: stored.records.clone(),
+        lifecycles: stored.lifecycles.clone(),
+        queues: stored.queues.clone(),
+    }
+}
+
+fn assert_output_too_small_fields(
+    case: &FrozenCase,
+    needed: usize,
+    available: usize,
+) -> Result<(), String> {
+    let want_needed = case
+        .normalized
+        .get("needed")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| format!("case {} missing needed", case.id))?;
+    let want_available = case
+        .normalized
+        .get("available")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| format!("case {} missing available", case.id))?;
+    if needed as u64 != want_needed || available as u64 != want_available {
+        return Err(format!(
+            "case {} output_too_small fields mismatch: got needed {needed} available {available}, want needed {want_needed} available {want_available}",
+            case.id
+        ));
+    }
+    Ok(())
+}
+
 pub fn execute_companion_case(case: &FrozenCase) -> Result<(), String> {
+    let args = parse_companion_arguments(case)?;
+    match case.operation.as_str() {
+        "decode" => execute_companion_decode(case),
+        "encode" => execute_companion_encode(case, &args),
+        other => Err(format!("unsupported companion operation {other}")),
+    }
+}
+
+fn execute_companion_decode(case: &FrozenCase) -> Result<(), String> {
     let schema = companion_schema_version(&case.input)?;
     let want_version: u32 = case
         .version
@@ -325,6 +430,55 @@ pub fn execute_companion_case(case: &FrozenCase) -> Result<(), String> {
             assert_error_category(case, category)
         }
     }
+}
+
+fn execute_companion_encode(case: &FrozenCase, args: &CompanionArguments) -> Result<(), String> {
+    let stored = decode_companions(&case.input).map_err(|err| err.to_string())?;
+    let digest_value = companions_value(&stored);
+    let save = stored_to_save(&stored);
+    let needed = companions_encoded_len(&save).map_err(|err| err.to_string())?;
+    let buf_len = args.capacity.map(|cap| cap as usize).unwrap_or(needed);
+    let mut encoded = vec![0u8; buf_len];
+    let written = match encode_companions_into(&save, &mut encoded) {
+        Err(StorageError::OutputTooSmall {
+            needed: want_needed,
+            available: want_available,
+        }) => {
+            assert_error_category(case, "output_too_small")?;
+            assert_output_too_small_fields(case, want_needed, want_available)?;
+            return Ok(());
+        }
+        Err(err) => return Err(err.to_string()),
+        Ok(len) => len,
+    };
+    encoded.truncate(written);
+    if case.normalized.get("kind").and_then(JsonValue::as_str) == Some("ok") {
+        expected_value_digest(case, &digest_value)?;
+        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64) {
+            if length as usize != encoded.len() {
+                return Err(format!(
+                    "case {} encoded length {}, want {}",
+                    case.id,
+                    encoded.len(),
+                    length
+                ));
+            }
+        }
+        if let Some(expected) = &case.encoded {
+            if expected.as_slice() != encoded.as_slice() {
+                return Err(format!("case {} encoded bytes mismatch", case.id));
+            }
+        }
+        let round = decode_companions(&encoded).map_err(|err| err.to_string())?;
+        if round.source_schema != 5 {
+            return Err(format!(
+                "case {} encoded output schema {}",
+                case.id,
+                round.source_schema
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn read_go_fixture(name: &str) -> Vec<u8> {
@@ -671,5 +825,72 @@ mod tests {
         ] {
             assert!(companion_legacy_case(id), "missing legacy id {id}");
         }
+    }
+
+    #[test]
+    fn companion_current_case_ids_recognized() {
+        assert!(companion_current_case("save.companion/5/decode/v5-fixture"));
+        assert!(!companion_current_case("save.companion/4/decode/v4-fixture"));
+    }
+
+    #[test]
+    fn companion_adversarial_case_ids_recognized() {
+        assert!(companion_adversarial_case("save.companion/5/decode/corrupt-crc"));
+        assert!(!companion_adversarial_case("save.companion/5/decode/v5-fixture"));
+    }
+
+    #[test]
+    fn companion_current_executes_fixture_cases() {
+        let golden = read_go_fixture("companions-v5.bin");
+        let case = legacy_decode_ok_case("save.companion/5/decode/v5-fixture", "5", golden);
+        execute_companion_case(&case).expect("v5 golden fixture");
+    }
+
+    #[test]
+    fn companion_adversarial_executes_fixture_cases() {
+        let golden = read_go_fixture("companions-v5.bin");
+        let case = legacy_decode_error_case(
+            "save.companion/5/decode/corrupt-crc",
+            "5",
+            companion_corrupt_crc_wire(&golden),
+            "corrupt",
+        );
+        execute_companion_case(&case).expect("corrupt crc adversarial fixture");
+    }
+
+    #[test]
+    fn companion_current_queue_owner_digest_mutation_fails_comparison() {
+        let golden = read_go_fixture("companions-v5.bin");
+        let mut stale = decode_companions(&golden).expect("decode v5");
+        if let Some(queue) = stale.queues.first_mut() {
+            queue.id = mornlea_storage::PlayerId::from_bytes([0; 16]);
+        }
+        let mut case = legacy_decode_ok_case("save.companion/5/decode/v5-fixture", "5", golden);
+        case.normalized = serde_json::json!({
+            "kind": "ok",
+            "category": "save",
+            "value_sha256": value_sha256(&companions_value(&stale))
+        });
+        let err = execute_companion_case(&case).expect_err("stale queue owner digest must fail");
+        assert!(err.contains("value digest mismatch"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn companion_current_fifo_digest_mutation_fails_comparison() {
+        let golden = read_go_fixture("companions-v5.bin");
+        let mut stale = decode_companions(&golden).expect("decode v5");
+        if let Some(queue) = stale.queues.first_mut() {
+            if let Some(entry) = queue.pending.first_mut() {
+                entry.push('x');
+            }
+        }
+        let mut case = legacy_decode_ok_case("save.companion/5/decode/v5-fixture", "5", golden);
+        case.normalized = serde_json::json!({
+            "kind": "ok",
+            "category": "save",
+            "value_sha256": value_sha256(&companions_value(&stale))
+        });
+        let err = execute_companion_case(&case).expect_err("stale fifo digest must fail");
+        assert!(err.contains("value digest mismatch"), "unexpected error: {err}");
     }
 }

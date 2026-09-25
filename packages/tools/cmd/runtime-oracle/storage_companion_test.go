@@ -29,9 +29,38 @@ const (
 	companionProducerTestRel = "packages/tools/cmd/runtime-oracle/storage_companion_test.go"
 	companionCodecSourceRel  = "packages/server/storage/companion/companion_codec.go"
 	companionExportDir       = "/tmp/runtime-oracle-companion-4.6a"
+	companionCurrentExportDir = "/tmp/runtime-oracle-companion-4.6b"
+	companionVersionV5       = "5"
+
+	companionDecodeV5FixtureID           = companionFamily + "/" + companionVersionV5 + "/decode/v5-fixture"
+	companionDecodeV5RoundTripAltID      = companionFamily + "/" + companionVersionV5 + "/decode/v5-roundtrip-alt"
+	companionDecodeV5MaxLegalID          = companionFamily + "/" + companionVersionV5 + "/decode/max-legal-size"
+	companionEncodeV5CanonicalID         = companionFamily + "/" + companionVersionV5 + "/encode/v5-canonical"
+	companionEncodeCapacityMinusOneID    = companionFamily + "/" + companionVersionV5 + "/encode/capacity-minus-one"
+
+	companionDecodeBodyCount65ID         = companionFamily + "/" + companionVersionV5 + "/decode/body-count-65"
+	companionDecodeActiveCountFiveID     = companionFamily + "/" + companionVersionV5 + "/decode/active-count-five"
+	companionDecodeDuplicateLifecycleID  = companionFamily + "/" + companionVersionV5 + "/decode/duplicate-lifecycle"
+	companionDecodeMissingLifecycleID    = companionFamily + "/" + companionVersionV5 + "/decode/missing-lifecycle"
+	companionDecodeOrphanQueueID         = companionFamily + "/" + companionVersionV5 + "/decode/orphan-queue"
+	companionDecodeInactiveQueueID       = companionFamily + "/" + companionVersionV5 + "/decode/inactive-queue"
+	companionDecodeCommandOverLimitID    = companionFamily + "/" + companionVersionV5 + "/decode/command-over-limit"
+	companionDecodePlanStepsOverLimitID  = companionFamily + "/" + companionVersionV5 + "/decode/plan-steps-over-limit"
+	companionDecodeFIFOOverLimitID       = companionFamily + "/" + companionVersionV5 + "/decode/fifo-over-limit"
+	companionDecodeSummaryOverLimitID    = companionFamily + "/" + companionVersionV5 + "/decode/summary-over-limit"
+	companionDecodeV5InvalidVersionZeroID   = companionFamily + "/" + companionVersionV5 + "/decode/invalid-version-zero"
+	companionDecodeV5InvalidVersionFutureID = companionFamily + "/" + companionVersionV5 + "/decode/invalid-version-future"
+	companionDecodeTruncatedHeaderID     = companionFamily + "/" + companionVersionV5 + "/decode/truncated-header"
+	companionDecodeTrailingByteID        = companionFamily + "/" + companionVersionV5 + "/decode/trailing-byte"
+	companionDecodeV5CorruptCRCID        = companionFamily + "/" + companionVersionV5 + "/decode/corrupt-crc"
+	companionDecodeMalformedUUIDID       = companionFamily + "/" + companionVersionV5 + "/decode/malformed-uuid"
 
 	companionHeaderLength = 32
 	companionRecordLength = 221
+
+	companionV5TaskStepsCountOffset = companionHeaderLength + 16 + companionRecordLength + 1 + 8 + 8 + 16 + 2 + 2 + 2
+	companionV5TaskFIFOCountOffset  = companionV5TaskStepsCountOffset + 2 + 13 + 4 + 1 + 1 + 8 + 8
+	companionV5SummaryPrefixOffset  = companionHeaderLength + 16 + companionRecordLength + 1 + 8 + 8 + 16
 
 	companionLegacyFlagHasTask    = 1 << 0
 	companionLegacyFlagHasFIFO    = 1 << 1
@@ -47,7 +76,9 @@ const (
 	companionDecodeV4InvalidVersionFutureID = companionFamily + "/4/decode/invalid-version-future"
 )
 
-type companionCaseArguments struct{}
+type companionCaseArguments struct {
+	Capacity *uint32 `json:"capacity,omitempty"`
+}
 
 type companionCandidate struct {
 	Spec    CaseSpec
@@ -56,8 +87,12 @@ type companionCandidate struct {
 	Encoded []byte
 }
 
-func companionArgumentsJSON() json.RawMessage {
-	raw, err := json.Marshal(companionCaseArguments{})
+func companionArgumentsJSON(capacity *uint32) json.RawMessage {
+	args := companionCaseArguments{}
+	if capacity != nil {
+		args.Capacity = capacity
+	}
+	raw, err := json.Marshal(args)
 	if err != nil {
 		panic(err)
 	}
@@ -459,13 +494,86 @@ func runCompanionDecode(c CaseSpec, input []byte) (Outcome, []byte, error) {
 	return Outcome{Kind: "ok", Category: "save", Fields: map[string]any{"value_sha256": digest}}, nil, nil
 }
 
+func storedCompanionToSave(stored companion.StoredCompanions) companion.CompanionSave {
+	return companion.CompanionSave{
+		Revision:         stored.Revision,
+		AgentNamespaceID: stored.AgentNamespaceID,
+		Records:          stored.Records,
+		Lifecycles:       stored.Lifecycles,
+		Queues:           stored.Queues,
+	}
+}
+
+func runCompanionEncode(c CaseSpec, input []byte) (Outcome, []byte, error) {
+	args, err := parseCompanionArguments(c)
+	if err != nil {
+		return Outcome{}, nil, fmt.Errorf("runtime-oracle: case %s: %w", c.ID, err)
+	}
+	stored, err := companion.Decode(input)
+	if err != nil {
+		category, ok := companionStorageErrorCategory(err)
+		if !ok {
+			return Outcome{}, nil, fmt.Errorf("runtime-oracle: case %s: unclassified rejection: %w", c.ID, err)
+		}
+		return Outcome{Kind: "error", Category: category}, nil, nil
+	}
+	digest := storageValueSHA256(companionStoredValueTree(stored))
+	save := storedCompanionToSave(stored)
+	encoded, err := companion.Encode(save)
+	if err != nil {
+		category, ok := companionStorageErrorCategory(err)
+		if !ok {
+			return Outcome{}, nil, fmt.Errorf("runtime-oracle: case %s: unclassified encode rejection: %w", c.ID, err)
+		}
+		return Outcome{Kind: "error", Category: category}, nil, nil
+	}
+	if args.Capacity != nil {
+		if int(*args.Capacity) < len(encoded) {
+			return Outcome{
+				Kind:     "error",
+				Category: "output_too_small",
+				Fields: map[string]any{
+					"needed":    len(encoded),
+					"available": int(*args.Capacity),
+				},
+			}, nil, nil
+		}
+	}
+	round, err := companion.Decode(encoded)
+	if err != nil {
+		return Outcome{}, nil, fmt.Errorf("runtime-oracle: case %s: re-decode output: %w", c.ID, err)
+	}
+	if round.SourceSchema != companion.CurrentSchema {
+		return Outcome{}, nil, fmt.Errorf("runtime-oracle: case %s: encoded output schema %d", c.ID, round.SourceSchema)
+	}
+	length := len(encoded)
+	return Outcome{
+		Kind:     "ok",
+		Category: "save",
+		Fields: map[string]any{
+			"value_sha256": digest,
+			"length":       length,
+		},
+	}, encoded, nil
+}
+
 func buildCompanionCandidate(
 	t *testing.T,
 	id, operation, caseVersion string,
 	input []byte,
 	args json.RawMessage,
+	wantEncoded []byte,
 ) companionCandidate {
 	t.Helper()
+	var producer GoOperation
+	switch operation {
+	case "decode":
+		producer = runCompanionDecode
+	case "encode":
+		producer = runCompanionEncode
+	default:
+		t.Fatalf("unsupported operation %q", operation)
+	}
 	spec := CaseSpec{
 		ID:           id,
 		Family:       companionFamily,
@@ -476,7 +584,7 @@ func buildCompanionCandidate(
 		Checkpoints:  []string{"0"},
 		RustConsumer: storageConsumerName,
 	}
-	outcome, _, err := runCompanionDecode(spec, input)
+	outcome, producedEncoded, err := producer(spec, input)
 	if err != nil {
 		t.Fatalf("execute %s: %v", id, err)
 	}
@@ -488,6 +596,18 @@ func buildCompanionCandidate(
 	if err != nil {
 		t.Fatalf("marshal expected %s: %v", id, err)
 	}
+	encoded := wantEncoded
+	if operation == "encode" {
+		if len(producedEncoded) == 0 && saveOutcome.Kind == "ok" {
+			t.Fatalf("encode case %s produced no bytes", id)
+		}
+		if saveOutcome.Kind == "ok" {
+			if encoded != nil && !bytes.Equal(producedEncoded, encoded) {
+				t.Fatalf("encode case %s bytes mismatch", id)
+			}
+			encoded = producedEncoded
+		}
+	}
 	stem := strings.ReplaceAll(id, "/", "_")
 	inputRel := filepath.ToSlash(filepath.Join(companionCorpusRelDir, stem+".input.bin"))
 	expectedRel := filepath.ToSlash(filepath.Join(companionCorpusRelDir, stem+".expected.json"))
@@ -497,27 +617,378 @@ func buildCompanionCandidate(
 	}
 	spec.Input = AssetRef{Path: inputRel, SHA256: digestOf(t, input)}
 	spec.Expected = AssetRef{Path: expectedRel, SHA256: digestOf(t, expectedBytes)}
-	return companionCandidate{Spec: spec, Assets: assets, Expect: saveOutcome}
+	if operation == "encode" && saveOutcome.Kind == "ok" {
+		encodedRel := filepath.ToSlash(filepath.Join(companionCorpusRelDir, stem+".encoded.bin"))
+		assets[encodedRel] = encoded
+		spec.Encoded = &AssetRef{Path: encodedRel, SHA256: digestOf(t, encoded)}
+	}
+	return companionCandidate{Spec: spec, Assets: assets, Expect: saveOutcome, Encoded: encoded}
+}
+
+func oracleAgentIdentity(last byte) companion.Identity {
+	return companion.Identity{
+		0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x46, 0x17,
+		0x88, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, last,
+	}
+}
+
+func oracleCompanionID(last byte) sharedcompanion.ID {
+	return sharedcompanion.ID{
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x46, 0x77,
+		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, last,
+	}
+}
+
+func oracleFollowPlayerID() core.PlayerID {
+	return core.PlayerID{
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x46, 0x77,
+		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x05,
+	}
+}
+
+func oracleCompanionBodies() []sharedcompanion.Body {
+	stoneFull, _ := core.ItemMaxDurability(core.ItemStonePickaxe)
+	ironFull, _ := core.ItemMaxDurability(core.ItemIronPickaxe)
+	high := sharedcompanion.Body{
+		ID: oracleCompanionID(2), Dimension: core.Overworld,
+		Position: [3]float32{-12.5, 70, 3.25}, Yaw: 1.25, Pitch: -0.5,
+	}
+	high.Inventory.Hotbar.Selected = 4
+	high.Inventory.Hotbar.Slots[0] = core.ItemStack{Item: core.ItemStone, Count: 64}
+	high.Inventory.Hotbar.Slots[4] = core.ItemStack{Item: core.ItemStonePickaxe, Count: 1, Durability: stoneFull}
+	high.Inventory.Backpack[0] = core.ItemStack{Item: core.ItemOakLog, Count: 7}
+	low := sharedcompanion.Body{
+		ID: oracleCompanionID(1), Dimension: core.Overworld,
+		Position: [3]float32{8.5, 65, -9.75}, Yaw: -2.5, Pitch: 0.75,
+	}
+	low.Inventory.Hotbar.Selected = 2
+	low.Inventory.Hotbar.Slots[2] = core.ItemStack{Item: core.ItemGlass, Count: 12}
+	low.Inventory.Backpack[7] = core.ItemStack{Item: core.ItemIronPickaxe, Count: 1, Durability: ironFull}
+	low.Inventory.Backpack[core.BackpackSlots-1] = core.ItemStack{Item: core.ItemDirt, Count: 5}
+	return []sharedcompanion.Body{high, low}
+}
+
+func oracleV5Lifecycle(id sharedcompanion.ID, active bool, epoch uint64) companion.StoredCompanionLifecycle {
+	lifecycle := companion.StoredCompanionLifecycle{ID: id, Active: active, MemoryEpoch: epoch}
+	if !active {
+		lifecycle.TombstoneOperationID = oracleAgentIdentity(id[15] + 0x40)
+	}
+	return lifecycle
+}
+
+func oracleV5Queues() []companion.StoredCompanionQueue {
+	queue := companion.StoredCompanionQueue{
+		ID: oracleCompanionID(1), HasCurrent: true,
+		Current: companion.StoredCompanionTask{
+			Command: "去橡树旁挖一格垫一块再跟着我",
+			PlanSteps: []sharedcompanion.PlanStep{
+				{Kind: sharedcompanion.PlanStepGoTo, X: -8, Y: 70, Z: 6},
+				{Kind: sharedcompanion.PlanStepMine, X: -7, Y: 69, Z: 6},
+				{Kind: sharedcompanion.PlanStepPlace, X: -6, Y: 69, Z: 6, Block: core.OakPlanksID},
+				{Kind: sharedcompanion.PlanStepFollow, PlayerID: oracleFollowPlayerID()},
+			},
+			StepIndex: 2, State: sharedcompanion.TaskRunning, StartTick: 2400,
+		},
+		Pending: make([]string, companion.MaxCompanionFIFOEntries),
+	}
+	for index := range queue.Pending {
+		queue.Pending[index] = fmt.Sprintf("v3排队第%d条", index+1)
+	}
+	return []companion.StoredCompanionQueue{queue}
+}
+
+func oracleV5GoldenSave() companion.CompanionSave {
+	bodies := oracleCompanionBodies()
+	inactiveBody := bodies[0]
+	inactiveBody.ID = oracleCompanionID(3)
+	inactiveBody.Position = [3]float32{24.5, 68, -17.5}
+	records := []sharedcompanion.Body{bodies[1], bodies[0], inactiveBody}
+	nonzero := oracleV5Lifecycle(records[0].ID, true, 7)
+	nonzero.MemoryRevision = 11
+	nonzero.MemoryOperationID = oracleAgentIdentity(0x71)
+	nonzero.Summary = "阿木记得北边橡树旁的小路。"
+	zero := oracleV5Lifecycle(records[1].ID, true, 3)
+	inactive := oracleV5Lifecycle(records[2].ID, false, 9)
+	inactive.TombstoneOperationID = oracleAgentIdentity(0x73)
+	return companion.CompanionSave{
+		Revision: 47, AgentNamespaceID: oracleAgentIdentity(0x70),
+		Records: records, Lifecycles: []companion.StoredCompanionLifecycle{nonzero, zero, inactive},
+		Queues: oracleV5Queues(),
+	}
+}
+
+func oracleV5RoundTripAltSave() companion.CompanionSave {
+	records := oracleCompanionBodies()
+	active := oracleV5Lifecycle(oracleCompanionID(1), true, 7)
+	active.MemoryRevision = 11
+	active.MemoryOperationID = oracleAgentIdentity(0x71)
+	active.Summary = "保留的恢复摘要"
+	inactive := oracleV5Lifecycle(oracleCompanionID(2), false, 9)
+	return companion.CompanionSave{
+		Revision: 47, AgentNamespaceID: oracleAgentIdentity(0x70),
+		Records: records, Lifecycles: []companion.StoredCompanionLifecycle{inactive, active},
+		Queues: oracleV5Queues(),
+	}
+}
+
+func mustEncodeCompanionSave(t *testing.T, save companion.CompanionSave) []byte {
+	t.Helper()
+	if save.AgentNamespaceID == (companion.Identity{}) {
+		save.AgentNamespaceID = oracleAgentIdentity(0x70)
+	}
+	if save.Lifecycles == nil {
+		save.Lifecycles = make([]companion.StoredCompanionLifecycle, len(save.Records))
+		for index, body := range save.Records {
+			save.Lifecycles[index] = oracleV5Lifecycle(body.ID, index < sharedcompanion.MaxActive, 1)
+		}
+	}
+	encoded, err := companion.Encode(save)
+	if err != nil {
+		t.Fatalf("encode companion save: %v", err)
+	}
+	return encoded
+}
+
+func readCompanionV5Fixture(t *testing.T, root string) []byte {
+	t.Helper()
+	rel := "packages/server/storage/companion/testdata/companions-v5.bin"
+	full := filepath.Join(root, filepath.FromSlash(rel))
+	data, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("read companion v5 fixture: %v", err)
+	}
+	return data
+}
+
+func companionTruncatedHeaderWire(wire []byte) []byte {
+	if len(wire) <= 1 {
+		return bytes.Clone(wire)
+	}
+	end := companionHeaderLength - 1
+	if end > len(wire) {
+		end = len(wire)
+	}
+	return bytes.Clone(wire[:end])
+}
+
+func companionTrailingByteWire(wire []byte) []byte {
+	return append(bytes.Clone(wire), 0)
+}
+
+func companionBodyCount65HeaderWire() []byte {
+	oversized := make([]byte, companionHeaderLength)
+	copy(oversized, "MCAI")
+	binary.LittleEndian.PutUint32(oversized[4:], 1)
+	binary.LittleEndian.PutUint32(oversized[8:], 5)
+	binary.LittleEndian.PutUint64(oversized[12:], 1)
+	binary.LittleEndian.PutUint32(oversized[20:], sharedcompanion.MaxStored+1)
+	binary.LittleEndian.PutUint32(oversized[24:], (sharedcompanion.MaxStored+1)*companionRecordLength)
+	companionResealCRC(oversized)
+	return oversized
+}
+
+func companionTaskBearingV5Wire(t *testing.T) []byte {
+	t.Helper()
+	return mustEncodeCompanionSave(t, companion.CompanionSave{
+		Revision: 5,
+		Records:  oracleCompanionBodies()[:1],
+		Queues: []companion.StoredCompanionQueue{{
+			ID: oracleCompanionID(2), HasCurrent: true,
+			Current: companion.StoredCompanionTask{
+				Command:   "go",
+				PlanSteps: []sharedcompanion.PlanStep{{Kind: sharedcompanion.PlanStepGoTo, X: 1, Y: 64, Z: 2}},
+				State:     sharedcompanion.TaskRunning, StartTick: 5, DeadlineTicks: 1205,
+			},
+			Pending: []string{"go", "go2"},
+		}},
+	})
+}
+
+func companionMaximumLegalV5Wire(t *testing.T) []byte {
+	t.Helper()
+	records := make([]sharedcompanion.Body, sharedcompanion.MaxStored)
+	lifecycles := make([]companion.StoredCompanionLifecycle, sharedcompanion.MaxStored)
+	queues := make([]companion.StoredCompanionQueue, sharedcompanion.MaxActive)
+	for index := range records {
+		records[index] = oracleCompanionBodies()[0]
+		records[index].ID = oracleCompanionID(byte(index + 1))
+		active := index < sharedcompanion.MaxActive
+		lifecycles[index] = oracleV5Lifecycle(records[index].ID, active, uint64(index+1))
+		if !active {
+			continue
+		}
+		lifecycles[index].MemoryRevision = uint64(index + 1)
+		lifecycles[index].MemoryOperationID = oracleAgentIdentity(byte(0x80 + index))
+		lifecycles[index].Summary = strings.Repeat("s", companion.MaxCompanionSummaryBytes)
+		steps := make([]sharedcompanion.PlanStep, companion.MaxCompanionPlanSteps)
+		for step := 0; step < companion.MaxCompanionPlanSteps-1; step++ {
+			steps[step] = sharedcompanion.PlanStep{
+				Kind: sharedcompanion.PlanStepPlace, X: int32(step), Y: 64, Z: -int32(step), Block: core.OakPlanksID,
+			}
+		}
+		steps[len(steps)-1] = sharedcompanion.PlanStep{Kind: sharedcompanion.PlanStepFollow, PlayerID: oracleFollowPlayerID()}
+		queues[index] = companion.StoredCompanionQueue{
+			ID: records[index].ID, HasCurrent: true,
+			Current: companion.StoredCompanionTask{
+				Command: strings.Repeat("c", companion.MaxCompanionTaskCommandBytes),
+				PlanSteps: steps, StepIndex: len(steps) - 1, State: sharedcompanion.TaskRunning, StartTick: 1,
+			},
+			Pending: make([]string, companion.MaxCompanionFIFOEntries),
+		}
+		for pending := range queues[index].Pending {
+			queues[index].Pending[pending] = strings.Repeat("p", companion.MaxCompanionTaskCommandBytes)
+		}
+	}
+	wire := mustEncodeCompanionSave(t, companion.CompanionSave{
+		Revision: 1, AgentNamespaceID: oracleAgentIdentity(0x70),
+		Records: records, Lifecycles: lifecycles, Queues: queues,
+	})
+	if len(wire) != companion.MaxFileLength {
+		t.Fatalf("maximum legal wire length = %d, want %d", len(wire), companion.MaxFileLength)
+	}
+	return wire
+}
+
+func companionMinimalActiveRecordPayload(t *testing.T, id byte) []byte {
+	t.Helper()
+	body := oracleCompanionBodies()[0]
+	body.ID = oracleCompanionID(id)
+	wire := mustEncodeCompanionSave(t, companion.CompanionSave{
+		Revision: 1,
+		Records:  []sharedcompanion.Body{body},
+		Lifecycles: []companion.StoredCompanionLifecycle{oracleV5Lifecycle(body.ID, true, 1)},
+	})
+	return bytes.Clone(wire[companionHeaderLength+16:])
+}
+
+func companionV5WireFromPayload(t *testing.T, revision uint64, recordCount uint32, payload []byte) []byte {
+	t.Helper()
+	header := make([]byte, companionHeaderLength)
+	copy(header, "MCAI")
+	binary.LittleEndian.PutUint32(header[4:], 1)
+	binary.LittleEndian.PutUint32(header[8:], 5)
+	binary.LittleEndian.PutUint64(header[12:], revision)
+	binary.LittleEndian.PutUint32(header[20:], recordCount)
+	binary.LittleEndian.PutUint32(header[24:], uint32(len(payload)))
+	namespace := oracleAgentIdentity(0x70)
+	out := append(header, namespace[:]...)
+	out = append(out, payload...)
+	companionResealCRC(out)
+	return out
+}
+
+func companionFiveActiveWire(t *testing.T) []byte {
+	t.Helper()
+	var payload []byte
+	for id := byte(1); id <= 5; id++ {
+		payload = append(payload, companionMinimalActiveRecordPayload(t, id)...)
+	}
+	return companionV5WireFromPayload(t, 1, 5, payload)
+}
+
+func companionCurrentCandidates(t *testing.T) []companionCandidate {
+	t.Helper()
+	root := mustRepoRoot(t)
+	args := companionArgumentsJSON(nil)
+	v5Fixture := readCompanionV5Fixture(t, root)
+	roundTripAlt := mustEncodeCompanionSave(t, oracleV5RoundTripAltSave())
+	maxLegal := companionMaximumLegalV5Wire(t)
+	canonical := buildCompanionCandidate(t, companionEncodeV5CanonicalID, "encode", companionVersionV5, v5Fixture, args, nil)
+	capacity := uint32(len(canonical.Encoded) - 1)
+	capacityCase := buildCompanionCandidate(t, companionEncodeCapacityMinusOneID, "encode", companionVersionV5, v5Fixture, companionArgumentsJSON(&capacity), nil)
+	return []companionCandidate{
+		buildCompanionCandidate(t, companionDecodeV5FixtureID, "decode", companionVersionV5, v5Fixture, args, nil),
+		buildCompanionCandidate(t, companionDecodeV5RoundTripAltID, "decode", companionVersionV5, roundTripAlt, args, nil),
+		buildCompanionCandidate(t, companionDecodeV5MaxLegalID, "decode", companionVersionV5, maxLegal, args, nil),
+		canonical,
+		capacityCase,
+	}
+}
+
+func companionAdversarialCandidates(t *testing.T) []companionCandidate {
+	t.Helper()
+	base := companionTaskBearingV5Wire(t)
+	golden := readCompanionV5Fixture(t, mustRepoRoot(t))
+	args := companionArgumentsJSON(nil)
+	patch := func(wire []byte, mutate func([]byte)) []byte {
+		out := bytes.Clone(wire)
+		mutate(out)
+		companionResealCRC(out)
+		return out
+	}
+	onePayload := companionMinimalActiveRecordPayload(t, 1)
+	duplicatePayload := append(bytes.Clone(onePayload), bytes.Clone(onePayload)...)
+	duplicateLifecycleWire := companionV5WireFromPayload(t, 1, 2, duplicatePayload)
+	missingLifecycleWire := patch(companionV5WireFromPayload(t, 1, 1, onePayload), func(out []byte) {
+		epochOffset := companionHeaderLength + 16 + companionRecordLength + 1
+		clear(out[epochOffset : epochOffset+8])
+	})
+	inactiveQueueWire := patch(bytes.Clone(base), func(out []byte) {
+		out[companionHeaderLength+16+companionRecordLength] = companionLegacyFlagHasFIFO
+	})
+	orphanQueueWire := patch(bytes.Clone(base), func(out []byte) {
+		idOffset := companionHeaderLength + 16
+		orphanID := oracleCompanionID(9)
+		copy(out[idOffset:idOffset+16], orphanID[:])
+	})
+	return []companionCandidate{
+		buildCompanionCandidate(t, companionDecodeBodyCount65ID, "decode", companionVersionV5, companionBodyCount65HeaderWire(), args, nil),
+		buildCompanionCandidate(t, companionDecodeActiveCountFiveID, "decode", companionVersionV5, companionFiveActiveWire(t), args, nil),
+		buildCompanionCandidate(t, companionDecodeDuplicateLifecycleID, "decode", companionVersionV5, duplicateLifecycleWire, args, nil),
+		buildCompanionCandidate(t, companionDecodeMissingLifecycleID, "decode", companionVersionV5, missingLifecycleWire, args, nil),
+		buildCompanionCandidate(t, companionDecodeOrphanQueueID, "decode", companionVersionV5, orphanQueueWire, args, nil),
+		buildCompanionCandidate(t, companionDecodeInactiveQueueID, "decode", companionVersionV5, inactiveQueueWire, args, nil),
+		buildCompanionCandidate(t, companionDecodeCommandOverLimitID, "decode", companionVersionV5, patch(base, func(out []byte) {
+			cmdLenOffset := companionHeaderLength + 16 + companionRecordLength + 1 + 8 + 8 + 16 + 2
+			binary.LittleEndian.PutUint16(out[cmdLenOffset:], uint16(companion.MaxCompanionTaskCommandBytes+1))
+		}), args, nil),
+		buildCompanionCandidate(t, companionDecodePlanStepsOverLimitID, "decode", companionVersionV5, patch(base, func(out []byte) {
+			binary.LittleEndian.PutUint16(out[companionV5TaskStepsCountOffset:], uint16(companion.MaxCompanionPlanSteps+1))
+		}), args, nil),
+		buildCompanionCandidate(t, companionDecodeFIFOOverLimitID, "decode", companionVersionV5, patch(base, func(out []byte) {
+			out[companionV5TaskFIFOCountOffset] = byte(companion.MaxCompanionFIFOEntries + 1)
+		}), args, nil),
+		buildCompanionCandidate(t, companionDecodeSummaryOverLimitID, "decode", companionVersionV5, patch(golden, func(out []byte) {
+			binary.LittleEndian.PutUint16(out[companionV5SummaryPrefixOffset:], uint16(companion.MaxCompanionSummaryBytes+1))
+		}), args, nil),
+		buildCompanionCandidate(t, companionDecodeV5InvalidVersionZeroID, "decode", companionVersionV5, companionWireWithSchema(golden, 0), args, nil),
+		buildCompanionCandidate(t, companionDecodeV5InvalidVersionFutureID, "decode", companionVersionV5, companionWireWithSchema(golden, 6), args, nil),
+		buildCompanionCandidate(t, companionDecodeTruncatedHeaderID, "decode", companionVersionV5, companionTruncatedHeaderWire(golden), args, nil),
+		buildCompanionCandidate(t, companionDecodeTrailingByteID, "decode", companionVersionV5, companionTrailingByteWire(golden), args, nil),
+		buildCompanionCandidate(t, companionDecodeV5CorruptCRCID, "decode", companionVersionV5, companionCorruptCRCWire(golden), args, nil),
+		buildCompanionCandidate(t, companionDecodeMalformedUUIDID, "decode", companionVersionV5, patch(golden, func(out []byte) {
+			out[companionHeaderLength+6] = 0x30
+		}), args, nil),
+	}
+}
+
+func companionV5ExportCandidates(t *testing.T) []companionCandidate {
+	current := companionCurrentCandidates(t)
+	adversarial := companionAdversarialCandidates(t)
+	out := make([]companionCandidate, 0, len(current)+len(adversarial))
+	out = append(out, current...)
+	out = append(out, adversarial...)
+	return out
 }
 
 func companionLegacyCandidates(t *testing.T) []companionCandidate {
 	t.Helper()
 	root := mustRepoRoot(t)
-	args := companionArgumentsJSON()
+	args := companionArgumentsJSON(nil)
 	v1 := readCompanionLegacyFixture(t, root, 1)
 	v2 := readCompanionLegacyFixture(t, root, 2)
 	v3 := readCompanionLegacyFixture(t, root, 3)
 	v4 := readCompanionLegacyFixture(t, root, 4)
 
 	return []companionCandidate{
-		buildCompanionCandidate(t, companionDecodeV1FixtureID, "decode", "1", v1, args),
-		buildCompanionCandidate(t, companionDecodeV1TruncatedPayloadID, "decode", "1", companionTruncatedWire(v1, 1), args),
-		buildCompanionCandidate(t, companionDecodeV2FixtureID, "decode", "2", v2, args),
-		buildCompanionCandidate(t, companionDecodeV2CorruptCRCID, "decode", "2", companionCorruptCRCWire(v2), args),
-		buildCompanionCandidate(t, companionDecodeV3FixtureID, "decode", "3", v3, args),
-		buildCompanionCandidate(t, companionDecodeV3InvalidVersionZeroID, "decode", "3", companionWireWithSchema(v3, 0), args),
-		buildCompanionCandidate(t, companionDecodeV4FixtureID, "decode", "4", v4, args),
-		buildCompanionCandidate(t, companionDecodeV4InvalidVersionFutureID, "decode", "4", companionWireWithSchema(v4, 10), args),
+		buildCompanionCandidate(t, companionDecodeV1FixtureID, "decode", "1", v1, args, nil),
+		buildCompanionCandidate(t, companionDecodeV1TruncatedPayloadID, "decode", "1", companionTruncatedWire(v1, 1), args, nil),
+		buildCompanionCandidate(t, companionDecodeV2FixtureID, "decode", "2", v2, args, nil),
+		buildCompanionCandidate(t, companionDecodeV2CorruptCRCID, "decode", "2", companionCorruptCRCWire(v2), args, nil),
+		buildCompanionCandidate(t, companionDecodeV3FixtureID, "decode", "3", v3, args, nil),
+		buildCompanionCandidate(t, companionDecodeV3InvalidVersionZeroID, "decode", "3", companionWireWithSchema(v3, 0), args, nil),
+		buildCompanionCandidate(t, companionDecodeV4FixtureID, "decode", "4", v4, args, nil),
+		buildCompanionCandidate(t, companionDecodeV4InvalidVersionFutureID, "decode", "4", companionWireWithSchema(v4, 10), args, nil),
 	}
 }
 
@@ -534,11 +1005,32 @@ func companionLegacyRoutes() []ConsumerRoute {
 }
 
 func companionCorpusRoutes() map[ConsumerRoute]GoOperation {
-	routes := make(map[ConsumerRoute]GoOperation, len(companionLegacyRoutes()))
+	routes := make(map[ConsumerRoute]GoOperation, len(companionLegacyRoutes())+2)
 	for _, route := range companionLegacyRoutes() {
 		routes[route] = runCompanionDecode
 	}
+	for _, route := range companionCurrentRoutes() {
+		switch route.Operation {
+		case "decode":
+			routes[route] = runCompanionDecode
+		case "encode":
+			routes[route] = runCompanionEncode
+		}
+	}
 	return routes
+}
+
+func companionCurrentRoutes() []ConsumerRoute {
+	return []ConsumerRoute{
+		{FamilyID: companionFamily, Version: companionVersionV5, Operation: "decode"},
+		{FamilyID: companionFamily, Version: companionVersionV5, Operation: "encode"},
+	}
+}
+
+func companionAdversarialRoutes() []ConsumerRoute {
+	return []ConsumerRoute{
+		{FamilyID: companionFamily, Version: companionVersionV5, Operation: "decode"},
+	}
 }
 
 func companionSelection(t *testing.T, root string, candidates []companionCandidate, routes []ConsumerRoute) StorageSelection {
@@ -663,12 +1155,12 @@ func companionObservation(t *testing.T, observations []ExecutedObservation, id s
 	return ExecutedObservation{}
 }
 
-func exportCompanionSelectionCandidate(t *testing.T, root string, candidates []companionCandidate) string {
+func exportCompanionSelectionCandidate(t *testing.T, root string, candidates []companionCandidate, routes []ConsumerRoute) string {
 	t.Helper()
 	if strings.TrimSpace(os.Getenv(runtimeOracleExportDirEnv)) == "" {
 		return ""
 	}
-	selection := companionSelection(t, root, candidates, companionLegacyRoutes())
+	selection := companionSelection(t, root, candidates, routes)
 	var assets []generatedAsset
 	manifestBytes, err := json.Marshal(encodeStorageSelectionJSON(selection))
 	if err != nil {
@@ -693,7 +1185,7 @@ func exportCompanionSelectionCandidate(t *testing.T, root string, candidates []c
 }
 
 func TestStorageCompanionLegacyArgumentsValidate(t *testing.T) {
-	if err := validateStorageArguments(companionFamily, "decode", companionArgumentsJSON()); err != nil {
+	if err := validateStorageArguments(companionFamily, "decode", companionArgumentsJSON(nil)); err != nil {
 		t.Fatalf("validate companion decode arguments: %v", err)
 	}
 }
@@ -740,7 +1232,7 @@ func TestStorageCompanionLegacyQueueDigestMutationFailsComparison(t *testing.T) 
 	}
 	spec := CaseSpec{
 		ID: companionDecodeV4FixtureID, Family: companionFamily, Version: "4",
-		Operation: "decode", Arguments: companionArgumentsJSON(), InputFormat: "binary",
+		Operation: "decode", Arguments: companionArgumentsJSON(nil), InputFormat: "binary",
 		Checkpoints: []string{"0"}, RustConsumer: storageConsumerName,
 	}
 	outcome, _, err := runCompanionDecode(spec, v4)
@@ -765,7 +1257,7 @@ func TestStorageCompanionLegacyInputSwapDigestMutationFailsComparison(t *testing
 	dual := companionV3TwoDistinctQueuesWire(t, root)
 	spec := CaseSpec{
 		ID: companionDecodeV3FixtureID, Family: companionFamily, Version: "3",
-		Operation: "decode", Arguments: companionArgumentsJSON(), InputFormat: "binary",
+		Operation: "decode", Arguments: companionArgumentsJSON(nil), InputFormat: "binary",
 		Checkpoints: []string{"0"}, RustConsumer: storageConsumerName,
 	}
 	outcome, _, err := runCompanionDecode(spec, v3)
@@ -792,14 +1284,14 @@ func TestStorageCompanionLegacyInputSwapDigestMutationFailsComparison(t *testing
 func TestStorageCompanionLegacyExportUnsetWritesNothing(t *testing.T) {
 	root := mustRepoRoot(t)
 	t.Setenv(runtimeOracleExportDirEnv, "")
-	_ = exportCompanionSelectionCandidate(t, root, companionLegacyCandidates(t))
+	_ = exportCompanionSelectionCandidate(t, root, companionLegacyCandidates(t), companionLegacyRoutes())
 }
 
 func TestStorageCompanionLegacyCandidatesExportForReview(t *testing.T) {
 	root := mustRepoRoot(t)
 	exportRoot := filepath.Join(t.TempDir(), "companion-legacy-export-parent")
 	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
-	child := exportCompanionSelectionCandidate(t, root, companionLegacyCandidates(t))
+	child := exportCompanionSelectionCandidate(t, root, companionLegacyCandidates(t), companionLegacyRoutes())
 	if child == "" {
 		t.Fatal("export returned empty path with RUNTIME_ORACLE_EXPORT_DIR set")
 	}
@@ -814,11 +1306,162 @@ func TestStorageCompanionLegacyExportToPinnedDirectory(t *testing.T) {
 		t.Fatalf("pinned export child %s already exists", companionExportDir)
 	}
 	t.Setenv(runtimeOracleExportDirEnv, companionExportDir)
-	child := exportCompanionSelectionCandidate(t, root, companionLegacyCandidates(t))
+	child := exportCompanionSelectionCandidate(t, root, companionLegacyCandidates(t), companionLegacyRoutes())
 	if child == "" {
 		t.Fatal("export returned empty path")
 	}
 	if _, err := os.Stat(filepath.Join(child, storageSelectionManifest)); err != nil {
 		t.Fatalf("missing selection manifest under pinned export: %v", err)
+	}
+}
+
+func TestStorageCompanionCurrentArgumentsValidate(t *testing.T) {
+	if err := validateStorageArguments(companionFamily, "decode", companionArgumentsJSON(nil)); err != nil {
+		t.Fatalf("validate companion decode arguments: %v", err)
+	}
+	if err := validateStorageArguments(companionFamily, "encode", companionArgumentsJSON(nil)); err != nil {
+		t.Fatalf("validate companion encode arguments: %v", err)
+	}
+}
+
+func TestStorageCompanionCurrentProducerExecutesEveryCase(t *testing.T) {
+	root := mustRepoRoot(t)
+	candidates := companionCurrentCandidates(t)
+	const wantCases = 5
+	if len(candidates) != wantCases {
+		t.Fatalf("candidate count = %d, want %d", len(candidates), wantCases)
+	}
+	manifest := companionRunnerManifest(t, root, candidates)
+	staged := companionScratchRoot(t, candidates)
+	observations, err := RunStorageCases(staged, manifest, companionCorpusRoutes())
+	if err != nil {
+		t.Fatalf("RunStorageCases: %v", err)
+	}
+	for _, candidate := range candidates {
+		obs := companionObservation(t, observations, candidate.Spec.ID)
+		got, err := outcomeToStorageSave(obs.Outcome)
+		if err != nil {
+			t.Fatalf("case %s: %v", candidate.Spec.ID, err)
+		}
+		if !storageSaveOutcomesEqual(got, candidate.Expect) {
+			t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
+		}
+	}
+}
+
+func TestStorageCompanionCurrentQueueOwnerDigestMutationFailsComparison(t *testing.T) {
+	root := mustRepoRoot(t)
+	v5 := readCompanionV5Fixture(t, root)
+	stored, err := companion.Decode(v5)
+	if err != nil {
+		t.Fatalf("decode v5: %v", err)
+	}
+	stale := stored
+	if len(stale.Queues) > 0 {
+		stale.Queues[0].ID = oracleCompanionID(9)
+	}
+	spec := CaseSpec{
+		ID: companionDecodeV5FixtureID, Family: companionFamily, Version: companionVersionV5,
+		Operation: "decode", Arguments: companionArgumentsJSON(nil), InputFormat: "binary",
+		Checkpoints: []string{"0"}, RustConsumer: storageConsumerName,
+	}
+	outcome, _, err := runCompanionDecode(spec, v5)
+	if err != nil {
+		t.Fatalf("runCompanionDecode: %v", err)
+	}
+	got, err := outcomeToStorageSave(outcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleExpect := storageSaveOutcome{
+		Kind: "ok", Category: "save", ValueSHA256: storageValueSHA256(companionStoredValueTree(stale)),
+	}
+	if storageSaveOutcomesEqual(got, staleExpect) {
+		t.Fatal("queue owner mutation still matches stale expected digest")
+	}
+}
+
+func TestStorageCompanionCurrentFIFOOrderDigestMutationFailsComparison(t *testing.T) {
+	root := mustRepoRoot(t)
+	v5 := readCompanionV5Fixture(t, root)
+	stored, err := companion.Decode(v5)
+	if err != nil {
+		t.Fatalf("decode v5: %v", err)
+	}
+	stale := stored
+	if len(stale.Queues) > 0 && len(stale.Queues[0].Pending) > 0 {
+		stale.Queues[0].Pending[0] = stale.Queues[0].Pending[0] + "x"
+	}
+	spec := CaseSpec{
+		ID: companionDecodeV5FixtureID, Family: companionFamily, Version: companionVersionV5,
+		Operation: "decode", Arguments: companionArgumentsJSON(nil), InputFormat: "binary",
+		Checkpoints: []string{"0"}, RustConsumer: storageConsumerName,
+	}
+	outcome, _, err := runCompanionDecode(spec, v5)
+	if err != nil {
+		t.Fatalf("runCompanionDecode: %v", err)
+	}
+	got, err := outcomeToStorageSave(outcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleExpect := storageSaveOutcome{
+		Kind: "ok", Category: "save", ValueSHA256: storageValueSHA256(companionStoredValueTree(stale)),
+	}
+	if storageSaveOutcomesEqual(got, staleExpect) {
+		t.Fatal("FIFO order mutation still matches stale expected digest")
+	}
+}
+
+func TestStorageCompanionCurrentExportUnsetWritesNothing(t *testing.T) {
+	root := mustRepoRoot(t)
+	t.Setenv(runtimeOracleExportDirEnv, "")
+	_ = exportCompanionSelectionCandidate(t, root, companionV5ExportCandidates(t), companionCurrentRoutes())
+}
+
+func TestStorageCompanionCurrentCandidatesExportForReview(t *testing.T) {
+	root := mustRepoRoot(t)
+	exportRoot := filepath.Join(t.TempDir(), "companion-current-export-parent")
+	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
+	child := exportCompanionSelectionCandidate(t, root, companionV5ExportCandidates(t), companionCurrentRoutes())
+	if child == "" {
+		t.Fatal("export returned empty path with RUNTIME_ORACLE_EXPORT_DIR set")
+	}
+}
+
+func TestStorageCompanionCurrentExportToPinnedDirectory(t *testing.T) {
+	root := mustRepoRoot(t)
+	if _, err := os.Stat(companionCurrentExportDir); err == nil {
+		t.Fatalf("pinned export child %s already exists", companionCurrentExportDir)
+	}
+	t.Setenv(runtimeOracleExportDirEnv, companionCurrentExportDir)
+	child := exportCompanionSelectionCandidate(t, root, companionV5ExportCandidates(t), companionCurrentRoutes())
+	if child == "" {
+		t.Fatal("export returned empty path")
+	}
+}
+
+func TestStorageCompanionAdversarialProducerExecutesEveryCase(t *testing.T) {
+	root := mustRepoRoot(t)
+	candidates := companionAdversarialCandidates(t)
+	const wantCases = 16
+	if len(candidates) != wantCases {
+		t.Fatalf("candidate count = %d, want %d", len(candidates), wantCases)
+	}
+	manifest := companionRunnerManifest(t, root, candidates)
+	staged := companionScratchRoot(t, candidates)
+	observations, err := RunStorageCases(staged, manifest, companionCorpusRoutes())
+	if err != nil {
+		t.Fatalf("RunStorageCases: %v", err)
+	}
+	for _, candidate := range candidates {
+		obs := companionObservation(t, observations, candidate.Spec.ID)
+		got, err := outcomeToStorageSave(obs.Outcome)
+		if err != nil {
+			t.Fatalf("case %s: %v", candidate.Spec.ID, err)
+		}
+		if !storageSaveOutcomesEqual(got, candidate.Expect) {
+			t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
+		}
 	}
 }
