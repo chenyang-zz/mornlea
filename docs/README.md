@@ -1,6 +1,6 @@
 ---
 doc_id: documentation-map
-doc_revision: 2026-09-23.1
+doc_revision: 2026-09-25.1
 language: en
 counterpart: README.zh.md
 ---
@@ -18,6 +18,7 @@ This index is navigation only; it does not repeat the content of the linked docu
 | Active changes | [`openspec/changes/`](../openspec/changes/) | Changes being proposed or implemented |
 | OpenSpec workflow | [`docs/openspec.md`](openspec.md) | Proposal, implementation, validation, and archive rules |
 | Development process | [`docs/development-process.md`](development-process.md) | Task roles, execution stages, review, and gates |
+| Interface-first parallel development | [`docs/interface-first-parallel-development.md`](interface-first-parallel-development.md) | Shared contract landing, task readiness, and integration evidence |
 | Continuous integration | [`docs/continuous-integration.md`](continuous-integration.md) | Required and optional workflows, platform routing, artifacts, and local entry points |
 | Test organization and quick checks | [`docs/test-organization.md`](test-organization.md), [`docs/notes/test-quickstart.md`](notes/test-quickstart.md) | Test-file organization, tiers, and focused commands |
 | Progress and backlog | [`docs/notes/progress.md`](notes/progress.md), [`docs/feature-backlog.md`](feature-backlog.md) | Implementation chronology, current plans, and backlog |

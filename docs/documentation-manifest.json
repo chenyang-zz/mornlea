@@ -51,7 +51,7 @@
       ],
       "english_path": "docs/README.md",
       "chinese_path": "docs/README.zh.md",
-      "revision": "2026-09-23.1"
+      "revision": "2026-09-25.1"
     },
     {
       "id": "agent-guidance-style",
@@ -141,7 +141,7 @@
       ],
       "english_path": "docs/development-process.md",
       "chinese_path": "docs/development-process.zh.md",
-      "revision": "2026-09-23.1"
+      "revision": "2026-09-25.1"
     },
     {
       "id": "interface-first-parallel-development",

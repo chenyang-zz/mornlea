@@ -1,6 +1,6 @@
 ---
 doc_id: documentation-map
-doc_revision: 2026-09-23.1
+doc_revision: 2026-09-25.1
 language: zh-CN
 counterpart: README.md
 ---
@@ -18,6 +18,7 @@ counterpart: README.md
 | 活跃变更 | [`openspec/changes/`](../openspec/changes/) | 正在提议或实施的变更产物 |
 | OpenSpec 流程 | [`docs/openspec.md`](openspec.md) | 提案、实现、校验与归档规则 |
 | 开发流程 | [`docs/development-process.md`](development-process.md) | 任务角色、执行阶段、评审和门禁 |
+| 接口先行的并行开发 | [`docs/interface-first-parallel-development.zh.md`](interface-first-parallel-development.zh.md) | 共享契约落地、任务开工和集成证据 |
 | 持续集成 | [`docs/continuous-integration.zh.md`](continuous-integration.zh.md) | 必需与可选工作流、平台分工、产物和本地入口 |
 | 测试组织与快检 | [`docs/test-organization.md`](test-organization.md)、[`docs/notes/test-quickstart.md`](notes/test-quickstart.md) | 测试文件组织、分层与定点命令 |
 | 进度与待办 | [`docs/notes/progress.md`](notes/progress.md)、[`docs/feature-backlog.md`](feature-backlog.md) | 实现编年史、当前规划与待办 |
