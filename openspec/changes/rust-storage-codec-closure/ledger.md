@@ -202,6 +202,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the return-shape fix: `chunk_codec context_` 6/6; `logical_` 13/13; `runtime_contract chunk_` 10/10. `make rust` passed on `5aaa54cd`.
 - Architecture skill: no change. The reusable context and the single envelope parser are local to this codec.
 
+## 2026-09-25 — SDD execution: node 4.3a closed
+
+- Commits: `ff43a5a3` early chunk producer and Rust executor; `82e45dfc` temp export root; `a6bd9815` v4 tool-split pin in the test only; `416a0f75` integration of eight `save.chunk` decode cases and routes 1–4.
+- The first pinned selection hashed `ff43a5a3` and was not imported. The replacement at `/tmp/runtime-oracle-chunk-4.3a-fix` was pretty-printed after export. The approved candidate is the compact 5640-byte tree at `/tmp/runtime-oracle-chunk-4.3a-fix2/chunk/migration/`, byte-identical to a fresh exporter run of `a6bd9815`.
+- Reviews of the producer, the tool pin, the compact handoff, and the integration approved. No remaining Critical or Important findings.
+- Minor findings held for the final review: v3 does not assert empty chests; the Go digest mutation shares the `*world.Chunk` pointer; the v2 invalid id is named `corrupt-crc` for a compressed-frame byte; `chunkPinnedExportDir` is unused; the exporter refusals have no subtest; the tool pin does not check `Active` or `Generation`.
+- `save.chunk` has 8 cases. `save.region` stays at 26. `save.player` stays at 37. `save.world-metadata` stays at 15. `save.hostile` stays at 50. `save.passive` stays at 70. Save total is 206. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 57/57 including nonempty `chunk_legacy_early_`; `runtime_contract chunk_` 10/10.
+- Architecture skill: no change. The external compact-export handoff is already the corpus-contract rule.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
