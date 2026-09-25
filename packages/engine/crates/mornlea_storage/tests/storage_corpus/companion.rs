@@ -308,6 +308,9 @@ fn assert_ok_outcome(case: &FrozenCase) -> Result<(), String> {
 }
 
 fn assert_error_category(case: &FrozenCase, category: &str) -> Result<(), String> {
+    if case.normalized.get("kind").and_then(JsonValue::as_str) != Some("error") {
+        return Err(format!("case {} expected kind error", case.id));
+    }
     match case.normalized.get("category").and_then(JsonValue::as_str) {
         Some(value) if value == category => Ok(()),
         other => Err(format!(
@@ -443,7 +446,7 @@ fn execute_companion_encode(case: &FrozenCase, args: &CompanionArguments) -> Res
     let digest_value = companions_value(&stored);
     let save = stored_to_save(&stored);
     let needed = companions_encoded_len(&save).map_err(|err| err.to_string())?;
-    let buf_len = args.capacity.map(|cap| cap as usize).unwrap_or(needed);
+    let buf_len = super::checked_output_capacity(case, args.capacity, needed)?;
     let mut encoded = vec![0u8; buf_len];
     let written = match encode_companions_into(&save, &mut encoded) {
         Err(StorageError::OutputTooSmall {
@@ -458,30 +461,29 @@ fn execute_companion_encode(case: &FrozenCase, args: &CompanionArguments) -> Res
         Ok(len) => len,
     };
     encoded.truncate(written);
-    if case.normalized.get("kind").and_then(JsonValue::as_str) == Some("ok") {
-        expected_value_digest(case, &digest_value)?;
-        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64)
-            && length as usize != encoded.len()
-        {
-            return Err(format!(
-                "case {} encoded length {}, want {}",
-                case.id,
-                encoded.len(),
-                length
-            ));
-        }
-        if let Some(expected) = &case.encoded
-            && expected.as_slice() != encoded.as_slice()
-        {
-            return Err(format!("case {} encoded bytes mismatch", case.id));
-        }
-        let round = decode_companions(&encoded).map_err(|err| err.to_string())?;
-        if round.source_schema != 5 {
-            return Err(format!(
-                "case {} encoded output schema {}",
-                case.id, round.source_schema
-            ));
-        }
+    assert_ok_outcome(case)?;
+    expected_value_digest(case, &digest_value)?;
+    if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64)
+        && length as usize != encoded.len()
+    {
+        return Err(format!(
+            "case {} encoded length {}, want {}",
+            case.id,
+            encoded.len(),
+            length
+        ));
+    }
+    if let Some(expected) = &case.encoded
+        && expected.as_slice() != encoded.as_slice()
+    {
+        return Err(format!("case {} encoded bytes mismatch", case.id));
+    }
+    let round = decode_companions(&encoded).map_err(|err| err.to_string())?;
+    if round.source_schema != 5 {
+        return Err(format!(
+            "case {} encoded output schema {}",
+            case.id, round.source_schema
+        ));
     }
     Ok(())
 }

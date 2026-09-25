@@ -200,6 +200,9 @@ fn assert_ok_outcome(case: &FrozenCase) -> Result<(), String> {
 }
 
 fn assert_error_category(case: &FrozenCase, category: &str) -> Result<(), String> {
+    if case.normalized.get("kind").and_then(JsonValue::as_str) != Some("error") {
+        return Err(format!("case {} expected kind error", case.id));
+    }
     match case.normalized.get("category").and_then(JsonValue::as_str) {
         Some(value) if value == category => Ok(()),
         other => Err(format!(
@@ -357,32 +360,55 @@ fn execute_region_encode(
         other => return Err(format!("encode component {other} is unsupported")),
     };
 
-    if let Some(capacity) = args.capacity
-        && (capacity as usize) < encoded.len()
-    {
-        assert_error_category(case, "output_too_small")?;
-        return Ok(());
+    let capacity = super::checked_output_capacity(case, args.capacity, encoded.len())?;
+    if capacity < encoded.len() {
+        let mut short = vec![0xa5u8; capacity];
+        let result = match args.component.as_str() {
+            "superblock" => encode_superblock_into(key, &mut short),
+            "bank" => {
+                let bank = decode_region_bank(key, &case.input, args.file_size)
+                    .map_err(|err| err.to_string())?;
+                encode_region_bank_into(key, &bank, &mut short)
+            }
+            other => return Err(format!("encode component {other} is unsupported")),
+        };
+        match result {
+            Err(StorageError::OutputTooSmall { needed, available }) => {
+                assert_error_category(case, "output_too_small")?;
+                super::assert_output_too_small_fields(case, needed, available)?;
+                if short.iter().any(|byte| *byte != 0xa5) {
+                    return Err(format!("case {} short output changed destination", case.id));
+                }
+                return Ok(());
+            }
+            Err(err) => return Err(format!("case {} short encode: {err}", case.id)),
+            Ok(_) => {
+                return Err(format!(
+                    "case {} short encode unexpectedly succeeded",
+                    case.id
+                ));
+            }
+        }
     }
 
-    if case.normalized.get("kind").and_then(JsonValue::as_str) == Some("ok") {
-        expected_value_digest(case, &value)?;
-        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64)
-            && length as usize != encoded.len()
-        {
-            return Err(format!(
-                "case {} encoded length {}, want {}",
-                case.id,
-                encoded.len(),
-                length
-            ));
-        }
-        let encoded_ref = case
-            .encoded
-            .as_ref()
-            .ok_or_else(|| format!("case {} missing encoded asset", case.id))?;
-        if encoded_ref.as_slice() != encoded.as_slice() {
-            return Err(format!("case {} encoded bytes mismatch", case.id));
-        }
+    assert_ok_outcome(case)?;
+    expected_value_digest(case, &value)?;
+    if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64)
+        && length as usize != encoded.len()
+    {
+        return Err(format!(
+            "case {} encoded length {}, want {}",
+            case.id,
+            encoded.len(),
+            length
+        ));
+    }
+    let encoded_ref = case
+        .encoded
+        .as_ref()
+        .ok_or_else(|| format!("case {} missing encoded asset", case.id))?;
+    if encoded_ref.as_slice() != encoded.as_slice() {
+        return Err(format!("case {} encoded bytes mismatch", case.id));
     }
     Ok(())
 }

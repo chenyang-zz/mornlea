@@ -173,6 +173,9 @@ fn assert_ok_outcome(case: &FrozenCase) -> Result<(), String> {
 }
 
 fn assert_error_category(case: &FrozenCase, category: &str) -> Result<(), String> {
+    if case.normalized.get("kind").and_then(JsonValue::as_str) != Some("error") {
+        return Err(format!("case {} expected kind error", case.id));
+    }
     match case.normalized.get("category").and_then(JsonValue::as_str) {
         Some(value) if value == category => Ok(()),
         other => Err(format!(
@@ -301,7 +304,7 @@ fn execute_hostile_encode(case: &FrozenCase, args: &HostileArguments) -> Result<
         save.records = fixture_hostile_records_shuffled();
     }
     let required = hostile_mobs_encoded_len(&save).map_err(|err| err.to_string())?;
-    let buf_len = args.capacity.map(|cap| cap as usize).unwrap_or(required);
+    let buf_len = super::checked_output_capacity(case, args.capacity, required)?;
     let mut buf = vec![0u8; buf_len];
     match encode_hostile_mobs_into(&save, &mut buf) {
         Err(StorageError::OutputTooSmall {

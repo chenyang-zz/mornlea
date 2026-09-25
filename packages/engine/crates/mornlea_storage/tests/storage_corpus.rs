@@ -1001,6 +1001,45 @@ fn execute_storage_family_case(case: &FrozenCase) -> Result<(), String> {
     }
 }
 
+fn checked_output_capacity(
+    case: &FrozenCase,
+    requested: Option<u32>,
+    needed: usize,
+) -> Result<usize, String> {
+    let capacity = requested.map(|value| value as usize).unwrap_or(needed);
+    if capacity > needed {
+        return Err(format!(
+            "case {} capacity {capacity} exceeds encoded length {needed}",
+            case.id
+        ));
+    }
+    Ok(capacity)
+}
+
+fn assert_output_too_small_fields(
+    case: &FrozenCase,
+    needed: usize,
+    available: usize,
+) -> Result<(), String> {
+    let want_needed = case
+        .normalized
+        .get("needed")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| format!("case {} missing needed", case.id))?;
+    let want_available = case
+        .normalized
+        .get("available")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| format!("case {} missing available", case.id))?;
+    if needed as u64 != want_needed || available as u64 != want_available {
+        return Err(format!(
+            "case {} output_too_small fields mismatch: got needed {needed} available {available}, want needed {want_needed} available {want_available}",
+            case.id
+        ));
+    }
+    Ok(())
+}
+
 fn successful_decode_cases(cases: &[FrozenCase]) -> Vec<&FrozenCase> {
     cases
         .iter()
@@ -1037,6 +1076,94 @@ fn storage_corpus_stale_value_digest_mutation_fails() {
         err.contains("value digest mismatch"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn storage_corpus_rejects_success_on_error_expectation_for_every_encoder() {
+    let cases = load_cases_for_consumer(CorpusConsumer::Storage);
+    for family in CROSS_INPUT_SAVE_FAMILIES {
+        let case = cases
+            .iter()
+            .find(|case| {
+                case.family == *family
+                    && case.operation == "encode"
+                    && case.normalized.get("kind").and_then(|value| value.as_str()) == Some("ok")
+            })
+            .unwrap_or_else(|| panic!("integrated manifest has no successful encode for {family}"));
+        let mut mutated = case.clone();
+        let outcome = mutated
+            .normalized
+            .as_object_mut()
+            .expect("encode outcome must be an object");
+        outcome.insert("kind".to_string(), serde_json::json!("error"));
+        outcome.insert(
+            "category".to_string(),
+            serde_json::json!("output_too_small"),
+        );
+        assert!(
+            execute_storage_family_case(&mutated).is_err(),
+            "family {family} accepted a Go rejection although Rust encoding succeeded"
+        );
+    }
+}
+
+#[test]
+fn storage_corpus_rejects_error_on_success_expectation_for_every_decoder() {
+    let cases = load_cases_for_consumer(CorpusConsumer::Storage);
+    for family in CROSS_INPUT_SAVE_FAMILIES {
+        let case = cases
+            .iter()
+            .find(|case| {
+                case.family == *family
+                    && case.operation == "decode"
+                    && case.normalized.get("kind").and_then(|value| value.as_str()) == Some("error")
+            })
+            .unwrap_or_else(|| panic!("integrated manifest has no rejected decode for {family}"));
+        let mut mutated = case.clone();
+        mutated
+            .normalized
+            .as_object_mut()
+            .expect("decode outcome must be an object")
+            .insert("kind".to_string(), serde_json::json!("ok"));
+        assert!(
+            execute_storage_family_case(&mutated).is_err(),
+            "family {family} accepted a Go success although Rust decoding rejected"
+        );
+    }
+}
+
+#[test]
+fn storage_corpus_rejects_capacity_above_go_encoded_length() {
+    let cases = load_cases_for_consumer(CorpusConsumer::Storage);
+    for family in CROSS_INPUT_SAVE_FAMILIES
+        .iter()
+        .copied()
+        .filter(|family| *family != "save.chunk")
+    {
+        let case = cases
+            .iter()
+            .find(|case| {
+                case.family == family
+                    && case.operation == "encode"
+                    && case.normalized.get("kind").and_then(|value| value.as_str()) == Some("ok")
+            })
+            .unwrap_or_else(|| panic!("integrated manifest has no successful encode for {family}"));
+        let needed = case
+            .normalized
+            .get("length")
+            .and_then(|value| value.as_u64())
+            .unwrap_or_else(|| panic!("case {} has no Go encoded length", case.id));
+        let mut mutated = case.clone();
+        mutated
+            .arguments
+            .as_object_mut()
+            .expect("encode arguments must be an object")
+            .insert("capacity".to_string(), serde_json::json!(needed + 1));
+        assert!(
+            execute_storage_family_case(&mutated).is_err(),
+            "family {family} admitted corpus capacity above the Go encoded length"
+        );
+    }
 }
 
 const CROSS_INPUT_SAVE_FAMILIES: &[&str] = &[

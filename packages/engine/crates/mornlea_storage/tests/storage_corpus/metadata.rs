@@ -185,6 +185,9 @@ fn assert_ok_outcome(case: &FrozenCase) -> Result<(), String> {
 }
 
 fn assert_error_category(case: &FrozenCase, category: &str) -> Result<(), String> {
+    if case.normalized.get("kind").and_then(JsonValue::as_str) != Some("error") {
+        return Err(format!("case {} expected kind error", case.id));
+    }
     match case.normalized.get("category").and_then(JsonValue::as_str) {
         Some(value) if value == category => Ok(()),
         other => Err(format!(
@@ -262,16 +265,8 @@ fn execute_metadata_encode(case: &FrozenCase, args: &MetadataArguments) -> Resul
     let metadata = decode_world_metadata(&case.input).map_err(|err| err.to_string())?;
     let digest = value_sha256(&metadata_value(&metadata));
     let required = world_metadata_encoded_len(&metadata).map_err(|err| err.to_string())?;
-    let mut buf = vec![0u8; required];
-    if let Some(capacity) = args.capacity {
-        if (capacity as usize) < required {
-            assert_error_category(case, "output_too_small")?;
-            return Ok(());
-        }
-        if capacity as usize > buf.len() {
-            buf.resize(capacity as usize, 0);
-        }
-    }
+    let capacity = super::checked_output_capacity(case, args.capacity, required)?;
+    let mut buf = vec![0xa5u8; capacity];
     match encode_world_metadata_into(&metadata, &mut buf) {
         Ok(written) => {
             assert_ok_outcome(case)?;
@@ -295,6 +290,14 @@ fn execute_metadata_encode(case: &FrozenCase, args: &MetadataArguments) -> Resul
                     "case {} value digest mismatch: got {digest}, want {expected_digest}",
                     case.id
                 ));
+            }
+            Ok(())
+        }
+        Err(StorageError::OutputTooSmall { needed, available }) => {
+            assert_error_category(case, "output_too_small")?;
+            super::assert_output_too_small_fields(case, needed, available)?;
+            if buf.iter().any(|byte| *byte != 0xa5) {
+                return Err(format!("case {} short output changed destination", case.id));
             }
             Ok(())
         }
