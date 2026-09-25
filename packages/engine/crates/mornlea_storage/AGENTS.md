@@ -47,14 +47,14 @@ the next section.
 | `save.region` | `src/region.rs` | v1 | fixed 4096-byte superblock plus two 28672-byte banks; newest valid committed generation wins, identical ties select bank A and divergent ties fail |
 | `save.world-metadata` | `src/world_metadata.rs` | v6 | v1..v6 are pure tail appends; a legacy file keeps its bytes and reads missing tails as documented defaults |
 | `save.companion` | `src/companion.rs` | v5 | v1..v4 stay read-only migration input; v5 adds a 16-byte agent namespace plus per-record lifecycle mirrors and tombstones |
+| `save.player` | `src/player.rs` | v9 | every schema is a tail append; decoding peels fixed tails off the end so older files keep their layout |
+| player identity | `src/identity.rs` | — | `PlayerId` UUIDv4 wrapper shared by the entity families |
+| item rules | `src/items.rs` | — | Wire item IDs and fixed slot counts. Ordinary stack limits and durability delegate to `mornlea_domain`; `checked_item_stack` rejects any other triple. Player armor stays a raw triple |
 
 ## `save.companion` output boundary (`src/companion.rs`)
 
 - `companions_encoded_len` reports the exact v5 envelope length after the same
   admission checks as `encode_companions`, without building encoded bytes.
-| `save.player` | `src/player.rs` | v9 | every schema is a tail append; decoding peels fixed tails off the end so older files keep their layout |
-| player identity | `src/identity.rs` | — | `PlayerId` UUIDv4 wrapper shared by the entity families |
-| item rules | `src/items.rs` | — | Wire item IDs and fixed slot counts. Ordinary stack limits and durability delegate to `mornlea_domain`; `checked_item_stack` rejects any other triple. Player armor stays a raw triple |
 
 ## `save.passive` output boundary (`src/passive.rs`)
 
