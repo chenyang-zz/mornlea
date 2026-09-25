@@ -22,19 +22,15 @@ import (
 )
 
 const (
-	chunkFamily                     = "save.chunk"
-	chunkProducerID                 = "chunk/migration"
-	chunkCorpusRelDir               = "testdata/runtime-migration/cases/storage/chunk"
-	chunkProducerTestRel            = "packages/server/storage/chunk/chunk_oracle_test.go"
-	chunkCodecSourceRel             = "packages/server/storage/chunk/chunk_codec.go"
-	chunkPinnedExportDir            = "/tmp/runtime-oracle-chunk-4.3a"
-	chunkPinnedExportDirLate        = "/tmp/runtime-oracle-chunk-4.3b-late-fix"
-	chunkPinnedExportDirAdversarial = "/tmp/runtime-oracle-chunk-4.3c-adversarial"
-	chunkPinnedExportDirCross       = "/tmp/runtime-oracle-chunk-4.3c-cross"
-	chunkSelectionManifest          = "selection.json"
-	chunkRustConsumer               = "mornlea_storage"
-	chunkRuntimeOracleExportDirEnv  = "RUNTIME_ORACLE_EXPORT_DIR"
-	chunkRustFrameInputEnv          = "RUST_STORAGE_FRAME_INPUT"
+	chunkFamily                    = "save.chunk"
+	chunkProducerID                = "chunk/migration"
+	chunkCorpusRelDir              = "testdata/runtime-migration/cases/storage/chunk"
+	chunkProducerTestRel           = "packages/server/storage/chunk/chunk_oracle_test.go"
+	chunkCodecSourceRel            = "packages/server/storage/chunk/chunk_codec.go"
+	chunkSelectionManifest         = "selection.json"
+	chunkRustConsumer              = "mornlea_storage"
+	chunkRuntimeOracleExportDirEnv = "RUNTIME_ORACLE_EXPORT_DIR"
+	chunkRustFrameInputEnv         = "RUST_STORAGE_FRAME_INPUT"
 
 	chunkFixtureRevision = uint64(19)
 )
@@ -1439,25 +1435,6 @@ func TestChunkMigrationOracleAdversarial(t *testing.T) {
 	}
 }
 
-func TestChunkMigrationOracleAdversarialExportToPinnedDirectory(t *testing.T) {
-	root := chunkRepoRoot(t)
-	exportRoot := chunkPinnedExportDirAdversarial
-	producerChild := filepath.Join(exportRoot, filepath.FromSlash(chunkProducerID))
-	if _, err := os.Lstat(producerChild); err == nil {
-		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat pinned producer child: %v", err)
-	}
-	t.Setenv(chunkRuntimeOracleExportDirEnv, exportRoot)
-	child := chunkExportSelection(t, root, chunkAdversarialCandidates(t), chunkAdversarialRoutes())
-	if child == "" {
-		t.Fatal("export root unset after explicit env")
-	}
-	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
-		t.Fatalf("selection manifest missing: %v", err)
-	}
-}
-
 func TestChunkMigrationOracleCross(t *testing.T) {
 	framePath := strings.TrimSpace(os.Getenv(chunkRustFrameInputEnv))
 	if framePath == "" {
@@ -1489,52 +1466,6 @@ func TestChunkMigrationOracleCross(t *testing.T) {
 	child := chunkExportSelection(t, root, []chunkCandidate{candidate}, chunkLateRoutes())
 	if child == "" {
 		t.Fatal("export did not publish cross-decode candidate")
-	}
-	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
-		t.Fatalf("selection manifest missing: %v", err)
-	}
-}
-
-func TestChunkMigrationOracleCrossExportToPinnedDirectory(t *testing.T) {
-	framePath := strings.TrimSpace(os.Getenv(chunkRustFrameInputEnv))
-	if framePath == "" {
-		t.Skip("RUST_STORAGE_FRAME_INPUT unset")
-	}
-	frame, err := os.ReadFile(framePath)
-	if err != nil {
-		t.Fatalf("read reviewed frame: %v", err)
-	}
-	root := chunkRepoRoot(t)
-	exportRoot := chunkPinnedExportDirCross
-	producerChild := filepath.Join(exportRoot, filepath.FromSlash(chunkProducerID))
-	if _, err := os.Lstat(producerChild); err == nil {
-		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat pinned producer child: %v", err)
-	}
-	t.Setenv(chunkRuntimeOracleExportDirEnv, exportRoot)
-	child := chunkExportSelection(t, root, []chunkCandidate{chunkCrossCandidateFromFrame(t, frame)}, chunkLateRoutes())
-	if child == "" {
-		t.Fatal("export root unset after explicit env")
-	}
-	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
-		t.Fatalf("selection manifest missing: %v", err)
-	}
-}
-
-func TestChunkMigrationOracleLateExportToPinnedDirectory(t *testing.T) {
-	root := chunkRepoRoot(t)
-	exportRoot := chunkPinnedExportDirLate
-	producerChild := filepath.Join(exportRoot, filepath.FromSlash(chunkProducerID))
-	if _, err := os.Lstat(producerChild); err == nil {
-		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat pinned producer child: %v", err)
-	}
-	t.Setenv(chunkRuntimeOracleExportDirEnv, exportRoot)
-	child := chunkExportSelection(t, root, chunkLateCandidates(t), chunkLateRoutes())
-	if child == "" {
-		t.Fatal("export root unset after explicit env")
 	}
 	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
 		t.Fatalf("selection manifest missing: %v", err)

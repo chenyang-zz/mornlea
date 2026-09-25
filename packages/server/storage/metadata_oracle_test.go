@@ -19,14 +19,12 @@ import (
 )
 
 const (
-	metadataFamily              = "save.world-metadata"
-	metadataVersion             = "6"
-	metadataProducerID          = "storage/metadata"
-	metadataCorpusRelDir        = "testdata/runtime-migration/cases/storage/world-metadata"
-	metadataProducerTestRel     = "packages/server/storage/metadata_oracle_test.go"
-	metadataCodecSourceRel      = "packages/server/storage/metadata.go"
-	metadataPinnedExportDir     = "/tmp/runtime-oracle-metadata-2.4-fix"
-	metadataClosureGapExportDir = "/tmp/runtime-oracle-metadata-5.1-gap"
+	metadataFamily          = "save.world-metadata"
+	metadataVersion         = "6"
+	metadataProducerID      = "storage/metadata"
+	metadataCorpusRelDir    = "testdata/runtime-migration/cases/storage/world-metadata"
+	metadataProducerTestRel = "packages/server/storage/metadata_oracle_test.go"
+	metadataCodecSourceRel  = "packages/server/storage/metadata.go"
 
 	metadataDecodeV1TruncatedRecordID  = metadataFamily + "/1/decode/truncated-record"
 	metadataDecodeV6BoundaryID         = metadataFamily + "/6/decode/v6-boundary"
@@ -726,11 +724,11 @@ func TestMetadataOracle(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "live-path") {
 		t.Fatalf("expected live-path rejection, got: %v", err)
 	}
-	handoffRoot := filepath.Join(metadataPinnedExportDir, "handoff")
+	handoffRoot := filepath.Join(t.TempDir(), "metadata-handoff")
 	t.Setenv(metadataRuntimeOracleExportDirEnv, handoffRoot)
 	child := metadataExportSelection(t, root, candidates)
 	if child == "" {
-		t.Fatal("pinned export directory did not publish a candidate")
+		t.Fatal("fresh export directory did not publish a candidate")
 	}
 	selectionPath := filepath.Join(child, metadataSelectionManifest)
 	if _, err := os.Stat(selectionPath); err != nil {

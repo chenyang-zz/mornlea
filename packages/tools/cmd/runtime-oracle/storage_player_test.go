@@ -41,10 +41,6 @@ const (
 	playerEncodeV9CanonicalID      = playerFamily + "/" + playerVersion + "/encode/v9-canonical"
 	playerEncodeCapacityMinusOneID = playerFamily + "/" + playerVersion + "/encode/capacity-minus-one"
 
-	playerLegacyEarlyExportDir = "/tmp/runtime-oracle-player-legacy-early-2.2b"
-	playerLegacyLateExportDir  = "/tmp/runtime-oracle-player-legacy-late-2.2c"
-	playerAdversarialExportDir = "/tmp/runtime-oracle-player-adversarial-2.2d"
-
 	playerDecodeWrongRequestedID         = playerFamily + "/" + playerVersion + "/decode/wrong-requested-id"
 	playerDecodeRevisionZeroID           = playerFamily + "/" + playerVersion + "/decode/revision-zero"
 	playerDecodeV9InvalidVersionZeroID   = playerFamily + "/" + playerVersion + "/decode/invalid-version-zero"
@@ -1258,25 +1254,6 @@ func TestStoragePlayerLegacyEarlyCandidatesExportForReview(t *testing.T) {
 	}
 }
 
-func TestStoragePlayerLegacyEarlyExportToPinnedDirectory(t *testing.T) {
-	root := mustRepoRoot(t)
-	exportRoot := playerLegacyEarlyExportDir
-	producerChild := filepath.Join(exportRoot, filepath.FromSlash("runtime-oracle/storage-player"))
-	if _, err := os.Lstat(producerChild); err == nil {
-		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat pinned producer child: %v", err)
-	}
-	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
-	child := exportPlayerSelectionCandidate(t, root, playerLegacyEarlyCandidates(t), playerLegacyEarlyRoutes())
-	if child == "" {
-		t.Fatal("export root unset after explicit env")
-	}
-	if _, err := readStorageSelection(child); err != nil {
-		t.Fatalf("reload exported selection: %v", err)
-	}
-}
-
 func TestStoragePlayerLegacyLateArgumentsValidate(t *testing.T) {
 	if err := validateStorageArguments(playerFamily, "decode", playerArgumentsJSON(nil)); err != nil {
 		t.Fatalf("validate player decode arguments: %v", err)
@@ -1540,25 +1517,6 @@ func TestStoragePlayerLegacyLateCandidatesExportForReview(t *testing.T) {
 	}
 }
 
-func TestStoragePlayerLegacyLateExportToPinnedDirectory(t *testing.T) {
-	root := mustRepoRoot(t)
-	exportRoot := playerLegacyLateExportDir
-	producerChild := filepath.Join(exportRoot, filepath.FromSlash("runtime-oracle/storage-player"))
-	if _, err := os.Lstat(producerChild); err == nil {
-		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat pinned producer child: %v", err)
-	}
-	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
-	child := exportPlayerSelectionCandidate(t, root, playerLegacyLateCandidates(t), playerLegacyLateRoutes())
-	if child == "" {
-		t.Fatal("export root unset after explicit env")
-	}
-	if _, err := readStorageSelection(child); err != nil {
-		t.Fatalf("reload exported selection: %v", err)
-	}
-}
-
 func TestStoragePlayerAdversarialArgumentsValidate(t *testing.T) {
 	if err := validateStorageArguments(playerFamily, "decode", playerArgumentsJSON(nil)); err != nil {
 		t.Fatalf("validate player decode arguments: %v", err)
@@ -1688,25 +1646,6 @@ func TestStoragePlayerAdversarialExportUnsetWritesNothing(t *testing.T) {
 func TestStoragePlayerAdversarialCandidatesExportForReview(t *testing.T) {
 	root := mustRepoRoot(t)
 	t.Setenv(runtimeOracleExportDirEnv, t.TempDir())
-	child := exportPlayerSelectionCandidate(t, root, playerAdversarialCandidates(t), playerAdversarialRoutes())
-	if child == "" {
-		t.Fatal("export root unset after explicit env")
-	}
-	if _, err := readStorageSelection(child); err != nil {
-		t.Fatalf("reload exported selection: %v", err)
-	}
-}
-
-func TestStoragePlayerAdversarialExportToPinnedDirectory(t *testing.T) {
-	root := mustRepoRoot(t)
-	exportRoot := playerAdversarialExportDir
-	producerChild := filepath.Join(exportRoot, filepath.FromSlash("runtime-oracle/storage-player"))
-	if _, err := os.Lstat(producerChild); err == nil {
-		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat pinned producer child: %v", err)
-	}
-	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
 	child := exportPlayerSelectionCandidate(t, root, playerAdversarialCandidates(t), playerAdversarialRoutes())
 	if child == "" {
 		t.Fatal("export root unset after explicit env")

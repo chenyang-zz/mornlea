@@ -31,7 +31,6 @@ const (
 	hostileCorpusRelDir    = "testdata/runtime-migration/cases/storage/hostile"
 	hostileProducerTestRel = "packages/tools/cmd/runtime-oracle/storage_hostile_test.go"
 	hostileCodecSourceRel  = "packages/server/storage/hostile/hostile_codec.go"
-	hostileExportDir       = "/tmp/runtime-oracle-hostile-3.2"
 
 	hostileHeaderLength    = 32
 	hostileRecordLengthV1  = 72
@@ -938,25 +937,6 @@ func TestStorageHostileExportUnsetWritesNothing(t *testing.T) {
 func TestStorageHostileCandidatesExportForReview(t *testing.T) {
 	root := mustRepoRoot(t)
 	t.Setenv(runtimeOracleExportDirEnv, t.TempDir())
-	child := exportHostileSelectionCandidate(t, root, hostileCandidates(t))
-	if child == "" {
-		t.Fatal("export root unset after explicit env")
-	}
-	if _, err := readStorageSelection(child); err != nil {
-		t.Fatalf("reload exported selection: %v", err)
-	}
-}
-
-func TestStorageHostileExportToPinnedDirectory(t *testing.T) {
-	root := mustRepoRoot(t)
-	exportRoot := hostileExportDir
-	producerChild := filepath.Join(exportRoot, filepath.FromSlash("runtime-oracle/storage-hostile"))
-	if _, err := os.Lstat(producerChild); err == nil {
-		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat pinned producer child: %v", err)
-	}
-	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
 	child := exportHostileSelectionCandidate(t, root, hostileCandidates(t))
 	if child == "" {
 		t.Fatal("export root unset after explicit env")

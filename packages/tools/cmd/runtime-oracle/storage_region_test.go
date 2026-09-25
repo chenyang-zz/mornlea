@@ -42,7 +42,6 @@ const (
 	regionBankCommittedDecodeID    = regionFamily + "/" + regionVersion + "/decode/bank-committed-gen1"
 	regionBankCommittedEncodeID    = regionFamily + "/" + regionVersion + "/encode/bank-committed-gen1"
 	regionEncodeCapacityMinusOneID = regionFamily + "/" + regionVersion + "/encode/capacity-minus-one"
-	regionClosureGapExportDir      = "/tmp/runtime-oracle-region-5.1-gap"
 
 	regionOrderCommittedNewerAID = regionFamily + "/" + regionVersion + "/order/committed-newer-a"
 	regionOrderCommittedNewerBID = regionFamily + "/" + regionVersion + "/order/committed-newer-b"

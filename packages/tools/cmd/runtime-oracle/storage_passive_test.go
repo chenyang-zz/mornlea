@@ -30,7 +30,6 @@ const (
 	passiveCorpusRelDir    = "testdata/runtime-migration/cases/storage/passive"
 	passiveProducerTestRel = "packages/tools/cmd/runtime-oracle/storage_passive_test.go"
 	passiveCodecSourceRel  = "packages/server/storage/passive/passive_codec.go"
-	passiveExportDir       = "/tmp/runtime-oracle-passive-3.4"
 
 	passiveHeaderLength = 32
 	passiveRecordLength = 72
@@ -723,43 +722,6 @@ func validatePassiveExportCandidates(t *testing.T, candidates []passiveCandidate
 	}
 }
 
-func passivePinnedExportChildIsStaleCollision(t *testing.T, producerChild string) bool {
-	t.Helper()
-	expectedRoot, err := filepath.Abs(passiveExportDir)
-	if err != nil {
-		t.Fatalf("abs passive export dir: %v", err)
-	}
-	absChild, err := filepath.Abs(producerChild)
-	if err != nil {
-		t.Fatalf("abs producer child: %v", err)
-	}
-	wantChild := filepath.Join(expectedRoot, filepath.FromSlash("runtime-oracle/storage-passive"))
-	if absChild != wantChild {
-		t.Fatalf("producer child %s is not the pinned passive export path", producerChild)
-	}
-	manifestPath := filepath.Join(producerChild, storageSelectionManifest)
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return false
-	}
-	var payload struct {
-		Cases []struct {
-			ID string `json:"id"`
-		} `json:"cases"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return false
-	}
-	staleID := passiveFamily + "/" + passiveVersionV1 + "/decode/truncated-tail"
-	count := 0
-	for _, spec := range payload.Cases {
-		if spec.ID == staleID {
-			count++
-		}
-	}
-	return count >= 2
-}
-
 func exportPassiveSelectionCandidate(t *testing.T, root string, candidates []passiveCandidate) string {
 	t.Helper()
 	if strings.TrimSpace(os.Getenv(runtimeOracleExportDirEnv)) == "" {
@@ -923,30 +885,6 @@ func TestStoragePassiveExportUnsetWritesNothing(t *testing.T) {
 func TestStoragePassiveCandidatesExportForReview(t *testing.T) {
 	root := mustRepoRoot(t)
 	t.Setenv(runtimeOracleExportDirEnv, t.TempDir())
-	child := exportPassiveSelectionCandidate(t, root, passiveCandidates(t))
-	if child == "" {
-		t.Fatal("export root unset after explicit env")
-	}
-	if _, err := readStorageSelection(child); err != nil {
-		t.Fatalf("reload exported selection: %v", err)
-	}
-}
-
-func TestStoragePassiveExportToPinnedDirectory(t *testing.T) {
-	root := mustRepoRoot(t)
-	exportRoot := passiveExportDir
-	producerChild := filepath.Join(exportRoot, filepath.FromSlash("runtime-oracle/storage-passive"))
-	if _, err := os.Lstat(producerChild); err == nil {
-		if !passivePinnedExportChildIsStaleCollision(t, producerChild) {
-			t.Skip("pinned producer child already exists; reviewed export candidate preserved")
-		}
-		if err := os.RemoveAll(producerChild); err != nil {
-			t.Fatalf("remove stale pinned producer child: %v", err)
-		}
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat pinned producer child: %v", err)
-	}
-	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
 	child := exportPassiveSelectionCandidate(t, root, passiveCandidates(t))
 	if child == "" {
 		t.Fatal("export root unset after explicit env")

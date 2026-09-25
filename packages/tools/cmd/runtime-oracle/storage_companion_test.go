@@ -23,15 +23,12 @@ import (
 )
 
 const (
-	companionFamily           = "save.companion"
-	companionProducerID       = "runtime-oracle/storage-companion"
-	companionCorpusRelDir     = "testdata/runtime-migration/cases/storage/companion"
-	companionProducerTestRel  = "packages/tools/cmd/runtime-oracle/storage_companion_test.go"
-	companionCodecSourceRel   = "packages/server/storage/companion/companion_codec.go"
-	companionExportDir        = "/tmp/runtime-oracle-companion-4.6a"
-	companionCurrentExportDir = "/tmp/runtime-oracle-companion-4.6b"
-	companionFixExportDir     = "/tmp/runtime-oracle-companion-4.6b-fix"
-	companionVersionV5        = "5"
+	companionFamily          = "save.companion"
+	companionProducerID      = "runtime-oracle/storage-companion"
+	companionCorpusRelDir    = "testdata/runtime-migration/cases/storage/companion"
+	companionProducerTestRel = "packages/tools/cmd/runtime-oracle/storage_companion_test.go"
+	companionCodecSourceRel  = "packages/server/storage/companion/companion_codec.go"
+	companionVersionV5       = "5"
 
 	companionDecodeV5FixtureID        = companionFamily + "/" + companionVersionV5 + "/decode/v5-fixture"
 	companionDecodeV5RoundTripAltID   = companionFamily + "/" + companionVersionV5 + "/decode/v5-roundtrip-alt"
@@ -1436,21 +1433,6 @@ func TestStorageCompanionLegacyCandidatesExportForReview(t *testing.T) {
 	}
 }
 
-func TestStorageCompanionLegacyExportToPinnedDirectory(t *testing.T) {
-	root := mustRepoRoot(t)
-	if _, err := os.Stat(companionExportDir); err == nil {
-		t.Fatalf("pinned export child %s already exists", companionExportDir)
-	}
-	t.Setenv(runtimeOracleExportDirEnv, companionExportDir)
-	child := exportCompanionSelectionCandidate(t, root, companionLegacyCandidates(t), companionLegacyRoutes())
-	if child == "" {
-		t.Fatal("export returned empty path")
-	}
-	if _, err := os.Stat(filepath.Join(child, storageSelectionManifest)); err != nil {
-		t.Fatalf("missing selection manifest under pinned export: %v", err)
-	}
-}
-
 func TestStorageCompanionCurrentArgumentsValidate(t *testing.T) {
 	if err := validateStorageArguments(companionFamily, "decode", companionArgumentsJSON(nil)); err != nil {
 		t.Fatalf("validate companion decode arguments: %v", err)
@@ -1562,30 +1544,6 @@ func TestStorageCompanionCurrentCandidatesExportForReview(t *testing.T) {
 	child := exportCompanionSelectionCandidate(t, root, companionV5ExportCandidates(t), companionCurrentRoutes())
 	if child == "" {
 		t.Fatal("export returned empty path with RUNTIME_ORACLE_EXPORT_DIR set")
-	}
-}
-
-func TestStorageCompanionCurrentExportToPinnedDirectory(t *testing.T) {
-	root := mustRepoRoot(t)
-	if _, err := os.Stat(companionCurrentExportDir); err == nil {
-		t.Fatalf("pinned export child %s already exists", companionCurrentExportDir)
-	}
-	t.Setenv(runtimeOracleExportDirEnv, companionCurrentExportDir)
-	child := exportCompanionSelectionCandidate(t, root, companionV5ExportCandidates(t), companionCurrentRoutes())
-	if child == "" {
-		t.Fatal("export returned empty path")
-	}
-}
-
-func TestStorageCompanionV5FixExportToPinnedDirectory(t *testing.T) {
-	root := mustRepoRoot(t)
-	if _, err := os.Stat(companionFixExportDir); err == nil {
-		t.Fatalf("pinned export child %s already exists", companionFixExportDir)
-	}
-	t.Setenv(runtimeOracleExportDirEnv, companionFixExportDir)
-	child := exportCompanionSelectionCandidate(t, root, companionV5ExportCandidates(t), companionCurrentRoutes())
-	if child == "" {
-		t.Fatal("export returned empty path")
 	}
 }
 

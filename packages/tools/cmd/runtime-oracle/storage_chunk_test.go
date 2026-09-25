@@ -28,7 +28,6 @@ const (
 	chunkCorpusRelDir       = "testdata/runtime-migration/cases/storage/chunk"
 	chunkProducerTestRel    = "packages/tools/cmd/runtime-oracle/storage_chunk_test.go"
 	chunkCodecSourceRel     = "packages/server/storage/chunk/chunk_codec.go"
-	chunkExportDir          = "/tmp/runtime-oracle-chunk-4.3b-current-fix"
 	chunkFixtureRevision    = uint64(19)
 	chunkEnvelopeHeaderSize = 44
 
@@ -715,25 +714,6 @@ func TestStorageChunkCurrentExportUnsetWritesNothing(t *testing.T) {
 func TestStorageChunkCurrentCandidatesExportForReview(t *testing.T) {
 	root := mustRepoRoot(t)
 	t.Setenv(runtimeOracleExportDirEnv, t.TempDir())
-	child := exportChunkSelectionCandidate(t, root, chunkCurrentCandidates(t))
-	if child == "" {
-		t.Fatal("export root unset after explicit env")
-	}
-	if _, err := readStorageSelection(child); err != nil {
-		t.Fatalf("reload exported selection: %v", err)
-	}
-}
-
-func TestStorageChunkCurrentExportToPinnedDirectory(t *testing.T) {
-	root := mustRepoRoot(t)
-	exportRoot := chunkExportDir
-	producerChild := filepath.Join(exportRoot, filepath.FromSlash(chunkProducerID))
-	if _, err := os.Lstat(producerChild); err == nil {
-		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat pinned producer child: %v", err)
-	}
-	t.Setenv(runtimeOracleExportDirEnv, exportRoot)
 	child := exportChunkSelectionCandidate(t, root, chunkCurrentCandidates(t))
 	if child == "" {
 		t.Fatal("export root unset after explicit env")
