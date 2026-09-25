@@ -22,7 +22,7 @@ Start with session/tick scheduling, then world/chunk/environment/fluid work, pla
 
 ### Persistence and independent Agent
 
-Storage workers own blocking I/O with bounded submission/acknowledgment and shutdown policies matching the current contract. Use test copies for migration and crash injection. Preserve the existing versioned loopback Agent HTTP/MCP boundary, cancellation and revalidation at the tick boundary. Do not embed, shell out to or import the independent Agent into the game runtime. The embedded Godot Python environment is unrelated.
+Storage workers own blocking I/O with bounded submission/acknowledgment and shutdown policies matching the current contract. Use test copies for migration and crash injection. The [S1 compile-ready seams](plans/02-core-seams.md) define one atomic world/inventory transaction, a separate sessionless companion ingress, measured budgets, save scheduling and retryable final-tick shutdown. Preserve the existing versioned loopback Agent HTTP/MCP boundary, cancellation and revalidation at the tick boundary. Do not embed, shell out to or import the independent Agent into the game runtime. The embedded Godot Python environment is unrelated.
 
 ### Authority selection and rollback
 

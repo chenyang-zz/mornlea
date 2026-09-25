@@ -8,7 +8,7 @@ Interface baseline: the [target runtime interface map](../../../docs/runtime-int
 
 ## Ownership and selected local transport
 
-Use a supervised Rust server process with loopback TCP for the first local distribution. This reuses F2's server and F3's existing remote path and makes child termination/world ownership explicit. Rust owns process supervision, startup status, bounded cancellation, and the client session. Python presents progress and submits semantic launch/cancel intent. Local Memory remains a shared F2/F3 conformance requirement, but P13 does not need a second in-process runtime to expose local play.
+Use a supervised Rust server process with loopback TCP for the first local distribution. This reuses F2's server and F3's existing remote path and makes child termination/world ownership explicit. The [local supervision contract](plans/02-local-supervision.md) fixes checked process, lease and readiness ownership before independent platform providers. Rust owns process supervision, startup status, bounded cancellation, and the client session. Python presents progress and submits semantic launch/cancel intent. Local Memory remains a shared F2/F3 conformance requirement, but P13 does not need a second in-process runtime to expose local play.
 
 Reject a new Go Memory implementation because it expands transitional ownership. Defer an in-process Rust transport because it adds process/lifecycle complexity without changing user-visible semantics; it would require separate accepted evidence before adoption. The child server is the sole world writer. Lost supervision must not orphan a writable server or start a competing writer.
 
@@ -16,7 +16,7 @@ Reject a new Go Memory implementation because it expands transitional ownership.
 
 The supported target family is desktop macOS/Windows/Linux. Qualify and record each actual target architecture/runtime combination separately. Export only selected Python sources, exact embedded interpreter/extension, native runtime libraries, assets, fonts, licenses, and checksums. Resolve exported dependencies from the package filesystem layout, never current directory/system paths. Exclude development tests, capture tools, comparison CLI, cache/provenance build machinery, non-target libraries, and the standalone Agent environment.
 
-Add `scripts/godot/desktop-release-check.sh --target <macos|windows|linux> --run-dir <explicit-directory>` as the prospective release-closure and lifecycle gate; it fails if run on an unqualified target or required evidence is absent. Existing macOS `make godot-build` is preparation, not proof of Windows/Linux qualification. Each gate records actual source and runtime identities and exercises runtime-missing, corrupt-resource, local-child-exit, and repeated teardown failures.
+Add `scripts/godot/desktop-release-check.sh --target <macos|windows|linux> --run-dir <explicit-directory>` as the prospective release-closure and lifecycle gate; it fails if run on an unqualified target or required evidence is absent. Existing macOS `make godot-build` is preparation, not proof of Windows/Linux qualification. The pinned Windows/Linux Godot editor, embedded Python and native extension are separate provider nodes in [platform preparation](plans/03-platform-preparation.md); shared wrappers route only after those actual-host artifacts pass. Each gate records actual source and runtime identities and exercises runtime-missing, corrupt-resource, local-child-exit, and repeated teardown failures.
 
 ## Risks, migration, and rollback
 

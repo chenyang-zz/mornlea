@@ -10,10 +10,14 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 1.2 Register nonempty Rust/Godot UI harness with behavioral red.
 ## 2. Parallel capability slices
 
-- [ ] 2.1 Validate typed UI intent tokens before queueing.
+- [ ] 2.1 Adapt UI Controls to accepted F3 typed input and token validation.
 - [ ] 2.2 Implement menus, focus and loading Controls.
 - [ ] 2.3 Implement HUD and survival Controls.
-- [ ] 2.4 Implement inventory/container Controls.
+- [ ] 2.4a Implement inventory Control.
+- [ ] 2.4b Implement chest Control.
+- [ ] 2.4c Implement workbench Control.
+- [ ] 2.4d Implement furnace Control.
+- [ ] 2.4e Assemble container Controls.
 - [ ] 2.5a Implement chat/task Controls.
 - [ ] 2.5b Implement settings/debug Controls.
 ## 3. Serial assembly and evidence

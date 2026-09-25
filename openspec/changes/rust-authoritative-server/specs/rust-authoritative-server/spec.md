@@ -23,7 +23,7 @@ The Rust server SHALL be the sole writer for its world's ticks, players, entitie
 
 ### Requirement: Local and remote inputs use one validation path
 
-Memory and TCP sessions SHALL use identical login, packet, validation, sequencing and authoritative tick semantics. Human and Agent actions MUST enter the validated command path; the independent Agent service MUST remain isolated behind its versioned service contract.
+Memory and TCP sessions SHALL use identical login, packet, validation, sequencing and authoritative tick semantics. Human actions MUST enter the session-bound validated command path. Agent-derived companion actions MUST enter a separately typed, sessionless candidate ingress and join the same authoritative validation and world-mutation pipeline; they MUST NOT forge a human session or sequence. The independent Agent service MUST remain isolated behind its versioned service contract.
 
 #### Scenario: Invalid intent across transports
 

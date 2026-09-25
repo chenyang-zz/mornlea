@@ -86,6 +86,8 @@ ServerCore::admit(login: AdmittedLogin, transport: TransportKind)
     -> Result<SessionKey, AdmissionError>;
 ServerCore::submit(session: SessionKey, intent: PlayIntent)
     -> Result<SubmissionReceipt, IntakeError>;
+ServerCore::submit_companion(candidate: CompanionActionEnvelope)
+    -> Result<CompanionReceipt, IntakeError>;
 ServerCore::advance_tick(work: TickBudget)
     -> Result<TickPublication, TickError>;
 ServerCore::close_session(session: SessionKey, reason: CloseReason)
@@ -100,7 +102,7 @@ ServerCore::shutdown(deadline: Deadline)
 
 `StoreHandle` 是建立在 `mornlea_storage` 编解码器之上的异步工作邮箱：`submit(SaveRequest) -> Result<SaveTicket, CapacityOrState>`、`poll(SaveTicket) -> Pending | Durable | Failed(IoError)`、`flush(deadline) -> Result<FlushReport, IoOrTimeout>`。达到要求的写入/提交边界后才返回 durable；读取失败不得生成空白世界。启动时读取可变状态前先取得独占可写世界租约。崩溃恢复、schema 检查、备份和回滚必须在一次性副本上测试；不兼容 schema 或竞争写入是硬失败。
 
-`AgentHandle` 使用现有带版本的回环服务契约发起有界异步请求。结果包含候选数据、请求 ID 和来源 tick；超时、取消或服务错误都没有世界效果。`advance_tick` 在转换为与人类输入相同的领域命令路径前，重新检查当前权威、权限、目标、距离、资源及序号。对话或摘要文字属于展示数据，不能绕过命令校验。
+`AgentHandle` 使用现有带版本的回环服务契约发起有界异步请求。结果包含候选数据、请求 ID 和来源 tick；超时、取消或服务错误都没有世界效果。当前 `CommandEnvelope` 绑定人类会话，不能表达伙伴候选动作。因此 S1 使用单独的、无会话的强类型伙伴入口，携带伙伴身份和请求来源。`advance_tick` 重新检查当前权威、权限、目标、距离、资源及顺序后，再让候选动作进入与人类输入相同的已验证世界变更流程；它不会伪造人类会话或序号。对话或摘要文字属于展示数据，不能绕过命令校验。
 
 ## 6. 客户端核心与有类型桥接接口
 

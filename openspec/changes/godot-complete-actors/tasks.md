@@ -10,7 +10,8 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 1.2 Register nonempty actor contract/harness with behavioral red.
 ## 2. Parallel capability slices
 
-- [ ] 2.1 Implement remote-player and player-view presentation.
+- [ ] 2.1a Implement remote-player scene presentation.
+- [ ] 2.1b Implement local player-view and camera presentation.
 - [ ] 2.2 Implement companion presentation.
 - [ ] 2.3 Implement hostile presentation.
 - [ ] 2.4 Implement passive presentation.

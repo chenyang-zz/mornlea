@@ -1,6 +1,6 @@
 # godot-production-tooling implementation tasks
 
-All nodes are pending. [Worker packets](plans/worker-packets.md) define exact readiness, ownership, interfaces, concrete red/green cases, commands, exclusions and rollback. New targets/scripts are prospective until their owning node lands. `ledger.md` binds source/package/fixture identity and the accepted contract SHA to nonzero test counts and scoped commits. A mock, plan validation or candidate capture cannot substitute for real integration or required approval.
+All nodes are pending. [Worker packets](plans/worker-packets.md) and [strict evidence schema](plans/02-evidence-schema.md) define exact readiness, ownership, interfaces, concrete red/green cases, commands, exclusions and rollback. New targets/scripts are prospective until their owning node lands. `ledger.md` binds source/package/fixture identity and the accepted contract SHA to nonzero test counts and scoped commits. A mock, plan validation or candidate capture cannot substitute for real integration or required approval.
 
 See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
@@ -11,7 +11,9 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 ## 2. Independent providers and serial integration
 
 - [ ] 2.1 Implement producer registry and required-case validation.
-- [ ] 2.2 Implement semantic replay and no-focus candidate capture.
+- [ ] 2.2a Implement source-bound semantic replay adapter.
+- [ ] 2.2b Implement no-focus qualified GPU/motion capture.
+- [ ] 2.2c Integrate atomic candidate run orchestration.
 - [ ] 2.3 Implement strict artifact/report comparison.
 - [ ] 2.4 Integrate ownership-aware visual-regression dispatcher; accept phase-2 contract.
 ## 3. Qualification, handoff or cutover

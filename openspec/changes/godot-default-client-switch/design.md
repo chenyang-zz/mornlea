@@ -4,7 +4,7 @@ This revision changes planning artifacts only. Runtime behavior, version identit
 
 Implementation requires the relevant accepted F1, F2, and F3 exit evidence in their ledgers, including exact source SHA, fixture identities, command output, test discovery, and rollback decision. An existing proposal, checked planning status, text search, or optional-entry audit is not completion evidence. After a prerequisite is archived, resolve its ledger through its archive location and retain the accepted SHA. No task is complete merely because a test filter selected zero tests.
 
-Interface baseline: the [target runtime interface map](../../../docs/runtime-interface-architecture.md) supplies the D0–T1 ownership and version register that the release manifest must enumerate. P14 consumes actual accepted implementation identities and real integration for every required family; the target catalog alone cannot satisfy either release cycle or rollback gate.
+Interface baseline: the [target runtime interface map](../../../docs/runtime-interface-architecture.md) supplies the D0–T1 ownership and version register that the release manifest must enumerate. P14 consumes actual accepted implementation identities and real integration for every required family; its [v2 two-cycle evidence contract](plans/02-cycle-schema.md) binds each target, case and restore report to a clean build/run identity; the target catalog alone cannot satisfy either release cycle or rollback gate.
 
 ## Complete dependency gate
 

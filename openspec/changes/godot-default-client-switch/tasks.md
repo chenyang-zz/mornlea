@@ -1,6 +1,6 @@
 # godot-default-client-switch implementation tasks
 
-All nodes are pending. [Worker packets](plans/worker-packets.md) define exact readiness, ownership, interfaces, concrete red/green cases, commands, exclusions and rollback. New targets/scripts are prospective until their owning node lands. `ledger.md` binds source/package/fixture identity and the accepted contract SHA to nonzero test counts and scoped commits. A mock, plan validation or candidate capture cannot substitute for real integration or required approval.
+All nodes are pending. [Worker packets](plans/worker-packets.md) and [two-cycle evidence schema](plans/02-cycle-schema.md) define exact readiness, ownership, interfaces, concrete red/green cases, commands, exclusions and rollback. New targets/scripts are prospective until their owning node lands. `ledger.md` binds source/package/fixture identity and the accepted contract SHA to nonzero test counts and scoped commits. A mock, plan validation or candidate capture cannot substitute for real integration or required approval.
 
 See the [cross-change dispatch map](plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
@@ -13,8 +13,12 @@ See the [cross-change dispatch map](plans/00-cross-change-dispatch.md) for paral
 
 - [ ] 2.1 Implement native source/export setup diagnostics.
 - [ ] 2.2 Implement transitive product closure and mixed-runtime rejection.
-- [ ] 2.3 Run complete first release cycle with previous-release restore.
-- [ ] 2.4 Run a distinct complete second release cycle with restore.
+- [ ] 2.3a Build clean committed release candidate A.
+- [ ] 2.3b Run complete cycle-one target, feature and hard-error tests.
+- [ ] 2.3c Restore the previous release and seal cycle one.
+- [ ] 2.4a Build distinct subsequent release candidate B.
+- [ ] 2.4b Repeat complete cycle-two target, feature and hard-error tests.
+- [ ] 2.4c Restore the previous release and seal cycle two.
 ## 3. Qualification, handoff or cutover
 
 - [ ] 3.1 Apply explicitly approved default switch after both cycles.

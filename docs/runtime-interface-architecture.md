@@ -86,6 +86,8 @@ ServerCore::admit(login: AdmittedLogin, transport: TransportKind)
     -> Result<SessionKey, AdmissionError>;
 ServerCore::submit(session: SessionKey, intent: PlayIntent)
     -> Result<SubmissionReceipt, IntakeError>;
+ServerCore::submit_companion(candidate: CompanionActionEnvelope)
+    -> Result<CompanionReceipt, IntakeError>;
 ServerCore::advance_tick(work: TickBudget)
     -> Result<TickPublication, TickError>;
 ServerCore::close_session(session: SessionKey, reason: CloseReason)
@@ -100,7 +102,7 @@ ServerCore::shutdown(deadline: Deadline)
 
 `StoreHandle` is an async worker mailbox over `mornlea_storage` codecs: `submit(SaveRequest) -> Result<SaveTicket, CapacityOrState>`, `poll(SaveTicket) -> Pending | Durable | Failed(IoError)`, `flush(deadline) -> Result<FlushReport, IoOrTimeout>`. A durable result is emitted only after the required write/commit boundary; a failed read never creates a blank world. Startup acquires an exclusive writable-world lease before reading mutable state. Crash recovery, schema checks, backups and rollback are tested against disposable copies; an incompatible schema or competing writer is a hard failure.
 
-`AgentHandle` issues bounded asynchronous requests over the existing versioned loopback service contract. It returns candidate data with request ID and source tick; timeout/cancel/service errors have no world effect. At `advance_tick`, the server rechecks current authority, permissions, target, range, resources and sequence before converting a candidate to the same domain command path as human input. Dialogue or summary text is presentation data, not a command bypass.
+`AgentHandle` issues bounded asynchronous requests over the existing versioned loopback service contract. It returns candidate data with request ID and source tick; timeout/cancel/service errors have no world effect. The current `CommandEnvelope` is bound to a human session and does not represent a companion candidate. S1 therefore admits candidates through a separately typed, sessionless companion ingress carrying companion identity and request provenance. At `advance_tick`, the server checks current authority, permissions, target, range, resources and ordering before the candidate joins the same validated world-mutation pipeline as human input. It does not forge a human session or sequence. Dialogue or summary text is presentation data, not a command bypass.
 
 ## 6. Client-core and typed bridge interfaces
 
