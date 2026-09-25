@@ -241,6 +241,15 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for `30c8b4ed`: `companion_buffer preflight_` 6/6; `runtime_contract companion_` 6/6; `cargo clippy -p mornlea_storage --lib -- -D warnings` pass. The guide fix is docs-only.
 - Architecture skill: no change. The borrowed length preflight follows the same writer rule as the other noncompressed families.
 
+## 2026-09-25 — SDD execution: node 4.5 closed
+
+- Commits: `fce7e50a` adds `encode_companions_into` and routes `encode_companions` through that writer; `edc6d87e` deletes unused `ByteWriter::f32` and `ByteWriter::len`.
+- Review of `2cc0af22..fce7e50a` required that deletion. Re-review of `edc6d87e` approved. No remaining Critical or Important findings.
+- Minor findings held for the final review: the task pin does not assert decoded step fields; the unsorted case compares the two encoders with each other; the empty-queue arm is a save with no queue.
+- No save-family case count change. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the writer: `companion_buffer` 13/13 including `writer_` 7/7; `runtime_contract companion_` 6/6; `go test ./packages/server/storage/companion -count=1` pass. Library clippy `-D warnings` passed after `edc6d87e`.
+- Architecture skill: no change. The companion writer follows the existing validate-then-write rule.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
