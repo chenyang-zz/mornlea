@@ -175,3 +175,23 @@
   - `go test ./packages/shared/nativeabi -run 'TestWorldgen' -count=1`: passed.
 - Review: Task Reviewer subagent approved with three minor findings deferred to the final whole-branch review (controller ratification of the `src/native/mod.rs` visibility boundary, Go oracle rejection paths missing an output-untouched assertion behind an accurate comment, and a missing `water == stone` duplicate rejection case).
 - Rollback: Revert `b81d0dad`.
+
+## 2026-09-25 — Node 2.5 world probe provider
+
+- Predecessor SHA: `722e8b3a`
+- Result SHA: `8b75dad4`
+- Implementation summary:
+  - `src/native/world_probe.rs` implements `NativeWorldProbe` for `ProbeOp`, validating the query count bound (1..=64) before evaluation, rejecting a short destination with `OutputTooSmall { needed, available }` without touching it, converting parameters once through `as_legacy()`, evaluating into a fixed 64-entry local stage, and publishing exactly the used prefix after every query succeeds.
+  - `src/native/mod.rs` widens the `world_probe` module to `pub` so integration tests can name the provider.
+  - `tests/native_contract/worldgen_probe.rs` covers mode mapping, out-of-world Y air, seeded decoration reachable through the Base layer, 0/1/64/65 count bounds, short-output canary, surplus-destination suffix preservation, query-order preservation, and reuse safety.
+  - `tests/numerical_migration/worldgen_probe.rs` pins bitwise probe values for both seeds at ordinary positive/negative coordinates across all three modes, Height Y-independence, extreme-coordinate determinism with tree fringe wrapping across both signed extremes, and a mutated-permutation digest difference.
+  - `packages/tools/cmd/runtime-oracle/kernel_worldgen_probe_test.go` freezes release ABI observations for the seed/mode/coordinate matrix and exercises the failure inventory with post-rejection output byte-identity checks.
+- Verification:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked worldgen_probe`: passed (8 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test numerical_migration --locked worldgen_probe`: passed (6 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --lib --locked probe`: passed (3 tests passed).
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelWorldgenProbe' -count=1`: passed.
+  - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`: passed cleanly.
+  - `go test ./packages/shared/nativeabi -run 'TestWorldgenProbe' -count=1`: passed.
+- Review: Task Reviewer subagent approved with three minor findings deferred to the final whole-branch review (oracle export style wording, duplicated release-ABI fixture across the two test roots, and an overclaiming fixture test name). The reviewer verified two named risks against source: the probe ABI input frame has no reserved field, so the brief's reserved-bytes rejection was inapplicable and the worker's mode-word/reserved-zero/long-output mapping is the correct reading; and the extreme-coordinate tree fringe genuinely wraps across both signed extremes.
+- Rollback: Revert `8b75dad4`.
