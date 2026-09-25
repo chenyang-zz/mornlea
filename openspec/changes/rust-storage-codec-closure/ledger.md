@@ -281,6 +281,13 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Minor findings held for the final review: unused gap-export constants; the metadata registration test pins only the v1 truncated category; the closure inventory clone shares an `Encoded` pointer; hook-injected `Co-authored-by` trailers.
 - Architecture skill: no change. The corpus revision names the integration commit that contains the producers and the integrated assets.
 
+## 2026-09-25 — SDD execution: node 5.2 still open
+
+- `574840f9` formats the storage tree, pins the non-protocol save total at 269, refreshes the seven gofmt'd producer hashes, and adds the `TestStorageCorpus` command to the runtime-oracle guide. Review approved. `source_revision` stays `f75dfcf4db03eebdbf07deb5e3ff512e6c417a28`.
+- Green on this machine: `cargo fmt --check`, `make rust-check`, `TestStorageCorpus`, `TestProtocolCorpusNonProtocolEvidenceUnchanged`, `npx --yes @fission-ai/openspec@1.7.0 validate --all --strict --no-interactive` (127/127), `go test ./packages/audit -count=1` with the untracked root `go.mod` moved aside, and the runtime-oracle race package after skipping the three occupied companion pin tests. `git diff --check` is clean. Production `metadata.go`, `chunk_codec.go`, and `chunk_codec_logical.go` are unchanged from `ba0165896b78daaa2a50c03364dc4b912382d117`.
+- `make dev-check` fails while vetting `packages/client` because `app` is Darwin-only on this Linux machine. `make test-race` fails only because `TestMetadataOracle` finds `/tmp/runtime-oracle-metadata-2.4-fix/handoff/storage/metadata` already present. Those two gates are not green, so this node stays open.
+- Architecture skill: no change.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
