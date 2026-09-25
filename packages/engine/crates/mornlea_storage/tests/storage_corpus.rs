@@ -989,3 +989,171 @@ fn companion_legacy_gate_excludes_v5_integrated_cases() {
         );
     }
 }
+
+fn execute_storage_family_case(case: &FrozenCase) -> Result<(), String> {
+    match case.family.as_str() {
+        "save.region" => region::execute_region_case(case),
+        "save.player" => player::execute_player_case(case),
+        "save.world-metadata" => metadata::execute_metadata_case(case),
+        "save.hostile" => hostile::execute_hostile_case(case),
+        "save.passive" => passive::execute_passive_case(case),
+        "save.chunk" => chunk::execute_chunk_case(case),
+        "save.companion" => companion::execute_companion_case(case),
+        other => Err(format!("unsupported storage family {other}")),
+    }
+}
+
+fn successful_decode_cases(cases: &[FrozenCase]) -> Vec<&FrozenCase> {
+    cases
+        .iter()
+        .filter(|case| {
+            case.operation == "decode"
+                && case.normalized.get("kind").and_then(|value| value.as_str()) == Some("ok")
+        })
+        .collect()
+}
+
+#[test]
+fn storage_corpus_stale_value_digest_mutation_fails() {
+    let cases = load_cases_for_consumer(CorpusConsumer::Storage);
+    let case = successful_decode_cases(&cases)
+        .into_iter()
+        .find(|case| case.family == "save.player")
+        .unwrap_or_else(|| panic!("integrated manifest missing successful save.player decode case"));
+    let mut mutated = case.clone();
+    let mut normalized = case.normalized.clone();
+    let object = normalized.as_object_mut().expect("ok outcome must be an object");
+    object.insert(
+        "value_sha256".to_string(),
+        serde_json::json!("sha256:0000000000000000000000000000000000000000000000000000000000000001"),
+    );
+    mutated.normalized = normalized;
+    let err = execute_storage_family_case(&mutated).expect_err("stale value_sha256 must fail");
+    assert!(
+        err.contains("value digest mismatch"),
+        "unexpected error: {err}"
+    );
+}
+
+const CROSS_INPUT_SAVE_FAMILIES: &[&str] = &[
+    "save.region",
+    "save.player",
+    "save.world-metadata",
+    "save.hostile",
+    "save.passive",
+    "save.chunk",
+    "save.companion",
+];
+
+fn region_cross_input_candidate(case: &FrozenCase) -> bool {
+    case.id.contains("bank-") && !case.id.contains("superblock")
+}
+
+fn discover_cross_input_pair<'a>(
+    cases: &'a [FrozenCase],
+    family: &str,
+) -> Option<(&'a FrozenCase, &'a FrozenCase)> {
+    if family == "save.world-metadata" {
+        return discover_metadata_cross_input_pair(cases);
+    }
+    discover_same_route_cross_input_pair(cases, family)
+}
+
+fn discover_metadata_cross_input_pair<'a>(
+    cases: &'a [FrozenCase],
+) -> Option<(&'a FrozenCase, &'a FrozenCase)> {
+    let mut ok_cases: Vec<&FrozenCase> = Vec::new();
+    for case in successful_decode_cases(cases) {
+        if case.family != "save.world-metadata" {
+            continue;
+        }
+        if case
+            .normalized
+            .get("value_sha256")
+            .and_then(|value| value.as_str())
+            .is_some()
+        {
+            ok_cases.push(case);
+        }
+    }
+    for (left_index, left) in ok_cases.iter().enumerate() {
+        let left_digest = left
+            .normalized
+            .get("value_sha256")
+            .and_then(|value| value.as_str())?;
+        for right in ok_cases.iter().skip(left_index + 1) {
+            let right_digest = right
+                .normalized
+                .get("value_sha256")
+                .and_then(|value| value.as_str())?;
+            if left_digest != right_digest {
+                return Some((left, right));
+            }
+        }
+    }
+    None
+}
+
+fn discover_same_route_cross_input_pair<'a>(
+    cases: &'a [FrozenCase],
+    family: &str,
+) -> Option<(&'a FrozenCase, &'a FrozenCase)> {
+    use std::collections::BTreeMap;
+
+    let mut by_route: BTreeMap<(&str, &str), Vec<&FrozenCase>> = BTreeMap::new();
+    for case in successful_decode_cases(cases) {
+        if case.family != family {
+            continue;
+        }
+        if family == "save.region" && !region_cross_input_candidate(case) {
+            continue;
+        }
+        by_route
+            .entry((case.version.as_str(), case.operation.as_str()))
+            .or_default()
+            .push(case);
+    }
+    for group in by_route.values() {
+        for (index, left) in group.iter().enumerate() {
+            let Some(left_digest) = left
+                .normalized
+                .get("value_sha256")
+                .and_then(|value| value.as_str())
+            else {
+                continue;
+            };
+            for right in group.iter().skip(index + 1) {
+                let Some(right_digest) = right
+                    .normalized
+                    .get("value_sha256")
+                    .and_then(|value| value.as_str())
+                else {
+                    continue;
+                };
+                if left_digest != right_digest {
+                    return Some((left, right));
+                }
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn storage_corpus_cross_input_value_digest_mutation_fails_for_every_family() {
+    let cases = load_cases_for_consumer(CorpusConsumer::Storage);
+    for family in CROSS_INPUT_SAVE_FAMILIES {
+        let (case_a, case_b) = discover_cross_input_pair(&cases, family).unwrap_or_else(|| {
+            panic!("integrated manifest has no cross-input decode pair for family {family}")
+        });
+        let mut hybrid = (*case_b).clone();
+        hybrid.normalized = case_a.normalized.clone();
+        let err = execute_storage_family_case(&hybrid).unwrap_err();
+        assert!(
+            err.contains("value digest mismatch"),
+            "family {family} pair {} vs {}: unexpected error: {err}",
+            case_a.id,
+            case_b.id
+        );
+    }
+}
