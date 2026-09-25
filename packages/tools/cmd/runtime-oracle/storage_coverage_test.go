@@ -46,7 +46,40 @@ func cloneStorageClosureInventory(frozen Inventory) Inventory {
 		family.Cases = append([]string(nil), family.Cases...)
 		cloned.Families[index] = family
 	}
+	for index, c := range frozen.Cases {
+		c.Arguments = append([]byte(nil), c.Arguments...)
+		c.Checkpoints = append([]string(nil), c.Checkpoints...)
+		if c.PacketKey != nil {
+			key := *c.PacketKey
+			c.PacketKey = &key
+		}
+		if c.Encoded != nil {
+			encoded := *c.Encoded
+			c.Encoded = &encoded
+		}
+		cloned.Cases[index] = c
+	}
 	return cloned
+}
+
+func TestCloneStorageClosureInventoryIsIndependent(t *testing.T) {
+	frozen := Inventory{Cases: []CaseSpec{{
+		Arguments:   []byte(`{"n":1}`),
+		PacketKey:   &PacketKeySpec{ID: 1},
+		Encoded:     &AssetRef{Path: "original"},
+		Checkpoints: []string{"original"},
+	}}}
+	cloned := cloneStorageClosureInventory(frozen)
+	cloned.Cases[0].Arguments[0] = 'x'
+	cloned.Cases[0].PacketKey.ID = 2
+	cloned.Cases[0].Encoded.Path = "changed"
+	cloned.Cases[0].Checkpoints[0] = "changed"
+	if string(frozen.Cases[0].Arguments) != `{"n":1}` ||
+		frozen.Cases[0].PacketKey.ID != 1 ||
+		frozen.Cases[0].Encoded.Path != "original" ||
+		frozen.Cases[0].Checkpoints[0] != "original" {
+		t.Fatal("cloned case aliases frozen inventory")
+	}
 }
 
 func storageConsumerRoutes(consumers ConsumerRegistry) []ConsumerRoute {
