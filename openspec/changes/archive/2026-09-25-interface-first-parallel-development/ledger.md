@@ -27,3 +27,10 @@
 - Review: navigation resolves to the new bilingual guide; revisions and manifest entries match. Contract landing, provider and integration remain separate gates. The current numerical contract is still planned and unimplemented; this governance closeout claims no numerical execution or runtime migration.
 - Directory guidance: all edited documentation inherits `docs/AGENTS.md`, policy files inherit the root guide, and existing project skill directories retain their guides. No new independent ownership directory was created.
 - Architecture skill: no change. The work codifies orchestration readiness, not a new code-backed cross-task architecture fact.
+
+## 2026-09-25 — canonical sync and archive decision
+
+- Accepted node commits: plan `de2dd7df`, guide `5911d62f`, machine readiness `0d89e6d7`, workflow navigation `258e2ed2`. All three task checkboxes are complete and the worktree was clean at `258e2ed2` before canonical sync.
+- The four added governance requirements were copied into the canonical `openspec/specs/development-governance/spec.md` under its existing `## Requirements`, preserving all prior requirements. Exact delta-body comparison passed; `openspec validate --all --strict --no-interactive` passed 128/128 and `git diff --check` passed after sync. No version matrix, runtime source, save, protocol, or ABI changed.
+- Archive choice: sync the completed behavioral governance delta before archiving so future plans use the canonical specification. No user confirmation is repeated because the current request already authorizes making the reusable rule effective, and the archive is a reversible repository move.
+- Archive result: moved to `openspec/changes/archive/2026-09-25-interface-first-parallel-development/`. Post-move `openspec validate --all --strict --no-interactive` passed 127/127 current items, the focused documentation audit passed, and `git diff --check` passed. The completed change's six artifacts remain together as historical evidence.
