@@ -523,9 +523,13 @@ fn storage_corpus_loader_accepts_storage_consumer_in_manifest() {
 }
 
 const METADATA_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.world-metadata/1/decode/truncated-record",
     "save.world-metadata/1/decode/v1-canonical",
+    "save.world-metadata/2/decode/truncated-record",
     "save.world-metadata/2/decode/v2-canonical",
+    "save.world-metadata/3/decode/truncated-record",
     "save.world-metadata/3/decode/v3-canonical",
+    "save.world-metadata/4/decode/truncated-record",
     "save.world-metadata/4/decode/v4-canonical",
     "save.world-metadata/5/decode/v5-canonical",
     "save.world-metadata/5/decode/wrong-dimension-count",
@@ -535,8 +539,10 @@ const METADATA_INTEGRATED_CASE_IDS: &[&str] = &[
     "save.world-metadata/6/decode/invalid-version-zero",
     "save.world-metadata/6/decode/trailing-byte",
     "save.world-metadata/6/decode/truncated-record",
+    "save.world-metadata/6/decode/v6-boundary",
     "save.world-metadata/6/decode/v6-weather-255",
     "save.world-metadata/6/decode/wrong-header",
+    "save.world-metadata/6/encode/capacity-minus-one",
     "save.world-metadata/6/encode/v6-boundary",
 ];
 
@@ -1053,45 +1059,7 @@ fn discover_cross_input_pair<'a>(
     cases: &'a [FrozenCase],
     family: &str,
 ) -> Option<(&'a FrozenCase, &'a FrozenCase)> {
-    if family == "save.world-metadata" {
-        return discover_metadata_cross_input_pair(cases);
-    }
     discover_same_route_cross_input_pair(cases, family)
-}
-
-fn discover_metadata_cross_input_pair<'a>(
-    cases: &'a [FrozenCase],
-) -> Option<(&'a FrozenCase, &'a FrozenCase)> {
-    let mut ok_cases: Vec<&FrozenCase> = Vec::new();
-    for case in successful_decode_cases(cases) {
-        if case.family != "save.world-metadata" {
-            continue;
-        }
-        if case
-            .normalized
-            .get("value_sha256")
-            .and_then(|value| value.as_str())
-            .is_some()
-        {
-            ok_cases.push(case);
-        }
-    }
-    for (left_index, left) in ok_cases.iter().enumerate() {
-        let left_digest = left
-            .normalized
-            .get("value_sha256")
-            .and_then(|value| value.as_str())?;
-        for right in ok_cases.iter().skip(left_index + 1) {
-            let right_digest = right
-                .normalized
-                .get("value_sha256")
-                .and_then(|value| value.as_str())?;
-            if left_digest != right_digest {
-                return Some((left, right));
-            }
-        }
-    }
-    None
 }
 
 fn discover_same_route_cross_input_pair<'a>(

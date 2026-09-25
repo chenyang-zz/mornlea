@@ -4324,7 +4324,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/storage_region_test.go",
-          "sha256": "sha256:8485cb65686bbd69cb99bc84be9672e665f6699208a1cf439871280a89d2dae2"
+          "sha256": "sha256:6d3d38a641d0c61d0959c09cc4c1868529b1ac08059c88578e44a04835b7ca0d"
         }
       ],
       "cases": [
@@ -4348,6 +4348,7 @@
         "save.region/1/decode/superblock-short",
         "save.region/1/decode/superblock-trailing",
         "save.region/1/encode/bank-committed-gen1",
+        "save.region/1/encode/capacity-minus-one",
         "save.region/1/order/committed-newer-a",
         "save.region/1/order/committed-newer-b",
         "save.region/1/order/corrupt-fallback",
@@ -4379,7 +4380,7 @@
         },
         {
           "path": "packages/server/storage/metadata_oracle_test.go",
-          "sha256": "sha256:71c606388a54c379890a6032090ff1d971ea5d9c61ef15596fd6f8a3ecf3c577"
+          "sha256": "sha256:65c7a594721c84b7b302e78b96967b48e7b927241f3e9b98cb11827f1c5ca072"
         },
         {
           "path": "packages/server/storage/metadata_test.go",
@@ -4387,9 +4388,13 @@
         }
       ],
       "cases": [
+        "save.world-metadata/1/decode/truncated-record",
         "save.world-metadata/1/decode/v1-canonical",
+        "save.world-metadata/2/decode/truncated-record",
         "save.world-metadata/2/decode/v2-canonical",
+        "save.world-metadata/3/decode/truncated-record",
         "save.world-metadata/3/decode/v3-canonical",
+        "save.world-metadata/4/decode/truncated-record",
         "save.world-metadata/4/decode/v4-canonical",
         "save.world-metadata/5/decode/v5-canonical",
         "save.world-metadata/5/decode/wrong-dimension-count",
@@ -4399,8 +4404,10 @@
         "save.world-metadata/6/decode/invalid-version-zero",
         "save.world-metadata/6/decode/trailing-byte",
         "save.world-metadata/6/decode/truncated-record",
+        "save.world-metadata/6/decode/v6-boundary",
         "save.world-metadata/6/decode/v6-weather-255",
         "save.world-metadata/6/decode/wrong-header",
+        "save.world-metadata/6/encode/capacity-minus-one",
         "save.world-metadata/6/encode/v6-boundary"
       ]
     }
@@ -33184,6 +33191,33 @@
       "rust_consumer": "mornlea_storage"
     },
     {
+      "id": "save.region/1/encode/capacity-minus-one",
+      "family": "save.region",
+      "version": "1",
+      "operation": "encode",
+      "arguments": {
+        "dimension": -3,
+        "x": -1,
+        "z": 2,
+        "file_size": "65536",
+        "component": "bank",
+        "capacity": 28671
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_encode_capacity-minus-one.input.bin",
+        "sha256": "sha256:e254fdbd9b07b3640cab85bb4fd842864187f80df13ab6201bfcb9d3a246410f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/region/save.region_1_encode_capacity-minus-one.expected.json",
+        "sha256": "sha256:dcaa0fb5e07a9e0def5e50260043cb09fe57d1992ca052104884cc8d2e2dda94"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
       "id": "save.region/1/order/committed-newer-a",
       "family": "save.region",
       "version": "1",
@@ -33340,6 +33374,26 @@
       "rust_consumer": "mornlea_storage"
     },
     {
+      "id": "save.world-metadata/1/decode/truncated-record",
+      "family": "save.world-metadata",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_1_decode_truncated-record.input.bin",
+        "sha256": "sha256:292665955000d73e1363b70ccf3e338a126ae448f0209b06708654f1499bd33c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_1_decode_truncated-record.expected.json",
+        "sha256": "sha256:dcbd0bcf3d42e105a0b07d54d542648d1d0c931675f8007915810b24d09f7378"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
       "id": "save.world-metadata/1/decode/v1-canonical",
       "family": "save.world-metadata",
       "version": "1",
@@ -33353,6 +33407,26 @@
       "expected": {
         "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_1_decode_v1-canonical.expected.json",
         "sha256": "sha256:3f54f88ca0ec99ff5bf94e93d23bee41aa36c5bd6e0de8f96ac8e847713e8eef"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.world-metadata/2/decode/truncated-record",
+      "family": "save.world-metadata",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_2_decode_truncated-record.input.bin",
+        "sha256": "sha256:9a598caa7a30890793dd8fd194c1cc08ce99aa9d90781930d7421689f1f7e34f"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_2_decode_truncated-record.expected.json",
+        "sha256": "sha256:dcbd0bcf3d42e105a0b07d54d542648d1d0c931675f8007915810b24d09f7378"
       },
       "checkpoints": [
         "0"
@@ -33380,6 +33454,26 @@
       "rust_consumer": "mornlea_storage"
     },
     {
+      "id": "save.world-metadata/3/decode/truncated-record",
+      "family": "save.world-metadata",
+      "version": "3",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_3_decode_truncated-record.input.bin",
+        "sha256": "sha256:a2f1f70cd259e569ebe182226f580cf36af76df2b91891ee7cc319ce0d38d869"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_3_decode_truncated-record.expected.json",
+        "sha256": "sha256:dcbd0bcf3d42e105a0b07d54d542648d1d0c931675f8007915810b24d09f7378"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
       "id": "save.world-metadata/3/decode/v3-canonical",
       "family": "save.world-metadata",
       "version": "3",
@@ -33393,6 +33487,26 @@
       "expected": {
         "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_3_decode_v3-canonical.expected.json",
         "sha256": "sha256:fd6f22ea215739d4710c1c10cb79b7bfa5828d76675257e296344080dc52aa48"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.world-metadata/4/decode/truncated-record",
+      "family": "save.world-metadata",
+      "version": "4",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_4_decode_truncated-record.input.bin",
+        "sha256": "sha256:8b0c92cc3177c81b9b428d723e149142aae967023a0a2cfd02b298a9db2af659"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_4_decode_truncated-record.expected.json",
+        "sha256": "sha256:dcbd0bcf3d42e105a0b07d54d542648d1d0c931675f8007915810b24d09f7378"
       },
       "checkpoints": [
         "0"
@@ -33580,6 +33694,26 @@
       "rust_consumer": "mornlea_storage"
     },
     {
+      "id": "save.world-metadata/6/decode/v6-boundary",
+      "family": "save.world-metadata",
+      "version": "6",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_6_decode_v6-boundary.input.bin",
+        "sha256": "sha256:884ea01b0acf56239801dd3b5854a5fbf346eedcc1b466b40cc83194e1ff0384"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_6_decode_v6-boundary.expected.json",
+        "sha256": "sha256:995578608c22aac42f1cd44bd52f9f5c91bb0a06d3fcafaa6b1f03e5d0930696"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
       "id": "save.world-metadata/6/decode/v6-weather-255",
       "family": "save.world-metadata",
       "version": "6",
@@ -33613,6 +33747,28 @@
       "expected": {
         "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_6_decode_wrong-header.expected.json",
         "sha256": "sha256:dcbd0bcf3d42e105a0b07d54d542648d1d0c931675f8007915810b24d09f7378"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.world-metadata/6/encode/capacity-minus-one",
+      "family": "save.world-metadata",
+      "version": "6",
+      "operation": "encode",
+      "arguments": {
+        "capacity": 77
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_6_encode_capacity-minus-one.input.bin",
+        "sha256": "sha256:884ea01b0acf56239801dd3b5854a5fbf346eedcc1b466b40cc83194e1ff0384"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/world-metadata/save.world-metadata_6_encode_capacity-minus-one.expected.json",
+        "sha256": "sha256:19a075d7d3f4c88d845a7e6cfebd997d6843ea1254cdaa80eab0ef4669ee7d84"
       },
       "checkpoints": [
         "0"

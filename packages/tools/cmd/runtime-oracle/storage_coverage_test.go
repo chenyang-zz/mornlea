@@ -10,36 +10,16 @@ import (
 const closedSaveSourceRevision = "138183c5cf7e1aac4974233e303a2d9df0c202d6"
 
 var closedSaveFamilyCounts = map[string]int{
-	"save.region":         26,
+	"save.region":         27,
 	"save.player":         37,
-	"save.world-metadata": 15,
+	"save.world-metadata": 21,
 	"save.hostile":        50,
 	"save.passive":        70,
 	"save.chunk":          35,
 	"save.companion":      29,
 }
 
-const closedSaveCaseTotal = 262
-
-// metadataLegacyMigrationDecodeVersions are tail-append migration decodes whose
-// integrated corpus carries a canonical accepted fixture only; invalid evidence
-// for those versions lives on later schema rows in the same family.
-var metadataLegacyMigrationDecodeVersions = map[string]bool{
-	"1": true,
-	"2": true,
-	"3": true,
-	"4": true,
-}
-
-// encodeRoutesRequiringErrorCases names non-chunk encode routes whose walked
-// cases must include both kind=ok and kind=error. Region and world-metadata
-// encode at v1/v6 integrate a single validated writer case each.
-var encodeRoutesRequiringErrorCases = map[ConsumerRoute]bool{
-	{FamilyID: "save.player", Version: "9", Operation: "encode"}:         true,
-	{FamilyID: "save.companion", Version: "5", Operation: "encode"}:       true,
-	{FamilyID: "save.hostile", Version: "2", Operation: "encode"}:         true,
-	{FamilyID: "save.passive", Version: "1", Operation: "encode"}:         true,
-}
+const closedSaveCaseTotal = 269
 
 // loadStorageClosureInventory loads the tracked corpus manifest for save closure.
 func loadStorageClosureInventory(t *testing.T, root string) Inventory {
@@ -171,9 +151,6 @@ func TestStorageCorpus(t *testing.T) {
 		if !strings.HasPrefix(pt.FamilyID, "save.") {
 			continue
 		}
-		if pt.FamilyID == "save.world-metadata" && metadataLegacyMigrationDecodeVersions[pt.Version] {
-			continue
-		}
 		t.Fatalf("save point %s/%s remains uncovered", pt.FamilyID, pt.Version)
 	}
 
@@ -230,12 +207,6 @@ func TestStorageCorpus(t *testing.T) {
 		tally := routeKinds[route]
 		switch route.Operation {
 		case "decode":
-			if route.FamilyID == "save.world-metadata" && metadataLegacyMigrationDecodeVersions[route.Version] {
-				if !tally.ok {
-					t.Fatalf("route %s/%s/decode missing kind=ok evidence", route.FamilyID, route.Version)
-				}
-				continue
-			}
 			if !tally.ok || !tally.error {
 				t.Fatalf("route %s/%s/decode missing ok=%v error=%v evidence", route.FamilyID, route.Version, tally.ok, tally.error)
 			}
@@ -243,12 +214,6 @@ func TestStorageCorpus(t *testing.T) {
 			if route.FamilyID == "save.chunk" && route.Version == "9" {
 				if !tally.ok {
 					t.Fatalf("route save.chunk/9/encode missing kind=ok evidence")
-				}
-				continue
-			}
-			if !encodeRoutesRequiringErrorCases[route] {
-				if !tally.ok {
-					t.Fatalf("route %s/%s/encode missing kind=ok evidence", route.FamilyID, route.Version)
 				}
 				continue
 			}
