@@ -103,16 +103,8 @@ impl ByteWriter {
         self.data.extend_from_slice(&value.to_le_bytes());
     }
 
-    pub(crate) fn f32(&mut self, value: f32) {
-        self.u32(value.to_bits());
-    }
-
     pub(crate) fn bytes(&mut self, value: &[u8]) {
         self.data.extend_from_slice(value);
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.data.len()
     }
 
     pub(crate) fn into_vec(self) -> Vec<u8> {
