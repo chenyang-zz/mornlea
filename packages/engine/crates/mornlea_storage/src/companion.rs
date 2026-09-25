@@ -269,6 +269,192 @@ pub fn encode(save: &CompanionSave) -> StorageResult<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Sorted emission indices produced by admission; consumed by length preflight
+/// and the caller-buffer writer in canonical ID order.
+struct CompanionEncodePlan {
+    record_indices: Vec<usize>,
+    lifecycle_indices: Vec<usize>,
+    queue_indices: Vec<usize>,
+}
+
+/// Reports the exact on-disk byte length for a valid v5 companion aggregate,
+/// including the envelope, without materializing encoded bytes.
+pub fn encoded_len(save: &CompanionSave) -> StorageResult<usize> {
+    let plan = prepare_companion_encode_plan(save)?;
+    let payload_length = companion_payload_length(save, &plan)?;
+    let total = HEADER_LENGTH
+        .checked_add(payload_length)
+        .ok_or_else(|| corrupt("companion file length", "overflow"))?;
+    if total > MAX_FILE_LENGTH {
+        return Err(corrupt(
+            "companion file length",
+            format!("{total} exceeds limit {MAX_FILE_LENGTH}"),
+        ));
+    }
+    Ok(total)
+}
+
+fn prepare_companion_encode_plan(save: &CompanionSave) -> StorageResult<CompanionEncodePlan> {
+    if save.revision == 0 {
+        return Err(corrupt("companion revision", "zero revision"));
+    }
+    if !save.agent_namespace_id.is_valid() {
+        return Err(corrupt(
+            "companion agent namespace",
+            "not a canonical UUIDv4",
+        ));
+    }
+    if save.records.len() > MAX_STORED {
+        return Err(corrupt(
+            "companion count",
+            format!("{} exceeds limit {MAX_STORED}", save.records.len()),
+        ));
+    }
+    if save.lifecycles.len() != save.records.len() {
+        return Err(corrupt(
+            "companion lifecycles",
+            "set does not match records",
+        ));
+    }
+    if save.queues.len() > MAX_ACTIVE {
+        return Err(corrupt(
+            "companion queues",
+            format!("{} exceeds limit {MAX_ACTIVE}", save.queues.len()),
+        ));
+    }
+
+    let mut record_indices: Vec<usize> = Vec::new();
+    record_indices
+        .try_reserve_exact(save.records.len())
+        .map_err(|_| corrupt("companion count", "index reservation failed"))?;
+    record_indices.extend(0..save.records.len());
+    record_indices.sort_by_key(|&index| save.records[index].id.to_bytes());
+    for (position, &index) in record_indices.iter().enumerate() {
+        validate_body(&save.records[index])
+            .map_err(|detail| corrupt("companion record", format!("{position}: {detail}")))?;
+        if position > 0 {
+            let previous = save.records[record_indices[position - 1]].id;
+            if previous == save.records[index].id {
+                return Err(corrupt("companion records", "duplicate companion ID"));
+            }
+        }
+    }
+
+    let mut lifecycle_indices: Vec<usize> = Vec::new();
+    lifecycle_indices
+        .try_reserve_exact(save.lifecycles.len())
+        .map_err(|_| corrupt("companion count", "index reservation failed"))?;
+    lifecycle_indices.extend(0..save.lifecycles.len());
+    lifecycle_indices.sort_by_key(|&index| save.lifecycles[index].id.to_bytes());
+    let mut active: Vec<PlayerId> = Vec::new();
+    for (position, &index) in lifecycle_indices.iter().enumerate() {
+        let lifecycle = &save.lifecycles[index];
+        if position > 0 {
+            let previous = save.lifecycles[lifecycle_indices[position - 1]].id;
+            if previous == lifecycle.id {
+                return Err(corrupt("companion lifecycles", "duplicate ID"));
+            }
+        }
+        if lifecycle.id != save.records[record_indices[position]].id {
+            return Err(corrupt(
+                "companion lifecycles",
+                "set does not match records",
+            ));
+        }
+        validate_v5_lifecycle(lifecycle)
+            .map_err(|detail| corrupt("companion lifecycle", format!("{position}: {detail}")))?;
+        if lifecycle.active {
+            active.push(lifecycle.id);
+        }
+    }
+    if active.len() > MAX_ACTIVE {
+        return Err(corrupt(
+            "companion active count",
+            format!("{} exceeds limit {MAX_ACTIVE}", active.len()),
+        ));
+    }
+
+    validate_queues(&save.queues, &save.records, CURRENT_SCHEMA)
+        .map_err(|detail| corrupt("companion queues", detail))?;
+
+    let mut queue_indices: Vec<usize> = Vec::new();
+    queue_indices
+        .try_reserve_exact(save.queues.len())
+        .map_err(|_| corrupt("companion queues", "index reservation failed"))?;
+    queue_indices.extend(0..save.queues.len());
+    queue_indices.sort_by_key(|&index| save.queues[index].id.to_bytes());
+    for &index in &queue_indices {
+        let queue = &save.queues[index];
+        if !queue.summary.is_empty() {
+            return Err(corrupt(
+                "companion queues",
+                "v5 queue carries legacy summary",
+            ));
+        }
+        if !active.contains(&queue.id) {
+            return Err(corrupt(
+                "companion queues",
+                "inactive companion carries task or FIFO",
+            ));
+        }
+    }
+
+    Ok(CompanionEncodePlan {
+        record_indices,
+        lifecycle_indices,
+        queue_indices,
+    })
+}
+
+fn companion_payload_length(
+    save: &CompanionSave,
+    plan: &CompanionEncodePlan,
+) -> StorageResult<usize> {
+    let namespace_bytes = save.agent_namespace_id.to_bytes().len();
+    let mut payload_length = namespace_bytes;
+    for (position, &record_index) in plan.record_indices.iter().enumerate() {
+        let body = &save.records[record_index];
+        let lifecycle = &save.lifecycles[plan.lifecycle_indices[position]];
+        let mut record_length = RECORD_LENGTH
+            .checked_add(1)
+            .and_then(|value| value.checked_add(8))
+            .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+        if !lifecycle.active {
+            record_length = record_length
+                .checked_add(Identity::default().to_bytes().len())
+                .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+        } else {
+            record_length = record_length
+                .checked_add(8)
+                .and_then(|value| value.checked_add(Identity::default().to_bytes().len()))
+                .and_then(|value| value.checked_add(SUMMARY_PREFIX_LENGTH))
+                .and_then(|value| value.checked_add(lifecycle.summary.len()))
+                .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+            let queue = plan
+                .queue_indices
+                .iter()
+                .map(|&index| &save.queues[index])
+                .find(|candidate| candidate.id == body.id);
+            if let Some(queue) = queue {
+                if queue.has_current {
+                    record_length = record_length
+                        .checked_add(task_encoded_length(&queue.current))
+                        .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+                }
+                if !queue.pending.is_empty() {
+                    record_length = record_length
+                        .checked_add(fifo_encoded_length(&queue.pending))
+                        .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+                }
+            }
+        }
+        payload_length = payload_length
+            .checked_add(record_length)
+            .ok_or_else(|| corrupt("companion payload length", "overflow"))?;
+    }
+    Ok(payload_length)
+}
+
 /// Decodes a companion aggregate, migrating v1..v4 read-only.
 ///
 /// The file-length gate runs before any parsing or allocation.
