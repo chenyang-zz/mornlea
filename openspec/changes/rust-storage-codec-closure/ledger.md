@@ -260,6 +260,17 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: Rust `storage_corpus` 75/75 including nonempty `companion_legacy_`; `runtime_contract companion_` 6/6. The full Go oracle package fails only on the occupied pin. The integration reviewer compared asset bytes and did not re-run those commands.
 - Architecture skill: no change. The companion inventory digest matches the player hotbar shape already required by the corpus contract.
 
+## 2026-09-25 — SDD execution: node 4.6b closed
+
+- Commits: `06bb4a8a` v5 producer; `c2e5fb65` reachable v5 wire faults; `f1f0c68a` command-limit pin; `138183c5` integration of the twenty-one v5 decode and encode cases.
+- Approved candidate: compact `/tmp/runtime-oracle-companion-4.6b-fix2/runtime-oracle/storage-companion/` (21 cases, 13716 bytes). The trees at `/tmp/runtime-oracle-companion-4.6b` and `/tmp/runtime-oracle-companion-4.6b-fix` were not imported.
+- Reviews of the producer, the wire fix, the pin fix, and the integration approved. No remaining Critical or Important findings.
+- Controller ruling: v5 decode copies lifecycle and queue IDs from the body before the canonical checks, so `companion queue without body record` and `companion lifecycle set does not match records` are not reachable from a v5 wire. Orphan-queue fails `companion hotbar slot: unexpected EOF`. Missing-lifecycle fails `flags: unexpected EOF`. Duplicate-lifecycle fails `companion IDs are not strictly sorted`. The command-over-limit pin is `1025 字节超过上限`.
+- Minor findings held for the final review: `v5-roundtrip-alt` shares the fixture queue shape; `execute_companion_encode` returns success after a completed encode when kind is not `ok`; `companionAdversarialRoutes` has no callers. Occupied `/tmp` pin tests remain environmental.
+- `save.companion` has 29 cases. `save.chunk` stays at 35. `save.region` stays at 26. `save.player` stays at 37. `save.world-metadata` stays at 15. `save.hostile` stays at 50. `save.passive` stays at 70. Save total is 262. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for `138183c5`: Rust `storage_corpus` 85/85; `companion_` 16/16; `runtime_contract companion_` 6/6. The full Go oracle package fails only on occupied pins. The integration reviewer compared asset bytes and did not re-run those commands.
+- Architecture skill: no change. The unreachable v5 membership messages follow the existing body-id copy in the Go decoder.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
