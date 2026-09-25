@@ -28,6 +28,9 @@ mod passive;
 #[path = "storage_corpus/chunk.rs"]
 mod chunk;
 
+#[path = "storage_corpus/companion.rs"]
+mod companion;
+
 use runtime_corpus::{load_cases_for_consumer, CorpusConsumer, FrozenCase, try_load_cases_from_root};
 use std::fs;
 use std::path::{Path, PathBuf};
