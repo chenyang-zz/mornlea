@@ -2,6 +2,21 @@
 
 This is an index over the active OpenSpec `tasks.md` files, not a second status source. It applies the [target interface contract](../../../../docs/runtime-interface-architecture.md) and the archived protocol/storage worker-packet precedent. Detailed editable files, tests and rollback for a node live in that node's change-local `plans/` packet; the controller verifies its prerequisites at dispatch. All implementation checkboxes remain open. A packet is only dispatchable after its compile-ready upstream declaration, deterministic consumer double and accepted SHA actually exist; a plan file cannot supply that SHA.
 
+| Stage and status source | Open nodes | Detailed packet entry |
+| --- | ---: | --- |
+| [F1 numerical closure](../../rust-native-numerical-closure/tasks.md) | 29 | [Foundation packets](../../rust-native-numerical-closure/plans/00-foundation.md) and its linked provider/adapter/closure packets |
+| [F2 authoritative server](../../rust-authoritative-server/tasks.md) | 25 | [S1 contract](../../rust-authoritative-server/plans/00-execution.md), [server slices](../../rust-authoritative-server/plans/01-server-slices.md) |
+| [F3 client core and bridge](../../rust-client-core/tasks.md) | 22 | [C1/C2/G1 contract](../../rust-client-core/plans/00-client-contract.md), [client slices](../../rust-client-core/plans/01-client-slices.md) |
+| [P8 terrain](../../godot-production-terrain/tasks.md) | 12 | [Terrain packets](../../godot-production-terrain/plans/worker-packets.md) |
+| [P9 actors](../../godot-complete-actors/tasks.md) | 15 | [Actor packets](../../godot-complete-actors/plans/worker-packets.md) |
+| [P10 UI](../../godot-ui-migration/tasks.md) | 12 | [UI packets](../../godot-ui-migration/plans/worker-packets.md) |
+| [P11 desktop audio/input](../../godot-desktop-audio/tasks.md) | 11 | [Desktop packets](../../godot-desktop-audio/plans/worker-packets.md) |
+| [P12 tooling/evidence](../../godot-production-tooling/tasks.md) | 14 | [Tooling packets](../../godot-production-tooling/plans/worker-packets.md) |
+| [P13 packaging](../../godot-desktop-packaging/tasks.md) | 13 | [Release packets](../../godot-desktop-packaging/plans/worker-packets.md) |
+| [P14 cutover](../tasks.md) | 13 | [Cutover packets](worker-packets.md) |
+
+The nine revised changes contain 137 nodes; the existing F1 change has 29, for 166 open implementation nodes in this program. These counts are planning inventory, not completion evidence.
+
 | Wave | Serial landing / accepted gate | Concurrent disjoint lanes after the gate | Serial join / acceptance |
 | --- | --- | --- | --- |
 | F1 numerical closure | Existing F1 1.1/1.2, then complete D0/P0/S0/K0 zero-gap acceptance | Existing F1 native numerical providers and adapters under its own DAG | F1 3.12 corpus and 4.x; no F2 worker before complete F1 ledger |
