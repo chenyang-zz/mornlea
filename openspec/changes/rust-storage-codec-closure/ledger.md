@@ -250,6 +250,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the writer: `companion_buffer` 13/13 including `writer_` 7/7; `runtime_contract companion_` 6/6; `go test ./packages/server/storage/companion -count=1` pass. Library clippy `-D warnings` passed after `edc6d87e`.
 - Architecture skill: no change. The companion writer follows the existing validate-then-write rule.
 
+## 2026-09-25 — SDD execution: node 4.6a closed
+
+- Commits: `9b4390c5` v1–v4 producer; `46c73b14` nested hotbar digest and removal of the surplus queue case; `407e0646` integration of eight `save.companion` decode cases and routes 1–4.
+- Approved candidate: compact `/tmp/runtime-oracle-companion-4.6a-fix/runtime-oracle/storage-companion/` (8 cases). The nine-case tree at `/tmp/runtime-oracle-companion-4.6a` was not imported.
+- Reviews of the producer, the digest fix, and the integration approved. No remaining Critical or Important findings.
+- Minor findings held for the final review: the export-unset test does not compare directory listings; the Go integrated companion test does not compare observations with the frozen digest. The pinned export test still stops when the rejected tree occupies its path. That failure is environmental and was not treated as a defect.
+- `save.companion` has 8 cases. `save.chunk` stays at 35. `save.region` stays at 26. `save.player` stays at 37. `save.world-metadata` stays at 15. `save.hostile` stays at 50. `save.passive` stays at 70. Save total is 241. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the integration commit: Rust `storage_corpus` 75/75 including nonempty `companion_legacy_`; `runtime_contract companion_` 6/6. The full Go oracle package fails only on the occupied pin. The integration reviewer compared asset bytes and did not re-run those commands.
+- Architecture skill: no change. The companion inventory digest matches the player hotbar shape already required by the corpus contract.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections

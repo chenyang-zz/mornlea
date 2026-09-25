@@ -46,7 +46,7 @@
 - [x] 4.3c [Close chunk cross-decode and rejection matrix](plans/05-dispatch-slices.md#node-4-3c). Go decode a Rust-produced frame, then run bounded corruption cases.
 - [x] 4.4 [Preflight companion length and canonical index plan](plans/03-aggregates.md#node-4-4). Rust `src/{companion,lib}.rs`, `tests/companion_buffer.rs`; run Rust `--test companion_buffer preflight_`.
 - [x] 4.5 [Add companion atomic caller-buffer writer](plans/03-aggregates.md#node-4-5). Rust `src/{companion,lib}.rs`, `tests/companion_buffer.rs`; run Rust `--test companion_buffer writer_`.
-- [ ] 4.6a [Execute companion v1–v4 history](plans/05-dispatch-slices.md#node-4-6a). Prove legacy owner, task, FIFO and summary without v5 bootstrap.
+- [x] 4.6a [Execute companion v1–v4 history](plans/05-dispatch-slices.md#node-4-6a). Prove legacy owner, task, FIFO and summary without v5 bootstrap.
 - [ ] 4.6b [Execute companion v5 and adversarial closure](plans/05-dispatch-slices.md#node-4-6b). Prove exact current bytes, bounds, membership and corruption.
 
 ## 5. Whole-storage acceptance
