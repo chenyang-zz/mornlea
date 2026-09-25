@@ -15,7 +15,7 @@ pub(crate) mod mesh;
 #[allow(dead_code)]
 pub(crate) mod pathfind;
 #[allow(dead_code)]
-pub(crate) mod physics;
+pub mod physics;
 #[allow(dead_code)]
 pub(crate) mod raycast;
 #[allow(dead_code)]
