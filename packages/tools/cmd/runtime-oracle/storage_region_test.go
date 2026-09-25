@@ -40,7 +40,9 @@ const (
 	regionSuperblockDecodeCaseID = regionFamily + "/" + regionVersion + "/decode/superblock-seed"
 	regionBankStandbyDecodeID    = regionFamily + "/" + regionVersion + "/decode/bank-standby-gen0"
 	regionBankCommittedDecodeID  = regionFamily + "/" + regionVersion + "/decode/bank-committed-gen1"
-	regionBankCommittedEncodeID  = regionFamily + "/" + regionVersion + "/encode/bank-committed-gen1"
+	regionBankCommittedEncodeID       = regionFamily + "/" + regionVersion + "/encode/bank-committed-gen1"
+	regionEncodeCapacityMinusOneID    = regionFamily + "/" + regionVersion + "/encode/capacity-minus-one"
+	regionClosureGapExportDir         = "/tmp/runtime-oracle-region-5.1-gap"
 
 	regionOrderCommittedNewerAID   = regionFamily + "/" + regionVersion + "/order/committed-newer-a"
 	regionOrderCommittedNewerBID   = regionFamily + "/" + regionVersion + "/order/committed-newer-b"
@@ -637,12 +639,17 @@ func regionOrderRoutes() []ConsumerRoute {
 }
 
 func regionArgumentsJSON(component, fileSize string) json.RawMessage {
+	return regionArgumentsJSONWithCapacity(component, fileSize, nil)
+}
+
+func regionArgumentsJSONWithCapacity(component, fileSize string, capacity *uint32) json.RawMessage {
 	raw, err := json.Marshal(regionCaseArguments{
 		Dimension: regionSeedDimension,
 		X:         regionSeedX,
 		Z:         regionSeedZ,
 		FileSize:  fileSize,
 		Component: component,
+		Capacity:  capacity,
 	})
 	if err != nil {
 		panic(err)
@@ -711,8 +718,10 @@ func regionSeedCandidates(t *testing.T) []regionCandidate {
 		t.Fatalf("encode committed bank: %v", err)
 	}
 
-	build := func(id, operation, component, fileSize string, input []byte, wantEncoded []byte) regionCandidate {
-		args := regionArgumentsJSON(component, fileSize)
+	build := func(id, operation, component, fileSize string, input []byte, wantEncoded []byte, args json.RawMessage) regionCandidate {
+		if args == nil {
+			args = regionArgumentsJSON(component, fileSize)
+		}
 		var producer GoOperation
 		switch operation {
 		case "decode":
@@ -745,7 +754,7 @@ func regionSeedCandidates(t *testing.T) []regionCandidate {
 			t.Fatalf("marshal expected %s: %v", id, err)
 		}
 		encoded := wantEncoded
-		if operation == "encode" {
+		if operation == "encode" && saveOutcome.Kind == "ok" {
 			if len(producedEncoded) == 0 {
 				t.Fatalf("encode case %s produced no bytes", id)
 			}
@@ -771,12 +780,35 @@ func regionSeedCandidates(t *testing.T) []regionCandidate {
 		return regionCandidate{Spec: spec, Assets: assets, Expect: saveOutcome, Encoded: encoded}
 	}
 
+	committedEncode := build(regionBankCommittedEncodeID, "encode", "bank", regionFileSizeOccupiedEntry, committedBytes[:], committedBytes[:], nil)
+	capacity := uint32(len(committedEncode.Encoded) - 1)
+	capacityArgs := regionArgumentsJSONWithCapacity("bank", regionFileSizeOccupiedEntry, &capacity)
+
 	return []regionCandidate{
-		build(regionSuperblockDecodeCaseID, "decode", "superblock", regionFileSizeOccupiedEntry, superblock[:], nil),
-		build(regionBankStandbyDecodeID, "decode", "bank", regionFileSizeEmptyBank, standbyBytes[:], nil),
-		build(regionBankCommittedDecodeID, "decode", "bank", regionFileSizeOccupiedEntry, committedBytes[:], nil),
-		build(regionBankCommittedEncodeID, "encode", "bank", regionFileSizeOccupiedEntry, committedBytes[:], committedBytes[:]),
+		build(regionSuperblockDecodeCaseID, "decode", "superblock", regionFileSizeOccupiedEntry, superblock[:], nil, nil),
+		build(regionBankStandbyDecodeID, "decode", "bank", regionFileSizeEmptyBank, standbyBytes[:], nil, nil),
+		build(regionBankCommittedDecodeID, "decode", "bank", regionFileSizeOccupiedEntry, committedBytes[:], nil, nil),
+		committedEncode,
+		build(regionEncodeCapacityMinusOneID, "encode", "bank", regionFileSizeOccupiedEntry, committedBytes[:], nil, capacityArgs),
 	}
+}
+
+func TestStorageRegionRegistersClosureGapCase(t *testing.T) {
+	for _, candidate := range regionSeedCandidates(t) {
+		if candidate.Spec.ID == regionEncodeCapacityMinusOneID {
+			if candidate.Expect.Kind != "error" || candidate.Expect.Category != "output_too_small" {
+				t.Fatalf("case %s outcome %#v, want output_too_small error", candidate.Spec.ID, candidate.Expect)
+			}
+			if candidate.Expect.Needed == nil || candidate.Expect.Available == nil {
+				t.Fatalf("case %s missing needed/available fields", candidate.Spec.ID)
+			}
+			if *candidate.Expect.Available != *candidate.Expect.Needed-1 {
+				t.Fatalf("case %s available=%d needed=%d", candidate.Spec.ID, *candidate.Expect.Available, *candidate.Expect.Needed)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing closure gap case %s", regionEncodeCapacityMinusOneID)
 }
 
 func regionOrderCandidates(t *testing.T) []regionCandidate {

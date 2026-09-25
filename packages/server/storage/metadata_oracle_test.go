@@ -25,7 +25,12 @@ const (
 	metadataCorpusRelDir    = "testdata/runtime-migration/cases/storage/world-metadata"
 	metadataProducerTestRel = "packages/server/storage/metadata_oracle_test.go"
 	metadataCodecSourceRel  = "packages/server/storage/metadata.go"
-	metadataPinnedExportDir = "/tmp/runtime-oracle-metadata-2.4-fix"
+	metadataPinnedExportDir     = "/tmp/runtime-oracle-metadata-2.4-fix"
+	metadataClosureGapExportDir = "/tmp/runtime-oracle-metadata-5.1-gap"
+
+	metadataDecodeV1TruncatedRecordID = metadataFamily + "/1/decode/truncated-record"
+	metadataDecodeV6BoundaryID        = metadataFamily + "/6/decode/v6-boundary"
+	metadataEncodeV6CapacityMinusOneID = metadataFamily + "/6/encode/capacity-minus-one"
 	metadataSelectionManifest = "selection.json"
 	metadataRustConsumer    = "mornlea_storage"
 	metadataRuntimeOracleExportDirEnv = "RUNTIME_ORACLE_EXPORT_DIR"
@@ -506,6 +511,12 @@ func metadataCandidates(t *testing.T) []metadataCandidate {
 	t.Helper()
 	args := metadataArgumentsJSON(nil)
 	v6 := mustEncodeMetadataForTest(t, metadataV6BoundaryMetadata())
+	v1 := metadataLegacyV1Bytes()
+	v2 := metadataLegacyV2Bytes()
+	v3 := metadataLegacyV3Bytes()
+	v4 := metadataLegacyV4Bytes()
+	capacity := uint32(metadataTotalLenV6 - 1)
+	capacityArgs := metadataArgumentsJSON(&capacity)
 	return []metadataCandidate{
 		metadataBuildCandidate(t, metadataFamily+"/1/decode/v1-canonical", "decode", "1", metadataLegacyV1Bytes(), args, nil),
 		metadataBuildCandidate(t, metadataFamily+"/2/decode/v2-canonical", "decode", "2", metadataLegacyV2Bytes(), args, nil),
@@ -522,6 +533,42 @@ func metadataCandidates(t *testing.T) []metadataCandidate {
 		metadataBuildCandidate(t, metadataFamily+"/6/decode/wrong-header", "decode", metadataVersion, metadataWrongHeader(v6), args, nil),
 		metadataBuildCandidate(t, metadataFamily+"/5/decode/wrong-dimension-count", "decode", "5", metadataWrongDimensionCountV5(), args, nil),
 		metadataBuildCandidate(t, metadataFamily+"/6/decode/invalid-difficulty-3", "decode", metadataVersion, metadataInvalidDifficultyV6(t), args, nil),
+		metadataBuildCandidate(t, metadataFamily+"/1/decode/truncated-record", "decode", "1", v1[:len(v1)-1], args, nil),
+		metadataBuildCandidate(t, metadataFamily+"/2/decode/truncated-record", "decode", "2", v2[:len(v2)-1], args, nil),
+		metadataBuildCandidate(t, metadataFamily+"/3/decode/truncated-record", "decode", "3", v3[:len(v3)-1], args, nil),
+		metadataBuildCandidate(t, metadataFamily+"/4/decode/truncated-record", "decode", "4", v4[:len(v4)-1], args, nil),
+		metadataBuildCandidate(t, metadataDecodeV6BoundaryID, "decode", metadataVersion, v6, args, nil),
+		metadataBuildCandidate(t, metadataEncodeV6CapacityMinusOneID, "encode", metadataVersion, v6, capacityArgs, nil),
+	}
+}
+
+func TestMetadataOracleRegistersClosureGapCase(t *testing.T) {
+	for _, candidate := range metadataCandidates(t) {
+		if candidate.Spec.ID == metadataDecodeV1TruncatedRecordID {
+			if candidate.Expect.Kind != "error" || candidate.Expect.Category != "corrupt" {
+				t.Fatalf("case %s outcome %#v, want corrupt error", candidate.Spec.ID, candidate.Expect)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing closure gap case %s", metadataDecodeV1TruncatedRecordID)
+}
+
+// TestMetadataOracleExportFromEnvironment writes the reviewed selection and
+// assets when RUNTIME_ORACLE_EXPORT_DIR is set outside the test.
+func TestMetadataOracleExportFromEnvironment(t *testing.T) {
+	exportRoot := strings.TrimSpace(os.Getenv(metadataRuntimeOracleExportDirEnv))
+	if exportRoot == "" {
+		t.Skip("RUNTIME_ORACLE_EXPORT_DIR unset")
+	}
+	root := metadataRepoRoot(t)
+	child := metadataExportSelection(t, root, metadataCandidates(t))
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
+	}
+	selectionPath := filepath.Join(child, metadataSelectionManifest)
+	if _, err := os.Stat(selectionPath); err != nil {
+		t.Fatalf("selection manifest missing after export: %v", err)
 	}
 }
 
@@ -633,6 +680,21 @@ func TestMetadataOracle(t *testing.T) {
 		if !metadataOutcomesEqual(got, candidate.Expect) {
 			t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
 		}
+	}
+	var boundaryDigest, weatherDigest string
+	for _, candidate := range candidates {
+		switch candidate.Spec.ID {
+		case metadataDecodeV6BoundaryID:
+			boundaryDigest = candidate.Expect.ValueSHA256
+		case metadataFamily + "/6/decode/v6-weather-255":
+			weatherDigest = candidate.Expect.ValueSHA256
+		}
+	}
+	if boundaryDigest == "" || weatherDigest == "" {
+		t.Fatal("missing v6 boundary or weather-255 decode case for digest check")
+	}
+	if boundaryDigest == weatherDigest {
+		t.Fatalf("v6-boundary digest %s matches v6-weather-255 digest %s", boundaryDigest, weatherDigest)
 	}
 	// digest sensitivity
 	v5 := metadataLegacyV5Bytes()
