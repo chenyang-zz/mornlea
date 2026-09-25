@@ -287,6 +287,12 @@ func BaselineConsumerRegistry() ConsumerRegistry {
 				{FamilyID: "save.chunk", Version: "2", Operation: "decode"}:         {},
 				{FamilyID: "save.chunk", Version: "3", Operation: "decode"}:         {},
 				{FamilyID: "save.chunk", Version: "4", Operation: "decode"}:         {},
+				{FamilyID: "save.chunk", Version: "5", Operation: "decode"}:         {},
+				{FamilyID: "save.chunk", Version: "6", Operation: "decode"}:         {},
+				{FamilyID: "save.chunk", Version: "7", Operation: "decode"}:         {},
+				{FamilyID: "save.chunk", Version: "8", Operation: "decode"}:         {},
+				{FamilyID: "save.chunk", Version: "9", Operation: "decode"}:         {},
+				{FamilyID: "save.chunk", Version: "9", Operation: "encode"}:         {},
 			},
 		},
 		"external:agent-contract": {

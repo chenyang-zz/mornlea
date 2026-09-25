@@ -361,6 +361,19 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.chunk/3/decode/v3-fixture":                           true,
 		"save.chunk/4/decode/invalid-version-future":               true,
 		"save.chunk/4/decode/v4-fixture":                           true,
+		"save.chunk/5/decode/corrupt-crc":                          true,
+		"save.chunk/5/decode/v5-fixture":                           true,
+		"save.chunk/6/decode/truncated-payload":                    true,
+		"save.chunk/6/decode/v6-fixture":                           true,
+		"save.chunk/7/decode/invalid-version-zero":                 true,
+		"save.chunk/7/decode/v7-fixture":                           true,
+		"save.chunk/8/decode/invalid-version-future":               true,
+		"save.chunk/8/decode/v8-fixture":                           true,
+		"save.chunk/9/decode/truncated-payload":                    true,
+		"save.chunk/9/decode/v9-fixture":                           true,
+		"save.chunk/9/decode/v9-chest-registry":                    true,
+		"save.chunk/9/decode/v9-fluid-fixture":                     true,
+		"save.chunk/9/encode/v9-fixture-exact":                       true,
 	}
 	for _, c := range frozen.Cases {
 		if !strings.HasPrefix(c.Family, "save.") {

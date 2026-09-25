@@ -121,6 +121,7 @@ func Discover(root string) ([]Family, Identities, error) {
 			"packages/server/storage/chunk/chunk_codec.go", append(
 				versionedBins("packages/server/storage/chunk/testdata", "chunk", chunkSupported),
 				"packages/server/storage/chunk/chunk_oracle_test.go",
+				"packages/tools/cmd/runtime-oracle/storage_chunk_test.go",
 			)),
 		saveFamily(root, "save.player", strconv.Itoa(playerCurrent), intsToStrings(playerSupported),
 			"packages/server/storage/player/player_codec.go", append(

@@ -188,6 +188,36 @@ const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
         version: "4",
         operation: "decode",
     },
+    StorageRoute {
+        family: "save.chunk",
+        version: "5",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.chunk",
+        version: "6",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.chunk",
+        version: "7",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.chunk",
+        version: "8",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.chunk",
+        version: "9",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.chunk",
+        version: "9",
+        operation: "encode",
+    },
 ];
 
 fn route_is_registered_for_case(case: &FrozenCase) -> bool {
@@ -675,7 +705,7 @@ fn passive_corpus_executes_all_integrated_case_ids() {
     passive::execute_passive_cases(&cases);
 }
 
-const CHUNK_INTEGRATED_CASE_IDS: &[&str] = &[
+const CHUNK_LEGACY_EARLY_INTEGRATED_CASE_IDS: &[&str] = &[
     "save.chunk/1/decode/truncated-payload",
     "save.chunk/1/decode/v1-fixture",
     "save.chunk/2/decode/corrupt-crc",
@@ -686,29 +716,77 @@ const CHUNK_INTEGRATED_CASE_IDS: &[&str] = &[
     "save.chunk/4/decode/v4-fixture",
 ];
 
-#[test]
-fn chunk_legacy_early_corpus_executes_all_integrated_case_ids() {
+const CHUNK_LEGACY_LATE_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.chunk/5/decode/corrupt-crc",
+    "save.chunk/5/decode/v5-fixture",
+    "save.chunk/6/decode/truncated-payload",
+    "save.chunk/6/decode/v6-fixture",
+    "save.chunk/7/decode/invalid-version-zero",
+    "save.chunk/7/decode/v7-fixture",
+    "save.chunk/8/decode/invalid-version-future",
+    "save.chunk/8/decode/v8-fixture",
+    "save.chunk/9/decode/truncated-payload",
+    "save.chunk/9/decode/v9-fixture",
+];
+
+const CHUNK_CURRENT_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.chunk/9/decode/v9-chest-registry",
+    "save.chunk/9/decode/v9-fluid-fixture",
+    "save.chunk/9/encode/v9-fixture-exact",
+];
+
+fn chunk_gate_cases(ids: &[&str], gate: fn(&str) -> bool, label: &str) -> Vec<FrozenCase> {
     use std::collections::BTreeMap;
 
     let cases: Vec<FrozenCase> = load_cases_for_consumer(CorpusConsumer::Storage)
         .into_iter()
-        .filter(|case| case.family == "save.chunk")
+        .filter(|case| case.family == "save.chunk" && gate(&case.id))
         .collect();
     let found: BTreeMap<&str, &FrozenCase> = cases
         .iter()
         .map(|case| (case.id.as_str(), case))
         .collect();
-    for id in CHUNK_INTEGRATED_CASE_IDS {
+    for id in ids {
         if !found.contains_key(id) {
-            panic!("integrated manifest missing chunk case {id}");
+            panic!("integrated manifest missing {label} chunk case {id}");
         }
     }
-    if cases.len() != CHUNK_INTEGRATED_CASE_IDS.len() {
+    if cases.len() != ids.len() {
         panic!(
-            "integrated manifest has {} save.chunk cases, want {}",
+            "integrated manifest has {} {label} save.chunk cases, want {}",
             cases.len(),
-            CHUNK_INTEGRATED_CASE_IDS.len()
+            ids.len()
         );
     }
+    cases
+}
+
+#[test]
+fn chunk_legacy_early_corpus_executes_all_integrated_case_ids() {
+    let cases = chunk_gate_cases(
+        CHUNK_LEGACY_EARLY_INTEGRATED_CASE_IDS,
+        chunk::chunk_legacy_early_case,
+        "legacy early",
+    );
+    chunk::execute_chunk_cases(&cases);
+}
+
+#[test]
+fn chunk_legacy_late_corpus_executes_all_integrated_case_ids() {
+    let cases = chunk_gate_cases(
+        CHUNK_LEGACY_LATE_INTEGRATED_CASE_IDS,
+        chunk::chunk_legacy_late_case,
+        "legacy late",
+    );
+    chunk::execute_chunk_cases(&cases);
+}
+
+#[test]
+fn chunk_current_corpus_executes_all_integrated_case_ids() {
+    let cases = chunk_gate_cases(
+        CHUNK_CURRENT_INTEGRATED_CASE_IDS,
+        chunk::chunk_current_case,
+        "current",
+    );
     chunk::execute_chunk_cases(&cases);
 }

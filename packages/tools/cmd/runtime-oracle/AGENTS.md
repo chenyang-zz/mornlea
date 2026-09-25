@@ -52,7 +52,7 @@ or Agent process packages. These boundaries are enforced by `packages/audit`
   through `save.world-metadata/6/decode` plus `save.world-metadata/6/encode`; and
   `save.hostile/1/decode`, `save.hostile/2/decode`, and `save.hostile/2/encode`; and
   `save.passive/1/decode` and `save.passive/1/encode`; and `save.chunk/1/decode`
-  through `save.chunk/4/decode`.
+  through `save.chunk/9/decode` plus `save.chunk/9/encode`.
 - Enforcement: `TestContractInventoryReconcilesFrozenCorpus`,
   `TestContractInventoryWorkingReportsZeroCaseFamilies`,
   `TestContractInventoryCompleteRejectsZeroCaseFamilies`,
