@@ -21,11 +21,13 @@ rules:
     - Specify behavioral contracts only; put package structure, type choices, and implementation steps in `design.md`.
   design:
     - Use Superpowers brainstorming; the main Agent resolves architecture, functional behavior, exact interfaces, lifecycle, algorithms, compatibility, failure policy and resource bounds before delegating implementation.
+    - For a new or materially changed boundary shared by multiple implementation tasks, identify one owner and design a compile-ready contract landing before parallel provider or consumer work; follow `docs/interface-first-parallel-development.md` without adding an interface layer to private one-task behavior.
     - Write in English and describe data ownership, dependency direction, concurrency boundaries, and affected files without bypassing existing architecture gates.
     - For save, network protocol, or performance-contract changes, include compatibility or migration handling, risks, rollback, and validation.
     - Record rejected alternatives and the reason for each important trade-off.
   tasks:
     - Use Superpowers writing-plans to produce concrete worker briefs inside the active change; keep tasks.md as the sole status source and link subsystem detail.
+    - Parallel task plans must name the shared-contract landing predecessor, direct dependencies, exclusive editable files, read-only contract files, and serial adapter/integration owner; at dispatch, record the accepted contract SHA and distinguish contract, real-provider and real-integration evidence.
     - The main Agent must finish every architectural and functional decision, define exact files and producer/consumer signatures, dependencies, implementation steps, concrete failing tests, expected outcomes, validation, exclusions and rollback before marking a node ready. Workers implement frozen contracts and escalate discrepancies.
     - Decompose broad milestones into independently testable nodes; self-review requirement coverage, acyclic dependencies, matching types and missing boundary cases. Do not leave catch-all tasks or controller-held design placeholders in a completed implementation plan.
     - Write in English and split work into ordered, independently verifiable checkboxes; keep tests and the corresponding implementation in the same task group.
@@ -36,6 +38,7 @@ operations:
   apply:
     guidance:
       - Before implementation, reread the proposal, delta specifications, design, and tasks and treat those artifacts as the scope boundary.
+      - Start independent shared-boundary tasks only after the compile-ready contract landing is accepted. A double or compile-only test proves neither real-provider conformance nor integrated acceptance; contract changes require a controller ruling, updated affected briefs, a new accepted identity and revalidation.
       - During discovery, read the ancestor `AGENTS.md` chain for every affected directory. When a task creates, reorganizes, or materially reassigns an important directory, create or update its local `AGENTS.md` in the same change; when no independent invariant warrants a guide, record the inheritance rationale.
       - Follow red-green-refactor for behavior changes, preserve pre-existing and unrelated user worktree changes, and record implementation progress, validation evidence, review decisions, and material rulings in the change ledger.
       - If implementation reveals an invalid specification or design, reconcile the affected OpenSpec artifacts before continuing.

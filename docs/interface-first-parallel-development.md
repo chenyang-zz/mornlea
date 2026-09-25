@@ -1,6 +1,6 @@
 ---
 doc_id: interface-first-parallel-development
-doc_revision: 2026-09-25.1
+doc_revision: 2026-09-25.2
 language: en
 counterpart: interface-first-parallel-development.zh.md
 ---
@@ -23,7 +23,7 @@ An interface can be a function signature, semantic value, Rust trait, Go interfa
 
 ## Contract packet to freeze before dispatch
 
-The controller writes one packet per shared boundary in the active change's `design.md` or linked brief. `tasks.md` remains the only task-status source. A packet is ready only when every row below has a concrete value or an explicit non-applicable ruling.
+The controller writes one packet per shared boundary in the active change's `design.md` or linked brief. `tasks.md` remains the only task-status source. During planning, name the landing predecessor; fill in its accepted SHA after the landing passes. A packet is dispatch-ready only when every row below has a concrete value or an explicit non-applicable ruling.
 
 | Field | Required decision |
 | --- | --- |

@@ -1,6 +1,6 @@
 ---
 doc_id: interface-first-parallel-development
-doc_revision: 2026-09-25.1
+doc_revision: 2026-09-25.2
 language: zh-CN
 counterpart: interface-first-parallel-development.md
 ---
@@ -23,7 +23,7 @@ counterpart: interface-first-parallel-development.md
 
 ## 派发前冻结的契约说明
 
-控制者在活跃 change 的 `design.md` 或链接的任务说明中，为每个共享边界填写一份契约说明。`tasks.md` 仍是唯一的任务状态来源。下表每一项都须有具体值，或明确说明不适用。
+控制者在活跃 change 的 `design.md` 或链接的任务说明中，为每个共享边界填写一份契约说明。`tasks.md` 仍是唯一的任务状态来源。规划时先指定契约落地的前置任务；该任务通过后填入已验收 SHA。达到可派发状态时，下表每一项都须有具体值，或明确说明不适用。
 
 | 字段 | 必须确定的内容 |
 | --- | --- |
