@@ -13,6 +13,30 @@ import (
 	"github.com/channing771/mornlea/packages/server/storage/storagedef"
 )
 
+func companionIntegratedManifestCases(t *testing.T, wantIDs map[string]bool) []CaseSpec {
+	root, err := RepositoryRoot()
+	if err != nil {
+		t.Fatalf("repository root: %v", err)
+	}
+	frozen, err := LoadInventory(filepath.Join(root, filepath.FromSlash(InventoryRelPath)))
+	if err != nil {
+		t.Fatalf("load frozen manifest: %v", err)
+	}
+	var companionCases []CaseSpec
+	for _, c := range frozen.Cases {
+		if c.Family == "save.companion" && wantIDs[c.ID] {
+			companionCases = append(companionCases, c)
+		}
+	}
+	if len(companionCases) == 0 {
+		t.Fatal("integrated manifest selected zero save.companion cases")
+	}
+	if len(companionCases) != len(wantIDs) {
+		t.Fatalf("integrated companion case count = %d, want %d", len(companionCases), len(wantIDs))
+	}
+	return companionCases
+}
+
 func TestStorageCompanionLegacyIntegratedCorpusExecutesEverySelectionID(t *testing.T) {
 	root, err := RepositoryRoot()
 	if err != nil {
@@ -32,18 +56,7 @@ func TestStorageCompanionLegacyIntegratedCorpusExecutesEverySelectionID(t *testi
 		"save.companion/4/decode/v4-fixture":              true,
 		"save.companion/4/decode/invalid-version-future": true,
 	}
-	var companionCases []CaseSpec
-	for _, c := range frozen.Cases {
-		if c.Family == "save.companion" && wantIDs[c.ID] {
-			companionCases = append(companionCases, c)
-		}
-	}
-	if len(companionCases) == 0 {
-		t.Fatal("integrated manifest selected zero save.companion cases")
-	}
-	if len(companionCases) != len(wantIDs) {
-		t.Fatalf("integrated companion case count = %d, want %d", len(companionCases), len(wantIDs))
-	}
+	companionCases := companionIntegratedManifestCases(t, wantIDs)
 	manifest := frozen
 	manifest.Cases = companionCases
 	observations, err := RunStorageCases(root, manifest, map[ConsumerRoute]GoOperation{
@@ -52,6 +65,97 @@ func TestStorageCompanionLegacyIntegratedCorpusExecutesEverySelectionID(t *testi
 		{FamilyID: "save.companion", Version: "3", Operation: "decode"}: runCompanionDecode,
 		{FamilyID: "save.companion", Version: "4", Operation: "decode"}: runCompanionDecode,
 	})
+	if err != nil {
+		t.Fatalf("RunStorageCases: %v", err)
+	}
+	if len(observations) != len(companionCases) {
+		t.Fatalf("produced %d observations, want %d", len(observations), len(companionCases))
+	}
+	for id := range wantIDs {
+		found := false
+		for _, obs := range observations {
+			if obs.CaseID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no observation for case %s", id)
+		}
+	}
+}
+
+func TestStorageCompanionCurrentIntegratedCorpusExecutesEverySelectionID(t *testing.T) {
+	root, err := RepositoryRoot()
+	if err != nil {
+		t.Fatalf("repository root: %v", err)
+	}
+	frozen, err := LoadInventory(filepath.Join(root, filepath.FromSlash(InventoryRelPath)))
+	if err != nil {
+		t.Fatalf("load frozen manifest: %v", err)
+	}
+	wantIDs := map[string]bool{
+		"save.companion/5/decode/v5-fixture":           true,
+		"save.companion/5/decode/v5-roundtrip-alt":     true,
+		"save.companion/5/decode/max-legal-size":       true,
+		"save.companion/5/encode/v5-canonical":         true,
+		"save.companion/5/encode/capacity-minus-one":   true,
+	}
+	companionCases := companionIntegratedManifestCases(t, wantIDs)
+	manifest := frozen
+	manifest.Cases = companionCases
+	observations, err := RunStorageCases(root, manifest, companionCorpusRoutes())
+	if err != nil {
+		t.Fatalf("RunStorageCases: %v", err)
+	}
+	if len(observations) != len(companionCases) {
+		t.Fatalf("produced %d observations, want %d", len(observations), len(companionCases))
+	}
+	for id := range wantIDs {
+		found := false
+		for _, obs := range observations {
+			if obs.CaseID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no observation for case %s", id)
+		}
+	}
+}
+
+func TestStorageCompanionAdversarialIntegratedCorpusExecutesEverySelectionID(t *testing.T) {
+	root, err := RepositoryRoot()
+	if err != nil {
+		t.Fatalf("repository root: %v", err)
+	}
+	frozen, err := LoadInventory(filepath.Join(root, filepath.FromSlash(InventoryRelPath)))
+	if err != nil {
+		t.Fatalf("load frozen manifest: %v", err)
+	}
+	wantIDs := map[string]bool{
+		"save.companion/5/decode/active-count-five":     true,
+		"save.companion/5/decode/body-count-65":         true,
+		"save.companion/5/decode/command-over-limit":    true,
+		"save.companion/5/decode/corrupt-crc":           true,
+		"save.companion/5/decode/duplicate-lifecycle":   true,
+		"save.companion/5/decode/fifo-over-limit":       true,
+		"save.companion/5/decode/inactive-queue":        true,
+		"save.companion/5/decode/invalid-version-future": true,
+		"save.companion/5/decode/invalid-version-zero":  true,
+		"save.companion/5/decode/malformed-uuid":        true,
+		"save.companion/5/decode/missing-lifecycle":   true,
+		"save.companion/5/decode/orphan-queue":          true,
+		"save.companion/5/decode/plan-steps-over-limit": true,
+		"save.companion/5/decode/summary-over-limit":    true,
+		"save.companion/5/decode/trailing-byte":         true,
+		"save.companion/5/decode/truncated-header":      true,
+	}
+	companionCases := companionIntegratedManifestCases(t, wantIDs)
+	manifest := frozen
+	manifest.Cases = companionCases
+	observations, err := RunStorageCases(root, manifest, companionCorpusRoutes())
 	if err != nil {
 		t.Fatalf("RunStorageCases: %v", err)
 	}
@@ -455,6 +559,27 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.companion/3/decode/v3-fixture":                         true,
 		"save.companion/4/decode/invalid-version-future":             true,
 		"save.companion/4/decode/v4-fixture":                         true,
+		"save.companion/5/decode/active-count-five":                  true,
+		"save.companion/5/decode/body-count-65":                      true,
+		"save.companion/5/decode/command-over-limit":                 true,
+		"save.companion/5/decode/corrupt-crc":                        true,
+		"save.companion/5/decode/duplicate-lifecycle":                true,
+		"save.companion/5/decode/fifo-over-limit":                    true,
+		"save.companion/5/decode/inactive-queue":                     true,
+		"save.companion/5/decode/invalid-version-future":             true,
+		"save.companion/5/decode/invalid-version-zero":               true,
+		"save.companion/5/decode/malformed-uuid":                     true,
+		"save.companion/5/decode/max-legal-size":                     true,
+		"save.companion/5/decode/missing-lifecycle":                  true,
+		"save.companion/5/decode/orphan-queue":                       true,
+		"save.companion/5/decode/plan-steps-over-limit":              true,
+		"save.companion/5/decode/summary-over-limit":                 true,
+		"save.companion/5/decode/trailing-byte":                      true,
+		"save.companion/5/decode/truncated-header":                   true,
+		"save.companion/5/decode/v5-fixture":                         true,
+		"save.companion/5/decode/v5-roundtrip-alt":                   true,
+		"save.companion/5/encode/capacity-minus-one":                 true,
+		"save.companion/5/encode/v5-canonical":                       true,
 	}
 	for _, c := range frozen.Cases {
 		if !strings.HasPrefix(c.Family, "save.") {

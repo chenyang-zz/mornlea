@@ -241,6 +241,16 @@ const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
         version: "4",
         operation: "decode",
     },
+    StorageRoute {
+        family: "save.companion",
+        version: "5",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.companion",
+        version: "5",
+        operation: "encode",
+    },
 ];
 
 fn route_is_registered_for_case(case: &FrozenCase) -> bool {
@@ -872,6 +882,33 @@ const COMPANION_LEGACY_INTEGRATED_CASE_IDS: &[&str] = &[
     "save.companion/4/decode/v4-fixture",
 ];
 
+const COMPANION_CURRENT_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.companion/5/decode/v5-fixture",
+    "save.companion/5/decode/v5-roundtrip-alt",
+    "save.companion/5/decode/max-legal-size",
+    "save.companion/5/encode/v5-canonical",
+    "save.companion/5/encode/capacity-minus-one",
+];
+
+const COMPANION_ADVERSARIAL_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.companion/5/decode/active-count-five",
+    "save.companion/5/decode/body-count-65",
+    "save.companion/5/decode/command-over-limit",
+    "save.companion/5/decode/corrupt-crc",
+    "save.companion/5/decode/duplicate-lifecycle",
+    "save.companion/5/decode/fifo-over-limit",
+    "save.companion/5/decode/inactive-queue",
+    "save.companion/5/decode/invalid-version-future",
+    "save.companion/5/decode/invalid-version-zero",
+    "save.companion/5/decode/malformed-uuid",
+    "save.companion/5/decode/missing-lifecycle",
+    "save.companion/5/decode/orphan-queue",
+    "save.companion/5/decode/plan-steps-over-limit",
+    "save.companion/5/decode/summary-over-limit",
+    "save.companion/5/decode/trailing-byte",
+    "save.companion/5/decode/truncated-header",
+];
+
 fn companion_gate_cases(ids: &[&str], gate: fn(&str) -> bool, label: &str) -> Vec<FrozenCase> {
     use std::collections::BTreeMap;
 
@@ -909,4 +946,46 @@ fn companion_legacy_corpus_executes_all_integrated_case_ids() {
         "legacy",
     );
     companion::execute_companion_cases(&cases);
+}
+
+#[test]
+fn companion_current_corpus_executes_all_integrated_case_ids() {
+    let cases = companion_gate_cases(
+        COMPANION_CURRENT_INTEGRATED_CASE_IDS,
+        companion::companion_current_case,
+        "current",
+    );
+    companion::execute_companion_cases(&cases);
+}
+
+#[test]
+fn companion_adversarial_corpus_executes_all_integrated_case_ids() {
+    let cases = companion_gate_cases(
+        COMPANION_ADVERSARIAL_INTEGRATED_CASE_IDS,
+        companion::companion_adversarial_case,
+        "adversarial",
+    );
+    companion::execute_companion_cases(&cases);
+}
+
+#[test]
+fn companion_corpus_rejects_zero_case_selection() {
+    let err = std::panic::catch_unwind(|| companion::execute_companion_cases(&[]));
+    assert!(err.is_err(), "zero selected companion cases must fail");
+}
+
+#[test]
+fn companion_legacy_gate_excludes_v5_integrated_cases() {
+    for id in COMPANION_CURRENT_INTEGRATED_CASE_IDS {
+        assert!(
+            !companion::companion_legacy_case(id),
+            "v5 current case {id} must not match the legacy gate"
+        );
+    }
+    for id in COMPANION_ADVERSARIAL_INTEGRATED_CASE_IDS {
+        assert!(
+            !companion::companion_legacy_case(id),
+            "v5 adversarial case {id} must not match the legacy gate"
+        );
+    }
 }
