@@ -55,6 +55,10 @@ the next section.
 
 - `companions_encoded_len` reports the exact v5 envelope length after the same
   admission checks as `encode_companions`, without building encoded bytes.
+- `encode_companions_into` writes that exact length into a caller buffer and
+  preserves any tail. A short buffer returns `StorageError::OutputTooSmall`
+  without writing; invalid input reports corruption before capacity and likewise
+  leaves the entire buffer unchanged.
 
 ## `save.passive` output boundary (`src/passive.rs`)
 

@@ -40,7 +40,8 @@ pub use companion::{
     SCHEMA_V1 as COMPANION_SCHEMA_V1, SCHEMA_V2 as COMPANION_SCHEMA_V2,
     SCHEMA_V3 as COMPANION_SCHEMA_V3, SCHEMA_V4 as COMPANION_SCHEMA_V4, StoredCompanionLifecycle,
     StoredCompanionQueue, StoredCompanionTask, StoredCompanions, decode as decode_companions,
-    encode as encode_companions, encoded_len as companions_encoded_len,
+    encode as encode_companions, encode_into as encode_companions_into,
+    encoded_len as companions_encoded_len,
 };
 pub use companion::{
     PLAN_STEP_FOLLOW as COMPANION_PLAN_STEP_FOLLOW, PLAN_STEP_GO_TO as COMPANION_PLAN_STEP_GO_TO,

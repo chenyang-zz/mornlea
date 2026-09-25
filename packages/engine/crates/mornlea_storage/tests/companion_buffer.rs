@@ -8,10 +8,11 @@ use std::path::PathBuf;
 use mornlea_storage::{
     COMPANION_MAX_FIFO_ENTRIES, COMPANION_MAX_FILE_LENGTH, COMPANION_MAX_PLAN_STEPS,
     COMPANION_MAX_STORED, COMPANION_MAX_SUMMARY_BYTES, COMPANION_MAX_TASK_COMMAND_BYTES,
-    COMPANION_PLAN_STEP_FOLLOW, COMPANION_PLAN_STEP_PLACE, COMPANION_TASK_FAIL_NONE,
+    COMPANION_PLAN_STEP_FOLLOW, COMPANION_PLAN_STEP_GO_TO, COMPANION_PLAN_STEP_MINE,
+    COMPANION_PLAN_STEP_PLACE, COMPANION_TASK_FAIL_NONE,
     COMPANION_TASK_RUNNING, CompanionBody, CompanionSave, Inventory, ItemStack, PlanStep, PlayerId,
     StorageError, StoredCompanionLifecycle, StoredCompanionQueue, StoredCompanionTask,
-    companions_encoded_len, decode_companions, encode_companions,
+    companions_encoded_len, decode_companions, encode_companions, encode_companions_into,
 };
 
 struct MeasuredAllocator;
@@ -412,4 +413,213 @@ fn preflight_unsorted_valid_save_matches_canonical_encode_without_mutation() {
     let encoded = encode_companions(&input).expect("encode");
     assert_eq!(length, encoded.len());
     assert_eq!(input, before);
+}
+
+fn assert_writer_matches_encode(save: &CompanionSave) {
+    let expected = encode_companions(save).expect("encode");
+    let n = companions_encoded_len(save).expect("length");
+    let mut buf = vec![0u8; n];
+    let written = encode_companions_into(save, &mut buf).expect("encode_into");
+    assert_eq!(written, n);
+    assert_eq!(buf, expected);
+}
+
+#[test]
+fn writer_golden_v5_fixture_matches_encode_bytes() {
+    let golden = read_go_fixture("server/storage/companion/testdata/companions-v5.bin");
+    let decoded = decode_companions(&golden).expect("decode golden");
+    let save = CompanionSave {
+        revision: decoded.revision,
+        agent_namespace_id: decoded.agent_namespace_id,
+        records: decoded.records,
+        lifecycles: decoded.lifecycles,
+        queues: decoded.queues,
+    };
+    assert_writer_matches_encode(&save);
+    let n = golden.len();
+    let mut buf = vec![0u8; n];
+    encode_companions_into(&save, &mut buf).expect("into golden length");
+    assert_eq!(buf, golden);
+}
+
+#[test]
+fn writer_unsorted_records_lifecycles_and_queues_stay_canonical_without_mutation() {
+    let active = body(3);
+    let first = body(2);
+    let second = body(1);
+    let input = save(
+        vec![first.clone(), active.clone(), second.clone()],
+        vec![
+            lifecycle(first.id, false, 2),
+            lifecycle(active.id, true, 3),
+            lifecycle(second.id, false, 1),
+        ],
+        vec![StoredCompanionQueue {
+            id: active.id,
+            pending: vec!["b".to_owned(), "a".to_owned()],
+            ..StoredCompanionQueue::default()
+        }],
+    );
+    let before = input.clone();
+    assert_writer_matches_encode(&input);
+    assert_eq!(input, before);
+}
+
+#[test]
+fn writer_valid_empty_queue_is_omitted_and_legacy_summary_rejected() {
+    let active = body(1);
+    let without_queue = save(
+        vec![active.clone()],
+        vec![lifecycle(active.id, true, 1)],
+        Vec::new(),
+    );
+    assert_writer_matches_encode(&without_queue);
+
+    let with_legacy = save(
+        vec![active.clone()],
+        vec![lifecycle(active.id, true, 1)],
+        vec![StoredCompanionQueue {
+            id: active.id,
+            summary: "legacy".to_owned(),
+            ..StoredCompanionQueue::default()
+        }],
+    );
+    assert!(matches!(
+        encode_companions_into(&with_legacy, &mut vec![0u8; 64]),
+        Err(StorageError::Corrupt { .. })
+    ));
+}
+
+#[test]
+fn writer_buffer_canaries_respect_capacity() {
+    let input = inactive_pair(2);
+    let n = companions_encoded_len(&input).expect("length");
+    let expected = encode_companions(&input).expect("encode");
+
+    let mut short = vec![0xA5; n - 1];
+    assert_eq!(
+        encode_companions_into(&input, &mut short),
+        Err(StorageError::OutputTooSmall {
+            needed: n,
+            available: n - 1,
+        })
+    );
+    assert!(short.iter().all(|&b| b == 0xA5));
+
+    let mut exact = vec![0xA5; n];
+    assert_eq!(encode_companions_into(&input, &mut exact).expect("exact"), n);
+    assert_eq!(&exact, expected.as_slice());
+
+    let mut larger = vec![0xA5; n + 7];
+    assert_eq!(encode_companions_into(&input, &mut larger).expect("larger"), n);
+    assert_eq!(&larger[..n], expected.as_slice());
+    assert!(larger[n..].iter().all(|&b| b == 0xA5));
+}
+
+#[test]
+fn writer_invalid_input_and_short_buffer_reports_corruption_without_write() {
+    let one = body(1);
+    let valid = save(vec![one.clone()], vec![lifecycle(one.id, false, 1)], Vec::new());
+    let n = companions_encoded_len(&valid).expect("length");
+    let mut invalid = valid.clone();
+    invalid.revision = 0;
+    let mut buf = vec![0xA5; n - 1];
+    assert!(matches!(
+        encode_companions_into(&invalid, &mut buf),
+        Err(StorageError::Corrupt { .. })
+    ));
+    assert!(buf.iter().all(|&b| b == 0xA5));
+}
+
+#[test]
+fn writer_pins_current_task_step_discriminants_and_lifecycle_alternatives() {
+    let active = body(1);
+    let inactive = body(2);
+    let mut active_lifecycle = lifecycle(active.id, true, 9);
+    active_lifecycle.memory_revision = 4;
+    active_lifecycle.memory_operation_id = agent_id(0x81);
+    active_lifecycle.summary = "mirror".to_owned();
+    let inactive_lifecycle = lifecycle(inactive.id, false, 2);
+    let task = StoredCompanionTask {
+        command: "dig-and-build".to_owned(),
+        plan_steps: vec![
+            PlanStep {
+                kind: COMPANION_PLAN_STEP_GO_TO,
+                x: 1,
+                y: 64,
+                z: -1,
+                ..PlanStep::default()
+            },
+            PlanStep {
+                kind: COMPANION_PLAN_STEP_MINE,
+                x: 2,
+                y: 63,
+                z: -2,
+                ..PlanStep::default()
+            },
+            PlanStep {
+                kind: COMPANION_PLAN_STEP_PLACE,
+                x: 3,
+                y: 62,
+                z: -3,
+                block: 18,
+                ..PlanStep::default()
+            },
+            PlanStep {
+                kind: COMPANION_PLAN_STEP_FOLLOW,
+                player_id: agent_id(0x05),
+                ..PlanStep::default()
+            },
+        ],
+        step_index: 3,
+        state: COMPANION_TASK_RUNNING,
+        start_tick: 11,
+        deadline_ticks: 0,
+        fail_reason: COMPANION_TASK_FAIL_NONE,
+    };
+    let input = save(
+        vec![inactive.clone(), active.clone()],
+        vec![inactive_lifecycle, active_lifecycle],
+        vec![StoredCompanionQueue {
+            id: active.id,
+            has_current: true,
+            current: task,
+            pending: vec!["first".to_owned(), "second".to_owned()],
+            summary: String::new(),
+        }],
+    );
+    let encoded = encode_companions(&input).expect("encode");
+    let decoded = decode_companions(&encoded).expect("decode");
+    assert_eq!(decoded.records.len(), 2);
+    assert_eq!(decoded.records[0].id, active.id);
+    assert_eq!(decoded.records[1].id, inactive.id);
+    let active_decoded = decoded
+        .lifecycles
+        .iter()
+        .find(|lifecycle| lifecycle.id == active.id)
+        .expect("active lifecycle");
+    assert!(active_decoded.active);
+    assert_eq!(active_decoded.summary, "mirror");
+    let inactive_decoded = decoded
+        .lifecycles
+        .iter()
+        .find(|lifecycle| lifecycle.id == inactive.id)
+        .expect("inactive lifecycle");
+    assert!(!inactive_decoded.active);
+    let queue = decoded
+        .queues
+        .iter()
+        .find(|queue| queue.id == active.id)
+        .expect("queue");
+    assert_eq!(queue.pending, vec!["first".to_owned(), "second".to_owned()]);
+    assert_eq!(queue.current.plan_steps.len(), 4);
+    assert_writer_matches_encode(&input);
+}
+
+#[test]
+fn writer_after_rejected_oversized_request_valid_call_matches_encode() {
+    let oversized = inactive_pair(COMPANION_MAX_STORED + 1);
+    assert!(encode_companions_into(&oversized, &mut vec![0u8; COMPANION_MAX_FILE_LENGTH]).is_err());
+    let valid = inactive_pair(1);
+    assert_writer_matches_encode(&valid);
 }
