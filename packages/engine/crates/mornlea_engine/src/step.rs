@@ -448,8 +448,8 @@ pub(crate) fn physics_step(bytes: &[u8]) -> Result<[u8; STEP_OUTPUT_BYTES], Step
 #[cfg(test)]
 mod tests {
     use super::{
-        STEP_HEADER_BYTES, STEP_LAYOUT_VERSION, STEP_OUTPUT_BYTES, StepError, StepInput, integrate,
-        physics_step, IntegrationParams, read_f32, step_input_is_valid, vec3_len,
+        IntegrationParams, STEP_HEADER_BYTES, STEP_LAYOUT_VERSION, STEP_OUTPUT_BYTES, StepError,
+        StepInput, integrate, physics_step, read_f32, step_input_is_valid, vec3_len,
     };
 
     const CELL_BYTES: usize = 196;
@@ -685,32 +685,32 @@ mod tests {
         bytes[35] = 1; // move_z = 1，真正的对角输入
         let input = StepInput::decode(Box::leak(bytes.into_boxed_slice()));
         let params = IntegrationParams {
-        velocity: input.velocity,
-        on_ground: input.on_ground,
-        jump: input.jump,
-        move_x: input.move_x,
-        move_z: input.move_z,
-        yaw_sin: input.yaw_sin,
-        yaw_cos: input.yaw_cos,
-        fixed_delta_seconds: input.fixed_delta_seconds,
-        walk_speed: input.walk_speed,
-        ground_acceleration: input.ground_acceleration,
-        ground_deceleration: input.ground_deceleration,
-        air_acceleration: input.air_acceleration,
-        jump_speed: input.jump_speed,
-        gravity: input.gravity,
-        terminal_fall_speed: input.terminal_fall_speed,
-        body_in_fluid: input.body_in_fluid,
-        sprinting: input.sprinting,
-        sneaking: input.sneaking,
-        fluid_gravity: input.fluid_gravity,
-        fluid_sink_speed: input.fluid_sink_speed,
-        fluid_ascend_speed: input.fluid_ascend_speed,
-        fluid_horizontal_drag: input.fluid_horizontal_drag,
-        sprint_speed_multiplier: input.sprint_speed_multiplier,
-        sneak_speed_multiplier: input.sneak_speed_multiplier,
-    };
-    let (velocity, _) = integrate(&params);
+            velocity: input.velocity,
+            on_ground: input.on_ground,
+            jump: input.jump,
+            move_x: input.move_x,
+            move_z: input.move_z,
+            yaw_sin: input.yaw_sin,
+            yaw_cos: input.yaw_cos,
+            fixed_delta_seconds: input.fixed_delta_seconds,
+            walk_speed: input.walk_speed,
+            ground_acceleration: input.ground_acceleration,
+            ground_deceleration: input.ground_deceleration,
+            air_acceleration: input.air_acceleration,
+            jump_speed: input.jump_speed,
+            gravity: input.gravity,
+            terminal_fall_speed: input.terminal_fall_speed,
+            body_in_fluid: input.body_in_fluid,
+            sprinting: input.sprinting,
+            sneaking: input.sneaking,
+            fluid_gravity: input.fluid_gravity,
+            fluid_sink_speed: input.fluid_sink_speed,
+            fluid_ascend_speed: input.fluid_ascend_speed,
+            fluid_horizontal_drag: input.fluid_horizontal_drag,
+            sprint_speed_multiplier: input.sprint_speed_multiplier,
+            sneak_speed_multiplier: input.sneak_speed_multiplier,
+        };
+        let (velocity, _) = integrate(&params);
         let horizontal = (velocity[0] * velocity[0] + velocity[2] * velocity[2]).sqrt();
         assert!((horizontal - 2.0).abs() < 1e-5);
     }
@@ -726,32 +726,32 @@ mod tests {
         write_f32(&mut bytes, 152, 0.3); // sneak_speed_multiplier
         let input = StepInput::decode(Box::leak(bytes.into_boxed_slice()));
         let params = IntegrationParams {
-        velocity: input.velocity,
-        on_ground: input.on_ground,
-        jump: input.jump,
-        move_x: input.move_x,
-        move_z: input.move_z,
-        yaw_sin: input.yaw_sin,
-        yaw_cos: input.yaw_cos,
-        fixed_delta_seconds: input.fixed_delta_seconds,
-        walk_speed: input.walk_speed,
-        ground_acceleration: input.ground_acceleration,
-        ground_deceleration: input.ground_deceleration,
-        air_acceleration: input.air_acceleration,
-        jump_speed: input.jump_speed,
-        gravity: input.gravity,
-        terminal_fall_speed: input.terminal_fall_speed,
-        body_in_fluid: input.body_in_fluid,
-        sprinting: input.sprinting,
-        sneaking: input.sneaking,
-        fluid_gravity: input.fluid_gravity,
-        fluid_sink_speed: input.fluid_sink_speed,
-        fluid_ascend_speed: input.fluid_ascend_speed,
-        fluid_horizontal_drag: input.fluid_horizontal_drag,
-        sprint_speed_multiplier: input.sprint_speed_multiplier,
-        sneak_speed_multiplier: input.sneak_speed_multiplier,
-    };
-    let (velocity, _) = integrate(&params);
+            velocity: input.velocity,
+            on_ground: input.on_ground,
+            jump: input.jump,
+            move_x: input.move_x,
+            move_z: input.move_z,
+            yaw_sin: input.yaw_sin,
+            yaw_cos: input.yaw_cos,
+            fixed_delta_seconds: input.fixed_delta_seconds,
+            walk_speed: input.walk_speed,
+            ground_acceleration: input.ground_acceleration,
+            ground_deceleration: input.ground_deceleration,
+            air_acceleration: input.air_acceleration,
+            jump_speed: input.jump_speed,
+            gravity: input.gravity,
+            terminal_fall_speed: input.terminal_fall_speed,
+            body_in_fluid: input.body_in_fluid,
+            sprinting: input.sprinting,
+            sneaking: input.sneaking,
+            fluid_gravity: input.fluid_gravity,
+            fluid_sink_speed: input.fluid_sink_speed,
+            fluid_ascend_speed: input.fluid_ascend_speed,
+            fluid_horizontal_drag: input.fluid_horizontal_drag,
+            sprint_speed_multiplier: input.sprint_speed_multiplier,
+            sneak_speed_multiplier: input.sneak_speed_multiplier,
+        };
+        let (velocity, _) = integrate(&params);
         assert_eq!(velocity[2].to_bits(), (-(4.3f32 * 0.3f32)).to_bits());
     }
 
@@ -767,32 +767,32 @@ mod tests {
         write_f32(&mut bytes, 152, 0.3); // sneak_speed_multiplier
         let input = StepInput::decode(Box::leak(bytes.into_boxed_slice()));
         let params = IntegrationParams {
-        velocity: input.velocity,
-        on_ground: input.on_ground,
-        jump: input.jump,
-        move_x: input.move_x,
-        move_z: input.move_z,
-        yaw_sin: input.yaw_sin,
-        yaw_cos: input.yaw_cos,
-        fixed_delta_seconds: input.fixed_delta_seconds,
-        walk_speed: input.walk_speed,
-        ground_acceleration: input.ground_acceleration,
-        ground_deceleration: input.ground_deceleration,
-        air_acceleration: input.air_acceleration,
-        jump_speed: input.jump_speed,
-        gravity: input.gravity,
-        terminal_fall_speed: input.terminal_fall_speed,
-        body_in_fluid: input.body_in_fluid,
-        sprinting: input.sprinting,
-        sneaking: input.sneaking,
-        fluid_gravity: input.fluid_gravity,
-        fluid_sink_speed: input.fluid_sink_speed,
-        fluid_ascend_speed: input.fluid_ascend_speed,
-        fluid_horizontal_drag: input.fluid_horizontal_drag,
-        sprint_speed_multiplier: input.sprint_speed_multiplier,
-        sneak_speed_multiplier: input.sneak_speed_multiplier,
-    };
-    let (velocity, _) = integrate(&params);
+            velocity: input.velocity,
+            on_ground: input.on_ground,
+            jump: input.jump,
+            move_x: input.move_x,
+            move_z: input.move_z,
+            yaw_sin: input.yaw_sin,
+            yaw_cos: input.yaw_cos,
+            fixed_delta_seconds: input.fixed_delta_seconds,
+            walk_speed: input.walk_speed,
+            ground_acceleration: input.ground_acceleration,
+            ground_deceleration: input.ground_deceleration,
+            air_acceleration: input.air_acceleration,
+            jump_speed: input.jump_speed,
+            gravity: input.gravity,
+            terminal_fall_speed: input.terminal_fall_speed,
+            body_in_fluid: input.body_in_fluid,
+            sprinting: input.sprinting,
+            sneaking: input.sneaking,
+            fluid_gravity: input.fluid_gravity,
+            fluid_sink_speed: input.fluid_sink_speed,
+            fluid_ascend_speed: input.fluid_ascend_speed,
+            fluid_horizontal_drag: input.fluid_horizontal_drag,
+            sprint_speed_multiplier: input.sprint_speed_multiplier,
+            sneak_speed_multiplier: input.sneak_speed_multiplier,
+        };
+        let (velocity, _) = integrate(&params);
         assert_eq!(velocity[2].to_bits(), (-(4.3f32 * 0.3f32)).to_bits());
     }
 
@@ -817,32 +817,32 @@ mod tests {
         bytes[33] = 1; // jump
         let input = StepInput::decode(Box::leak(bytes.into_boxed_slice()));
         let params = IntegrationParams {
-        velocity: input.velocity,
-        on_ground: input.on_ground,
-        jump: input.jump,
-        move_x: input.move_x,
-        move_z: input.move_z,
-        yaw_sin: input.yaw_sin,
-        yaw_cos: input.yaw_cos,
-        fixed_delta_seconds: input.fixed_delta_seconds,
-        walk_speed: input.walk_speed,
-        ground_acceleration: input.ground_acceleration,
-        ground_deceleration: input.ground_deceleration,
-        air_acceleration: input.air_acceleration,
-        jump_speed: input.jump_speed,
-        gravity: input.gravity,
-        terminal_fall_speed: input.terminal_fall_speed,
-        body_in_fluid: input.body_in_fluid,
-        sprinting: input.sprinting,
-        sneaking: input.sneaking,
-        fluid_gravity: input.fluid_gravity,
-        fluid_sink_speed: input.fluid_sink_speed,
-        fluid_ascend_speed: input.fluid_ascend_speed,
-        fluid_horizontal_drag: input.fluid_horizontal_drag,
-        sprint_speed_multiplier: input.sprint_speed_multiplier,
-        sneak_speed_multiplier: input.sneak_speed_multiplier,
-    };
-    let (velocity, _) = integrate(&params);
+            velocity: input.velocity,
+            on_ground: input.on_ground,
+            jump: input.jump,
+            move_x: input.move_x,
+            move_z: input.move_z,
+            yaw_sin: input.yaw_sin,
+            yaw_cos: input.yaw_cos,
+            fixed_delta_seconds: input.fixed_delta_seconds,
+            walk_speed: input.walk_speed,
+            ground_acceleration: input.ground_acceleration,
+            ground_deceleration: input.ground_deceleration,
+            air_acceleration: input.air_acceleration,
+            jump_speed: input.jump_speed,
+            gravity: input.gravity,
+            terminal_fall_speed: input.terminal_fall_speed,
+            body_in_fluid: input.body_in_fluid,
+            sprinting: input.sprinting,
+            sneaking: input.sneaking,
+            fluid_gravity: input.fluid_gravity,
+            fluid_sink_speed: input.fluid_sink_speed,
+            fluid_ascend_speed: input.fluid_ascend_speed,
+            fluid_horizontal_drag: input.fluid_horizontal_drag,
+            sprint_speed_multiplier: input.sprint_speed_multiplier,
+            sneak_speed_multiplier: input.sneak_speed_multiplier,
+        };
+        let (velocity, _) = integrate(&params);
         assert_eq!(velocity[1].to_bits(), 8.4f32.to_bits());
     }
 
@@ -853,32 +853,32 @@ mod tests {
         write_f32(&mut bytes, 24, -78.0);
         let input = StepInput::decode(Box::leak(bytes.into_boxed_slice()));
         let params = IntegrationParams {
-        velocity: input.velocity,
-        on_ground: input.on_ground,
-        jump: input.jump,
-        move_x: input.move_x,
-        move_z: input.move_z,
-        yaw_sin: input.yaw_sin,
-        yaw_cos: input.yaw_cos,
-        fixed_delta_seconds: input.fixed_delta_seconds,
-        walk_speed: input.walk_speed,
-        ground_acceleration: input.ground_acceleration,
-        ground_deceleration: input.ground_deceleration,
-        air_acceleration: input.air_acceleration,
-        jump_speed: input.jump_speed,
-        gravity: input.gravity,
-        terminal_fall_speed: input.terminal_fall_speed,
-        body_in_fluid: input.body_in_fluid,
-        sprinting: input.sprinting,
-        sneaking: input.sneaking,
-        fluid_gravity: input.fluid_gravity,
-        fluid_sink_speed: input.fluid_sink_speed,
-        fluid_ascend_speed: input.fluid_ascend_speed,
-        fluid_horizontal_drag: input.fluid_horizontal_drag,
-        sprint_speed_multiplier: input.sprint_speed_multiplier,
-        sneak_speed_multiplier: input.sneak_speed_multiplier,
-    };
-    let (velocity, _) = integrate(&params);
+            velocity: input.velocity,
+            on_ground: input.on_ground,
+            jump: input.jump,
+            move_x: input.move_x,
+            move_z: input.move_z,
+            yaw_sin: input.yaw_sin,
+            yaw_cos: input.yaw_cos,
+            fixed_delta_seconds: input.fixed_delta_seconds,
+            walk_speed: input.walk_speed,
+            ground_acceleration: input.ground_acceleration,
+            ground_deceleration: input.ground_deceleration,
+            air_acceleration: input.air_acceleration,
+            jump_speed: input.jump_speed,
+            gravity: input.gravity,
+            terminal_fall_speed: input.terminal_fall_speed,
+            body_in_fluid: input.body_in_fluid,
+            sprinting: input.sprinting,
+            sneaking: input.sneaking,
+            fluid_gravity: input.fluid_gravity,
+            fluid_sink_speed: input.fluid_sink_speed,
+            fluid_ascend_speed: input.fluid_ascend_speed,
+            fluid_horizontal_drag: input.fluid_horizontal_drag,
+            sprint_speed_multiplier: input.sprint_speed_multiplier,
+            sneak_speed_multiplier: input.sneak_speed_multiplier,
+        };
+        let (velocity, _) = integrate(&params);
         assert_eq!(velocity[1].to_bits(), (-78.4f32).to_bits());
     }
 
@@ -889,32 +889,32 @@ mod tests {
         write_f32(&mut bytes, 20, 10.0); // velocity x = 10
         let input = StepInput::decode(Box::leak(bytes.into_boxed_slice()));
         let params = IntegrationParams {
-        velocity: input.velocity,
-        on_ground: input.on_ground,
-        jump: input.jump,
-        move_x: input.move_x,
-        move_z: input.move_z,
-        yaw_sin: input.yaw_sin,
-        yaw_cos: input.yaw_cos,
-        fixed_delta_seconds: input.fixed_delta_seconds,
-        walk_speed: input.walk_speed,
-        ground_acceleration: input.ground_acceleration,
-        ground_deceleration: input.ground_deceleration,
-        air_acceleration: input.air_acceleration,
-        jump_speed: input.jump_speed,
-        gravity: input.gravity,
-        terminal_fall_speed: input.terminal_fall_speed,
-        body_in_fluid: input.body_in_fluid,
-        sprinting: input.sprinting,
-        sneaking: input.sneaking,
-        fluid_gravity: input.fluid_gravity,
-        fluid_sink_speed: input.fluid_sink_speed,
-        fluid_ascend_speed: input.fluid_ascend_speed,
-        fluid_horizontal_drag: input.fluid_horizontal_drag,
-        sprint_speed_multiplier: input.sprint_speed_multiplier,
-        sneak_speed_multiplier: input.sneak_speed_multiplier,
-    };
-    let (velocity, _) = integrate(&params);
+            velocity: input.velocity,
+            on_ground: input.on_ground,
+            jump: input.jump,
+            move_x: input.move_x,
+            move_z: input.move_z,
+            yaw_sin: input.yaw_sin,
+            yaw_cos: input.yaw_cos,
+            fixed_delta_seconds: input.fixed_delta_seconds,
+            walk_speed: input.walk_speed,
+            ground_acceleration: input.ground_acceleration,
+            ground_deceleration: input.ground_deceleration,
+            air_acceleration: input.air_acceleration,
+            jump_speed: input.jump_speed,
+            gravity: input.gravity,
+            terminal_fall_speed: input.terminal_fall_speed,
+            body_in_fluid: input.body_in_fluid,
+            sprinting: input.sprinting,
+            sneaking: input.sneaking,
+            fluid_gravity: input.fluid_gravity,
+            fluid_sink_speed: input.fluid_sink_speed,
+            fluid_ascend_speed: input.fluid_ascend_speed,
+            fluid_horizontal_drag: input.fluid_horizontal_drag,
+            sprint_speed_multiplier: input.sprint_speed_multiplier,
+            sneak_speed_multiplier: input.sneak_speed_multiplier,
+        };
+        let (velocity, _) = integrate(&params);
         assert_eq!(velocity[0].to_bits(), 7.5f32.to_bits()); // 10 − 50*0.05
     }
 
@@ -978,34 +978,34 @@ mod tests {
         let displacement = {
             let input = StepInput::decode(&bytes);
             {
-let params = IntegrationParams {
-        velocity: input.velocity,
-        on_ground: input.on_ground,
-        jump: input.jump,
-        move_x: input.move_x,
-        move_z: input.move_z,
-        yaw_sin: input.yaw_sin,
-        yaw_cos: input.yaw_cos,
-        fixed_delta_seconds: input.fixed_delta_seconds,
-        walk_speed: input.walk_speed,
-        ground_acceleration: input.ground_acceleration,
-        ground_deceleration: input.ground_deceleration,
-        air_acceleration: input.air_acceleration,
-        jump_speed: input.jump_speed,
-        gravity: input.gravity,
-        terminal_fall_speed: input.terminal_fall_speed,
-        body_in_fluid: input.body_in_fluid,
-        sprinting: input.sprinting,
-        sneaking: input.sneaking,
-        fluid_gravity: input.fluid_gravity,
-        fluid_sink_speed: input.fluid_sink_speed,
-        fluid_ascend_speed: input.fluid_ascend_speed,
-        fluid_horizontal_drag: input.fluid_horizontal_drag,
-        sprint_speed_multiplier: input.sprint_speed_multiplier,
-        sneak_speed_multiplier: input.sneak_speed_multiplier,
-    };
-    integrate(&params).1
-}
+                let params = IntegrationParams {
+                    velocity: input.velocity,
+                    on_ground: input.on_ground,
+                    jump: input.jump,
+                    move_x: input.move_x,
+                    move_z: input.move_z,
+                    yaw_sin: input.yaw_sin,
+                    yaw_cos: input.yaw_cos,
+                    fixed_delta_seconds: input.fixed_delta_seconds,
+                    walk_speed: input.walk_speed,
+                    ground_acceleration: input.ground_acceleration,
+                    ground_deceleration: input.ground_deceleration,
+                    air_acceleration: input.air_acceleration,
+                    jump_speed: input.jump_speed,
+                    gravity: input.gravity,
+                    terminal_fall_speed: input.terminal_fall_speed,
+                    body_in_fluid: input.body_in_fluid,
+                    sprinting: input.sprinting,
+                    sneaking: input.sneaking,
+                    fluid_gravity: input.fluid_gravity,
+                    fluid_sink_speed: input.fluid_sink_speed,
+                    fluid_ascend_speed: input.fluid_ascend_speed,
+                    fluid_horizontal_drag: input.fluid_horizontal_drag,
+                    sprint_speed_multiplier: input.sprint_speed_multiplier,
+                    sneak_speed_multiplier: input.sneak_speed_multiplier,
+                };
+                integrate(&params).1
+            }
         };
         write_f32(&mut bytes, 88, displacement[1].next_down()); // dy_min 取更小确定值
         write_f32(&mut bytes, 92, displacement[1].next_down()); // dy_max = 位移 − 1 ulp
@@ -1020,34 +1020,34 @@ let params = IntegrationParams {
         let displacement = {
             let input = StepInput::decode(&bytes);
             {
-let params = IntegrationParams {
-        velocity: input.velocity,
-        on_ground: input.on_ground,
-        jump: input.jump,
-        move_x: input.move_x,
-        move_z: input.move_z,
-        yaw_sin: input.yaw_sin,
-        yaw_cos: input.yaw_cos,
-        fixed_delta_seconds: input.fixed_delta_seconds,
-        walk_speed: input.walk_speed,
-        ground_acceleration: input.ground_acceleration,
-        ground_deceleration: input.ground_deceleration,
-        air_acceleration: input.air_acceleration,
-        jump_speed: input.jump_speed,
-        gravity: input.gravity,
-        terminal_fall_speed: input.terminal_fall_speed,
-        body_in_fluid: input.body_in_fluid,
-        sprinting: input.sprinting,
-        sneaking: input.sneaking,
-        fluid_gravity: input.fluid_gravity,
-        fluid_sink_speed: input.fluid_sink_speed,
-        fluid_ascend_speed: input.fluid_ascend_speed,
-        fluid_horizontal_drag: input.fluid_horizontal_drag,
-        sprint_speed_multiplier: input.sprint_speed_multiplier,
-        sneak_speed_multiplier: input.sneak_speed_multiplier,
-    };
-    integrate(&params).1
-}
+                let params = IntegrationParams {
+                    velocity: input.velocity,
+                    on_ground: input.on_ground,
+                    jump: input.jump,
+                    move_x: input.move_x,
+                    move_z: input.move_z,
+                    yaw_sin: input.yaw_sin,
+                    yaw_cos: input.yaw_cos,
+                    fixed_delta_seconds: input.fixed_delta_seconds,
+                    walk_speed: input.walk_speed,
+                    ground_acceleration: input.ground_acceleration,
+                    ground_deceleration: input.ground_deceleration,
+                    air_acceleration: input.air_acceleration,
+                    jump_speed: input.jump_speed,
+                    gravity: input.gravity,
+                    terminal_fall_speed: input.terminal_fall_speed,
+                    body_in_fluid: input.body_in_fluid,
+                    sprinting: input.sprinting,
+                    sneaking: input.sneaking,
+                    fluid_gravity: input.fluid_gravity,
+                    fluid_sink_speed: input.fluid_sink_speed,
+                    fluid_ascend_speed: input.fluid_ascend_speed,
+                    fluid_horizontal_drag: input.fluid_horizontal_drag,
+                    sprint_speed_multiplier: input.sprint_speed_multiplier,
+                    sneak_speed_multiplier: input.sneak_speed_multiplier,
+                };
+                integrate(&params).1
+            }
         };
         write_f32(&mut bytes, 88, displacement[1].next_down()); // dy_min 取更小确定值
         write_f32(&mut bytes, 92, displacement[1].next_down().next_down()); // dy_max = 位移 − 2 ulp

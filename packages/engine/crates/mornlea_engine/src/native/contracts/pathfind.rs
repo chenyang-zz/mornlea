@@ -141,7 +141,10 @@ pub struct PathResult {
 
 impl PathResult {
     pub fn new(waypoints: Box<[PathCell]>, revisions: Box<[[i32; 2]]>) -> Self {
-        Self { waypoints, revisions }
+        Self {
+            waypoints,
+            revisions,
+        }
     }
 
     pub fn waypoints(&self) -> &[PathCell] {

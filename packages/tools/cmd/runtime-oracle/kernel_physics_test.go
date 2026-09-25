@@ -13,7 +13,7 @@ func TestKernelPhysics(t *testing.T) {
 	validInput := make([]byte, 196160)
 	copy(validInput[0:4], "MGP1")
 	binary.LittleEndian.PutUint32(validInput[4:8], 4)
-	
+
 	binary.LittleEndian.PutUint32(validInput[8:12], math.Float32bits(0.5))
 	binary.LittleEndian.PutUint32(validInput[12:16], math.Float32bits(1.0))
 	binary.LittleEndian.PutUint32(validInput[16:20], math.Float32bits(0.5))
@@ -38,7 +38,7 @@ func TestKernelPhysics(t *testing.T) {
 	binary.LittleEndian.PutUint32(validInput[120:124], 10)
 	binary.LittleEndian.PutUint32(validInput[124:128], 10)
 
-	validInput[160 + 555*196] = 1
+	validInput[160+555*196] = 1
 	validOutput := make([]byte, 32)
 
 	assertPanic := func(t *testing.T, f func()) {

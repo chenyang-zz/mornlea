@@ -138,7 +138,6 @@ impl<'a> CollisionInput<'a> {
     }
 }
 
-
 impl<'a> CollisionCells for CollisionInput<'a> {
     fn loaded(&self, position: [i32; 3]) -> bool {
         self.cell(position).loaded()
@@ -238,7 +237,9 @@ fn resolve_collision_input(input: CollisionInput<'_>) -> [u8; 16] {
     )
 }
 
-pub(crate) fn resolve_move_and_step<C: CollisionCells>(input: &CollisionInputData<'_, C>) -> FinalResult {
+pub(crate) fn resolve_move_and_step<C: CollisionCells>(
+    input: &CollisionInputData<'_, C>,
+) -> FinalResult {
     let mut ordinary = resolve_move(input);
     let mut used_step = false;
     if (ordinary.clipped[0] || ordinary.clipped[2])
@@ -315,8 +316,13 @@ fn clip_axis<C: CollisionCells>(
             for z in i64::from(minimum_z)..=i64::from(maximum_z) {
                 let pos = [x as i32, y as i32, z as i32];
                 if !input.cells.loaded(pos) {
-                    let (candidate, blocks) =
-                        clip_against(feet_position, player, axis, moved, input.cells.unknown_bounds(pos));
+                    let (candidate, blocks) = clip_against(
+                        feet_position,
+                        player,
+                        axis,
+                        moved,
+                        input.cells.unknown_bounds(pos),
+                    );
                     if blocks {
                         hit_unknown = true;
                         moved = candidate;
@@ -325,8 +331,13 @@ fn clip_axis<C: CollisionCells>(
                     continue;
                 }
                 for index in 0..input.cells.count(pos) {
-                    let (candidate, blocks) =
-                        clip_against(feet_position, player, axis, moved, input.cells.bounds(pos, index));
+                    let (candidate, blocks) = clip_against(
+                        feet_position,
+                        player,
+                        axis,
+                        moved,
+                        input.cells.bounds(pos, index),
+                    );
                     if blocks {
                         moved = candidate;
                         was_clipped = true;
@@ -444,7 +455,10 @@ fn overlaps_other_axes(left: Bounds, right: Bounds, axis: usize) -> bool {
     true
 }
 
-fn bounds_are_collision_free<C: CollisionCells>(input: &CollisionInputData<'_, C>, position: Vector) -> (bool, bool) {
+fn bounds_are_collision_free<C: CollisionCells>(
+    input: &CollisionInputData<'_, C>,
+    position: Vector,
+) -> (bool, bool) {
     let player = player_bounds(position);
     let (minimum_x, maximum_x) = block_range(player.minimum[0], player.maximum[0]);
     let (minimum_y, maximum_y) = block_range(player.minimum[1], player.maximum[1]);

@@ -330,7 +330,7 @@ mod tests {
         };
         let perm = [42; 512];
         let params = WorldgenParams::try_new(12345, materials, perm).unwrap();
-        
+
         let legacy = params.as_legacy();
         assert_eq!(legacy.seed, 12345);
         assert_eq!(legacy.materials.air, 0);

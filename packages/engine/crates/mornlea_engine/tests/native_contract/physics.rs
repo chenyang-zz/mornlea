@@ -1,9 +1,9 @@
 use mornlea_engine::native::contracts::{
+    KernelError,
     collision::{Aabb, CollisionCell, CollisionGrid},
     physics::{
         PhysicsControls, PhysicsOp, PhysicsRequest, PhysicsState, PhysicsTuning, SweepBounds,
     },
-    KernelError,
 };
 use mornlea_engine::native::physics::NativePhysics;
 
@@ -29,18 +29,53 @@ fn base_tuning() -> PhysicsTuning {
 
 #[test]
 fn floor_landing_clips_vertical_velocity() {
-    let mut cells = vec![CollisionCell::try_new(true, [Aabb { minimum: [0.0; 3], maximum: [0.0; 3] }; 8], 0).unwrap(); 1000];
+    let mut cells = vec![
+        CollisionCell::try_new(
+            true,
+            [Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3]
+            }; 8],
+            0
+        )
+        .unwrap();
+        1000
+    ];
     let floor_cell = CollisionCell::try_new(
         true,
         [
-            Aabb { minimum: [0.0, 0.0, 0.0], maximum: [1.0, 1.0, 1.0] },
-            Aabb { minimum: [0.0; 3], maximum: [0.0; 3] },
-            Aabb { minimum: [0.0; 3], maximum: [0.0; 3] },
-            Aabb { minimum: [0.0; 3], maximum: [0.0; 3] },
-            Aabb { minimum: [0.0; 3], maximum: [0.0; 3] },
-            Aabb { minimum: [0.0; 3], maximum: [0.0; 3] },
-            Aabb { minimum: [0.0; 3], maximum: [0.0; 3] },
-            Aabb { minimum: [0.0; 3], maximum: [0.0; 3] },
+            Aabb {
+                minimum: [0.0, 0.0, 0.0],
+                maximum: [1.0, 1.0, 1.0],
+            },
+            Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3],
+            },
+            Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3],
+            },
+            Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3],
+            },
+            Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3],
+            },
+            Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3],
+            },
+            Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3],
+            },
+            Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3],
+            },
         ],
         1,
     )
@@ -74,7 +109,7 @@ fn floor_landing_clips_vertical_velocity() {
 
     let op = NativePhysics;
     let result = op.step(&request).unwrap();
-    
+
     assert!(result.state.on_ground);
     assert_eq!(result.state.velocity[1], 0.0);
     assert!(result.clipped[1]);
@@ -82,7 +117,18 @@ fn floor_landing_clips_vertical_velocity() {
 
 #[test]
 fn jump_speed_applied() {
-    let cells = vec![CollisionCell::try_new(true, [Aabb { minimum: [0.0; 3], maximum: [0.0; 3] }; 8], 0).unwrap(); 1000];
+    let cells = vec![
+        CollisionCell::try_new(
+            true,
+            [Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3]
+            }; 8],
+            0
+        )
+        .unwrap();
+        1000
+    ];
     let grid = CollisionGrid::try_new([-5, -5, -5], [10, 10, 10], &cells).unwrap();
 
     let request = PhysicsRequest {
@@ -116,7 +162,18 @@ fn jump_speed_applied() {
 
 #[test]
 fn fluid_drag_and_gravity() {
-    let cells = vec![CollisionCell::try_new(true, [Aabb { minimum: [0.0; 3], maximum: [0.0; 3] }; 8], 0).unwrap(); 1000];
+    let cells = vec![
+        CollisionCell::try_new(
+            true,
+            [Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3]
+            }; 8],
+            0
+        )
+        .unwrap();
+        1000
+    ];
     let grid = CollisionGrid::try_new([-5, -5, -5], [10, 10, 10], &cells).unwrap();
 
     let request = PhysicsRequest {
@@ -145,13 +202,27 @@ fn fluid_drag_and_gravity() {
 
     let op = NativePhysics;
     let result = op.step(&request).unwrap();
-    
-    assert_eq!(result.state.velocity[1].to_bits(), (-6.4f32 * 0.05).to_bits());
+
+    assert_eq!(
+        result.state.velocity[1].to_bits(),
+        (-6.4f32 * 0.05).to_bits()
+    );
 }
 
 #[test]
 fn sneak_overrides_sprint() {
-    let cells = vec![CollisionCell::try_new(true, [Aabb { minimum: [0.0; 3], maximum: [0.0; 3] }; 8], 0).unwrap(); 1000];
+    let cells = vec![
+        CollisionCell::try_new(
+            true,
+            [Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3]
+            }; 8],
+            0
+        )
+        .unwrap();
+        1000
+    ];
     let grid = CollisionGrid::try_new([-5, -5, -5], [10, 10, 10], &cells).unwrap();
 
     let request = PhysicsRequest {
@@ -180,13 +251,24 @@ fn sneak_overrides_sprint() {
 
     let op = NativePhysics;
     let result = op.step(&request).unwrap();
-    
+
     assert!(result.state.velocity[2] < 0.0);
 }
 
 #[test]
 fn sweep_bounds_ulp_allowances() {
-    let cells = vec![CollisionCell::try_new(true, [Aabb { minimum: [0.0; 3], maximum: [0.0; 3] }; 8], 0).unwrap(); 1000];
+    let cells = vec![
+        CollisionCell::try_new(
+            true,
+            [Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3]
+            }; 8],
+            0
+        )
+        .unwrap();
+        1000
+    ];
     let grid = CollisionGrid::try_new([-5, -5, -5], [10, 10, 10], &cells).unwrap();
 
     let mut request = PhysicsRequest {
@@ -214,17 +296,23 @@ fn sweep_bounds_ulp_allowances() {
     };
 
     let op = NativePhysics;
-    
+
     // figure out exact displacement
     let _res = op.step(&request).unwrap();
     let exact_dy = (0.0_f32 - 32.0_f32 * 0.05_f32).max(-78.4_f32) * 0.05_f32;
-    
+
     // Set 1 ULP outside
     request.sweep.minimum[1] = exact_dy.next_up();
     request.sweep.maximum[1] = 10.0;
-    
+
     let res1 = op.step(&request);
-    assert!(res1.is_ok(), "1 ULP should be ok, but got {:?} for min={}, exact_dy={}", res1, request.sweep.minimum[1], exact_dy);
+    assert!(
+        res1.is_ok(),
+        "1 ULP should be ok, but got {:?} for min={}, exact_dy={}",
+        res1,
+        request.sweep.minimum[1],
+        exact_dy
+    );
 
     // 2 ULPs should fail
     request.sweep.minimum[1] = exact_dy.next_up().next_up();
@@ -232,7 +320,18 @@ fn sweep_bounds_ulp_allowances() {
 }
 #[test]
 fn input_validation_failures() {
-    let cells = vec![CollisionCell::try_new(true, [Aabb { minimum: [0.0; 3], maximum: [0.0; 3] }; 8], 0).unwrap(); 1000];
+    let cells = vec![
+        CollisionCell::try_new(
+            true,
+            [Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3]
+            }; 8],
+            0
+        )
+        .unwrap();
+        1000
+    ];
     let grid = CollisionGrid::try_new([-5, -5, -5], [10, 10, 10], &cells).unwrap();
 
     let base_req = PhysicsRequest {
@@ -258,7 +357,7 @@ fn input_validation_failures() {
         },
         grid,
     };
-    
+
     let op = NativePhysics;
 
     let mut req = base_req;
@@ -276,7 +375,18 @@ fn input_validation_failures() {
 
 #[test]
 fn negative_dt_tuning_accepted() {
-    let cells = vec![CollisionCell::try_new(true, [Aabb { minimum: [0.0; 3], maximum: [0.0; 3] }; 8], 0).unwrap(); 1000];
+    let cells = vec![
+        CollisionCell::try_new(
+            true,
+            [Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3]
+            }; 8],
+            0
+        )
+        .unwrap();
+        1000
+    ];
     let grid = CollisionGrid::try_new([-5, -5, -5], [10, 10, 10], &cells).unwrap();
 
     let mut request = PhysicsRequest {
@@ -307,9 +417,9 @@ fn negative_dt_tuning_accepted() {
     request.tuning.fixed_delta_seconds = -0.05;
 
     let op = NativePhysics;
-    
+
     let expected_disp = (0.0 - 32.0_f32 * 0.05_f32).max(-78.4_f32) * 0.05_f32;
     request.sweep.minimum[1] = expected_disp.next_up();
-let res = op.step(&request);
+    let res = op.step(&request);
     assert!(res.is_ok(), "{:?}", res);
 }

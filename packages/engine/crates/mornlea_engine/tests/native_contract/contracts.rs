@@ -32,11 +32,15 @@ impl PhysicsOp for DoublePhysics {
 struct DoubleRaycast;
 impl RaycastOp for DoubleRaycast {
     fn next_batch(&self, _cursor: &mut RayCursor) -> Result<RayBatch, KernelError> {
-        RayBatch::from_parts([RayRecord {
-            cell: [0; 3],
-            face: RayFace::Origin,
-            distance: 0.0,
-        }; 64], 0, true)
+        RayBatch::from_parts(
+            [RayRecord {
+                cell: [0; 3],
+                face: RayFace::Origin,
+                distance: 0.0,
+            }; 64],
+            0,
+            true,
+        )
     }
 }
 
@@ -68,10 +72,13 @@ impl ProbeOp for DoubleProbe {
 struct DoubleTree;
 impl TreeOp for DoubleTree {
     fn tree_blocks(&self, _request: &TreeRequest) -> Result<TreeBlocks, KernelError> {
-        TreeBlocks::from_parts([TreeBlock {
-            offset: [0; 3],
-            block: 0,
-        }; 128], 0)
+        TreeBlocks::from_parts(
+            [TreeBlock {
+                offset: [0; 3],
+                block: 0,
+            }; 128],
+            0,
+        )
     }
 }
 
@@ -89,11 +96,7 @@ impl LodOp for DoubleLod {
 
 struct DoubleFluidEval;
 impl FluidEvalOp for DoubleFluidEval {
-    fn evaluate(
-        &self,
-        items: &[[u16; 7]],
-        dst: &mut [FluidWrites],
-    ) -> Result<usize, KernelError> {
+    fn evaluate(&self, items: &[[u16; 7]], dst: &mut [FluidWrites]) -> Result<usize, KernelError> {
         if items.is_empty() {
             return Err(KernelError::InvalidInput);
         }
@@ -145,7 +148,10 @@ impl PathfindOp for DoublePathfind {
         _goal: PathCell,
         _scratch: &mut PathScratch,
     ) -> Result<PathResult, PathError> {
-        Ok(PathResult::new(vec![].into_boxed_slice(), vec![].into_boxed_slice()))
+        Ok(PathResult::new(
+            vec![].into_boxed_slice(),
+            vec![].into_boxed_slice(),
+        ))
     }
 }
 
@@ -202,14 +208,20 @@ fn contract_doubles_compile_and_dispatch() {
             velocity: [0.0; 3],
             on_ground: true,
         },
-        sweep: SweepBounds { minimum: [0.0; 3], maximum: [1.0; 3] },
+        sweep: SweepBounds {
+            minimum: [0.0; 3],
+            maximum: [1.0; 3],
+        },
         grid,
     });
-    let _ = DoubleRaycast.next_batch(&mut RayCursor::try_new(Ray {
-        origin: [0.0; 3],
-        direction: [0.0, 1.0, 0.0],
-        maximum: 1.0,
-    }).unwrap());
+    let _ = DoubleRaycast.next_batch(
+        &mut RayCursor::try_new(Ray {
+            origin: [0.0; 3],
+            direction: [0.0, 1.0, 0.0],
+            maximum: 1.0,
+        })
+        .unwrap(),
+    );
     let perm = [0u8; 512];
     let materials = Materials {
         air: 0,
@@ -232,24 +244,46 @@ fn contract_doubles_compile_and_dispatch() {
     let mut w_scratch = WorldgenScratch::try_new().unwrap();
     let _ = DoubleWorldgen.generate_chunk(&params, [0, 0], &mut w_scratch, &mut [0; 98304]);
     let _ = DoubleProbe.probe(&params, &[], &mut []);
-    let _ = DoubleTree.tree_blocks(&TreeRequest { seed: 0, root: [0; 3] });
+    let _ = DoubleTree.tree_blocks(&TreeRequest {
+        seed: 0,
+        root: [0; 3],
+    });
     let mut l_scratch = LodScratch::try_new().unwrap();
-    let _ = DoubleLod.build(&LodRequest {
-        params: &params,
-        tile: [0, 0],
-        step: LodStep::Two,
-    }, &mut l_scratch, &mut []);
+    let _ = DoubleLod.build(
+        &LodRequest {
+            params: &params,
+            tile: [0, 0],
+            step: LodStep::Two,
+        },
+        &mut l_scratch,
+        &mut [],
+    );
     let mut r_scratch = RescanScratch::try_with_capacity(100).unwrap();
     let skirt = Box::new([[0u16; 384]; 68]);
     let skirt_ref = Box::leak(skirt);
     let metadata = Box::new([None; 216]);
     let metadata_ref = Box::leak(metadata);
-    let _ = DoubleFluidRescan.rescan(&RescanRequest {
-        view: RescanView::try_new([RescanSection::Uniform(0); 24], skirt_ref, metadata_ref, [0, 0]).unwrap(),
-        range: RescanRange { x0: 0, x1: 0, z0: 0, z1: 0 },
-        start_section: 0,
-        budget: 0,
-    }, &mut r_scratch, &mut []);
+    let _ = DoubleFluidRescan.rescan(
+        &RescanRequest {
+            view: RescanView::try_new(
+                [RescanSection::Uniform(0); 24],
+                skirt_ref,
+                metadata_ref,
+                [0, 0],
+            )
+            .unwrap(),
+            range: RescanRange {
+                x0: 0,
+                x1: 0,
+                z0: 0,
+                z1: 0,
+            },
+            start_section: 0,
+            budget: 0,
+        },
+        &mut r_scratch,
+        &mut [],
+    );
     let mut m_scratch = MeshScratch::try_new().unwrap();
     let blocks = Box::new([0u16; 110592]);
     let blocks_ref = Box::leak(blocks) as &[u16; 110592];
@@ -257,16 +291,22 @@ fn contract_doubles_compile_and_dispatch() {
     let heights_present_ref = Box::leak(heights_present) as &[bool; 9];
     let heights = Box::new([[0i16; 256]; 9]);
     let heights_ref = Box::leak(heights) as &[[i16; 256]; 9];
-    let mesh_reg = MeshRegistry::try_new(&[MeshRegistryEntry {
-        id: 0,
-        opaque: true,
-        emission: 0,
-        material: [0; 6],
-        fluid_height: 0,
-        light_attenuation: 0,
-        block_top_raw: 0,
-        model: MeshModel::Default,
-    }], &[0], 0, 0).unwrap();
+    let mesh_reg = MeshRegistry::try_new(
+        &[MeshRegistryEntry {
+            id: 0,
+            opaque: true,
+            emission: 0,
+            material: [0; 6],
+            fluid_height: 0,
+            light_attenuation: 0,
+            block_top_raw: 0,
+            model: MeshModel::Default,
+        }],
+        &[0],
+        0,
+        0,
+    )
+    .unwrap();
     let view = MeshView {
         blocks: blocks_ref,
         heights_present: heights_present_ref,
@@ -276,7 +316,19 @@ fn contract_doubles_compile_and_dispatch() {
     };
     let _ = DoubleMesh.mesh(&view, &mut m_scratch, &mut []);
     let mut p_scratch = PathScratch::try_with_capacity(100).unwrap();
-    let _ = DoublePathfind.find(&PathGrid::try_new(PathCell { x: 0, y: 0, z: 0 }, [1, 1, 1], vec![0].into_boxed_slice(), PathBlockTable::from_passable_ids(&[]).unwrap(), vec![]).unwrap(), PathCell { x: 0, y: 0, z: 0 }, PathCell { x: 0, y: 0, z: 0 }, &mut p_scratch);
+    let _ = DoublePathfind.find(
+        &PathGrid::try_new(
+            PathCell { x: 0, y: 0, z: 0 },
+            [1, 1, 1],
+            vec![0].into_boxed_slice(),
+            PathBlockTable::from_passable_ids(&[]).unwrap(),
+            vec![],
+        )
+        .unwrap(),
+        PathCell { x: 0, y: 0, z: 0 },
+        PathCell { x: 0, y: 0, z: 0 },
+        &mut p_scratch,
+    );
 
     let double = DoubleFluidEval;
     let mut dst = [FluidWrites::default(); 2];
@@ -368,4 +420,3 @@ fn shared_world_params_constructor() {
     let params_bad = WorldgenParams::try_new(42, bad_materials, perm);
     assert_eq!(params_bad, Err(KernelError::InvalidInput));
 }
-

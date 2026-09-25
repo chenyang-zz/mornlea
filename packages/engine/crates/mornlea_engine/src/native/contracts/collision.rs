@@ -42,7 +42,11 @@ impl CollisionCell {
                 return Err(KernelError::InvalidInput);
             }
         }
-        Ok(Self { loaded, boxes, used })
+        Ok(Self {
+            loaded,
+            boxes,
+            used,
+        })
     }
 
     pub fn loaded(&self) -> bool {

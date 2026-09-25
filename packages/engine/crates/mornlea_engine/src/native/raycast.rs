@@ -1,5 +1,5 @@
-use crate::native::contracts::raycast::{RayBatch, RayCursor, RayFace, RayRecord, RaycastOp};
 use crate::native::contracts::KernelError;
+use crate::native::contracts::raycast::{RayBatch, RayCursor, RayFace, RayRecord, RaycastOp};
 use crate::raycast::{RaycastCursor, RaycastInput};
 
 pub struct NativeRaycast;
@@ -10,9 +10,13 @@ impl RaycastOp for NativeRaycast {
 
         if local_cursor.is_done() {
             let batch = RayBatch::from_parts(
-                [RayRecord { cell: [0; 3], face: RayFace::Origin, distance: 0.0 }; 64],
+                [RayRecord {
+                    cell: [0; 3],
+                    face: RayFace::Origin,
+                    distance: 0.0,
+                }; 64],
                 0,
-                true
+                true,
             )?;
             *cursor = local_cursor;
             return Ok(batch);
@@ -25,19 +29,27 @@ impl RaycastOp for NativeRaycast {
         };
 
         let mut inner = RaycastCursor::start(&input);
-        
+
         if local_cursor.initialized {
             while inner.cell != local_cursor.current_cell {
                 let mut axis = 0;
-                if inner.maximum[1] < inner.maximum[axis] { axis = 1; }
-                if inner.maximum[2] < inner.maximum[axis] { axis = 2; }
-                
+                if inner.maximum[1] < inner.maximum[axis] {
+                    axis = 1;
+                }
+                if inner.maximum[2] < inner.maximum[axis] {
+                    axis = 2;
+                }
+
                 inner.cell[axis] = inner.cell[axis].wrapping_add(inner.step[axis]);
                 inner.maximum[axis] += inner.delta[axis];
             }
         }
 
-        let mut records = [RayRecord { cell: [0; 3], face: RayFace::Origin, distance: 0.0 }; 64];
+        let mut records = [RayRecord {
+            cell: [0; 3],
+            face: RayFace::Origin,
+            distance: 0.0,
+        }; 64];
         let mut count = 0;
 
         if !local_cursor.initialized {
@@ -52,18 +64,22 @@ impl RaycastOp for NativeRaycast {
 
         while count < 64 {
             let mut axis = 0;
-            if inner.maximum[1] < inner.maximum[axis] { axis = 1; }
-            if inner.maximum[2] < inner.maximum[axis] { axis = 2; }
-            
+            if inner.maximum[1] < inner.maximum[axis] {
+                axis = 1;
+            }
+            if inner.maximum[2] < inner.maximum[axis] {
+                axis = 2;
+            }
+
             let distance = inner.maximum[axis];
             if distance > input.maximum {
                 local_cursor.done = true;
                 break;
             }
-            
+
             inner.cell[axis] = inner.cell[axis].wrapping_add(inner.step[axis]);
             inner.maximum[axis] += inner.delta[axis];
-            
+
             let face = match (axis, inner.step[axis] > 0) {
                 (0, true) => RayFace::NegX,
                 (0, false) => RayFace::PosX,

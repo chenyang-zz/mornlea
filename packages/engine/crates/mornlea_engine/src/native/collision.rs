@@ -1,6 +1,6 @@
-use crate::native::contracts::collision::{CollisionOp, CollisionRequest, CollisionResult};
+use crate::collision::{Bounds, CollisionCells, CollisionInputData, resolve_move_and_step};
 use crate::native::contracts::KernelError;
-use crate::collision::{resolve_move_and_step, CollisionCells, Bounds, CollisionInputData};
+use crate::native::contracts::collision::{CollisionOp, CollisionRequest, CollisionResult};
 
 pub struct NativeCollision;
 
@@ -46,7 +46,11 @@ pub fn resolve_collision(request: &CollisionRequest<'_>) -> Result<CollisionResu
         let grid_min = request.grid.origin()[axis] as i64;
         let grid_max = grid_min + request.grid.dimensions()[axis] as i64 - 1;
 
-        if min_i < grid_min || max_i > grid_max || min_i < i32::MIN as i64 || max_i > i32::MAX as i64 {
+        if min_i < grid_min
+            || max_i > grid_max
+            || min_i < i32::MIN as i64
+            || max_i > i32::MAX as i64
+        {
             Err(KernelError::DisplacementOutOfBounds)
         } else {
             Ok(())

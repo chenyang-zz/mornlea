@@ -1,8 +1,8 @@
 use crate::native::contracts::{
-    physics::{PhysicsOp, PhysicsRequest, PhysicsResult, PhysicsState},
     KernelError,
+    physics::{PhysicsOp, PhysicsRequest, PhysicsResult, PhysicsState},
 };
-use crate::step::{integrate, IntegrationParams};
+use crate::step::{IntegrationParams, integrate};
 
 pub struct NativePhysics;
 
@@ -13,37 +13,54 @@ impl PhysicsOp for NativePhysics {
 }
 
 pub fn step_physics(request: &PhysicsRequest<'_>) -> Result<PhysicsResult, KernelError> {
-    if !(-1..=1).contains(&request.controls.move_x) || !(-1..=1).contains(&request.controls.move_z) {
+    if !(-1..=1).contains(&request.controls.move_x) || !(-1..=1).contains(&request.controls.move_z)
+    {
         return Err(KernelError::InvalidInput);
     }
-    
+
     let floats = [
-        request.state.position[0], request.state.position[1], request.state.position[2],
-        request.state.velocity[0], request.state.velocity[1], request.state.velocity[2],
-        request.controls.yaw_sin, request.controls.yaw_cos,
-        request.tuning.fixed_delta_seconds, request.tuning.step_height,
-        request.tuning.walk_speed, request.tuning.ground_acceleration,
-        request.tuning.ground_deceleration, request.tuning.air_acceleration,
-        request.tuning.jump_speed, request.tuning.gravity,
-        request.tuning.terminal_fall_speed, request.tuning.fluid_gravity,
-        request.tuning.fluid_sink_speed, request.tuning.fluid_ascend_speed,
-        request.tuning.fluid_horizontal_drag, request.tuning.sprint_speed_multiplier,
+        request.state.position[0],
+        request.state.position[1],
+        request.state.position[2],
+        request.state.velocity[0],
+        request.state.velocity[1],
+        request.state.velocity[2],
+        request.controls.yaw_sin,
+        request.controls.yaw_cos,
+        request.tuning.fixed_delta_seconds,
+        request.tuning.step_height,
+        request.tuning.walk_speed,
+        request.tuning.ground_acceleration,
+        request.tuning.ground_deceleration,
+        request.tuning.air_acceleration,
+        request.tuning.jump_speed,
+        request.tuning.gravity,
+        request.tuning.terminal_fall_speed,
+        request.tuning.fluid_gravity,
+        request.tuning.fluid_sink_speed,
+        request.tuning.fluid_ascend_speed,
+        request.tuning.fluid_horizontal_drag,
+        request.tuning.sprint_speed_multiplier,
         request.tuning.sneak_speed_multiplier,
-        request.sweep.minimum[0], request.sweep.minimum[1], request.sweep.minimum[2],
-        request.sweep.maximum[0], request.sweep.maximum[1], request.sweep.maximum[2],
+        request.sweep.minimum[0],
+        request.sweep.minimum[1],
+        request.sweep.minimum[2],
+        request.sweep.maximum[0],
+        request.sweep.maximum[1],
+        request.sweep.maximum[2],
     ];
     for f in floats {
         if !f.is_finite() {
             return Err(KernelError::InvalidInput);
         }
     }
-    
+
     for i in 0..3 {
         if request.sweep.minimum[i] > request.sweep.maximum[i] {
             return Err(KernelError::InvalidInput);
         }
     }
-    
+
     let params = IntegrationParams {
         velocity: request.state.velocity,
         on_ground: request.state.on_ground,
@@ -70,9 +87,9 @@ pub fn step_physics(request: &PhysicsRequest<'_>) -> Result<PhysicsResult, Kerne
         sprint_speed_multiplier: request.tuning.sprint_speed_multiplier,
         sneak_speed_multiplier: request.tuning.sneak_speed_multiplier,
     };
-    
+
     let (mut velocity, displacement) = integrate(&params);
-    
+
     for (i, &disp) in displacement.iter().enumerate() {
         let min = request.sweep.minimum[i].next_down();
         let max = request.sweep.maximum[i].next_up();
@@ -80,11 +97,11 @@ pub fn step_physics(request: &PhysicsRequest<'_>) -> Result<PhysicsResult, Kerne
             return Err(KernelError::DisplacementOutOfBounds);
         }
     }
-    
+
     struct PhysicsGridWrapper<'a> {
         grid: crate::native::contracts::collision::CollisionGrid<'a>,
     }
-    
+
     impl<'a> crate::collision::CollisionCells for PhysicsGridWrapper<'a> {
         fn loaded(&self, position: [i32; 3]) -> bool {
             let idx = self.index(position);
@@ -111,7 +128,7 @@ pub fn step_physics(request: &PhysicsRequest<'_>) -> Result<PhysicsResult, Kerne
             }
         }
     }
-    
+
     impl<'a> PhysicsGridWrapper<'a> {
         fn index(&self, position: [i32; 3]) -> usize {
             let origin = self.grid.origin();
@@ -122,7 +139,7 @@ pub fn step_physics(request: &PhysicsRequest<'_>) -> Result<PhysicsResult, Kerne
             (y * dims[0] as usize + x) * dims[2] as usize + z
         }
     }
-    
+
     let wrapper = PhysicsGridWrapper { grid: request.grid };
     let collision_input = crate::collision::CollisionInputData {
         cells: &wrapper,
@@ -131,9 +148,9 @@ pub fn step_physics(request: &PhysicsRequest<'_>) -> Result<PhysicsResult, Kerne
         began_grounded: request.state.on_ground,
         step_height: request.tuning.step_height,
     };
-    
+
     let collision_result = crate::collision::resolve_move_and_step(&collision_input);
-    
+
     let mut clipped = [false; 3];
     for (i, &clip) in collision_result.clipped.iter().enumerate() {
         if clip {
@@ -141,7 +158,7 @@ pub fn step_physics(request: &PhysicsRequest<'_>) -> Result<PhysicsResult, Kerne
             velocity[i] = 0.0;
         }
     }
-    
+
     Ok(PhysicsResult {
         state: PhysicsState {
             position: collision_result.position,

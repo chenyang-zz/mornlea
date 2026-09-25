@@ -8,7 +8,18 @@ use mornlea_engine::native::physics::NativePhysics;
 
 #[test]
 fn parity_with_abi_observations() {
-    let cells = vec![CollisionCell::try_new(true, [Aabb { minimum: [0.0; 3], maximum: [0.0; 3] }; 8], 0).unwrap(); 1000];
+    let cells = vec![
+        CollisionCell::try_new(
+            true,
+            [Aabb {
+                minimum: [0.0; 3],
+                maximum: [0.0; 3]
+            }; 8],
+            0
+        )
+        .unwrap();
+        1000
+    ];
     let grid = CollisionGrid::try_new([-5, -5, -5], [10, 10, 10], &cells).unwrap();
 
     let request = PhysicsRequest {
@@ -53,17 +64,17 @@ fn parity_with_abi_observations() {
 
     let op = NativePhysics;
     let result = op.step(&request).unwrap();
-    
+
     // In ABI mode, empty grid with initial velocity 0, dt=0.05, gravity=32
     // new velocity = [0.0, -1.6, 0.0]
     // pos = [0.5, 0.92, 0.5]
     // The bits for pos: 0.5 (0x3f000000), 0.92 (0x3f6b851f), 0.5 (0x3f000000)
     // The bits for vel: 0.0, -1.6 (0xbfccw...), 0.0
-    
+
     assert_eq!(result.state.position[0].to_bits(), 0.5f32.to_bits());
     assert_eq!(result.state.position[1].to_bits(), 0.92f32.to_bits());
     assert_eq!(result.state.position[2].to_bits(), 0.5f32.to_bits());
-    
+
     assert_eq!(result.state.velocity[0].to_bits(), 0.0f32.to_bits());
     assert_eq!(result.state.velocity[1].to_bits(), (-1.6f32).to_bits());
     assert_eq!(result.state.velocity[2].to_bits(), 0.0f32.to_bits());

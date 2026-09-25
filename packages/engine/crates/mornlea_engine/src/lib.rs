@@ -3,13 +3,13 @@ mod ffi;
 mod fluid_eval;
 mod fluid_rescan;
 mod greedy;
+#[allow(dead_code)]
+mod input;
 mod light;
 mod lod;
 mod quad;
 mod raycast;
 mod step;
 mod worldgen;
-#[allow(dead_code)]
-mod input;
 
 pub mod native;

@@ -34,7 +34,11 @@ pub struct RayBatch {
 }
 
 impl RayBatch {
-    pub fn from_parts(records: [RayRecord; 64], len: usize, done: bool) -> Result<Self, KernelError> {
+    pub fn from_parts(
+        records: [RayRecord; 64],
+        len: usize,
+        done: bool,
+    ) -> Result<Self, KernelError> {
         if len > 64 {
             return Err(KernelError::InvalidInput);
         }
