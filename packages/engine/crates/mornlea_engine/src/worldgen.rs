@@ -457,10 +457,10 @@ impl WorldgenParams {
     fn tree_block_at(&self, x: i32, y: i32, z: i32) -> u16 {
         let m = self.materials;
         let mut leaf = false;
-        let cell_z_min = (z - 3) >> OAK_TREE_CELL_SHIFT;
-        let cell_z_max = (z + 3) >> OAK_TREE_CELL_SHIFT;
-        let cell_x_min = (x - 3) >> OAK_TREE_CELL_SHIFT;
-        let cell_x_max = (x + 3) >> OAK_TREE_CELL_SHIFT;
+        let cell_z_min = z.wrapping_sub(3) >> OAK_TREE_CELL_SHIFT;
+        let cell_z_max = z.wrapping_add(3) >> OAK_TREE_CELL_SHIFT;
+        let cell_x_min = x.wrapping_sub(3) >> OAK_TREE_CELL_SHIFT;
+        let cell_x_max = x.wrapping_add(3) >> OAK_TREE_CELL_SHIFT;
         for cell_z in cell_z_min..=cell_z_max {
             for cell_x in cell_x_min..=cell_x_max {
                 let Some(tree) = self.oak_tree_for_cell(cell_x, cell_z) else {
@@ -487,13 +487,13 @@ impl WorldgenParams {
     pub(crate) fn generate_chunk(&self, chunk_x: i32, chunk_z: i32, dense: &mut [u16]) {
         debug_assert_eq!(dense.len(), CHUNK_VOLUME);
         dense.fill(self.materials.air);
-        let base_x = chunk_x << SECTION_SHIFT;
-        let base_z = chunk_z << SECTION_SHIFT;
+        let base_x = chunk_x.wrapping_shl(SECTION_SHIFT);
+        let base_z = chunk_z.wrapping_shl(SECTION_SHIFT);
 
         for lz in 0..SECTION_SIZE {
             for lx in 0..SECTION_SIZE {
-                let wx = base_x + lx;
-                let wz = base_z + lz;
+                let wx = base_x.wrapping_add(lx);
+                let wz = base_z.wrapping_add(lz);
                 let h = self.truncated_surface(wx, wz);
                 for y in WORLD_MIN_Y..=h {
                     dense[dense_index(lx, y, lz)] = self.generated_block_at(wx, y, wz, h);
@@ -514,12 +514,12 @@ impl WorldgenParams {
     /// `short_grass_block_at` 的单点路径逐格一致。
     fn apply_short_grass(&self, chunk_x: i32, chunk_z: i32, dense: &mut [u16]) {
         let m = self.materials;
-        let base_x = chunk_x << SECTION_SHIFT;
-        let base_z = chunk_z << SECTION_SHIFT;
+        let base_x = chunk_x.wrapping_shl(SECTION_SHIFT);
+        let base_z = chunk_z.wrapping_shl(SECTION_SHIFT);
         for lz in 0..SECTION_SIZE {
             for lx in 0..SECTION_SIZE {
-                let wx = base_x + lx;
-                let wz = base_z + lz;
+                let wx = base_x.wrapping_add(lx);
+                let wz = base_z.wrapping_add(lz);
                 let surface = self.truncated_surface(wx, wz);
                 if !(WORLD_MIN_Y..WORLD_MAX_Y).contains(&surface) {
                     continue;
@@ -572,20 +572,20 @@ impl WorldgenParams {
     /// 地形永远不被改写,分杈撞上固体时自然截断。
     fn apply_oak_trees(&self, chunk_x: i32, chunk_z: i32, dense: &mut [u16]) {
         let m = self.materials;
-        let base_x = chunk_x << SECTION_SHIFT;
-        let base_z = chunk_z << SECTION_SHIFT;
-        let cell_z_min = (base_z - 3) >> OAK_TREE_CELL_SHIFT;
-        let cell_z_max = (base_z + SECTION_SIZE + 2) >> OAK_TREE_CELL_SHIFT;
-        let cell_x_min = (base_x - 3) >> OAK_TREE_CELL_SHIFT;
-        let cell_x_max = (base_x + SECTION_SIZE + 2) >> OAK_TREE_CELL_SHIFT;
+        let base_x = chunk_x.wrapping_shl(SECTION_SHIFT);
+        let base_z = chunk_z.wrapping_shl(SECTION_SHIFT);
+        let cell_z_min = base_z.wrapping_sub(3) >> OAK_TREE_CELL_SHIFT;
+        let cell_z_max = base_z.wrapping_add(SECTION_SIZE + 2) >> OAK_TREE_CELL_SHIFT;
+        let cell_x_min = base_x.wrapping_sub(3) >> OAK_TREE_CELL_SHIFT;
+        let cell_x_max = base_x.wrapping_add(SECTION_SIZE + 2) >> OAK_TREE_CELL_SHIFT;
         for cell_z in cell_z_min..=cell_z_max {
             for cell_x in cell_x_min..=cell_x_max {
                 let Some(tree) = self.oak_tree_for_cell(cell_x, cell_z) else {
                     continue;
                 };
                 for y in tree.root_y..=tree.root_y + tree.height + 1 {
-                    for z in tree.root_z - 3..=tree.root_z + 3 {
-                        for x in tree.root_x - 3..=tree.root_x + 3 {
+                    for z in tree.root_z.wrapping_sub(3)..=tree.root_z.wrapping_add(3) {
+                        for x in tree.root_x.wrapping_sub(3)..=tree.root_x.wrapping_add(3) {
                             // 与 Go `pos.Chunk() != chunk.Pos` 判定等价:
                             // 世界坐标算术右移 4 即 floor 除 16。
                             if (x >> SECTION_SHIFT) != chunk_x
@@ -668,16 +668,26 @@ fn oak_tree_block_at(tree: &OakTree, m: &Materials, x: i32, y: i32, z: i32) -> u
         if y != top_y - 4 - i32::from(i) {
             continue;
         }
-        let along = (x - tree.root_x) * dx + (z - tree.root_z) * dz;
-        let side = (z - tree.root_z) * dx - (x - tree.root_x) * dz;
+        let along = x
+            .wrapping_sub(tree.root_x)
+            .wrapping_mul(dx)
+            .wrapping_add(z.wrapping_sub(tree.root_z).wrapping_mul(dz));
+        let side = z
+            .wrapping_sub(tree.root_z)
+            .wrapping_mul(dx)
+            .wrapping_sub(x.wrapping_sub(tree.root_x).wrapping_mul(dz));
         if (1..=3).contains(&along) && side == 0 {
             return m.oak_log;
         }
     }
-    let dx = (x - tree.root_x).abs();
-    let dz = (z - tree.root_z).abs();
+    let dx = x.wrapping_sub(tree.root_x).abs();
+    let dz = z.wrapping_sub(tree.root_z).abs();
+    // Pointwise probe queries may hand in a Y outside the world range before
+    // any layer guard runs; wrapping subtraction keeps debug overflow checks
+    // quiet and mirrors Go int32 wrap semantics, so extreme Y simply misses
+    // every crown layer and resolves to air.
     if tree.rare {
-        return match y - top_y {
+        return match y.wrapping_sub(top_y) {
             -3 if dx <= 2 && dz <= 2 && !(dx == 2 && dz == 2) => m.leaves,
             -2 | -1 if dx <= 3 && dz <= 3 && !(dx == 3 && dz == 3) => m.leaves,
             0 if dx <= 2 && dz <= 2 => m.leaves,
@@ -686,7 +696,7 @@ fn oak_tree_block_at(tree: &OakTree, m: &Materials, x: i32, y: i32, z: i32) -> u
             _ => m.air,
         };
     }
-    match y - top_y {
+    match y.wrapping_sub(top_y) {
         -2 | -1 if dx <= 2 && dz <= 2 && !(dx == 2 && dz == 2) => m.leaves,
         0 if dx <= 1 && dz <= 1 => m.leaves,
         1 if dx + dz <= 1 => m.leaves,
@@ -2317,6 +2327,21 @@ mod tests {
             }
         }
     }
+    /// Pointwise probe queries can hand the tree layer a Y coordinate outside
+    /// the world range before any guard runs. Debug overflow checks must not
+    /// panic on the crown-layer Y comparison, and wrapped comparison keeps
+    /// out-of-reach layers air instead of matching a wrapped offset.
+    #[test]
+    fn extreme_probe_y_stays_air_without_overflow() {
+        let (p, tree) = first_rare_tree();
+        let m = &p.materials;
+        assert_eq!(
+            oak_tree_block_at(&tree, m, tree.root_x, i32::MIN, tree.root_z),
+            m.air
+        );
+        assert_eq!(p.base_block_at(tree.root_x, i32::MIN, tree.root_z), m.air);
+        assert_eq!(p.base_block_at(tree.root_x, i32::MAX, tree.root_z), m.air);
+    }
 }
 
 /// 运行时树形几何(`tree_blocks`)的主题测试。
@@ -2621,4 +2646,3 @@ mod tree_blocks_tests {
         }
     }
 }
-

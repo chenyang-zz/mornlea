@@ -23,4 +23,4 @@ pub(crate) mod tree;
 #[allow(dead_code)]
 pub(crate) mod world_probe;
 #[allow(dead_code)]
-pub(crate) mod worldgen;
+pub mod worldgen;
