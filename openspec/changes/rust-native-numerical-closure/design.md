@@ -27,7 +27,7 @@ The shared type owners are fixed: collision owns `CollisionGrid` consumed by phy
 | Mesh and light | `MeshOp::mesh(&MeshView, &mut MeshScratch, &mut [MeshQuad]) -> Result<usize, KernelError>` | Registry and quad semantic types | `src/input.rs`, `src/light.rs`, `src/quad.rs`, `src/greedy/`, `src/native/mesh.rs`, matching tests |
 | Pathfinding | `PathfindOp::find(&PathGrid, PathCell, PathCell, &mut PathScratch) -> Result<PathResult, PathError>` | Owned snapshot and passability table | new `src/pathfind.rs`, `src/native/pathfind.rs`, matching tests |
 
-The field maps, constructors, accepted raw values, limits and error precedence for these signatures are pinned in [worker-briefs.md](worker-briefs.md). The family methods above are traits so an F2/F3 consumer can compile with a test double as soon as the contract node lands. Concrete providers are stateless; scratch is caller-owned and `&mut` ensures one active owner. All result values are owned or tied only to immutable request input. No trait permits storage, session, Godot, or network access.
+The field maps, constructors, accepted raw values, limits and error precedence for these signatures are pinned in [worker-briefs.md](worker-briefs.md). The [file-level execution packets](plans/00-foundation.md) assign exact source, test, producer and integration ownership to each task. The family methods above are traits so an F2/F3 consumer can compile with a test double as soon as the contract node lands. Concrete providers are stateless; scratch is caller-owned and `&mut` ensures one active owner. All result values are owned or tied only to immutable request input. No trait permits storage, session, Godot, or network access.
 
 ### Shared algorithm and ABI integration
 
