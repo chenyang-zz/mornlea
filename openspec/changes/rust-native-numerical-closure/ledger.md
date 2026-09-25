@@ -154,3 +154,24 @@
   - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`: passed cleanly.
 - Review: Task Reviewer subagent approved after two fix rounds ensuring robust `RayCursor::try_new` tests, true commit-on-success in `next_batch`, and clean comments.
 - Rollback: Revert `75a047c9`.
+
+## 2026-09-25 — Node 2.4 world chunk provider
+
+- Predecessor SHA: `06869a1cb62234fb56ffbcd3694f432f72df9fb3`
+- Result SHA: `b81d0dad`
+- Implementation summary:
+  - `src/worldgen.rs` replaces debug-overflow-prone coordinate and fringe arithmetic with explicit two's-complement wrapping (`wrapping_shl` for chunk base, `wrapping_add`/`wrapping_sub` for world coordinates and tree/short-grass fringe windows, `wrapping_sub` for crown tier matching) while preserving signed comparisons and ascending inclusive ranges; an inverted wrapped window iterates zero times instead of exploding. Y arithmetic stays bounded and ordinary.
+  - `src/native/worldgen.rs` implements `NativeWorldgen` for `WorldgenOp`, preflighting destination capacity before any write, generating into the caller-owned `WorldgenScratch` stage, and copying exactly 98,304 cells so a short destination is untouched and surplus destination cells keep their canary.
+  - `src/native/mod.rs` widens the `worldgen` module to `pub` so integration tests can name `NativeWorldgen`, matching the ray lane.
+  - `tests/native_contract/worldgen_chunk.rs` covers exact/short/extra capacity, destination canaries, full destination overwrite on success, scratch reuse, and the shared duplicate-material constructor rule (`water == air` accepted, other duplicates rejected).
+  - `tests/numerical_migration/worldgen_chunk.rs` pins bitwise cell parity for seed 0 at chunk (0,0), extreme-coordinate FNV-1a 64 digests at both signed extremes, seeds 0/1/-1 at chunk (0,0) and (-1,2), and a modified permutation, cross-checked against an independent bedrock-layer rule and a digest mutation check.
+  - `packages/tools/cmd/runtime-oracle/kernel_worldgen_chunk_test.go` freezes release ABI observations from `nativeabi.WorldgenChunk` (FNV-1a 64 over all 98,304 output cells) for the seed/chunk/permutation matrix and exercises eight panic conditions.
+- Verification:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked worldgen_chunk`: passed (6 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test numerical_migration --locked worldgen_chunk`: passed (4 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --lib --locked worldgen`: passed (43 tests passed).
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelWorldgenChunk' -count=1`: passed (ok github.com/channing771/mornlea/packages/tools/cmd/runtime-oracle 0.732s).
+  - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`: passed cleanly.
+  - `go test ./packages/shared/nativeabi -run 'TestWorldgen' -count=1`: passed.
+- Review: Task Reviewer subagent approved with three minor findings deferred to the final whole-branch review (controller ratification of the `src/native/mod.rs` visibility boundary, Go oracle rejection paths missing an output-untouched assertion behind an accurate comment, and a missing `water == stone` duplicate rejection case).
+- Rollback: Revert `b81d0dad`.
