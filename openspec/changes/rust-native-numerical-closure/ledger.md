@@ -77,3 +77,23 @@
   - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --locked -- --list`: passed (262 unit tests discovered, 0 benchmarks, 0 doc-tests).
 - Outcome: Baseline verified; no engine symbol or version drift. All 11 numerical routes confirmed uncovered without corpus mutation. Ready for Node 1.2 interface landing.
 - Rollback: Revert this ledger entry only.
+
+## 2026-09-25 — Node 1.2 interface contract landing
+
+- Predecessor SHA: `0aeb35e6244a59adc2639ef187576dea1a5119b2`
+- Result SHA: `dabde3465b8a0babdcde8e59698457fc605b8598`
+- Implementation summary:
+  - All eleven object-safe operation traits, shared request/result structs, capacity unit checkers and `KernelError`/`PathError` enums defined in `packages/engine/crates/mornlea_engine/src/native/contracts/`.
+  - Shared validated constructors implemented and tested: `CollisionCell::try_new`, `CollisionGrid::try_new`, `WorldgenParams::try_new`, `RayBatch::from_parts`, `TreeBlocks::from_parts`, `PathResult::new`.
+  - Crate-private sampler bridge `WorldgenParams::as_legacy()` tested with field-for-field parity.
+  - Allocation-free `visit_tree_blocks` seam in `worldgen.rs` preserves dy/dz/dx ordering, <= 128 record bound, and early refusal abortion.
+  - Test roots `tests/native_contract.rs` and `tests/numerical_migration.rs` registered.
+  - Test doubles for all 11 traits compiled and exercised in `tests/native_contract/contracts.rs`, with `FluidEvalOp` double tested for both success and typed error.
+  - `src/native/AGENTS.md` created; `crates/mornlea_engine/AGENTS.md` updated.
+- Verification:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked -- --list`: passed (6 tests discovered).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked`: passed (6 tests passed, 0 failures).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --lib --locked tree_blocks`: passed (2 tests passed).
+  - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`: passed cleanly.
+- Review: Task Reviewer subagent approved both Spec Compliance and Code Quality.
+- Rollback: Revert `dabde346` prior to dependent provider tasks.
