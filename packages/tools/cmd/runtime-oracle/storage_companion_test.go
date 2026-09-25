@@ -1154,7 +1154,7 @@ func companionAdversarialPinByID(id string) (companionAdversarialPin, bool) {
 		companionDecodeMissingLifecycleID:      {corrupt, "flags: unexpected EOF"},
 		companionDecodeOrphanQueueID:           {corrupt, "companion hotbar slot: unexpected EOF"},
 		companionDecodeInactiveQueueID:         {corrupt, "inactive companion flags"},
-		companionDecodeCommandOverLimitID:      {corrupt, "companion task command"},
+		companionDecodeCommandOverLimitID:      {corrupt, "1025 字节超过上限"},
 		companionDecodePlanStepsOverLimitID:    {corrupt, "companion task plan steps 5001 exceeds limit"},
 		companionDecodeFIFOOverLimitID:         {corrupt, "companion FIFO depth 17 exceeds limit"},
 		companionDecodeSummaryOverLimitID:      {corrupt, "companion summary length 2049 exceeds limit"},
