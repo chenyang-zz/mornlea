@@ -271,6 +271,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for `138183c5`: Rust `storage_corpus` 85/85; `companion_` 16/16; `runtime_contract companion_` 6/6. The full Go oracle package fails only on occupied pins. The integration reviewer compared asset bytes and did not re-run those commands.
 - Architecture skill: no change. The unreachable v5 membership messages follow the existing body-id copy in the Go decoder.
 
+## 2026-09-25 — SDD execution: node 5.1 closed
+
+- Commits: `522f00f7` first closure gate; `b8e3392f` metadata and region gap producers; `f75dfcf4` integration of seven cases; `bd0dd5e5` records the corpus revision.
+- Reviews of the gap producers, the integration, and the revision approved. The first gate's exemptions were removed before integration. No remaining Critical or Important findings.
+- `save.region` has 27 cases. `save.player` has 37. `save.world-metadata` has 21. `save.hostile` has 50. `save.passive` has 70. `save.chunk` has 35. `save.companion` has 29. Save total is 269.
+- `source_revision` and `BaselineSourceRevision` are `f75dfcf4db03eebdbf07deb5e3ff512e6c417a28`.
+- Gates reported for the integration and the revision: `TestStorageCorpus` pass; Rust `storage_corpus` 87/87. The integration reviewer checked counts and asset digests and did not re-run those commands.
+- Minor findings held for the final review: unused gap-export constants; the metadata registration test pins only the v1 truncated category; the closure inventory clone shares an `Encoded` pointer; hook-injected `Co-authored-by` trailers.
+- Architecture skill: no change. The corpus revision names the integration commit that contains the producers and the integrated assets.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
