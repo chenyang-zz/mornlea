@@ -4,6 +4,8 @@ This revision changes planning artifacts only. Runtime behavior, version identit
 
 Implementation requires the relevant accepted F1, F2, and F3 exit evidence in their ledgers, including exact source SHA, fixture identities, command output, test discovery, and rollback decision. An existing proposal, checked planning status, text search, or optional-entry audit is not completion evidence. After a prerequisite is archived, resolve its ledger through its archive location and retain the accepted SHA. No task is complete merely because a test filter selected zero tests.
 
+Interface baseline: the [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns C2/G1 and `terrain@1` to this boundary. Before independently implementing mesh producer and Godot consumer, accept the exact terrain family schema and bridge registry mapping with validated stale/removal/capacity examples; its logical name alone is not an enabled ABI family.
+
 ## Ownership and design decisions
 
 `mornlea_engine` remains the single numerical implementation. `mornlea_client_core` owns chunk interpretation, revisions, visibility, mesh scheduling, and bounded semantic publication; `mornlea_godot` validates the bridge and owns any necessary native bulk resource conversion. Embedded Python in `features/world/` applies typed resources within declared budgets. GPU resource release remains on the Godot owner thread. No per-cell FFI or raw buffers reach Python.

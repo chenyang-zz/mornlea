@@ -4,6 +4,8 @@ This revision changes planning artifacts only. Runtime behavior, version identit
 
 Implementation requires the relevant accepted F1, F2, and F3 exit evidence in their ledgers, including exact source SHA, fixture identities, command output, test discovery, and rollback decision. An existing proposal, checked planning status, text search, or optional-entry audit is not completion evidence. After a prerequisite is archived, resolve its ledger through its archive location and retain the accepted SHA. No task is complete merely because a test filter selected zero tests.
 
+Interface baseline: the [target runtime interface map](../../../docs/runtime-interface-architecture.md) supplies the D0–T1 ownership and version register that the release manifest must enumerate. P14 consumes actual accepted implementation identities and real integration for every required family; the target catalog alone cannot satisfy either release cycle or rollback gate.
+
 ## Complete dependency gate
 
 Consume the accepted F1/F2/F3 ledgers plus [terrain](../godot-production-terrain/tasks.md), [actors](../godot-complete-actors/tasks.md), [UI](../godot-ui-migration/tasks.md), [desktop devices](../godot-desktop-audio/tasks.md), [tooling](../godot-production-tooling/tasks.md), and [packaging](../godot-desktop-packaging/tasks.md). Record the concrete release feature/platform manifest; no required item can be hidden by removing it from a report. Two distinct release cycles must each bind source SHA, release/package identities, protocol/save versions, complete semantic/visual coverage, performance hard-error checks, local/remote behavior, and successful restore of the previous release. Re-running one build twice is not two cycles.

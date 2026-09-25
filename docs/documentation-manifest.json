@@ -51,7 +51,7 @@
       ],
       "english_path": "docs/README.md",
       "chinese_path": "docs/README.zh.md",
-      "revision": "2026-09-25.1"
+      "revision": "2026-09-25.2"
     },
     {
       "id": "agent-guidance-style",
@@ -153,6 +153,17 @@
       "english_path": "docs/interface-first-parallel-development.md",
       "chinese_path": "docs/interface-first-parallel-development.zh.md",
       "revision": "2026-09-25.2"
+    },
+    {
+      "id": "runtime-interface-architecture",
+      "classification": "bilingual",
+      "paths": [
+        "docs/runtime-interface-architecture.md",
+        "docs/runtime-interface-architecture.zh.md"
+      ],
+      "english_path": "docs/runtime-interface-architecture.md",
+      "chinese_path": "docs/runtime-interface-architecture.zh.md",
+      "revision": "2026-09-25.1"
     },
     {
       "id": "feature-backlog",

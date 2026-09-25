@@ -4,6 +4,8 @@ This revision changes planning artifacts only. Runtime behavior, version identit
 
 Implementation requires the relevant accepted F1, F2, and F3 exit evidence in their ledgers, including exact source SHA, fixture identities, command output, test discovery, and rollback decision. An existing proposal, checked planning status, text search, or optional-entry audit is not completion evidence. After a prerequisite is archived, resolve its ledger through its archive location and retain the accepted SHA. No task is complete merely because a test filter selected zero tests.
 
+Interface baseline: the [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns S2/C1 session parity, `session@1`/`lifecycle@1` and T1 desktop/asset manifests to this boundary. The launcher consumes accepted server/client contracts and an exact export manifest; it cannot substitute a new local simulation path or activate a target-only semantic family.
+
 ## Ownership and selected local transport
 
 Use a supervised Rust server process with loopback TCP for the first local distribution. This reuses F2's server and F3's existing remote path and makes child termination/world ownership explicit. Rust owns process supervision, startup status, bounded cancellation, and the client session. Python presents progress and submits semantic launch/cancel intent. Local Memory remains a shared F2/F3 conformance requirement, but P13 does not need a second in-process runtime to expose local play.

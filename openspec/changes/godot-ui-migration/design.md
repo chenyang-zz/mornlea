@@ -4,6 +4,8 @@ This revision changes planning artifacts only. Runtime behavior, version identit
 
 Implementation requires the relevant accepted F1, F2, and F3 exit evidence in their ledgers, including exact source SHA, fixture identities, command output, test discovery, and rollback decision. An existing proposal, checked planning status, text search, or optional-entry audit is not completion evidence. After a prerequisite is archived, resolve its ledger through its archive location and retain the accepted SHA. No task is complete merely because a test filter selected zero tests.
 
+Interface baseline: the [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns C2/G1 and `inventory-ui@1`/`world-ui@1` plus typed `input@1` to this boundary. Accept exact family schemas, validated intent tokens and bridge mapping before independent core producer and Godot Control consumer work; the logical names do not enable the pilot ABI.
+
 ## Ownership and design decisions
 
 Rust client-core is the UI data owner. It publishes typed views and validates intent tokens, command order, and confirmed outcomes. Embedded Python maps those views to Godot Control trees, focus state, and bounded event routing. Inventory/container state is never reconstructed in Python from wire bytes. Capture fixtures use the same typed views as runtime presentation.

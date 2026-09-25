@@ -4,6 +4,8 @@ This revision changes planning artifacts only. Runtime behavior, version identit
 
 Implementation requires the relevant accepted F1, F2, and F3 exit evidence in their ledgers, including exact source SHA, fixture identities, command output, test discovery, and rollback decision. An existing proposal, checked planning status, text search, or optional-entry audit is not completion evidence. After a prerequisite is archived, resolve its ledger through its archive location and retain the accepted SHA. No task is complete merely because a test filter selected zero tests.
 
+Interface baseline: the [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns C2/G1 and `audio-cues@1`/`lifecycle@1` to this boundary. Accept exact cue identity/dedup schema and logical-to-numeric registry mapping with no-device and reset tests before independent core producer and Godot audio consumer work; the pilot's symbolic requirements alone cannot activate a numeric-only family table.
+
 ## Ownership and design decisions
 
 Rust client-core owns confirmation identities, session de-duplication, accepted input ordering, and semantic cue selection. Embedded Python and Godot AudioServer/Input own playback, device mapping, focus adaptation, and resource lifecycle. Device failure is presentation degradation, never a lost server outcome. Standalone Agent Python is not imported.

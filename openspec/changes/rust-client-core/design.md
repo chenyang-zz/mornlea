@@ -2,6 +2,8 @@
 
 The existing Rust Godot extension dynamically loads a pilot Go client-core. Python already consumes typed semantic views. F1 and the accepted F2 protocol/session contract are prerequisites; this stage replaces client runtime ownership without turning pilot code into the final architecture.
 
+The [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns C1 session, C2 presentation and G1 bridge/registry after F2 S2, with target V1 families consumed by later features. Each shared boundary requires its own compile-ready contract landing and accepted SHA before disjoint consumers start; the Godot registry and real integration have serial owners. Planned facade signatures and logical family names do not imply a present Rust client-core or numeric ABI descriptors.
+
 ## Goals / Non-Goals
 
 Preserve typed presentation behavior while moving sessions, mirrors, prediction and frame production to Rust. Do not expand Go core behavior, migrate complete terrain/UI/actors/audio features, transfer tracked visual producers, delete the legacy renderer, or switch defaults.

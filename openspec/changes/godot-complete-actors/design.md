@@ -4,6 +4,8 @@ This revision changes planning artifacts only. Runtime behavior, version identit
 
 Implementation requires the relevant accepted F1, F2, and F3 exit evidence in their ledgers, including exact source SHA, fixture identities, command output, test discovery, and rollback decision. An existing proposal, checked planning status, text search, or optional-entry audit is not completion evidence. After a prerequisite is archived, resolve its ledger through its archive location and retain the accepted SHA. No task is complete merely because a test filter selected zero tests.
 
+Interface baseline: the [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns C2/G1 and `actors@1`/`player-view@1` to this boundary. Before independent actor producer and scene work, accept exact family schemas and bridge mapping with tested identity reuse, despawn, epoch reset and capacity failure; the logical names do not enable the pilot ABI.
+
 ## Ownership and design decisions
 
 Rust server/domain owns entity rules and outcomes. Rust client-core owns identities, epochs, accepted ordering, confirmed events, and semantic interpolation inputs. Python owns scenes, animation, pooled instances, and bounded effect application. Any hot native resource transformation stays in `mornlea_godot`; no actor feature parses packets or simulates projectile hits.
