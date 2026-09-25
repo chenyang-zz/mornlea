@@ -823,12 +823,16 @@ fn runtime_oak_tree(request: &TreeBlocksRequest) -> OakTree {
 /// 与世界生成的树冠共用同一份实现,不产生珍异巨树或分杈。遍历序固定为
 /// dy 外层、dz 中层、dx 内层,记录顺序因此完全由输入决定。
 ///
-/// 记录数超过 `TREE_BLOCKS_MAX_RECORDS` 时返回 None(防御性上界,正常几何
-/// 不可能触发),由调用方转为显式输出溢出状态;不产生部分结果。
-pub(crate) fn tree_blocks(request: &TreeBlocksRequest) -> Option<Vec<TreeBlock>> {
+/// Traverse runtime tree block geometry and emit each block in dy/dz/dx order.
+///
+/// Returns None if the emitter returns false or the 128-record bound is exceeded.
+pub(crate) fn visit_tree_blocks(
+    request: &TreeBlocksRequest,
+    mut emit: impl FnMut(TreeBlock) -> bool,
+) -> Option<usize> {
     let tree = runtime_oak_tree(request);
     let materials = Materials::RUNTIME_TREE;
-    let mut records = Vec::with_capacity(TREE_BLOCKS_MAX_RECORDS);
+    let mut count = 0;
     for dy in 0..=tree.height + 1 {
         for dz in -2..=2 {
             for dx in -2..=2 {
@@ -842,18 +846,33 @@ pub(crate) fn tree_blocks(request: &TreeBlocksRequest) -> Option<Vec<TreeBlock>>
                 if block == materials.air {
                     continue;
                 }
-                if records.len() == TREE_BLOCKS_MAX_RECORDS {
+                if count == TREE_BLOCKS_MAX_RECORDS {
                     return None;
                 }
-                records.push(TreeBlock {
+                let item = TreeBlock {
                     dx: dx as i8,
                     dy: dy as i8,
                     dz: dz as i8,
                     block,
-                });
+                };
+                if !emit(item) {
+                    return None;
+                }
+                count += 1;
             }
         }
     }
+    Some(count)
+}
+
+/// Compute runtime tree block geometry: offsets relative to the root coordinate.
+pub(crate) fn tree_blocks(request: &TreeBlocksRequest) -> Option<Vec<TreeBlock>> {
+    let mut records = Vec::with_capacity(TREE_BLOCKS_MAX_RECORDS);
+    let count = visit_tree_blocks(request, |record| {
+        records.push(record);
+        true
+    })?;
+    debug_assert_eq!(records.len(), count);
     Some(records)
 }
 
@@ -2574,4 +2593,32 @@ mod tree_blocks_tests {
         assert_eq!(TREE_BLOCKS_OAK_LOG, 17);
         assert_eq!(TREE_BLOCKS_LEAVES, 19);
     }
+
+    #[test]
+    fn visit_tree_blocks_matches_legacy_tree_blocks_and_handles_refusal() {
+        for seed in [1i64, 42, -7, 20_260_909] {
+            for (x, z) in [(0i32, 0i32), (-137, 902), (15, -16)] {
+                let req = request(seed, x, z);
+                let expected = tree_blocks(&req).expect("valid request succeeds");
+                let mut collected = Vec::with_capacity(TREE_BLOCKS_MAX_RECORDS);
+                let count = visit_tree_blocks(&req, |record| {
+                    collected.push(record);
+                    true
+                });
+                assert_eq!(count, Some(expected.len()));
+                assert_eq!(collected, expected);
+
+                let mut early_stopped = Vec::new();
+                let mut emit_count = 0;
+                let stopped_res = visit_tree_blocks(&req, |record| {
+                    early_stopped.push(record);
+                    emit_count += 1;
+                    emit_count < 2
+                });
+                assert_eq!(stopped_res, None);
+                assert_eq!(early_stopped.len(), 2);
+            }
+        }
+    }
 }
+

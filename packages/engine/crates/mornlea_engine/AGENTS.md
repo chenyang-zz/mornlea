@@ -14,4 +14,4 @@
 ## 定点验证与入口
 
 - 测试：`cd packages/engine && cargo test -p mornlea_engine --locked`。
-- 当前文档入口：`docs/notes/go-rust-division.md`、`openspec/specs/rust-engine-mesh/spec.md`。
+- 当前文档入口：`docs/notes/go-rust-division.md`、`openspec/specs/rust-engine-mesh/spec.md`、`src/native/AGENTS.md`。
