@@ -97,3 +97,22 @@
   - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`: passed cleanly.
 - Review: Task Reviewer subagent approved both Spec Compliance and Code Quality.
 - Rollback: Revert `dabde346` prior to dependent provider tasks.
+
+## 2026-09-25 — Node 2.1 collision provider
+
+- Predecessor SHA: `b61f6393e32def407418d70c50b590c0d9603365`
+- Result SHA: `cc93cc9e19265f0b93167344144c2f59c324c861`
+- Implementation summary:
+  - `src/collision.rs` refactored to expose the internal resolution engine through a crate-private `CollisionCells` read view, enabling zero-copy native grid consumption without ABI re-encoding.
+  - `src/native/collision.rs` implements `CollisionOp` for `NativeCollision` and `resolve_collision`, with finite float validation and exact swept prism coverage validation (`KernelError::DisplacementOutOfBounds`).
+  - `tests/native_contract/collision.rs` exercises loaded floor/wall, unloaded neighbors, negative-zero displacement, swept boundary coverage, 4096/4097 cells, and NaN handling.
+  - `tests/numerical_migration/collision.rs` verifies bitwise parity against ABI observations.
+  - `packages/tools/cmd/runtime-oracle/kernel_collision_test.go` adds `TestKernelCollision` covering valid execution and panic handling on short input/output and invalid headers.
+- Verification:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked collision`: passed (8 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test numerical_migration --locked collision`: passed (1 test passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --lib --locked collision`: passed (14 tests passed).
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelCollision' -count=1`: passed (ok github.com/channing771/mornlea/packages/tools/cmd/runtime-oracle 0.509s).
+  - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`: passed cleanly.
+- Review: Task Reviewer subagent approved after addressing test bounds and comment hygiene in two fix rounds.
+- Rollback: Revert `cc93cc9e`.
