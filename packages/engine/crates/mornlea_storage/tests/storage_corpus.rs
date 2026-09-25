@@ -735,6 +735,24 @@ const CHUNK_CURRENT_INTEGRATED_CASE_IDS: &[&str] = &[
     "save.chunk/9/encode/v9-fixture-exact",
 ];
 
+const CHUNK_ADVERSARIAL_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.chunk/4/decode/insufficient-drop-slots",
+    "save.chunk/9/decode/active-container-mismatch",
+    "save.chunk/9/decode/checksum",
+    "save.chunk/9/decode/compressed-oversize",
+    "save.chunk/9/decode/declared-logical-oversize",
+    "save.chunk/9/decode/invalid-version-future",
+    "save.chunk/9/decode/invalid-version-zero",
+    "save.chunk/9/decode/palette-error",
+    "save.chunk/9/decode/trailing-byte",
+    "save.chunk/9/decode/truncated-envelope",
+    "save.chunk/9/decode/truncated-frame",
+    "save.chunk/9/decode/wrong-key",
+    "save.chunk/9/decode/wrong-revision",
+];
+
+const CHUNK_CROSS_INTEGRATED_CASE_IDS: &[&str] = &["save.chunk/9/decode/rust-v9-frame"];
+
 fn chunk_gate_cases(ids: &[&str], gate: fn(&str) -> bool, label: &str) -> Vec<FrozenCase> {
     use std::collections::BTreeMap;
 
@@ -787,6 +805,26 @@ fn chunk_current_corpus_executes_all_integrated_case_ids() {
         CHUNK_CURRENT_INTEGRATED_CASE_IDS,
         chunk::chunk_current_case,
         "current",
+    );
+    chunk::execute_chunk_cases(&cases);
+}
+
+#[test]
+fn chunk_adversarial_corpus_executes_all_integrated_case_ids() {
+    let cases = chunk_gate_cases(
+        CHUNK_ADVERSARIAL_INTEGRATED_CASE_IDS,
+        chunk::chunk_adversarial_case,
+        "adversarial",
+    );
+    chunk::execute_chunk_cases(&cases);
+}
+
+#[test]
+fn chunk_cross_corpus_executes_all_integrated_case_ids() {
+    let cases = chunk_gate_cases(
+        CHUNK_CROSS_INTEGRATED_CASE_IDS,
+        chunk::chunk_cross_case,
+        "cross",
     );
     chunk::execute_chunk_cases(&cases);
 }

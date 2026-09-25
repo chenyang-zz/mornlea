@@ -77,6 +77,9 @@ pub const CHUNK_REGISTERED_ROUTES: &[ChunkRoute] = &[
 ];
 
 pub fn chunk_legacy_early_case(id: &str) -> bool {
+    if chunk_adversarial_case(id) {
+        return false;
+    }
     id.starts_with("save.chunk/1/decode/")
         || id.starts_with("save.chunk/2/decode/")
         || id.starts_with("save.chunk/3/decode/")
@@ -84,6 +87,9 @@ pub fn chunk_legacy_early_case(id: &str) -> bool {
 }
 
 pub fn chunk_legacy_late_case(id: &str) -> bool {
+    if chunk_adversarial_case(id) || chunk_cross_case(id) {
+        return false;
+    }
     id.starts_with("save.chunk/5/decode/")
         || id.starts_with("save.chunk/6/decode/")
         || id.starts_with("save.chunk/7/decode/")
@@ -93,6 +99,9 @@ pub fn chunk_legacy_late_case(id: &str) -> bool {
 }
 
 pub fn chunk_current_case(id: &str) -> bool {
+    if chunk_adversarial_case(id) || chunk_cross_case(id) {
+        return false;
+    }
     id.starts_with("save.chunk/9/decode/v9-fluid-fixture")
         || id.starts_with("save.chunk/9/decode/v9-chest-registry")
         || id.starts_with("save.chunk/9/encode/")
