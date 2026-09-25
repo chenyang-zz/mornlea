@@ -212,6 +212,16 @@ This codec change claims no implementation or runtime gate. At implementation cl
 - Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 57/57 including nonempty `chunk_legacy_early_`; `runtime_contract chunk_` 10/10.
 - Architecture skill: no change. The external compact-export handoff is already the corpus-contract rule.
 
+## 2026-09-25 — SDD execution: node 4.3b closed
+
+- Commits: `e6f5de7d` late and current chunk producers; `42bf54fb` v9 registry pin; `16ec27d2` integration of thirteen `save.chunk` cases, decode routes 5–9, and encode route 9.
+- Approved candidates: compact `/tmp/runtime-oracle-chunk-4.3b-late-fix/chunk/migration/` (10 decode cases) and `/tmp/runtime-oracle-chunk-4.3b-current-fix/runtime-oracle/storage-chunk/` (2 decode cases and 1 logical encode). The non-fix trees were not imported.
+- Reviews of the producer, the pin, and the integration approved. No remaining Critical or Important findings.
+- Minor findings held for the final review: v5 drop-slot equality is structural zeros; `chunk_current_routes_recognize_registered_paths` does not call `execute_chunk_encode`; `storage_manifest_test.go` aligns one new `true` at a different column.
+- `save.chunk` has 21 cases. `save.region` stays at 26. `save.player` stays at 37. `save.world-metadata` stays at 15. `save.hostile` stays at 50. `save.passive` stays at 70. Save total is 219. `source_revision` stays `b6043f004176055a2e39a98508b662691c3e4ef7`.
+- Gates reported for the integration commit: `go test ./packages/tools/cmd/runtime-oracle -count=1` pass; Rust `storage_corpus` 63/63 including nonempty `chunk_legacy_late_` and `chunk_current_`; `runtime_contract chunk_` 10/10. The reviewer did not re-run those commands.
+- Architecture skill: no change. The external compact-export handoff is already the corpus-contract rule.
+
 ## Implementation evidence
 
 ### Node 1.1 — source-bound save selections
