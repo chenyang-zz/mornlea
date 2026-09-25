@@ -129,7 +129,10 @@ func Discover(root string) ([]Family, Identities, error) {
 				"packages/tools/cmd/runtime-oracle/storage_player_test.go",
 			)),
 		saveFamily(root, "save.companion", strconv.Itoa(companionCurrent), intsToStrings(companionSupported),
-			"packages/server/storage/companion/companion_codec.go", versionedBins("packages/server/storage/companion/testdata", "companions", companionSupported)),
+			"packages/server/storage/companion/companion_codec.go", append(
+				versionedBins("packages/server/storage/companion/testdata", "companions", companionSupported),
+				"packages/tools/cmd/runtime-oracle/storage_companion_test.go",
+			)),
 		saveFamily(root, "save.hostile", strconv.Itoa(hostileCurrent), intsToStrings(hostileSupported),
 			"packages/server/storage/hostile/hostile_codec.go", append(
 				versionedBins("packages/server/storage/hostile/testdata", "hostile-mobs", hostileSupported),

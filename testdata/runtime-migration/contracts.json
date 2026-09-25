@@ -3956,6 +3956,10 @@
       "numeric_semantics": "little-endian integers; CRC integrity; exact byte round-trip; no implicit repair",
       "sources": [
         {
+          "path": "packages/server/storage/companion/companion_codec.go",
+          "sha256": "sha256:f86bae1d81ba6cfb2332274de86a4789de627f85d3d0f7221fe545367957ec6d"
+        },
+        {
           "path": "packages/server/storage/companion/testdata/companions-v1.bin",
           "sha256": "sha256:0153f16082e8b1ac5e47ac7d4a22d8cfb117fe2fc222bd46bec9b116d394120c"
         },
@@ -3974,9 +3978,22 @@
         {
           "path": "packages/server/storage/companion/testdata/companions-v5.bin",
           "sha256": "sha256:9f267e9d1fbcb7f4a83d38c699595d1d5ab4c02d13cab54cc0db8d7b16c89391"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/storage_companion_test.go",
+          "sha256": "sha256:94593a2ba06b7f76c08482e6ef648794f0bde3f2afa36538df7f9db06662b492"
         }
       ],
-      "cases": null
+      "cases": [
+        "save.companion/1/decode/truncated-payload",
+        "save.companion/1/decode/v1-fixture",
+        "save.companion/2/decode/corrupt-crc",
+        "save.companion/2/decode/v2-fixture",
+        "save.companion/3/decode/invalid-version-zero",
+        "save.companion/3/decode/v3-fixture",
+        "save.companion/4/decode/invalid-version-future",
+        "save.companion/4/decode/v4-fixture"
+      ]
     },
     {
       "id": "save.hostile",
@@ -28762,6 +28779,166 @@
       "encoded": {
         "path": "testdata/runtime-migration/cases/storage/chunk/save.chunk_9_encode_v9-fixture-exact.encoded.bin",
         "sha256": "sha256:d73887f1b7e1c9221ce2e98a43e299dd157915bd3a73fb7b1084cc3404e5df4e"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.companion/1/decode/truncated-payload",
+      "family": "save.companion",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_1_decode_truncated-payload.input.bin",
+        "sha256": "sha256:f0d0d82ea2896b1ddacad3ad5f7f855cb0a86b3db87c9b654b0968f36f3ce58a"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_1_decode_truncated-payload.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.companion/1/decode/v1-fixture",
+      "family": "save.companion",
+      "version": "1",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_1_decode_v1-fixture.input.bin",
+        "sha256": "sha256:0153f16082e8b1ac5e47ac7d4a22d8cfb117fe2fc222bd46bec9b116d394120c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_1_decode_v1-fixture.expected.json",
+        "sha256": "sha256:8c4d9950a189858c795cb051f36207b041f41482452090cd9ac09b60a8008608"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.companion/2/decode/corrupt-crc",
+      "family": "save.companion",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_2_decode_corrupt-crc.input.bin",
+        "sha256": "sha256:2eead4cc74e0c82079cc28d8472d051a74847480f66441519f86d1dc39fc59f6"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_2_decode_corrupt-crc.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.companion/2/decode/v2-fixture",
+      "family": "save.companion",
+      "version": "2",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_2_decode_v2-fixture.input.bin",
+        "sha256": "sha256:b919eaa4bfac80d676645980b759414a05370361958efe83f5c3c47e68f65db3"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_2_decode_v2-fixture.expected.json",
+        "sha256": "sha256:df55e00d52fa62dccce052df72ac632a7b0e7ec4419f53f0fb6e1d6a4f22eb36"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.companion/3/decode/invalid-version-zero",
+      "family": "save.companion",
+      "version": "3",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_3_decode_invalid-version-zero.input.bin",
+        "sha256": "sha256:8f5661281e77f1dc348dc7c05cd91d97909b09457e7e172fd20617bcbb3cff4e"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_3_decode_invalid-version-zero.expected.json",
+        "sha256": "sha256:bcaa0bbb83c24b9e8f6a4778fb0ce4c25808b76fd18b26d84b1b52106ab99e79"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.companion/3/decode/v3-fixture",
+      "family": "save.companion",
+      "version": "3",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_3_decode_v3-fixture.input.bin",
+        "sha256": "sha256:3c004af9be5fa57bd25ae6dca6b63fc6beeceb60d269b9b568ff4c5fae05e05d"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_3_decode_v3-fixture.expected.json",
+        "sha256": "sha256:5c337e41adf6cdb46056243b93525a5036bffc094ca960f957f0d17f8ca127ad"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.companion/4/decode/invalid-version-future",
+      "family": "save.companion",
+      "version": "4",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_4_decode_invalid-version-future.input.bin",
+        "sha256": "sha256:017ba3dd93e5e73671544817cccc74a5a48358dad5bef9940f23461145494c34"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_4_decode_invalid-version-future.expected.json",
+        "sha256": "sha256:a525fa8b2a3a83c483dde06e0e9a39ddaff1890264a44785949a3bc757098e51"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_storage"
+    },
+    {
+      "id": "save.companion/4/decode/v4-fixture",
+      "family": "save.companion",
+      "version": "4",
+      "operation": "decode",
+      "arguments": {},
+      "input": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_4_decode_v4-fixture.input.bin",
+        "sha256": "sha256:6f8a81ee7c096a63e935e27a408797b88925b077145ad9bd704d844a61ffbea9"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/storage/companion/save.companion_4_decode_v4-fixture.expected.json",
+        "sha256": "sha256:16f20bc77c69035baf9fbf73816b7993ea337c3aabc0f4c70f14434f9fdffdce"
       },
       "checkpoints": [
         "0"

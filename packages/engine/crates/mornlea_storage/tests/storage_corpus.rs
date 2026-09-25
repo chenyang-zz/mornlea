@@ -221,6 +221,26 @@ const REGISTERED_STORAGE_ROUTES: &[StorageRoute] = &[
         version: "9",
         operation: "encode",
     },
+    StorageRoute {
+        family: "save.companion",
+        version: "1",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.companion",
+        version: "2",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.companion",
+        version: "3",
+        operation: "decode",
+    },
+    StorageRoute {
+        family: "save.companion",
+        version: "4",
+        operation: "decode",
+    },
 ];
 
 fn route_is_registered_for_case(case: &FrozenCase) -> bool {
@@ -305,6 +325,14 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
     if !chunk_cases.is_empty() {
         chunk::execute_chunk_cases(&chunk_cases);
     }
+    let companion_cases: Vec<FrozenCase> = cases
+        .iter()
+        .filter(|case| case.family == "save.companion")
+        .cloned()
+        .collect();
+    if !companion_cases.is_empty() {
+        companion::execute_companion_cases(&companion_cases);
+    }
     let other = cases
         .iter()
         .filter(|case| {
@@ -314,6 +342,7 @@ fn execute_storage_selection(cases: &[FrozenCase]) {
                 && case.family != "save.hostile"
                 && case.family != "save.passive"
                 && case.family != "save.chunk"
+                && case.family != "save.companion"
         })
         .count();
     if other > 0 {
@@ -830,4 +859,54 @@ fn chunk_cross_corpus_executes_all_integrated_case_ids() {
         "cross",
     );
     chunk::execute_chunk_cases(&cases);
+}
+
+const COMPANION_LEGACY_INTEGRATED_CASE_IDS: &[&str] = &[
+    "save.companion/1/decode/truncated-payload",
+    "save.companion/1/decode/v1-fixture",
+    "save.companion/2/decode/corrupt-crc",
+    "save.companion/2/decode/v2-fixture",
+    "save.companion/3/decode/invalid-version-zero",
+    "save.companion/3/decode/v3-fixture",
+    "save.companion/4/decode/invalid-version-future",
+    "save.companion/4/decode/v4-fixture",
+];
+
+fn companion_gate_cases(ids: &[&str], gate: fn(&str) -> bool, label: &str) -> Vec<FrozenCase> {
+    use std::collections::BTreeMap;
+
+    let cases: Vec<FrozenCase> = load_cases_for_consumer(CorpusConsumer::Storage)
+        .into_iter()
+        .filter(|case| case.family == "save.companion" && gate(&case.id))
+        .collect();
+    let found: BTreeMap<&str, &FrozenCase> = cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect();
+    for id in ids {
+        if !found.contains_key(id) {
+            panic!("integrated manifest missing {label} companion case {id}");
+        }
+    }
+    if cases.is_empty() {
+        panic!("integrated manifest selected zero save.companion cases");
+    }
+    if cases.len() != ids.len() {
+        panic!(
+            "integrated manifest has {} {label} save.companion cases, want {}",
+            cases.len(),
+            ids.len()
+        );
+    }
+    cases
+}
+
+#[test]
+fn companion_legacy_corpus_executes_all_integrated_case_ids() {
+    let cases = companion_gate_cases(
+        COMPANION_LEGACY_INTEGRATED_CASE_IDS,
+        companion::companion_legacy_case,
+        "legacy",
+    );
+    companion::execute_companion_cases(&cases);
 }

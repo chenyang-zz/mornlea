@@ -13,6 +13,65 @@ import (
 	"github.com/channing771/mornlea/packages/server/storage/storagedef"
 )
 
+func TestStorageCompanionLegacyIntegratedCorpusExecutesEverySelectionID(t *testing.T) {
+	root, err := RepositoryRoot()
+	if err != nil {
+		t.Fatalf("repository root: %v", err)
+	}
+	frozen, err := LoadInventory(filepath.Join(root, filepath.FromSlash(InventoryRelPath)))
+	if err != nil {
+		t.Fatalf("load frozen manifest: %v", err)
+	}
+	wantIDs := map[string]bool{
+		"save.companion/1/decode/v1-fixture":              true,
+		"save.companion/1/decode/truncated-payload":     true,
+		"save.companion/2/decode/v2-fixture":              true,
+		"save.companion/2/decode/corrupt-crc":           true,
+		"save.companion/3/decode/v3-fixture":              true,
+		"save.companion/3/decode/invalid-version-zero":   true,
+		"save.companion/4/decode/v4-fixture":              true,
+		"save.companion/4/decode/invalid-version-future": true,
+	}
+	var companionCases []CaseSpec
+	for _, c := range frozen.Cases {
+		if c.Family == "save.companion" && wantIDs[c.ID] {
+			companionCases = append(companionCases, c)
+		}
+	}
+	if len(companionCases) == 0 {
+		t.Fatal("integrated manifest selected zero save.companion cases")
+	}
+	if len(companionCases) != len(wantIDs) {
+		t.Fatalf("integrated companion case count = %d, want %d", len(companionCases), len(wantIDs))
+	}
+	manifest := frozen
+	manifest.Cases = companionCases
+	observations, err := RunStorageCases(root, manifest, map[ConsumerRoute]GoOperation{
+		{FamilyID: "save.companion", Version: "1", Operation: "decode"}: runCompanionDecode,
+		{FamilyID: "save.companion", Version: "2", Operation: "decode"}: runCompanionDecode,
+		{FamilyID: "save.companion", Version: "3", Operation: "decode"}: runCompanionDecode,
+		{FamilyID: "save.companion", Version: "4", Operation: "decode"}: runCompanionDecode,
+	})
+	if err != nil {
+		t.Fatalf("RunStorageCases: %v", err)
+	}
+	if len(observations) != len(companionCases) {
+		t.Fatalf("produced %d observations, want %d", len(observations), len(companionCases))
+	}
+	for id := range wantIDs {
+		found := false
+		for _, obs := range observations {
+			if obs.CaseID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no observation for case %s", id)
+		}
+	}
+}
+
 func TestStorageSelectionValidateStorageArguments(t *testing.T) {
 	t.Run("player rejects missing id", func(t *testing.T) {
 		err := validateStorageArguments("save.player", "decode", json.RawMessage(`{}`))
@@ -388,6 +447,14 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		"save.chunk/9/decode/v9-chest-registry":                    true,
 		"save.chunk/9/decode/v9-fluid-fixture":                     true,
 		"save.chunk/9/encode/v9-fixture-exact":                       true,
+		"save.companion/1/decode/truncated-payload":                  true,
+		"save.companion/1/decode/v1-fixture":                         true,
+		"save.companion/2/decode/corrupt-crc":                        true,
+		"save.companion/2/decode/v2-fixture":                         true,
+		"save.companion/3/decode/invalid-version-zero":               true,
+		"save.companion/3/decode/v3-fixture":                         true,
+		"save.companion/4/decode/invalid-version-future":             true,
+		"save.companion/4/decode/v4-fixture":                         true,
 	}
 	for _, c := range frozen.Cases {
 		if !strings.HasPrefix(c.Family, "save.") {
@@ -396,8 +463,8 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 		if !wantSaveCases[c.ID] {
 			t.Fatalf("baseline carries unexpected save case %s", c.ID)
 		}
-		if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" && c.Family != "save.passive" && c.Family != "save.chunk" {
-			t.Fatalf("save case %s has family %s, want save.region, save.player, save.world-metadata, save.hostile, save.passive, or save.chunk", c.ID, c.Family)
+		if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" && c.Family != "save.passive" && c.Family != "save.chunk" && c.Family != "save.companion" {
+			t.Fatalf("save case %s has family %s, want save.region, save.player, save.world-metadata, save.hostile, save.passive, save.chunk, or save.companion", c.ID, c.Family)
 		}
 	}
 	for id := range wantSaveCases {
@@ -420,6 +487,9 @@ func TestStorageSelectionBaselinePinsSaveRegionCases(t *testing.T) {
 				}
 				if strings.HasPrefix(id, "save.chunk/") {
 					wantFamily = "save.chunk"
+				}
+				if strings.HasPrefix(id, "save.companion/") {
+					wantFamily = "save.companion"
 				}
 				if c.Family != wantFamily {
 					t.Fatalf("pinned save case %s has family %s, want %s", id, c.Family, wantFamily)

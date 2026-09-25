@@ -689,14 +689,14 @@ func TestProtocolCorpusNonProtocolEvidenceUnchanged(t *testing.T) {
 			protocolCases++
 		case strings.HasPrefix(c.Family, "save."):
 			saveCases++
-			if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" && c.Family != "save.passive" && c.Family != "save.chunk" {
-				t.Fatalf("save case %s has family %s, want save.region, save.player, save.world-metadata, save.hostile, save.passive, or save.chunk", c.ID, c.Family)
+			if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" && c.Family != "save.passive" && c.Family != "save.chunk" && c.Family != "save.companion" {
+				t.Fatalf("save case %s has family %s, want save.region, save.player, save.world-metadata, save.hostile, save.passive, save.chunk, or save.companion", c.ID, c.Family)
 			}
 		default:
 			t.Fatalf("case %s belongs to no reviewed corpus slice", c.ID)
 		}
 	}
-	if domainCases != 534 || agentCases != 154 || protocolCases != 436 || saveCases != 233 {
+	if domainCases != 534 || agentCases != 154 || protocolCases != 436 || saveCases != 241 {
 		t.Fatalf("corpus totals drifted: domain %d, agent %d, protocol %d, save %d", domainCases, agentCases, protocolCases, saveCases)
 	}
 	if _, err := ReconcileWorking(root, frozen, families, live, BaselineConsumerRegistry(), BaselineNegativeCoverageExceptions()); err != nil {
