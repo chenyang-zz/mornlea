@@ -20,7 +20,6 @@ pub mod physics;
 pub mod raycast;
 #[allow(dead_code)]
 pub(crate) mod tree;
-#[allow(dead_code)]
-pub(crate) mod world_probe;
+pub mod world_probe;
 #[allow(dead_code)]
 pub mod worldgen;
