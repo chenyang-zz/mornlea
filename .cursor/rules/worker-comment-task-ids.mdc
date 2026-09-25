@@ -1,0 +1,10 @@
+---
+description: Keep OpenSpec task identifiers out of worker-written comments.
+alwaysApply: true
+---
+
+# Worker comments and OpenSpec task IDs
+
+When developing an OpenSpec task, read the applicable change's task identifiers in `tasks.md` and linked spec or plan documents before editing. Do not put any of those identifiers in a new or substantively revised comment in first-party source, tests, scripts, or configuration files, including GoDoc and Rust doc comments. This covers dotted IDs such as `2.1` and letter-number IDs such as `F-01` when they identify tasks. Describe the feature, contract, or boundary instead.
+
+Before handing off the work, inspect added and revised comments for those identifiers. Task IDs may be used in the task brief, OpenSpec artifacts, and ledger entries; they do not belong in implementation comments. Follow the project-wide rule in `AGENTS.md`.
