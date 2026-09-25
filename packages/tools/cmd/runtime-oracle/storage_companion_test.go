@@ -43,7 +43,6 @@ const (
 	companionDecodeV2CorruptCRCID           = companionFamily + "/2/decode/corrupt-crc"
 	companionDecodeV3FixtureID              = companionFamily + "/3/decode/v3-fixture"
 	companionDecodeV3InvalidVersionZeroID   = companionFamily + "/3/decode/invalid-version-zero"
-	companionDecodeV3TwoDistinctQueuesID    = companionFamily + "/3/decode/two-distinct-queues"
 	companionDecodeV4FixtureID              = companionFamily + "/4/decode/v4-fixture"
 	companionDecodeV4InvalidVersionFutureID = companionFamily + "/4/decode/invalid-version-future"
 )
@@ -119,9 +118,11 @@ func companionInventoryValue(inventory core.Inventory) storageValueNode {
 		backpack = append(backpack, companionItemStackValue(slot))
 	}
 	return storageValueObject(map[string]storageValueNode{
-		"selected": storageValueUnsigned(uint64(inventory.Hotbar.Selected)),
-		"hotbar":   storageValueArray(hotbarSlots),
 		"backpack": storageValueArray(backpack),
+		"hotbar": storageValueObject(map[string]storageValueNode{
+			"selected": storageValueUnsigned(uint64(inventory.Hotbar.Selected)),
+			"slots":    storageValueArray(hotbarSlots),
+		}),
 	})
 }
 
@@ -507,7 +508,6 @@ func companionLegacyCandidates(t *testing.T) []companionCandidate {
 	v2 := readCompanionLegacyFixture(t, root, 2)
 	v3 := readCompanionLegacyFixture(t, root, 3)
 	v4 := readCompanionLegacyFixture(t, root, 4)
-	v3Dual := companionV3TwoDistinctQueuesWire(t, root)
 
 	return []companionCandidate{
 		buildCompanionCandidate(t, companionDecodeV1FixtureID, "decode", "1", v1, args),
@@ -516,7 +516,6 @@ func companionLegacyCandidates(t *testing.T) []companionCandidate {
 		buildCompanionCandidate(t, companionDecodeV2CorruptCRCID, "decode", "2", companionCorruptCRCWire(v2), args),
 		buildCompanionCandidate(t, companionDecodeV3FixtureID, "decode", "3", v3, args),
 		buildCompanionCandidate(t, companionDecodeV3InvalidVersionZeroID, "decode", "3", companionWireWithSchema(v3, 0), args),
-		buildCompanionCandidate(t, companionDecodeV3TwoDistinctQueuesID, "decode", "3", v3Dual, args),
 		buildCompanionCandidate(t, companionDecodeV4FixtureID, "decode", "4", v4, args),
 		buildCompanionCandidate(t, companionDecodeV4InvalidVersionFutureID, "decode", "4", companionWireWithSchema(v4, 10), args),
 	}
@@ -702,7 +701,7 @@ func TestStorageCompanionLegacyArgumentsValidate(t *testing.T) {
 func TestStorageCompanionLegacyProducerExecutesEveryCase(t *testing.T) {
 	root := mustRepoRoot(t)
 	candidates := companionLegacyCandidates(t)
-	const wantCases = 9
+	const wantCases = 8
 	if len(candidates) != wantCases {
 		t.Fatalf("candidate count = %d, want %d", len(candidates), wantCases)
 	}

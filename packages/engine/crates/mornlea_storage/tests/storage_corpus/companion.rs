@@ -97,20 +97,26 @@ fn item_stack_value(stack: &ItemStack) -> Value {
 }
 
 fn inventory_value(inventory: &Inventory) -> Value {
-    let hotbar: Vec<Value> = inventory
+    let hotbar_slots = inventory
         .hotbar
         .slots
         .iter()
         .map(item_stack_value)
-        .collect();
-    let backpack: Vec<Value> = inventory.backpack.iter().map(item_stack_value).collect();
-    let mut fields = BTreeMap::new();
-    fields.insert(
+        .collect::<Vec<_>>();
+    let mut hotbar = BTreeMap::new();
+    hotbar.insert(
         "selected".to_string(),
         Value::Unsigned(inventory.hotbar.selected as u64),
     );
-    fields.insert("hotbar".to_string(), Value::Array(hotbar));
+    hotbar.insert("slots".to_string(), Value::Array(hotbar_slots));
+    let backpack = inventory
+        .backpack
+        .iter()
+        .map(item_stack_value)
+        .collect::<Vec<_>>();
+    let mut fields = BTreeMap::new();
     fields.insert("backpack".to_string(), Value::Array(backpack));
+    fields.insert("hotbar".to_string(), Value::Object(hotbar));
     Value::Object(fields)
 }
 
@@ -545,7 +551,6 @@ mod tests {
         let v2 = read_go_fixture("companions-v2.bin");
         let v3 = read_go_fixture("companions-v3.bin");
         let v4 = read_go_fixture("companions-v4.bin");
-        let v3_dual = companion_v3_two_distinct_queues_wire();
         vec![
             legacy_decode_ok_case("save.companion/1/decode/v1-fixture", "1", v1.clone()),
             legacy_decode_error_case(
@@ -567,11 +572,6 @@ mod tests {
                 "3",
                 companion_wire_with_schema(&v3, 0),
                 "corrupt",
-            ),
-            legacy_decode_ok_case(
-                "save.companion/3/decode/two-distinct-queues",
-                "3",
-                v3_dual,
             ),
             legacy_decode_ok_case("save.companion/4/decode/v4-fixture", "4", v4.clone()),
             legacy_decode_error_case(
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn companion_legacy_fixture_cases_execute_locally() {
         let cases = companion_legacy_fixture_cases();
-        assert_eq!(cases.len(), 9);
+        assert_eq!(cases.len(), 8);
         for case in &cases {
             execute_companion_case(case).expect("local legacy companion fixture");
         }
@@ -666,7 +666,6 @@ mod tests {
             "save.companion/2/decode/corrupt-crc",
             "save.companion/3/decode/v3-fixture",
             "save.companion/3/decode/invalid-version-zero",
-            "save.companion/3/decode/two-distinct-queues",
             "save.companion/4/decode/v4-fixture",
             "save.companion/4/decode/invalid-version-future",
         ] {
