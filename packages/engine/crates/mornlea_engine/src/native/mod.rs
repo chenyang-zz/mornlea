@@ -18,8 +18,7 @@ pub(crate) mod pathfind;
 pub mod physics;
 #[allow(dead_code)]
 pub mod raycast;
-#[allow(dead_code)]
-pub(crate) mod tree;
+pub mod tree;
 pub mod world_probe;
 #[allow(dead_code)]
 pub mod worldgen;
