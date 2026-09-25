@@ -1,24 +1,27 @@
-Implementation is blocked on the accepted prerequisite evidence named in `design.md`. New test targets and scripts below are prospective: create them in the stated task, assert nonzero test discovery, then record red/green results. All commands run from the repository root; direct Cargo commands explicitly use the toolchain pinned by `packages/engine/rust-toolchain.toml`.
+# godot-desktop-packaging implementation tasks
 
-## 1. Prerequisite and test registration
+All nodes are pending. [Worker packets](plans/worker-packets.md) define exact readiness, ownership, interfaces, concrete red/green cases, commands, exclusions and rollback. New targets/scripts are prospective until their owning node lands. `ledger.md` binds source/package/fixture identity and the accepted contract SHA to nonzero test counts and scoped commits. A mock, plan validation or candidate capture cannot substitute for real integration or required approval.
 
-- [ ] 1.1 In `ledger.md`, bind [F1](../rust-runtime-foundation/proposal.md), [F2](../rust-authoritative-server/proposal.md), and [F3](../rust-client-core/proposal.md) acceptance to the SHA under test and list the exact required semantic families. Reject missing prerequisite acceptance or unverified compatibility. Inspect `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --locked --no-deps --format-version 1`, run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server -p mornlea_client_core -p mornlea_godot --locked -- --list`, and record actual nonzero discovery; this inventory supplements, rather than substitutes for, the prerequisite ledgers.
-- [ ] 1.2 Register `packages/engine/crates/mornlea_client_core/tests/local_release_contract.rs` and the feature's scoped Godot harness cases; start with failing cases named by this specification, then implement each following node against them. Verify discovery with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test local_release_contract --locked -- --list` and red/green execution with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test local_release_contract --locked`.
+See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
-## 2. Local launch and release harness
+## 1. Prerequisite and contract gate
 
-- [ ] 2.1 In Rust client-core local supervision and `tests/local_release_contract.rs`, add failing startup/cancel/child-exit/duplicate-writer cases before implementing supervised loopback launch; consume the F2 server binary without changing authoritative semantics. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test local_release_contract --locked` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --locked`.
-- [ ] 2.2 In `apps/mornlea-godot/platform/desktop/`, add launch/progress/cancel presentation over typed views and harness cases before implementation. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test local_release_contract --locked`, `make godot-python-check`, and `make godot-project-check`.
-- [ ] 2.3 Create `scripts/godot/desktop-release-check.sh` and release audit fixtures with nonzero discovery and failing escaped-resource/wrong-target/system-Python/tooling-inclusion cases before package assembly. Verify with `scripts/godot/desktop-release-check.sh --self-test` and `go test ./packages/audit -run 'GodotPythonIsolation|GodotDesktopOnly|ReleaseUnit' -count=1`; self-test uses temporary fixtures and does not qualify a platform.
+- [ ] 1.1 Inventory exact release assets, dependencies, target and backup identities.
+- [ ] 1.2 Register nonempty launcher/release harness with behavioral red.
+## 2. Independent providers and serial integration
 
-## 3. Target qualification and rollback
+- [ ] 2.1 Implement supervised Rust server child over loopback TCP.
+- [ ] 2.2 Implement typed Godot launch progress and cancellation.
+- [ ] 2.3 Implement relocatable package asset/export resolver.
+- [ ] 2.4 Integrate strict desktop release closure harness.
+## 3. Qualification, handoff or cutover
 
-- [ ] 3.1 Build and qualify the macOS release closure and relevant `export_presets.cfg` entry; record license/checksum, editor/headless/export, repeated teardown, and native diagnostic evidence. Verify on macOS with `scripts/godot/desktop-release-check.sh --target macos --run-dir build/release-evidence/macos` and `make godot-project-check`.
-- [ ] 3.2 Build and qualify the Windows release closure with only its native/Python payloads; record the same independent evidence. Verify on Windows with `scripts/godot/desktop-release-check.sh --target windows --run-dir build/release-evidence/windows` and `make godot-project-check` through the supported shell toolchain.
-- [ ] 3.3 Build and qualify the Linux release closure with only its native/Python payloads; record the same independent evidence. Verify on Linux with `scripts/godot/desktop-release-check.sh --target linux --run-dir build/release-evidence/linux` and `make godot-project-check`.
-- [ ] 3.4 In `tests/local_release_contract.rs` and release fixtures, replay local/remote parity, save failure/recovery, and complete previous-release restore using temporary worlds; record F2 storage compatibility evidence and backup identities in `ledger.md`. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test local_release_contract --locked` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server -p mornlea_storage --locked`.
-- [ ] 3.5 After P12 phase 2 capture/report acceptance is recorded in `ledger.md`, produce semantic and candidate evidence for `release` using the explicit run directory `build/visual/migration/release`. Verify with `scripts/godot/migration-evidence.sh --feature release --run-dir build/visual/migration/release --strict` and `go test ./packages/audit -run VisualBaselineRouting -count=1`. Obtain per-case human review and explicit handoff approval before any canonical producer or tracked-image update; otherwise keep candidate status and the previous producer.
+- [ ] 3.1 Qualify macOS package on macOS.
+- [ ] 3.2 Qualify Windows package on Windows.
+- [ ] 3.3 Qualify Linux package on Linux.
+- [ ] 3.4 Prove save failure/recovery and complete previous-release restore.
+- [ ] 3.5 Capture untracked candidate release evidence after P12 phase 2.
 ## 4. Closeout
 
-- [ ] 4.1 Update this change's `ledger.md`, affected directory guides, and current architecture documentation only for behavior actually implemented; record source SHA, prerequisite evidence, tests discovered/executed, review, rollback, and architecture-skill ruling. Verify with `git diff --check` and `openspec validate godot-desktop-packaging --type change --strict --no-interactive`.
-- [ ] 4.2 Run formatting and full implementation gates: `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check` (including six-module vet), `make test-race` (all six Go modules), and `openspec validate --all --strict --no-interactive`. Record each actual result and tested SHA in `ledger.md`; do not mark implementation complete while any required platform, parity, or rollback case is unverified.
+- [ ] 4.1 Reconcile supported target/package coverage, guides and rollback.
+- [ ] 4.2 Run complete implementation stage gates.

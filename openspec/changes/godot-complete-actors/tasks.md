@@ -1,22 +1,29 @@
-Implementation is blocked on the accepted prerequisite evidence named in `design.md`. New test targets and scripts below are prospective: create them in the stated task, assert nonzero test discovery, then record red/green results. All commands run from the repository root; direct Cargo commands explicitly use the toolchain pinned by `packages/engine/rust-toolchain.toml`.
+# godot-complete-actors implementation tasks
 
-## 1. Prerequisite and test registration
+All nodes are pending. [Worker packets](plans/worker-packets.md) define exact readiness, files, interfaces, cases, commands, exclusions and rollback. New tests/scripts are prospective until their owning node lands. `ledger.md` records accepted prerequisite SHA, fixture identity, behavioral red/green, nonzero discovery, scoped commits and integration evidence. Shared registries, catalogs and real integration have one serial controller owner.
 
-- [ ] 1.1 In `ledger.md`, bind [F1](../rust-runtime-foundation/proposal.md), [F2](../rust-authoritative-server/proposal.md), and [F3](../rust-client-core/proposal.md) acceptance to the SHA under test and list the exact required semantic families. Reject missing prerequisite acceptance or unverified compatibility. Inspect `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --locked --no-deps --format-version 1`, run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core -p mornlea_godot --locked -- --list`, and record actual nonzero discovery; this inventory supplements, rather than substitutes for, the prerequisite ledgers.
-- [ ] 1.2 Register `packages/engine/crates/mornlea_client_core/tests/actor_contract.rs` and the feature's scoped Godot harness cases; start with failing cases named by this specification, then implement each following node against them. Verify discovery with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test actor_contract --locked -- --list` and red/green execution with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test actor_contract --locked`.
+See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
-## 2. Typed families and feature lifecycle
+## 1. Prerequisite and contract gate
 
-- [ ] 2.1 In `packages/engine/crates/mornlea_client_core/tests/actor_contract.rs` and the Rust entity family, implement red-first companions/hostiles/passives identity, ordering, interpolation-input, and bounded batch cases. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test actor_contract --locked`.
-- [ ] 2.2 Extend the same suite for projectiles, viewmodel, and confirmed effects before publishing those Rust semantic families. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test actor_contract --locked` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_godot --locked`.
-- [ ] 2.3 In `apps/mornlea-godot/features/actors/` and `scripts/godot/entity-check.sh`, add failing spawn/update/despawn, pool reuse, occlusion, and disable harness cases before Python actor implementation. Verify with `make godot-entity-check`, `make godot-python-check`, and `make godot-project-check`.
-- [ ] 2.4 In `apps/mornlea-godot/features/effects/` and `features/viewmodel/`, extend the entity harness with reset/cancellation/timing cases before implementation; record directory-guide ownership. Verify with `make godot-entity-check`, `make godot-python-check`, and `make godot-smoke`.
+- [ ] 1.1 Inventory all supported actor kinds, effects and motion cases.
+- [ ] 1.2 Register nonempty actor contract/harness with behavioral red.
+## 2. Parallel capability slices
 
-## 3. Replay and visual acceptance
+- [ ] 2.1 Implement remote-player and player-view presentation.
+- [ ] 2.2 Implement companion presentation.
+- [ ] 2.3 Implement hostile presentation.
+- [ ] 2.4 Implement passive presentation.
+- [ ] 2.5a Implement projectile presentation.
+- [ ] 2.5b Implement drop presentation.
+- [ ] 2.6a Implement viewmodel presentation.
+- [ ] 2.6b Implement name-tag presentation.
+- [ ] 2.6c Implement confirmed effects presentation.
+## 3. Serial assembly and evidence
 
-- [ ] 3.1 In `packages/engine/crates/mornlea_client_core/tests/actor_contract.rs`, replay the recorded legacy actor corpus offline and reject duplicate/backward/overflow cases; record per-kind coverage and fixture identities in `ledger.md`. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test actor_contract --locked`.
-- [ ] 3.2 After P12 phase 2 capture/report acceptance is recorded in `ledger.md`, produce semantic and candidate evidence for `actors` using the explicit run directory `build/visual/migration/actors`. Verify with `scripts/godot/migration-evidence.sh --feature actors --run-dir build/visual/migration/actors --strict` and `go test ./packages/audit -run VisualBaselineRouting -count=1`. Obtain per-case human review and explicit handoff approval before any canonical producer or tracked-image update; otherwise keep candidate status and the previous producer.
+- [ ] 3.1 Assemble actor catalog and real F2/F3/G1 parity.
+- [ ] 3.2 Capture untracked visual and motion candidates after P12 phase 2.
 ## 4. Closeout
 
-- [ ] 4.1 Update this change's `ledger.md`, affected directory guides, and current architecture documentation only for behavior actually implemented; record source SHA, prerequisite evidence, tests discovered/executed, review, rollback, and architecture-skill ruling. Verify with `git diff --check` and `openspec validate godot-complete-actors --type change --strict --no-interactive`.
-- [ ] 4.2 Run formatting and full implementation gates: `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check` (including six-module vet), `make test-race` (all six Go modules), and `openspec validate --all --strict --no-interactive`. Record each actual result and tested SHA in `ledger.md`; do not mark implementation complete while any required platform, parity, or rollback case is unverified.
+- [ ] 4.1 Reconcile per-kind coverage, guides and rollback.
+- [ ] 4.2 Run complete implementation stage gates.

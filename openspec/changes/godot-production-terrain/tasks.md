@@ -1,20 +1,26 @@
-Implementation is blocked on the accepted prerequisite evidence named in `design.md`. New test targets and scripts below are prospective: create them in the stated task, assert nonzero test discovery, then record red/green results. All commands run from the repository root; direct Cargo commands explicitly use the toolchain pinned by `packages/engine/rust-toolchain.toml`.
+# godot-production-terrain implementation tasks
 
-## 1. Prerequisite and test registration
+All nodes are pending. [Worker packets](plans/worker-packets.md) define exact readiness, files, interfaces, cases, commands, exclusions and rollback. New tests/scripts are prospective until their owning node lands. `ledger.md` records accepted prerequisite SHA, fixture identity, behavioral red/green, nonzero discovery, scoped commits and integration evidence. Shared registries, catalogs and real integration have one serial controller owner.
 
-- [ ] 1.1 In `ledger.md`, bind [F1](../rust-runtime-foundation/proposal.md), [F2](../rust-authoritative-server/proposal.md), and [F3](../rust-client-core/proposal.md) acceptance to the SHA under test and list the exact required semantic families. Reject missing prerequisite acceptance or unverified compatibility. Inspect `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --locked --no-deps --format-version 1`, run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core -p mornlea_godot --locked -- --list`, and record actual nonzero discovery; this inventory supplements, rather than substitutes for, the prerequisite ledgers.
-- [ ] 1.2 Register `packages/engine/crates/mornlea_client_core/tests/terrain_contract.rs` and the feature's scoped Godot harness cases; start with failing cases named by this specification, then implement each following node against them. Verify discovery with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test terrain_contract --locked -- --list` and red/green execution with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test terrain_contract --locked`.
+See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
-## 2. Rust publication and Godot resources
+## 1. Prerequisite and contract gate
 
-- [ ] 2.1 In `packages/engine/crates/mornlea_client_core` and `mornlea_godot`, implement the failing epoch/revision, near/far visibility, material-class, LOD, capacity, and reset cases against F3's semantic family; reuse `mornlea_engine` kernels. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test terrain_contract --locked` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine -p mornlea_godot --locked`.
-- [ ] 2.2 In `apps/mornlea-godot/features/world/` and `scripts/godot/godot-terrain-check.sh`, add failing pool, upload-budget, delayed-completion, and repeated-teardown harness cases before implementing Python presentation. Update the feature guide if ownership changes. Verify with `make godot-terrain-check`, `make godot-python-check`, and `make godot-project-check`.
+- [ ] 1.1 Inventory every supported terrain/material/LOD case and freeze bounds.
+- [ ] 1.2 Register nonempty Rust/Godot terrain harness and behavioral red.
+## 2. Parallel capability slices
 
-## 3. Parity and staged handoff
+- [ ] 2.1 Implement typed native bulk conversion.
+- [ ] 2.2 Implement bounded Godot resource pool.
+- [ ] 2.3 Implement stale-safe preparation completion.
+- [ ] 2.4 Implement near-terrain Python scene consumer.
+- [ ] 2.5a Implement independent terrain LOD consumer.
+- [ ] 2.5b Implement material, light and fog shaders.
+## 3. Serial assembly and evidence
 
-- [ ] 3.1 In `packages/engine/crates/mornlea_client_core/tests/terrain_contract.rs`, add recorded legacy input/world parity cases before enabling the catalog entry; include negative overflow and stale-completion cases. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test terrain_contract --locked` and `make godot-smoke`; record fixture hashes and the accepted F2 server identity in `ledger.md`.
-- [ ] 3.2 After P12 phase 2 capture/report acceptance is recorded in `ledger.md`, produce semantic and candidate evidence for `world` using the explicit run directory `build/visual/migration/world`. Verify with `scripts/godot/migration-evidence.sh --feature world --run-dir build/visual/migration/world --strict` and `go test ./packages/audit -run VisualBaselineRouting -count=1`. Obtain per-case human review and explicit handoff approval before any canonical producer or tracked-image update; otherwise keep candidate status and the previous producer.
+- [ ] 3.1 Assemble real F2/F3/G1 terrain replay and enable qualified profile.
+- [ ] 3.2 Capture untracked candidate visual evidence after P12 phase 2.
 ## 4. Closeout
 
-- [ ] 4.1 Update this change's `ledger.md`, affected directory guides, and current architecture documentation only for behavior actually implemented; record source SHA, prerequisite evidence, tests discovered/executed, review, rollback, and architecture-skill ruling. Verify with `git diff --check` and `openspec validate godot-production-terrain --type change --strict --no-interactive`.
-- [ ] 4.2 Run formatting and full implementation gates: `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check` (including six-module vet), `make test-race` (all six Go modules), and `openspec validate --all --strict --no-interactive`. Record each actual result and tested SHA in `ledger.md`; do not mark implementation complete while any required platform, parity, or rollback case is unverified.
+- [ ] 4.1 Reconcile coverage, guides and rollback.
+- [ ] 4.2 Run complete implementation stage gates.
