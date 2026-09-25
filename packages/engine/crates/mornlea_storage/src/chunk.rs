@@ -783,8 +783,7 @@ fn fill_logical_scratch(
     chunk: &Chunk,
     schema: u32,
 ) {
-    scratch.clear();
-    let mut logical = ByteWriter::new();
+    let mut logical = ByteWriter::from_vec(std::mem::take(scratch));
     write_logical_payload(&mut logical, key, revision, chunk, schema);
     *scratch = logical.into_vec();
 }
@@ -1791,6 +1790,30 @@ mod tests {
         assert_eq!(decoded.chunk, save.chunk);
         assert_eq!(decoded.schema, CURRENT_SCHEMA);
         assert!(!decoded.migrated);
+    }
+
+    #[test]
+    fn reusable_codec_keeps_logical_scratch_allocation() {
+        let save = ChunkSave {
+            key: ChunkKey {
+                dimension: OVERWORLD,
+                x: 1,
+                z: 2,
+            },
+            revision: 1,
+            chunk: air_chunk(),
+        };
+        let mut codec = ChunkCodec::try_new().expect("create codec");
+        let mut output = [0u8; 4096];
+        codec.encode_into(&save, &mut output).expect("first encode");
+        let original = codec.logical_scratch.as_ptr();
+        let capacity = codec.logical_scratch.capacity();
+        assert!(capacity > 0);
+        codec
+            .encode_into(&save, &mut output)
+            .expect("second encode");
+        assert_eq!(codec.logical_scratch.as_ptr(), original);
+        assert_eq!(codec.logical_scratch.capacity(), capacity);
     }
 
     #[test]

@@ -87,6 +87,13 @@ impl ByteWriter {
         Self { data: Vec::new() }
     }
 
+    /// Reuses a caller-owned allocation after the caller has validated the
+    /// complete record, avoiding a fresh logical buffer on every encode.
+    pub(crate) fn from_vec(mut data: Vec<u8>) -> Self {
+        data.clear();
+        Self { data }
+    }
+
     pub(crate) fn u8(&mut self, value: u8) {
         self.data.push(value);
     }
