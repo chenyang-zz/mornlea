@@ -52,4 +52,4 @@
 ## 5. Whole-storage acceptance
 
 - [x] 5.1 [Prove seven-family zero-gap route and mutation closure](plans/04-closure.md#node-5-1). Go `storage_coverage_test.go`, Rust `storage_corpus.rs`, reviewed `contracts.json`; run `go test ./packages/tools/cmd/runtime-oracle -run '^TestStorageCorpus' -count=1` and Rust `--test storage_corpus`.
-- [ ] 5.2 [Run complete stage gates and record rollback evidence](plans/04-closure.md#node-5-2). Run format, `make rust-check`, `make dev-check`, `make test-race`, audit and strict OpenSpec; bind result SHA/case counts/source revision in `ledger.md`.
+- [x] 5.2 [Run complete stage gates and record rollback evidence](plans/04-closure.md#node-5-2). Run format, `make rust-check`, `make dev-check`, `make test-race`, audit and strict OpenSpec; bind result SHA/case counts/source revision in `ledger.md`.
