@@ -9,10 +9,10 @@ use mornlea_storage::{
     COMPANION_MAX_FIFO_ENTRIES, COMPANION_MAX_FILE_LENGTH, COMPANION_MAX_PLAN_STEPS,
     COMPANION_MAX_STORED, COMPANION_MAX_SUMMARY_BYTES, COMPANION_MAX_TASK_COMMAND_BYTES,
     COMPANION_PLAN_STEP_FOLLOW, COMPANION_PLAN_STEP_GO_TO, COMPANION_PLAN_STEP_MINE,
-    COMPANION_PLAN_STEP_PLACE, COMPANION_TASK_FAIL_NONE,
-    COMPANION_TASK_RUNNING, CompanionBody, CompanionSave, Inventory, ItemStack, PlanStep, PlayerId,
-    StorageError, StoredCompanionLifecycle, StoredCompanionQueue, StoredCompanionTask,
-    companions_encoded_len, decode_companions, encode_companions, encode_companions_into,
+    COMPANION_PLAN_STEP_PLACE, COMPANION_TASK_FAIL_NONE, COMPANION_TASK_RUNNING, CompanionBody,
+    CompanionSave, Inventory, ItemStack, PlanStep, PlayerId, StorageError,
+    StoredCompanionLifecycle, StoredCompanionQueue, StoredCompanionTask, companions_encoded_len,
+    decode_companions, encode_companions, encode_companions_into,
 };
 
 struct MeasuredAllocator;
@@ -485,7 +485,7 @@ fn writer_valid_empty_queue_is_omitted_and_legacy_summary_rejected() {
         }],
     );
     assert!(matches!(
-        encode_companions_into(&with_legacy, &mut vec![0u8; 64]),
+        encode_companions_into(&with_legacy, &mut [0u8; 64]),
         Err(StorageError::Corrupt { .. })
     ));
 }
@@ -507,11 +507,17 @@ fn writer_buffer_canaries_respect_capacity() {
     assert!(short.iter().all(|&b| b == 0xA5));
 
     let mut exact = vec![0xA5; n];
-    assert_eq!(encode_companions_into(&input, &mut exact).expect("exact"), n);
+    assert_eq!(
+        encode_companions_into(&input, &mut exact).expect("exact"),
+        n
+    );
     assert_eq!(&exact, expected.as_slice());
 
     let mut larger = vec![0xA5; n + 7];
-    assert_eq!(encode_companions_into(&input, &mut larger).expect("larger"), n);
+    assert_eq!(
+        encode_companions_into(&input, &mut larger).expect("larger"),
+        n
+    );
     assert_eq!(&larger[..n], expected.as_slice());
     assert!(larger[n..].iter().all(|&b| b == 0xA5));
 }
@@ -519,7 +525,11 @@ fn writer_buffer_canaries_respect_capacity() {
 #[test]
 fn writer_invalid_input_and_short_buffer_reports_corruption_without_write() {
     let one = body(1);
-    let valid = save(vec![one.clone()], vec![lifecycle(one.id, false, 1)], Vec::new());
+    let valid = save(
+        vec![one.clone()],
+        vec![lifecycle(one.id, false, 1)],
+        Vec::new(),
+    );
     let n = companions_encoded_len(&valid).expect("length");
     let mut invalid = valid.clone();
     invalid.revision = 0;

@@ -674,19 +674,19 @@ func TestSimDependencyViolationsDetectDrift(t *testing.T) {
 }
 
 var oracleAllowedTestImports = map[string]bool{
-	"packages/shared/network/codec":     true,
-	"packages/shared/network/protocol":  true,
-	"packages/shared/core":              true,
-	"packages/shared/world":             true,
-	"packages/shared/companion":         true,
-	"packages/shared/pathfind":          true,
-	"packages/shared/nativeabi":         true,
-	"packages/server/storage/chunk":     true,
-	"packages/server/storage/player":    true,
-	"packages/server/storage/companion": true,
-	"packages/server/storage/hostile":   true,
-	"packages/server/storage/passive":   true,
-	"packages/server/storage/region":    true,
+	"packages/shared/network/codec":      true,
+	"packages/shared/network/protocol":   true,
+	"packages/shared/core":               true,
+	"packages/shared/world":              true,
+	"packages/shared/companion":          true,
+	"packages/shared/pathfind":           true,
+	"packages/shared/nativeabi":          true,
+	"packages/server/storage/chunk":      true,
+	"packages/server/storage/player":     true,
+	"packages/server/storage/companion":  true,
+	"packages/server/storage/hostile":    true,
+	"packages/server/storage/passive":    true,
+	"packages/server/storage/region":     true,
 	"packages/server/storage/storagedef": true,
 }
 

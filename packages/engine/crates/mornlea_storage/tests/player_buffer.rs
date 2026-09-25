@@ -2,9 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use mornlea_storage::{
-    decode_player, encode_player, encode_player_into, player_encoded_len, Inventory, ItemStack,
-    PlayerId, PlayerLocation, PlayerSave, StorageError, PLAYER_ENVELOPE_LENGTH,
-    PLAYER_MAX_PAYLOAD,
+    Inventory, ItemStack, PLAYER_ENVELOPE_LENGTH, PLAYER_MAX_PAYLOAD, PlayerId, PlayerLocation,
+    PlayerSave, StorageError, decode_player, encode_player, encode_player_into, player_encoded_len,
 };
 
 fn read_go_fixture(relative: &str) -> Vec<u8> {
@@ -82,10 +81,7 @@ fn golden_player_v9_fixture_matches_bounded_writer() {
         respawn_dimension: decoded.respawn_dimension,
         armor: decoded.armor,
     };
-    assert_eq!(
-        player_encoded_len(&save).expect("length"),
-        golden.len()
-    );
+    assert_eq!(player_encoded_len(&save).expect("length"), golden.len());
     let mut buf = vec![0u8; golden.len()];
     let written = encode_player_into(&save, &mut buf).expect("encode_into");
     assert_eq!(written, golden.len());

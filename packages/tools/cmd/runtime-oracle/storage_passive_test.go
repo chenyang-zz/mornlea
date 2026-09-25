@@ -44,16 +44,16 @@ const (
 	passiveWireHealth    = 41
 	passiveWireReserved  = 42
 
-	passiveDecodeV1FixtureID              = passiveFamily + "/" + passiveVersionV1 + "/decode/v1-fixture"
-	passiveDecodeEmptyID                  = passiveFamily + "/" + passiveVersionV1 + "/decode/empty"
-	passiveDecodeMaxRecordsID             = passiveFamily + "/" + passiveVersionV1 + "/decode/max-records"
-	passiveDecodeYMinID                   = passiveFamily + "/" + passiveVersionV1 + "/decode/y-min-boundary"
-	passiveDecodeYMaxID                   = passiveFamily + "/" + passiveVersionV1 + "/decode/y-max-boundary"
-	passiveDecodeHealthMinID              = passiveFamily + "/" + passiveVersionV1 + "/decode/health-min-boundary"
-	passiveDecodeHealthMaxID              = passiveFamily + "/" + passiveVersionV1 + "/decode/health-max-boundary"
-	passiveDecodeCount33ID                = passiveFamily + "/" + passiveVersionV1 + "/decode/count-33"
-	passiveDecodeTruncatedFixtureID       = passiveFamily + "/" + passiveVersionV1 + "/decode/truncated-fixture"
-	passiveDecodeInvalidVersionFutureID   = passiveFamily + "/" + passiveVersionV1 + "/decode/invalid-version-future"
+	passiveDecodeV1FixtureID            = passiveFamily + "/" + passiveVersionV1 + "/decode/v1-fixture"
+	passiveDecodeEmptyID                = passiveFamily + "/" + passiveVersionV1 + "/decode/empty"
+	passiveDecodeMaxRecordsID           = passiveFamily + "/" + passiveVersionV1 + "/decode/max-records"
+	passiveDecodeYMinID                 = passiveFamily + "/" + passiveVersionV1 + "/decode/y-min-boundary"
+	passiveDecodeYMaxID                 = passiveFamily + "/" + passiveVersionV1 + "/decode/y-max-boundary"
+	passiveDecodeHealthMinID            = passiveFamily + "/" + passiveVersionV1 + "/decode/health-min-boundary"
+	passiveDecodeHealthMaxID            = passiveFamily + "/" + passiveVersionV1 + "/decode/health-max-boundary"
+	passiveDecodeCount33ID              = passiveFamily + "/" + passiveVersionV1 + "/decode/count-33"
+	passiveDecodeTruncatedFixtureID     = passiveFamily + "/" + passiveVersionV1 + "/decode/truncated-fixture"
+	passiveDecodeInvalidVersionFutureID = passiveFamily + "/" + passiveVersionV1 + "/decode/invalid-version-future"
 
 	passiveEncodeV1ExactID       = passiveFamily + "/" + passiveVersionV1 + "/encode/v1-fixture-exact"
 	passiveEncodeEmptyID         = passiveFamily + "/" + passiveVersionV1 + "/encode/empty"
@@ -62,7 +62,6 @@ const (
 	passiveEncodeCapacityMinusID = passiveFamily + "/" + passiveVersionV1 + "/encode/capacity-minus-one"
 	passiveEncodeCount33ID       = passiveFamily + "/" + passiveVersionV1 + "/encode/count-33"
 )
-
 
 type passiveCaseArguments struct {
 	Capacity *uint32 `json:"capacity,omitempty"`
@@ -151,13 +150,13 @@ func passiveRecordValueTree(record passive.StoredPassiveMob) storageValueNode {
 		})
 	}
 	return storageValueObject(map[string]storageValueNode{
-		"id":         storageValueUnsigned(record.ID),
-		"dimension":  storageValueSigned(int64(record.Dimension)),
-		"position":   vec3(record.Position),
-		"velocity":   vec3(record.Velocity),
-		"on_ground":  storageValueBool(record.OnGround),
-		"yaw":        storageValueF32(record.Yaw),
-		"health":     storageValueUnsigned(uint64(record.Health)),
+		"id":        storageValueUnsigned(record.ID),
+		"dimension": storageValueSigned(int64(record.Dimension)),
+		"position":  vec3(record.Position),
+		"velocity":  vec3(record.Velocity),
+		"on_ground": storageValueBool(record.OnGround),
+		"yaw":       storageValueF32(record.Yaw),
+		"health":    storageValueUnsigned(uint64(record.Health)),
 	})
 }
 

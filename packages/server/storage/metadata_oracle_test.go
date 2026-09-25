@@ -19,21 +19,21 @@ import (
 )
 
 const (
-	metadataFamily          = "save.world-metadata"
-	metadataVersion         = "6"
-	metadataProducerID      = "storage/metadata"
-	metadataCorpusRelDir    = "testdata/runtime-migration/cases/storage/world-metadata"
-	metadataProducerTestRel = "packages/server/storage/metadata_oracle_test.go"
-	metadataCodecSourceRel  = "packages/server/storage/metadata.go"
+	metadataFamily              = "save.world-metadata"
+	metadataVersion             = "6"
+	metadataProducerID          = "storage/metadata"
+	metadataCorpusRelDir        = "testdata/runtime-migration/cases/storage/world-metadata"
+	metadataProducerTestRel     = "packages/server/storage/metadata_oracle_test.go"
+	metadataCodecSourceRel      = "packages/server/storage/metadata.go"
 	metadataPinnedExportDir     = "/tmp/runtime-oracle-metadata-2.4-fix"
 	metadataClosureGapExportDir = "/tmp/runtime-oracle-metadata-5.1-gap"
 
-	metadataDecodeV1TruncatedRecordID = metadataFamily + "/1/decode/truncated-record"
-	metadataDecodeV6BoundaryID        = metadataFamily + "/6/decode/v6-boundary"
+	metadataDecodeV1TruncatedRecordID  = metadataFamily + "/1/decode/truncated-record"
+	metadataDecodeV6BoundaryID         = metadataFamily + "/6/decode/v6-boundary"
 	metadataEncodeV6CapacityMinusOneID = metadataFamily + "/6/encode/capacity-minus-one"
-	metadataSelectionManifest = "selection.json"
-	metadataRustConsumer    = "mornlea_storage"
-	metadataRuntimeOracleExportDirEnv = "RUNTIME_ORACLE_EXPORT_DIR"
+	metadataSelectionManifest          = "selection.json"
+	metadataRustConsumer               = "mornlea_storage"
+	metadataRuntimeOracleExportDirEnv  = "RUNTIME_ORACLE_EXPORT_DIR"
 
 	metadataTotalLenV1 = 36
 	metadataTotalLenV2 = 44
@@ -55,17 +55,17 @@ type metadataAssetRef struct {
 }
 
 type metadataCaseSpec struct {
-	ID           string          `json:"id"`
-	Family       string          `json:"family"`
-	Version      string          `json:"version"`
-	Operation    string          `json:"operation"`
-	Arguments    json.RawMessage `json:"arguments,omitempty"`
-	Input        metadataAssetRef `json:"input"`
-	InputFormat  string          `json:"input_format"`
-	Expected     metadataAssetRef `json:"expected"`
+	ID           string            `json:"id"`
+	Family       string            `json:"family"`
+	Version      string            `json:"version"`
+	Operation    string            `json:"operation"`
+	Arguments    json.RawMessage   `json:"arguments,omitempty"`
+	Input        metadataAssetRef  `json:"input"`
+	InputFormat  string            `json:"input_format"`
+	Expected     metadataAssetRef  `json:"expected"`
 	Encoded      *metadataAssetRef `json:"encoded,omitempty"`
-	Checkpoints  []string        `json:"checkpoints"`
-	RustConsumer string          `json:"rust_consumer"`
+	Checkpoints  []string          `json:"checkpoints"`
+	RustConsumer string            `json:"rust_consumer"`
 }
 
 type metadataSourceSpec struct {
@@ -74,9 +74,9 @@ type metadataSourceSpec struct {
 }
 
 type metadataSelection struct {
-	ProducerID string                 `json:"producer_id"`
-	Cases      []metadataCaseSpec     `json:"cases"`
-	Sources    []metadataSourceSpec   `json:"sources"`
+	ProducerID string                  `json:"producer_id"`
+	Cases      []metadataCaseSpec      `json:"cases"`
+	Sources    []metadataSourceSpec    `json:"sources"`
 	Routes     []metadataConsumerRoute `json:"routes"`
 }
 
@@ -90,9 +90,9 @@ type metadataSaveOutcome struct {
 }
 
 type metadataCandidate struct {
-	Spec   metadataCaseSpec
-	Assets map[string][]byte
-	Expect metadataSaveOutcome
+	Spec    metadataCaseSpec
+	Assets  map[string][]byte
+	Expect  metadataSaveOutcome
 	Encoded []byte
 }
 
@@ -128,9 +128,9 @@ type metadataValueNode struct {
 	object   map[string]metadataValueNode
 }
 
-func metadataValueNull() metadataValueNode { return metadataValueNode{null: true} }
-func metadataValueBool(v bool) metadataValueNode { return metadataValueNode{boolean: &v} }
-func metadataValueSigned(v int64) metadataValueNode { return metadataValueNode{signed: &v} }
+func metadataValueNull() metadataValueNode             { return metadataValueNode{null: true} }
+func metadataValueBool(v bool) metadataValueNode       { return metadataValueNode{boolean: &v} }
+func metadataValueSigned(v int64) metadataValueNode    { return metadataValueNode{signed: &v} }
 func metadataValueUnsigned(v uint64) metadataValueNode { return metadataValueNode{unsigned: &v} }
 func metadataValueObject(fields map[string]metadataValueNode) metadataValueNode {
 	return metadataValueNode{object: fields}
@@ -187,17 +187,17 @@ func metadataChunkPosValue(pos core.ChunkPos) metadataValueNode {
 
 func metadataValueTree(metadata Metadata) metadataValueNode {
 	return metadataValueObject(map[string]metadataValueNode{
-		"format_version":           metadataValueUnsigned(uint64(metadata.FormatVersion)),
-		"seed":                     metadataValueSigned(metadata.Seed),
-		"spawn_dimension":          metadataValueSigned(int64(metadata.SpawnDimension)),
-		"spawn_anchor":             metadataChunkPosValue(metadata.SpawnAnchor),
-		"world_time_ticks":         metadataValueUnsigned(metadata.WorldTimeTicks),
-		"day_phase_offset":         metadataValueUnsigned(metadata.DayPhaseOffset),
-		"weather_kind":             metadataValueUnsigned(uint64(metadata.WeatherKind)),
-		"weather_ticks_remaining":  metadataValueUnsigned(uint64(metadata.WeatherTicksRemaining)),
-		"depths_spawn_anchor":      metadataChunkPosValue(metadata.DepthsSpawnAnchor),
-		"depths_seed_salt":         metadataValueUnsigned(metadata.DepthsSeedSalt),
-		"difficulty":               metadataValueUnsigned(uint64(metadata.Difficulty)),
+		"format_version":          metadataValueUnsigned(uint64(metadata.FormatVersion)),
+		"seed":                    metadataValueSigned(metadata.Seed),
+		"spawn_dimension":         metadataValueSigned(int64(metadata.SpawnDimension)),
+		"spawn_anchor":            metadataChunkPosValue(metadata.SpawnAnchor),
+		"world_time_ticks":        metadataValueUnsigned(metadata.WorldTimeTicks),
+		"day_phase_offset":        metadataValueUnsigned(metadata.DayPhaseOffset),
+		"weather_kind":            metadataValueUnsigned(uint64(metadata.WeatherKind)),
+		"weather_ticks_remaining": metadataValueUnsigned(uint64(metadata.WeatherTicksRemaining)),
+		"depths_spawn_anchor":     metadataChunkPosValue(metadata.DepthsSpawnAnchor),
+		"depths_seed_salt":        metadataValueUnsigned(metadata.DepthsSeedSalt),
+		"difficulty":              metadataValueUnsigned(uint64(metadata.Difficulty)),
 	})
 }
 
@@ -648,11 +648,11 @@ func TestMetadataOracle(t *testing.T) {
 	root := metadataRepoRoot(t)
 	candidates := metadataCandidates(t)
 	lengths := map[string]int{
-		metadataFamily + "/1/decode/v1-canonical": metadataTotalLenV1,
-		metadataFamily + "/2/decode/v2-canonical": metadataTotalLenV2,
-		metadataFamily + "/3/decode/v3-canonical": metadataTotalLenV3,
-		metadataFamily + "/4/decode/v4-canonical": metadataTotalLenV4,
-		metadataFamily + "/5/decode/v5-canonical": metadataTotalLenV5,
+		metadataFamily + "/1/decode/v1-canonical":   metadataTotalLenV1,
+		metadataFamily + "/2/decode/v2-canonical":   metadataTotalLenV2,
+		metadataFamily + "/3/decode/v3-canonical":   metadataTotalLenV3,
+		metadataFamily + "/4/decode/v4-canonical":   metadataTotalLenV4,
+		metadataFamily + "/5/decode/v5-canonical":   metadataTotalLenV5,
 		metadataFamily + "/6/encode/v6-boundary":    metadataTotalLenV6,
 		metadataFamily + "/6/decode/v6-weather-255": metadataTotalLenV6,
 	}

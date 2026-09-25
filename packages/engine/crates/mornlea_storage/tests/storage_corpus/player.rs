@@ -5,11 +5,11 @@
 //! registers the reviewed routes against integrated manifest assets.
 
 use super::value_digest::{Value, value_sha256};
+use crate::runtime_corpus::{FrozenCase, InputFormat};
 use mornlea_storage::{
-    Inventory, ItemStack, PlayerId, PlayerLocation, PlayerSave, StoredPlayer, StorageError,
+    Inventory, ItemStack, PlayerId, PlayerLocation, PlayerSave, StorageError, StoredPlayer,
     decode_player, encode_player_into, player_encoded_len,
 };
-use crate::runtime_corpus::{FrozenCase, InputFormat};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
@@ -168,7 +168,9 @@ fn player_schema_version(input: &[u8]) -> Result<u32, String> {
     if input.len() < 12 {
         return Err("input shorter than schema header".to_string());
     }
-    Ok(u32::from_le_bytes(input[8..12].try_into().expect("slice length")))
+    Ok(u32::from_le_bytes(
+        input[8..12].try_into().expect("slice length"),
+    ))
 }
 
 fn storage_error_category(err: &StorageError) -> Option<&'static str> {
@@ -192,7 +194,10 @@ fn item_stack_value(stack: &ItemStack) -> Value {
 
 fn location_value(location: &PlayerLocation) -> Value {
     let mut fields = BTreeMap::new();
-    fields.insert("dimension".to_string(), Value::Signed(location.dimension as i64));
+    fields.insert(
+        "dimension".to_string(),
+        Value::Signed(location.dimension as i64),
+    );
     fields.insert(
         "position".to_string(),
         Value::Array(
@@ -235,11 +240,18 @@ fn stored_player_value(stored: &StoredPlayer) -> Value {
         None => Value::Null,
         Some(location) => location_value(location),
     };
-    let armor = stored.armor.iter().map(item_stack_value).collect::<Vec<_>>();
+    let armor = stored
+        .armor
+        .iter()
+        .map(item_stack_value)
+        .collect::<Vec<_>>();
     let mut fields = BTreeMap::new();
     fields.insert("armor".to_string(), Value::Array(armor));
     fields.insert("current".to_string(), location_value(&stored.current));
-    fields.insert("display_name".to_string(), Value::Utf8(stored.display_name.clone()));
+    fields.insert(
+        "display_name".to_string(),
+        Value::Utf8(stored.display_name.clone()),
+    );
     fields.insert(
         "exhaustion_milli".to_string(),
         Value::Unsigned(stored.exhaustion_milli as u64),
@@ -247,7 +259,10 @@ fn stored_player_value(stored: &StoredPlayer) -> Value {
     fields.insert("health".to_string(), Value::Unsigned(stored.health as u64));
     fields.insert("hunger".to_string(), Value::Unsigned(stored.hunger as u64));
     fields.insert("inventory".to_string(), inventory_value(&stored.inventory));
-    fields.insert("needs_rewrite".to_string(), Value::Bool(stored.needs_rewrite));
+    fields.insert(
+        "needs_rewrite".to_string(),
+        Value::Bool(stored.needs_rewrite),
+    );
     fields.insert("pitch".to_string(), Value::F32(stored.pitch));
     fields.insert(
         "player_id".to_string(),
@@ -354,7 +369,10 @@ pub fn execute_player_cases(cases: &[FrozenCase]) {
         assert!(
             route_is_registered(case),
             "unregistered player route {}/{}/{} for case {}",
-            case.family, case.version, case.operation, case.id
+            case.family,
+            case.version,
+            case.operation,
+            case.id
         );
         execute_player_case(case).unwrap_or_else(|err| {
             panic!("case {} failed: {err}", case.id);
@@ -449,15 +467,15 @@ fn execute_player_encode(case: &FrozenCase, args: &PlayerArguments) -> Result<()
 
     if case.normalized.get("kind").and_then(JsonValue::as_str) == Some("ok") {
         expected_value_digest(case, &digest_value)?;
-        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64) {
-            if length as usize != encoded.len() {
-                return Err(format!(
-                    "case {} encoded length {}, want {}",
-                    case.id,
-                    encoded.len(),
-                    length
-                ));
-            }
+        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64)
+            && length as usize != encoded.len()
+        {
+            return Err(format!(
+                "case {} encoded length {}, want {}",
+                case.id,
+                encoded.len(),
+                length
+            ));
         }
         let encoded_ref = case
             .encoded
@@ -477,7 +495,7 @@ fn execute_player_encode(case: &FrozenCase, args: &PlayerArguments) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime_corpus::{load_cases_for_consumer, CorpusConsumer};
+    use crate::runtime_corpus::{CorpusConsumer, load_cases_for_consumer};
     use std::fs;
     use std::path::PathBuf;
 
@@ -565,7 +583,7 @@ mod tests {
             operation: "decode".to_string(),
             arguments: player_arguments_json(),
             input_format: InputFormat::Binary,
-            input: input,
+            input,
             input_json: None,
             normalized: serde_json::json!({
                 "kind": "error",
@@ -747,10 +765,8 @@ mod tests {
             .into_iter()
             .filter(|case| player_legacy_early_case(&case.id))
             .collect::<Vec<_>>();
-        let found: BTreeMap<&str, &FrozenCase> = cases
-            .iter()
-            .map(|case| (case.id.as_str(), case))
-            .collect();
+        let found: BTreeMap<&str, &FrozenCase> =
+            cases.iter().map(|case| (case.id.as_str(), case)).collect();
         for id in LEGACY_EARLY_INTEGRATED_CASE_IDS {
             if !found.contains_key(id) {
                 panic!("integrated manifest missing legacy early case {id}");
@@ -787,7 +803,9 @@ mod tests {
     #[test]
     fn player_legacy_late_case_ids_recognized() {
         assert!(player_legacy_late_case("save.player/5/decode/v5-fixture"));
-        assert!(player_legacy_late_case("save.player/9/encode/v8-fixture-reencode"));
+        assert!(player_legacy_late_case(
+            "save.player/9/encode/v8-fixture-reencode"
+        ));
         assert!(!player_legacy_late_case("save.player/4/decode/v4-fixture"));
     }
 
@@ -797,10 +815,8 @@ mod tests {
             .into_iter()
             .filter(|case| player_legacy_late_case(&case.id))
             .collect::<Vec<_>>();
-        let found: BTreeMap<&str, &FrozenCase> = cases
-            .iter()
-            .map(|case| (case.id.as_str(), case))
-            .collect();
+        let found: BTreeMap<&str, &FrozenCase> =
+            cases.iter().map(|case| (case.id.as_str(), case)).collect();
         for id in LEGACY_LATE_INTEGRATED_CASE_IDS {
             if !found.contains_key(id) {
                 panic!("integrated manifest missing legacy late case {id}");
@@ -827,8 +843,14 @@ mod tests {
         let v5 = read_go_fixture("server/storage/player/testdata/player-v5.bin");
         let player_id = fixture_player_id();
         let stored = decode_player(player_id, &v5).expect("decode v5 fixture");
-        assert!(stored.needs_rewrite, "historical v5 decode must set needs_rewrite");
-        assert_eq!(stored.health, 13, "v5 health must decode to 13 from fixture");
+        assert!(
+            stored.needs_rewrite,
+            "historical v5 decode must set needs_rewrite"
+        );
+        assert_eq!(
+            stored.health, 13,
+            "v5 health must decode to 13 from fixture"
+        );
         let case = legacy_decode_ok_case("save.player/5/decode/v5-fixture", "5", v5);
         let digest = value_sha256(&stored_player_value(&stored));
         assert_eq!(
@@ -1029,8 +1051,8 @@ mod tests {
         };
         PlayerSave {
             player_id: PlayerId::from_bytes([
-                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x46, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
-                0xdd, 0xee, 0xff,
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x46, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
             ]),
             revision,
             display_name: "Chen".to_owned(),
@@ -1289,10 +1311,8 @@ mod tests {
             .into_iter()
             .filter(|case| player_adversarial_case(&case.id))
             .collect::<Vec<_>>();
-        let found: BTreeMap<&str, &FrozenCase> = cases
-            .iter()
-            .map(|case| (case.id.as_str(), case))
-            .collect();
+        let found: BTreeMap<&str, &FrozenCase> =
+            cases.iter().map(|case| (case.id.as_str(), case)).collect();
         for id in ADVERSARIAL_INTEGRATED_CASE_IDS {
             if !found.contains_key(id) {
                 panic!("integrated manifest missing adversarial case {id}");

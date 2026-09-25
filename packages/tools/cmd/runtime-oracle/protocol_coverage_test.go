@@ -696,7 +696,7 @@ func TestProtocolCorpusNonProtocolEvidenceUnchanged(t *testing.T) {
 			t.Fatalf("case %s belongs to no reviewed corpus slice", c.ID)
 		}
 	}
-	if domainCases != 534 || agentCases != 154 || protocolCases != 436 || saveCases != 262 {
+	if domainCases != 534 || agentCases != 154 || protocolCases != 436 || saveCases != 269 {
 		t.Fatalf("corpus totals drifted: domain %d, agent %d, protocol %d, save %d", domainCases, agentCases, protocolCases, saveCases)
 	}
 	if _, err := ReconcileWorking(root, frozen, families, live, BaselineConsumerRegistry(), BaselineNegativeCoverageExceptions()); err != nil {

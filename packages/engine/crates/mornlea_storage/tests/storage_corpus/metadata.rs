@@ -5,11 +5,11 @@
 //! registers the reviewed routes against integrated manifest assets.
 
 use super::value_digest::{Value, value_sha256};
+use crate::runtime_corpus::{FrozenCase, InputFormat};
 use mornlea_storage::{
     Metadata, MetadataChunkPos, StorageError, decode_world_metadata, encode_world_metadata_into,
     world_metadata_encoded_len,
 };
-use crate::runtime_corpus::{FrozenCase, InputFormat};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
@@ -95,7 +95,9 @@ fn metadata_schema_version(input: &[u8]) -> Result<u32, String> {
     if input.len() < 8 {
         return Err("input shorter than schema header".to_string());
     }
-    Ok(u32::from_le_bytes(input[4..8].try_into().expect("slice length")))
+    Ok(u32::from_le_bytes(
+        input[4..8].try_into().expect("slice length"),
+    ))
 }
 
 fn storage_error_category(err: &StorageError) -> Option<&'static str> {
@@ -278,10 +280,10 @@ fn execute_metadata_encode(case: &FrozenCase, args: &MetadataArguments) -> Resul
             if round != metadata {
                 return Err(format!("case {} encode round-trip drift", case.id));
             }
-            if let Some(expected_encoded) = &case.encoded {
-                if expected_encoded.as_slice() != encoded {
-                    return Err(format!("case {} encoded asset mismatch", case.id));
-                }
+            if let Some(expected_encoded) = &case.encoded
+                && expected_encoded.as_slice() != encoded
+            {
+                return Err(format!("case {} encoded asset mismatch", case.id));
             }
             let expected_digest = case
                 .normalized

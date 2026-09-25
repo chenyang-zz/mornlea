@@ -162,7 +162,10 @@ fn inventory_value(inventory: &Inventory) -> Value {
 
 fn companion_body_value(body: &CompanionBody) -> Value {
     let mut fields = BTreeMap::new();
-    fields.insert("dimension".to_string(), Value::Signed(body.dimension as i64));
+    fields.insert(
+        "dimension".to_string(),
+        Value::Signed(body.dimension as i64),
+    );
     fields.insert("id".to_string(), Value::Bytes(body.id.to_bytes().to_vec()));
     fields.insert("inventory".to_string(), inventory_value(&body.inventory));
     fields.insert("pitch".to_string(), Value::F32(body.pitch));
@@ -230,7 +233,10 @@ fn companion_queue_value(queue: &StoredCompanionQueue) -> Value {
 fn companion_lifecycle_value(lifecycle: &StoredCompanionLifecycle) -> Value {
     let mut fields = BTreeMap::new();
     fields.insert("active".to_string(), Value::Bool(lifecycle.active));
-    fields.insert("id".to_string(), Value::Bytes(lifecycle.id.to_bytes().to_vec()));
+    fields.insert(
+        "id".to_string(),
+        Value::Bytes(lifecycle.id.to_bytes().to_vec()),
+    );
     fields.insert(
         "memory_epoch".to_string(),
         Value::Unsigned(lifecycle.memory_epoch),
@@ -454,27 +460,26 @@ fn execute_companion_encode(case: &FrozenCase, args: &CompanionArguments) -> Res
     encoded.truncate(written);
     if case.normalized.get("kind").and_then(JsonValue::as_str) == Some("ok") {
         expected_value_digest(case, &digest_value)?;
-        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64) {
-            if length as usize != encoded.len() {
-                return Err(format!(
-                    "case {} encoded length {}, want {}",
-                    case.id,
-                    encoded.len(),
-                    length
-                ));
-            }
+        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64)
+            && length as usize != encoded.len()
+        {
+            return Err(format!(
+                "case {} encoded length {}, want {}",
+                case.id,
+                encoded.len(),
+                length
+            ));
         }
-        if let Some(expected) = &case.encoded {
-            if expected.as_slice() != encoded.as_slice() {
-                return Err(format!("case {} encoded bytes mismatch", case.id));
-            }
+        if let Some(expected) = &case.encoded
+            && expected.as_slice() != encoded.as_slice()
+        {
+            return Err(format!("case {} encoded bytes mismatch", case.id));
         }
         let round = decode_companions(&encoded).map_err(|err| err.to_string())?;
         if round.source_schema != 5 {
             return Err(format!(
                 "case {} encoded output schema {}",
-                case.id,
-                round.source_schema
+                case.id, round.source_schema
             ));
         }
     }
@@ -521,8 +526,8 @@ mod tests {
     }
 
     fn legacy_decode_ok_case(id: &str, version: &str, input: Vec<u8>) -> FrozenCase {
-        let stored =
-            decode_companions(&input).unwrap_or_else(|err| panic!("case {id} decode fixture: {err}"));
+        let stored = decode_companions(&input)
+            .unwrap_or_else(|err| panic!("case {id} decode fixture: {err}"));
         FrozenCase {
             id: id.to_string(),
             family: "save.companion".to_string(),
@@ -575,10 +580,12 @@ mod tests {
         let v4 = read_go_fixture("companions-v4.bin");
         let dec_v3 = decode_companions(&v3).expect("decode v3 fixture");
         let dec_v4 = decode_companions(&v4).expect("decode v4 fixture");
-        encode_companion_legacy_wire(3, dec_v3.revision, &dec_v3.records, &[
-            dec_v3.queues[0].clone(),
-            dec_v4.queues[1].clone(),
-        ])
+        encode_companion_legacy_wire(
+            3,
+            dec_v3.revision,
+            &dec_v3.records,
+            &[dec_v3.queues[0].clone(), dec_v4.queues[1].clone()],
+        )
         .expect("encode v3 dual-queue wire")
     }
 
@@ -632,12 +639,12 @@ mod tests {
         out.extend_from_slice(&body.pitch.to_le_bytes());
         out.push(body.inventory.hotbar.selected);
         for stack in &body.inventory.hotbar.slots {
-            out.extend_from_slice(&(stack.item as u16).to_le_bytes());
+            out.extend_from_slice(&stack.item.to_le_bytes());
             out.push(stack.count);
             out.extend_from_slice(&stack.durability.to_le_bytes());
         }
         for stack in &body.inventory.backpack {
-            out.extend_from_slice(&(stack.item as u16).to_le_bytes());
+            out.extend_from_slice(&stack.item.to_le_bytes());
             out.push(stack.count);
             out.extend_from_slice(&stack.durability.to_le_bytes());
         }
@@ -769,10 +776,10 @@ mod tests {
     fn companion_legacy_queue_digest_mutation_fails_comparison() {
         let golden = read_go_fixture("companions-v4.bin");
         let mut stale = decode_companions(&golden).expect("decode v4");
-        if let Some(queue) = stale.queues.first_mut() {
-            if let Some(entry) = queue.pending.first_mut() {
-                entry.push('x');
-            }
+        if let Some(queue) = stale.queues.first_mut()
+            && let Some(entry) = queue.pending.first_mut()
+        {
+            entry.push('x');
         }
         let stale_digest = value_sha256(&companions_value(&stale));
         let mut case = legacy_decode_ok_case("save.companion/4/decode/v4-fixture", "4", golden);
@@ -830,13 +837,19 @@ mod tests {
     #[test]
     fn companion_current_case_ids_recognized() {
         assert!(companion_current_case("save.companion/5/decode/v5-fixture"));
-        assert!(!companion_current_case("save.companion/4/decode/v4-fixture"));
+        assert!(!companion_current_case(
+            "save.companion/4/decode/v4-fixture"
+        ));
     }
 
     #[test]
     fn companion_adversarial_case_ids_recognized() {
-        assert!(companion_adversarial_case("save.companion/5/decode/corrupt-crc"));
-        assert!(!companion_adversarial_case("save.companion/5/decode/v5-fixture"));
+        assert!(companion_adversarial_case(
+            "save.companion/5/decode/corrupt-crc"
+        ));
+        assert!(!companion_adversarial_case(
+            "save.companion/5/decode/v5-fixture"
+        ));
     }
 
     #[test]
@@ -872,17 +885,20 @@ mod tests {
             "value_sha256": value_sha256(&companions_value(&stale))
         });
         let err = execute_companion_case(&case).expect_err("stale queue owner digest must fail");
-        assert!(err.contains("value digest mismatch"), "unexpected error: {err}");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
     fn companion_current_fifo_digest_mutation_fails_comparison() {
         let golden = read_go_fixture("companions-v5.bin");
         let mut stale = decode_companions(&golden).expect("decode v5");
-        if let Some(queue) = stale.queues.first_mut() {
-            if let Some(entry) = queue.pending.first_mut() {
-                entry.push('x');
-            }
+        if let Some(queue) = stale.queues.first_mut()
+            && let Some(entry) = queue.pending.first_mut()
+        {
+            entry.push('x');
         }
         let mut case = legacy_decode_ok_case("save.companion/5/decode/v5-fixture", "5", golden);
         case.normalized = serde_json::json!({
@@ -891,6 +907,9 @@ mod tests {
             "value_sha256": value_sha256(&companions_value(&stale))
         });
         let err = execute_companion_case(&case).expect_err("stale fifo digest must fail");
-        assert!(err.contains("value digest mismatch"), "unexpected error: {err}");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -23,12 +23,12 @@ import (
 )
 
 const (
-	regionFamily            = "save.region"
-	regionVersion           = "1"
-	regionProducerID        = "runtime-oracle/storage-region"
-	regionCorpusRelDir      = "testdata/runtime-migration/cases/storage/region"
-	regionProducerTestRel   = "packages/tools/cmd/runtime-oracle/storage_region_test.go"
-	regionFormatSourceRel   = "packages/server/storage/region/region_format.go"
+	regionFamily          = "save.region"
+	regionVersion         = "1"
+	regionProducerID      = "runtime-oracle/storage-region"
+	regionCorpusRelDir    = "testdata/runtime-migration/cases/storage/region"
+	regionProducerTestRel = "packages/tools/cmd/runtime-oracle/storage_region_test.go"
+	regionFormatSourceRel = "packages/server/storage/region/region_format.go"
 
 	regionSeedDimension = -3
 	regionSeedX         = -1
@@ -37,21 +37,21 @@ const (
 	regionFileSizeEmptyBank     = "61440"
 	regionFileSizeOccupiedEntry = "65536"
 
-	regionSuperblockDecodeCaseID = regionFamily + "/" + regionVersion + "/decode/superblock-seed"
-	regionBankStandbyDecodeID    = regionFamily + "/" + regionVersion + "/decode/bank-standby-gen0"
-	regionBankCommittedDecodeID  = regionFamily + "/" + regionVersion + "/decode/bank-committed-gen1"
-	regionBankCommittedEncodeID       = regionFamily + "/" + regionVersion + "/encode/bank-committed-gen1"
-	regionEncodeCapacityMinusOneID    = regionFamily + "/" + regionVersion + "/encode/capacity-minus-one"
-	regionClosureGapExportDir         = "/tmp/runtime-oracle-region-5.1-gap"
+	regionSuperblockDecodeCaseID   = regionFamily + "/" + regionVersion + "/decode/superblock-seed"
+	regionBankStandbyDecodeID      = regionFamily + "/" + regionVersion + "/decode/bank-standby-gen0"
+	regionBankCommittedDecodeID    = regionFamily + "/" + regionVersion + "/decode/bank-committed-gen1"
+	regionBankCommittedEncodeID    = regionFamily + "/" + regionVersion + "/encode/bank-committed-gen1"
+	regionEncodeCapacityMinusOneID = regionFamily + "/" + regionVersion + "/encode/capacity-minus-one"
+	regionClosureGapExportDir      = "/tmp/runtime-oracle-region-5.1-gap"
 
-	regionOrderCommittedNewerAID   = regionFamily + "/" + regionVersion + "/order/committed-newer-a"
-	regionOrderCommittedNewerBID   = regionFamily + "/" + regionVersion + "/order/committed-newer-b"
-	regionOrderCorruptFallbackID   = regionFamily + "/" + regionVersion + "/order/corrupt-fallback"
-	regionOrderStandbyBothID       = regionFamily + "/" + regionVersion + "/order/standby-both"
-	regionOrderEqualIdenticalID    = regionFamily + "/" + regionVersion + "/order/equal-identical"
-	regionOrderEqualDivergentID    = regionFamily + "/" + regionVersion + "/order/equal-divergent"
+	regionOrderCommittedNewerAID = regionFamily + "/" + regionVersion + "/order/committed-newer-a"
+	regionOrderCommittedNewerBID = regionFamily + "/" + regionVersion + "/order/committed-newer-b"
+	regionOrderCorruptFallbackID = regionFamily + "/" + regionVersion + "/order/corrupt-fallback"
+	regionOrderStandbyBothID     = regionFamily + "/" + regionVersion + "/order/standby-both"
+	regionOrderEqualIdenticalID  = regionFamily + "/" + regionVersion + "/order/equal-identical"
+	regionOrderEqualDivergentID  = regionFamily + "/" + regionVersion + "/order/equal-divergent"
 
-	regionCorruptFileSizeExtent   = "69632"  // 17 * region.SectorSize
+	regionCorruptFileSizeExtent   = "69632"   // 17 * region.SectorSize
 	regionCorruptFileSizeOver1MiB = "1114112" // 272 * region.SectorSize
 
 	regionCorruptBankOffsetInsideHeadersID = regionFamily + "/" + regionVersion + "/decode/bank-offset-inside-headers"
@@ -619,7 +619,7 @@ func regionCorpusRoutes() map[ConsumerRoute]GoOperation {
 	return map[ConsumerRoute]GoOperation{
 		{FamilyID: regionFamily, Version: regionVersion, Operation: "decode"}: runRegionDecode,
 		{FamilyID: regionFamily, Version: regionVersion, Operation: "encode"}: runRegionEncode,
-		{FamilyID: regionFamily, Version: regionVersion, Operation: "order"}: runRegionOrder,
+		{FamilyID: regionFamily, Version: regionVersion, Operation: "order"}:  runRegionOrder,
 	}
 }
 

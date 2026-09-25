@@ -22,19 +22,19 @@ import (
 )
 
 const (
-	chunkFamily               = "save.chunk"
-	chunkProducerID           = "chunk/migration"
-	chunkCorpusRelDir         = "testdata/runtime-migration/cases/storage/chunk"
-	chunkProducerTestRel      = "packages/server/storage/chunk/chunk_oracle_test.go"
-	chunkCodecSourceRel       = "packages/server/storage/chunk/chunk_codec.go"
-	chunkPinnedExportDir           = "/tmp/runtime-oracle-chunk-4.3a"
-	chunkPinnedExportDirLate       = "/tmp/runtime-oracle-chunk-4.3b-late-fix"
+	chunkFamily                     = "save.chunk"
+	chunkProducerID                 = "chunk/migration"
+	chunkCorpusRelDir               = "testdata/runtime-migration/cases/storage/chunk"
+	chunkProducerTestRel            = "packages/server/storage/chunk/chunk_oracle_test.go"
+	chunkCodecSourceRel             = "packages/server/storage/chunk/chunk_codec.go"
+	chunkPinnedExportDir            = "/tmp/runtime-oracle-chunk-4.3a"
+	chunkPinnedExportDirLate        = "/tmp/runtime-oracle-chunk-4.3b-late-fix"
 	chunkPinnedExportDirAdversarial = "/tmp/runtime-oracle-chunk-4.3c-adversarial"
-	chunkPinnedExportDirCross        = "/tmp/runtime-oracle-chunk-4.3c-cross"
-	chunkSelectionManifest         = "selection.json"
-	chunkRustConsumer              = "mornlea_storage"
-	chunkRuntimeOracleExportDirEnv = "RUNTIME_ORACLE_EXPORT_DIR"
-	chunkRustFrameInputEnv         = "RUST_STORAGE_FRAME_INPUT"
+	chunkPinnedExportDirCross       = "/tmp/runtime-oracle-chunk-4.3c-cross"
+	chunkSelectionManifest          = "selection.json"
+	chunkRustConsumer               = "mornlea_storage"
+	chunkRuntimeOracleExportDirEnv  = "RUNTIME_ORACLE_EXPORT_DIR"
+	chunkRustFrameInputEnv          = "RUST_STORAGE_FRAME_INPUT"
 
 	chunkFixtureRevision = uint64(19)
 )
@@ -51,16 +51,16 @@ type chunkAssetRef struct {
 }
 
 type chunkCaseSpec struct {
-	ID           string           `json:"id"`
-	Family       string           `json:"family"`
-	Version      string           `json:"version"`
-	Operation    string           `json:"operation"`
-	Arguments    json.RawMessage  `json:"arguments,omitempty"`
-	Input        chunkAssetRef    `json:"input"`
-	InputFormat  string           `json:"input_format"`
-	Expected     chunkAssetRef    `json:"expected"`
-	Checkpoints  []string         `json:"checkpoints"`
-	RustConsumer string           `json:"rust_consumer"`
+	ID           string          `json:"id"`
+	Family       string          `json:"family"`
+	Version      string          `json:"version"`
+	Operation    string          `json:"operation"`
+	Arguments    json.RawMessage `json:"arguments,omitempty"`
+	Input        chunkAssetRef   `json:"input"`
+	InputFormat  string          `json:"input_format"`
+	Expected     chunkAssetRef   `json:"expected"`
+	Checkpoints  []string        `json:"checkpoints"`
+	RustConsumer string          `json:"rust_consumer"`
 }
 
 type chunkSourceSpec struct {
@@ -69,10 +69,10 @@ type chunkSourceSpec struct {
 }
 
 type chunkSelection struct {
-	ProducerID string                 `json:"producer_id"`
-	Cases      []chunkCaseSpec        `json:"cases"`
-	Sources    []chunkSourceSpec      `json:"sources"`
-	Routes     []chunkConsumerRoute   `json:"routes"`
+	ProducerID string               `json:"producer_id"`
+	Cases      []chunkCaseSpec      `json:"cases"`
+	Sources    []chunkSourceSpec    `json:"sources"`
+	Routes     []chunkConsumerRoute `json:"routes"`
 }
 
 type chunkSaveOutcome struct {
@@ -82,9 +82,9 @@ type chunkSaveOutcome struct {
 }
 
 type chunkCandidate struct {
-	Spec    chunkCaseSpec
-	Assets  map[string][]byte
-	Expect  chunkSaveOutcome
+	Spec   chunkCaseSpec
+	Assets map[string][]byte
+	Expect chunkSaveOutcome
 }
 
 type chunkGeneratedAsset struct {
@@ -119,9 +119,9 @@ type chunkValueNode struct {
 	object   map[string]chunkValueNode
 }
 
-func chunkValueNull() chunkValueNode { return chunkValueNode{null: true} }
-func chunkValueBool(v bool) chunkValueNode { return chunkValueNode{boolean: &v} }
-func chunkValueSigned(v int64) chunkValueNode { return chunkValueNode{signed: &v} }
+func chunkValueNull() chunkValueNode             { return chunkValueNode{null: true} }
+func chunkValueBool(v bool) chunkValueNode       { return chunkValueNode{boolean: &v} }
+func chunkValueSigned(v int64) chunkValueNode    { return chunkValueNode{signed: &v} }
 func chunkValueUnsigned(v uint64) chunkValueNode { return chunkValueNode{unsigned: &v} }
 
 func chunkValueF32(v float32) chunkValueNode {
@@ -275,12 +275,12 @@ func chunkSectionValue(snapshot world.ContainerSnapshot) chunkValueNode {
 
 func chunkDropValue(drop world.DropSlot) chunkValueNode {
 	return chunkValueObject(map[string]chunkValueNode{
-		"generation":           chunkValueUnsigned(uint64(drop.Generation)),
-		"active":               chunkValueBool(drop.Active),
-		"stack":                chunkItemStackValue(drop.Stack),
-		"block_index":          chunkValueUnsigned(uint64(drop.BlockIndex)),
-		"age_ticks":            chunkValueUnsigned(uint64(drop.AgeTicks)),
-		"pickup_delay_ticks":   chunkValueUnsigned(uint64(drop.PickupDelayTicks)),
+		"generation":         chunkValueUnsigned(uint64(drop.Generation)),
+		"active":             chunkValueBool(drop.Active),
+		"stack":              chunkItemStackValue(drop.Stack),
+		"block_index":        chunkValueUnsigned(uint64(drop.BlockIndex)),
+		"age_ticks":          chunkValueUnsigned(uint64(drop.AgeTicks)),
+		"pickup_delay_ticks": chunkValueUnsigned(uint64(drop.PickupDelayTicks)),
 	})
 }
 
@@ -328,10 +328,10 @@ func chunkBodyValue(chunk *world.Chunk) chunkValueNode {
 		chests[i] = chunkChestValue(chunk.Chest(i))
 	}
 	return chunkValueObject(map[string]chunkValueNode{
-		"sections":  chunkValueNode{array: sections},
-		"drops":     chunkValueNode{array: drops},
-		"furnaces":  chunkValueNode{array: furnaces},
-		"chests":    chunkValueNode{array: chests},
+		"sections": chunkValueNode{array: sections},
+		"drops":    chunkValueNode{array: drops},
+		"furnaces": chunkValueNode{array: furnaces},
+		"chests":   chunkValueNode{array: chests},
 	})
 }
 

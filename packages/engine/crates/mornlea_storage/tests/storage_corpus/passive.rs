@@ -94,7 +94,10 @@ fn vec3_value(values: [f32; 3]) -> Value {
 fn passive_record_value(record: &PassiveMob) -> Value {
     let mut fields = BTreeMap::new();
     fields.insert("id".to_string(), Value::Unsigned(record.id));
-    fields.insert("dimension".to_string(), Value::Signed(record.dimension as i64));
+    fields.insert(
+        "dimension".to_string(),
+        Value::Signed(record.dimension as i64),
+    );
     fields.insert("position".to_string(), vec3_value(record.position));
     fields.insert("velocity".to_string(), vec3_value(record.velocity));
     fields.insert("on_ground".to_string(), Value::Bool(record.on_ground));
@@ -275,13 +278,13 @@ fn execute_passive_encode(case: &FrozenCase, args: &PassiveArguments) -> Result<
         }) => {
             assert_error_category(case, "output_too_small")?;
             assert_output_too_small_fields(case, want_needed, want_available)?;
-            return Ok(());
+            Ok(())
         }
         Err(err) => {
             let category = storage_error_category(&err)
                 .ok_or_else(|| format!("unclassified encode rejection: {err}"))?;
             assert_error_category(case, category)?;
-            return Ok(());
+            Ok(())
         }
         Ok(written) => {
             assert_ok_outcome(case)?;
@@ -291,15 +294,15 @@ fn execute_passive_encode(case: &FrozenCase, args: &PassiveArguments) -> Result<
                 return Err(format!("case {} encode round-trip record drift", case.id));
             }
             expected_value_digest(case, &passive_mobs_value(&mobs))?;
-            if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64) {
-                if length as usize != encoded.len() {
-                    return Err(format!(
-                        "case {} encoded length {}, want {}",
-                        case.id,
-                        encoded.len(),
-                        length
-                    ));
-                }
+            if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64)
+                && length as usize != encoded.len()
+            {
+                return Err(format!(
+                    "case {} encoded length {}, want {}",
+                    case.id,
+                    encoded.len(),
+                    length
+                ));
             }
             let encoded_ref = case
                 .encoded

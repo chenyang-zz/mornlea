@@ -23,38 +23,38 @@ import (
 )
 
 const (
-	companionFamily          = "save.companion"
-	companionProducerID      = "runtime-oracle/storage-companion"
-	companionCorpusRelDir    = "testdata/runtime-migration/cases/storage/companion"
-	companionProducerTestRel = "packages/tools/cmd/runtime-oracle/storage_companion_test.go"
-	companionCodecSourceRel  = "packages/server/storage/companion/companion_codec.go"
-	companionExportDir       = "/tmp/runtime-oracle-companion-4.6a"
+	companionFamily           = "save.companion"
+	companionProducerID       = "runtime-oracle/storage-companion"
+	companionCorpusRelDir     = "testdata/runtime-migration/cases/storage/companion"
+	companionProducerTestRel  = "packages/tools/cmd/runtime-oracle/storage_companion_test.go"
+	companionCodecSourceRel   = "packages/server/storage/companion/companion_codec.go"
+	companionExportDir        = "/tmp/runtime-oracle-companion-4.6a"
 	companionCurrentExportDir = "/tmp/runtime-oracle-companion-4.6b"
 	companionFixExportDir     = "/tmp/runtime-oracle-companion-4.6b-fix"
-	companionVersionV5       = "5"
+	companionVersionV5        = "5"
 
-	companionDecodeV5FixtureID           = companionFamily + "/" + companionVersionV5 + "/decode/v5-fixture"
-	companionDecodeV5RoundTripAltID      = companionFamily + "/" + companionVersionV5 + "/decode/v5-roundtrip-alt"
-	companionDecodeV5MaxLegalID          = companionFamily + "/" + companionVersionV5 + "/decode/max-legal-size"
-	companionEncodeV5CanonicalID         = companionFamily + "/" + companionVersionV5 + "/encode/v5-canonical"
-	companionEncodeCapacityMinusOneID    = companionFamily + "/" + companionVersionV5 + "/encode/capacity-minus-one"
+	companionDecodeV5FixtureID        = companionFamily + "/" + companionVersionV5 + "/decode/v5-fixture"
+	companionDecodeV5RoundTripAltID   = companionFamily + "/" + companionVersionV5 + "/decode/v5-roundtrip-alt"
+	companionDecodeV5MaxLegalID       = companionFamily + "/" + companionVersionV5 + "/decode/max-legal-size"
+	companionEncodeV5CanonicalID      = companionFamily + "/" + companionVersionV5 + "/encode/v5-canonical"
+	companionEncodeCapacityMinusOneID = companionFamily + "/" + companionVersionV5 + "/encode/capacity-minus-one"
 
-	companionDecodeBodyCount65ID         = companionFamily + "/" + companionVersionV5 + "/decode/body-count-65"
-	companionDecodeActiveCountFiveID     = companionFamily + "/" + companionVersionV5 + "/decode/active-count-five"
-	companionDecodeDuplicateLifecycleID  = companionFamily + "/" + companionVersionV5 + "/decode/duplicate-lifecycle"
-	companionDecodeMissingLifecycleID    = companionFamily + "/" + companionVersionV5 + "/decode/missing-lifecycle"
-	companionDecodeOrphanQueueID         = companionFamily + "/" + companionVersionV5 + "/decode/orphan-queue"
-	companionDecodeInactiveQueueID       = companionFamily + "/" + companionVersionV5 + "/decode/inactive-queue"
-	companionDecodeCommandOverLimitID    = companionFamily + "/" + companionVersionV5 + "/decode/command-over-limit"
-	companionDecodePlanStepsOverLimitID  = companionFamily + "/" + companionVersionV5 + "/decode/plan-steps-over-limit"
-	companionDecodeFIFOOverLimitID       = companionFamily + "/" + companionVersionV5 + "/decode/fifo-over-limit"
-	companionDecodeSummaryOverLimitID    = companionFamily + "/" + companionVersionV5 + "/decode/summary-over-limit"
+	companionDecodeBodyCount65ID            = companionFamily + "/" + companionVersionV5 + "/decode/body-count-65"
+	companionDecodeActiveCountFiveID        = companionFamily + "/" + companionVersionV5 + "/decode/active-count-five"
+	companionDecodeDuplicateLifecycleID     = companionFamily + "/" + companionVersionV5 + "/decode/duplicate-lifecycle"
+	companionDecodeMissingLifecycleID       = companionFamily + "/" + companionVersionV5 + "/decode/missing-lifecycle"
+	companionDecodeOrphanQueueID            = companionFamily + "/" + companionVersionV5 + "/decode/orphan-queue"
+	companionDecodeInactiveQueueID          = companionFamily + "/" + companionVersionV5 + "/decode/inactive-queue"
+	companionDecodeCommandOverLimitID       = companionFamily + "/" + companionVersionV5 + "/decode/command-over-limit"
+	companionDecodePlanStepsOverLimitID     = companionFamily + "/" + companionVersionV5 + "/decode/plan-steps-over-limit"
+	companionDecodeFIFOOverLimitID          = companionFamily + "/" + companionVersionV5 + "/decode/fifo-over-limit"
+	companionDecodeSummaryOverLimitID       = companionFamily + "/" + companionVersionV5 + "/decode/summary-over-limit"
 	companionDecodeV5InvalidVersionZeroID   = companionFamily + "/" + companionVersionV5 + "/decode/invalid-version-zero"
 	companionDecodeV5InvalidVersionFutureID = companionFamily + "/" + companionVersionV5 + "/decode/invalid-version-future"
-	companionDecodeTruncatedHeaderID     = companionFamily + "/" + companionVersionV5 + "/decode/truncated-header"
-	companionDecodeTrailingByteID        = companionFamily + "/" + companionVersionV5 + "/decode/trailing-byte"
-	companionDecodeV5CorruptCRCID        = companionFamily + "/" + companionVersionV5 + "/decode/corrupt-crc"
-	companionDecodeMalformedUUIDID       = companionFamily + "/" + companionVersionV5 + "/decode/malformed-uuid"
+	companionDecodeTruncatedHeaderID        = companionFamily + "/" + companionVersionV5 + "/decode/truncated-header"
+	companionDecodeTrailingByteID           = companionFamily + "/" + companionVersionV5 + "/decode/trailing-byte"
+	companionDecodeV5CorruptCRCID           = companionFamily + "/" + companionVersionV5 + "/decode/corrupt-crc"
+	companionDecodeMalformedUUIDID          = companionFamily + "/" + companionVersionV5 + "/decode/malformed-uuid"
 
 	companionHeaderLength = 32
 	companionRecordLength = 221
@@ -194,13 +194,13 @@ func companionTaskValue(task companion.StoredCompanionTask) storageValueNode {
 		steps = append(steps, companionPlanStepValue(step))
 	}
 	return storageValueObject(map[string]storageValueNode{
-		"command":         storageValueUTF8(task.Command),
-		"deadline_ticks":  storageValueUnsigned(task.DeadlineTicks),
-		"fail_reason":     storageValueUnsigned(uint64(task.FailReason)),
-		"plan_steps":      storageValueArray(steps),
-		"start_tick":      storageValueUnsigned(task.StartTick),
-		"state":           storageValueUnsigned(uint64(task.State)),
-		"step_index":      storageValueSigned(int64(task.StepIndex)),
+		"command":        storageValueUTF8(task.Command),
+		"deadline_ticks": storageValueUnsigned(task.DeadlineTicks),
+		"fail_reason":    storageValueUnsigned(uint64(task.FailReason)),
+		"plan_steps":     storageValueArray(steps),
+		"start_tick":     storageValueUnsigned(task.StartTick),
+		"state":          storageValueUnsigned(uint64(task.State)),
+		"step_index":     storageValueSigned(int64(task.StepIndex)),
 	})
 }
 
@@ -214,23 +214,23 @@ func companionQueueValue(queue companion.StoredCompanionQueue) storageValueNode 
 		current = companionTaskValue(queue.Current)
 	}
 	return storageValueObject(map[string]storageValueNode{
-		"current":   current,
+		"current":     current,
 		"has_current": storageValueBool(queue.HasCurrent),
-		"id":        companionIdentityBytes(companion.Identity(queue.ID)),
-		"pending":   storageValueArray(pending),
-		"summary":   storageValueUTF8(queue.Summary),
+		"id":          companionIdentityBytes(companion.Identity(queue.ID)),
+		"pending":     storageValueArray(pending),
+		"summary":     storageValueUTF8(queue.Summary),
 	})
 }
 
 func companionLifecycleValue(lifecycle companion.StoredCompanionLifecycle) storageValueNode {
 	return storageValueObject(map[string]storageValueNode{
-		"active":                  storageValueBool(lifecycle.Active),
-		"id":                      companionIdentityBytes(companion.Identity(lifecycle.ID)),
-		"memory_epoch":            storageValueUnsigned(lifecycle.MemoryEpoch),
-		"memory_operation_id":     companionIdentityBytes(lifecycle.MemoryOperationID),
-		"memory_revision":         storageValueUnsigned(lifecycle.MemoryRevision),
-		"summary":                 storageValueUTF8(lifecycle.Summary),
-		"tombstone_operation_id":  companionIdentityBytes(lifecycle.TombstoneOperationID),
+		"active":                 storageValueBool(lifecycle.Active),
+		"id":                     companionIdentityBytes(companion.Identity(lifecycle.ID)),
+		"memory_epoch":           storageValueUnsigned(lifecycle.MemoryEpoch),
+		"memory_operation_id":    companionIdentityBytes(lifecycle.MemoryOperationID),
+		"memory_revision":        storageValueUnsigned(lifecycle.MemoryRevision),
+		"summary":                storageValueUTF8(lifecycle.Summary),
+		"tombstone_operation_id": companionIdentityBytes(lifecycle.TombstoneOperationID),
 	})
 }
 
@@ -825,7 +825,7 @@ func companionV5ActiveCommandLengthOffset(wire []byte) int {
 	off := companionHeaderLength + 16 + companionRecordLength
 	flags := wire[off]
 	off++
-	off += 8 // memory epoch
+	off += 8                                   // memory epoch
 	if flags&companionLegacyFlagHasTask == 0 { // v5 active bit
 		panic("companionV5ActiveCommandLengthOffset expects active record")
 	}
@@ -946,7 +946,7 @@ func companionMaximumLegalV5Wire(t *testing.T) []byte {
 		queues[index] = companion.StoredCompanionQueue{
 			ID: records[index].ID, HasCurrent: true,
 			Current: companion.StoredCompanionTask{
-				Command: strings.Repeat("c", companion.MaxCompanionTaskCommandBytes),
+				Command:   strings.Repeat("c", companion.MaxCompanionTaskCommandBytes),
 				PlanSteps: steps, StepIndex: len(steps) - 1, State: sharedcompanion.TaskRunning, StartTick: 1,
 			},
 			Pending: make([]string, companion.MaxCompanionFIFOEntries),
@@ -970,8 +970,8 @@ func companionMinimalActiveRecordPayload(t *testing.T, id byte) []byte {
 	body := oracleCompanionBodies()[0]
 	body.ID = oracleCompanionID(id)
 	wire := mustEncodeCompanionSave(t, companion.CompanionSave{
-		Revision: 1,
-		Records:  []sharedcompanion.Body{body},
+		Revision:   1,
+		Records:    []sharedcompanion.Body{body},
 		Lifecycles: []companion.StoredCompanionLifecycle{oracleV5Lifecycle(body.ID, true, 1)},
 	})
 	return bytes.Clone(wire[companionHeaderLength+16:])
@@ -1148,22 +1148,22 @@ func companionAdversarialPinByID(id string) (companionAdversarialPin, bool) {
 	corrupt := storageSaveOutcome{Kind: "error", Category: "corrupt"}
 	future := storageSaveOutcome{Kind: "error", Category: "future_version"}
 	pins := map[string]companionAdversarialPin{
-		companionDecodeBodyCount65ID:           {corrupt, "companion count 65 exceeds limit"},
-		companionDecodeActiveCountFiveID:       {corrupt, "active companion count 5 exceeds limit"},
-		companionDecodeDuplicateLifecycleID:    {corrupt, "companion IDs are not strictly sorted"},
-		companionDecodeMissingLifecycleID:      {corrupt, "flags: unexpected EOF"},
-		companionDecodeOrphanQueueID:           {corrupt, "companion hotbar slot: unexpected EOF"},
-		companionDecodeInactiveQueueID:         {corrupt, "inactive companion flags"},
-		companionDecodeCommandOverLimitID:      {corrupt, "1025 字节超过上限"},
-		companionDecodePlanStepsOverLimitID:    {corrupt, "companion task plan steps 5001 exceeds limit"},
-		companionDecodeFIFOOverLimitID:         {corrupt, "companion FIFO depth 17 exceeds limit"},
-		companionDecodeSummaryOverLimitID:      {corrupt, "companion summary length 2049 exceeds limit"},
-		companionDecodeV5InvalidVersionZeroID:    {corrupt, "unsupported companion schema 0"},
-		companionDecodeV5InvalidVersionFutureID:  {future, "companion schema 6"},
-		companionDecodeTruncatedHeaderID:         {corrupt, "companion CRC32C: unexpected EOF"},
-		companionDecodeTrailingByteID:          {corrupt, "companion payload length does not match file"},
-		companionDecodeV5CorruptCRCID:            {corrupt, "companion CRC32C"},
-		companionDecodeMalformedUUIDID:           {corrupt, "invalid companion agent namespace"},
+		companionDecodeBodyCount65ID:            {corrupt, "companion count 65 exceeds limit"},
+		companionDecodeActiveCountFiveID:        {corrupt, "active companion count 5 exceeds limit"},
+		companionDecodeDuplicateLifecycleID:     {corrupt, "companion IDs are not strictly sorted"},
+		companionDecodeMissingLifecycleID:       {corrupt, "flags: unexpected EOF"},
+		companionDecodeOrphanQueueID:            {corrupt, "companion hotbar slot: unexpected EOF"},
+		companionDecodeInactiveQueueID:          {corrupt, "inactive companion flags"},
+		companionDecodeCommandOverLimitID:       {corrupt, "1025 字节超过上限"},
+		companionDecodePlanStepsOverLimitID:     {corrupt, "companion task plan steps 5001 exceeds limit"},
+		companionDecodeFIFOOverLimitID:          {corrupt, "companion FIFO depth 17 exceeds limit"},
+		companionDecodeSummaryOverLimitID:       {corrupt, "companion summary length 2049 exceeds limit"},
+		companionDecodeV5InvalidVersionZeroID:   {corrupt, "unsupported companion schema 0"},
+		companionDecodeV5InvalidVersionFutureID: {future, "companion schema 6"},
+		companionDecodeTruncatedHeaderID:        {corrupt, "companion CRC32C: unexpected EOF"},
+		companionDecodeTrailingByteID:           {corrupt, "companion payload length does not match file"},
+		companionDecodeV5CorruptCRCID:           {corrupt, "companion CRC32C"},
+		companionDecodeMalformedUUIDID:          {corrupt, "invalid companion agent namespace"},
 	}
 	pin, ok := pins[id]
 	return pin, ok

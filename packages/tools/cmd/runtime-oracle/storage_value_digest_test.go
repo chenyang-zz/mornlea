@@ -157,8 +157,7 @@ func crossLanguageGoldenStorageTree() storageValueNode {
 }
 
 // Cross-language golden tree pinned by the frozen storage corpus contract.
-const crossLanguageGoldenStorageTreeSHA256 =
-	"sha256:9afe6b3bc14a7b3daa74b6be41bc34d2357ac15a874c92a20a8f84c3bf66206b"
+const crossLanguageGoldenStorageTreeSHA256 = "sha256:9afe6b3bc14a7b3daa74b6be41bc34d2357ac15a874c92a20a8f84c3bf66206b"
 
 func TestStorageValueV1CrossLanguageGoldenTree(t *testing.T) {
 	digest := storageValueSHA256(crossLanguageGoldenStorageTree())

@@ -31,7 +31,9 @@ mod chunk;
 #[path = "storage_corpus/companion.rs"]
 mod companion;
 
-use runtime_corpus::{load_cases_for_consumer, CorpusConsumer, FrozenCase, try_load_cases_from_root};
+use runtime_corpus::{
+    CorpusConsumer, FrozenCase, load_cases_for_consumer, try_load_cases_from_root,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -554,10 +556,8 @@ fn metadata_corpus_executes_all_integrated_case_ids() {
         .into_iter()
         .filter(|case| case.family == "save.world-metadata")
         .collect();
-    let found: BTreeMap<&str, &FrozenCase> = cases
-        .iter()
-        .map(|case| (case.id.as_str(), case))
-        .collect();
+    let found: BTreeMap<&str, &FrozenCase> =
+        cases.iter().map(|case| (case.id.as_str(), case)).collect();
     for id in METADATA_INTEGRATED_CASE_IDS {
         if !found.contains_key(id) {
             panic!("integrated manifest missing metadata case {id}");
@@ -634,10 +634,8 @@ fn hostile_corpus_executes_all_integrated_case_ids() {
         .into_iter()
         .filter(|case| case.family == "save.hostile")
         .collect();
-    let found: BTreeMap<&str, &FrozenCase> = cases
-        .iter()
-        .map(|case| (case.id.as_str(), case))
-        .collect();
+    let found: BTreeMap<&str, &FrozenCase> =
+        cases.iter().map(|case| (case.id.as_str(), case)).collect();
     for id in HOSTILE_INTEGRATED_CASE_IDS {
         if !found.contains_key(id) {
             panic!("integrated manifest missing hostile case {id}");
@@ -734,10 +732,8 @@ fn passive_corpus_executes_all_integrated_case_ids() {
         .into_iter()
         .filter(|case| case.family == "save.passive")
         .collect();
-    let found: BTreeMap<&str, &FrozenCase> = cases
-        .iter()
-        .map(|case| (case.id.as_str(), case))
-        .collect();
+    let found: BTreeMap<&str, &FrozenCase> =
+        cases.iter().map(|case| (case.id.as_str(), case)).collect();
     for id in PASSIVE_INTEGRATED_CASE_IDS {
         if !found.contains_key(id) {
             panic!("integrated manifest missing passive case {id}");
@@ -808,10 +804,8 @@ fn chunk_gate_cases(ids: &[&str], gate: fn(&str) -> bool, label: &str) -> Vec<Fr
         .into_iter()
         .filter(|case| case.family == "save.chunk" && gate(&case.id))
         .collect();
-    let found: BTreeMap<&str, &FrozenCase> = cases
-        .iter()
-        .map(|case| (case.id.as_str(), case))
-        .collect();
+    let found: BTreeMap<&str, &FrozenCase> =
+        cases.iter().map(|case| (case.id.as_str(), case)).collect();
     for id in ids {
         if !found.contains_key(id) {
             panic!("integrated manifest missing {label} chunk case {id}");
@@ -922,10 +916,8 @@ fn companion_gate_cases(ids: &[&str], gate: fn(&str) -> bool, label: &str) -> Ve
         .into_iter()
         .filter(|case| case.family == "save.companion" && gate(&case.id))
         .collect();
-    let found: BTreeMap<&str, &FrozenCase> = cases
-        .iter()
-        .map(|case| (case.id.as_str(), case))
-        .collect();
+    let found: BTreeMap<&str, &FrozenCase> =
+        cases.iter().map(|case| (case.id.as_str(), case)).collect();
     for id in ids {
         if !found.contains_key(id) {
             panic!("integrated manifest missing {label} companion case {id}");
@@ -1025,13 +1017,19 @@ fn storage_corpus_stale_value_digest_mutation_fails() {
     let case = successful_decode_cases(&cases)
         .into_iter()
         .find(|case| case.family == "save.player")
-        .unwrap_or_else(|| panic!("integrated manifest missing successful save.player decode case"));
+        .unwrap_or_else(|| {
+            panic!("integrated manifest missing successful save.player decode case")
+        });
     let mut mutated = case.clone();
     let mut normalized = case.normalized.clone();
-    let object = normalized.as_object_mut().expect("ok outcome must be an object");
+    let object = normalized
+        .as_object_mut()
+        .expect("ok outcome must be an object");
     object.insert(
         "value_sha256".to_string(),
-        serde_json::json!("sha256:0000000000000000000000000000000000000000000000000000000000000001"),
+        serde_json::json!(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+        ),
     );
     mutated.normalized = normalized;
     let err = execute_storage_family_case(&mutated).expect_err("stale value_sha256 must fail");

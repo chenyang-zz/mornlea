@@ -55,15 +55,15 @@ const (
 	hostileWireDistant    = 70
 	hostileWireKind       = 72
 
-	hostileDecodeV1FixtureID     = hostileFamily + "/" + hostileVersionV1 + "/decode/v1-fixture"
-	hostileDecodeV2FixtureID     = hostileFamily + "/" + hostileVersionV2 + "/decode/v2-fixture"
-	hostileDecodeEmptyID           = hostileFamily + "/" + hostileVersionV2 + "/decode/empty"
-	hostileDecodeMaxRecordsID      = hostileFamily + "/" + hostileVersionV2 + "/decode/max-records"
-	hostileDecodeYMinID            = hostileFamily + "/" + hostileVersionV2 + "/decode/y-min-boundary"
-	hostileDecodeYMaxID            = hostileFamily + "/" + hostileVersionV2 + "/decode/y-max-boundary"
-	hostileDecodeCount65ID      = hostileFamily + "/" + hostileVersionV2 + "/decode/count-65"
-	hostileDecodeCooldown20ID   = hostileFamily + "/" + hostileVersionV2 + "/decode/cooldown-20"
-	hostileDecodeV1TruncatedID  = hostileFamily + "/" + hostileVersionV1 + "/decode/truncated-tail"
+	hostileDecodeV1FixtureID            = hostileFamily + "/" + hostileVersionV1 + "/decode/v1-fixture"
+	hostileDecodeV2FixtureID            = hostileFamily + "/" + hostileVersionV2 + "/decode/v2-fixture"
+	hostileDecodeEmptyID                = hostileFamily + "/" + hostileVersionV2 + "/decode/empty"
+	hostileDecodeMaxRecordsID           = hostileFamily + "/" + hostileVersionV2 + "/decode/max-records"
+	hostileDecodeYMinID                 = hostileFamily + "/" + hostileVersionV2 + "/decode/y-min-boundary"
+	hostileDecodeYMaxID                 = hostileFamily + "/" + hostileVersionV2 + "/decode/y-max-boundary"
+	hostileDecodeCount65ID              = hostileFamily + "/" + hostileVersionV2 + "/decode/count-65"
+	hostileDecodeCooldown20ID           = hostileFamily + "/" + hostileVersionV2 + "/decode/cooldown-20"
+	hostileDecodeV1TruncatedID          = hostileFamily + "/" + hostileVersionV1 + "/decode/truncated-tail"
 	hostileDecodeInvalidVersionFutureID = hostileFamily + "/" + hostileVersionV2 + "/decode/invalid-version-future"
 
 	hostileEncodeV2ExactID       = hostileFamily + "/" + hostileVersionV2 + "/encode/v2-fixture-exact"
@@ -965,4 +965,3 @@ func TestStorageHostileExportToPinnedDirectory(t *testing.T) {
 		t.Fatalf("reload exported selection: %v", err)
 	}
 }
-

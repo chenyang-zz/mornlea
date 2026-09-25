@@ -5,11 +5,11 @@
 //! registers the reviewed routes against integrated manifest assets.
 
 use super::value_digest::{Value, value_sha256};
-use mornlea_storage::{
-    decode_region_bank, decode_superblock, encode_region_bank_into, encode_superblock_into,
-    select_region_bank, BANK_SIZE, RegionBank, RegionEntry, RegionKey, StorageError,
-};
 use crate::runtime_corpus::{FrozenCase, InputFormat};
+use mornlea_storage::{
+    BANK_SIZE, RegionBank, RegionEntry, RegionKey, StorageError, decode_region_bank,
+    decode_superblock, encode_region_bank_into, encode_superblock_into, select_region_bank,
+};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
@@ -74,11 +74,7 @@ fn parse_region_arguments(case: &FrozenCase) -> Result<(RegionArguments, RegionK
             component,
             capacity,
         },
-        RegionKey {
-            dimension,
-            x,
-            z,
-        },
+        RegionKey { dimension, x, z },
     ))
 }
 
@@ -123,7 +119,9 @@ fn region_schema_version(input: &[u8]) -> Result<u32, String> {
     if input.len() < 8 {
         return Err("input shorter than schema header".to_string());
     }
-    Ok(u32::from_le_bytes(input[4..8].try_into().expect("slice length")))
+    Ok(u32::from_le_bytes(
+        input[4..8].try_into().expect("slice length"),
+    ))
 }
 
 fn storage_error_category(err: &StorageError) -> Option<&'static str> {
@@ -148,10 +146,7 @@ fn entry_value(entry: &RegionEntry) -> Value {
         "payload_length".to_string(),
         Value::Unsigned(entry.payload_length as u64),
     );
-    fields.insert(
-        "revision".to_string(),
-        Value::Unsigned(entry.revision),
-    );
+    fields.insert("revision".to_string(), Value::Unsigned(entry.revision));
     fields.insert(
         "sector_count".to_string(),
         Value::Unsigned(entry.sector_count as u64),
@@ -163,10 +158,7 @@ fn bank_value(bank: &RegionBank) -> Value {
     let entries = bank.entries.iter().map(entry_value).collect::<Vec<_>>();
     let mut fields = BTreeMap::new();
     fields.insert("entries".to_string(), Value::Array(entries));
-    fields.insert(
-        "generation".to_string(),
-        Value::Unsigned(bank.generation),
-    );
+    fields.insert("generation".to_string(), Value::Unsigned(bank.generation));
     Value::Object(fields)
 }
 
@@ -236,7 +228,10 @@ pub fn execute_region_cases(cases: &[FrozenCase]) {
         assert!(
             route_is_registered(case),
             "unregistered region route {}/{}/{} for case {}",
-            case.family, case.version, case.operation, case.id
+            case.family,
+            case.version,
+            case.operation,
+            case.id
         );
         execute_region_case(case).unwrap_or_else(|err| {
             panic!("case {} failed: {err}", case.id);
@@ -362,24 +357,24 @@ fn execute_region_encode(
         other => return Err(format!("encode component {other} is unsupported")),
     };
 
-    if let Some(capacity) = args.capacity {
-        if (capacity as usize) < encoded.len() {
-            assert_error_category(case, "output_too_small")?;
-            return Ok(());
-        }
+    if let Some(capacity) = args.capacity
+        && (capacity as usize) < encoded.len()
+    {
+        assert_error_category(case, "output_too_small")?;
+        return Ok(());
     }
 
     if case.normalized.get("kind").and_then(JsonValue::as_str) == Some("ok") {
         expected_value_digest(case, &value)?;
-        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64) {
-            if length as usize != encoded.len() {
-                return Err(format!(
-                    "case {} encoded length {}, want {}",
-                    case.id,
-                    encoded.len(),
-                    length
-                ));
-            }
+        if let Some(length) = case.normalized.get("length").and_then(JsonValue::as_u64)
+            && length as usize != encoded.len()
+        {
+            return Err(format!(
+                "case {} encoded length {}, want {}",
+                case.id,
+                encoded.len(),
+                length
+            ));
         }
         let encoded_ref = case
             .encoded
@@ -395,7 +390,7 @@ fn execute_region_encode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime_corpus::{load_cases_for_consumer, CorpusConsumer};
+    use crate::runtime_corpus::{CorpusConsumer, load_cases_for_consumer};
 
     fn region_cases_from_manifest() -> Vec<FrozenCase> {
         load_cases_for_consumer(CorpusConsumer::Storage)
@@ -434,7 +429,10 @@ mod tests {
             category: "save".to_string(),
         };
         let err = std::panic::catch_unwind(|| execute_region_cases(std::slice::from_ref(&case)));
-        assert!(err.is_err(), "unknown region routes must fail before dispatch");
+        assert!(
+            err.is_err(),
+            "unknown region routes must fail before dispatch"
+        );
     }
 
     #[test]

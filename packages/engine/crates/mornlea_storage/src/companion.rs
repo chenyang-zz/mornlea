@@ -832,16 +832,10 @@ fn write_companion_payload_records(
         writer.u16(lifecycle.summary.len() as u16);
         writer.bytes(lifecycle.summary.as_bytes());
         if flags & FLAG_HAS_TASK != 0 {
-            append_task_slice(
-                writer,
-                &queue.expect("task flag implies a queue").current,
-            );
+            append_task_slice(writer, &queue.expect("task flag implies a queue").current);
         }
         if flags & FLAG_HAS_FIFO != 0 {
-            append_fifo_slice(
-                writer,
-                &queue.expect("FIFO flag implies a queue").pending,
-            );
+            append_fifo_slice(writer, &queue.expect("FIFO flag implies a queue").pending);
         }
     }
 }

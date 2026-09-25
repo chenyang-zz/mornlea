@@ -882,6 +882,7 @@ only discriminator the manifest carries.
 ```bash
 go test ./packages/tools/cmd/runtime-oracle -run TestContractInventory -count=1
 go test ./packages/tools/cmd/runtime-oracle -list TestContractInventory
+go test ./packages/tools/cmd/runtime-oracle -run '^TestStorageCorpus' -count=1
 go test ./packages/tools/cmd/runtime-oracle -run '^TestProtocolOracleFrame' -count=1
 go test ./packages/tools/cmd/runtime-oracle -run '^TestProtocolInventoryPublicationOracle' -count=1
 go test ./packages/tools/cmd/runtime-oracle -run '^TestProtocolRemotePlayersOracle' -count=1

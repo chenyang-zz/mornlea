@@ -108,11 +108,7 @@ pub fn cross_language_golden_tree() -> Value {
         Value::Utf8("storage".to_string()),
         Value::Bytes(vec![0x0a, 0x0b, 0x0c]),
         Value::Object(nested),
-        Value::Array(vec![
-            Value::Signed(1),
-            Value::Signed(2),
-            Value::Signed(3),
-        ]),
+        Value::Array(vec![Value::Signed(1), Value::Signed(2), Value::Signed(3)]),
     ])
 }
 
@@ -139,15 +135,17 @@ mod tests {
             .windows(7)
             .position(|window| window == b"a_first")
             .expect("a_first key bytes");
-        assert!(a_pos < z_pos, "object keys must encode in ascending UTF-8 order");
+        assert!(
+            a_pos < z_pos,
+            "object keys must encode in ascending UTF-8 order"
+        );
     }
 
     #[test]
     fn storage_value_v1_cross_language_golden_tree_digest_matches_go() {
         let digest = value_sha256(&cross_language_golden_tree());
         assert_eq!(
-            digest,
-            CROSS_LANGUAGE_GOLDEN_TREE_SHA256,
+            digest, CROSS_LANGUAGE_GOLDEN_TREE_SHA256,
             "golden tree digest must match the Go node 1.1 oracle"
         );
     }

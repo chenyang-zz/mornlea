@@ -99,7 +99,10 @@ fn vec3_value(values: [f32; 3]) -> Value {
 fn hostile_record_value(record: &HostileMob) -> Value {
     let mut fields = BTreeMap::new();
     fields.insert("id".to_string(), Value::Unsigned(record.id));
-    fields.insert("dimension".to_string(), Value::Signed(record.dimension as i64));
+    fields.insert(
+        "dimension".to_string(),
+        Value::Signed(record.dimension as i64),
+    );
     fields.insert("position".to_string(), vec3_value(record.position));
     fields.insert("velocity".to_string(), vec3_value(record.velocity));
     fields.insert("on_ground".to_string(), Value::Bool(record.on_ground));
@@ -307,13 +310,13 @@ fn execute_hostile_encode(case: &FrozenCase, args: &HostileArguments) -> Result<
         }) => {
             assert_error_category(case, "output_too_small")?;
             assert_output_too_small_fields(case, want_needed, want_available)?;
-            return Ok(());
+            Ok(())
         }
         Err(err) => {
             let category = storage_error_category(&err)
                 .ok_or_else(|| format!("unclassified encode rejection: {err}"))?;
             assert_error_category(case, category)?;
-            return Ok(());
+            Ok(())
         }
         Ok(written) => {
             assert_ok_outcome(case)?;
@@ -322,10 +325,10 @@ fn execute_hostile_encode(case: &FrozenCase, args: &HostileArguments) -> Result<
             if round.records != mobs.records {
                 return Err(format!("case {} encode round-trip record drift", case.id));
             }
-            if let Some(expected_encoded) = &case.encoded {
-                if expected_encoded.as_slice() != encoded {
-                    return Err(format!("case {} encoded asset mismatch", case.id));
-                }
+            if let Some(expected_encoded) = &case.encoded
+                && expected_encoded.as_slice() != encoded
+            {
+                return Err(format!("case {} encoded asset mismatch", case.id));
             }
             let expected_digest = case
                 .normalized
@@ -483,7 +486,8 @@ mod tests {
 
     #[test]
     fn hostile_v2_fixture_decode_executes_locally() {
-        let golden = include_bytes!("../../../../../server/storage/hostile/testdata/hostile-mobs-v2.bin");
+        let golden =
+            include_bytes!("../../../../../server/storage/hostile/testdata/hostile-mobs-v2.bin");
         let mobs = decode_hostile_mobs(golden).expect("decode v2 fixture");
         let digest = value_sha256(&hostile_mobs_value(&mobs));
         let case = fixture_decode_case(
@@ -497,7 +501,8 @@ mod tests {
 
     #[test]
     fn hostile_has_target_digest_mutation_fails_comparison() {
-        let golden = include_bytes!("../../../../../server/storage/hostile/testdata/hostile-mobs-v2.bin");
+        let golden =
+            include_bytes!("../../../../../server/storage/hostile/testdata/hostile-mobs-v2.bin");
         let mobs = decode_hostile_mobs(golden).expect("decode v2 fixture");
         let mut stale = mobs.clone();
         if let Some(record) = stale.records.iter_mut().find(|record| record.has_target) {
@@ -518,7 +523,8 @@ mod tests {
 
     #[test]
     fn hostile_kind_digest_mutation_fails_comparison() {
-        let golden = include_bytes!("../../../../../server/storage/hostile/testdata/hostile-mobs-v2.bin");
+        let golden =
+            include_bytes!("../../../../../server/storage/hostile/testdata/hostile-mobs-v2.bin");
         let mobs = decode_hostile_mobs(golden).expect("decode v2 fixture");
         let mut stale = mobs.clone();
         if let Some(record) = stale.records.iter_mut().find(|record| record.kind == 1) {

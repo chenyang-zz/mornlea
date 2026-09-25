@@ -3858,7 +3858,7 @@
         },
         {
           "path": "packages/server/storage/chunk/chunk_oracle_test.go",
-          "sha256": "sha256:e693f1c1d45768689781212fcb4c3ffc4dd710b631ec8b25ef594d362869e1da"
+          "sha256": "sha256:391af98a3e5fd8941aebb443a375d34312ae70cd80221cdf72c2de9ebe1bed3b"
         },
         {
           "path": "packages/server/storage/chunk/testdata/chunk-v1.bin",
@@ -3981,7 +3981,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/storage_companion_test.go",
-          "sha256": "sha256:705595dce58d194593715b1c58667b479e01c6e595636d3e047b74dd583fd7f8"
+          "sha256": "sha256:9d6eda00893d8681491409fdb07cfe0d281825389d85985fdd5fe6073a60160c"
         }
       ],
       "cases": [
@@ -4043,7 +4043,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/storage_hostile_test.go",
-          "sha256": "sha256:17296f1b5182a3b504b12ce16e3ac123ba5296bca2ca49c653e711233f5407c6"
+          "sha256": "sha256:826a385fcc6b82b4b9f90a621e28b9aa7a83127c9673804f719b5a5f6cd106a7"
         }
       ],
       "cases": [
@@ -4121,7 +4121,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/storage_passive_test.go",
-          "sha256": "sha256:45f0248bba9273c9c1f9fedb709a9fce965595f17cbce853ac4e9f2994bd06e5"
+          "sha256": "sha256:d8422849e48b22e6dc615744a1fec00eef15219cd634bd948e719c473b7a9c58"
         }
       ],
       "cases": [
@@ -4259,7 +4259,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/storage_player_test.go",
-          "sha256": "sha256:0f98780e4024486ff0b5c52ddb6f4b029bfb55df169060f3accbef0c696db76d"
+          "sha256": "sha256:a1763260d8c1cfbaf3b41e0c6100bcfc7ac0b72e1d5dc18270b857cfd9ae0952"
         }
       ],
       "cases": [
@@ -4324,7 +4324,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/storage_region_test.go",
-          "sha256": "sha256:6d3d38a641d0c61d0959c09cc4c1868529b1ac08059c88578e44a04835b7ca0d"
+          "sha256": "sha256:46ba21d2d7d78508bb44bcc6397e1f1d6ecd0f3ebfb4f87c0adf62e5ece5d7c0"
         }
       ],
       "cases": [
@@ -4380,7 +4380,7 @@
         },
         {
           "path": "packages/server/storage/metadata_oracle_test.go",
-          "sha256": "sha256:65c7a594721c84b7b302e78b96967b48e7b927241f3e9b98cb11827f1c5ca072"
+          "sha256": "sha256:9a0345c4bb037865bb44159f94319bc41eb55ede1192477f27b4d29383742430"
         },
         {
           "path": "packages/server/storage/metadata_test.go",

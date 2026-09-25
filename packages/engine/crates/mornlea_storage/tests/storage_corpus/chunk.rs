@@ -7,9 +7,9 @@
 use super::value_digest::{Value, value_sha256};
 use crate::runtime_corpus::{FrozenCase, InputFormat};
 use mornlea_storage::{
-    ChestSlot, ChunkKey, ChunkSave, ContainerSnapshot, DecodedChunk, DropSlot, FurnaceSlot, ItemStack,
-    StorageError, CHUNK_MAX_DECODED_CHUNK, decode_chunk, decode_chunk_envelope, encode_chunk,
-    encode_chunk_logical,
+    CHUNK_MAX_DECODED_CHUNK, ChestSlot, ChunkKey, ChunkSave, ContainerSnapshot, DecodedChunk,
+    DropSlot, FurnaceSlot, ItemStack, StorageError, decode_chunk, decode_chunk_envelope,
+    encode_chunk, encode_chunk_logical,
 };
 const CHUNK_CURRENT_SCHEMA: u32 = 9;
 use serde_json::Value as JsonValue;
@@ -147,27 +147,33 @@ fn parse_chunk_arguments(case: &FrozenCase) -> Result<ChunkArguments, String> {
         .arguments
         .as_object()
         .ok_or_else(|| format!("case {} arguments must be an object", case.id))?;
-    let dimension = read_i32_json(obj.get("dimension").ok_or_else(|| {
-        format!("case {} missing dimension", case.id)
-    })?)?;
-    let x = read_i32_json(obj.get("x").ok_or_else(|| format!("case {} missing x", case.id))?)?;
-    let z = read_i32_json(obj.get("z").ok_or_else(|| format!("case {} missing z", case.id))?)?;
+    let dimension = read_i32_json(
+        obj.get("dimension")
+            .ok_or_else(|| format!("case {} missing dimension", case.id))?,
+    )?;
+    let x = read_i32_json(
+        obj.get("x")
+            .ok_or_else(|| format!("case {} missing x", case.id))?,
+    )?;
+    let z = read_i32_json(
+        obj.get("z")
+            .ok_or_else(|| format!("case {} missing z", case.id))?,
+    )?;
     let revision_text = obj
         .get("revision")
         .and_then(JsonValue::as_str)
         .ok_or_else(|| format!("case {} missing revision", case.id))?;
-    let revision = revision_text
-        .parse::<u64>()
-        .map_err(|_| format!("case {} revision must be an unsigned decimal string", case.id))?;
+    let revision = revision_text.parse::<u64>().map_err(|_| {
+        format!(
+            "case {} revision must be an unsigned decimal string",
+            case.id
+        )
+    })?;
     if revision == 0 {
         return Err(format!("case {} revision must be nonzero", case.id));
     }
     Ok(ChunkArguments {
-        key: ChunkKey {
-            dimension,
-            x,
-            z,
-        },
+        key: ChunkKey { dimension, x, z },
         revision,
     })
 }
@@ -229,14 +235,20 @@ fn section_value(section: &ContainerSnapshot) -> Value {
 
 fn drop_value(drop: &DropSlot) -> Value {
     let mut fields = BTreeMap::new();
-    fields.insert("generation".to_string(), Value::Unsigned(drop.generation as u64));
+    fields.insert(
+        "generation".to_string(),
+        Value::Unsigned(drop.generation as u64),
+    );
     fields.insert("active".to_string(), Value::Bool(drop.active));
     fields.insert("stack".to_string(), item_stack_value(&drop.stack));
     fields.insert(
         "block_index".to_string(),
         Value::Unsigned(drop.block_index as u64),
     );
-    fields.insert("age_ticks".to_string(), Value::Unsigned(drop.age_ticks as u64));
+    fields.insert(
+        "age_ticks".to_string(),
+        Value::Unsigned(drop.age_ticks as u64),
+    );
     fields.insert(
         "pickup_delay_ticks".to_string(),
         Value::Unsigned(drop.pickup_delay_ticks as u64),
@@ -246,7 +258,10 @@ fn drop_value(drop: &DropSlot) -> Value {
 
 fn furnace_value(slot: &FurnaceSlot) -> Value {
     let mut fields = BTreeMap::new();
-    fields.insert("generation".to_string(), Value::Unsigned(slot.generation as u64));
+    fields.insert(
+        "generation".to_string(),
+        Value::Unsigned(slot.generation as u64),
+    );
     fields.insert("active".to_string(), Value::Bool(slot.active));
     fields.insert(
         "block_index".to_string(),
@@ -259,18 +274,20 @@ fn furnace_value(slot: &FurnaceSlot) -> Value {
         "progress_ticks".to_string(),
         Value::Unsigned(slot.progress_ticks as u64),
     );
-    fields.insert("burn_ticks".to_string(), Value::Unsigned(slot.burn_ticks as u64));
+    fields.insert(
+        "burn_ticks".to_string(),
+        Value::Unsigned(slot.burn_ticks as u64),
+    );
     Value::Object(fields)
 }
 
 fn chest_value(slot: &ChestSlot) -> Value {
-    let items = slot
-        .items
-        .iter()
-        .map(item_stack_value)
-        .collect::<Vec<_>>();
+    let items = slot.items.iter().map(item_stack_value).collect::<Vec<_>>();
     let mut fields = BTreeMap::new();
-    fields.insert("generation".to_string(), Value::Unsigned(slot.generation as u64));
+    fields.insert(
+        "generation".to_string(),
+        Value::Unsigned(slot.generation as u64),
+    );
     fields.insert("active".to_string(), Value::Bool(slot.active));
     fields.insert(
         "block_index".to_string(),
@@ -289,11 +306,7 @@ fn chunk_key_value(key: &ChunkKey) -> Value {
 }
 
 fn chunk_body_value(chunk: &mornlea_storage::Chunk) -> Value {
-    let sections = chunk
-        .sections
-        .iter()
-        .map(section_value)
-        .collect::<Vec<_>>();
+    let sections = chunk.sections.iter().map(section_value).collect::<Vec<_>>();
     let drops = chunk.drops.iter().map(drop_value).collect::<Vec<_>>();
     let furnaces = chunk.furnaces.iter().map(furnace_value).collect::<Vec<_>>();
     let chests = chunk.chests.iter().map(chest_value).collect::<Vec<_>>();
@@ -400,17 +413,15 @@ fn assert_logical_length(case: &FrozenCase, length: usize) -> Result<(), String>
     if length as u64 != want {
         return Err(format!(
             "case {} logical_length {}, want {}",
-            case.id,
-            length,
-            want
+            case.id, length, want
         ));
     }
     Ok(())
 }
 
 fn execute_chunk_encode(case: &FrozenCase, args: &ChunkArguments) -> Result<(), String> {
-    let decoded = decode_chunk(args.key, args.revision, &case.input)
-        .map_err(|err| err.to_string())?;
+    let decoded =
+        decode_chunk(args.key, args.revision, &case.input).map_err(|err| err.to_string())?;
     let digest_value = decoded_chunk_value(&decoded);
     let save = ChunkSave {
         key: args.key,
@@ -569,7 +580,7 @@ mod tests {
         use mornlea_storage::MAX_COMPRESSED_CHUNK;
         let mut out = wire.to_vec();
         if out.len() >= 44 {
-            out[40..44].copy_from_slice(&((MAX_COMPRESSED_CHUNK + 1) as u32).to_le_bytes());
+            out[40..44].copy_from_slice(&(MAX_COMPRESSED_CHUNK + 1).to_le_bytes());
         }
         out
     }
@@ -606,8 +617,8 @@ mod tests {
         logical: &[u8],
     ) -> Vec<u8> {
         const COMPRESSION_LEVEL: i32 = 3;
-        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), COMPRESSION_LEVEL)
-            .expect("zstd encoder");
+        let mut encoder =
+            zstd::stream::write::Encoder::new(Vec::new(), COMPRESSION_LEVEL).expect("zstd encoder");
         encoder
             .set_pledged_src_size(Some(logical.len() as u64))
             .expect("pledge size");
@@ -721,8 +732,7 @@ mod tests {
                 ..DropSlot::default()
             };
         }
-        let logical =
-            encode_chunk_logical(key, fixture_revision(), &chunk, 4).expect("v4 logical");
+        let logical = encode_chunk_logical(key, fixture_revision(), &chunk, 4).expect("v4 logical");
         chunk_test_envelope_from_logical(key, fixture_revision(), 4, &logical)
     }
 
