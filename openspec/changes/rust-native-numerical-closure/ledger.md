@@ -32,3 +32,48 @@
 - Parallelism ruling: node 1.2 is the only shared-contract landing; disjoint provider files can begin on its accepted SHA. Mesh and path continuations and all `ffi.rs` edits are serial by actual shared-file ownership. Metadata alias repair can begin after the interface and precedes every adapter. The controller owns corpus registration and SHA refresh only after reviewed producer fragments; this does not block independent provider tests.
 - File-ownership correction: 1.2 also creates and registers empty `tests/native_contract/publication.rs`, so 3.1 can add its public atomicity cases without editing a controller-only test root. The explicit file packets name each provider's test-only Go producer, exact Rust source/test files, and read-only peers.
 - Static check: 29 unique open checkbox IDs, 29 links and 29 matching plan anchors; no broken local Markdown target or unfinished plan placeholder. Focused strict OpenSpec validation, scoped `git diff --check`, and `openspec validate --all --strict --no-interactive` passed (127/127). Pre-existing `.cursor/` deletions and the user-owned root `AGENTS.md` edit were left untouched. Architecture skill: no change; this revision adds implementation instructions, not verified cross-task code facts.
+
+## 2026-09-25 — Node 1.1 baseline pinning
+
+- Execution baseline: `372da827b3f7c15690b7a75855943d16b04090c8` on branch `feat/rust-native-numerical-closure`, initially clean.
+- Four accepted predecessor change SHAs:
+  - Domain event completion: archive `44f15ac5a4202f635a589c5b9ce4313c9eead1ca`, code result `b390e5314eeef76c1231f28b49e6dcf3b12ce0ff`.
+  - Protocol completion: archive `81a56bb897e9e623eb64fbcad093bafe430f81d5`, code result `cbbd1de9b531bc16a1b24bfba6c8d35661601004`.
+  - Region format completion: archive `380428873722e0300dc976077557e937d2f93427`, code result `699d4cd42b26b48220feceae1df7f7fa9e2a6d71`.
+  - Storage codec closure: archive `e9d272f9011e0e891c784346eb4a2d1d053257df`, code result `d4b08a0b1eae7889ef43c96e54626559d69be3e3`.
+- Current engine source identity and ABI:
+  - ABI version: v11 (`mornlea_engine_abi_version() -> 11`).
+  - `packages/engine/crates/mornlea_engine/src/ffi.rs`: `sha256:703d20c76b2d7f16d2e0933badf6e60fc2e8dd32be60f05607de63a529cedaa2`.
+  - `packages/engine/crates/mornlea_engine/src/lib.rs`: `sha256:11dc7fb9641630a6704ac7052108dd60f2ddfc29fdcbf128133e1dd319153804`.
+  - Ten exported numerical C symbols verified in `src/ffi.rs`: `mornlea_collision_resolve`, `mornlea_fluid_eval_batch`, `mornlea_fluid_rescan`, `mornlea_lod_shell`, `mornlea_mesh_section`, `mornlea_physics_step`, `mornlea_raycast_batch`, `mornlea_tree_blocks`, `mornlea_worldgen_chunk`, `mornlea_worldgen_probe`.
+- Manifest inspection (`testdata/runtime-migration/contracts.json`):
+  - Eleven kernel families enumerated; all currently have zero accepted cases (null):
+    1. `kernel.mornlea_collision_resolve` (version 11, cases: 0)
+    2. `kernel.mornlea_fluid_eval_batch` (version 11, cases: 0)
+    3. `kernel.mornlea_fluid_rescan` (version 11, cases: 0)
+    4. `kernel.mornlea_lod_shell` (version 11, cases: 0)
+    5. `kernel.mornlea_mesh_section` (version 11, cases: 0)
+    6. `kernel.mornlea_physics_step` (version 11, cases: 0)
+    7. `kernel.mornlea_raycast_batch` (version 11, cases: 0)
+    8. `kernel.mornlea_tree_blocks` (version 11, cases: 0)
+    9. `kernel.mornlea_worldgen_chunk` (version 11, cases: 0)
+    10. `kernel.mornlea_worldgen_probe` (version 11, cases: 0)
+    11. `kernel.pathfind` (version 1, cases: 0)
+  - Source SHA-256 validation (all match checked-out files):
+    - `packages/engine/include/mornlea_engine.h`: `sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f`
+    - `packages/shared/nativeabi/native_test.go`: `sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c`
+    - `packages/engine/crates/mornlea_engine/src/collision.rs`: `sha256:ed8adb64ca6a14c0b205eba6d262b632089ba2bce4fc3e4fc029b1702aa99507`
+    - `packages/engine/crates/mornlea_engine/src/fluid_eval.rs`: `sha256:47716d86f213cd003cae72bc4773ff39ea08546bea83f234b2bcc503d3bbc2a0`
+    - `packages/engine/crates/mornlea_engine/src/fluid_rescan.rs`: `sha256:d9fab8dc772fc66496ddee739c6e30bdc8e648473141680b340f2d41be658fd9`
+    - `packages/engine/crates/mornlea_engine/src/lod.rs`: `sha256:dfdc994ed2cf305e32679b2f0500f7634e060f65dae6de458836071aba20f62a`
+    - `packages/engine/crates/mornlea_engine/src/greedy/mod.rs`: `sha256:b24091657579b1d3c1aa996a445fc6c9d2c2edadc89f054ae762553b15e98b50`
+    - `packages/engine/crates/mornlea_engine/src/step.rs`: `sha256:188cb73517c29e471afc2733a0c49bced834087ed04871ca408dabf5b7446aac`
+    - `packages/engine/crates/mornlea_engine/src/raycast.rs`: `sha256:61acf71d6bf411a4d0fc3e2698ab6881f0baa7e26ba4d184abdb3cad53dd5652`
+    - `packages/engine/crates/mornlea_engine/src/worldgen.rs`: `sha256:1bd2d720ee17e975bc62a8ca0673a504b81634cc506adcd1e262beb6bffb66bd`
+    - `packages/shared/pathfind/pathfind.go`: `sha256:228bbfa1c2682a242f89084f59c2843a415829fae534ad3b0c048494b7263878`
+    - `packages/shared/pathfind/pathfind_test.go`: `sha256:540bbaf3d8d3d12b2717e0c2daa9e8e38d22a6e469d895c7ea22d0970571e031`
+- Validation commands:
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestContractInventory' -count=1`: passed (ok github.com/channing771/mornlea/packages/tools/cmd/runtime-oracle 3.968s).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --locked -- --list`: passed (262 unit tests discovered, 0 benchmarks, 0 doc-tests).
+- Outcome: Baseline verified; no engine symbol or version drift. All 11 numerical routes confirmed uncovered without corpus mutation. Ready for Node 1.2 interface landing.
+- Rollback: Revert this ledger entry only.
