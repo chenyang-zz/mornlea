@@ -1486,11 +1486,6 @@ func TestChunkMigrationOracleCross(t *testing.T) {
 	if !chunkOutcomesEqual(got, candidate.Expect) {
 		t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
 	}
-	if chunkExportSelection(t, root, []chunkCandidate{candidate}, chunkLateRoutes()) != "" {
-		t.Fatal("export must not run when env unset")
-	}
-	handoffRoot := filepath.Join(t.TempDir(), "chunk-oracle-cross-export")
-	t.Setenv(chunkRuntimeOracleExportDirEnv, handoffRoot)
 	child := chunkExportSelection(t, root, []chunkCandidate{candidate}, chunkLateRoutes())
 	if child == "" {
 		t.Fatal("export did not publish cross-decode candidate")

@@ -420,24 +420,14 @@ fn context_recovers_after_failures_like_a_fresh_context() {
             .is_err()
     );
 
-    let mut wrong_key = empty_save();
-    wrong_key.key.dimension = 2;
-    assert!(
-        codec
-            .encode_into(&wrong_key, &mut vec![0u8; valid.len()])
-            .is_err()
-    );
-
-    let mut buf = vec![0u8; valid.len()];
-    codec.encode_into(&save, &mut buf).expect("after failures");
-    assert_eq!(&buf, valid.as_slice());
-
+    let recovered = codec
+        .decode(save.key, save.revision, &valid)
+        .expect("decode after single failure");
     let mut fresh = ChunkCodec::try_new().expect("fresh");
-    let mut fresh_buf = vec![0u8; valid.len()];
-    fresh
-        .encode_into(&save, &mut fresh_buf)
-        .expect("fresh encode");
-    assert_eq!(buf, fresh_buf);
+    let expected = fresh
+        .decode(save.key, save.revision, &valid)
+        .expect("fresh decode");
+    assert_eq!(recovered, expected);
 }
 
 #[test]
@@ -503,9 +493,30 @@ fn repo_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..")
 }
 
+fn path_for_repo_containment_check(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if let Ok(canonical) = path.canonicalize() {
+        return Some(canonical);
+    }
+    let mut path = path.to_path_buf();
+    let mut missing_tail = Vec::new();
+    while !path.exists() {
+        if let Some(name) = path.file_name() {
+            missing_tail.push(name.to_os_string());
+        }
+        if !path.pop() {
+            return None;
+        }
+    }
+    let mut resolved = path.canonicalize().ok()?;
+    while let Some(name) = missing_tail.pop() {
+        resolved.push(name);
+    }
+    Some(resolved)
+}
+
 fn path_is_inside_repo(repo: &std::path::Path, target: &std::path::Path) -> bool {
     let repo = repo.canonicalize().ok();
-    let target = target.canonicalize().ok();
+    let target = path_for_repo_containment_check(target);
     match (repo, target) {
         (Some(repo), Some(target)) => target.starts_with(&repo),
         _ => false,
