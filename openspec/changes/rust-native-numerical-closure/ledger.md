@@ -135,3 +135,22 @@
   - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`: passed cleanly.
 - Review: Task Reviewer subagent approved after one fix round addressing an unused variable in the test file.
 - Rollback: Revert `24dccf01`.
+
+## 2026-09-25 — Node 2.3 ray traversal provider
+
+- Predecessor SHA: `e40a73a530e2e8a45af0ca27c6945dbf92833298`
+- Result SHA: `75a047c9ddbe41baf61998076004ec68a6fa0bcb`
+- Implementation summary:
+  - `src/raycast.rs` exposed raycast traversal step and internal cursor math.
+  - `src/native/raycast.rs` implements `NativeRaycast` for `RaycastOp`, with commit-on-success semantics (mutates cursor only after `RayBatch::from_parts` succeeds), handling `done` repeat calls, negative floors, tie priorities, endpoint inclusion, and wrapping math.
+  - `tests/native_contract/raycast.rs` tests input validation on `RayCursor::try_new`, multi-batch 65-record traversal, repeated done, negative floor, tie priority, endpoint inclusion, and verifies cursor remains unchanged on error.
+  - `tests/numerical_migration/raycast.rs` verifies multi-batch bitwise parity with ABI observations.
+  - `packages/tools/cmd/runtime-oracle/kernel_raycast_test.go` exercises `nativeabi.RaycastBatch` on valid multi-batch cases and panic error conditions.
+- Verification:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked raycast`: passed (7 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test numerical_migration --locked raycast`: passed (1 test passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --lib --locked raycast`: passed (11 tests passed).
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelRaycast' -count=1`: passed (ok github.com/channing771/mornlea/packages/tools/cmd/runtime-oracle 0.498s).
+  - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`: passed cleanly.
+- Review: Task Reviewer subagent approved after two fix rounds ensuring robust `RayCursor::try_new` tests, true commit-on-success in `next_batch`, and clean comments.
+- Rollback: Revert `75a047c9`.
