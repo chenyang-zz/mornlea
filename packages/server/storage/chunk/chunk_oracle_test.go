@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/channing771/mornlea/packages/server/storage/region"
 	"github.com/channing771/mornlea/packages/server/storage/storagedef"
 	"github.com/channing771/mornlea/packages/shared/core"
 	"github.com/channing771/mornlea/packages/shared/world"
@@ -26,11 +27,14 @@ const (
 	chunkCorpusRelDir         = "testdata/runtime-migration/cases/storage/chunk"
 	chunkProducerTestRel      = "packages/server/storage/chunk/chunk_oracle_test.go"
 	chunkCodecSourceRel       = "packages/server/storage/chunk/chunk_codec.go"
-	chunkPinnedExportDir      = "/tmp/runtime-oracle-chunk-4.3a"
-	chunkPinnedExportDirLate  = "/tmp/runtime-oracle-chunk-4.3b-late-fix"
-	chunkSelectionManifest    = "selection.json"
-	chunkRustConsumer         = "mornlea_storage"
+	chunkPinnedExportDir           = "/tmp/runtime-oracle-chunk-4.3a"
+	chunkPinnedExportDirLate       = "/tmp/runtime-oracle-chunk-4.3b-late-fix"
+	chunkPinnedExportDirAdversarial = "/tmp/runtime-oracle-chunk-4.3c-adversarial"
+	chunkPinnedExportDirCross        = "/tmp/runtime-oracle-chunk-4.3c-cross"
+	chunkSelectionManifest         = "selection.json"
+	chunkRustConsumer              = "mornlea_storage"
 	chunkRuntimeOracleExportDirEnv = "RUNTIME_ORACLE_EXPORT_DIR"
+	chunkRustFrameInputEnv         = "RUST_STORAGE_FRAME_INPUT"
 
 	chunkFixtureRevision = uint64(19)
 )
@@ -185,11 +189,15 @@ func chunkFixtureKey() core.ChunkKey {
 }
 
 func chunkArgumentsJSON() json.RawMessage {
+	return chunkArgumentsJSONFor(-3, strconv.FormatUint(chunkFixtureRevision, 10))
+}
+
+func chunkArgumentsJSONFor(x int32, revision string) json.RawMessage {
 	args := map[string]any{
 		"dimension": int32(core.Overworld),
-		"x":         int32(-3),
+		"x":         x,
 		"z":         int32(7),
-		"revision":  strconv.FormatUint(chunkFixtureRevision, 10),
+		"revision":  revision,
 	}
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -423,10 +431,19 @@ func chunkWireWithSchema(wire []byte, schema uint32) []byte {
 }
 
 func chunkBuildCandidate(t *testing.T, id, caseVersion string, input []byte) chunkCandidate {
+	return chunkBuildCandidateWithArgs(t, id, caseVersion, input, chunkArgumentsJSON())
+}
+
+func chunkBuildCandidateWithArgs(
+	t *testing.T,
+	id, caseVersion string,
+	input []byte,
+	args json.RawMessage,
+) chunkCandidate {
 	t.Helper()
 	spec := chunkCaseSpec{
 		ID: id, Family: chunkFamily, Version: caseVersion, Operation: "decode",
-		Arguments: chunkArgumentsJSON(), InputFormat: "binary", Checkpoints: []string{"0"},
+		Arguments: args, InputFormat: "binary", Checkpoints: []string{"0"},
 		RustConsumer: chunkRustConsumer,
 	}
 	outcome, err := chunkRunDecode(spec, input)
@@ -464,6 +481,188 @@ func chunkLateRoutes() []chunkConsumerRoute {
 		})
 	}
 	return routes
+}
+
+func chunkAdversarialBaseWire(t *testing.T) []byte {
+	t.Helper()
+	key := chunkFixtureKey()
+	encoded, err := Encode(ChunkSave{
+		Key: key, Revision: chunkFixtureRevision, Chunk: world.NewChunk(key.Pos),
+	})
+	if err != nil {
+		t.Fatalf("encode adversarial base: %v", err)
+	}
+	return encoded
+}
+
+func chunkTruncatedEnvelopeWire(wire []byte) []byte {
+	if len(wire) >= 44 {
+		return bytes.Clone(wire[:43])
+	}
+	return bytes.Clone(wire)
+}
+
+func chunkTruncatedFrameWire(wire []byte) []byte {
+	if len(wire) <= 44 {
+		return bytes.Clone(wire)
+	}
+	declared := binary.LittleEndian.Uint32(wire[40:44])
+	out := bytes.Clone(wire[:44])
+	compressed := wire[44:]
+	if len(compressed) > 1 {
+		out = append(out, compressed[:len(compressed)-1]...)
+	} else if len(compressed) > 0 {
+		out = append(out, compressed[0])
+	}
+	binary.LittleEndian.PutUint32(out[40:44], declared)
+	return out
+}
+
+func chunkTrailingByteWire(wire []byte) []byte {
+	return append(bytes.Clone(wire), 0)
+}
+
+func chunkBrokenZstdChecksumWire(wire []byte) []byte {
+	out := bytes.Clone(wire)
+	if len(out) == 0 {
+		return out
+	}
+	out[len(out)-1] ^= 0xff
+	return out
+}
+
+func chunkDeclaredLogicalOversizeWire(wire []byte) []byte {
+	out := bytes.Clone(wire)
+	if len(out) >= 40 {
+		binary.LittleEndian.PutUint32(out[36:40], maxDecodedChunk+1)
+	}
+	return out
+}
+
+func chunkDeclaredCompressedOversizeWire(wire []byte) []byte {
+	out := bytes.Clone(wire)
+	if len(out) >= 44 {
+		binary.LittleEndian.PutUint32(out[40:44], region.MaxCompressedChunk+1)
+	}
+	return out
+}
+
+func chunkPaletteErrorWire(t *testing.T, key core.ChunkKey) []byte {
+	t.Helper()
+	logical := testLogicalChunk(key, chunkFixtureRevision, func(index int) world.ContainerSnapshot {
+		if index == 0 {
+			packed := make([]uint64, 256)
+			packed[0] = 1
+			return world.ContainerSnapshot{
+				Kind: world.StorageIndexed, Bits: 4,
+				Palette: []core.BlockID{0}, Packed: packed,
+			}
+		}
+		return world.ContainerSnapshot{Kind: world.StorageSingle, Single: core.AirID}
+	})
+	return testEnvelope(key, chunkFixtureRevision, logical)
+}
+
+func chunkActiveContainerMismatchWire(t *testing.T, key core.ChunkKey) []byte {
+	t.Helper()
+	logical := testLogicalChunk(key, chunkFixtureRevision, func(int) world.ContainerSnapshot {
+		return world.ContainerSnapshot{Kind: world.StorageSingle, Single: core.AirID}
+	})
+	for range core.DropsPerChunk {
+		logical = appendLogicalDropSlot(logical, world.DropSlot{})
+	}
+	logical = appendLogicalFurnaceSlot(logical, world.FurnaceSlot{
+		Generation: 1, Active: true, BlockIndex: 0,
+	})
+	for slot := 1; slot < core.FurnacesPerChunk; slot++ {
+		logical = appendLogicalFurnaceSlot(logical, world.FurnaceSlot{})
+	}
+	for range core.ChestsPerChunk {
+		logical = appendLogicalChestSlot(logical, world.ChestSlot{})
+	}
+	return testEnvelope(key, chunkFixtureRevision, logical)
+}
+
+func chunkInsufficientDropSlotsWire(t *testing.T, key core.ChunkKey) []byte {
+	t.Helper()
+	chunk := codecFixtureChunk(key.Pos)
+	index, ok := world.ChunkBlockIndex(core.BlockPos{
+		X: key.Pos.X << core.SectionShift, Y: 5, Z: key.Pos.Z << core.SectionShift,
+	})
+	if !ok {
+		t.Fatal("fixture block index missing for insufficient drop slots")
+	}
+	chunk.SetDrop(0, world.DropSlot{
+		Generation: 1, Active: true,
+		Stack:      core.ItemStack{Item: core.ItemStonePickaxe, Count: 2},
+		BlockIndex: index,
+	})
+	for slot := 1; slot < core.DropsPerChunk; slot++ {
+		if slot%2 == 0 {
+			chunk.SetDrop(slot, world.DropSlot{Generation: math.MaxUint32})
+			continue
+		}
+		chunk.SetDrop(slot, world.DropSlot{
+			Generation: uint32(slot), Active: true,
+			Stack:      core.ItemStack{Item: core.ItemStone, Count: 1},
+			BlockIndex: index,
+		})
+	}
+	return legacyV4ChunkPayload(t, key, chunkFixtureRevision, chunk)
+}
+
+func chunkAdversarialRoutes() []chunkConsumerRoute {
+	return []chunkConsumerRoute{
+		{FamilyID: chunkFamily, Version: "9", Operation: "decode"},
+		{FamilyID: chunkFamily, Version: "4", Operation: "decode"},
+	}
+}
+
+func chunkAdversarialCandidates(t *testing.T) []chunkCandidate {
+	t.Helper()
+	key := chunkFixtureKey()
+	base := chunkAdversarialBaseWire(t)
+	args := chunkArgumentsJSON()
+	wrongKeyArgs := chunkArgumentsJSONFor(-2, strconv.FormatUint(chunkFixtureRevision, 10))
+	wrongRevisionArgs := chunkArgumentsJSONFor(-3, "20")
+	return []chunkCandidate{
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/invalid-version-zero", "9",
+			chunkWireWithSchema(base, 0), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/invalid-version-future", "9",
+			chunkWireWithSchema(base, 10), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/wrong-key", "9", base, wrongKeyArgs),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/wrong-revision", "9", base, wrongRevisionArgs),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/truncated-envelope", "9",
+			chunkTruncatedEnvelopeWire(base), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/truncated-frame", "9",
+			chunkTruncatedFrameWire(base), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/trailing-byte", "9",
+			chunkTrailingByteWire(base), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/checksum", "9",
+			chunkBrokenZstdChecksumWire(base), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/declared-logical-oversize", "9",
+			chunkDeclaredLogicalOversizeWire(base), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/compressed-oversize", "9",
+			chunkDeclaredCompressedOversizeWire(base), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/palette-error", "9",
+			chunkPaletteErrorWire(t, key), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/9/decode/active-container-mismatch", "9",
+			chunkActiveContainerMismatchWire(t, key), args),
+		chunkBuildCandidateWithArgs(t, chunkFamily+"/4/decode/insufficient-drop-slots", "4",
+			chunkInsufficientDropSlotsWire(t, key), args),
+	}
+}
+
+func chunkCrossCandidateFromFrame(t *testing.T, frame []byte) chunkCandidate {
+	t.Helper()
+	schema, err := chunkSchemaVersion(frame)
+	if err != nil {
+		t.Fatalf("cross frame schema: %v", err)
+	}
+	if schema != 9 {
+		t.Fatalf("cross frame schema %d, want 9", schema)
+	}
+	return chunkBuildCandidate(t, chunkFamily+"/9/decode/rust-v9-frame", "9", frame)
 }
 
 func chunkLateCandidates(t *testing.T) []chunkCandidate {
@@ -1198,6 +1397,130 @@ func TestChunkMigrationOracleLate(t *testing.T) {
 	child := chunkExportSelection(t, root, candidates, chunkLateRoutes())
 	if child == "" {
 		t.Fatal("export did not publish late candidates")
+	}
+	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
+		t.Fatalf("selection manifest missing: %v", err)
+	}
+}
+
+func TestChunkMigrationOracleAdversarial(t *testing.T) {
+	t.Setenv(chunkRuntimeOracleExportDirEnv, "")
+	root := chunkRepoRoot(t)
+	candidates := chunkAdversarialCandidates(t)
+	if len(candidates) != 13 {
+		t.Fatalf("adversarial candidate count = %d, want 13", len(candidates))
+	}
+	for _, candidate := range candidates {
+		input := candidate.Assets[candidate.Spec.Input.Path]
+		got, err := chunkRunDecode(candidate.Spec, input)
+		if err != nil {
+			t.Fatalf("decode %s: %v", candidate.Spec.ID, err)
+		}
+		if !chunkOutcomesEqual(got, candidate.Expect) {
+			t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
+		}
+	}
+	future := candidates[1]
+	if future.Spec.ID != chunkFamily+"/9/decode/invalid-version-future" ||
+		future.Expect.Category != "future_version" {
+		t.Fatalf("invalid-version-future outcome %#v", future.Expect)
+	}
+	if chunkExportSelection(t, root, candidates, chunkAdversarialRoutes()) != "" {
+		t.Fatal("export must not run when env unset")
+	}
+	handoffRoot := filepath.Join(t.TempDir(), "chunk-oracle-adversarial-export")
+	t.Setenv(chunkRuntimeOracleExportDirEnv, handoffRoot)
+	child := chunkExportSelection(t, root, candidates, chunkAdversarialRoutes())
+	if child == "" {
+		t.Fatal("export did not publish adversarial candidates")
+	}
+	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
+		t.Fatalf("selection manifest missing: %v", err)
+	}
+}
+
+func TestChunkMigrationOracleAdversarialExportToPinnedDirectory(t *testing.T) {
+	root := chunkRepoRoot(t)
+	exportRoot := chunkPinnedExportDirAdversarial
+	producerChild := filepath.Join(exportRoot, filepath.FromSlash(chunkProducerID))
+	if _, err := os.Lstat(producerChild); err == nil {
+		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat pinned producer child: %v", err)
+	}
+	t.Setenv(chunkRuntimeOracleExportDirEnv, exportRoot)
+	child := chunkExportSelection(t, root, chunkAdversarialCandidates(t), chunkAdversarialRoutes())
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
+	}
+	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
+		t.Fatalf("selection manifest missing: %v", err)
+	}
+}
+
+func TestChunkMigrationOracleCross(t *testing.T) {
+	framePath := strings.TrimSpace(os.Getenv(chunkRustFrameInputEnv))
+	if framePath == "" {
+		return
+	}
+	if strings.TrimSpace(os.Getenv(chunkRuntimeOracleExportDirEnv)) == "" {
+		t.Fatal("RUST_STORAGE_FRAME_INPUT set without RUNTIME_ORACLE_EXPORT_DIR")
+	}
+	root := chunkRepoRoot(t)
+	frame, err := os.ReadFile(framePath)
+	if err != nil {
+		t.Fatalf("read rust frame %s: %v", framePath, err)
+	}
+	decoded, err := Decode(chunkFixtureKey(), chunkFixtureRevision, frame)
+	if err != nil {
+		t.Fatalf("decode rust frame: %v", err)
+	}
+	if decoded.Schema != currentChunkSchema {
+		t.Fatalf("decoded schema %d, want %d", decoded.Schema, currentChunkSchema)
+	}
+	candidate := chunkCrossCandidateFromFrame(t, frame)
+	got, err := chunkRunDecode(candidate.Spec, frame)
+	if err != nil {
+		t.Fatalf("oracle decode %s: %v", candidate.Spec.ID, err)
+	}
+	if !chunkOutcomesEqual(got, candidate.Expect) {
+		t.Fatalf("case %s produced %#v, want %#v", candidate.Spec.ID, got, candidate.Expect)
+	}
+	if chunkExportSelection(t, root, []chunkCandidate{candidate}, chunkLateRoutes()) != "" {
+		t.Fatal("export must not run when env unset")
+	}
+	handoffRoot := filepath.Join(t.TempDir(), "chunk-oracle-cross-export")
+	t.Setenv(chunkRuntimeOracleExportDirEnv, handoffRoot)
+	child := chunkExportSelection(t, root, []chunkCandidate{candidate}, chunkLateRoutes())
+	if child == "" {
+		t.Fatal("export did not publish cross-decode candidate")
+	}
+	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
+		t.Fatalf("selection manifest missing: %v", err)
+	}
+}
+
+func TestChunkMigrationOracleCrossExportToPinnedDirectory(t *testing.T) {
+	framePath := strings.TrimSpace(os.Getenv(chunkRustFrameInputEnv))
+	if framePath == "" {
+		t.Skip("RUST_STORAGE_FRAME_INPUT unset")
+	}
+	frame, err := os.ReadFile(framePath)
+	if err != nil {
+		t.Fatalf("read reviewed frame: %v", err)
+	}
+	root := chunkRepoRoot(t)
+	exportRoot := chunkPinnedExportDirCross
+	producerChild := filepath.Join(exportRoot, filepath.FromSlash(chunkProducerID))
+	if _, err := os.Lstat(producerChild); err == nil {
+		t.Skip("pinned producer child already exists; reviewed export candidate preserved")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat pinned producer child: %v", err)
+	}
+	t.Setenv(chunkRuntimeOracleExportDirEnv, exportRoot)
+	child := chunkExportSelection(t, root, []chunkCandidate{chunkCrossCandidateFromFrame(t, frame)}, chunkLateRoutes())
+	if child == "" {
+		t.Fatal("export root unset after explicit env")
 	}
 	if _, err := os.Stat(filepath.Join(child, chunkSelectionManifest)); err != nil {
 		t.Fatalf("selection manifest missing: %v", err)

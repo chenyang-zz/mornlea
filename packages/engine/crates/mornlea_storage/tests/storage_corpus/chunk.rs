@@ -8,7 +8,8 @@ use super::value_digest::{Value, value_sha256};
 use crate::runtime_corpus::{FrozenCase, InputFormat};
 use mornlea_storage::{
     ChestSlot, ChunkKey, ChunkSave, ContainerSnapshot, DecodedChunk, DropSlot, FurnaceSlot, ItemStack,
-    StorageError, decode_chunk, decode_chunk_envelope, encode_chunk,
+    StorageError, CHUNK_MAX_DECODED_CHUNK, decode_chunk, decode_chunk_envelope, encode_chunk,
+    encode_chunk_logical,
 };
 const CHUNK_CURRENT_SCHEMA: u32 = 9;
 use serde_json::Value as JsonValue;
@@ -95,6 +96,27 @@ pub fn chunk_current_case(id: &str) -> bool {
     id.starts_with("save.chunk/9/decode/v9-fluid-fixture")
         || id.starts_with("save.chunk/9/decode/v9-chest-registry")
         || id.starts_with("save.chunk/9/encode/")
+}
+
+/// Adversarial decode cases exported in node 4.3c (integrated separately).
+pub fn chunk_adversarial_case(id: &str) -> bool {
+    id.starts_with("save.chunk/9/decode/invalid-version-")
+        || id == "save.chunk/9/decode/wrong-key"
+        || id == "save.chunk/9/decode/wrong-revision"
+        || id == "save.chunk/9/decode/truncated-envelope"
+        || id == "save.chunk/9/decode/truncated-frame"
+        || id == "save.chunk/9/decode/trailing-byte"
+        || id == "save.chunk/9/decode/checksum"
+        || id == "save.chunk/9/decode/declared-logical-oversize"
+        || id == "save.chunk/9/decode/compressed-oversize"
+        || id == "save.chunk/9/decode/palette-error"
+        || id == "save.chunk/9/decode/active-container-mismatch"
+        || id == "save.chunk/4/decode/insufficient-drop-slots"
+}
+
+/// Rust-produced v9 frame decoded by Go and re-exported for Rust corpus replay.
+pub fn chunk_cross_case(id: &str) -> bool {
+    id == "save.chunk/9/decode/rust-v9-frame"
 }
 
 fn route_is_registered(case: &FrozenCase) -> bool {
@@ -488,6 +510,213 @@ mod tests {
         out
     }
 
+    fn chunk_truncated_envelope_wire(wire: &[u8]) -> Vec<u8> {
+        if wire.len() >= 44 {
+            wire[..43].to_vec()
+        } else {
+            wire.to_vec()
+        }
+    }
+
+    fn chunk_truncated_frame_wire(wire: &[u8]) -> Vec<u8> {
+        if wire.len() <= 44 {
+            return wire.to_vec();
+        }
+        let declared = u32::from_le_bytes(wire[40..44].try_into().expect("compressed len"));
+        let mut out = wire[..44].to_vec();
+        let compressed = &wire[44..];
+        if compressed.len() > 1 {
+            out.extend_from_slice(&compressed[..compressed.len() - 1]);
+        } else if !compressed.is_empty() {
+            out.push(compressed[0]);
+        }
+        out[40..44].copy_from_slice(&declared.to_le_bytes());
+        out
+    }
+
+    fn chunk_trailing_byte_wire(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        out.push(0);
+        out
+    }
+
+    fn chunk_broken_zstd_checksum_wire(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        if let Some(last) = out.last_mut() {
+            *last ^= 0xff;
+        }
+        out
+    }
+
+    fn chunk_declared_logical_oversize_wire(wire: &[u8]) -> Vec<u8> {
+        let mut out = wire.to_vec();
+        if out.len() >= 40 {
+            out[36..40].copy_from_slice(&((CHUNK_MAX_DECODED_CHUNK + 1) as u32).to_le_bytes());
+        }
+        out
+    }
+
+    fn chunk_declared_compressed_oversize_wire(wire: &[u8]) -> Vec<u8> {
+        use mornlea_storage::MAX_COMPRESSED_CHUNK;
+        let mut out = wire.to_vec();
+        if out.len() >= 44 {
+            out[40..44].copy_from_slice(&((MAX_COMPRESSED_CHUNK + 1) as u32).to_le_bytes());
+        }
+        out
+    }
+
+    fn fixture_air_save() -> ChunkSave {
+        ChunkSave {
+            key: fixture_chunk_key(),
+            revision: fixture_revision(),
+            chunk: mornlea_storage::Chunk {
+                sections: (0..24)
+                    .map(|_| ContainerSnapshot {
+                        kind: mornlea_storage::StorageKind::Single,
+                        bits: 0,
+                        single: 0,
+                        palette: Vec::new(),
+                        packed: Vec::new(),
+                    })
+                    .collect(),
+                drops: vec![DropSlot::default(); 32],
+                furnaces: vec![Default::default(); 32],
+                chests: vec![Default::default(); 16],
+            },
+        }
+    }
+
+    fn fixture_air_wire() -> Vec<u8> {
+        encode_chunk(&fixture_air_save()).expect("fixture air wire")
+    }
+
+    fn chunk_test_envelope_from_logical(
+        key: ChunkKey,
+        revision: u64,
+        schema: u32,
+        logical: &[u8],
+    ) -> Vec<u8> {
+        const COMPRESSION_LEVEL: i32 = 3;
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), COMPRESSION_LEVEL)
+            .expect("zstd encoder");
+        encoder
+            .set_pledged_src_size(Some(logical.len() as u64))
+            .expect("pledge size");
+        encoder.include_checksum(true).expect("checksum");
+        encoder.include_contentsize(true).expect("content size");
+        std::io::Write::write_all(&mut encoder, logical).expect("compress");
+        let compressed = encoder.finish().expect("finish zstd");
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"CHNK");
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&schema.to_le_bytes());
+        payload.extend_from_slice(&(key.dimension as u32).to_le_bytes());
+        payload.extend_from_slice(&(key.x as u32).to_le_bytes());
+        payload.extend_from_slice(&(key.z as u32).to_le_bytes());
+        payload.extend_from_slice(&revision.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&(logical.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&compressed);
+        payload
+    }
+
+    fn append_air_section(logical: &mut Vec<u8>, index: u32) {
+        logical.extend_from_slice(&index.to_le_bytes());
+        logical.push(0);
+        logical.push(0);
+        logical.extend_from_slice(&0u16.to_le_bytes());
+        logical.extend_from_slice(&0u32.to_le_bytes());
+        logical.extend_from_slice(&0u32.to_le_bytes());
+    }
+
+    fn chunk_palette_error_wire() -> Vec<u8> {
+        let key = fixture_chunk_key();
+        let revision = fixture_revision();
+        let mut logical = Vec::new();
+        logical.extend_from_slice(b"MCGC");
+        logical.extend_from_slice(&CHUNK_CURRENT_SCHEMA.to_le_bytes());
+        logical.extend_from_slice(&(key.dimension as u32).to_le_bytes());
+        logical.extend_from_slice(&(key.x as u32).to_le_bytes());
+        logical.extend_from_slice(&(key.z as u32).to_le_bytes());
+        logical.extend_from_slice(&revision.to_le_bytes());
+        logical.extend_from_slice(&24u32.to_le_bytes());
+        logical.extend_from_slice(&0u32.to_le_bytes());
+        logical.push(1);
+        logical.push(4);
+        logical.extend_from_slice(&0u16.to_le_bytes());
+        logical.extend_from_slice(&1u32.to_le_bytes());
+        logical.extend_from_slice(&0u16.to_le_bytes());
+        logical.extend_from_slice(&256u32.to_le_bytes());
+        logical.extend_from_slice(&1u64.to_le_bytes());
+        for _ in 1..256 {
+            logical.extend_from_slice(&0u64.to_le_bytes());
+        }
+        for index in 1..24 {
+            append_air_section(&mut logical, index);
+        }
+        for _ in 0..32 {
+            logical.extend(std::iter::repeat_n(0u8, 19));
+        }
+        for _ in 0..32 {
+            logical.extend(std::iter::repeat_n(0u8, 21));
+        }
+        for _ in 0..16 {
+            logical.extend(std::iter::repeat_n(0u8, 144));
+        }
+        chunk_test_envelope_from_logical(key, revision, CHUNK_CURRENT_SCHEMA, &logical)
+    }
+
+    fn chunk_active_container_mismatch_wire() -> Vec<u8> {
+        let key = fixture_chunk_key();
+        let envelope = decode_chunk_envelope(&fixture_air_wire()).expect("air envelope");
+        let mut logical = envelope.bytes;
+        let furnace_offset = 32 + 24 * 16 + 32 * 19;
+        logical[furnace_offset..furnace_offset + 4].copy_from_slice(&1u32.to_le_bytes());
+        logical[furnace_offset + 4] = 1;
+        chunk_test_envelope_from_logical(key, fixture_revision(), CHUNK_CURRENT_SCHEMA, &logical)
+    }
+
+    fn chunk_insufficient_drop_slots_wire() -> Vec<u8> {
+        let key = fixture_chunk_key();
+        let v4 = read_go_fixture("server/storage/chunk/testdata/chunk-v4.bin");
+        let decoded =
+            decode_chunk(key, fixture_revision(), &v4).expect("decode v4 fixture for template");
+        let mut chunk = decoded.chunk;
+        let block_index = 5 << 8;
+        chunk.drops[0] = DropSlot {
+            generation: 1,
+            active: true,
+            stack: ItemStack {
+                item: 10,
+                count: 2,
+                durability: 0,
+            },
+            block_index,
+            ..DropSlot::default()
+        };
+        for slot in 1..32 {
+            if slot % 2 == 0 {
+                chunk.drops[slot].generation = u32::MAX;
+                continue;
+            }
+            chunk.drops[slot] = DropSlot {
+                generation: slot as u32,
+                active: true,
+                stack: ItemStack {
+                    item: 1,
+                    count: 1,
+                    durability: 0,
+                },
+                block_index,
+                ..DropSlot::default()
+            };
+        }
+        let logical =
+            encode_chunk_logical(key, fixture_revision(), &chunk, 4).expect("v4 logical");
+        chunk_test_envelope_from_logical(key, fixture_revision(), 4, &logical)
+    }
+
     fn legacy_decode_ok_case(id: &str, version: &str, input: Vec<u8>) -> FrozenCase {
         let decoded = decode_chunk(fixture_chunk_key(), fixture_revision(), &input)
             .unwrap_or_else(|err| panic!("case {id} decode fixture: {err}"));
@@ -784,5 +1013,193 @@ mod tests {
             encoded: None,
             category: "save".to_string(),
         }));
+    }
+
+    fn chunk_adversarial_fixture_cases() -> Vec<FrozenCase> {
+        let base = fixture_air_wire();
+        let wrong_key_args = serde_json::json!({
+            "dimension": 0,
+            "x": -2,
+            "z": 7,
+            "revision": "19"
+        });
+        let wrong_revision_args = serde_json::json!({
+            "dimension": 0,
+            "x": -3,
+            "z": 7,
+            "revision": "20"
+        });
+        vec![
+            legacy_decode_error_case(
+                "save.chunk/9/decode/invalid-version-zero",
+                "9",
+                chunk_wire_with_schema(&base, 0),
+                "corrupt",
+            ),
+            legacy_decode_error_case(
+                "save.chunk/9/decode/invalid-version-future",
+                "9",
+                chunk_wire_with_schema(&base, 10),
+                "future_version",
+            ),
+            FrozenCase {
+                id: "save.chunk/9/decode/wrong-key".to_string(),
+                family: "save.chunk".to_string(),
+                version: "9".to_string(),
+                consumer: crate::runtime_corpus::CorpusConsumer::Storage,
+                packet_key: None,
+                operation: "decode".to_string(),
+                arguments: wrong_key_args,
+                input_format: InputFormat::Binary,
+                input: base.clone(),
+                input_json: None,
+                normalized: serde_json::json!({
+                    "kind": "error",
+                    "category": "corrupt"
+                }),
+                encoded: None,
+                category: "corrupt".to_string(),
+            },
+            FrozenCase {
+                id: "save.chunk/9/decode/wrong-revision".to_string(),
+                family: "save.chunk".to_string(),
+                version: "9".to_string(),
+                consumer: crate::runtime_corpus::CorpusConsumer::Storage,
+                packet_key: None,
+                operation: "decode".to_string(),
+                arguments: wrong_revision_args,
+                input_format: InputFormat::Binary,
+                input: base.clone(),
+                input_json: None,
+                normalized: serde_json::json!({
+                    "kind": "error",
+                    "category": "corrupt"
+                }),
+                encoded: None,
+                category: "corrupt".to_string(),
+            },
+            legacy_decode_error_case(
+                "save.chunk/9/decode/truncated-envelope",
+                "9",
+                chunk_truncated_envelope_wire(&base),
+                "corrupt",
+            ),
+            legacy_decode_error_case(
+                "save.chunk/9/decode/truncated-frame",
+                "9",
+                chunk_truncated_frame_wire(&base),
+                "corrupt",
+            ),
+            legacy_decode_error_case(
+                "save.chunk/9/decode/trailing-byte",
+                "9",
+                chunk_trailing_byte_wire(&base),
+                "corrupt",
+            ),
+            legacy_decode_error_case(
+                "save.chunk/9/decode/checksum",
+                "9",
+                chunk_broken_zstd_checksum_wire(&base),
+                "corrupt",
+            ),
+            legacy_decode_error_case(
+                "save.chunk/9/decode/declared-logical-oversize",
+                "9",
+                chunk_declared_logical_oversize_wire(&base),
+                "corrupt",
+            ),
+            legacy_decode_error_case(
+                "save.chunk/9/decode/compressed-oversize",
+                "9",
+                chunk_declared_compressed_oversize_wire(&base),
+                "corrupt",
+            ),
+            legacy_decode_error_case(
+                "save.chunk/9/decode/palette-error",
+                "9",
+                chunk_palette_error_wire(),
+                "corrupt",
+            ),
+            legacy_decode_error_case(
+                "save.chunk/9/decode/active-container-mismatch",
+                "9",
+                chunk_active_container_mismatch_wire(),
+                "corrupt",
+            ),
+            legacy_decode_error_case(
+                "save.chunk/4/decode/insufficient-drop-slots",
+                "4",
+                chunk_insufficient_drop_slots_wire(),
+                "corrupt",
+            ),
+        ]
+    }
+
+    #[test]
+    fn chunk_adversarial_case_ids_recognized() {
+        assert!(chunk_adversarial_case("save.chunk/9/decode/wrong-key"));
+        assert!(!chunk_adversarial_case("save.chunk/9/decode/v9-fixture"));
+        assert!(chunk_cross_case("save.chunk/9/decode/rust-v9-frame"));
+    }
+
+    #[test]
+    fn chunk_adversarial_fixture_cases_execute_locally() {
+        let cases = chunk_adversarial_fixture_cases();
+        assert_eq!(cases.len(), 13);
+        for case in &cases {
+            execute_chunk_case(case).expect("local adversarial chunk fixture");
+        }
+    }
+
+    #[test]
+    fn chunk_cross_fixture_air_frame_executes_locally() {
+        let frame = fixture_air_wire();
+        let decoded = decode_chunk(fixture_chunk_key(), fixture_revision(), &frame)
+            .expect("decode local air frame");
+        let case = legacy_decode_ok_case("save.chunk/9/decode/rust-v9-frame", "9", frame);
+        execute_chunk_case(&case).expect("local rust-v9-frame case");
+        let digest = value_sha256(&decoded_chunk_value(&decoded));
+        assert_eq!(
+            case.normalized
+                .get("value_sha256")
+                .and_then(JsonValue::as_str),
+            Some(digest.as_str())
+        );
+    }
+
+    fn chunk_chest_registry_wire() -> Vec<u8> {
+        let v6 = read_go_fixture("server/storage/chunk/testdata/chunk-v6.bin");
+        let decoded = decode_chunk(fixture_chunk_key(), fixture_revision(), &v6)
+            .expect("decode v6 for chest registry wire");
+        encode_chunk(&ChunkSave {
+            key: fixture_chunk_key(),
+            revision: fixture_revision(),
+            chunk: decoded.chunk,
+        })
+        .expect("encode chest registry wire")
+    }
+
+    #[test]
+    fn chunk_current_valid_input_swap_changes_expected_digest() {
+        let v9 = read_go_fixture("server/storage/chunk/testdata/chunk-v9.bin");
+        let chest = chunk_chest_registry_wire();
+        let fixture = legacy_decode_ok_case("save.chunk/9/decode/v9-fixture", "9", v9.clone());
+        let chest_case =
+            legacy_decode_ok_case("save.chunk/9/decode/v9-chest-registry", "9", chest.clone());
+        let mut swapped = fixture.clone();
+        swapped.input = chest.clone();
+        let err = execute_chunk_case(&swapped).expect_err("swapped v9-fixture input must fail");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
+        let mut swapped_chest = chest_case.clone();
+        swapped_chest.input = v9.clone();
+        let err = execute_chunk_case(&swapped_chest)
+            .expect_err("swapped v9-chest-registry input must fail");
+        assert!(
+            err.contains("value digest mismatch"),
+            "unexpected error: {err}"
+        );
     }
 }

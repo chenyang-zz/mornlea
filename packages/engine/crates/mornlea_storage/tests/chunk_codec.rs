@@ -473,3 +473,91 @@ fn context_two_independent_codecs_interleaved_share_no_state() {
         decode_chunk(save_b.key, save_b.revision, &buf_b).expect("free b")
     );
 }
+
+fn fixture_air_save_for_export() -> ChunkSave {
+    ChunkSave {
+        key: ChunkKey {
+            dimension: 0,
+            x: -3,
+            z: 7,
+        },
+        revision: 19,
+        chunk: Chunk {
+            sections: (0..24)
+                .map(|_| ContainerSnapshot {
+                    kind: StorageKind::Single,
+                    bits: 0,
+                    single: 0,
+                    palette: Vec::new(),
+                    packed: Vec::new(),
+                })
+                .collect(),
+            drops: vec![DropSlot::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        },
+    }
+}
+
+fn repo_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..")
+}
+
+fn path_is_inside_repo(repo: &std::path::Path, target: &std::path::Path) -> bool {
+    let repo = repo.canonicalize().ok();
+    let target = target.canonicalize().ok();
+    match (repo, target) {
+        (Some(repo), Some(target)) => target.starts_with(&repo),
+        _ => false,
+    }
+}
+
+fn export_root_has_symlink_ancestor(path: &std::path::Path) -> bool {
+    let mut current = path.parent();
+    while let Some(component) = current {
+        if component == std::path::Path::new("/") {
+            break;
+        }
+        if std::fs::symlink_metadata(component)
+            .map(|meta| meta.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        current = component.parent();
+    }
+    false
+}
+
+#[test]
+fn context_exports_deterministic_v9_frame_when_env_set() {
+    let export_dir = match std::env::var("RUST_STORAGE_FRAME_EXPORT_DIR") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => return,
+    };
+    let export_dir = std::path::PathBuf::from(export_dir);
+    if !export_dir.is_absolute() {
+        panic!("export dir must be absolute");
+    }
+    let repo = repo_root();
+    if path_is_inside_repo(&repo, &export_dir) {
+        panic!("export dir must be outside repository");
+    }
+    if export_dir.exists() {
+        panic!("export dir already exists");
+    }
+    if export_root_has_symlink_ancestor(&export_dir) {
+        panic!("export dir has symlink ancestor");
+    }
+    std::fs::create_dir(&export_dir).expect("create export dir");
+    let frame_path = export_dir.join("v9-frame.bin");
+    let save = fixture_air_save_for_export();
+    let frame = encode_chunk(&save).expect("encode deterministic v9 frame");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&frame_path)
+        .expect("create frame exclusively");
+    std::io::Write::write_all(&mut file, &frame).expect("write frame");
+    file.sync_all().expect("sync frame");
+}
