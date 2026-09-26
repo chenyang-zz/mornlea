@@ -656,3 +656,94 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestMeshSection'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelMesh'`, `--lib greedy` 35/35 + `light` 31/31 plus full `--lib` 274/274 and `native_contract` 80/80, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~63s, green only after the hash refresh).
 - Review: Task Reviewer subagent: spec compliant; no Important findings; four Minor notes (duplicated wire offsets, `expect` in the ABI closure, silent remainder drop, per-call heap — all documented as acceptable/future work, no action). No deferred minor from this node.
 - Rollback: Revert `ad811e13`.
+
+## 2026-09-27 — Node 3.12 dispatch preflight
+
+- Frontier: 3.11 accepted and recorded by `3ecb0640`; 3.12 (corpus closure) is
+  next, then 4.1/4.2. Worktree clean at BASE `3ecb0640`; every
+  `kernel.mornlea_*` family verified `cases: null` (86 families total), so the
+  step-1 inventory RED is genuine.
+- Orphan check (parallel-controller handover): tasks.md shows 3.12/4.1/4.2
+  open; no untracked files; no in-flight mtimes newer than the 3.11 landing.
+  No adoptable orphan artifacts. Proceeding with a fresh 3.12 dispatch.
+- Preflight scan (packet `plans/03-closure.md#node-3-12`, dispatch packet
+  `worker-briefs.md` node 3.12 + brief 5.14, `tasks.md` node 3.12, delta spec
+  5 requirements / 9 scenarios):
+  - 3.12 ↔ 3.2–3.11 adapters: 3.12 reads accepted `ffi.rs` hunks + migration
+    tests as parity evidence; `ffi.rs` is read-only here. No conflict.
+  - 3.12 ↔ 2.x providers: consumes providers/tests as inputs; edits only
+    registry/loader/manifest/assets + listed guides. Provider files read-only.
+    No conflict.
+  - 3.12 ↔ 4.1/4.2: successors, not concurrent. No conflict.
+  - Self-consistency: RED-then-import order is coherent with `cases: null`;
+    Cargo.toml pins exact versions with lock-edit-only-if-`--locked`-fails;
+    4 MiB manifest cap met via hashed binary assets + compact digests.
+    The closed `CorpusConsumer` vocabulary (tests/AGENTS.md) must gain the
+    Engine entry in the same node — packet covers it. No defect found.
+  - Derived-artifact inventory (critical for this node): families pin
+    header/`native_test.go`/core sources; worker must enumerate every hashed
+    consumer (`TestStorageCorpus` + inventory reconcile) and prove currency
+    with the FULL unfiltered oracle package run, not a `-run` subset. Brief
+    carries this explicitly.
+- Readiness review (worker-planning checklist): implementable from packet +
+  named contracts without controller transcript — yes; traceable to node +
+  acceptance case — yes; producer/consumer signatures agree via case-ID +
+  normalized-JSON merge rule — yes; acyclic deps with tasks.md sole status
+  and 3.12 serial — yes; no parallel consumers of the new registry — yes
+  (single owner); real symbols + typed pathfinder executed, mutation check
+  proves the comparison real — per packet; compat/input/resource/publication
+  settled (caps, `0xa5` canaries, status normalization, create-exclusive
+  export) — yes; negatives exercise the real boundary — yes; rejectable
+  without invalidating unrelated nodes (rollback unit is corpus-only) — yes;
+  worktree clean, no external side effects beyond temp export dir — yes.
+- Ruling: project overrides the SDD flat progress store — status lives in
+  tasks.md, evidence in this ledger; no `.superpowers/sdd` progress file is
+  created for this plan (the stale `tasks-rust-native-numerical-closure/`
+  directory from the 2.12 era is left untouched). Cost if wrong: status
+  fragmentation; mitigated by the sole-source rule. Recorded per
+  mornlea-implementation-orchestration.
+- Ruling: single serial dispatch for 3.12 (controller-owned integration
+  files, strict-SDD no-parallel-implementers). Model: implementer `sonnet`
+  (multi-file integration under a complete packet), task reviewer `sonnet`
+  scaled to the diff, fix-loop rounds 4–5 escalate to `opus`, final
+  whole-branch review on `opus`. Cost if wrong: re-dispatch on a stronger
+  model with the report file as persistent memory.
+- Dispatch: implementer subagent for node 3.12 from BASE `3ecb0640`; brief
+  `/tmp/mornlea-rn-closure-3.12/task-3.12-brief.md`, report
+  `/tmp/mornlea-rn-closure-3.12/task-3.12-report.md`.
+
+## 2026-09-27 — Node 3.12 BLOCKED ruling: shared corpus gates join node scope
+
+- Implementer report (`/tmp/mornlea-rn-closure-3.12/task-3.12-report.md`):
+  BLOCKED, no commits, tree pristine. Two observed failures from scratch demos
+  (both restored byte-identical, gates re-green): a kernel `input` category
+  rejected by `TestCorpusOutcomeVocabularyMatchesExecutionContract`
+  (`protocol_frame_test.go:831`, closed vocabulary sets at lines 786–821), and
+  a kernel case rejected by `TestProtocolCorpusNonProtocolEvidenceUnchanged`
+  (`protocol_coverage_test.go:695-696`, `default` arm + exact totals at 699).
+  Controller verified both gates in current code; the contradiction is real.
+- Ruling: the packet's explicit category rule (exact ABI status names +
+  `PathError` names, mirrored by Rust-side assertions) stands — mapping kernel
+  categories into the old vocabulary would violate the packet and the delta
+  spec. Registration is precisely what 3.12 means ("register and execute all
+  eleven routes"), so the file list — not the design — was incomplete. 3.12 is
+  authorized to extend both gates minimally: a new `corpusKernelCategories`
+  set accepted in the whole-tree check (existing sets untouched, storage-set
+  precedent), and a `kernel.` slice arm with its own counted total plus
+  reconcile (existing four totals unchanged). No existing category renamed or
+  removed; the gates keep their intent (rejections classifiable by both
+  implementations — Go normalizes to the same names, Rust asserts them).
+  Cost if wrong: shared protocol gates weakened and later slices inherit a
+  diluted vocabulary; mitigated by full-package green, 4.1 scenario mapping,
+  and scoped review of the two diffs.
+- Reconciliation (landed before resume): `plans/03-closure.md` node-3.12 table
+  gains the two gate rows and a narrowed Read-only line; `tasks.md` 3.12 file
+  list gains both test files; `worker-briefs.md` 3.12 predecessor/files names
+  the exact gate changes. No spec/design behavior changed.
+- Preflight gap noted: the readiness scan missed the oracle package's own
+  corpus-wide gates. Resume order is staged to catch further shared-gate
+  conflicts early: extend gates, import ONE family, run the FULL unfiltered
+  oracle suite green, then the remaining ten.
+- Resume: same implementer (context intact), same model, ruling + amended
+  packet carried in the resume message; brief file amended with the ruling
+  section. New BASE is the reconciliation commit below.

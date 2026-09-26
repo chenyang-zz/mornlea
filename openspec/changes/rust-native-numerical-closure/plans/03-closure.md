@@ -11,6 +11,8 @@
 | --- | --- |
 | `packages/tools/cmd/runtime-oracle/kernel_test.go` | Check all eleven case IDs/categories/source hashes; merge reviewed family valid drafts with raw-status drafts by unique case ID; assert each route has executed success, error and boundary. |
 | `packages/tools/cmd/runtime-oracle/inventory.go` and `inventory_test.go` | Add the closed eleven `{FamilyID,Version,Operation:"kernel"}` entries in `BaselineConsumerRegistry()` and its exact-map test; reject an absent or extra route. |
+| `packages/tools/cmd/runtime-oracle/protocol_frame_test.go` | Extend the frozen outcome vocabulary only: add a `corpusKernelCategories` set with the nine ABI status names plus the six pathfind categories and accept it in the whole-tree check; existing structural/admission/storage sets untouched. |
+| `packages/tools/cmd/runtime-oracle/protocol_coverage_test.go` | Accept the `kernel.` slice with its own counted total plus reconcile, mirroring the existing slices; existing four totals unchanged. |
 | `packages/tools/cmd/runtime-oracle/AGENTS.md` | Explain test-only producer ownership, external export and focused commands. |
 | `packages/shared/nativeabi/kernel_oracle_test.go` | Add `TestKernelABIRawOracle` in the existing package, calling package-private status helpers; assert status/0xa5 canaries locally and export malformed cases only with `RUNTIME_ORACLE_EXPORT_DIR`, without new production cgo/API. |
 | `packages/shared/nativeabi/AGENTS.md` | Describe package-local raw oracle boundary and no tracked asset write. |
@@ -21,7 +23,7 @@
 | `packages/engine/tests/AGENTS.md` | Document the engine consumer, fixture provenance and focused gate. |
 | `testdata/runtime-migration/contracts.json` and new kernel case assets | Add actual reviewed cases, expected JSON and all source/input SHA-256; never write a placeholder or zero-case family. |
 
-**Read-only:** all production Go bridges, accepted Rust providers/adapters, canonical specs and other consumers. Source-bound family producer fragments created by 2.x nodes are inputs outside the repo, not automatically accepted assets.
+**Read-only:** all production Go bridges, accepted Rust providers/adapters, canonical specs and other consumers except the two shared corpus gates this node extends per the rows above. Source-bound family producer fragments created by 2.x nodes are inputs outside the repo, not automatically accepted assets.
 
 **Case encoding:** ten `kernel.mornlea_*` v11 cases use `input_format:"binary"` containing only an existing raw symbol request. `arguments` explicitly include integer `abi_version`, output capacity in ABI bytes (mesh in `u64` slots), scratch capacity where applicable, and one of `normal|short|null|metadata-alias-input|metadata-alias-output|metadata-alias-scratch`. Initialize aligned output/scratch/metadata arenas to `0xa5`; run the exported Rust symbol; normalize status 0..9 into `ok`, `abi-version`, `invalid-argument`, `input`, `scratch`, `registry`, `emission`, `output-overflow`, `queue-overflow`, `panic`. Include status, applicable count/length/done/cursor digest, a SHA-256 of the **entire** caller-visible output arena and a success-only used-prefix digest. Collision/physics/raycast include ordered `f32` bit hex. Invalid arguments/capacity above harness bounds fail loading rather than silently skip. JSON input is capped at 256 KiB, binary at 4 MiB, manifest at 4 MiB and all cases at 8192.
 
