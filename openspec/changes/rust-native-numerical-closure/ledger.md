@@ -344,3 +344,32 @@
   - `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelMesh' -count=1` passed; after the controller hash refresh (`src/greedy/mod.rs` `b2409165…` -> `5cfd1aa5…`), the package-wide `go test ./packages/tools/cmd/runtime-oracle -count=1` passed in 70.8s; `go test ./packages/audit -run '^TestCommentBacktickIdentifiersExist$'` passed after the fix round.
 - Review: Task Reviewer subagent: every node-2.11 functional item verified (packed-bit and ordered-record parity, not type presence); one Important finding (backticked `MGM1` in the new Go producer turned the repo-wide audit gate red) fixed in `6b3b7c74`, which also rewrote the three de-staled Chinese comment spots in English; the scoped re-review marked both items ADDRESSED with no new breakage.
 - Rollback: Revert `74620e9b`, `6b3b7c74`, `373478c6` in that order.
+
+## 2026-09-26 — Node 2.12 dispatch preflight
+
+- Frontier: 2.1–2.11 accepted; 2.12 is next. Worktree clean at BASE `6a39ada5`; `src/pathfind.rs` absent, `src/native/pathfind.rs` and `tests/numerical_migration/path_grid.rs` empty registered stubs; oracle `pathfind_test.go` absent.
+- Preflight scan (packet `plans/01-providers.md#node-2-12`, dispatch packet `worker-briefs.md` node 2.12, brief 5.12, `tasks.md` node 2.12):
+  - 2.12 ↔ 2.13 share `src/pathfind.rs` and `src/native/pathfind.rs`: 2.12 lands grid/snapshot/indexing with no search; 2.13 adds search to the accepted surface. Serial order already frozen; no conflict.
+  - 2.12 ↔ 3.12 share nothing yet: corpus registration is controller-owned at 3.12; this node only produces temporary Go grid observations. No conflict.
+  - Go oracle boundary: `packages/shared/pathfind` stays read-only; unexported block/standing/expansion reads are observable only through exported `NewPathBlockTable`/`NewPathGrid`/`FindPath` (revision normalization via a start==goal result). No conflict.
+  - Derived-artifact inventory: `kernel.pathfind` pins only the two Go files; neither is edited here and new Rust files are unpinned, so the package-wide oracle run must be fully green with no expected mismatch. No conflict.
+- Ruling: 2.12 may add the single `mod pathfind;` registration line in `src/lib.rs` and may widen the `pathfind` line in `src/native/mod.rs` to `pub mod pathfind;` iff the migration test must name the native grid surface. Cost if wrong: two one-line diffs also required by 2.13.
+- Ruling: frozen-contract gaps (e.g., unchecked size-product arithmetic in `PathGrid::try_new`) are worker-reported concerns, never worker edits; the contract changes only by controller ruling with artifact reconciliation. Cost if wrong: an extreme-size debug panic survives to a later node.
+- Dispatch: implementer subagent for node 2.12 from BASE `6a39ada5`; brief `.superpowers/sdd/tasks-rust-native-numerical-closure/task-2.12-brief.md`, report `task-2.12-report.md` in the same workspace.
+
+## 2026-09-26 — Node 2.12 immutable path grid
+
+- Predecessor SHA: `6a39ada5`
+- Result SHA: `180e331a` (single commit; no controller hash refresh — `kernel.pathfind` pins only the two untouched Go files, and the package-wide oracle run stayed green)
+- Implementation summary:
+  - New `src/pathfind.rs` exposes free read functions over the frozen contract grid: `flat_index` (Y-fast `((x * size_z) + z) * size_y + y`, bounds-first with checked arithmetic), `block_at` (widened `i64` subtraction, `.get()` lookup, never panics), `is_passable` (in-grid AND table), `is_standing` (feet/head passable, support in-grid nonpassable, `checked_add`/`checked_sub` at Y extremes).
+  - `src/native/pathfind.rs` re-exports the four reads for external consumers; no search, no `PathfindOp`, no ABI bytes.
+  - Registration diffs only: one `mod pathfind;` line in `src/lib.rs`, `pub mod pathfind;` widening in `src/native/mod.rs`.
+  - Tests: `tests/numerical_migration/path_grid.rs` (`path_grid_shape_revision_and_snapshot`: unit/zero/over-cap/exact-cap/wrong-length/overflow, nine/ten/dedup/conflict revisions, Y-fast markers with X-fast-disagree spotlights, unknown 65535 blocked-yet-support-solid, move-clone ownership, determinism); Go producer `pathfind_test.go` (`TestPathfindOracleGrid`: revision passthrough, failure matrix with zero-fetch-reads, cap, verbatim overflow log, Y-fast waypoints, unknown column unreachable both ways, snapshot mutation replay, create-exclusive export).
+- Verification:
+  - `native_contract` untouched; `numerical_migration --test ... path_grid` 1 passed with `-- --list` discovery 1/1.
+  - `go test ./packages/shared/pathfind -count=1` passed; `go test ./packages/tools/cmd/runtime-oracle -run '^TestPathfindOracleGrid$' -count=1` passed.
+  - clippy `-D warnings` clean; `cargo fmt --all --check` clean after fix round; `gofmt -l ./packages` empty; `go vet` on runtime-oracle clean; audit `TestCommentBacktickIdentifiersExist` passed.
+  - `go test ./packages/tools/cmd/runtime-oracle -count=1` fully green — no manifest drift, as ruled.
+- Review: Task Reviewer subagent: spec ✅ with one Important (plan-mandated `cargo fmt` RED, 8 line-width reformats, no logic change); controller applied the mechanical fmt fix; scoped re-review marked it ADDRESSED with no new breakage. Divergence adjudicated: Go accepts max/min-int32 origins with size 2 (logged verbatim) while Rust rejects far-corner-past-maximum as `InvalidGrid` per the frozen contract — the Rust rejection stands. No implementer report was written (subagent terminated after one usage line); the diff plus controller-collected gates are the evidence. Three minors deferred to the final whole-branch review (Go exact-131073 case, `sha=unpinned` stamp, three-layer wording).
+- Rollback: Revert `180e331a`.
