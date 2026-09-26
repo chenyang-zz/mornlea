@@ -843,15 +843,15 @@ fn native_lod_request(
 }
 
 /// Maps one staged native quad onto the legacy quad record so the adapter
-/// encodes through the existing `encode_shell` helper; the two face enums
-/// share discriminants with identical variant order.
+/// encodes through the existing `encode_shell` helper; both face enums
+/// share discriminants 0..=4, and the native provider only emits those.
 fn native_quad_to_legacy(quad: &NativeQuad) -> LodQuad {
-    let face = match quad.face() as u8 {
-        0 => LodFace::Top,
-        1 => LodFace::NegX,
-        2 => LodFace::PosX,
-        3 => LodFace::NegZ,
-        _ => LodFace::PosZ,
+    let face = match quad.face() {
+        crate::native::contracts::world::LodFace::Top => LodFace::Top,
+        crate::native::contracts::world::LodFace::NegX => LodFace::NegX,
+        crate::native::contracts::world::LodFace::PosX => LodFace::PosX,
+        crate::native::contracts::world::LodFace::NegZ => LodFace::NegZ,
+        crate::native::contracts::world::LodFace::PosZ => LodFace::PosZ,
     };
     LodQuad {
         x: quad.x(),
@@ -865,7 +865,7 @@ fn native_quad_to_legacy(quad: &NativeQuad) -> LodQuad {
     }
 }
 
-/// `mornlea_lod_shell` 的校验与发布核心:解析请求后经共享原生壳层生成并编码。
+/// `mornlea_lod_shell` validation and publish core: parses the request, then generates and encodes through the shared native shell.
 ///
 /// Validation order mirrors `mornlea_mesh_section`: the `output_len` metadata
 /// pointer is validated by address only, then null-pointer checks, the ABI
@@ -3960,16 +3960,16 @@ mod tests {
 
     #[test]
     fn lod_shell_panic_is_contained_without_output() {
-        // The panic boundary itself still converges to status 9: prove it
-        // directly against a panicking closure inside `catch_unwind`,
-        // since the production route no longer takes an injectable
-        // generator. The shared sampler never panics on admitted inputs
-        // (all indexing is checked), so a valid call below also proves
-        // the real core publishes with guard bytes intact.
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // The adapter body runs inside `catch_unwind`, but every admitted
+        // input is fully checked, so no admitted vector can unwind: prove
+        // convergence at the boundary primitive itself (the same
+        // `catch_unwind` wrapper the adapter uses), and prove the real
+        // core publishes exactly, with output untouched on a separate
+        // rejected vector.
+        let boundary = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             panic!("lod panic boundary probe")
         }));
-        assert!(panicked.is_err());
+        assert!(boundary.is_err());
         let input = lod_shell_input(0, 0, 64, 4);
         let expected = expected_shell(&input);
         let needed = expected.len();
@@ -3989,6 +3989,26 @@ mod tests {
         assert_eq!(status, MORNLEA_STATUS_OK);
         assert_eq!(output_len, needed);
         assert_eq!(output, expected);
+        // A rejected vector leaves payload and metadata untouched.
+        let mut bad = lod_shell_input(0, 0, 64, 4);
+        bad[0] = b'X';
+        let mut bad_out = vec![0xA5_u8; 64];
+        let bad_canary = bad_out.clone();
+        let mut bad_len = usize::MAX;
+        // SAFETY: 指针来自有效 Vec;坏 magic 在边界内拒绝。
+        let bad_status = unsafe {
+            lod_shell_with(
+                ABI_VERSION,
+                bad.as_ptr(),
+                bad.len(),
+                bad_out.as_mut_ptr(),
+                bad_out.len(),
+                &mut bad_len,
+            )
+        };
+        assert_eq!(bad_status, MORNLEA_STATUS_INPUT);
+        assert_eq!(bad_len, 0);
+        assert_eq!(bad_out, bad_canary);
     }
 
     #[test]
