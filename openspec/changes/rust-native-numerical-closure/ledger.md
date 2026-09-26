@@ -583,3 +583,27 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestLodShell'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestLodShell'`, `--lib lod` 23/23 plus full `--lib` 274/274, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~60s, green only after the hash refresh — the pre-refresh failure on the stale pin proves the rule).
 - Review: Task Reviewer subagent: Needs fixes with two Important findings (vacuous panic proof; face-map wildcard hiding invalid discriminants) + two Minors. Controller fixed in `7f34c3d6` (honest boundary+publish+rejection proof; exhaustive typed face match; English doc line); scoped re-review confirmed all addressed with no new breakage. No deferred minor from this node.
 - Rollback: Revert `7f34c3d6`, `b72e0a1c`, `4792a08a` in that order.
+
+## 2026-09-26 — Node 3.9 dispatch preflight
+
+- Frontier: 3.8 accepted and recorded by `a2e02692`; 3.9 is next. Worktree clean at BASE `a2e02692`; `tests/numerical_migration/fluid_eval.rs` holds the 2.8 typed rule-matrix tests; oracle `kernel_fluid_eval_test.go` accepted at 2.8.
+- Preflight scan (packet `plans/02-adapters.md#node-3-9`, dispatch packet `worker-briefs.md` node 3.9, brief 5.9/adapter table, `tasks.md` node 3.9):
+  - 3.9 ↔ 3.8: disjoint hunks (`fluid_eval_batch_with` vs LOD); 3.8 landed and closed. Serial `ffi.rs` order frozen; no conflict.
+  - 3.9 ↔ 2.8: consumes the accepted eval provider with its 4096 native bound; `src/fluid_eval.rs` read-only here. The 4097-compat chunking is the packet's key requirement. No conflict.
+  - Derived-artifact inventory: the eval family pins the header, `native_test.go`, `src/fluid_eval.rs`; none is edited here and new/edited files are unpinned, so the package-wide oracle run must stay fully green with no expected mismatch.
+- Ruling: chunk through the bounded `NativeFluidEval::evaluate` (≤4096 per call) with a complete `12*N` stage and single final publish; short output stays status 2 (never 7); remove the `evaluator` seam and re-own the panic test (3.4/3.8 precedent). Cost if wrong: none — admission and rules provably unchanged.
+- Dispatch: implementer subagent for node 3.9 from BASE `a2e02692`; brief `task-3.9-brief.md` in the session workspace, report `task-3.9-report.md` in the same workspace.
+
+## 2026-09-26 — Node 3.9 fluid evaluation ABI adapter
+
+- Predecessor SHA: `a2e02692`
+- Result SHA: `59d07960` (provider `629d0b25`, comment fix `59d07960`; no manifest refresh — eval family pins only the untouched header/test/core files, and the package-wide oracle run stayed green)
+- Implementation summary:
+  - `src/ffi.rs` `fluid_eval_batch_with` hunk: admission byte-identical (3.1 order, `parse_eval_input`, checked `8+14*N`/`12*N`, status-2 short rule, `catch_unwind`, single-copy publish). The `evaluator` seam is REMOVED (signature + 2 call sites); validated items route in ≤4096 chunks through `NativeFluidEval::evaluate` (decode via `read_eval_item`, re-encode via new `encode_eval_writes` sentinel-prefill + used-prefix pack), publishing once only after every chunk succeeds. New `FLUID_EVAL_NATIVE_CHUNK_ITEMS` bound constant.
+  - Seam test re-owned: `fluid_eval_panic_is_contained_without_output` proves the boundary primitive converges + the real core publishes exactly + a rejected vector leaves canaries; `expected_eval_output` recomputed through the native route. No custom-evaluator coverage remains.
+  - `tests/numerical_migration/fluid_eval.rs`: `fluid_eval_abi_4097` for the 6-item matrix (full 72 bytes + digest `0x84aca3f0db8d0ae2`), the 4097-item chunked compat (status 0, full 49164 bytes + digest + spot records), short status-2 canaries, and malformed status-3 canaries.
+- Verification:
+  - Baseline GREEN before the route change (same rules + legacy 4097 acceptance): migration fluid_eval 4/4; post-change GREEN with identical bytes.
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestFluidEval'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestFluidEval'`, `--lib fluid_eval` 32/32 plus full `--lib`, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (no drift).
+- Review: Task Reviewer subagent: spec compliant; no Important findings; four Minor notes (three Chinese new-comment lines — fixed in `59d07960`; test-helper circularity via shared route — noted, independent Go-oracle digest + typed pins carry the gate; per-chunk allocations at the ABI layer — accepted; vacuous boundary probe — documented unreachable-by-construction). No deferred minor from this node.
+- Rollback: Revert `59d07960`, `629d0b25` in that order.
