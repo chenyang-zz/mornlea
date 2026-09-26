@@ -607,3 +607,27 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestFluidEval'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestFluidEval'`, `--lib fluid_eval` 32/32 plus full `--lib`, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (no drift).
 - Review: Task Reviewer subagent: spec compliant; no Important findings; four Minor notes (three Chinese new-comment lines — fixed in `59d07960`; test-helper circularity via shared route — noted, independent Go-oracle digest + typed pins carry the gate; per-chunk allocations at the ABI layer — accepted; vacuous boundary probe — documented unreachable-by-construction). No deferred minor from this node.
 - Rollback: Revert `59d07960`, `629d0b25` in that order.
+
+## 2026-09-26 — Node 3.10 dispatch preflight
+
+- Frontier: 3.9 accepted and recorded by `bbe33860`; 3.10 is next. Worktree clean at BASE `bbe33860`; `tests/numerical_migration/fluid_rescan.rs` holds the 2.9 typed position/summary tests; oracle `kernel_fluid_rescan_test.go` accepted at 2.9.
+- Preflight scan (packet `plans/02-adapters.md#node-3-10`, dispatch packet `worker-briefs.md` node 3.10, brief 5.10/adapter table, `tasks.md` node 3.10):
+  - 3.10 ↔ 3.9: disjoint hunks (`fluid_rescan_with` vs eval); 3.9 landed and closed. Serial `ffi.rs` order frozen; no conflict.
+  - 3.10 ↔ 2.9: consumes the accepted rescan provider with its halo-safe accessor; `src/fluid_rescan.rs` read-only here. The halo-9 conversion is the packet's key requirement. No conflict.
+  - Derived-artifact inventory: the rescan family pins the header, `native_test.go`, `src/fluid_rescan.rs`; none is edited here and new/edited files are unpinned, so the package-wide oracle run must stay fully green with no expected mismatch.
+- Ruling: keep `parse_rescan_input` + route the parsed legacy view through the shared `rescan_scan` accounting via `fluid_rescan` (same core the reviewed provider runs via its accessor); preserve raw 0..17 admission with actually-accessed halo converging to status 9; remove the `scanner` seam and re-own the panic test (3.4/3.8/3.9 precedent). Cost if wrong: none — admission and accounting provably unchanged.
+- Dispatch: implementer subagent for node 3.10 from BASE `bbe33860`; brief `task-3.10-brief.md` in the session workspace, report `task-3.10-report.md` in the same workspace.
+
+## 2026-09-26 — Node 3.10 fluid rescan ABI adapter
+
+- Predecessor SHA: `bbe33860`
+- Result SHA: `3cfdb36c` (provider `99c18494`, comment fix `3cfdb36c`; no manifest refresh — rescan family pins only the untouched header/test/core files, and the package-wide oracle run stayed green)
+- Implementation summary:
+  - `src/ffi.rs` `fluid_rescan_with` hunk: admission byte-identical (3.1 order, `parse_rescan_input`, two-phase exact-needed publish, `catch_unwind`, single-copy publish). The `scanner` seam is REMOVED (signature + 2 call sites); the parsed view routes through shared `fluid_rescan` with raw 0..17 admission kept — an actually-accessed missing halo unwinds inside the boundary to status 9.
+  - Seam test re-owned: `fluid_rescan_panic_is_contained_without_output` proves the boundary primitive converges + the real core publishes exactly + a rejected vector leaves canaries. No custom-scanner coverage remains.
+  - `tests/numerical_migration/fluid_rescan.rs`: `fluid_rescan_outer_halo` (outer-air status 0, outer-missing-halo status 9 with payload + cleared metadata) plus short-output exact-needed coverage (status 7, `8 + 12*N` metadata, canary, exact retry identical Y/Z/X).
+- Verification:
+  - Baseline GREEN before the route change (same accounting + legacy panic convergence): migration fluid_rescan 5/5; post-change GREEN with identical positions.
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestFluidRescan'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestFluidRescan'`, `--lib fluid_rescan` 19/19, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (no drift).
+- Review: Task Reviewer subagent: spec compliant (legacy caught-unwind-9 kept instead of a typed `MissingHalo` value is legitimate — status/canary/metadata identical, typed path covered by 2.9); no Important findings; two Minor English-comment notes both fixed in `3cfdb36c`. No deferred minor from this node.
+- Rollback: Revert `3cfdb36c`, `99c18494` in that order.
