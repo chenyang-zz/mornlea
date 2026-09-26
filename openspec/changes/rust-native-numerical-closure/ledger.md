@@ -242,3 +242,23 @@
   - `go test ./packages/tools/cmd/runtime-oracle -count=1`: passed after the controller's source-hash refresh (`src/lod.rs` `dfdc994e…` -> `9c6c7a17…`).
 - Review: Task Reviewer subagent required one fix round for the exact-capacity boundary, which the implementer fixed in `ad781b71` by building into `&mut exact[..needed]` and asserting `Ok(needed)` with every slot written; the scoped re-review marked it ADDRESSED with no new breakage. The reviewer's second finding was ruled waived: a zero-quad tile is unreachable through the frozen `WorldgenParams::try_new` contract (terrain is never air), so the empty-tile evidence is the seam test `empty_tile_produces_no_quads` and no contract entry was added. One minor deferred to the final whole-branch review: the Go ordered walk omits the skirt `w == step` check the Rust walk asserts.
 - Rollback: Revert `ad781b71`, `0126c19a`, `5cd4b11e` in that order.
+
+## 2026-09-25 — Node 2.8 fluid evaluation provider
+
+- Predecessor SHA: `21103c78`
+- Result SHA: `cf0d8ae5` (provider `cf0d8ae5`, controller hash refresh `c20261c8`)
+- Implementation summary:
+  - `src/native/fluid_eval.rs` implements `NativeFluidEval` for `FluidEvalOp`, preflighting the batch count (0..=4096) and then destination capacity, evaluating each item through the existing `eval_one` rules into a stack-local 12-byte record, and decoding it into a typed four-entry `FluidWrites` with the no-write sentinel skipped so padding is never published.
+  - `src/fluid_eval.rs` widens `SLOT_NO_WRITE` to `pub(crate)` and changes nothing else; no fluid rule moved.
+  - `tests/native_contract/fluid_eval.rs` pins vertical-before-horizontal priority, four contiguous write slots, non-publication of unused entries, unknown id 65535 as nonfluid, the 0/1/4096/4097 count bounds with a test that fails if the preflight order is swapped, exact/short/surplus destinations with canaries, and the established decay, survival, infinite-source and vertical-over-horizontal rules.
+  - `tests/numerical_migration/fluid_eval.rs` pins typed write parity and a digest over the Go-observed wire records, determinism, and the native 4096/4097 boundary.
+  - `packages/tools/cmd/runtime-oracle/kernel_fluid_eval_test.go` freezes the rule matrix at batch sizes 0, 1 and 4096, records that the legacy ABI still accepts 4097 as an observation only, and asserts output-untouched canaries on every recovered failure.
+- Verification:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked fluid_eval`: passed (7 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test numerical_migration --locked fluid_eval`: passed (3 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --lib --locked fluid_eval`: passed (31 tests passed).
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestFluidEval' -count=1`: passed.
+  - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`, `cargo fmt --all --check`, `gofmt -l ./packages`: all clean.
+  - `go test ./packages/tools/cmd/runtime-oracle -count=1`: passed after the controller's source-hash refresh (`src/fluid_eval.rs` `47716d86…` -> `edee1299…`).
+- Review: Task Reviewer subagent approved with no Critical or Important findings and two minor findings deferred to the final whole-branch review (a vacuous zero-length check in the Go oracle, and an anti-padding predicate that would false-positive on a legitimate self-cell air write).
+- Rollback: Revert `c20261c8`, `cf0d8ae5` in that order.
