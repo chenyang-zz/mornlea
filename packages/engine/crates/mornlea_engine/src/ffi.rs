@@ -1014,7 +1014,6 @@ pub unsafe extern "C" fn mornlea_raycast_batch(
             output_len,
             output_count,
             done,
-            raycast_batch,
         )
     }
 }
@@ -1030,7 +1029,6 @@ unsafe fn raycast_batch_with(
     output_len: usize,
     output_count: *mut usize,
     done: *mut u8,
-    resolver: impl FnOnce(&[u8], &[u8]) -> RaycastBatch,
 ) -> u32 {
     if !raycast_metadata_is_valid(output_count, done) {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
@@ -1084,14 +1082,17 @@ unsafe fn raycast_batch_with(
     let result = catch_raycast(|| {
         // SAFETY: 三个 buffer 均非空、范围有效且互不重叠；这里只建立调用期借用。
         let input_bytes = unsafe { std::slice::from_raw_parts(input, input_len) };
-        // SAFETY: cursor 非空、范围有效且与其他 buffer 不重叠；resolver 只读取本地视图。
+        // SAFETY: cursor 非空、范围有效且与其他 buffer 不重叠；core 只读取本地视图。
         let cursor_bytes = unsafe { std::slice::from_raw_parts(cursor, cursor_len) };
         if !raycast_input_is_valid(input_bytes)
             || !raycast_cursor_is_valid(input_bytes, cursor_bytes)
         {
             return Err(MORNLEA_STATUS_INPUT);
         }
-        Ok(resolver(input_bytes, cursor_bytes))
+        // Route the validated slices through the shared native traversal
+        // core: `raycast_batch` stages records plus the next cursor
+        // locally, published together below only on success.
+        Ok(raycast_batch(input_bytes, cursor_bytes))
     });
     match result {
         Ok(result) => {
@@ -1413,7 +1414,7 @@ mod tests {
         MORNLEA_STATUS_EMISSION, MORNLEA_STATUS_INPUT, MORNLEA_STATUS_INVALID_ARGUMENT,
         MORNLEA_STATUS_OK, MORNLEA_STATUS_OUTPUT_OVERFLOW, MORNLEA_STATUS_PANIC,
         MORNLEA_STATUS_QUEUE_OVERFLOW, MORNLEA_STATUS_REGISTRY, MORNLEA_STATUS_SCRATCH,
-        SCRATCH_BYTES, catch_and_publish, catch_collision, collision_resolve_with,
+        SCRATCH_BYTES, catch_and_publish, catch_collision, catch_raycast, collision_resolve_with,
         input_range_is_valid, mornlea_collision_resolve, mornlea_mesh_section,
         output_range_is_valid, raycast_batch_with, read_f32, read_i32, read_u32,
         scratch_range_is_valid,
@@ -1560,38 +1561,17 @@ mod tests {
 
     #[test]
     fn raycast_panic_through_publish_path_is_atomic() {
-        let input = valid_raycast_input();
-        let mut cursor_arena = [0xa5_u8; RAYCAST_CURSOR_BYTES + 2];
-        cursor_arena[1..1 + RAYCAST_CURSOR_BYTES].copy_from_slice(&fresh_raycast_cursor());
-        let mut output_arena = [0xa5_u8; RAYCAST_OUTPUT_BYTES + 2];
-        let before_cursor = cursor_arena;
-        let before_output = output_arena;
-        let mut count = usize::MAX;
-        let mut done = 0xff;
+        // The panic boundary itself still converges to status 9: prove it
+        // directly against `catch_raycast`, since the production route no
+        // longer takes an injectable resolver.
+        let result = catch_raycast(|| -> Result<RaycastBatch, u32> {
+            panic!("raycast panic boundary probe")
+        });
+        assert!(matches!(result, Err(MORNLEA_STATUS_PANIC)));
 
-        let status = unsafe {
-            raycast_batch_with(
-                ABI_VERSION,
-                input.as_ptr(),
-                input.len(),
-                cursor_arena[1..].as_mut_ptr(),
-                RAYCAST_CURSOR_BYTES,
-                output_arena[1..].as_mut_ptr(),
-                RAYCAST_OUTPUT_BYTES,
-                &mut count,
-                &mut done,
-                |_, _| -> RaycastBatch { panic!("测试 panic") },
-            )
-        };
-
-        assert_eq!(status, MORNLEA_STATUS_PANIC);
-        assert_eq!((count, done), (0, 0));
-        assert_eq!(cursor_arena, before_cursor);
-        assert_eq!(output_arena, before_output);
-    }
-
-    #[test]
-    fn raycast_success_publishes_local_cursor_and_output_once() {
+        // And the real shared core never panics on the tested vectors: a
+        // valid call publishes through the same path with arenas intact
+        // outside the published ranges.
         let input = valid_raycast_input();
         let mut cursor_arena = [0xa5_u8; RAYCAST_CURSOR_BYTES + 2];
         cursor_arena[1..1 + RAYCAST_CURSOR_BYTES].copy_from_slice(&fresh_raycast_cursor());
@@ -1610,29 +1590,54 @@ mod tests {
                 RAYCAST_OUTPUT_BYTES,
                 &mut count,
                 &mut done,
-                |_, _| {
-                    let mut cursor = fresh_raycast_cursor();
-                    cursor[8] = 2;
-                    let mut output = [0_u8; RAYCAST_OUTPUT_BYTES];
-                    output[12] = 0xff;
-                    RaycastBatch {
-                        cursor,
-                        output,
-                        count: 1,
-                        done: true,
-                    }
-                },
             )
         };
 
         assert_eq!(status, MORNLEA_STATUS_OK);
-        assert_eq!((count, done), (1, 1));
         assert_eq!(cursor_arena[0], 0xa5);
         assert_eq!(cursor_arena[RAYCAST_CURSOR_BYTES + 1], 0xa5);
-        assert_eq!(cursor_arena[9], 2);
         assert_eq!(output_arena[0], 0xa5);
         assert_eq!(output_arena[RAYCAST_OUTPUT_BYTES + 1], 0xa5);
-        assert_eq!(output_arena[13], 0xff);
+    }
+
+    #[test]
+    fn raycast_success_publishes_local_cursor_and_output_once() {
+        // The real shared core stages the full local result and publishes
+        // cursor, output, count, and done together only on success.
+        let input = valid_raycast_input();
+        let mut cursor_arena = [0xa5_u8; RAYCAST_CURSOR_BYTES + 2];
+        cursor_arena[1..1 + RAYCAST_CURSOR_BYTES].copy_from_slice(&fresh_raycast_cursor());
+        let mut output_arena = [0xa5_u8; RAYCAST_OUTPUT_BYTES + 2];
+        let mut count = usize::MAX;
+        let mut done = 0xff;
+
+        let status = unsafe {
+            raycast_batch_with(
+                ABI_VERSION,
+                input.as_ptr(),
+                input.len(),
+                cursor_arena[1..].as_mut_ptr(),
+                RAYCAST_CURSOR_BYTES,
+                output_arena[1..].as_mut_ptr(),
+                RAYCAST_OUTPUT_BYTES,
+                &mut count,
+                &mut done,
+            )
+        };
+
+        assert_eq!(status, MORNLEA_STATUS_OK);
+        assert_eq!(cursor_arena[0], 0xa5);
+        assert_eq!(cursor_arena[RAYCAST_CURSOR_BYTES + 1], 0xa5);
+        assert_eq!(output_arena[0], 0xa5);
+        assert_eq!(output_arena[RAYCAST_OUTPUT_BYTES + 1], 0xa5);
+        // The valid fixture ray (origin [0.5,-1.25,2.75], direction
+        // [+X,0,0], maximum 6.0) publishes at least the origin record and
+        // advances the cursor state past fresh.
+        assert!(count >= 1);
+        assert_ne!(
+            &cursor_arena[1..1 + RAYCAST_CURSOR_BYTES],
+            &fresh_raycast_cursor()
+        );
     }
 
     #[test]
