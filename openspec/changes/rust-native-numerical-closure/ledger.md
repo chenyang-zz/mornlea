@@ -488,3 +488,26 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestRaycast'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelRaycast'`, full `--lib` 274/274, full `native_contract` + `numerical_migration`, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~60s, no drift).
 - Review: Task Reviewer subagent: spec compliant against the revised brief; no Important findings; three Minor notes (one Chinese fragment in an edited SAFETY line — fixed in `cc317e8e`; weaker-than-old through-path panic proof explicitly allowed by the brief's fallback clause; publish-test exactness relying on the migration test). No deferred minor from this node beyond the recorded fallback acceptance.
 - Rollback: Revert `cc317e8e`, `06f92f81` in that order.
+
+## 2026-09-26 — Node 3.5 dispatch preflight
+
+- Frontier: 3.4 accepted and recorded by `016acfd6`; 3.5 is next. Worktree clean at BASE `016acfd6`; `tests/numerical_migration/worldgen_chunk.rs` holds the 2.4 typed digest/cell tests; oracle `kernel_worldgen_chunk_test.go` accepted at 2.4.
+- Preflight scan (packet `plans/02-adapters.md#node-3-5`, dispatch packet `worker-briefs.md` node 3.5, brief 5.5/adapter table, `tasks.md` node 3.5):
+  - 3.5 ↔ 3.6 share the worldgen core (probe routes after 3.5 through its own hunk; both consume the accepted 2.4 sampler). Serial `ffi.rs` order frozen; no conflict.
+  - 3.5 ↔ 2.4: consumes the accepted chunk provider with its wrapping correction; `src/worldgen.rs` read-only here. No conflict.
+  - Derived-artifact inventory: the chunk family pins the header, `native_test.go`, `src/worldgen.rs`; none is edited here and new/edited files are unpinned, so the package-wide oracle run must stay fully green with no expected mismatch.
+- Ruling: keep `parse_chunk_input` + route the parsed legacy params through the shared `generate_chunk` sampler staged in a named local `stage` box — no typed-params rebuild, no second input grid, no exact-length change. The reviewed `NativeWorldgen` provider stages through the same sampler via `as_legacy`, so this is the same core by construction. Cost if wrong: none — admission and numerics provably unchanged.
+- Dispatch: implementer subagent for node 3.5 from BASE `016acfd6`; brief `task-3.5-brief.md` in the session workspace, report `task-3.5-report.md` in the same workspace.
+
+## 2026-09-26 — Node 3.5 world chunk ABI adapter
+
+- Predecessor SHA: `016acfd6`
+- Result SHA: `9cd0260f` (provider `a14d967c`, review polish `9cd0260f`; no manifest refresh — chunk family pins only the untouched header/test/core files, and the package-wide oracle run stayed green)
+- Implementation summary:
+  - `src/ffi.rs` `worldgen_chunk_with` hunk: admission byte-identical; only the staging changed (`vec![0u16; CHUNK_VOLUME]` → named `Box<[u16; CHUNK_VOLUME]>` `stage`) with a 3-line English comment naming the shared `generate_chunk` route. Same sampler, same LE-encode, same single copy.
+  - `tests/numerical_migration/worldgen_chunk.rs`: `worldgen_chunk_abi_bytes` calls the real exported symbol for seed-0 origin (full-output digest + full 98304-cell vector equality + spread spot cells), both signed extremes (frozen digests), mutated perm (frozen digest + inequality), and 196607-byte status-7 full-canary. Five observations total, reusing the file's existing digest constants.
+- Verification:
+  - Baseline GREEN before the route edit (same core): migration chunk 5/5; post-edit GREEN with identical digests (`0x6f674aa8baa4ea79`, `0x8d3e20fa7599b5c6`, `0x7f8806f3505dfbce`, `0x072b63b2bdf3922b`).
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestWorldgen'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelWorldgenChunk'`, `--lib worldgen` 43/43, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (no drift).
+- Review: Task Reviewer subagent: spec compliant; no Important findings; three Minor DRY notes (unused-literal spot range, duplicated FNV constants, hardcoded header fields). Controller applied the first two in `9cd0260f` (spot range via `CHUNK_CELLS`, shared `FNV_OFFSET_BASIS`/`FNV_PRIME`); the header-field note needs no action because the helper builds from the typed params' own getters, not literals. No deferred minor from this node.
+- Rollback: Revert `9cd0260f`, `a14d967c` in that order.
