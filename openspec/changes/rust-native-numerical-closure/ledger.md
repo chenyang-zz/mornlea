@@ -266,3 +266,23 @@
 ## 2026-09-25 — Round-end governance retrospective
 
 - Architecture skill: promoted one rule to the synchronized `mornlea-architecture` skill. `testdata/runtime-migration/contracts.json` is a live provenance registry whose per-family `sources[].sha256` pins are reconciled against the working tree by `TestStorageCorpus`; any hashed-source change must land the matching refresh before the node closes, `source_revision` stays pinned, corpus assets stay closure-owned, and only a package-wide runtime-oracle run proves the reconciliation. Verified against `packages/tools/cmd/runtime-oracle/inventory.go`, `storage_coverage_test.go`, the archived storage-closure ledger's per-family hash-refresh pattern, and the drift reproduced across nodes 1.2-2.5 of this change. No other finding met the promotion bar; everything else recorded here is task history or already specified in the change's own briefs.
+
+## 2026-09-25 — Node 2.9 fluid rescan provider
+
+- Predecessor SHA: `dc0684b4`
+- Result SHA: `1866f315` (provider `1866f315`, controller hash refresh `ff2c119c`)
+- Implementation summary:
+  - `src/fluid_rescan.rs` extracts the canonical rescan accounting loop into one shared `rescan_scan` read through a small access capability, with `section_cell_index` and `box_to_world` replacing the previously inline arithmetic. `fluid_rescan` becomes a thin byte-encoding adapter and its golden output is unchanged; the legacy `skirt_column` panic path stays as it was.
+  - `src/native/fluid_rescan.rs` implements `NativeFluidRescan` for `FluidRescanOp` plus the typed read accessor: closed box coordinates `1..=16`, `start_section < 24`, scratch capacity `area * 16 * (24 - start_section)`, `MissingHalo` only on an actually-read out-of-owned coordinate, out-of-world Y still answering the barrier for sealed-source parity, and a single publication pass after the scan.
+  - `tests/native_contract/fluid_rescan.rs` covers budget accounting with entered-section completion, exact world positions for unsealed edge sources, Y/Z/X emission order, `start_section` 23 completion and break, range rejection, `ScratchTooSmall` worst-case math, exact/short/surplus destinations with canaries, center-over-metadata precedence, and scratch reuse after a rejected call.
+  - `tests/numerical_migration/fluid_rescan.rs` pins position and summary parity against the Go observations, determinism, and typed-layer outer-column rejection.
+  - `packages/tools/cmd/runtime-oracle/kernel_fluid_rescan_test.go` freezes the observation matrix including the interior halo case and asserts output-untouched canaries on every recovered failure.
+- Verification:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked fluid_rescan`: passed (8 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test numerical_migration --locked fluid_rescan`: passed (3 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --lib --locked fluid_rescan`: passed (18 tests passed).
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestFluidRescan' -count=1`: passed.
+  - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`, `cargo fmt --all --check`, `gofmt -l ./packages`: all clean.
+  - `go test ./packages/tools/cmd/runtime-oracle -count=1`: passed after the controller's source-hash refresh (`src/fluid_rescan.rs` `d9fab8dc…` -> `11732749…`).
+- Review: Task Reviewer subagent approved with no Critical or Important findings; the named duplication risk is absent because the accounting loop lives once in `rescan_scan`. Two minor findings deferred to the final whole-branch review (an overclaiming test name for the typed-range rejection, and `meta_uniform` admitting the center `(0,0)` pair although the seal loop never uses it).
+- Rollback: Revert `ff2c119c`, `1866f315` in that order.
