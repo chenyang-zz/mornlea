@@ -48,11 +48,14 @@ pub(crate) const TORCH_WALL_TOP_NEAR_RAW: u8 = 8;
 /// 间误传；也留出与满格 15（流体水柱内部专用）的余量。
 pub(crate) const TORCH_WALL_TOP_FAR_RAW: u8 = 13;
 
-/// mesh_models 为区段里每个带有限模型 tag 的格子发射模型几何。这是 model
-/// dispatcher 的发射半边：tag 0（默认）不进本函数、继续走既有几何；
-/// tag 1..=5 走火把、tag 6 走床（见 `super::bed`）；7 起的未知值已在
-/// registry 的解析/校验期被拒绝，走不到这里——闭区间 `match` 保持穷尽，
-/// 未来新增 tag 会在编译期强制显式处理而不是静默回退。
+/// mesh_models emits the model geometry for every cell carrying a finite
+/// model tag. This is the emission half of the model dispatcher: tag 0
+/// (default) never enters this function and keeps the existing geometry;
+/// tags 1..=5 dispatch to the torch forms and tag 6 to the bed (see
+/// `super::bed`); unknown values from 7 up are already rejected while the
+/// registry is parsed and validated, so they never arrive here. The closed
+/// range `match` therefore stays exhaustive, and a future tag is forced to be
+/// handled explicitly instead of silently falling back.
 ///
 /// Emission shares the `y → z → x` walk and the registry-only dispatch with
 /// the byte lane's packing path, so both lanes publish the same stream.
@@ -83,7 +86,7 @@ pub(crate) fn mesh_models<A: MeshAccess, S: QuadStage>(
                     6 => emit_bed(access, light, [x, y, z], stage)?,
                     // Registry validation already rejected every unknown tag
                     // from 7 up, so this arm exists for exhaustiveness only.
-                    _ => unreachable!("model tag 已被 registry 校验拒绝"),
+                    _ => unreachable!("unknown model tags are rejected by registry validation"),
                 }
             }
         }

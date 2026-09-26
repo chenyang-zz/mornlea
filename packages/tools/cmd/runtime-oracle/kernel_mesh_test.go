@@ -11,7 +11,7 @@ import (
 )
 
 // Geometry scenes of the raw mesh/light section entry, built on the shared
-// `MGM1` fixture from `kernel_mesh_view_test.go`. The output is the ordered
+// MGM1 fixture from `kernel_mesh_view_test.go`. The output is the ordered
 // stream of packed `u64` quads the typed provider stages, so the Rust
 // numerical-migration mesh test pins the same counts, digests and ordered
 // fields. `kernelMeshStageWords` is the typed provider's fixed staging

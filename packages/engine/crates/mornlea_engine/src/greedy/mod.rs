@@ -422,7 +422,7 @@ fn is_plant<A: MeshAccess>(access: &A, id: u16) -> bool {
     matches!(access.material(id, 0), Some(material) if plant_material(material))
 }
 
-/// mesh_plants 为区段里每个植物格补出交叉斜面。
+/// mesh_plants emits the cross quads for every plant cell in the section.
 ///
 /// 植物格的六个轴向面已经被上面的循环挡掉了——出面规则的唯一真值源是 Go 的
 /// `assets.Registry.FaceVisible`，它对作物一律返回 false，烘焙进可见性位图后
