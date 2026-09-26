@@ -1,5 +1,6 @@
 use crate::input::MeshInput;
 use crate::light::LightScratch;
+use crate::native::contracts::{KernelError, MeshQuad, MeshRegistryEntry, MeshView};
 use crate::quad::{FULL_FLUID_HEIGHT, Face, Quad, plant_material};
 
 mod bed;
@@ -12,6 +13,215 @@ pub(crate) use torch::{TORCH_QUADS_PER_STANDING_CELL, TORCH_QUADS_PER_WALL_CELL}
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum MeshError {
     OutputOverflow,
+}
+
+/// Read capability the shared geometry core needs from one section lane.
+///
+/// The byte ABI lane (`MeshInput` plus its borrowed `RegistryView`) and the
+/// typed lane (`MeshView` plus its validated contract registry) answer the
+/// same geometry questions, so emission runs once for both lanes and neither
+/// can drift from the other's face order, merge rules or finite-model dispatch.
+pub(crate) trait MeshAccess {
+    fn block(&self, x: i32, y: i32, z: i32) -> u16;
+    fn air_id(&self) -> u16;
+    fn face_visible(&self, id: u16, adjacent: u16) -> bool;
+    fn material(&self, id: u16, face: usize) -> Option<u16>;
+    fn model(&self, id: u16) -> u8;
+    fn fluid_height(&self, id: u16) -> Option<u8>;
+    fn block_top_raw(&self, id: u16) -> Option<u8>;
+    fn opaque(&self, id: u16) -> bool;
+}
+
+impl MeshAccess for MeshInput<'_> {
+    fn block(&self, x: i32, y: i32, z: i32) -> u16 {
+        MeshInput::block(self, x, y, z)
+    }
+
+    fn air_id(&self) -> u16 {
+        self.air_id
+    }
+
+    fn face_visible(&self, id: u16, adjacent: u16) -> bool {
+        self.registry.face_visible(id, adjacent)
+    }
+
+    fn material(&self, id: u16, face: usize) -> Option<u16> {
+        self.registry.material(id, face)
+    }
+
+    fn model(&self, id: u16) -> u8 {
+        self.registry.model(id)
+    }
+
+    fn fluid_height(&self, id: u16) -> Option<u8> {
+        self.registry.fluid_height(id)
+    }
+
+    fn block_top_raw(&self, id: u16) -> Option<u8> {
+        self.registry.block_top_raw(id)
+    }
+
+    fn opaque(&self, id: u16) -> bool {
+        self.registry.opaque(id)
+    }
+}
+
+/// Read access over one validated typed section view.
+///
+/// Mirrors the byte lane's query surface exactly: ids resolve through the
+/// strictly sorted entry table, an absent id answers the same neutral values
+/// `RegistryView` returns, a face outside `0..6` has no material, and the `0`
+/// sentinel in the fluid/top height fields means "not that geometry" just like
+/// the wire fields.
+pub(crate) struct TypedMeshAccess<'a> {
+    view: MeshView<'a>,
+    entries: &'a [MeshRegistryEntry],
+    visibility: &'a [u64],
+    words_per_row: usize,
+}
+
+impl<'a> TypedMeshAccess<'a> {
+    pub(crate) fn new(view: &MeshView<'a>) -> Self {
+        let entries = view.registry.entries();
+        Self {
+            view: *view,
+            entries,
+            visibility: view.registry.visibility(),
+            words_per_row: entries.len().div_ceil(64),
+        }
+    }
+
+    fn index(&self, id: u16) -> Option<usize> {
+        self.entries
+            .binary_search_by(|entry| entry.id.cmp(&id))
+            .ok()
+    }
+}
+
+impl MeshAccess for TypedMeshAccess<'_> {
+    fn block(&self, x: i32, y: i32, z: i32) -> u16 {
+        match crate::input::typed_cell_index(x, y, z) {
+            Some(index) => self.view.blocks[index],
+            None => self.view.registry.barrier(),
+        }
+    }
+
+    fn air_id(&self) -> u16 {
+        self.view.registry.air()
+    }
+
+    fn face_visible(&self, id: u16, adjacent: u16) -> bool {
+        let (Some(row), Some(column)) = (self.index(id), self.index(adjacent)) else {
+            return false;
+        };
+        self.visibility[row * self.words_per_row + column / 64] & (1_u64 << (column % 64)) != 0
+    }
+
+    fn material(&self, id: u16, face: usize) -> Option<u16> {
+        if face >= 6 {
+            return None;
+        }
+        self.index(id)
+            .map(|index| self.entries[index].material[face])
+    }
+
+    fn model(&self, id: u16) -> u8 {
+        self.index(id)
+            .map_or(0, |index| self.entries[index].model as u8)
+    }
+
+    fn fluid_height(&self, id: u16) -> Option<u8> {
+        let index = self.index(id)?;
+        match self.entries[index].fluid_height {
+            0 => None,
+            raw => Some(raw),
+        }
+    }
+
+    fn block_top_raw(&self, id: u16) -> Option<u8> {
+        let index = self.index(id)?;
+        match self.entries[index].block_top_raw {
+            0 => None,
+            raw => Some(raw),
+        }
+    }
+
+    fn opaque(&self, id: u16) -> bool {
+        self.index(id)
+            .is_some_and(|index| self.entries[index].opaque)
+    }
+}
+
+/// Destination the shared geometry core writes emitted records into.
+///
+/// The byte ABI lane packs each record into the caller's `u64` destination as
+/// it goes; that write-as-you-go behavior is pinned by the existing ABI tests.
+/// The typed lane stores checked contract records in the fixed scratch stage
+/// and publishes only after the exact count is known. The associated error
+/// keeps each lane's failure vocabulary: `MeshError::OutputOverflow` for the
+/// raw destination and `KernelError` for the typed entry.
+pub(crate) trait QuadStage {
+    type Error;
+
+    fn push(&mut self, quad: Quad) -> Result<(), Self::Error>;
+}
+
+/// Byte-lane stage: packs straight into the caller's `u64` destination.
+struct PackedStage<'a> {
+    output: &'a mut [u64],
+    written: usize,
+}
+
+impl QuadStage for PackedStage<'_> {
+    type Error = MeshError;
+
+    fn push(&mut self, quad: Quad) -> Result<(), MeshError> {
+        let index = self.written;
+        let Some(slot) = self.output.get_mut(index) else {
+            return Err(MeshError::OutputOverflow);
+        };
+        *slot = quad.pack();
+        self.written += 1;
+        Ok(())
+    }
+}
+
+/// Typed stage: stores checked contract records in the caller's fixed staging
+/// array.
+///
+/// Both a field-domain violation in one emission and exhaustion of the static
+/// stage bound are invariant failures, not caller-capacity failures: the
+/// conservative bound covers every structurally and semantically accepted
+/// registry, so reaching past it means the geometry contract itself broke.
+/// Either way no destination slot is published.
+pub(crate) struct MeshStage<'a> {
+    stage: &'a mut [MeshQuad],
+    written: usize,
+}
+
+impl<'a> MeshStage<'a> {
+    pub(crate) fn new(stage: &'a mut [MeshQuad]) -> Self {
+        Self { stage, written: 0 }
+    }
+
+    /// Published prefix of the staged records.
+    pub(crate) fn output(&self) -> &[MeshQuad] {
+        &self.stage[..self.written]
+    }
+}
+
+impl QuadStage for MeshStage<'_> {
+    type Error = KernelError;
+
+    fn push(&mut self, quad: Quad) -> Result<(), KernelError> {
+        let index = self.written;
+        let Some(slot) = self.stage.get_mut(index) else {
+            return Err(KernelError::OutputInvariant);
+        };
+        *slot = quad.staged().map_err(|_| KernelError::OutputInvariant)?;
+        self.written += 1;
+        Ok(())
+    }
 }
 
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
@@ -68,7 +278,21 @@ pub(crate) fn mesh_section(
         return Ok(0);
     }
 
-    let mut count = 0;
+    let mut stage = PackedStage { output, written: 0 };
+    mesh_geometry(input, light, &mut stage)?;
+    Ok(stage.written)
+}
+
+/// Shared emission core for both section lanes.
+///
+/// Face, slice, row and cell order, the greedy merge rules, the plant cross
+/// quads and the finite-model dispatch all live here once, so the typed lane
+/// publishes exactly the stream the byte ABI lane packs for the same section.
+pub(crate) fn mesh_geometry<A: MeshAccess, S: QuadStage>(
+    access: &A,
+    light: &LightScratch<'_>,
+    stage: &mut S,
+) -> Result<(), S::Error> {
     for face in FACES {
         let axis = (face as usize) >> 1;
         let u = (axis + 1) % 3;
@@ -84,38 +308,37 @@ pub(crate) fn mesh_section(
                     p[axis] = slice;
                     p[u] = ui;
                     p[v] = vi;
-                    let id = input.block(p[0], p[1], p[2]);
+                    let id = access.block(p[0], p[1], p[2]);
                     let mut q = p;
                     q[axis] += step;
-                    if !input
-                        .registry
-                        .face_visible(id, input.block(q[0], q[1], q[2]))
-                    {
+                    if !access.face_visible(id, access.block(q[0], q[1], q[2])) {
                         continue;
                     }
-                    let Some(material) = input.registry.material(id, face as usize) else {
+                    let Some(material) = access.material(id, face as usize) else {
                         continue;
                     };
-                    // model dispatcher 的豁免半边：带有限模型 tag 的方块（当前
-                    // 即火把 1..=5 与床 6）不出轴向面——几何由 `mesh_models`
-                    // 全权发射。植物靠 visibility 位图的整行全零达成同一豁免；
-                    // 火把/床的位图可能非零（Go 侧 FaceVisible 对非不透明邻居
-                    // 返回 true），必须在这里显式跳过。7 起的未知值已被
-                    // `RegistryView::validate` 在 parse 期拒绝，进不到这里。
-                    if input.registry.model(id) != 0 {
+                    // Axial faces of a finite-model block are exempt: torch
+                    // forms 1..=5 and bed 6 publish their geometry through
+                    // `mesh_models` alone. Plants reach the same exemption by
+                    // having an all-zero visibility row; torch and bed rows may
+                    // be nonzero (Go's `FaceVisible` answers true for a
+                    // non-opaque neighbor), so the skip must be explicit here.
+                    // Unknown tags from 7 up were already rejected by the
+                    // registry validation, so they never reach this point.
+                    if access.model(id) != 0 {
                         continue;
                     }
-                    let fluid = input.registry.fluid_height(id).is_some();
-                    let top_raw = input.registry.block_top_raw(id);
+                    let fluid = access.fluid_height(id).is_some();
+                    let top_raw = access.block_top_raw(id);
                     mask[(vi * 16 + ui) as usize] = MaskCell {
                         used: true,
                         material,
-                        ao: compute_ao(input, p, axis, u, v, step),
+                        ao: compute_ao(access, p, axis, u, v, step),
                         light: light.at(q[0], q[1], q[2]),
                         fluid,
                         short: !fluid && top_raw.is_some(),
                         corners: if fluid {
-                            fluid_corners(input, p, face, axis, u, v)
+                            fluid_corners(access, p, face, axis, u, v)
                         } else if let Some(raw) = top_raw {
                             short_block_corners(p, face, axis, u, v, raw)
                         } else {
@@ -163,14 +386,11 @@ pub(crate) fn mesh_section(
                         }
                     }
 
-                    let Some(slot) = output.get_mut(count) else {
-                        return Err(MeshError::OutputOverflow);
-                    };
                     let mut p = [0; 3];
                     p[axis] = slice;
                     p[u] = ui as i32;
                     p[v] = vi as i32;
-                    *slot = Quad {
+                    stage.push(Quad {
                         x: p[0] as u8,
                         y: p[1] as u8,
                         z: p[2] as u8,
@@ -182,29 +402,27 @@ pub(crate) fn mesh_section(
                         light: cell.light,
                         corners: cell.corners,
                         back: false,
-                    }
-                    .pack();
-                    count += 1;
+                    })?;
                     ui += width;
                 }
             }
         }
     }
 
-    count = mesh_plants(input, light, output, count)?;
-    count = mesh_models(input, light, output, count)?;
-    Ok(count)
+    mesh_plants(access, light, stage)?;
+    mesh_models(access, light, stage)?;
+    Ok(())
 }
 
 /// is_plant 报告一格是不是植物，判据是它的 material 落在植物区间。
 ///
 /// 取 face 0 的 material 即可：植物六个面共用同一层（交叉斜面没有"朝向"），
 /// Go 侧 `assets.Registry.Material` 对作物的全部 face 返回同一个 `LayerWheatN`。
-fn is_plant(input: &MeshInput<'_>, id: u16) -> bool {
-    matches!(input.registry.material(id, 0), Some(material) if plant_material(material))
+fn is_plant<A: MeshAccess>(access: &A, id: u16) -> bool {
+    matches!(access.material(id, 0), Some(material) if plant_material(material))
 }
 
-/// mesh_plants 为区段里每个植物格补出交叉斜面，返回新的 quad 总数。
+/// mesh_plants 为区段里每个植物格补出交叉斜面。
 ///
 /// 植物格的六个轴向面已经被上面的循环挡掉了——出面规则的唯一真值源是 Go 的
 /// `assets.Registry.FaceVisible`，它对作物一律返回 false，烘焙进可见性位图后
@@ -224,29 +442,25 @@ fn is_plant(input: &MeshInput<'_>, id: u16) -> bool {
 ///    有共面邻居"，交叉斜面两者都不满足，硬算只会得到与视角无关的脏阴影。
 ///
 /// 枚举次序是 `y → z → x`（与区段方块的存储次序一致），保证输出确定。
-fn mesh_plants(
-    input: &MeshInput<'_>,
+fn mesh_plants<A: MeshAccess, S: QuadStage>(
+    access: &A,
     light: &LightScratch<'_>,
-    output: &mut [u64],
-    mut count: usize,
-) -> Result<usize, MeshError> {
+    stage: &mut S,
+) -> Result<(), S::Error> {
     for y in 0..16 {
         for z in 0..16 {
             for x in 0..16 {
-                let id = input.block(x, y, z);
+                let id = access.block(x, y, z);
                 // 空气早退：绝大多数格是空气，先挡掉能省下一次 registry 二分。
-                if id == input.air_id || !is_plant(input, id) {
+                if id == access.air_id() || !is_plant(access, id) {
                     continue;
                 }
-                let Some(material) = input.registry.material(id, 0) else {
+                let Some(material) = access.material(id, 0) else {
                     continue;
                 };
                 let light_above = light.at(x, y + 1, z);
                 for (face, back) in PLANT_QUADS {
-                    let Some(slot) = output.get_mut(count) else {
-                        return Err(MeshError::OutputOverflow);
-                    };
-                    *slot = Quad {
+                    stage.push(Quad {
                         x: x as u8,
                         y: y as u8,
                         z: z as u8,
@@ -258,14 +472,12 @@ fn mesh_plants(
                         light: light_above,
                         corners: [0; 4],
                         back,
-                    }
-                    .pack();
-                    count += 1;
+                    })?;
                 }
             }
         }
     }
-    Ok(count)
+    Ok(())
 }
 
 /// cell_height 返回一格流体的 4-bit 高度原值，非流体返回 `None`。
@@ -274,13 +486,9 @@ fn mesh_plants(
 ///
 /// - 上方也是流体 → 取满格 `FULL_FLUID_HEIGHT`（15），使水柱内部无斜面、与上格无缝；
 /// - 否则取 registry 里烘焙好的 `h_raw`（Go 侧 `14 - level`，源 14、最弱 7）。
-fn cell_height(input: &MeshInput<'_>, x: i32, y: i32, z: i32) -> Option<u8> {
-    let raw = input.registry.fluid_height(input.block(x, y, z))?;
-    if input
-        .registry
-        .fluid_height(input.block(x, y + 1, z))
-        .is_some()
-    {
+fn cell_height<A: MeshAccess>(access: &A, x: i32, y: i32, z: i32) -> Option<u8> {
+    let raw = access.fluid_height(access.block(x, y, z))?;
+    if access.fluid_height(access.block(x, y + 1, z)).is_some() {
         return Some(FULL_FLUID_HEIGHT);
     }
     Some(raw)
@@ -294,11 +502,11 @@ fn cell_height(input: &MeshInput<'_>, x: i32, y: i32, z: i32) -> Option<u8> {
 ///
 /// 因为结果只由顶点坐标决定，两个水平相邻的流体格在共享边上必然读出同一个值，
 /// 斜面于是天然连续。四格全非流体时返回 0，调用方只在流体格上调用它，不会命中。
-fn corner_height(input: &MeshInput<'_>, vx: i32, y: i32, vz: i32) -> u8 {
+fn corner_height<A: MeshAccess>(access: &A, vx: i32, y: i32, vz: i32) -> u8 {
     let mut sum = 0_u32;
     let mut count = 0_u32;
     for (dx, dz) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
-        let Some(height) = cell_height(input, vx + dx, y, vz + dz) else {
+        let Some(height) = cell_height(access, vx + dx, y, vz + dz) else {
             continue;
         };
         if height == FULL_FLUID_HEIGHT {
@@ -318,8 +526,8 @@ fn corner_height(input: &MeshInput<'_>, vx: i32, y: i32, vz: i32) -> u8 {
 /// 只有落在该格顶面那一层（世界 y == `p[1] + 1`）的顶点才带高度；侧面的两个下顶点
 /// 与底面的四个顶点都在方块底面，语义上高度为 0。顶面四角全部带高度，底面全 0
 /// 因而按普通 1×1 quad 打包——它本来就是平的，没有可插值的东西。
-fn fluid_corners(
-    input: &MeshInput<'_>,
+fn fluid_corners<A: MeshAccess>(
+    access: &A,
     p: [i32; 3],
     face: Face,
     axis: usize,
@@ -334,7 +542,7 @@ fn fluid_corners(
         vertex[u] += (du + 1) / 2;
         vertex[v] += (dv + 1) / 2;
         if vertex[1] == p[1] + 1 {
-            corners[index] = corner_height(input, vertex[0], p[1], vertex[2]);
+            corners[index] = corner_height(access, vertex[0], p[1], vertex[2]);
         }
     }
     corners
@@ -386,8 +594,8 @@ pub(crate) fn center_is_air(input: &MeshInput<'_>) -> bool {
     true
 }
 
-fn compute_ao(
-    input: &MeshInput<'_>,
+fn compute_ao<A: MeshAccess>(
+    access: &A,
     p: [i32; 3],
     axis: usize,
     u: usize,
@@ -400,7 +608,7 @@ fn compute_ao(
         let mut q = base;
         q[u] += du;
         q[v] += dv;
-        u8::from(input.registry.opaque(input.block(q[0], q[1], q[2])))
+        u8::from(access.opaque(access.block(q[0], q[1], q[2])))
     };
 
     let mut ao = 0;

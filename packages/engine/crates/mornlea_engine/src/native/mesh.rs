@@ -1,18 +1,21 @@
 //! Typed native mesh/light provider surface.
 //!
-//! This module owns the validated registry constructor and the typed light
-//! build for the mesh/light lane. The borrowed section view and the reusable
-//! scratch are the frozen contract types ([`MeshView`] and [`MeshScratch`]);
-//! geometry publication is not part of this module yet, so the typed surface
-//! ends at the light result held in the scratch.
+//! This module owns the validated registry constructor, the typed light build
+//! and the staged geometry provider for the mesh/light lane. The borrowed
+//! section view and the reusable scratch are the frozen contract types
+//! ([`MeshView`] and [`MeshScratch`]); geometry is emitted by the shared
+//! `greedy` core into the scratch's fixed quad stage and published only after
+//! the complete stream and its exact count are known.
 //!
 //! Validation order is fixed: a typed registry is fully validated before any
-//! light work, and the light entry re-validates the view's registry so an
-//! externally constructed view can never reach the solver with a table the
-//! byte lane would have rejected.
+//! light or geometry work, and the light entry re-validates the view's registry
+//! so an externally constructed view can never reach the solver with a table
+//! the byte lane would have rejected.
 
 use crate::native::contracts::KernelError;
-use crate::native::contracts::mesh::{MeshRegistry, MeshRegistryEntry, MeshScratch, MeshView};
+use crate::native::contracts::mesh::{
+    MeshOp, MeshQuad, MeshRegistry, MeshRegistryEntry, MeshScratch, MeshView,
+};
 
 /// Builds a fully validated typed registry snapshot.
 ///
@@ -44,4 +47,56 @@ pub fn try_new_registry(
 pub fn build_light(view: &MeshView<'_>, scratch: &mut MeshScratch) -> Result<(), KernelError> {
     crate::input::validate_typed_registry(view.registry)?;
     crate::light::build_light_view(view, scratch)
+}
+
+/// Zero-sized native provider for one section's mesh geometry.
+///
+/// Ownership: the provider is stateless. Light levels, the queue and the fixed
+/// staging array all live in the caller-owned `MeshScratch`, so a warm caller
+/// reuses a single allocation across sections. The provider borrows the view
+/// for the call only and never keeps a reference to the destination.
+pub struct NativeMesh;
+
+impl MeshOp for NativeMesh {
+    /// Builds light and stages the complete quad stream for one validated
+    /// section view, then publishes it into `dst` once.
+    ///
+    /// The registry is validated before any light or geometry work. The shared
+    /// geometry core writes checked records into the scratch's fixed 40960-quad
+    /// stage: a record whose fields violate the packing domains, or a stream
+    /// that would exceed the conservative stage bound, fails with
+    /// `OutputInvariant` and leaves `dst` untouched. Only after the exact count
+    /// is known is it compared with `dst.len()`: a shorter destination returns
+    /// `OutputTooSmall` with the exact count and still publishes nothing, and a
+    /// success copies the used prefix once.
+    ///
+    /// The scratch's level volume and queue hold the light result this call
+    /// consumed; the staged prefix is only meaningful until the next `mesh`
+    /// call on the same scratch.
+    fn mesh(
+        &self,
+        view: &MeshView<'_>,
+        scratch: &mut MeshScratch,
+        dst: &mut [MeshQuad],
+    ) -> Result<usize, KernelError> {
+        build_light(view, scratch)?;
+        let access = crate::greedy::TypedMeshAccess::new(view);
+        let MeshScratch {
+            levels,
+            queue,
+            stage,
+        } = scratch;
+        let light = crate::light::LightScratch::new(&mut levels[..], &mut queue[..]);
+        let mut staged = crate::greedy::MeshStage::new(&mut stage[..]);
+        crate::greedy::mesh_geometry(&access, &light, &mut staged)?;
+        let quads = staged.output();
+        if dst.len() < quads.len() {
+            return Err(KernelError::OutputTooSmall {
+                needed: quads.len(),
+                available: dst.len(),
+            });
+        }
+        dst[..quads.len()].copy_from_slice(quads);
+        Ok(quads.len())
+    }
 }

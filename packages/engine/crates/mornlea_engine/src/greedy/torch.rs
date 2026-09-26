@@ -19,12 +19,11 @@
 //! 采，硬算只会得到与视角无关的脏阴影）；不参与贪心合并；枚举次序
 //! `y → z → x` 保证输出确定。
 
-use crate::input::MeshInput;
 use crate::light::LightScratch;
 use crate::quad::{Face, Quad};
 
 use super::bed::emit_bed;
-use super::{MeshError, PLANT_QUADS};
+use super::{MeshAccess, PLANT_QUADS, QuadStage};
 
 /// 落地火把每格面实例数的**固定上界**：两条交叉斜面 × 正背各一。
 ///
@@ -49,46 +48,47 @@ pub(crate) const TORCH_WALL_TOP_NEAR_RAW: u8 = 8;
 /// 间误传；也留出与满格 15（流体水柱内部专用）的余量。
 pub(crate) const TORCH_WALL_TOP_FAR_RAW: u8 = 13;
 
-/// mesh_models 为区段里每个带有限模型 tag 的格子发射模型几何，返回新的
-/// quad 总数。这是 model dispatcher 的发射半边：tag 0（默认）不进本函数、
-/// 继续走既有几何；tag 1..=5 走火把、tag 6 走床（见 `super::bed`）；
-/// 7 起的未知值在 `RegistryView::validate` 的 parse 期就被拒绝，走不到
-/// 这里——闭区间 `match` 保持穷尽，未来新增 tag 会在编译期强制显式处理
-/// 而不是静默回退。
-pub(crate) fn mesh_models(
-    input: &MeshInput<'_>,
+/// mesh_models 为区段里每个带有限模型 tag 的格子发射模型几何。这是 model
+/// dispatcher 的发射半边：tag 0（默认）不进本函数、继续走既有几何；
+/// tag 1..=5 走火把、tag 6 走床（见 `super::bed`）；7 起的未知值已在
+/// registry 的解析/校验期被拒绝，走不到这里——闭区间 `match` 保持穷尽，
+/// 未来新增 tag 会在编译期强制显式处理而不是静默回退。
+///
+/// Emission shares the `y → z → x` walk and the registry-only dispatch with
+/// the byte lane's packing path, so both lanes publish the same stream.
+pub(crate) fn mesh_models<A: MeshAccess, S: QuadStage>(
+    access: &A,
     light: &LightScratch<'_>,
-    output: &mut [u64],
-    mut count: usize,
-) -> Result<usize, MeshError> {
+    stage: &mut S,
+) -> Result<(), S::Error> {
     for y in 0..16 {
         for z in 0..16 {
             for x in 0..16 {
-                let id = input.block(x, y, z);
+                let id = access.block(x, y, z);
                 // 空气早退：绝大多数格是空气，先挡掉能省下一次 registry 二分。
-                if id == input.air_id {
+                if id == access.air_id() {
                     continue;
                 }
-                let tag = input.registry.model(id);
+                let tag = access.model(id);
                 if tag == 0 {
                     continue;
                 }
-                let Some(material) = input.registry.material(id, 0) else {
+                let Some(material) = access.material(id, 0) else {
                     continue;
                 };
                 let light_above = light.at(x, y + 1, z);
-                count = match tag {
-                    1 => emit_standing([x, y, z], material, light_above, output, count)?,
-                    2..=5 => emit_wall(tag, [x, y, z], material, light_above, output, count)?,
-                    6 => emit_bed(input, light, [x, y, z], output, count)?,
-                    // validate 已把 7 起的未知值整体拒绝成 InputError::Registry，
-                    // 这里的 `_` 分支只为穷尽性而存在。
-                    _ => unreachable!("model tag 已被 RegistryView::validate 拒绝"),
-                };
+                match tag {
+                    1 => emit_standing([x, y, z], material, light_above, stage)?,
+                    2..=5 => emit_wall(tag, [x, y, z], material, light_above, stage)?,
+                    6 => emit_bed(access, light, [x, y, z], stage)?,
+                    // Registry validation already rejected every unknown tag
+                    // from 7 up, so this arm exists for exhaustiveness only.
+                    _ => unreachable!("model tag 已被 registry 校验拒绝"),
+                }
             }
         }
     }
-    Ok(count)
+    Ok(())
 }
 
 /// emit_standing 发射落地形态：两条交叉斜面 × 正背各一，复用植物的
@@ -96,18 +96,14 @@ pub(crate) fn mesh_models(
 ///
 /// `cell` 是火把格坐标 `[x, y, z]`——与 `compute_ao`/`fluid_corners` 的坐标
 /// 参数式样一致，三个分量合并传递也压住 clippy 的 too_many_arguments 上限。
-fn emit_standing(
+fn emit_standing<S: QuadStage>(
     cell: [i32; 3],
     material: u16,
     light_above: u8,
-    output: &mut [u64],
-    mut count: usize,
-) -> Result<usize, MeshError> {
+    stage: &mut S,
+) -> Result<(), S::Error> {
     for (face, back) in PLANT_QUADS {
-        let Some(slot) = output.get_mut(count) else {
-            return Err(MeshError::OutputOverflow);
-        };
-        *slot = Quad {
+        stage.push(Quad {
             x: cell[0] as u8,
             y: cell[1] as u8,
             z: cell[2] as u8,
@@ -119,11 +115,9 @@ fn emit_standing(
             light: light_above,
             corners: [0; 4],
             back,
-        }
-        .pack();
-        count += 1;
+        })?;
     }
-    Ok(count)
+    Ok(())
 }
 
 /// emit_wall 发射墙面形态：两片倾斜薄板 + 一片贴面帽，次序固定、Go 侧逐条
@@ -133,14 +127,13 @@ fn emit_standing(
 /// u 轴是倾斜方向（±X 墙 → Z 法线面上 u=x；±Z 墙 → X 法线面上 v=z），顶缘
 /// 两个角分别取 near/far、底缘两角恒 0（贴地）。`cell` 是火把格坐标
 /// `[x, y, z]`（坐标分量合并传递的式样见 `emit_standing`）。
-fn emit_wall(
+fn emit_wall<S: QuadStage>(
     tag: u8,
     cell: [i32; 3],
     material: u16,
     light_above: u8,
-    output: &mut [u64],
-    mut count: usize,
-) -> Result<usize, MeshError> {
+    stage: &mut S,
+) -> Result<(), S::Error> {
     let near = TORCH_WALL_TOP_NEAR_RAW;
     let far = TORCH_WALL_TOP_FAR_RAW;
     // (倾斜薄板的 face 对, 贴面帽 face, 薄板四角)。墙面形态名 = 命中面名，
@@ -153,10 +146,7 @@ fn emit_wall(
         _ => ([Face::NegX, Face::PosX], Face::PosZ, [0, far, near, 0]),
     };
     for face in plates {
-        let Some(slot) = output.get_mut(count) else {
-            return Err(MeshError::OutputOverflow);
-        };
-        *slot = Quad {
+        stage.push(Quad {
             x: cell[0] as u8,
             y: cell[1] as u8,
             z: cell[2] as u8,
@@ -168,14 +158,9 @@ fn emit_wall(
             light: light_above,
             corners,
             back: false,
-        }
-        .pack();
-        count += 1;
+        })?;
     }
-    let Some(slot) = output.get_mut(count) else {
-        return Err(MeshError::OutputOverflow);
-    };
-    *slot = Quad {
+    stage.push(Quad {
         x: cell[0] as u8,
         y: cell[1] as u8,
         z: cell[2] as u8,
@@ -187,7 +172,5 @@ fn emit_wall(
         light: light_above,
         corners: [0; 4],
         back: false,
-    }
-    .pack();
-    Ok(count + 1)
+    })
 }

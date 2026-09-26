@@ -1,3 +1,5 @@
+use crate::native::contracts::MeshQuad;
+
 const SHIFT_X: u32 = 0;
 const SHIFT_Y: u32 = 4;
 const SHIFT_Z: u32 = 8;
@@ -131,38 +133,97 @@ pub(crate) struct Quad {
 }
 
 impl Quad {
+    /// Validates every field domain the packed encoding relies on.
+    ///
+    /// The byte ABI lane keeps packing through `pack`'s panic (a caught panic
+    /// is status 9); the staged native lane calls this first so the same
+    /// violation becomes a typed `OutputInvariant` before any destination slot
+    /// is published. The checks run in the order the packing asserts used to,
+    /// so the first reported violation never changes.
+    ///
+    /// One constraint is deliberately one-way: a plant material on an axial
+    /// face is rejected — a greedy-merged plant face would otherwise reach the
+    /// shader, which discriminates cross quads by `face >= 6`, and be painted
+    /// as a plain slab — while a cross face carrying a non-plant material is
+    /// legal because the standing torch shares that encoding. The Go
+    /// `quad.go` packer treats the same direction as part of the format.
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if !(1..=16).contains(&self.w) || !(1..=16).contains(&self.h) {
+            return Err("quad 宽高必须落在 1..=16");
+        }
+        if self.x > 15 || self.y > 15 || self.z > 15 {
+            return Err("quad 坐标必须落在 0..=15");
+        }
+        if self.face.plant() {
+            if self.w != 1 || self.h != 1 {
+                return Err("植物 quad 必须是 1×1");
+            }
+            if self.corners != [0; 4] {
+                return Err("植物 quad 不得带角高度");
+            }
+            return Ok(());
+        }
+        if self.corners == [0; 4] {
+            if plant_material(self.material) {
+                return Err("植物 material 只允许出现在 face 6/7 上");
+            }
+            if self.back {
+                return Err("非植物 quad 不得设置 back");
+            }
+            return Ok(());
+        }
+        if self.w != 1 || self.h != 1 {
+            return Err("带角高度的 quad 必须是 1×1");
+        }
+        if plant_material(self.material) {
+            return Err("植物 material 只允许出现在 face 6/7 上");
+        }
+        if self.back {
+            return Err("非植物 quad 不得设置 back");
+        }
+        if self.corners.iter().any(|&corner| corner > 15) {
+            return Err("quad 角高度必须落在 0..=15");
+        }
+        Ok(())
+    }
+
+    /// Converts one emitted quad into the frozen staging record after the same
+    /// field-domain validation `pack` runs.
+    ///
+    /// The staged native lane stores contract records rather than packed
+    /// words, so a malformed emission is reported as a typed result instead of
+    /// unwinding across the ABI boundary.
+    pub(crate) fn staged(self) -> Result<MeshQuad, &'static str> {
+        self.validate()?;
+        Ok(MeshQuad {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+            w: self.w,
+            h: self.h,
+            face: self.face as u8,
+            material: self.material,
+            ao: self.ao,
+            light: self.light,
+            corners: self.corners,
+            back: self.back,
+        })
+    }
+
     pub(crate) fn pack(self) -> u64 {
-        assert!((1..=16).contains(&self.w));
-        assert!((1..=16).contains(&self.h));
+        if let Err(violation) = self.validate() {
+            panic!("{violation}");
+        }
         // 带角高度的 quad 与植物 quad 都借走 w/h 的 8 bit，因此都必须是 1×1；
         // 两者本就都不参与贪心合并。
         let (low, high) = if self.face.plant() {
-            assert!(self.w == 1 && self.h == 1);
-            assert!(self.corners == [0; 4], "植物 quad 不得带角高度");
             (u64::from(self.back) << SHIFT_PLANT_BACK, 0)
         } else if self.corners == [0; 4] {
-            // 反方向的强制：植物 material 只允许出现在 face 6/7 上。缺了它，一条
-            // 贪心合并过的植物轴向面能干净流出 mesher，而着色器按 `face >= 6`
-            // 判别、会把它画成一整块普通石板。与 Go 侧 `quad.go` 的 Pack/UnpackQuad
-            // 同口径，两侧都把这条单向约束当成格式的一部分——正方向（face 6/7
-            // 携带非植物 material）不设强制：落地火把的交叉斜面共用该编组。
-            assert!(
-                !plant_material(self.material),
-                "植物 material 只允许出现在 face 6/7 上"
-            );
-            assert!(!self.back, "非植物 quad 不得设置 back");
             (
                 u64::from(self.w - 1) << SHIFT_W | u64::from(self.h - 1) << SHIFT_H,
                 0,
             )
         } else {
-            assert!(self.w == 1 && self.h == 1);
-            assert!(
-                !plant_material(self.material),
-                "植物 material 只允许出现在 face 6/7 上"
-            );
-            assert!(!self.back, "非植物 quad 不得设置 back");
-            assert!(self.corners.iter().all(|&corner| corner <= 15));
             (
                 u64::from(self.corners[0]) << SHIFT_W | u64::from(self.corners[1]) << SHIFT_H,
                 u64::from(self.corners[2]) << SHIFT_CORNER2

@@ -14,11 +14,10 @@
 //! 枚举次序 `y → z → x` 与每格内「四侧板自 −X/−X/−Z/+Z、末尾平顶」的发射
 //! 次序固定，Go 侧 `TestNativeMeshBedQuadsRoundTripThroughGoUnpack` 逐条对齐。
 
-use crate::input::MeshInput;
 use crate::light::LightScratch;
 use crate::quad::{Face, Quad};
 
-use super::MeshError;
+use super::{MeshAccess, QuadStage};
 
 /// 床侧板/平顶顶缘的 4-bit 角高度原值：呈现高度 (8+1)/16 = 9/16，与床碰撞
 /// 体同线。取 8 而非 7：9/16 是 spec 写死的半高契约值，不是「任意半格」。
@@ -48,28 +47,27 @@ pub(crate) const BED_QUADS_PER_CELL: usize = 5;
 /// quad 不得共用单一 face 材质：糊满任何一面都会让床整体退成单一木色、八
 /// 个朝向形态不可辨。任一材质缺失即整格跳过：五条面是一个完整形状，缺面
 /// 发射只会得到残盒。
-pub(crate) fn emit_bed(
-    input: &MeshInput<'_>,
+pub(crate) fn emit_bed<A: MeshAccess, S: QuadStage>(
+    access: &A,
     light: &LightScratch<'_>,
     cell: [i32; 3],
-    output: &mut [u64],
-    mut count: usize,
-) -> Result<usize, MeshError> {
-    let id = input.block(cell[0], cell[1], cell[2]);
-    let Some(mat_top) = input.registry.material(id, 3) else {
-        return Ok(count);
+    stage: &mut S,
+) -> Result<(), S::Error> {
+    let id = access.block(cell[0], cell[1], cell[2]);
+    let Some(mat_top) = access.material(id, 3) else {
+        return Ok(());
     };
-    let Some(mat_neg_x) = input.registry.material(id, 0) else {
-        return Ok(count);
+    let Some(mat_neg_x) = access.material(id, 0) else {
+        return Ok(());
     };
-    let Some(mat_pos_x) = input.registry.material(id, 1) else {
-        return Ok(count);
+    let Some(mat_pos_x) = access.material(id, 1) else {
+        return Ok(());
     };
-    let Some(mat_neg_z) = input.registry.material(id, 4) else {
-        return Ok(count);
+    let Some(mat_neg_z) = access.material(id, 4) else {
+        return Ok(());
     };
-    let Some(mat_pos_z) = input.registry.material(id, 5) else {
-        return Ok(count);
+    let Some(mat_pos_z) = access.material(id, 5) else {
+        return Ok(());
     };
     let light_above = light.at(cell[0], cell[1] + 1, cell[2]);
     let top_raw = BED_TOP_RAW;
@@ -80,10 +78,7 @@ pub(crate) fn emit_bed(
         (Face::PosZ, mat_pos_z, [0, 0, top_raw, top_raw]),
     ];
     for (face, material, corners) in sides {
-        let Some(slot) = output.get_mut(count) else {
-            return Err(MeshError::OutputOverflow);
-        };
-        *slot = Quad {
+        stage.push(Quad {
             x: cell[0] as u8,
             y: cell[1] as u8,
             z: cell[2] as u8,
@@ -95,14 +90,9 @@ pub(crate) fn emit_bed(
             light: light_above,
             corners,
             back: false,
-        }
-        .pack();
-        count += 1;
+        })?;
     }
-    let Some(slot) = output.get_mut(count) else {
-        return Err(MeshError::OutputOverflow);
-    };
-    *slot = Quad {
+    stage.push(Quad {
         x: cell[0] as u8,
         y: cell[1] as u8,
         z: cell[2] as u8,
@@ -114,9 +104,7 @@ pub(crate) fn emit_bed(
         light: light_above,
         corners: [top_raw; 4],
         back: false,
-    }
-    .pack();
-    Ok(count + 1)
+    })
 }
 
 #[cfg(test)]
@@ -186,7 +174,16 @@ mod tests {
             Box::leak(vec![0; LIGHT_VOLUME].into_boxed_slice()),
         );
         let mut output = vec![0_u64; 6 * 4096];
-        let count = emit_bed(&input, &light, [8, 8, 8], &mut output, 0).unwrap();
+        let count = {
+            // The byte-lane stage keeps this unit test on the same packing path
+            // the ABI entry uses; the typed lane is covered by the topic tests.
+            let mut stage = super::super::PackedStage {
+                output: &mut output,
+                written: 0,
+            };
+            emit_bed(&input, &light, [8, 8, 8], &mut stage).unwrap();
+            stage.written
+        };
         assert_eq!(
             count, BED_QUADS_PER_CELL,
             "单格床必须恰好发射 {BED_QUADS_PER_CELL} 条面实例"
