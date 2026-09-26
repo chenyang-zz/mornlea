@@ -1438,8 +1438,7 @@ pub unsafe extern "C" fn mornlea_fluid_rescan(
     }
 }
 
-/// `mornlea_fluid_rescan` 的校验与发布核心:解析请求后经共享重扫记账
-/// 核心扫描并编码。
+/// `mornlea_fluid_rescan` validation and publish core: parses the request, then scans through the shared rescan accounting core and encodes.
 ///
 /// Validation order mirrors `mornlea_lod_shell`: the `output_len` metadata
 /// pointer is validated by address only, then null-pointer checks, the ABI
@@ -1509,7 +1508,8 @@ unsafe fn fluid_rescan_with(
         // `NativeFluidRescan` runs through its halo-safe accessor. The raw
         // 0..17 admission stays: a seal check that actually reads past the
         // owned halo unwinds inside the boundary and converges to status 9
-        // below.先在本地缓冲完成扫描,成功后一次拷贝,保证失败路径不触碰调用方输出。
+        // below. The scan completes in a local buffer and publishes in one
+        // copy, so failure paths never touch caller output.
         Ok::<Vec<u8>, u32>(fluid_rescan(&view))
     }));
     match result {
