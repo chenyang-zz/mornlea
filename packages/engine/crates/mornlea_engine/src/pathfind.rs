@@ -117,13 +117,15 @@ enum CellState {
     Closed,
 }
 
-/// Working state for one search, sized by the caller scratch capacity.
+/// Working state for one search, allocated fresh per call.
 ///
-/// The vectors are indexed by flat cell address and reused across calls: each
-/// call bumps the generation instead of clearing them, and a wrapping counter
-/// falls back to a full reset. The heap holds cell addresses ordered by
-/// `(f, insertion-ordinal)`; `position` maps an address back to its heap slot
-/// for decrease-key updates that retain the original ordinal.
+/// `find_path` builds one `SearchSpace` sized by the grid cell count after
+/// the scratch-capacity check admits the grid, so the vectors never exceed
+/// the admitted bound. The vectors are indexed by flat cell address; the
+/// generation reset holds trivially because the state is fresh. The `heap`
+/// holds cell addresses ordered by `(f, insertion-ordinal)`; `position` maps
+/// an address back to its heap slot for decrease-key updates that retain the
+/// original ordinal.
 struct SearchSpace {
     cost: Vec<u32>,
     parent: Vec<usize>,
@@ -572,11 +574,6 @@ pub fn find_path(
     }
 }
 
-/// Reads the frozen scratch capacity without naming its private field.
-///
-/// The contract exposes no capacity getter, so the search derives the bound
-/// from a debug rendering the constructor controls. A foreign scratch value
-/// that does not render refuses rather than admitting unbounded work.
 /// Reads the frozen scratch capacity.
 ///
 /// `PathScratch.cells` is crate-visible, so the search reads the bound
