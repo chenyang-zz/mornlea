@@ -286,3 +286,35 @@
   - `go test ./packages/tools/cmd/runtime-oracle -count=1`: passed after the controller's source-hash refresh (`src/fluid_rescan.rs` `d9fab8dc…` -> `11732749…`).
 - Review: Task Reviewer subagent approved with no Critical or Important findings; the named duplication risk is absent because the accounting loop lives once in `rescan_scan`. Two minor findings deferred to the final whole-branch review (an overclaiming test name for the typed-range rejection, and `meta_uniform` admitting the center `(0,0)` pair although the seal loop never uses it).
 - Rollback: Revert `ff2c119c`, `1866f315` in that order.
+
+## 2026-09-26 — Node 2.10 dispatch preflight
+
+- Frontier: 2.1–2.9 accepted; 2.10 is the next unchecked node. Worktree clean at BASE `60b3bcb6de9fa2109d4ee4d37f80bc1af44c3b1d`; four-point orphan check consistent (checkboxes, ledger rows, tracked files; `tests/native_contract/mesh_view.rs` stub empty and registered).
+- Preflight scan (packet `plans/01-providers.md#node-2-10`, brief `worker-briefs.md` 5.11 parser/light half, `tasks.md` node 2.10):
+  - 2.10 ↔ 2.11 share `src/native/mesh.rs`: 2.10 lands constructors/view/scratch without geometry; 2.11 adds the geometry method to the accepted surface. Serial order already frozen; no conflict.
+  - 2.10 ↔ 3.1/3.11 share `ffi.rs`: read-only here; ABI byte behavior must stay identical, and the all-air structural-only exemption stays in place for 3.11's ABI test. No conflict.
+  - Derived-artifact inventory: the mesh family pins `packages/engine/include/mornlea_engine.h`, `packages/shared/nativeabi/native_test.go`, `src/greedy/mod.rs`; none of 2.10's editable files is pinned, so no manifest refresh belongs to this node. No conflict.
+- Ruling: 2.10 may edit `src/native/mod.rs` solely to widen `pub(crate) mod mesh` to `pub mod mesh` so the external test can name the native surface — same accepted pattern as nodes 2.4/2.5/2.6. Cost if wrong: a one-line visibility diff also required by 2.11.
+- Ruling: the typed light entry in `src/native/mesh.rs` is worker-local naming inside the frozen contract and must not add `MeshOp::mesh`; internal level/queue reset assertions live in `src/light.rs` unit tests because `MeshScratch` fields are crate-private contract state, while `tests/native_contract/mesh_view.rs` asserts observable public behavior.
+- Dispatch: implementer subagent for node 2.10 from BASE `60b3bcb6`; report file `task-2.10-report.md` in the session scratch directory.
+- Implementer report: DONE_WITH_CONCERNS; commit `cfd0bf1c` (6 files, single commit, editable set respected; `src/native/mod.rs` diff is the ruled one-line visibility widening). TDD evidence: two compile reds plus four genuinely observed semantic reds, then green gates `mesh_view` 5/5, `--lib light` 31/31, clippy/fmt/gofmt clean, `TestKernelMeshView` pass, full `--lib` 270 / `native_contract` 69 / `numerical_migration` 31. Raw ABI export produced 3 cases under the session scratch `mesh-view-export/` for later closure review.
+- Ruling on the count-1 concern: the byte lane at BASE rejects `air_id == barrier_id` and requires both sentinels present (tracked `has_air`/`has_barrier`), so the typed pass mirroring distinct-plus-present is raw-lane semantic parity, not an over-constraint; the packet's count matrix is covered as 96 accept / 97 reject / 1 reject-by-sentinel. Cost if wrong: one test expectation change once the reviewer or final review disagrees.
+- Ruling on `model 7`: the typed `MeshModel` enum is closed (`0..=6`, frozen contract), so tag-7 rejection is only expressible in the raw byte lane and Go producer; no contract edit is allowed in this node. Cost if wrong: none beyond the typed lane being strictly stronger than raw for that field.
+- Task 2.10 review: Spec compliant; one Important finding — the raw producer's rejected cases checked status only, so a regression writing output on registry rejection would have passed. Fix round 1/5 committed `49810017`, limited to `kernel_mesh_view_test.go` (shared `assertUntouched` canary helper on every rejected call, plus de-backticking the `MGM1` magic to keep the repo audit gate green). Fix report names `TestKernelMeshView`, `gofmt`, `go vet`, and audit-gate runs with actual output; scoped re-review over `cfd0bf1c..49810017` is in flight.
+- Artifact reconciliation (review minor, controller-owned): `worker-briefs.md` and `plans/01-providers.md` no longer imply a one-entry registry is accepted; they now state the byte-lane sentinel-presence rejection outcome.
+
+## 2026-09-26 — Node 2.10 mesh registry, view and light
+
+- Predecessor SHA: `60b3bcb6`
+- Result SHA: `49810017` (provider `cfd0bf1c`, review fix `49810017`)
+- Implementation summary:
+  - `src/input.rs` centralizes registry shape and per-entry semantic validation (`check_registry_shape`, `check_registry_entry`) for both lanes; `validate_typed_registry` closes the frozen constructor's gaps (air/barrier distinct and both present); `TypedRegistryView`, `typed_cell_index`, `typed_height_slot` and `MeshViewAccess` share the byte lane's 27-section layout and fallback semantics.
+  - `src/light.rs` introduces `LightAccess` with a raw and a typed implementation over one `build_light_core`; `build_light` keeps its exact FFI signature and behavior; `build_light_view(view, &mut MeshScratch)` consumes the typed view with full level/queue reset and `MeshError` → `KernelError` mapping.
+  - `src/native/mesh.rs` exposes `try_new_registry` (frozen `try_new` plus typed validation) and `build_light` (always validates registry semantics, including all-air; no geometry method); `src/native/mod.rs` widens `mesh` to `pub` (ruling R1).
+  - Tests: `tests/native_contract/mesh_view.rs` (5 tests) and six new `src/light.rs` unit tests; Go producer `kernel_mesh_view_test.go` (`TestKernelMeshView`) pins the raw all-air structural-only exception, registry/light cases, and exported three raw ABI cases to the session scratch `mesh-view-export/`.
+- Verification:
+  - `native_contract --test ... mesh_view`: 5 passed; `--lib light`: 31 passed; full `--lib` 270, `native_contract` 69, `numerical_migration` 31 passed.
+  - clippy `-D warnings` clean; `cargo fmt --all --check` clean; `gofmt -l ./packages` empty.
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelMeshView' -count=1` passed; `go test ./packages/audit -run 'TestCommentBacktickIdentifiersExist'` passed after de-backticking the `MGM1` wire magic in the new producer comment.
+- Review: Task Reviewer subagent: Spec compliant; one Important finding (rejected raw cases lacked destination-untouched canary assertions) fixed in `49810017`; the scoped re-review marked it ADDRESSED with no new breakage. Deferred minor for the final whole-branch review: the typed rejection test does not pin that validation leaves the scratch untouched. Requirement artifacts were reconciled to the landed count-1 sentinel semantics.
+- Rollback: Revert `49810017`, `cfd0bf1c` in that order.
