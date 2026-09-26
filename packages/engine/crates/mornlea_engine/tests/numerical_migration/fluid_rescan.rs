@@ -343,3 +343,260 @@ fn native_range_matches_go_rejections() {
         );
     }
 }
+
+unsafe extern "C" {
+    fn mornlea_fluid_rescan(
+        abi_version: u32,
+        input: *const u8,
+        input_len: usize,
+        output: *mut u8,
+        output_capacity: usize,
+        output_len: *mut usize,
+    ) -> u32;
+    fn mornlea_engine_abi_version() -> u32;
+}
+
+/// ABI status codes mirrored from the engine exports: only success,
+/// output-overflow and the caught-panic code appear in this adapter test.
+const RESCAN_STATUS_OK: u32 = 0;
+const RESCAN_STATUS_OUTPUT_OVERFLOW: u32 = 7;
+const RESCAN_STATUS_PANIC: u32 = 9;
+
+const ABI_CANARY: u8 = 0xA5;
+
+/// Raw `MFL1` framing shared by the adapter tests below: 26-byte header, 24
+/// section records, 68 skirt columns and the 9-chunk metadata table. The
+/// shape mirrors the file's typed `RescanBox` fixture structurally, but
+/// encodes the legacy wire bytes the real exported symbol parses.
+const RAW_SECTIONS: usize = 24;
+const RAW_EDGE: usize = 16;
+const RAW_HEIGHT: usize = 384;
+const RAW_COLUMNS: usize = 68;
+const RAW_CELLS: usize = RAW_EDGE * RAW_EDGE * RAW_EDGE;
+const RAW_CHUNKS: usize = 9;
+
+struct RawBox {
+    center: [i32; 2],
+    range: [u16; 4],
+    start_section: u8,
+    budget: u32,
+    uniform: [Option<u16>; RAW_SECTIONS],
+    dense: Box<[[u16; RAW_CELLS]; RAW_SECTIONS]>,
+    skirt: Box<[[u16; RAW_HEIGHT]; RAW_COLUMNS]>,
+    /// Metadata as `(flag, id)` pairs, chunk-major in `meta_slot` order.
+    meta: Box<[[(u8, u16); RAW_SECTIONS]; RAW_CHUNKS]>,
+}
+
+impl RawBox {
+    /// All-stone box over the full interior range, mirroring the typed
+    /// fixture's default: 24 uniform stone sections, stone skirt and uniform
+    /// stone metadata.
+    fn solid(center: [i32; 2]) -> Self {
+        Self {
+            center,
+            range: [1, 16, 1, 16],
+            start_section: 0,
+            budget: 100_000,
+            uniform: [Some(STONE); RAW_SECTIONS],
+            dense: Box::new([[STONE; RAW_CELLS]; RAW_SECTIONS]),
+            skirt: Box::new([[STONE; RAW_HEIGHT]; RAW_COLUMNS]),
+            meta: Box::new([[(1, STONE); RAW_SECTIONS]; RAW_CHUNKS]),
+        }
+    }
+
+    fn set_range(&mut self, x0: u16, x1: u16, z0: u16, z1: u16) {
+        self.range = [x0, x1, z0, z1];
+    }
+
+    fn uniform_section(&mut self, section: usize, id: u16) {
+        self.uniform[section] = Some(id);
+    }
+
+    fn dense_section(&mut self, section: usize) {
+        self.uniform[section] = None;
+    }
+
+    fn fill_dense(&mut self, section: usize, id: u16) {
+        self.dense[section].fill(id);
+    }
+
+    fn set_cell(&mut self, section: usize, lx: usize, y16: usize, lz: usize, id: u16) {
+        self.dense[section][lx + lz * RAW_EDGE + y16 * RAW_EDGE * RAW_EDGE] = id;
+    }
+
+    fn set_skirt(&mut self, bx: i32, y: usize, bz: i32, id: u16) {
+        self.skirt[skirt_column(bx, bz)][y] = id;
+    }
+
+    fn fill_skirt(&mut self, id: u16) {
+        for column in self.skirt.iter_mut() {
+            column.fill(id);
+        }
+    }
+
+    fn set_meta(&mut self, dx: i32, dz: i32, section: usize, flag: u8, id: u16) {
+        self.meta[meta_slot(dx, dz)][section] = (flag, id);
+    }
+
+    /// Encodes the full `MFL1` input byte stream the ABI parses.
+    fn build(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&self.center[0].to_le_bytes());
+        bytes.extend_from_slice(&self.center[1].to_le_bytes());
+        for end in self.range {
+            bytes.extend_from_slice(&end.to_le_bytes());
+        }
+        bytes.push(self.start_section);
+        bytes.push(0);
+        bytes.extend_from_slice(&self.budget.to_le_bytes());
+        for section in 0..RAW_SECTIONS {
+            match self.uniform[section] {
+                Some(id) => {
+                    bytes.push(0);
+                    bytes.push(0);
+                    bytes.extend_from_slice(&id.to_le_bytes());
+                }
+                None => {
+                    bytes.push(1);
+                    bytes.push(0);
+                    for cell in self.dense[section].iter() {
+                        bytes.extend_from_slice(&cell.to_le_bytes());
+                    }
+                }
+            }
+        }
+        for column in self.skirt.iter() {
+            for cell in column.iter() {
+                bytes.extend_from_slice(&cell.to_le_bytes());
+            }
+        }
+        for chunk in self.meta.iter() {
+            for (flag, id) in chunk.iter() {
+                bytes.push(*flag);
+                bytes.extend_from_slice(&id.to_le_bytes());
+            }
+        }
+        bytes
+    }
+}
+
+/// Decodes the trailing summary as `(spent, done)`.
+fn decode_abi_summary(output: &[u8]) -> (u32, bool) {
+    let tail = &output[output.len() - 8..];
+    (
+        u32::from_le_bytes(tail[0..4].try_into().expect("fixed-size slice")),
+        tail[4] == 1,
+    )
+}
+
+/// Decodes every emitted world position in scan order.
+fn decode_abi_positions(output: &[u8]) -> Vec<[i32; 3]> {
+    output[..output.len() - 8]
+        .chunks_exact(12)
+        .map(|entry| {
+            [
+                i32::from_le_bytes(entry[0..4].try_into().expect("fixed-size slice")),
+                i32::from_le_bytes(entry[4..8].try_into().expect("fixed-size slice")),
+                i32::from_le_bytes(entry[8..12].try_into().expect("fixed-size slice")),
+            ]
+        })
+        .collect()
+}
+
+/// Calls the real exported `mornlea_fluid_rescan` symbol with a
+/// canary-filled destination, returning the status, the metadata word, and
+/// the destination bytes. The caller keeps no aliasing: input, output and
+/// metadata are disjoint by construction.
+fn call_rescan_abi(input: &[u8], output_len: usize) -> (u32, usize, Vec<u8>) {
+    let version = unsafe { mornlea_engine_abi_version() };
+    let mut output = vec![ABI_CANARY; output_len];
+    let mut written = usize::MAX;
+    let status = unsafe {
+        mornlea_fluid_rescan(
+            version,
+            input.as_ptr(),
+            input.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut written,
+        )
+    };
+    (status, written, output)
+}
+
+#[test]
+fn fluid_rescan_outer_halo() {
+    // The legacy layout admits the raw outer range 0..17: an all-air box
+    // succeeds, including per-cell reads of the owned outer skirt columns.
+    let mut air = RawBox::solid([0, 0]);
+    air.fill_skirt(AIR);
+    for section in 0..RAW_SECTIONS {
+        air.uniform_section(section, AIR);
+    }
+    air.dense_section(0);
+    air.fill_dense(0, AIR);
+    air.set_range(0, 17, 0, 17);
+    let input = air.build();
+    let (status, written, output) = call_rescan_abi(&input, 64);
+    assert_eq!(status, RESCAN_STATUS_OK);
+    assert_eq!(written, 8);
+    let output = output[..written].to_vec();
+    // One dense air section costs every outer cell plus one per uniform
+    // section; nothing emits.
+    assert_eq!(decode_abi_summary(&output), (18 * 18 * 16 + 23, true));
+    assert!(decode_abi_positions(&output).is_empty());
+
+    // An outer fluid source whose seal check actually reads past the owned
+    // halo converges to the caught-panic status: payload untouched, valid
+    // non-aliased metadata cleared.
+    let mut halo = RawBox::solid([0, 0]);
+    halo.dense_section(0);
+    for y in 0..RAW_HEIGHT {
+        halo.set_skirt(0, y, 5, WATER_SOURCE);
+    }
+    halo.set_range(0, 2, 5, 5);
+    let input = halo.build();
+    let (status, written, output) = call_rescan_abi(&input, 64);
+    assert_eq!(status, RESCAN_STATUS_PANIC);
+    assert_eq!(written, 0);
+    assert_eq!(output, vec![ABI_CANARY; 64]);
+}
+
+#[test]
+fn fluid_rescan_short_output_exact_needed() {
+    // Interior scan with two emitted positions: one flowing cell plus one
+    // source unsealed by air below; the rest stays sealed by stone.
+    let mut mixed = RawBox::solid([-3, 2]);
+    mixed.dense_section(2);
+    mixed.set_cell(2, 3, 1, 4, WATER_SOURCE + 2);
+    mixed.set_cell(2, 5, 2, 6, WATER_SOURCE);
+    mixed.set_cell(2, 5, 1, 6, AIR);
+    mixed.set_cell(2, 8, 3, 9, WATER_SOURCE);
+    mixed.set_cell(2, 0, 5, 0, WATER_SOURCE);
+    mixed.set_cell(2, 15, 0, 7, WATER_SOURCE);
+    let input = mixed.build();
+
+    // Full-capacity call pins the complete ordered stream, never a digest.
+    let (status, written, output) = call_rescan_abi(&input, 64);
+    assert_eq!(status, RESCAN_STATUS_OK);
+    assert_eq!(written, 8 + 12 * 2);
+    let expected = output[..written].to_vec();
+    assert_eq!(
+        decode_abi_positions(&expected),
+        vec![[-45, -31, 36], [-43, -30, 38]]
+    );
+    assert_eq!(decode_abi_summary(&expected), (4119, true));
+
+    // One byte short: exact-needed metadata with the payload canary intact.
+    let (status, needed, short) = call_rescan_abi(&input, written - 1);
+    assert_eq!(status, RESCAN_STATUS_OUTPUT_OVERFLOW);
+    assert_eq!(needed, 8 + 12 * 2);
+    assert_eq!(short, vec![ABI_CANARY; written - 1]);
+
+    // Exact retry publishes identical ordered Y/Z/X records.
+    let (status, retry_written, retry) = call_rescan_abi(&input, written);
+    assert_eq!(status, RESCAN_STATUS_OK);
+    assert_eq!(retry_written, written);
+    assert_eq!(retry[..written], expected[..]);
+}
