@@ -532,6 +532,9 @@ unsafe fn physics_step_with(
         if !physics_step_input_is_valid(bytes) {
             return Err(MORNLEA_STATUS_INPUT);
         }
+        // Route the validated bytes through the shared physics/collision
+        // core: `physics_step` runs `integrate` plus the collision parts
+        // core and packs the local 32-byte result below.
         physics_step(bytes).map_err(|_| MORNLEA_STATUS_INPUT)
     }));
     match result {
