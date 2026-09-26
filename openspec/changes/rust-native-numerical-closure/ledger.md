@@ -557,3 +557,29 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestTreeBlocks'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelTreeBlocks'`, `--lib tree_blocks` 8/8, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (no drift).
 - Review: Task Reviewer subagent: spec compliant with all six brief pins; no Important findings; two Minor notes (raw status literals, unchecked `as u32` cast) both fixed in `cbf835ef` (named status consts scoped to the test, `u32::try_from`). No deferred minor from this node.
 - Rollback: Revert `cbf835ef`, `ba2b3e46` in that order.
+
+## 2026-09-26 — Node 3.8 dispatch preflight
+
+- Frontier: 3.7 accepted and recorded by `3a5a1849`; 3.8 is next. Worktree clean at BASE `3a5a1849`; `tests/numerical_migration/lod.rs` holds the 2.7 typed ordered-quad tests; oracle `kernel_lod_test.go` accepted at 2.7.
+- Preflight scan (packet `plans/02-adapters.md#node-3-8`, dispatch packet `worker-briefs.md` node 3.8, brief 5.8/adapter table, `tasks.md` node 3.8):
+  - 3.8 ↔ 3.5: disjoint hunks (`lod_shell_with` vs chunk); both depend on the accepted worldgen core but different functions. Serial `ffi.rs` order frozen; no conflict.
+  - 3.8 ↔ 2.7/3.1: consumes the accepted LOD provider and the 3.1 metadata order (this hunk HAS a metadata pointer with two-phase overflow). No conflict.
+  - Derived-artifact inventory: the LOD family pins the header, `native_test.go`, `src/lod.rs` — and this node EDITS `src/lod.rs` (`#[cfg(test)]` on two now-test-only fns), so the controller lands the matching hash refresh in the SAME commit per the derived-artifact rule, with the package-wide oracle run as proof.
+- Ruling (seam load-bearing, decided after evidence): the implementer chose preserve-live, but the dead_code evidence refutes its rationale — `lod_shell`/`encode_shell` stay reachable through the `ffi.rs` test helper `expected_shell` and the `src/lod.rs` unit tests, so removing the `generator` parameter does NOT orphan them into dead code; only `build_shell`/`lod_shell` (pure Vec collectors over the shared visitor) become test-only and are marked `#[cfg(test)]` with `expected_shell` recomputed through the native route. The node therefore REMOVES the seam (3.4 pattern), retiring the parked dual-execution debt instead of repeating it. Cost if wrong: release builds stop compiling the legacy Vec path; the golden tests still pin it under cfg(test).
+- Dispatch: implementer subagent for node 3.8 from BASE `3a5a1849`; brief `task-3.8-brief.md` in the session workspace, report `task-3.8-report.md` in the same workspace.
+
+## 2026-09-26 — Node 3.8 LOD ABI adapter
+
+- Predecessor SHA: `3a5a1849`
+- Result SHA: `7f34c3d6` (implementer `4792a08a` preserve-live, controller correction `b72e0a1c` single-native-shell + hash refresh, review fix `7f34c3d6`; manifest refresh for `src/lod.rs` landed in `b72e0a1c` per the derived-artifact rule)
+- Implementation summary:
+  - `src/ffi.rs` `lod_shell_with` hunk: admission byte-identical (3.1 order, `parse_lod_input`, two-phase exact-needed publish, `catch_unwind`). The `generator` seam is REMOVED (helper + 2 call sites); validated requests route `parse_lod_input` → `native_lod_request` (verbatim material rebuild + step map) → `NativeLod::build` (caller-owned scratch + 3136-quad stage) → `checked_mul(20)` → `encode_shell(native_quad_to_legacy)` → unchanged two-phase publish. Single execution per call.
+  - Seam test re-owned: `lod_shell_panic_is_contained_without_output` proves the `catch_unwind` primitive converges, the real core publishes exactly, and a rejected vector leaves payload/metadata untouched (no admitted vector can unwind — documented honestly).
+  - `src/lod.rs`: `build_shell` + `lod_shell` marked `#[cfg(test)]`; `expected_shell` recomputed through the native route.
+  - `tests/numerical_migration/lod.rs`: `lod_abi_exact_needed` for step 2/4/8 tiles with FULL ordered quads + counts 1284/112/82 + digests `0xd84930ff4cee9f89`/`0xaddba620c8cb5bd8`/`0x23714f969c54b4f7` + exact-needed retry per step.
+  - `testdata/runtime-migration/contracts.json`: `src/lod.rs` hash refreshed (`9c6c7a17…` → `cc39353d…`); `source_revision` unchanged, no case changes.
+- Verification:
+  - Baseline GREEN before the route change (same shell): migration lod 7/7; post-change GREEN with identical quads/digests.
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestLodShell'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestLodShell'`, `--lib lod` 23/23 plus full `--lib` 274/274, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~60s, green only after the hash refresh — the pre-refresh failure on the stale pin proves the rule).
+- Review: Task Reviewer subagent: Needs fixes with two Important findings (vacuous panic proof; face-map wildcard hiding invalid discriminants) + two Minors. Controller fixed in `7f34c3d6` (honest boundary+publish+rejection proof; exhaustive typed face match; English doc line); scoped re-review confirmed all addressed with no new breakage. No deferred minor from this node.
+- Rollback: Revert `7f34c3d6`, `b72e0a1c`, `4792a08a` in that order.
