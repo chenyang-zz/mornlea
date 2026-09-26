@@ -32,7 +32,7 @@ const SLOT_BELOW: usize = 2;
 const HORIZONTAL_SLOTS: [usize; 4] = [3, 4, 5, 6];
 
 /// 输出槽位条目的「无写入」哨兵:槽位字节固定 0xFF,BlockID 补零。
-const SLOT_NO_WRITE: u8 = 0xFF;
+pub(crate) const SLOT_NO_WRITE: u8 = 0xFF;
 
 /// 水平传播下界:等级 7 之外不再产生更弱流动水。
 const MAX_FLUID_LEVEL: u8 = 7;
