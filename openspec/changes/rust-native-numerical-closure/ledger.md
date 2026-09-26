@@ -903,9 +903,9 @@ match the tree, 0 mismatches.
   Scoped re-review: F1/F2/F3 ADDRESSED, no new breakage.
 - Deferred minors (→ final whole-branch review): two 3.12 items (LOD
   `needed_bytes` linkage; `kernelPanicStatus` 0–9 completeness) plus
-  `Task 4.1: minor (deferred): pre-existing '任务 2.1' identifier in
+  `Task 4.1: minor (deferred): pre-existing non-English task identifier in
   lod.rs:1 module doc predates this change; remove on next substantive
-  lod.rs edit`.
+  lod.rs edit (CJK scan of that line shows the exact string)`.
 - Architecture skill: no change (FakeImportC note is gate-harness-local;
   short→retry is change-local; nothing cross-task reusable).
 - Validation: `git diff --check` 0; `go test ./packages/audit -count=1`
@@ -916,3 +916,31 @@ match the tree, 0 mismatches.
   default runtime unchanged.
 - Rollback: this ledger/status entry only (`docs(openspec)` commit below);
   fix commit `9c978315` reverts independently without touching 3.12.
+
+## 2026-09-27 — Node 4.2 dispatch preflight
+
+- Frontier: 4.1 accepted and recorded by `8bae2268`; 4.2 (integrated gate)
+  is last. Worktree clean at BASE `8bae2268`; `git diff --check` clean.
+- Preflight scan (packet `plans/03-closure.md#node-4-2`, `tasks.md` 4.2):
+  - 4.2 ↔ all prior nodes: read-only gate run, no edits, no concurrent
+    editors. Single integrated SHA `8bae2268` doubles as baseline + result.
+  - Corpus identity fixed: manifest `2d8566f7…4885`,
+    `source_revision f75dfcf4`, 40 cases / 11 routes.
+  - No packet defect: six gates named with exact commands; failure policy
+    explicit (gate red → node open, defect returns to owning node).
+- Readiness review: gate list executable without controller transcript —
+  yes; traceable to node + per-gate evidence rows — yes; no producer/
+  consumer decisions left — yes; acyclic, tasks.md sole status — yes;
+  no shared-boundary consumers — yes (terminal node); real producers/
+  consumers executed by the gates themselves — yes; compat settled by 4.1 —
+  yes; rejectable without invalidating accepted nodes (gate evidence only)
+  — yes; tree clean, no external effects (no windowed tests; read-only,
+  no commits) — yes.
+- Ruling: 4.2 runs as a read-only gate dispatch (no repo edits, no commits;
+  ledger write stays with controller). Model `sonnet` (long multi-gate
+  trace with failure-ownership diagnosis). On any red gate the worker
+  STOPS with owning-node diagnosis instead of fixing. Cost if wrong: a
+  wasted full-gate cycle; no tree risk.
+- Dispatch: gate runner for node 4.2 from BASE `8bae2268`; brief
+  `/tmp/mornlea-rn-closure-3.12/task-4.2-brief.md`, report
+  `/tmp/mornlea-rn-closure-3.12/task-4.2-report.md`.
