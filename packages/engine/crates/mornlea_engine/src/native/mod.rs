@@ -8,8 +8,7 @@ pub mod collision;
 pub(crate) mod fluid_eval;
 #[allow(dead_code)]
 pub(crate) mod fluid_rescan;
-#[allow(dead_code)]
-pub(crate) mod lod;
+pub mod lod;
 #[allow(dead_code)]
 pub(crate) mod mesh;
 #[allow(dead_code)]

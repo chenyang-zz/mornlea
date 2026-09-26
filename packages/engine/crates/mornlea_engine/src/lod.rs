@@ -117,20 +117,28 @@ struct LodWindow {
 
 /// 窗口场:tile 内 N×N 窗口加边界外一圈,以全局窗口坐标 gi/gj ∈ −1..=N
 /// 索引;边界外一圈只参与断差裙边比较,不产生顶面 quad。
-struct WindowField {
+///
+/// Cells are borrowed from the caller (a reusable fixed sample buffer on the
+/// warm path) and encoded as `[top, material as i32]` records; the field only
+/// decodes them, so sampling never owns or reallocates window storage.
+pub(crate) struct WindowField<'a> {
     step: i32,
     base_x: i32,
     base_z: i32,
     /// 每轴内部窗口数 N = 64/step。
     n: usize,
     /// (N+2)×(N+2) 个窗口,下标 (gj+1)*(N+2)+(gi+1)。
-    cells: Vec<LodWindow>,
+    cells: &'a [[i32; 2]],
 }
 
-impl WindowField {
+impl WindowField<'_> {
     /// 取全局窗口坐标 (gi, gj) 处的窗口;调用方保证 ∈ −1..=N。
     fn window(&self, gi: i32, gj: i32) -> LodWindow {
-        self.cells[((gj + 1) as usize) * (self.n + 2) + (gi + 1) as usize]
+        let record = self.cells[((gj + 1) as usize) * (self.n + 2) + (gi + 1) as usize];
+        LodWindow {
+            top: record[0],
+            material: record[1] as u16,
+        }
     }
 }
 
@@ -225,24 +233,32 @@ fn clamp_window_to_sea_level(params: &WorldgenParams, window: LodWindow) -> LodW
     window
 }
 
-/// 采样 tile 的窗口场(含边界外一圈)。
+/// 采样 tile 的窗口场(含边界外一圈)到调用方拥有的样本缓冲。
 ///
 /// 边界外一圈只用于断差裙边的高侧判定:相邻 tile 以同一 worldgen 纯函数
 /// 重算同一边界窗口,两侧逐位一致,因此跨 tile 断差恰由高侧 tile 独立
 /// 补齐,不重复也不遗漏。
-fn sample_field(params: &WorldgenParams, tile_x: i32, tile_z: i32, step: i32) -> WindowField {
+///
+/// Exactly `(n+2)^2` records are written in the existing
+/// `(gj+1)*(n+2)+(gi+1)` order as `[top, material as i32]`; the remaining
+/// buffer slots stay untouched so one warm scratch serves every step size.
+/// The returned field borrows the buffer for its whole lifetime, which keeps
+/// sampling allocation-free on the warm path.
+pub(crate) fn sample_field_into<'a>(
+    params: &WorldgenParams,
+    tile_x: i32,
+    tile_z: i32,
+    step: i32,
+    cells: &'a mut [[i32; 2]; 1156],
+) -> WindowField<'a> {
     let n = (LOD_TILE_COLUMNS / step) as usize;
     let base_x = tile_x * LOD_TILE_COLUMNS;
     let base_z = tile_z * LOD_TILE_COLUMNS;
-    let mut cells = Vec::with_capacity((n + 2) * (n + 2));
     for gj in -1..=(n as i32) {
         for gi in -1..=(n as i32) {
-            cells.push(sample_window(
-                params,
-                base_x + gi * step,
-                base_z + gj * step,
-                step,
-            ));
+            let window = sample_window(params, base_x + gi * step, base_z + gj * step, step);
+            cells[((gj + 1) as usize) * (n + 2) + (gi + 1) as usize] =
+                [window.top, i32::from(window.material)];
         }
     }
     WindowField {
@@ -254,16 +270,24 @@ fn sample_field(params: &WorldgenParams, tile_x: i32, tile_z: i32, step: i32) ->
     }
 }
 
-/// 对窗口场生成壳 quad 流:先顶面贪心合并,后 X 向、Z 向断差裙边。
+/// 对窗口场遍历壳 quad 流:先顶面贪心合并,后 X 向、Z 向断差裙边。
 ///
 /// quad 顺序属于确定性契约:顶面按 Z 外、X 内的行主序贪心生长(先沿 X
 /// 扩宽、再沿 Z 扩深,与近环 greedy 同策略);裙边 X 向先于 Z 向,均按
 /// 行主序遍历窗口对。合并键 = (top, material):等高同材质才合并,顶面
 /// 着色恒为满档,不参与键。
-fn build_shell(field: &WindowField, air: u16) -> Vec<LodQuad> {
+///
+/// Every quad is handed to `emit` in that fixed order. The walk always runs to
+/// completion and reports no count; the emitter mirrors the tree visitor's
+/// `bool` signature and callers count the emissions they accept. The claimed
+/// mask is the only allocation and stays local to one walk.
+pub(crate) fn visit_lod_shell(
+    field: &WindowField<'_>,
+    air: u16,
+    mut emit: impl FnMut(LodQuad) -> bool,
+) {
     let n = field.n;
     let step = field.step;
-    let mut quads = Vec::new();
 
     // 顶面贪心合并:claimed 标记防止跨 quad 重复覆盖;无地表窗口(air)
     // 既不作为起点也不可被并入,天然成为合并屏障。
@@ -299,7 +323,7 @@ fn build_shell(field: &WindowField, air: u16) -> Vec<LodQuad> {
                     claimed[(j + dj) * n + i + di] = true;
                 }
             }
-            quads.push(LodQuad {
+            emit(LodQuad {
                 x: field.base_x + (i as i32) * step,
                 z: field.base_z + (j as i32) * step,
                 y: key.top,
@@ -326,7 +350,7 @@ fn build_shell(field: &WindowField, air: u16) -> Vec<LodQuad> {
             let edge_x = field.base_x + (g + 1) * step;
             let z = field.base_z + (j as i32) * step;
             if a.top > b.top && g >= 0 {
-                quads.push(LodQuad {
+                emit(LodQuad {
                     x: edge_x - 1,
                     z,
                     y: b.top + 1,
@@ -337,7 +361,7 @@ fn build_shell(field: &WindowField, air: u16) -> Vec<LodQuad> {
                     shade: SHADE_SIDE_X,
                 });
             } else if b.top > a.top && g + 1 < n as i32 {
-                quads.push(LodQuad {
+                emit(LodQuad {
                     x: edge_x,
                     z,
                     y: a.top + 1,
@@ -362,7 +386,7 @@ fn build_shell(field: &WindowField, air: u16) -> Vec<LodQuad> {
             let edge_z = field.base_z + (g + 1) * step;
             let x = field.base_x + (i as i32) * step;
             if a.top > b.top && g >= 0 {
-                quads.push(LodQuad {
+                emit(LodQuad {
                     x,
                     z: edge_z - 1,
                     y: b.top + 1,
@@ -373,7 +397,7 @@ fn build_shell(field: &WindowField, air: u16) -> Vec<LodQuad> {
                     shade: SHADE_SIDE_Z,
                 });
             } else if b.top > a.top && g + 1 < n as i32 {
-                quads.push(LodQuad {
+                emit(LodQuad {
                     x,
                     z: edge_z,
                     y: a.top + 1,
@@ -386,16 +410,27 @@ fn build_shell(field: &WindowField, air: u16) -> Vec<LodQuad> {
             }
         }
     }
+}
+
+/// 对窗口场生成壳 quad 流:薄收集器,顺序语义全在 [`visit_lod_shell`]。
+fn build_shell(field: &WindowField<'_>, air: u16) -> Vec<LodQuad> {
+    let mut quads = Vec::new();
+    visit_lod_shell(field, air, |quad| {
+        quads.push(quad);
+        true
+    });
     quads
 }
 
 /// 生产入口:解析后的请求 → 壳 quad 流(世界坐标,顺序确定)。
 pub(crate) fn lod_shell(request: &LodShellRequest) -> Vec<LodQuad> {
-    let field = sample_field(
+    let mut cells = [[0i32; 2]; 1156];
+    let field = sample_field_into(
         &request.params,
         request.tile_x,
         request.tile_z,
         request.step as i32,
+        &mut cells,
     );
     build_shell(&field, request.params.materials.air)
 }
@@ -424,7 +459,7 @@ mod tests {
     use super::{
         LOD_SHELL_INPUT_BYTES, LOD_SHELL_QUAD_BYTES, LodFace, LodQuad, LodShellRequest, LodWindow,
         WindowField, build_shell, clamp_window_to_sea_level, encode_shell, lod_shell,
-        parse_lod_input, sample_field, sample_window,
+        parse_lod_input, sample_field_into, sample_window,
     };
     use crate::worldgen::{Materials, SEA_LEVEL_Y, WORLD_MAX_Y, WorldgenParams};
 
@@ -499,18 +534,21 @@ mod tests {
         bytes
     }
 
-    /// 以闭包按全局窗口坐标构造合成窗口场(含边界外一圈)。
-    fn field(
+    /// 以闭包按全局窗口坐标构造合成窗口场(含边界外一圈);窗口记录写入
+    /// 调用方缓冲,返回的场借用该缓冲。
+    fn field<'a>(
         step: i32,
         n: usize,
         base_x: i32,
         base_z: i32,
+        cells: &'a mut Vec<[i32; 2]>,
         f: impl Fn(i32, i32) -> LodWindow,
-    ) -> WindowField {
-        let mut cells = Vec::with_capacity((n + 2) * (n + 2));
+    ) -> WindowField<'a> {
+        cells.clear();
         for gj in -1..=(n as i32) {
             for gi in -1..=(n as i32) {
-                cells.push(f(gi, gj));
+                let window = f(gi, gj);
+                cells.push([window.top, i32::from(window.material)]);
             }
         }
         WindowField {
@@ -518,7 +556,7 @@ mod tests {
             base_x,
             base_z,
             n,
-            cells,
+            cells: cells.as_slice(),
         }
     }
 
@@ -535,7 +573,8 @@ mod tests {
     #[test]
     fn empty_tile_produces_no_quads() {
         // 空 tile:全部窗口无地表(air),壳流必须为空,编码为空字节。
-        let air_field = field(4, 16, 0, 0, |_, _| LodWindow {
+        let mut cells = Vec::new();
+        let air_field = field(4, 16, 0, 0, &mut cells, |_, _| LodWindow {
             top: 40,
             material: AIR,
         });
@@ -548,7 +587,8 @@ mod tests {
     #[test]
     fn uniform_tile_merges_to_single_top_quad() {
         // 单一材质 + 等高:整个 tile 贪心合并为 1 个顶面 quad,无裙边。
-        let uniform = field(4, 16, 0, 0, |_, _| grass(70));
+        let mut cells = Vec::new();
+        let uniform = field(4, 16, 0, 0, &mut cells, |_, _| grass(70));
         let quads = build_shell(&uniform, AIR);
         assert_eq!(
             quads,
@@ -571,7 +611,8 @@ mod tests {
         // 一圈与相邻内部等高以隔离出唯一的内部断差。高侧东缘每行窗口各
         // 出一条 PosX 裙边(裙边不合并是既定取舍),竖直跨度精确衔接两侧
         // 地表平面。
-        let stepped = field(8, 2, 0, 0, |gi, _| {
+        let mut cells = Vec::new();
+        let stepped = field(8, 2, 0, 0, &mut cells, |gi, _| {
             let top = match gi {
                 -1 => 80,
                 0 => 80,
@@ -636,7 +677,8 @@ mod tests {
     fn boundary_skirt_owned_by_taller_side() {
         // 边界窗:tile 西侧边界外窗口更低(64),内部边缘(80)生成朝外
         // NegX 裙边;东侧边界外更高(96),本 tile 不生成(邻居 tile 拥有)。
-        let bounded = field(8, 2, 0, 0, |gi, _| {
+        let mut cells = Vec::new();
+        let bounded = field(8, 2, 0, 0, &mut cells, |gi, _| {
             let top = match gi {
                 -1 => 64,
                 2 => 96,
@@ -730,7 +772,8 @@ mod tests {
         // 复用核验:窗口 top == 窗内截断高度 max;material == 最高列(首
         // 个达到 max,z 外 x 内扫描序)的 terrain_block_at 表层结果。
         let p = params(11);
-        let field = sample_field(&p, -1, -1, 8);
+        let mut sample_cells = [[0i32; 2]; 1156];
+        let field = sample_field_into(&p, -1, -1, 8, &mut sample_cells);
         for (gi, gj) in [(0, 0), (3, 5), (7, 7), (-1, 0), (5, -1)] {
             let base_x = -64 + gi * 8;
             let base_z = -64 + gj * 8;
@@ -846,7 +889,8 @@ mod tests {
             top: SEA_LEVEL_Y,
             material: 13,
         };
-        let bounded = field(8, 3, 0, 0, |gi, _| {
+        let mut cells = Vec::new();
+        let bounded = field(8, 3, 0, 0, &mut cells, |gi, _| {
             if (0..2).contains(&gi) {
                 water
             } else {
