@@ -1082,7 +1082,7 @@ unsafe fn raycast_batch_with(
     let result = catch_raycast(|| {
         // SAFETY: 三个 buffer 均非空、范围有效且互不重叠；这里只建立调用期借用。
         let input_bytes = unsafe { std::slice::from_raw_parts(input, input_len) };
-        // SAFETY: cursor 非空、范围有效且与其他 buffer 不重叠；core 只读取本地视图。
+        // SAFETY: cursor is non-null, range-valid, and disjoint from the other buffers; the core only reads the borrowed views.
         let cursor_bytes = unsafe { std::slice::from_raw_parts(cursor, cursor_len) };
         if !raycast_input_is_valid(input_bytes)
             || !raycast_cursor_is_valid(input_bytes, cursor_bytes)
