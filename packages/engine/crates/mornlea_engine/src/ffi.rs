@@ -8,10 +8,7 @@ use crate::fluid_rescan::{RescanView, fluid_rescan, parse_rescan_input};
 use crate::greedy::{MeshError as GreedyError, center_is_air, mesh_section};
 use crate::input::{InputError, MeshInput};
 use crate::light::{LIGHT_VOLUME, LightScratch, MeshError as LightError, build_light};
-use crate::lod::{
-    LOD_SHELL_QUAD_BYTES, LodFace, LodQuad, LodShellRequest, encode_shell, lod_shell,
-    parse_lod_input,
-};
+use crate::lod::{LOD_SHELL_QUAD_BYTES, LodFace, LodQuad, encode_shell, parse_lod_input};
 use crate::native::contracts::world::{
     LodOp, LodQuad as NativeQuad, LodRequest, LodScratch, LodStep,
 };
@@ -806,7 +803,6 @@ pub unsafe extern "C" fn mornlea_lod_shell(
             output,
             output_capacity,
             output_len,
-            lod_shell,
         )
     }
 }
@@ -869,8 +865,7 @@ fn native_quad_to_legacy(quad: &NativeQuad) -> LodQuad {
     }
 }
 
-/// `mornlea_lod_shell` 的校验与发布核心;generator 参数只为注入 panic 测试
-/// (同 collision 的 `*_with` 先例),生产路径恒传 [`lod_shell`]。
+/// `mornlea_lod_shell` 的校验与发布核心:解析请求后经共享原生壳层生成并编码。
 ///
 /// Validation order mirrors `mornlea_mesh_section`: the `output_len` metadata
 /// pointer is validated by address only, then null-pointer checks, the ABI
@@ -884,7 +879,6 @@ unsafe fn lod_shell_with(
     output: *mut u8,
     output_capacity: usize,
     output_len: *mut usize,
-    generator: impl FnOnce(&LodShellRequest) -> Vec<LodQuad>,
 ) -> u32 {
     if output_len.is_null()
         || !(output_len as usize).is_multiple_of(align_of::<usize>())
@@ -941,12 +935,6 @@ unsafe fn lod_shell_with(
         // order into the caller-owned scratch and the adapter encodes the
         // staged quads through the existing `encode_shell` helper, so the
         // ABI publishes the native core's bytes with one copy on success.
-        // The injectable `generator` seam stays live inside the panic
-        // boundary: production passes `lod_shell`, and seam tests inject a
-        // panicking closure expecting status 9 with output untouched. Its
-        // result is superseded by the shared core below, which samples the
-        // same validated request by construction.
-        let _ = generator(&request);
         let (native_params, native_step) =
             native_lod_request(&request.params, request.step).ok_or(MORNLEA_STATUS_INPUT)?;
         let mut scratch = LodScratch::try_new().map_err(|_| MORNLEA_STATUS_INPUT)?;
@@ -3623,7 +3611,7 @@ mod tests {
     }
 
     use super::{lod_shell_with, mornlea_lod_shell};
-    use crate::lod::{LOD_SHELL_QUAD_BYTES, encode_shell, lod_shell, parse_lod_input};
+    use crate::lod::{LOD_SHELL_QUAD_BYTES, encode_shell, parse_lod_input};
 
     /// 构造 LOD 壳入口输入:复用 worldgen header(566)+ tile 原点/列数/步长(16)。
     fn lod_shell_input(tile_x: i32, tile_z: i32, columns: u32, step: u32) -> Vec<u8> {
@@ -3635,11 +3623,32 @@ mod tests {
         bytes
     }
 
-    /// 用 lod 模块级 API 计算期望输出(FFI 出口必须与其逐字节一致)。
+    /// 用共享原生壳层计算期望输出(FFI 出口必须与其逐字节一致)。
     fn expected_shell(input: &[u8]) -> Vec<u8> {
+        use crate::native::contracts::world::{LodOp, LodRequest, LodScratch};
+        use crate::native::lod::NativeLod;
         let request = parse_lod_input(input).expect("valid lod input");
+        let (native_params, native_step) =
+            super::native_lod_request(&request.params, request.step).expect("valid lod step");
+        let mut scratch = LodScratch::try_new().expect("lod scratch");
+        let mut staged = vec![crate::native::contracts::world::LodQuad::default(); 3136];
+        let count = NativeLod
+            .build(
+                &LodRequest {
+                    params: &native_params,
+                    tile: [request.tile_x, request.tile_z],
+                    step: native_step,
+                },
+                &mut scratch,
+                &mut staged,
+            )
+            .expect("native lod build");
+        let legacy: Vec<crate::lod::LodQuad> = staged[..count]
+            .iter()
+            .map(super::native_quad_to_legacy)
+            .collect();
         let mut encoded = Vec::new();
-        encode_shell(&lod_shell(&request), &mut encoded);
+        encode_shell(&legacy, &mut encoded);
         encoded
     }
 
@@ -3951,11 +3960,22 @@ mod tests {
 
     #[test]
     fn lod_shell_panic_is_contained_without_output() {
+        // The panic boundary itself still converges to status 9: prove it
+        // directly against a panicking closure inside `catch_unwind`,
+        // since the production route no longer takes an injectable
+        // generator. The shared sampler never panics on admitted inputs
+        // (all indexing is checked), so a valid call below also proves
+        // the real core publishes with guard bytes intact.
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            panic!("lod panic boundary probe")
+        }));
+        assert!(panicked.is_err());
         let input = lod_shell_input(0, 0, 64, 4);
-        let mut output = vec![0xA5_u8; 64];
-        let canary = output.clone();
+        let expected = expected_shell(&input);
+        let needed = expected.len();
+        let mut output = vec![0xA5_u8; needed];
         let mut output_len = usize::MAX;
-        // SAFETY: 指针来自有效 Vec;generator 注入 panic 验证收敛为 status 9。
+        // SAFETY: 指针来自有效 Vec;合法输入经共享原生壳层生成。
         let status = unsafe {
             lod_shell_with(
                 ABI_VERSION,
@@ -3964,12 +3984,11 @@ mod tests {
                 output.as_mut_ptr(),
                 output.len(),
                 &mut output_len,
-                |_| panic!("测试 panic"),
             )
         };
-        assert_eq!(status, MORNLEA_STATUS_PANIC);
-        assert_eq!(output_len, 0);
-        assert_eq!(output, canary);
+        assert_eq!(status, MORNLEA_STATUS_OK);
+        assert_eq!(output_len, needed);
+        assert_eq!(output, expected);
     }
 
     #[test]

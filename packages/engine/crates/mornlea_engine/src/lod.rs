@@ -413,6 +413,7 @@ pub(crate) fn visit_lod_shell(
 }
 
 /// 对窗口场生成壳 quad 流:薄收集器,顺序语义全在 [`visit_lod_shell`]。
+#[cfg(test)]
 fn build_shell(field: &WindowField<'_>, air: u16) -> Vec<LodQuad> {
     let mut quads = Vec::new();
     visit_lod_shell(field, air, |quad| {
@@ -423,6 +424,7 @@ fn build_shell(field: &WindowField<'_>, air: u16) -> Vec<LodQuad> {
 }
 
 /// 生产入口:解析后的请求 → 壳 quad 流(世界坐标,顺序确定)。
+#[cfg(test)]
 pub(crate) fn lod_shell(request: &LodShellRequest) -> Vec<LodQuad> {
     let mut cells = [[0i32; 2]; 1156];
     let field = sample_field_into(
