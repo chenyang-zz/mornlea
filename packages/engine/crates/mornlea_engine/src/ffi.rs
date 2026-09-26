@@ -595,11 +595,13 @@ unsafe fn worldgen_chunk_with(
         // SAFETY: input 非空，范围不超过 isize::MAX，地址加法不回绕且不与 output 重叠。
         let bytes = unsafe { std::slice::from_raw_parts(input, input_len) };
         let (params, chunk_x, chunk_z) = parse_chunk_input(bytes).ok_or(MORNLEA_STATUS_INPUT)?;
-        // 先在本地缓冲生成，成功后一次拷贝，保证失败路径不触碰调用方输出。
-        let mut dense = vec![0u16; CHUNK_VOLUME];
-        params.generate_chunk(chunk_x, chunk_z, &mut dense);
+        // Route the validated input through the shared sampler: `generate_chunk`
+        // fills the native `stage` scratch and the adapter encodes from it, so
+        // the ABI publishes the reviewed core's bytes with one copy on success.
+        let mut stage = Box::new([0u16; CHUNK_VOLUME]);
+        params.generate_chunk(chunk_x, chunk_z, &mut stage[..]);
         let mut encoded = vec![0u8; WORLDGEN_CHUNK_OUTPUT_BYTES];
-        for (chunk, value) in encoded.chunks_exact_mut(2).zip(dense.iter()) {
+        for (chunk, value) in encoded.chunks_exact_mut(2).zip(stage.iter()) {
             chunk.copy_from_slice(&value.to_le_bytes());
         }
         Ok::<Vec<u8>, u32>(encoded)
