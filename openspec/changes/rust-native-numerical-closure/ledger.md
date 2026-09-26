@@ -441,3 +441,26 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestCollision'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelCollision'`, `--lib collision` 8/8 (seam tests unmodified), clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~61s, no drift).
 - Review: Task Reviewer subagent: routing/admission/core-choice/seam correct; one Important finding (migration test asserted a semantic subset, not the brief's full 16-byte equality) fixed in `2832658c` by pinning all three vectors; scoped re-review confirmed ADDRESSED with no new breakage. One Minor deferred to the final whole-branch review: every ABI call runs both the legacy resolver path (discarded) and the parts core — deliberate plan-mandated seam-preserving debt until a later node re-owns the seam tests.
 - Rollback: Revert `2832658c`, `a2ae1d70` in that order.
+
+## 2026-09-26 — Node 3.3 dispatch preflight
+
+- Frontier: 3.2 accepted and recorded by `90133e10`; 3.3 is next. Worktree clean at BASE `90133e10`; `tests/numerical_migration/physics.rs` holds only the 2.2 typed parity test; oracle `kernel_physics_test.go` accepted at 2.2.
+- Preflight scan (packet `plans/02-adapters.md#node-3-3`, dispatch packet `worker-briefs.md` node 3.3, brief 5.3/adapter table, `tasks.md` node 3.3):
+  - 3.3 ↔ 3.2: disjoint hunks (`physics_step_with` vs `collision_resolve_with`); 3.2 landed and closed. Serial `ffi.rs` order frozen; no conflict.
+  - 3.3 ↔ 2.2: consumes the accepted physics provider; `src/step.rs` read-only here. No conflict.
+  - Derived-artifact inventory: the physics family pins the header, `native_test.go`, `src/step.rs`; none is edited here and new/edited files are unpinned, so the package-wide oracle run must stay fully green with no expected mismatch.
+- Ruling: route to shared `physics_step` (which runs `integrate` plus the collision parts core), never the stricter typed wrapper or standalone swept-grid validation, preserving the legacy physics prism admission. The hunk already calls the shared core, so the node pins the route with a comment rather than inventing churn. Cost if wrong: none — admission and numerics provably unchanged.
+- Dispatch: implementer subagent for node 3.3 from BASE `90133e10`; brief `task-3.3-brief.md` in the session workspace, report `task-3.3-report.md` in the same workspace.
+
+## 2026-09-26 — Node 3.3 physics ABI adapter
+
+- Predecessor SHA: `90133e10`
+- Result SHA: `4910504b` (provider `cb46e319`, review polish `4910504b`; no manifest refresh — physics family pins only the untouched header/test/core files, and the package-wide oracle run stayed green)
+- Implementation summary:
+  - `src/ffi.rs` `physics_step_with` hunk: admission byte-identical; only a 3-line English comment naming the shared route (`physics_step` → `integrate` + collision parts core). The hunk already invoked the shared core on the validated slice, so no call change belonged here.
+  - `tests/numerical_migration/physics.rs`: `physics_abi_native_bits` calls the real exported symbol for landing/jump/fluid/sneak+sprint with FULL 32-byte vectors incl. reserved zeros, one-ULP accepted vs two-ULP status-3 rejection, malformed-axis status-3 canary, and 31-byte status-7 known-good pre-fill canary. Full-word canaries throughout.
+- Verification:
+  - Baseline GREEN before the route change (same core): migration physics 2/2 with identical vectors; post-change GREEN with the same vectors.
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestPhysicsStep'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelPhysics'`, `--lib physics_step` 5/5 plus full `--lib` 274/274, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~59s, no drift).
+- Review: Task Reviewer subagent: spec compliant; the comment-only hunk satisfies the brief's explicit no-churn clause; no Important findings; two Minor notes (duplicated landing literal, committed `println!` noise) both fixed in `4910504b` without re-review scope creep. No deferred minor from this node.
+- Rollback: Revert `4910504b`, `cb46e319` in that order.
