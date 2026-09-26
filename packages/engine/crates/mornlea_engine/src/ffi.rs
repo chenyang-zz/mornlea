@@ -5,7 +5,7 @@ use crate::fluid_eval::{
     EVAL_ITEM_OUTPUT_BYTES, EVAL_SLOTS_PER_ITEM, SLOT_NO_WRITE, parse_eval_input, read_eval_item,
 };
 use crate::fluid_rescan::{fluid_rescan, parse_rescan_input};
-use crate::greedy::{MeshError as GreedyError, center_is_air, mesh_section};
+use crate::greedy::{MeshStage, TypedMeshAccess, center_is_air, mesh_geometry};
 use crate::input::{InputError, MeshInput};
 use crate::light::{LIGHT_VOLUME, LightScratch, MeshError as LightError, build_light};
 use crate::lod::{LOD_SHELL_QUAD_BYTES, LodFace, LodQuad, encode_shell, parse_lod_input};
@@ -14,10 +14,12 @@ use crate::native::contracts::world::{
     LodOp, LodQuad as NativeQuad, LodRequest, LodScratch, LodStep,
 };
 use crate::native::contracts::{
-    KernelError, Materials as NativeMaterials, WorldgenParams as NativeParams,
+    KernelError, Materials as NativeMaterials, MeshModel, MeshRegistryEntry, MeshScratch, MeshView,
+    WorldgenParams as NativeParams,
 };
 use crate::native::fluid_eval::NativeFluidEval;
 use crate::native::lod::NativeLod;
+use crate::native::mesh::try_new_registry;
 use crate::raycast::{
     RAYCAST_CURSOR_BYTES, RAYCAST_INPUT_BYTES, RAYCAST_OUTPUT_BYTES, RaycastBatch, raycast_batch,
     raycast_cursor_overflow_is_valid,
@@ -389,11 +391,104 @@ pub unsafe extern "C" fn mornlea_mesh_section(
             LightError::EmissionOutOfRange => MORNLEA_STATUS_EMISSION,
             LightError::QueueOverflow => MORNLEA_STATUS_QUEUE_OVERFLOW,
         })?;
-        // SAFETY: output 非空、对齐、范围有效，且不与 input、scratch 或 output_len 重叠。
+        // Stage the complete quad stream in a separate owned `MeshScratch`
+        // before touching the caller output: the typed access answers the
+        // shared `mesh_geometry` core from a field-for-field decode of the
+        // validated byte input, the fixed stage bounds the whole stream, and
+        // the caller slice is written only after the staged count passes the
+        // capacity check — so a short buffer reports status 7 with metadata
+        // zero and every payload slot untouched instead of a partial prefix.
+        let registry_count = usize::from(u16::from_le_bytes([bytes[8], bytes[9]]));
+        let words_per_row = usize::from(u16::from_le_bytes([bytes[10], bytes[11]]));
+        let mut blocks = Box::new([0u16; 110592]);
+        for (slot, pair) in blocks.iter_mut().zip(input.blocks.chunks_exact(2)) {
+            *slot = u16::from_le_bytes([pair[0], pair[1]]);
+        }
+        let mut heights_present = Box::new([false; 9]);
+        for (slot, &byte) in heights_present.iter_mut().zip(input.heights_present.iter()) {
+            *slot = byte != 0;
+        }
+        let mut heights = Box::new([[0i16; 256]; 9]);
+        for (column, stripe) in heights.iter_mut().zip(input.heights.chunks_exact(512)) {
+            for (slot, pair) in column.iter_mut().zip(stripe.chunks_exact(2)) {
+                *slot = i16::from_le_bytes([pair[0], pair[1]]);
+            }
+        }
+        let entries_base =
+            16 + input.blocks.len() + input.heights_present.len() + input.heights.len();
+        let entries_end = entries_base + registry_count * 20;
+        let mut entries = Vec::with_capacity(registry_count);
+        for record in bytes[entries_base..entries_end].chunks_exact(20) {
+            let mut material = [0u16; 6];
+            for (slot, pair) in material.iter_mut().zip(record[4..16].chunks_exact(2)) {
+                *slot = u16::from_le_bytes([pair[0], pair[1]]);
+            }
+            let model = match record[19] {
+                0 => MeshModel::Default,
+                1 => MeshModel::StandingTorch,
+                2 => MeshModel::WallTorchPosX,
+                3 => MeshModel::WallTorchNegX,
+                4 => MeshModel::WallTorchPosZ,
+                5 => MeshModel::WallTorchNegZ,
+                6 => MeshModel::Bed,
+                _ => return Err(MORNLEA_STATUS_REGISTRY),
+            };
+            entries.push(MeshRegistryEntry {
+                id: u16::from_le_bytes([record[0], record[1]]),
+                opaque: record[2] != 0,
+                emission: record[3],
+                material,
+                fluid_height: record[16],
+                light_attenuation: record[17],
+                block_top_raw: record[18],
+                model,
+            });
+        }
+        let mut visibility = Vec::with_capacity(registry_count * words_per_row);
+        for word in bytes[entries_end..].chunks_exact(8) {
+            let word: [u8; 8] = word.try_into().expect("exact-size chunk");
+            visibility.push(u64::from_le_bytes(word));
+        }
+        // Rebuild the registry through the shared typed constructor: the byte
+        // lane already accepted this exact table, so only an invariant breach
+        // can fail here, converging to the mapped status below.
+        let registry = try_new_registry(&entries, &visibility, input.air_id, input.barrier_id)
+            .map_err(|error| match error {
+                KernelError::EmissionOutOfRange => MORNLEA_STATUS_EMISSION,
+                KernelError::InvalidRegistry => MORNLEA_STATUS_REGISTRY,
+                _ => MORNLEA_STATUS_PANIC,
+            })?;
+        let view = MeshView {
+            blocks: &blocks,
+            heights_present: &heights_present,
+            heights: &heights,
+            section_origin_y: input.section_origin_y,
+            registry: &registry,
+        };
+        // The 552960-byte legacy scratch above stays the light workspace; the
+        // staged geometry lives in this separate owned `MeshScratch` (heap
+        // boxes, so the two lanes never alias and no typed state is stuffed
+        // into the legacy buffer).
+        let mut typed = MeshScratch::try_new().map_err(|_| MORNLEA_STATUS_PANIC)?;
+        let access = TypedMeshAccess::new(&view);
+        let mut staged = MeshStage::new(&mut typed.stage[..]);
+        // `MeshStage` fails only with `OutputInvariant`: the 40960-quad stage
+        // bound covers every accepted registry, so exhaustion means the
+        // geometry contract itself broke and converges to status 9 with the
+        // caller output untouched.
+        mesh_geometry(&access, &scratch, &mut staged).map_err(|_| MORNLEA_STATUS_PANIC)?;
+        let staged = staged.output();
+        // SAFETY: `output` is non-null, aligned, range-valid, and disjoint
+        // from `input`, `scratch` and `output_len`; it is only written after
+        // the staged count passed the capacity check below.
         let output = unsafe { std::slice::from_raw_parts_mut(output, output_capacity) };
-        mesh_section(&input, &scratch, output).map_err(|error| match error {
-            GreedyError::OutputOverflow => MORNLEA_STATUS_OUTPUT_OVERFLOW,
-        })
+        if staged.len() > output.len() {
+            return Err(MORNLEA_STATUS_OUTPUT_OVERFLOW);
+        }
+        for (slot, quad) in output.iter_mut().zip(staged.iter()) {
+            *slot = quad.packed();
+        }
+        Ok(staged.len())
     })
 }
 

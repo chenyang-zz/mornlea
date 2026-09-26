@@ -10,6 +10,10 @@ use torch::mesh_models;
 #[cfg(test)]
 pub(crate) use torch::{TORCH_QUADS_PER_STANDING_CELL, TORCH_QUADS_PER_WALL_CELL};
 
+/// Direct-write lane failure: the caller slice is short.
+/// Test-only since the ABI publishes from the staged typed stream, whose
+/// short destination reports the exact count instead.
+#[cfg(test)]
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum MeshError {
     OutputOverflow,
@@ -167,11 +171,15 @@ pub(crate) trait QuadStage {
 }
 
 /// Byte-lane stage: packs straight into the caller's `u64` destination.
+/// Test-only since the ABI publishes from the staged typed stream; the
+/// `greedy` unit suite keeps it as the direct-write vehicle.
+#[cfg(test)]
 struct PackedStage<'a> {
     output: &'a mut [u64],
     written: usize,
 }
 
+#[cfg(test)]
 impl QuadStage for PackedStage<'_> {
     type Error = MeshError;
 
@@ -269,6 +277,10 @@ const PLANT_QUADS: [(Face, bool); PLANT_QUADS_PER_CELL] = [
     (Face::PlantDiagB, true),
 ];
 
+/// Direct-write byte-lane entry: packs straight into the caller slice.
+/// Test-only since the ABI publishes from the staged typed stream; the
+/// `greedy` unit suite keeps it as the direct-write vehicle.
+#[cfg(test)]
 pub(crate) fn mesh_section(
     input: &MeshInput<'_>,
     light: &LightScratch<'_>,

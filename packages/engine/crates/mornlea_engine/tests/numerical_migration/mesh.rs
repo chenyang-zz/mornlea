@@ -360,3 +360,176 @@ fn combined_model_plant_cells_reach_the_dense_abi_digest() {
         "the dense stream ends with the last model pair of cell (15,15,15)"
     );
 }
+
+unsafe extern "C" {
+    fn mornlea_mesh_section(
+        abi_version: u32,
+        input: *const u8,
+        input_len: usize,
+        scratch: *mut u8,
+        scratch_len: usize,
+        output: *mut u64,
+        output_capacity: usize,
+        output_len: *mut usize,
+    ) -> u32;
+    fn mornlea_engine_abi_version() -> u32;
+}
+
+/// Legacy minimum output capacity in `u64` slots: the dense scene needs more,
+/// which is exactly the late-overflow trigger.
+const LEGACY_MIN_SLOTS: usize = 24576;
+/// Legacy light scratch size in bytes, kept as the byte lane's workspace.
+const LEGACY_SCRATCH_BYTES: usize = 552960;
+/// Output canary; no packed quad of these scenes equals it.
+const MESH_ABI_CANARY: u64 = 0xD15E_A5ED_F00D_CAFE;
+
+const MESH_STATUS_OK: u32 = 0;
+const MESH_STATUS_OUTPUT_OVERFLOW: u32 = 7;
+
+/// One raw registry record in wire order; the remaining wire fields stay zero
+/// for these scenes (no fluid, no attenuation, full cubes).
+struct RawEntry {
+    id: u16,
+    opaque: bool,
+    emission: u8,
+    material: [u16; 6],
+    model: u8,
+}
+
+fn push_raw_entry(bytes: &mut Vec<u8>, entry: &RawEntry) {
+    bytes.extend_from_slice(&entry.id.to_le_bytes());
+    bytes.push(u8::from(entry.opaque));
+    bytes.push(entry.emission);
+    for material in entry.material {
+        bytes.extend_from_slice(&material.to_le_bytes());
+    }
+    bytes.extend_from_slice(&[0, 0, 0, entry.model]);
+}
+
+/// Encodes one raw `MGM1` input mirroring `combined_scene` structurally: the
+/// same ids, materials, models and empty visibility table, but as the legacy
+/// wire bytes the real exported symbol parses. Every neighborhood cell holds
+/// `block`, and the torch entry carries `torch_emission` so the all-air case
+/// can smuggle a semantic-only violation past the structural parse.
+fn dense_raw_input(block: u16, torch_emission: u8) -> Vec<u8> {
+    let entries = [
+        RawEntry {
+            id: AIR,
+            opaque: false,
+            emission: 0,
+            material: [0; 6],
+            model: 0,
+        },
+        RawEntry {
+            id: BARRIER,
+            opaque: true,
+            emission: 0,
+            material: [1; 6],
+            model: 0,
+        },
+        RawEntry {
+            id: STANDING_TORCH,
+            opaque: false,
+            emission: torch_emission,
+            material: [WHEAT_MATERIAL; 6],
+            model: 1,
+        },
+    ];
+    let words_per_row = 1u16;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"MGM1");
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&words_per_row.to_le_bytes());
+    bytes.extend_from_slice(&AIR.to_le_bytes());
+    bytes.extend_from_slice(&BARRIER.to_le_bytes());
+    for _ in 0..BLOCKS {
+        bytes.extend_from_slice(&block.to_le_bytes());
+    }
+    bytes.extend_from_slice(&[0u8; 9]);
+    bytes.extend_from_slice(&[0u8; 9 * 256 * 2]);
+    for entry in &entries {
+        push_raw_entry(&mut bytes, entry);
+    }
+    for _ in 0..entries.len() * usize::from(words_per_row) {
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+    }
+    bytes
+}
+
+/// Calls the real exported `mornlea_mesh_section` symbol with a canary-filled
+/// destination, returning the status, the metadata word and the payload. The
+/// caller keeps no aliasing: input, scratch, output and metadata are disjoint
+/// by construction.
+fn call_mesh_abi(input: &[u8], slots: usize) -> (u32, usize, Vec<u64>) {
+    let version = unsafe { mornlea_engine_abi_version() };
+    let mut scratch = vec![0u64; LEGACY_SCRATCH_BYTES / 8];
+    let mut output = vec![MESH_ABI_CANARY; slots];
+    let mut written = usize::MAX;
+    let status = unsafe {
+        mornlea_mesh_section(
+            version,
+            input.as_ptr(),
+            input.len(),
+            scratch.as_mut_ptr().cast::<u8>(),
+            LEGACY_SCRATCH_BYTES,
+            output.as_mut_ptr(),
+            slots,
+            &mut written,
+        )
+    };
+    (status, written, output)
+}
+
+#[test]
+fn mesh_abi_late_overflow() {
+    // The dense model+plant scene needs 32768 quads, past the legacy 24576
+    // minimum: the legacy path writes a partial prefix before discovering the
+    // short output, so the full-arena canary compare must fail before the fix.
+    let dense = dense_raw_input(STANDING_TORCH, 0);
+    let (status, written, output) = call_mesh_abi(&dense, LEGACY_MIN_SLOTS);
+    assert_eq!(status, MESH_STATUS_OUTPUT_OVERFLOW);
+    assert_eq!(written, 0, "overflow metadata must read zero");
+    let first = output.iter().position(|word| *word != MESH_ABI_CANARY);
+    let count = output
+        .iter()
+        .filter(|word| **word != MESH_ABI_CANARY)
+        .count();
+    assert_eq!(
+        first,
+        None,
+        "late overflow wrote {count} payload slots starting at slot {}",
+        first.unwrap_or(usize::MAX),
+    );
+
+    // The same scene with the full required capacity publishes every packed
+    // word bit-identical to the typed provider's staged quads.
+    let (status, written, output) = call_mesh_abi(&dense, DENSE_COUNT);
+    assert_eq!(status, MESH_STATUS_OK);
+    assert_eq!(written, DENSE_COUNT);
+    let (section, registry) = combined_scene(true);
+    let staged = build(&section, &registry, STAGE_QUADS);
+    assert_eq!(staged.len(), DENSE_COUNT);
+    assert_eq!(
+        stream_digest(&staged),
+        DENSE_DIGEST,
+        "typed expectation must match the Go oracle digest"
+    );
+    let expected: Vec<u64> = staged.iter().map(|quad| quad.packed()).collect();
+    assert_eq!(
+        output, expected,
+        "full-capacity words must equal the staged bits"
+    );
+
+    // Raw all-air with a semantically invalid but structurally valid unused
+    // registry keeps the structural-only exemption: status 0, no payload.
+    let air = dense_raw_input(AIR, 16);
+    let (status, written, output) = call_mesh_abi(&air, LEGACY_MIN_SLOTS);
+    assert_eq!(status, MESH_STATUS_OK);
+    assert_eq!(written, 0);
+    assert_eq!(
+        output,
+        vec![MESH_ABI_CANARY; LEGACY_MIN_SLOTS],
+        "the all-air shortcut must not touch the payload"
+    );
+}
