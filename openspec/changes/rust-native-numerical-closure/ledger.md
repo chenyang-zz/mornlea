@@ -511,3 +511,26 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestWorldgen'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelWorldgenChunk'`, `--lib worldgen` 43/43, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (no drift).
 - Review: Task Reviewer subagent: spec compliant; no Important findings; three Minor DRY notes (unused-literal spot range, duplicated FNV constants, hardcoded header fields). Controller applied the first two in `9cd0260f` (spot range via `CHUNK_CELLS`, shared `FNV_OFFSET_BASIS`/`FNV_PRIME`); the header-field note needs no action because the helper builds from the typed params' own getters, not literals. No deferred minor from this node.
 - Rollback: Revert `9cd0260f`, `a14d967c` in that order.
+
+## 2026-09-26 — Node 3.6 dispatch preflight
+
+- Frontier: 3.5 accepted and recorded by `cdec32d1`; 3.6 is next. Worktree clean at BASE `cdec32d1`; `tests/numerical_migration/worldgen_probe.rs` holds the 2.5 typed digest/determinism tests; oracle `kernel_worldgen_probe_test.go` accepted at 2.5.
+- Preflight scan (packet `plans/02-adapters.md#node-3-6`, dispatch packet `worker-briefs.md` node 3.6, brief 5.6/adapter table, `tasks.md` node 3.6):
+  - 3.6 ↔ 3.5: disjoint hunks (`worldgen_probe_with` vs `worldgen_chunk_with`); 3.5 landed and closed. Serial `ffi.rs` order frozen; no conflict.
+  - 3.6 ↔ 2.4/2.5: consumes the accepted probe provider and the merged post-2.4 wrapping core; `src/worldgen.rs` read-only here. The extreme-digest replay is the packet's key integration check, not a blocker. No conflict.
+  - Derived-artifact inventory: the probe family pins the header, `native_test.go`, `src/worldgen.rs`; none is edited here and new/edited files are unpinned, so the package-wide oracle run must stay fully green with no expected mismatch.
+- Ruling: keep `parse_probe_input` + route the parsed records through shared `run_probe` (same sampler the reviewed provider stages via `as_legacy`); no typed mode→query→back conversion, no mode-3/Y-ignore/reserved-zero/exact-size change. Cost if wrong: none — admission and semantics provably unchanged.
+- Dispatch: implementer subagent for node 3.6 from BASE `cdec32d1`; brief `task-3.6-brief.md` in the session workspace, report `task-3.6-report.md` in the same workspace.
+
+## 2026-09-26 — Node 3.6 world probe ABI adapter
+
+- Predecessor SHA: `cdec32d1`
+- Result SHA: `9c1ed669` (single commit; no manifest refresh — probe family pins only the untouched header/test/core files, and the package-wide oracle run stayed green)
+- Implementation summary:
+  - `src/ffi.rs` `worldgen_probe_with` hunk: admission byte-identical; only a 3-line English comment naming the shared `run_probe` route. Same sampler, same encoding, same single copy.
+  - `tests/numerical_migration/worldgen_probe.rs`: `worldgen_probe_abi_modes` calls the real exported symbol for the seed-0 ordinary 13-record batch (full bytes + digest `0x57d1f3def5022eba` + explicit mode-0 Y-independence), the seed-0 extreme 7-record replay (digest `0x72119860a6d5d143`), mode-3 status-3 canary, 65-query status-3, and 64-query success + short status-7 canary + exact retry equality.
+- Verification:
+  - Baseline GREEN before the route change (same core): migration worldgen_probe 7/7; post-change GREEN with identical bytes/digests.
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestWorldgenProbe'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelWorldgenProbe'`, `--lib probe` 3/3, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~63s, no drift).
+- Review: Task Reviewer subagent: spec compliant with all seven brief checks present; no Important findings and no Minor notes. No deferred minor from this node.
+- Rollback: Revert `9c1ed669`.
