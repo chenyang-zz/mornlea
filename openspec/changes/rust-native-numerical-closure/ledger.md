@@ -222,3 +222,23 @@
   - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`, `cargo fmt --all --check`, `gofmt -l ./packages`: all clean.
 - Review: Task Reviewer subagent approved after the controller ruled on one plan-mandated deviation: the dispatch brief listed "long output" as a recovered failure, but the frozen tree ABI is at-least-capacity (`src/ffi.rs` rejects only `output_len < needed`), so a larger buffer correctly succeeds with an untouched suffix. The brief was pattern-matched from the chunk/probe exact-length semantics and is amended here; the implementation stands. Two minor findings deferred to the final whole-branch review (no negative or extreme seed pins the no-seed-validation rule; ~250 lines of record literals duplicated across the Go and Rust pins).
 - Rollback: Revert `f6d7ee0e`.
+
+## 2026-09-25 — Node 2.7 LOD shell provider
+
+- Predecessor SHA: `11401286`
+- Result SHA: `ad781b71` (provider `5cd4b11e`, controller hash refresh `0126c19a`, capacity fix `ad781b71`)
+- Implementation summary:
+  - `src/lod.rs` gains two allocation-free seams without changing behavior: `WindowField<'a>` borrows its window cells as `[[i32; 2]]`, `sample_field_into` fills the caller's 1156-record sample buffer in the existing `(gj+1)*(n+2)+(gi+1)` order, and `visit_lod_shell` carries the former `build_shell` body behind an emitter. `build_shell` and `lod_shell` delegate through the seams and keep their output; the golden-shell byte test is untouched.
+  - `src/native/lod.rs` implements `NativeLod` for `LodOp`, admitting tiles exactly as the legacy ABI does (per axis `checked_mul(64)`, then `checked_add(64)`, then `checked_sub(8)` as independent chains), sampling into `LodScratch::samples`, emitting into `LodScratch::stage`, and publishing only after the exact required count is known.
+  - `tests/native_contract/lod.rs` covers steps 2/4/8 with ordered quad fields, the taller-side-owned skirt, the sea clamp with and without `water == air`, tile overflow preflight on both axes, exact/short/surplus destinations with canaries, and warm scratch reuse across steps and across a failure.
+  - `tests/numerical_migration/lod.rs` pins ordered quad parity against the Go observations for one tile per step size, determinism, and exact required-count parity.
+  - `packages/tools/cmd/runtime-oracle/kernel_lod_test.go` freezes ordered LOD observations and exercises recovered failures.
+- Verification:
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --locked lod`: passed (5 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test numerical_migration --locked lod`: passed (6 tests passed).
+  - `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --lib --locked lod`: passed (22 tests passed, golden shell bytes stable).
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestLodShell' -count=1`: passed.
+  - `rustup run 1.97.1 cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_engine --all-targets --locked -- -D warnings`, `cargo fmt --all --check`, `gofmt -l ./packages`: all clean.
+  - `go test ./packages/tools/cmd/runtime-oracle -count=1`: passed after the controller's source-hash refresh (`src/lod.rs` `dfdc994e…` -> `9c6c7a17…`).
+- Review: Task Reviewer subagent required one fix round for the exact-capacity boundary, which the implementer fixed in `ad781b71` by building into `&mut exact[..needed]` and asserting `Ok(needed)` with every slot written; the scoped re-review marked it ADDRESSED with no new breakage. The reviewer's second finding was ruled waived: a zero-quad tile is unreachable through the frozen `WorldgenParams::try_new` contract (terrain is never air), so the empty-tile evidence is the seam test `empty_tile_produces_no_quads` and no contract entry was added. One minor deferred to the final whole-branch review: the Go ordered walk omits the skirt `w == step` check the Rust walk asserts.
+- Rollback: Revert `ad781b71`, `0126c19a`, `5cd4b11e` in that order.
