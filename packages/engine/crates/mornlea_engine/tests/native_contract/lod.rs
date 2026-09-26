@@ -405,9 +405,14 @@ fn capacity_and_canary() {
     let needed = NativeLod.build(&request, &mut scratch, &mut probe).unwrap();
     assert!(needed > 0);
 
-    // Exact capacity succeeds and overwrites every published slot.
+    // Exact capacity: a destination sized to exactly the required count
+    // succeeds and overwrites every one of its slots. This is the `<` versus
+    // `<=` publication boundary, so the destination length must equal
+    // `needed`, not merely exceed it.
     let mut exact = [canary(); STAGE_QUADS];
-    let written = NativeLod.build(&request, &mut scratch, &mut exact).unwrap();
+    let written = NativeLod
+        .build(&request, &mut scratch, &mut exact[..needed])
+        .unwrap();
     assert_eq!(written, needed);
     assert!(exact[..needed].iter().all(|quad| *quad != canary()));
 
