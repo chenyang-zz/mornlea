@@ -11,7 +11,7 @@ import (
 	"github.com/channing771/mornlea/packages/shared/nativeabi"
 )
 
-// Raw `MGM1` mesh-section framing: 16-byte header (magic, section origin,
+// Raw MGM1 mesh-section framing: 16-byte header (magic, section origin,
 // registry count, visibility words per row, air id, barrier id), the 3x3x3
 // neighborhood as 27 sections of 4096 little-endian u16 cells, nine
 // height-presence bytes, nine 256-entry i16 column tables, 20-byte registry
@@ -200,6 +200,17 @@ func kernelMeshViewRun(input []byte, scratch, output []uint64) (nativeabi.Status
 	return nativeabi.MeshSection(nativeabi.ABIVersion, input, scratch, output)
 }
 
+// assertUntouched fails when a call wrote any word of a canary-filled output
+// buffer. Rejected calls must leave the caller's destination byte-identical.
+func assertUntouched(t *testing.T, name string, output []uint64) {
+	t.Helper()
+	for index, word := range output {
+		if word != kernelMeshViewCanary {
+			t.Fatalf("%s wrote output[%d]=%#x", name, index, word)
+		}
+	}
+}
+
 // kernelMeshViewPackedQuads decodes the used prefix of the output into packed
 // words.
 func kernelMeshViewPackedQuads(output []uint64, count int) []uint64 {
@@ -246,19 +257,18 @@ func TestKernelMeshView(t *testing.T) {
 	if status != nativeabi.StatusOK || count != 0 {
 		t.Fatalf("all-air shortcut: status/count=%d/%d, want OK/0", status, count)
 	}
-	for index, word := range output {
-		if word != kernelMeshViewCanary {
-			t.Fatalf("all-air shortcut wrote output[%d]=%#x", index, word)
-		}
-	}
+	assertUntouched(t, "all-air shortcut", output)
 
 	// 2. The same semantic violation is rejected as soon as the center holds a
-	// non-air block, so the shortcut is structural-only.
+	// non-air block, so the shortcut is structural-only; the rejected call must
+	// leave the destination untouched.
 	shortcut.setBlock(0, 0, 0, 1)
-	status, count = kernelMeshViewRun(shortcut.encode(), newScratch(), newOutput())
+	rejectedOutput := newOutput()
+	status, count = kernelMeshViewRun(shortcut.encode(), newScratch(), rejectedOutput)
 	if status != nativeabi.StatusRegistry || count != 0 {
 		t.Fatalf("non-air semantic violation: status/count=%d/%d, want REGISTRY/0", status, count)
 	}
+	assertUntouched(t, "non-air semantic violation", rejectedOutput)
 
 	// 3. Registry capacity: 96 entries are accepted, 97 are rejected.
 	atCapacity := make([]kernelMeshEntry, 96)
@@ -276,13 +286,16 @@ func TestKernelMeshView(t *testing.T) {
 	for index := range over {
 		over[index] = kernelMeshEntry{id: uint16(index)}
 	}
-	status, count = kernelMeshViewRun(newKernelMeshViewSection(over).encode(), newScratch(), newOutput())
+	overOutput := newOutput()
+	status, count = kernelMeshViewRun(newKernelMeshViewSection(over).encode(), newScratch(), overOutput)
 	if status != nativeabi.StatusRegistry || count != 0 {
 		t.Fatalf("97 entries: status/count=%d/%d, want REGISTRY/0", status, count)
 	}
+	assertUntouched(t, "97 entries", overOutput)
 
 	// 4. Semantic entry ranges on the raw entry: emission 16, model 7 and
-	// fluid height 15 are rejected; fluid height 1 stays accepted.
+	// fluid height 15 are rejected; fluid height 1 stays accepted. Every
+	// rejected call must leave its destination untouched.
 	for _, tc := range []struct {
 		name   string
 		mutate func(*kernelMeshViewSection)
@@ -297,11 +310,16 @@ func TestKernelMeshView(t *testing.T) {
 		section.setBlock(0, 0, 0, 1)
 		section.markAirFacesVisible(1, 2, 3)
 		tc.mutate(section)
-		status, count = kernelMeshViewRun(section.encode(), newScratch(), newOutput())
+		output := newOutput()
+		status, count = kernelMeshViewRun(section.encode(), newScratch(), output)
 		if status != tc.want {
 			t.Fatalf("%s: status=%d, want %d", tc.name, status, tc.want)
 		}
-		if tc.want == nativeabi.StatusOK && count == 0 {
+		if tc.want != nativeabi.StatusOK {
+			assertUntouched(t, tc.name, output)
+			continue
+		}
+		if count == 0 {
 			t.Fatalf("%s: accepted but published no quads", tc.name)
 		}
 	}
