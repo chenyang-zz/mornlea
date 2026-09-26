@@ -464,3 +464,27 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestPhysicsStep'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelPhysics'`, `--lib physics_step` 5/5 plus full `--lib` 274/274, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~59s, no drift).
 - Review: Task Reviewer subagent: spec compliant; the comment-only hunk satisfies the brief's explicit no-churn clause; no Important findings; two Minor notes (duplicated landing literal, committed `println!` noise) both fixed in `4910504b` without re-review scope creep. No deferred minor from this node.
 - Rollback: Revert `4910504b`, `cb46e319` in that order.
+
+## 2026-09-26 — Node 3.4 dispatch preflight
+
+- Frontier: 3.3 accepted and recorded by `84bea73d`; 3.4 is next. Worktree clean at BASE `84bea73d`; `tests/numerical_migration/raycast.rs` holds only the 2.3 typed continuation test; oracle `kernel_raycast_test.go` accepted at 2.3.
+- Preflight scan (packet `plans/02-adapters.md#node-3-4`, dispatch packet `worker-briefs.md` node 3.4, brief 5.4/adapter table, `tasks.md` node 3.4):
+  - 3.4 ↔ 3.2/3.3: disjoint hunks (`raycast_batch_with` vs collision/physics); both landed and closed. Serial `ffi.rs` order frozen; no conflict.
+  - 3.4 ↔ 2.3: consumes the accepted raycast provider; `src/raycast.rs` read-only here. No conflict.
+  - Derived-artifact inventory: the raycast family pins the header, `native_test.go`, `src/raycast.rs`; none is edited here and new/edited files are unpinned, so the package-wide oracle run must stay fully green with no expected mismatch.
+- Ruling (seam load-bearing, found during preflight): unlike collision, the raycast `resolver` seam is load-bearing — `raycast_success_publishes_local_cursor_and_output_once` asserts CUSTOM resolver output, not just panics, so the 3.2 preserve-dual-execution pattern would leave dead custom coverage. The node REMOVES the `resolver` parameter (3 call sites) and re-owns both seam tests (panic proof via `catch_raycast` + real-core publish proof). Cost if wrong: the old custom-output test is replaced by real-core assertions; the migration test carries the exact publish proof.
+- Dispatch: implementer subagent for node 3.4 from BASE `84bea73d`; brief `task-3.4-brief.md` (revised for seam removal) in the session workspace, report `task-3.4-report.md` in the same workspace.
+
+## 2026-09-26 — Node 3.4 raycast ABI adapter
+
+- Predecessor SHA: `84bea73d`
+- Result SHA: `cc317e8e` (provider `06f92f81`, comment fix `cc317e8e`; no manifest refresh — raycast family pins only the untouched header/test/core files, and the package-wide oracle run stayed green)
+- Implementation summary:
+  - `src/ffi.rs` `raycast_batch_with` hunk: admission byte-identical (metadata checks, weak-history `raycast_cursor_is_valid` admission, capacity preflights, overlap checks, `catch_raycast`, staged cursor+output+count+done publish). Only the call changed: `Ok(resolver(input_bytes, cursor_bytes))` → `Ok(raycast_batch(input_bytes, cursor_bytes))` on the validated slices; the `resolver` parameter removed from the helper and its 3 call sites. No public raw cursor parser; no typed opaque-cursor routing.
+  - Seam tests re-owned by name: `raycast_panic_through_publish_path_is_atomic` proves the panic boundary directly via `catch_raycast` plus a real-core no-panic publish with guard bytes intact; `raycast_success_publishes_local_cursor_and_output_once` asserts the real core's staged publish (guards, count, advanced cursor). No custom-resolver coverage remains.
+  - `tests/numerical_migration/raycast.rs`: `raycast_abi_cursor_sequence` calls the real exported symbol for the 65-record ray (64 then 7 with full ordered record bytes, full cursor bytes, count/done after each call), repeat-done preservation, tampered-cursor status 3 with full preservation, and input/output overlap status 2 with full preservation.
+- Verification:
+  - Baseline GREEN before the route edit (same core): migration raycast 2/2; post-edit GREEN with identical bytes.
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestRaycast'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelRaycast'`, full `--lib` 274/274, full `native_contract` + `numerical_migration`, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~60s, no drift).
+- Review: Task Reviewer subagent: spec compliant against the revised brief; no Important findings; three Minor notes (one Chinese fragment in an edited SAFETY line — fixed in `cc317e8e`; weaker-than-old through-path panic proof explicitly allowed by the brief's fallback clause; publish-test exactness relying on the migration test). No deferred minor from this node beyond the recorded fallback acceptance.
+- Rollback: Revert `cc317e8e`, `06f92f81` in that order.
