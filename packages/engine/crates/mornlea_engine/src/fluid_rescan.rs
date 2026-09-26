@@ -46,6 +46,7 @@
 //! 起的扫描范围在预算内全部完成;spent 是本次记账总数。
 
 use crate::fluid_eval::{BARRIER, WATER_SOURCE, is_fluid, replaceable};
+use crate::native::contracts::KernelError;
 use crate::worldgen::{read_i32, read_u32};
 
 /// 输入布局版本:header `layout_version` 字段的唯一合法值。
@@ -112,7 +113,7 @@ pub(crate) struct RescanView<'a> {
 
 /// 元数据表的 (dx,dz) → 区块序映射:中心、(-1,-1)、(0,-1)、(1,-1)、
 /// (-1,0)、(1,0)、(-1,1)、(0,1)、(1,1)。只被内部固定方向调用。
-fn chunk_meta_index(dx: i32, dz: i32) -> usize {
+pub(crate) fn chunk_meta_index(dx: i32, dz: i32) -> usize {
     match (dx, dz) {
         (0, 0) => 0,
         (-1, -1) => 1,
@@ -131,7 +132,7 @@ fn chunk_meta_index(dx: i32, dz: i32) -> usize {
 /// z=0..15)、(z=-1,x=0..15)、(z=16,x=0..15),随后四角 (-1,-1)/(16,-1)/
 /// (-1,16)/(16,16)。角列只是布局定长的一部分:五邻偏移无对角,重扫
 /// 永远不会读角列。
-fn skirt_column(bx: i32, bz: i32) -> usize {
+pub(crate) fn skirt_column(bx: i32, bz: i32) -> usize {
     match (bx, bz) {
         (0, 1..=16) => (bz - 1) as usize,
         (17, 1..=16) => SECTION_SIZE + (bz - 1) as usize,
@@ -143,6 +144,27 @@ fn skirt_column(bx: i32, bz: i32) -> usize {
         (17, 17) => 4 * SECTION_SIZE + 3,
         _ => unreachable!("盒内局部列必须在 0..=17"),
     }
+}
+
+/// Dense section cell index for one box cell: `x + z*16 + y16*256` with x
+/// fastest, the section-record order the MFL1 wire layout pins. Kept beside
+/// `skirt_column` so every reader shares one index rule.
+pub(crate) fn section_cell_index(bx: i32, y: i32, bz: i32) -> usize {
+    (bx - 1) as usize
+        + (bz - 1) as usize * SECTION_SIZE
+        + y as usize % SECTION_SIZE * SECTION_SIZE * SECTION_SIZE
+}
+
+/// Box cell to world position: x/z use the center chunk's `×16` base (box
+/// column 1 is local 0) and y uses `core.MinY`. The legacy byte encoder and
+/// the typed provider both route through here so their coordinates cannot
+/// drift apart.
+pub(crate) fn box_to_world(center: [i32; 2], bx: i32, y: i32, bz: i32) -> [i32; 3] {
+    [
+        center[0] * SECTION_SIZE as i32 + bx - 1,
+        y + WORLD_MIN_Y,
+        center[1] * SECTION_SIZE as i32 + bz - 1,
+    ]
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> u16 {
@@ -276,9 +298,7 @@ impl<'a> RescanView<'a> {
                 Some(id) => id,
                 None => {
                     let base = self.section_offsets[section] + 2;
-                    let index = (bx - 1) as usize
-                        + (bz - 1) as usize * SECTION_SIZE
-                        + y as usize % SECTION_SIZE * SECTION_SIZE * SECTION_SIZE;
+                    let index = section_cell_index(bx, y, bz);
                     read_u16(self.bytes, base + index * 2)
                 }
             }
@@ -300,50 +320,172 @@ impl<'a> RescanView<'a> {
         }
         self.box_cell(bx, y, bz)
     }
+}
 
-    /// 镜像 Go `fluidSourceIsFixedPoint` 的五邻密封判定:下方 + 四个
-    /// 水平邻格全部对等级 1 的新水不可替换。盒模型把 Go 的「同区段快
-    /// 路径 + 跨区段/跨区块世界读」合并为单一 `block_at`(两条路径读
-    /// 同一份数据,语义等价)。
-    fn source_is_fixed_point(&self, bx: i32, y: i32, bz: i32) -> bool {
-        SEALED_OFFSETS
-            .iter()
-            .all(|&(dx, dy, dz)| !replaceable(self.block_at(bx + dx, y + dy, bz + dz), 1))
-    }
+/// Capability seam for the shared rescan accounting loop.
+///
+/// The loop reads box cells, center-section uniforms, neighbour metadata
+/// uniforms and world positions through this trait, so the legacy byte view
+/// and the typed native view run exactly one accounting implementation.
+/// `cell` answers the world-height barrier rule for a y outside the world
+/// column and `Err(KernelError::MissingHalo)` for a horizontal coordinate the
+/// view does not own; the seal predicates propagate that error instead of
+/// substituting a barrier, because a fabricated barrier would silently change
+/// which cells are treated as fixed points.
+pub(crate) trait RescanSource {
+    /// Reads one box cell `(bx, y, bz)`, applying the `fluidRescanBlockAt`
+    /// world-height rule; a coordinate outside the owned halo is
+    /// `Err(KernelError::MissingHalo)`.
+    fn cell(&self, bx: i32, y: i32, bz: i32) -> Result<u16, KernelError>;
 
-    /// 镜像 Go `fluidSectionIsFixedPoint`:下方区段 + 四个水平邻区段
-    /// 全部「均匀且不可替换」才成立。下方区段与中心同区块,直接用区段
-    /// 记录判定(Go 读同一 chunk 的活数据;元数据表的中心条目对诚实
-    /// 编码方与其一致,以记录为准即单一事实源);四个水平邻区块只有
-    /// 元数据表可用。区段 0 之下视作密封(Go 对越界区段返回「不可替换」)。
-    fn section_is_fixed_point(&self, section: usize) -> bool {
-        let below_is_unreplaceable = section == 0
-            || matches!(self.section_uniform[section - 1], Some(id) if !replaceable(id, 1));
-        if !below_is_unreplaceable {
-            return false;
-        }
-        for &(dx, dz) in &[(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let chunk = chunk_meta_index(dx, dz);
-            match metadata_uniform(self.bytes, self.metadata_offset, chunk, section) {
-                Some(id) if !replaceable(id, 1) => {}
-                _ => return false,
+    /// The uniform id of the center chunk's section, if that section is
+    /// uniform. Center section records always win over the metadata table.
+    fn section_uniform(&self, section: usize) -> Option<u16>;
+
+    /// A neighbour chunk's metadata uniform id for one section.
+    fn meta_uniform(&self, dx: i32, dz: i32, section: usize) -> Option<u16>;
+
+    /// The world position of a box cell.
+    fn position(&self, bx: i32, y: i32, bz: i32) -> [i32; 3];
+
+    /// Mirrors Go `fluidSourceIsFixedPoint` over the five-neighbour seal rule
+    /// (below plus the four horizontals, all unreplaceable for new level-1
+    /// water). Every neighbour read goes through `cell`, so a missing halo
+    /// propagates as `MissingHalo` and is never read as a seal.
+    fn source_is_fixed_point(&self, bx: i32, y: i32, bz: i32) -> Result<bool, KernelError> {
+        for &(dx, dy, dz) in &SEALED_OFFSETS {
+            if replaceable(self.cell(bx + dx, y + dy, bz + dz)?, 1) {
+                return Ok(false);
             }
         }
-        true
+        Ok(true)
     }
 
-    /// 追加一条产出坐标:世界 x/z 以 center_chunk × 16 为基数,y 以
-    /// `core.MinY` 为基数;负坐标按二进制补码编码为 u32 LE。
-    fn push_position(&self, output: &mut Vec<u8>, bx: i32, y: i32, bz: i32) {
-        let world_x = self.center_x * SECTION_SIZE as i32 + bx - 1;
-        let world_y = y + WORLD_MIN_Y;
-        let world_z = self.center_z * SECTION_SIZE as i32 + bz - 1;
-        let mut entry = [0_u8; RESCAN_POSITION_BYTES];
-        entry[0..4].copy_from_slice(&world_x.to_le_bytes());
-        entry[4..8].copy_from_slice(&world_y.to_le_bytes());
-        entry[8..12].copy_from_slice(&world_z.to_le_bytes());
-        output.extend_from_slice(&entry);
+    /// Mirrors Go `fluidSectionIsFixedPoint`: the section below plus the four
+    /// horizontal neighbour sections are all uniform and unreplaceable. The
+    /// below section is judged from the center chunk's own section records,
+    /// never from the metadata table, and section 0 is sealed below (Go's
+    /// out-of-range section rule). A missing or non-uniform neighbour record
+    /// is not a seal. The result shares the error channel with
+    /// `source_is_fixed_point` so the loop propagates a read failure instead
+    /// of inventing one.
+    fn section_is_fixed_point(&self, section: usize) -> Result<bool, KernelError> {
+        let below_is_unreplaceable = section == 0
+            || matches!(
+                self.section_uniform(section - 1),
+                Some(id) if !replaceable(id, 1)
+            );
+        if !below_is_unreplaceable {
+            return Ok(false);
+        }
+        for &(dx, dz) in &[(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            match self.meta_uniform(dx, dz, section) {
+                Some(id) if !replaceable(id, 1) => {}
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
     }
+}
+
+impl RescanSource for RescanView<'_> {
+    /// The parsed legacy box owns every column `0..=17` and the full height,
+    /// so this adapter keeps the historical reads (and the historical
+    /// `skirt_column` panic for a coordinate outside the box) unchanged.
+    fn cell(&self, bx: i32, y: i32, bz: i32) -> Result<u16, KernelError> {
+        Ok(self.block_at(bx, y, bz))
+    }
+
+    fn section_uniform(&self, section: usize) -> Option<u16> {
+        self.section_uniform.get(section).copied().flatten()
+    }
+
+    fn meta_uniform(&self, dx: i32, dz: i32, section: usize) -> Option<u16> {
+        metadata_uniform(
+            self.bytes,
+            self.metadata_offset,
+            chunk_meta_index(dx, dz),
+            section,
+        )
+    }
+
+    fn position(&self, bx: i32, y: i32, bz: i32) -> [i32; 3] {
+        box_to_world([self.center_x, self.center_z], bx, y, bz)
+    }
+}
+
+/// Shared rescan accounting loop, mirroring Go `enqueueChunkFluids`.
+///
+/// The budget is checked before every section, an entered section always
+/// completes (one call may overshoot by at most one section), the two uniform
+/// fast paths cost one each, and every other cell inside the span costs one in
+/// `y16` outer, `z` middle, `x` inner order. Positions are appended through
+/// `sink` in that same order. The returned triple is
+/// `(spent, done, next_section)`: on a budget break `next_section` is the
+/// section that was not entered, and on completion it is the section count.
+pub(crate) fn rescan_scan<S, F>(
+    source: &S,
+    span: (usize, usize, usize, usize),
+    start_section: usize,
+    budget: u32,
+    sink: &mut F,
+) -> Result<(u64, bool, usize), KernelError>
+where
+    S: RescanSource,
+    F: FnMut([i32; 3]),
+{
+    let (x0, x1, z0, z1) = span;
+    let mut spent: u64 = 0;
+    let budget = u64::from(budget);
+    let mut done = true;
+    let mut section = start_section;
+    while section < SECTIONS_PER_CHUNK {
+        // 区段循环前查额度:进入一个区段后必须整段完成,单次调用至多
+        // 超支一个区段(spent 在进入前 < budget,整段最多再计 4096)。
+        if spent >= budget {
+            done = false;
+            break;
+        }
+        if let Some(id) = source.section_uniform(section) {
+            // 档 1:均匀非流体区段整段计 1。
+            if !is_fluid(id) {
+                spent += 1;
+                section += 1;
+                continue;
+            }
+            // 档 2:均匀水源区段且区段级不动点成立,整段计 1;均匀
+            // 流动水区段落到档 3(Go 同样只在均匀 + 源 + 不动点时捷径)。
+            if id == WATER_SOURCE && source.section_is_fixed_point(section)? {
+                spent += 1;
+                section += 1;
+                continue;
+            }
+        }
+        // 档 3:逐格记账,扫描范围内每格计 1;循环序 y16 外、z 中、x 内,
+        // 与 Go 一致,产出坐标流因此确定。
+        for y16 in 0..SECTION_SIZE {
+            let y = (section * SECTION_SIZE + y16) as i32;
+            for bz in z0..=z1 {
+                for bx in x0..=x1 {
+                    spent += 1;
+                    let id = source.cell(bx as i32, y, bz as i32)?;
+                    if !is_fluid(id) {
+                        continue;
+                    }
+                    if id == WATER_SOURCE
+                        && source.source_is_fixed_point(bx as i32, y, bz as i32)?
+                    {
+                        continue;
+                    }
+                    sink(source.position(bx as i32, y, bz as i32));
+                }
+            }
+        }
+        section += 1;
+    }
+    // 扫描范围至多 18×18 列 × 全高 384,spent 不可能超出 u32。
+    debug_assert!(spent <= u32::MAX as u64);
+    Ok((spent, done, section))
 }
 
 /// 执行重扫扫描并编码输出(坐标流 + summary)。
@@ -354,54 +496,23 @@ impl<'a> RescanView<'a> {
 /// `spent` 重放记账可推出续扫区段(记账确定性)。
 pub(crate) fn fluid_rescan(view: &RescanView) -> Vec<u8> {
     let mut output = Vec::new();
-    let mut spent: u64 = 0;
-    let budget = u64::from(view.budget);
-    let mut done = true;
-    let mut section = view.start_section;
-    while section < SECTIONS_PER_CHUNK {
-        // 区段循环前查额度:进入一个区段后必须整段完成,单次调用至多
-        // 超支一个区段(spent 在进入前 < budget,整段最多再计 4096)。
-        if spent >= budget {
-            done = false;
-            break;
-        }
-        if let Some(id) = view.section_uniform[section] {
-            // 档 1:均匀非流体区段整段计 1。
-            if !is_fluid(id) {
-                spent += 1;
-                section += 1;
-                continue;
-            }
-            // 档 2:均匀水源区段且区段级不动点成立,整段计 1;均匀
-            // 流动水区段落到档 3(Go 同样只在均匀 + 源 + 不动点时捷径)。
-            if id == WATER_SOURCE && view.section_is_fixed_point(section) {
-                spent += 1;
-                section += 1;
-                continue;
-            }
-        }
-        // 档 3:逐格记账,扫描范围内每格计 1;循环序 y16 外、z 中、x 内,
-        // 与 Go 一致,产出坐标流因此确定。
-        for y16 in 0..SECTION_SIZE {
-            let y = (section * SECTION_SIZE + y16) as i32;
-            for bz in view.z0..=view.z1 {
-                for bx in view.x0..=view.x1 {
-                    spent += 1;
-                    let id = view.box_cell(bx as i32, y, bz as i32);
-                    if !is_fluid(id) {
-                        continue;
-                    }
-                    if id == WATER_SOURCE && view.source_is_fixed_point(bx as i32, y, bz as i32) {
-                        continue;
-                    }
-                    view.push_position(&mut output, bx as i32, y, bz as i32);
-                }
-            }
-        }
-        section += 1;
-    }
-    // 扫描范围至多 18×18 列 × 全高 384,spent 不可能超出 u32。
-    debug_assert!(spent <= u32::MAX as u64);
+    let mut push = |position: [i32; 3]| {
+        let mut entry = [0_u8; RESCAN_POSITION_BYTES];
+        entry[0..4].copy_from_slice(&position[0].to_le_bytes());
+        entry[4..8].copy_from_slice(&position[1].to_le_bytes());
+        entry[8..12].copy_from_slice(&position[2].to_le_bytes());
+        output.extend_from_slice(&entry);
+    };
+    let (spent, done, _) = rescan_scan(
+        view,
+        (view.x0, view.x1, view.z0, view.z1),
+        view.start_section,
+        view.budget,
+        &mut push,
+    )
+    .unwrap_or_else(|_| {
+        unreachable!("the parsed legacy view owns every coordinate the scan reads")
+    });
     let mut tail = [0_u8; RESCAN_SUMMARY_BYTES];
     tail[0..4].copy_from_slice(&(spent as u32).to_le_bytes());
     tail[4] = u8::from(done);

@@ -5,8 +5,7 @@ pub mod contracts;
 #[allow(dead_code)]
 pub mod collision;
 pub mod fluid_eval;
-#[allow(dead_code)]
-pub(crate) mod fluid_rescan;
+pub mod fluid_rescan;
 pub mod lod;
 #[allow(dead_code)]
 pub(crate) mod mesh;
