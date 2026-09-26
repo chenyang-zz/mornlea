@@ -33,6 +33,10 @@ const (
 	// minPacketFamilies is the reviewed packet family count: 23 client and 36
 	// server keys. The frame family sits beside them.
 	minPacketFamilies = 59
+	// closedKernelCaseTotal is the numerical kernel slice total the native
+	// closure node imports: zero until that node lands its families, then the
+	// exact reviewed case count it registers.
+	closedKernelCaseTotal = 0
 	// minProtocolFamilies is the reviewed protocol family count: 59 packet
 	// families plus the framing family.
 	minProtocolFamilies = 60
@@ -678,7 +682,7 @@ func TestProtocolCorpusNonProtocolEvidenceUnchanged(t *testing.T) {
 	defer assertTrackedCorpusUnchanged(t, root, before)
 	frozen := loadProtocolClosureInventory(t, root)
 
-	domainCases, agentCases, protocolCases, saveCases := 0, 0, 0, 0
+	domainCases, agentCases, protocolCases, saveCases, kernelCases := 0, 0, 0, 0, 0
 	for _, c := range frozen.Cases {
 		switch {
 		case strings.HasPrefix(c.Family, "domain."):
@@ -687,6 +691,8 @@ func TestProtocolCorpusNonProtocolEvidenceUnchanged(t *testing.T) {
 			agentCases++
 		case strings.HasPrefix(c.Family, protocolFamilyPrefix):
 			protocolCases++
+		case strings.HasPrefix(c.Family, "kernel."):
+			kernelCases++
 		case strings.HasPrefix(c.Family, "save."):
 			saveCases++
 			if c.Family != "save.region" && c.Family != "save.player" && c.Family != "save.world-metadata" && c.Family != "save.hostile" && c.Family != "save.passive" && c.Family != "save.chunk" && c.Family != "save.companion" {
@@ -698,6 +704,12 @@ func TestProtocolCorpusNonProtocolEvidenceUnchanged(t *testing.T) {
 	}
 	if domainCases != 534 || agentCases != 154 || protocolCases != 436 || saveCases != 269 {
 		t.Fatalf("corpus totals drifted: domain %d, agent %d, protocol %d, save %d", domainCases, agentCases, protocolCases, saveCases)
+	}
+	// The numerical kernel slice is owned by the native closure node: it grows
+	// from zero to its closed total there, so this gate only counts it today
+	// and the closure node pins the final total beside these four.
+	if kernelCases != closedKernelCaseTotal {
+		t.Fatalf("kernel corpus total drifted: %d, want %d", kernelCases, closedKernelCaseTotal)
 	}
 	if _, err := ReconcileWorking(root, frozen, families, live, BaselineConsumerRegistry(), BaselineNegativeCoverageExceptions()); err != nil {
 		t.Fatalf("frozen inventory no longer reconciles the non-protocol evidence: %v", err)

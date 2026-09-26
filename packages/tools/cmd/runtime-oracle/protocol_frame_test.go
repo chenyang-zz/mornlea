@@ -820,6 +820,30 @@ var corpusStorageCategories = map[string]bool{
 	"output_too_small": true,
 }
 
+// corpusKernelCategories is the frozen numerical-kernel vocabulary: the nine
+// engine ABI status names the native corpus normalizes rejections to, plus
+// the six pathfinder failure names the independent Go and Rust search
+// implementations share. It stays separate from the structural set because a
+// numerical rejection is an executed kernel observation rather than a
+// decoding failure.
+var corpusKernelCategories = map[string]bool{
+	"abi-version":       true,
+	"invalid-argument":  true,
+	"input":             true,
+	"scratch":           true,
+	"registry":          true,
+	"emission":          true,
+	"output-overflow":   true,
+	"queue-overflow":    true,
+	"panic":             true,
+	"invalid-grid":      true,
+	"invalid-revision":  true,
+	"scratch-too-small": true,
+	"unreachable":       true,
+	"budget-exceeded":   true,
+	"allocation":        true,
+}
+
 // TestCorpusOutcomeVocabularyMatchesExecutionContract pins every committed
 // corpus expectation to the outcome vocabulary the execution contract freezes.
 //
@@ -871,7 +895,8 @@ func TestCorpusOutcomeVocabularyMatchesExecutionContract(t *testing.T) {
 		}
 		if corpusStructuralCategories[outcome.Category] ||
 			corpusAdmissionCategories[outcome.Category] ||
-			corpusStorageCategories[outcome.Category] {
+			corpusStorageCategories[outcome.Category] ||
+			corpusKernelCategories[outcome.Category] {
 			continue
 		}
 		t.Fatalf("%s publishes rejection category %q, which is not in the frozen execution contract vocabulary", path, outcome.Category)
