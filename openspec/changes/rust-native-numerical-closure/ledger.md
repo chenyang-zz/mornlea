@@ -418,3 +418,26 @@
   - TDD RED: alias tests failed with the first metadata byte clobbered (`left: [0, 165, ...]` vs `right: [165, ...]`) before the fix; GREEN after.
 - Review: Task Reviewer subagent: spec compliant; no Critical/Important findings; four Minor canary-strength notes. Controller-applied polish (full-word fills, probe-prefix short destinations, 2-write eval case) verified by scoped re-review: all addressed, no new breakage. Deferred minor for the final whole-branch review: none from this node.
 - Rollback: Revert `58710c66`.
+
+## 2026-09-26 — Node 3.2 dispatch preflight
+
+- Frontier: 3.1 accepted and recorded by `fee8c06d`; 3.2 is next. Worktree clean at BASE `fee8c06d`; `tests/numerical_migration/collision.rs` holds only the 2.1 `parity_test`; oracle `kernel_collision_test.go` accepted at 2.1.
+- Preflight scan (packet `plans/02-adapters.md#node-3-2`, dispatch packet `worker-briefs.md` node 3.2, brief 5.2/adapter table, `tasks.md` node 3.2):
+  - 3.2 ↔ 3.3 share nothing yet (physics routes after 3.2 through its own hunk; both consume the accepted collision core). Serial `ffi.rs` order already frozen; no conflict.
+  - 3.2 ↔ 3.1: consumes the accepted metadata-clear order; this hunk has no metadata pointer. No conflict.
+  - Derived-artifact inventory: the collision family pins the header, `native_test.go`, `src/collision.rs`; none is edited here and new/edited files are unpinned, so the package-wide oracle run must stay fully green with no expected mismatch.
+- Ruling: the adapter routes to the shared `resolve_collision_parts` core, NOT the stricter typed `native::collision::resolve_collision` wrapper, preserving the legacy swept-prism admission exactly (same reason node 3.3 will cite). The `resolver` injection seam stays live so existing status-9 tests pass unmodified. Cost if wrong: duplicated numerical work per call until a later node re-owns the seam; recorded as plan-mandated debt.
+- Dispatch: implementer subagent for node 3.2 from BASE `fee8c06d`; brief `task-3.2-brief.md` in the session workspace, report `task-3.2-report.md` in the same workspace.
+
+## 2026-09-26 — Node 3.2 collision ABI adapter
+
+- Predecessor SHA: `fee8c06d`
+- Result SHA: `2832658c` (provider `a2ae1d70`, review fix `2832658c`; no manifest refresh — collision family pins only the untouched header/test/core files, and the package-wide oracle run stayed green)
+- Implementation summary:
+  - `src/ffi.rs` `collision_resolve_with` hunk: every admission line byte-identical (version, nulls, 16-byte preflights, ranges, input/output overlap, `collision_input_is_valid` + swept-prism coverage, `catch_collision`, single-copy publish). Only the `Ok(resolver(bytes))` call now decodes validated header fields and invokes shared `resolve_collision_parts`, packing the local `[u8; 16]` through the existing publish path. The `resolver` seam parameter stays invoked inside the panic boundary so injected-panic tests still prove status 9 with output untouched.
+  - `tests/numerical_migration/collision.rs`: `collision_abi_native_bits` calls the real exported symbol for floor/wall/unknown with full 16-byte vector parity (added in the fix round), 15-byte status-7 canary, and a corrupt-magic status-3 canary.
+- Verification:
+  - Baseline GREEN before the route edit (same core): migration collision 2/2 with identical bytes; post-edit GREEN with the same vectors.
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestCollision'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelCollision'`, `--lib collision` 8/8 (seam tests unmodified), clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~61s, no drift).
+- Review: Task Reviewer subagent: routing/admission/core-choice/seam correct; one Important finding (migration test asserted a semantic subset, not the brief's full 16-byte equality) fixed in `2832658c` by pinning all three vectors; scoped re-review confirmed ADDRESSED with no new breakage. One Minor deferred to the final whole-branch review: every ABI call runs both the legacy resolver path (discarded) and the parts core — deliberate plan-mandated seam-preserving debt until a later node re-owns the seam tests.
+- Rollback: Revert `2832658c`, `a2ae1d70` in that order.
