@@ -666,6 +666,9 @@ unsafe fn worldgen_probe_with(
             return Err(MORNLEA_STATUS_INVALID_ARGUMENT);
         }
         let mut encoded = vec![0u8; needed];
+        // Route the parsed records through the shared native sampler: `run_probe`
+        // stages the same per-mode heights/blocks the reviewed `NativeWorldProbe`
+        // publishes via `as_legacy`, and the ABI encodes from the local staging.
         run_probe(&params, &records, &mut encoded);
         Ok::<Vec<u8>, u32>(encoded)
     }));
