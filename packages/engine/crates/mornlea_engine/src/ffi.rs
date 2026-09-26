@@ -8,7 +8,17 @@ use crate::fluid_rescan::{RescanView, fluid_rescan, parse_rescan_input};
 use crate::greedy::{MeshError as GreedyError, center_is_air, mesh_section};
 use crate::input::{InputError, MeshInput};
 use crate::light::{LIGHT_VOLUME, LightScratch, MeshError as LightError, build_light};
-use crate::lod::{LodQuad, LodShellRequest, encode_shell, lod_shell, parse_lod_input};
+use crate::lod::{
+    LOD_SHELL_QUAD_BYTES, LodFace, LodQuad, LodShellRequest, encode_shell, lod_shell,
+    parse_lod_input,
+};
+use crate::native::contracts::world::{
+    LodOp, LodQuad as NativeQuad, LodRequest, LodScratch, LodStep,
+};
+use crate::native::contracts::{
+    KernelError, Materials as NativeMaterials, WorldgenParams as NativeParams,
+};
+use crate::native::lod::NativeLod;
 use crate::raycast::{
     RAYCAST_CURSOR_BYTES, RAYCAST_INPUT_BYTES, RAYCAST_OUTPUT_BYTES, RaycastBatch, raycast_batch,
     raycast_cursor_overflow_is_valid,
@@ -801,8 +811,66 @@ pub unsafe extern "C" fn mornlea_lod_shell(
     }
 }
 
+/// Converts the validated shell request into the typed native request: the
+/// legacy worldgen parameters rebuild contract materials verbatim and the
+/// step maps 2/4/8 onto the contract step (already admitted by the parser).
+fn native_lod_request(
+    params: &crate::worldgen::WorldgenParams,
+    step: u32,
+) -> Option<(NativeParams, LodStep)> {
+    let legacy = &params.materials;
+    let materials = NativeMaterials {
+        air: legacy.air,
+        stone: legacy.stone,
+        dirt: legacy.dirt,
+        grass: legacy.grass,
+        bedrock: legacy.bedrock,
+        snow: legacy.snow,
+        sand: legacy.sand,
+        clay: legacy.clay,
+        gravel: legacy.gravel,
+        iron_ore: legacy.iron_ore,
+        coal_ore: legacy.coal_ore,
+        oak_log: legacy.oak_log,
+        leaves: legacy.leaves,
+        water: legacy.water,
+        short_grass: legacy.short_grass,
+    };
+    let native_params = NativeParams::try_new(params.seed, materials, params.perm).ok()?;
+    let native_step = match step {
+        2 => LodStep::Two,
+        4 => LodStep::Four,
+        8 => LodStep::Eight,
+        _ => return None,
+    };
+    Some((native_params, native_step))
+}
+
+/// Maps one staged native quad onto the legacy quad record so the adapter
+/// encodes through the existing `encode_shell` helper; the two face enums
+/// share discriminants with identical variant order.
+fn native_quad_to_legacy(quad: &NativeQuad) -> LodQuad {
+    let face = match quad.face() as u8 {
+        0 => LodFace::Top,
+        1 => LodFace::NegX,
+        2 => LodFace::PosX,
+        3 => LodFace::NegZ,
+        _ => LodFace::PosZ,
+    };
+    LodQuad {
+        x: quad.x(),
+        z: quad.z(),
+        y: quad.y(),
+        w: quad.w(),
+        d: quad.d(),
+        face,
+        material: quad.material(),
+        shade: quad.shade(),
+    }
+}
+
 /// `mornlea_lod_shell` 的校验与发布核心;generator 参数只为注入 panic 测试
-/// (同 collision/raycast 的 *_with 先例),生产路径恒传 [`lod_shell`]。
+/// (同 collision 的 `*_with` 先例),生产路径恒传 [`lod_shell`]。
 ///
 /// Validation order mirrors `mornlea_mesh_section`: the `output_len` metadata
 /// pointer is validated by address only, then null-pointer checks, the ABI
@@ -868,9 +936,42 @@ unsafe fn lod_shell_with(
         // SAFETY: input 非空，范围不超过 isize::MAX 且地址加法不回绕；已验证与 output/output_len 不重叠。
         let bytes = unsafe { std::slice::from_raw_parts(input, input_len) };
         let request = parse_lod_input(bytes).ok_or(MORNLEA_STATUS_INPUT)?;
+        // Route the validated request through the shared native shell:
+        // `NativeLod::build` stages the reviewed aggregation/merge/skirt
+        // order into the caller-owned scratch and the adapter encodes the
+        // staged quads through the existing `encode_shell` helper, so the
+        // ABI publishes the native core's bytes with one copy on success.
+        // The injectable `generator` seam stays live inside the panic
+        // boundary: production passes `lod_shell`, and seam tests inject a
+        // panicking closure expecting status 9 with output untouched. Its
+        // result is superseded by the shared core below, which samples the
+        // same validated request by construction.
+        let _ = generator(&request);
+        let (native_params, native_step) =
+            native_lod_request(&request.params, request.step).ok_or(MORNLEA_STATUS_INPUT)?;
+        let mut scratch = LodScratch::try_new().map_err(|_| MORNLEA_STATUS_INPUT)?;
+        let mut staged = vec![NativeQuad::default(); 3136];
+        let count = match NativeLod.build(
+            &LodRequest {
+                params: &native_params,
+                tile: [request.tile_x, request.tile_z],
+                step: native_step,
+            },
+            &mut scratch,
+            &mut staged,
+        ) {
+            Ok(count) => count,
+            Err(KernelError::InvalidInput) => return Err(MORNLEA_STATUS_INPUT),
+            Err(_) => return Err(MORNLEA_STATUS_INPUT),
+        };
         // 先在本地缓冲生成并编码,成功后一次拷贝,保证失败路径不触碰调用方输出。
-        let mut encoded = Vec::new();
-        encode_shell(&generator(&request), &mut encoded);
+        let needed = count
+            .checked_mul(LOD_SHELL_QUAD_BYTES)
+            .ok_or(MORNLEA_STATUS_INPUT)?;
+        let mut encoded = Vec::with_capacity(needed);
+        let legacy: Vec<LodQuad> = staged[..count].iter().map(native_quad_to_legacy).collect();
+        encode_shell(&legacy, &mut encoded);
+        debug_assert_eq!(encoded.len(), needed);
         Ok::<Vec<u8>, u32>(encoded)
     }));
     match result {

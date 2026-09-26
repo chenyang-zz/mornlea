@@ -77,15 +77,21 @@ fn encode_shell(quads: &[LodQuad]) -> Vec<u8> {
     out
 }
 
-/// FNV-1a 64-bit digest over the encoded shell, matching the Go oracle's
-/// `hash/fnv` New64a over the same bytes.
-fn shell_digest(quads: &[LodQuad]) -> u64 {
+/// FNV-1a 64-bit digest over raw bytes, matching the Go oracle's `hash/fnv`
+/// New64a over the same stream.
+fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in encode_shell(quads) {
-        hash ^= u64::from(byte);
+    for byte in bytes {
+        hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+/// FNV-1a 64-bit digest over the encoded shell, matching the Go oracle's
+/// `hash/fnv` New64a over the same bytes.
+fn shell_digest(quads: &[LodQuad]) -> u64 {
+    fnv1a64(&encode_shell(quads))
 }
 
 fn build(gated_fluid: bool, tile: [i32; 2], step: LodStep) -> Vec<LodQuad> {
@@ -296,5 +302,152 @@ fn required_counts_match_go_abi_observations() {
             "{}",
             case.name
         );
+    }
+}
+
+unsafe extern "C" {
+    fn mornlea_lod_shell(
+        abi_version: u32,
+        input: *const u8,
+        input_len: usize,
+        output: *mut u8,
+        output_capacity: usize,
+        output_len: *mut usize,
+    ) -> u32;
+    fn mornlea_engine_abi_version() -> u32;
+}
+
+const ABI_CANARY: u8 = 0xA5;
+
+/// ABI status codes mirrored from the engine exports: only success and
+/// output-overflow appear in this adapter test.
+const LOD_STATUS_OK: u32 = 0;
+const LOD_STATUS_OUTPUT_OVERFLOW: u32 = 7;
+
+/// LOD shell ABI framing: the shared 566-byte `MGW1` worldgen header plus
+/// tile_x/tile_z i32, columns u32 (fixed 64) and step u32.
+const LOD_ABI_HEADER_BYTES: usize = 566;
+const LOD_ABI_INPUT_BYTES: usize = 582;
+const LOD_ABI_TILE_COLUMNS: u32 = 64;
+const LOD_ABI_QUAD_BYTES: usize = 20;
+
+/// Builds the raw 582-byte `MGW1` LOD shell request: layout 3, material
+/// table ids 1..=15 in wire order, identity permutation, then the tile
+/// coordinates with columns fixed at 64 and the requested step.
+fn lod_abi_input(tile: [i32; 2], step: u32) -> Vec<u8> {
+    let mut bytes = vec![0u8; LOD_ABI_INPUT_BYTES];
+    bytes[0..4].copy_from_slice(b"MGW1");
+    bytes[4..8].copy_from_slice(&3u32.to_le_bytes());
+    bytes[8..16].copy_from_slice(&0i64.to_le_bytes());
+    bytes[16..20].copy_from_slice(&(-64i32).to_le_bytes());
+    bytes[20..24].copy_from_slice(&320i32.to_le_bytes());
+    for (index, id) in (1u16..=15).enumerate() {
+        bytes[24 + index * 2..26 + index * 2].copy_from_slice(&id.to_le_bytes());
+    }
+    for (index, entry) in bytes[54..LOD_ABI_HEADER_BYTES].iter_mut().enumerate() {
+        *entry = (index & 255) as u8;
+    }
+    bytes[LOD_ABI_HEADER_BYTES..LOD_ABI_HEADER_BYTES + 4].copy_from_slice(&tile[0].to_le_bytes());
+    bytes[LOD_ABI_HEADER_BYTES + 4..LOD_ABI_HEADER_BYTES + 8]
+        .copy_from_slice(&tile[1].to_le_bytes());
+    bytes[LOD_ABI_HEADER_BYTES + 8..LOD_ABI_HEADER_BYTES + 12]
+        .copy_from_slice(&LOD_ABI_TILE_COLUMNS.to_le_bytes());
+    bytes[LOD_ABI_HEADER_BYTES + 12..LOD_ABI_HEADER_BYTES + 16]
+        .copy_from_slice(&step.to_le_bytes());
+    bytes
+}
+
+/// Calls the real exported `mornlea_lod_shell` symbol with a canary-filled
+/// destination, returning the status, the metadata word, and the destination
+/// bytes. The caller keeps no aliasing: input, output and metadata are
+/// disjoint by construction.
+fn call_lod_abi(input: &[u8], output_len: usize) -> (u32, usize, Vec<u8>) {
+    let version = unsafe { mornlea_engine_abi_version() };
+    let mut output = vec![ABI_CANARY; output_len];
+    let mut written = usize::MAX;
+    let status = unsafe {
+        mornlea_lod_shell(
+            version,
+            input.as_ptr(),
+            input.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut written,
+        )
+    };
+    (status, written, output)
+}
+
+struct AbiCase {
+    name: &'static str,
+    tile: [i32; 2],
+    step: LodStep,
+    raw_step: u32,
+    want_count: usize,
+    want_digest: u64,
+}
+
+fn abi_cases() -> Vec<AbiCase> {
+    vec![
+        AbiCase {
+            name: "step two at tile (0,0)",
+            tile: [0, 0],
+            step: LodStep::Two,
+            raw_step: 2,
+            want_count: 1284,
+            want_digest: 0xd849_30ff_4cee_9f89,
+        },
+        AbiCase {
+            name: "step four at tile (-3,2)",
+            tile: [-3, 2],
+            step: LodStep::Four,
+            raw_step: 4,
+            want_count: 112,
+            want_digest: 0xaddb_a620_c8cb_5bd8,
+        },
+        AbiCase {
+            name: "step eight at tile (7,-5)",
+            tile: [7, -5],
+            step: LodStep::Eight,
+            raw_step: 8,
+            want_count: 82,
+            want_digest: 0x2371_4f96_9c54_b4f7,
+        },
+    ]
+}
+
+#[test]
+fn lod_abi_exact_needed() {
+    // Each adapter case pins the full ordered 20-byte stream through the real
+    // exported symbol: byte-identical to the typed provider's encoded quads,
+    // with the frozen count and stream digest. The exact-needed retry per
+    // step probes `needed - 1` bytes first (status 7, canary untouched,
+    // metadata exactly `needed`) and retries with exact capacity.
+    for case in abi_cases() {
+        let input = lod_abi_input(case.tile, case.raw_step);
+        let expected = encode_shell(&build(false, case.tile, case.step));
+        let needed = case.want_count * LOD_ABI_QUAD_BYTES;
+        assert_eq!(needed, expected.len(), "{} staged bytes", case.name);
+        assert_eq!(fnv1a64(&expected), case.want_digest, "{}", case.name);
+
+        let (status, written, output) = call_lod_abi(&input, needed);
+        assert_eq!(status, LOD_STATUS_OK, "{} status", case.name);
+        assert_eq!(written, needed, "{} metadata", case.name);
+        assert_eq!(output, expected, "{} full ordered quad bytes", case.name);
+
+        let short_before = vec![ABI_CANARY; needed - 1];
+        let (status, written, short) = call_lod_abi(&input, needed - 1);
+        assert_eq!(
+            status, LOD_STATUS_OUTPUT_OVERFLOW,
+            "{} short status",
+            case.name
+        );
+        assert_eq!(written, needed, "{} short metadata", case.name);
+        assert_eq!(short, short_before, "{} short payload untouched", case.name);
+
+        let (status, written, retry) = call_lod_abi(&input, needed);
+        assert_eq!(status, LOD_STATUS_OK, "{} retry status", case.name);
+        assert_eq!(written, needed, "{} retry metadata", case.name);
+        assert_eq!(retry, expected, "{} retry bytes", case.name);
     }
 }
