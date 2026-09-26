@@ -789,3 +789,130 @@
   plus the needed-bytes linkage pin.
 - Rollback: Revert `64938c0c`, `0e54523a`, `9d709c51` in that order (corpus
   unit only); reconciliation `6ad64596` reverts packet text only.
+
+## 2026-09-27 — Node 4.1 dispatch preflight
+
+- Frontier: 3.12 accepted and recorded by `ad6d61e1`; 4.1 is next, then 4.2.
+  Worktree clean at BASE `ad6d61e1`.
+- Preflight scan (packet `plans/03-closure.md#node-4-1`, dispatch packet
+  `worker-briefs.md` 4.1, delta spec 5 requirements / 9 scenarios):
+  - 4.1 ↔ 3.12: consumes the accepted corpus as evidence; edits ledger only
+    (+ scoped guide/artifact iff a verified discrepancy requires it). No
+    conflict; no concurrent editors (strict serial).
+  - Known open item: `packages/audit` full-green is a 4.1 validation gate,
+    but `TestEnglishCommentMigration` (drift in files with zero 3.12 diff)
+    and `TestMornleaCurrentIdentity` (reproduced on pristine `6ad64596`)
+    fail from pre-existing branch state. 4.1 cannot close on a failing gate;
+    the fix scope (ledger-only vs reopened owning node) needs a ruling AFTER
+    evidence. No defect found in the 4.1 packet itself.
+  - Self-consistency: 9 scenarios × ≥1 executed case is satisfiable from the
+    40-case corpus (reviewer verified per-route ok/error/boundary); hash audit
+    is mechanical; architecture-skill default is `no change` with reason.
+- Readiness review: evidence-gathering is dispatchable from packet + named
+  contracts without controller transcript — yes; traceable to node + scenario
+  rows — yes; producer/consumer agreement already frozen by 3.12 — yes;
+  acyclic with tasks.md sole status — yes; single evidence author (this
+  dispatch), controller owns rulings + ledger write — yes; real-producer
+  evidence required, doubles excluded — per packet; compat/input/resource
+  settled by 3.12 acceptance — yes; negatives on real boundaries — yes;
+  rejectable without touching accepted nodes (rollback is ledger-only) — yes;
+  tree clean, no external effects (read-only dispatch, no commits) — yes.
+- Ruling: 4.1 runs as controller-directed evidence gathering — the worker
+  drafts the table/audit/hash diagnosis into the report file and makes NO
+  repo edits (ledger stays controller-owned, consistent with 3.x practice
+  where workers never touched it). Model `sonnet` (multi-file analysis +
+  failure diagnosis). Cost if wrong: controller re-derives from the report;
+  no tree risk since the dispatch is read-only.
+- Dispatch: evidence subagent for node 4.1 from BASE `ad6d61e1`; brief
+  `/tmp/mornlea-rn-closure-3.12/task-4.1-brief.md`, report
+  `/tmp/mornlea-rn-closure-3.12/task-4.1-report.md`.
+
+## 2026-09-27 — Node 4.1 evidence rulings + audit-fix dispatch
+
+- Evidence accepted (read-only, no commits): 10-row scenario table over all 40
+  executed cases with per-case expected/input SHAs; 94/94 manifest hashes
+  match; 3.12-diff comments English with zero task IDs (4 CJK hits are
+  byte-contract string literals matching `native.go` bridge panic texts, no
+  action); all three guides accurate; `git diff --check` 0;
+  `openspec validate --type change --strict` 0.
+- Ruling C1 (count): keep 10 rows — the delta spec is the authority and the
+  brief's "9" was the controller's miscount (plain correction, no artifact
+  change; cost if wrong: none, rows are a superset ledger mapping).
+- Ruling C2 (scratch reuse): sufficient — provider-level `warm_scratch_reuse`
+  (`native_contract/lod.rs:442`, accepted 2.7) pins same-object reuse, corpus
+  short→retry pairs prove failure atomicity plus retry-stream identity.
+  Cost if wrong: a same-object corruption class untested at corpus level;
+  mitigated by the provider pin running on every gate.
+- Ruling C3 (aliased metadata): sufficient — scenario maps to 3.1's executed
+  adapter matrices (`ffi.rs` metadata pointer/overlap atomicity tests,
+  accepted) plus the corpus untouched-canary rule on all error/boundary
+  cases; no frozen `metadata-alias-*` case required. Cost if wrong: alias
+  admission proven at adapter, not corpus; the admission code path is
+  identical (`ffi.rs` preflight).
+- Ruling C4 (audit gates): fix inside 4.1's verified-discrepancy allowance —
+  test/baseline artifacts only, zero production behavior change:
+  (A) translate the 2 `lod.rs` non-English comments to English, then ratchet
+  via `MORNLEA_UPDATE_ENGLISH_COMMENT_BASELINE=1` (ratchet refuses increases,
+  hence translate-first); (B) replace cgo-constant value-uses in oracle
+  `main` test files (`kernel_test.go`, `kernel_mesh_view_test.go`) with the
+  existing `EngineABIVersion()` runtime accessor plus a pinned non-cgo status
+  mapping; production bridge untouched. Exact scope in
+  `/tmp/mornlea-rn-closure-3.12/task-4.1-fix-brief.md`; anything beyond its
+  four files escalates. Cost if wrong: audit files churn or a behavior
+  change smuggled into test edits; mitigated by scoped review + oracle
+  focused suites proving unchanged observations.
+- Architecture skill: no change (worker triage accepted — FakeImportC note
+  is gate-harness-local, short→retry is change-local).
+- Dispatch: fix implementer from BASE `ad6d61e1` (dirty ledger preserved,
+  read-only for worker); fix brief above; same report file appended.
+
+## 2026-09-27 — Node 4.1 reconciled and accepted
+
+Common columns: Rust consumer `CorpusConsumer::Engine`
+(`packages/engine/tests/runtime_corpus.rs`); Go producer
+`nativeabi/kernel_oracle_test.go` + oracle `kernel_test.go` (+
+`packages/shared/pathfind/` for pathfind); ABI v11 everywhere; rollback unit
+is corpus-only (assets + manifest entries + registry/loader/guide edits;
+providers/adapters stay). Implementation SHAs: gates `9d709c51`, collision
+`0e54523a`, closure `64938c0c`, audit fix `9c978315`. Manifest
+`2d8566f7…4885`, `source_revision f75dfcf4` pinned. 94/94 source+case hashes
+match the tree, 0 mismatches.
+
+| Delta-spec scenario | Executed case IDs (count) | Category | ABI v11 verdict |
+|---|---|---|---|
+| Valid request | 11 route success cases + 9 boundary-success (`ulp-sweep-accept`, `record-65`, `query-64`, `count-4097`, `signed-extreme`, `exact-needed-retry`, `budget-one-retry`, `goal-pop-4096`, `grid-valid`) — 20 `ok` | `ok` | status 0, whole-arena + used-prefix digests agree Go-vs-Rust |
+| Malformed request | 10 legacy errors + `grid-invalid` | `input`/`invalid-grid` | failure statuses, `0xa5` canaries byte-identical post-call |
+| Capacity boundary | `short-output-15`, `short-by-one`, `exact-needed-short`, `model-plant-late-overflow`, `budget-one-short` | `output-overflow` | status 7 + exact needed bytes, payload/canary unchanged |
+| Scratch reuse after failure | `exact-needed-short`→`retry`, `budget-one-short`→`retry` pairs + provider `warm_scratch_reuse` (`native_contract/lod.rs:442`) | `output-overflow`→`ok` | untouched-on-short, retry stream identical (Ruling C2) |
+| Equal-cost tie determinism | `pathfind/1/corridor` | `ok` | ordered waypoints + sorted revisions agree |
+| Expansion limit 4096/4097 | `goal-pop-4096` / `goal-pop-4097` | `ok`/`budget-exceeded` | success vs exhaustion, no partial path |
+| Valid ABI matches frozen compat | all 20 `ok` cases | `ok` | bytes match frozen `expected.json` both sides |
+| Rejected aliased metadata | 3.1 adapter matrices (`ffi.rs` metadata pointer/overlap atomicity) + corpus canary rule; no frozen alias case by design | n/a (adapter) | rejection pre-publish, metadata cleared only after preflight (Ruling C3) |
+| Family not executed → gate fails | all 11 families nonempty (40 cases); inventory zero-case + reconcile gates | n/a (gate) | exact eleven registry entries; unknown/unexecuted fails |
+| Mutated expected fails | `floor-wall` float-bit flip, `corridor` waypoint move; permanent `TestKernelOracleMutationFailsComparison` | n/a (gate) | comparison fails on one-scalar mutation |
+
+- Guides: oracle, nativeabi and engine-test guides verified accurate; no
+  scoped guide edit needed. Engine guide boundary unchanged. No edited or
+  generated file outside the reviewed inventory.
+- Audit-gate repair (in-scope verified discrepancy, `9c978315`): 5 new
+  `lod.rs` Han comment lines translated (net +2 over baseline removed by
+  ratchet: 193→190); baseline ratcheted via env var (totals 38566→38478);
+  cgo-constant value-uses replaced with `EngineABIVersion()` + literal 0–9
+  table pinned by `TestKernelStatusTableMatchesBridge`; manifest pin-only
+  refresh (`kernel_test.go` → `fd03269d…aced9`, `lod.rs` → `a804a11e…6f7`).
+  Scoped re-review: F1/F2/F3 ADDRESSED, no new breakage.
+- Deferred minors (→ final whole-branch review): two 3.12 items (LOD
+  `needed_bytes` linkage; `kernelPanicStatus` 0–9 completeness) plus
+  `Task 4.1: minor (deferred): pre-existing '任务 2.1' identifier in
+  lod.rs:1 module doc predates this change; remove on next substantive
+  lod.rs edit`.
+- Architecture skill: no change (FakeImportC note is gate-harness-local;
+  short→retry is change-local; nothing cross-task reusable).
+- Validation: `git diff --check` 0; `go test ./packages/audit -count=1`
+  GREEN (full, ~105s); `openspec validate rust-native-numerical-closure
+  --type change --strict --no-interactive` 0 (`Change is valid`).
+- Dependent F1 input: 40 executed cases + 94/94 hash reconciliation + green
+  audit feed the separate complete-F1 zero-gap acceptance; F2 unstarted,
+  default runtime unchanged.
+- Rollback: this ledger/status entry only (`docs(openspec)` commit below);
+  fix commit `9c978315` reverts independently without touching 3.12.
