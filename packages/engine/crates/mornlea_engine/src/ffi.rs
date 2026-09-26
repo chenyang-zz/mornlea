@@ -739,6 +739,9 @@ unsafe fn tree_blocks_with(
         // SAFETY: input 非空，范围不超过 isize::MAX，地址加法不回绕且不与 output 重叠。
         let bytes = unsafe { std::slice::from_raw_parts(input, input_len) };
         let request = parse_tree_blocks_input(bytes).ok_or(MORNLEA_STATUS_INPUT)?;
+        // Route the parsed request through the shared native tree geometry:
+        // `tree_blocks` stages the same visitor the reviewed `NativeTree`
+        // publishes, and the ABI encodes from the local staging.
         let records = tree_blocks(&request).ok_or(MORNLEA_STATUS_OUTPUT_OVERFLOW)?;
         let needed = TREE_BLOCKS_COUNT_BYTES + records.len() * TREE_BLOCKS_RECORD_BYTES;
         // 调用方按静态上界预分配;几何越过上界即契约违约,与容量不足同一条
