@@ -91,14 +91,17 @@ fn generate(params: &WorldgenParams, chunk: [i32; 2]) -> Vec<u16> {
     dst
 }
 
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
 /// FNV-1a 64-bit digest over the little-endian dense cells, matching the Go
 /// oracle's `hash/fnv` New64a over the same 196608-byte buffer.
 fn dense_digest(cells: &[u16]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash: u64 = FNV_OFFSET_BASIS;
     for cell in cells {
         for byte in cell.to_le_bytes() {
             hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            hash = hash.wrapping_mul(FNV_PRIME);
         }
     }
     hash
@@ -207,12 +210,13 @@ fn chunk_abi_input(params: &WorldgenParams, chunk: [i32; 2]) -> Vec<u8> {
 }
 
 /// FNV-1a 64-bit digest over the raw 196608-byte little-endian output,
-/// matching the Go oracle's digest over the same ABI buffer.
+/// matching the Go oracle's digest over the same ABI buffer; shares the
+/// offset basis and prime with `dense_digest` above.
 fn abi_bytes_digest(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash: u64 = FNV_OFFSET_BASIS;
     for byte in bytes {
         hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        hash = hash.wrapping_mul(FNV_PRIME);
     }
     hash
 }
@@ -258,7 +262,7 @@ fn worldgen_chunk_abi_bytes() {
     let expected = generate(&params, [0, 0]);
     let cells = abi_bytes_cells(&output);
     assert_eq!(cells, expected, "seed 0 chunk (0,0) full cell parity");
-    for index in (0..8).chain(49152..49160) {
+    for index in (0..8).chain(CHUNK_CELLS / 2..CHUNK_CELLS / 2 + 8) {
         assert_eq!(
             cells[index], expected[index],
             "seed 0 chunk (0,0) cell {index}"
