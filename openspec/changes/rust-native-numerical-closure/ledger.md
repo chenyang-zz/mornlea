@@ -391,3 +391,30 @@
 - Review: Task Reviewer subagent: spec compliant, no read-only or contract-file touch, no scope-creeping extras; two Important findings (stale `scratch_cells` paragraph describing a nonexistent debug-rendering mechanism; `SearchSpace` doc claiming cross-call reuse while `find_path` allocates fresh per call) fixed docs-only in `ba918521` with no logic change; scoped re-review confirmed comments-only (8 insertions, 11 deletions) and marked both ADDRESSED with no new breakage. Four minors deferred to the final whole-branch review: generation/reset/touch machinery is dead weight given fresh per-call allocation; the retained-result reuse check clones waypoints instead of re-reading the retained result; `ScratchTooSmall` has no migration-test fixture; flat/gap use unchecked horizontal arithmetic while jump/fall use checked vertical arithmetic.
 - Frozen-gap observations (report only, no contract edits): `PathResult::revisions()` carries only `[[i32; 2]]` chunk coordinates so revision numbers do not round-trip; `PathScratch` carries only `cells: usize` so working state lives in per-call function-local buffers sized by the grid cell count with trivially holding generation-reset semantics and no warm heap reuse; `PathGrid::try_new` size multiply stays unchecked per the 2.12 ruling with the search using checked arithmetic for its own counts. Search fixtures avoid the ruled Go/Rust int32-origin divergence edge.
 - Rollback: Revert `ba918521`, `0b3bbd53` in that order.
+
+## 2026-09-26 — Node 3.1 dispatch preflight
+
+- Frontier: 2.1–2.13 accepted; 3.1 is the first serial `ffi.rs` node. Worktree clean at BASE `57e8cc71`; `tests/native_contract/publication.rs` is a one-line registered stub; no `ffi.rs` work in flight.
+- Preflight scan (packet `plans/02-adapters.md#node-3-1`, dispatch packet `worker-briefs.md` node 3.1, brief 5.1 publication correction, `tasks.md` node 3.1):
+  - 3.1 ↔ 3.2–3.11 share `src/ffi.rs`: 3.1 lands first and owns only the metadata-clear order in the four exports plus its unit tests; adapters consume the accepted order. Serial order already frozen; no conflict.
+  - 3.1 ↔ 2.x providers: providers read-only here; no numerical core moves. No conflict.
+  - Derived-artifact inventory: no kernel family pins `src/ffi.rs` (only the header, `native_test.go`, and per-family algorithm files are pinned), so NO manifest refresh belongs to this node; the package-wide oracle run must stay fully green with no expected mismatch.
+- Ruling: the ABI-version handshake moves after the null-pointer checks but before the clear (previously the clear came first). A wrong version means the call never belonged to this engine, so no caller word may be touched; pre-existing tests asserting `output_len == 0` on pre-clear rejections are corrected to `usize::MAX` unchanged. Cost if wrong: the Go bridge reads the count only on success/overflow, so no caller-visible change; the final whole-branch review re-checks.
+- Dispatch: three implementer subagent attempts returned partial/uncommitted work (two empty, one orphan implementation with tests but no fix); the controller adopted the orphan diff as the starting point per the handover rule and finished the node directly. Report `task-3.1-report.md` in the session workspace.
+
+## 2026-09-26 — Node 3.1 metadata alias preflight and atomic publication
+
+- Predecessor SHA: `57e8cc71`
+- Result SHA: `58710c66` (single commit; no manifest refresh — `src/ffi.rs` unpinned, package-wide oracle green)
+- Implementation summary:
+  - `src/ffi.rs`: each `output_len.write(0)` in `mornlea_mesh_section`, `lod_shell_with`, `fluid_eval_batch_with`, `fluid_rescan_with` moved to after the complete pointer/range/overlap preflight (order: pointer self-check, null checks, version handshake, clear, all range+overlap checks, core). No status, seam, unwind, or core change; LOD/rescan exact-needed overflow writes kept.
+  - New `ffi.rs` unit groups `metadata_alias_mesh` (input/output/scratch alias + non-aliased clear), `metadata_alias_lod`/`_fluid_eval`/`_fluid_rescan` (input/output alias + non-aliased clear + exact-needed probes): full-word canary arenas asserted equal to pre-call clones; non-aliased metadata clears to zero.
+  - `tests/native_contract/publication.rs`: four typed `OutputTooSmall` atomicity tests (mesh/LOD pre-filled with the known-good probe prefix; eval 2-write/1-slot with surviving-slot check; rescan short-destination check).
+  - Corrected 17 pre-existing stale assertions encoding the old early-clear behavior (`output_len == 0` → `usize::MAX` on pre-clear rejections; aliased words → full-arena before-image equality); post-clear rejections keep `== 0`.
+- Verification:
+  - `native_contract --test ... publication` 5 passed; `--lib` 274 passed; full `native_contract` 80 passed; `numerical_migration` 36 passed.
+  - clippy `-D warnings` clean; `cargo fmt --all --check` clean; `gofmt -l ./packages` empty; `git diff --check` clean.
+  - `make rust` ok; `go test ./packages/shared/nativeabi -run 'Test.*(FailureAtomicity|InvalidArguments|InvalidBuffers)' -count=1` passed; `go test ./packages/shared/nativeabi -count=1` passed; `go test ./packages/tools/cmd/runtime-oracle -count=1` fully green (~60s, no drift).
+  - TDD RED: alias tests failed with the first metadata byte clobbered (`left: [0, 165, ...]` vs `right: [165, ...]`) before the fix; GREEN after.
+- Review: Task Reviewer subagent: spec compliant; no Critical/Important findings; four Minor canary-strength notes. Controller-applied polish (full-word fills, probe-prefix short destinations, 2-write eval case) verified by scoped re-review: all addressed, no new breakage. Deferred minor for the final whole-branch review: none from this node.
+- Rollback: Revert `58710c66`.
