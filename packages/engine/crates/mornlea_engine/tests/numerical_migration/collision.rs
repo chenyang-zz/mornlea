@@ -152,6 +152,14 @@ fn collision_abi_native_bits() {
     floor.set_full_cube([0, 0, 0]);
     let (status, output) = call_abi(&floor.bytes, OUTPUT_BYTES);
     assert_eq!(status, 0, "floor case status");
+    assert_eq!(
+        output,
+        vec![
+            0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x02, 0x01,
+            0x00, 0x00
+        ],
+        "floor full 16-byte parity"
+    );
     assert_eq!(read_f32(&output, 4).to_bits(), 1.0_f32.to_bits());
     assert_eq!(output[12] & 0b010, 0b010, "floor clips the Y axis");
     assert_eq!(output[13], 1, "floor ends on the ground");
@@ -171,6 +179,14 @@ fn collision_abi_native_bits() {
     wall.set_full_cube([1, 1, 0]);
     let (status, output) = call_abi(&wall.bytes, OUTPUT_BYTES);
     assert_eq!(status, 0, "wall case status");
+    assert_eq!(
+        output,
+        vec![
+            0x33, 0x33, 0x33, 0x3f, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x01, 0x01,
+            0x00, 0x00
+        ],
+        "wall full 16-byte parity"
+    );
     assert_eq!(output[12] & 0b001, 0b001, "wall clips the X axis");
     assert_eq!(output[15], 0, "wall sees no unknown cell");
     println!("wall bytes: {output:02x?}");
@@ -188,6 +204,14 @@ fn collision_abi_native_bits() {
     unknown.set_unknown([1, 1, 0]);
     let (status, output) = call_abi(&unknown.bytes, OUTPUT_BYTES);
     assert_eq!(status, 0, "unknown case status");
+    assert_eq!(
+        output,
+        vec![
+            0x33, 0x33, 0x33, 0x3f, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x01, 0x01,
+            0x00, 0x01
+        ],
+        "unknown full 16-byte parity"
+    );
     assert_eq!(output[15], 1, "unknown cell sets the flag byte");
     println!("unknown bytes: {output:02x?}");
 
