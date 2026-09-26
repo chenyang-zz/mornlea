@@ -262,3 +262,7 @@
   - `go test ./packages/tools/cmd/runtime-oracle -count=1`: passed after the controller's source-hash refresh (`src/fluid_eval.rs` `47716d86…` -> `edee1299…`).
 - Review: Task Reviewer subagent approved with no Critical or Important findings and two minor findings deferred to the final whole-branch review (a vacuous zero-length check in the Go oracle, and an anti-padding predicate that would false-positive on a legitimate self-cell air write).
 - Rollback: Revert `c20261c8`, `cf0d8ae5` in that order.
+
+## 2026-09-25 — Round-end governance retrospective
+
+- Architecture skill: promoted one rule to the synchronized `mornlea-architecture` skill. `testdata/runtime-migration/contracts.json` is a live provenance registry whose per-family `sources[].sha256` pins are reconciled against the working tree by `TestStorageCorpus`; any hashed-source change must land the matching refresh before the node closes, `source_revision` stays pinned, corpus assets stay closure-owned, and only a package-wide runtime-oracle run proves the reconciliation. Verified against `packages/tools/cmd/runtime-oracle/inventory.go`, `storage_coverage_test.go`, the archived storage-closure ledger's per-family hash-refresh pattern, and the drift reproduced across nodes 1.2-2.5 of this change. No other finding met the promotion bar; everything else recorded here is task history or already specified in the change's own briefs.
