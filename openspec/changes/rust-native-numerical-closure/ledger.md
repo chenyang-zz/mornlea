@@ -747,3 +747,45 @@
 - Resume: same implementer (context intact), same model, ruling + amended
   packet carried in the resume message; brief file amended with the ruling
   section. New BASE is the reconciliation commit below.
+
+## 2026-09-27 — Node 3.12 corpus closure accepted
+
+- Result SHA: `64938c0c` (gate extension `9d709c51`, staged collision import
+  `0e54523a`, full closure `64938c0c`; reconciliation `6ad64596` beneath).
+- Implementation summary: eleven kernel routes registered in
+  `BaselineConsumerRegistry()`, Rust `ENGINE_CLOSED_ROUTES`, Go
+  `kernelClosedRoutes` and the duplicated `wantRegistry` literal; 40 cases
+  (3+4+3+3+4+3+4+3+4+3+6) with ok/error/boundary per route; `CorpusConsumer::Engine`
+  loader dispatching ten binary families to real exported symbols and pathfind
+  to the typed API; `TestKernelABIRawOracle` package-local raw producer;
+  `corpusKernelCategories` + `kernel.` slice arm added to the two shared gates
+  exactly as ruled (existing sets/totals byte-identical); `source_revision`
+  pinned, ABI v11, dev-deps `serde =1.0.229`/`serde_json =1.0.151`/`sha2 0.10`
+  plus a 5-line lock edge.
+- Verification (from report, coherent): all 40 cases execute Go-vs-Rust
+  byte-agree; full unfiltered oracle suite, nativeabi suite, Rust 80+52 tests,
+  fmt, clippy and both-side mutation checks green. Genuine RED recorded before
+  each GREEN; staged collision-first order held.
+- Review: task reviewer (`sonnet`): spec ✅, quality Approved, no
+  Critical/Important. Two Minors deferred to the final whole-branch review:
+  `Task 3.12: minor (deferred): pinKernelLodShortCase asserts needed_bytes
+  positivity but not its linkage to the exact-needed-retry output_len`
+  and `Task 3.12: minor (deferred): kernelPanicStatus maps only
+  1/2/3/7/9, latent gap for scratch/registry/emission/queue-overflow bridge
+  panics (fail-closed, no executed case affected)`.
+- Controller checks on review ⚠️ items: (a) audit failures confirmed
+  pre-existing relative to 3.12 (identity repro on pristine `6ad64596`;
+  English-drift paths zero-diff in `6ad64596..HEAD`) — 4.1 owns the gate
+  outcome; (b) live per-family counts present and reconcile to 40 in the
+  report, 4.2 re-runs all gates on the integrated SHA; (c) seed policy is
+  producer-side and producers use seeds 0/1 (verified worldgen-chunk), 4.1
+  spot-checks the scenario map; (d) both Rust roots already register every
+  topic file incl. `path_grid`/`path_search` — no 1.2 miss.
+- Ruling: accept the documented LOD split (`exact-needed-short` pinned by
+  ID/category/digest in Go, executed raw in the nativeabi oracle and Rust
+  consumer) — forced by the real constraint that the public bridge retries
+  overflow internally and a second cgo bridge is forbidden. Cost if wrong: one
+  Go row executes no bytes; mitigated by raw execution on both other sides
+  plus the needed-bytes linkage pin.
+- Rollback: Revert `64938c0c`, `0e54523a`, `9d709c51` in that order (corpus
+  unit only); reconciliation `6ad64596` reverts packet text only.
