@@ -944,3 +944,23 @@ match the tree, 0 mismatches.
 - Dispatch: gate runner for node 4.2 from BASE `8bae2268`; brief
   `/tmp/mornlea-rn-closure-3.12/task-4.2-brief.md`, report
   `/tmp/mornlea-rn-closure-3.12/task-4.2-report.md`.
+
+## 2026-09-27 — Node 4.2 integrated gates green
+
+- Integrated result SHA: `7a48b002` (first attempt on `8bae2268` stopped at
+  gate 3 on the controller's ledger Han quote; fixed ledger-only in
+  `7a48b002`, full six-gate restart on the new SHA per packet same-state
+  rule; corpus identity unchanged: manifest `2d8566f7…4885`,
+  `source_revision f75dfcf4`, 40 cases / 11 routes).
+- Gate evidence (report `/tmp/mornlea-rn-closure-3.12/task-4.2-report.md`):
+  `cargo fmt --all --check` 0; `make rust-check` 0; `make dev-check` 0
+  (six-module vet incl. audit ~101.8s); `make test-race` 0 (six modules,
+  52 ok / 0 FAIL); `go test ./packages/audit -count=1` 0 (~91.8s);
+  `openspec validate --all --strict --no-interactive` 0 (127/127 valid).
+  Timings informational; no overflow/data-loss/I/O failures.
+- Eleven executed case counts on this SHA: 3+4+3+3+4+3+4+3+4+3+6 = 40
+  (collision, physics, raycast, chunk, probe, tree, lod, eval, rescan,
+  mesh, pathfind), all Go-vs-Rust byte-agreeing per 3.12 acceptance.
+- This closure feeds the separate complete-F1 zero-gap acceptance; F2
+  unstarted, default runtime unchanged.
+- Rollback: this ledger/status entry only; all implementation commits stay.
