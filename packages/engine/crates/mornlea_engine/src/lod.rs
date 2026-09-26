@@ -233,7 +233,7 @@ fn clamp_window_to_sea_level(params: &WorldgenParams, window: LodWindow) -> LodW
     window
 }
 
-/// 采样 tile 的窗口场(含边界外一圈)到调用方拥有的样本缓冲。
+/// Sample the tile window field (plus a one-window halo) into the caller-owned sample buffer.
 ///
 /// 边界外一圈只用于断差裙边的高侧判定:相邻 tile 以同一 worldgen 纯函数
 /// 重算同一边界窗口,两侧逐位一致,因此跨 tile 断差恰由高侧 tile 独立
@@ -270,7 +270,7 @@ pub(crate) fn sample_field_into<'a>(
     }
 }
 
-/// 对窗口场遍历壳 quad 流:先顶面贪心合并,后 X 向、Z 向断差裙边。
+/// Walk the window field emitting the shell quad stream: greedy top-face merge first, then X- and Z-direction cliff skirts.
 ///
 /// quad 顺序属于确定性契约:顶面按 Z 外、X 内的行主序贪心生长(先沿 X
 /// 扩宽、再沿 Z 扩深,与近环 greedy 同策略);裙边 X 向先于 Z 向,均按
@@ -412,7 +412,7 @@ pub(crate) fn visit_lod_shell(
     }
 }
 
-/// 对窗口场生成壳 quad 流:薄收集器,顺序语义全在 [`visit_lod_shell`]。
+/// Collect the shell quad stream for a window field: thin test collector, ordering semantics live entirely in [`visit_lod_shell`].
 #[cfg(test)]
 fn build_shell(field: &WindowField<'_>, air: u16) -> Vec<LodQuad> {
     let mut quads = Vec::new();
@@ -536,8 +536,8 @@ mod tests {
         bytes
     }
 
-    /// 以闭包按全局窗口坐标构造合成窗口场(含边界外一圈);窗口记录写入
-    /// 调用方缓冲,返回的场借用该缓冲。
+    /// Build a synthetic window field (plus a one-window halo) from a closure over global window coordinates; window records go into the
+    /// caller buffer, and the returned field borrows that buffer.
     fn field<'a>(
         step: i32,
         n: usize,

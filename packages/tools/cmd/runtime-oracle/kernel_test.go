@@ -177,8 +177,8 @@ func parseKernelArguments(t *testing.T, family, id string, raw json.RawMessage) 
 	if err := dec.Decode(&args); err != nil {
 		t.Fatalf("case %s arguments decode: %v", id, err)
 	}
-	if args.ABIVersion != int(nativeabi.ABIVersion) {
-		t.Fatalf("case %s abi_version=%d cannot execute under bridge ABI %d", id, args.ABIVersion, nativeabi.ABIVersion)
+	if args.ABIVersion != int(nativeabi.EngineABIVersion()) {
+		t.Fatalf("case %s abi_version=%d cannot execute under bridge ABI %d", id, args.ABIVersion, nativeabi.EngineABIVersion())
 	}
 	if args.OutputCapacity <= 0 || int64(args.OutputCapacity) > MaxBinaryBytes {
 		t.Fatalf("case %s output_capacity=%d outside the binary budget", id, args.OutputCapacity)
@@ -196,29 +196,50 @@ func parseKernelArguments(t *testing.T, family, id string, raw json.RawMessage) 
 	return args
 }
 
+// kernelStatusCodes pins the engine ABI status numbers the oracle compares
+// against. The audit identity scan type-checks this package with a fake C
+// import, under which the cgo-derived nativeabi status constants carry no
+// usable value, so the oracle names statuses through these literals instead
+// of naming the bridge constants. TestKernelStatusTableMatchesBridge pins
+// every entry except kernelStatusCodeQueueOverflow against a status the real
+// bridge returns; the queue-overflow entry mirrors the header numbering and
+// has no frozen corpus case reaching that path.
+const (
+	kernelStatusCodeOK              uint32 = 0
+	kernelStatusCodeABIVersion      uint32 = 1
+	kernelStatusCodeInvalidArgument uint32 = 2
+	kernelStatusCodeInput           uint32 = 3
+	kernelStatusCodeScratch         uint32 = 4
+	kernelStatusCodeRegistry        uint32 = 5
+	kernelStatusCodeEmission        uint32 = 6
+	kernelStatusCodeOutputOverflow  uint32 = 7
+	kernelStatusCodeQueueOverflow   uint32 = 8
+	kernelStatusCodePanic           uint32 = 9
+)
+
 // kernelStatusName normalizes an engine ABI status code to the frozen corpus
 // category vocabulary shared with the Rust consumer.
 func kernelStatusName(status uint32) string {
-	switch nativeabi.Status(status) {
-	case nativeabi.StatusOK:
+	switch status {
+	case kernelStatusCodeOK:
 		return "ok"
-	case nativeabi.StatusABIVersion:
+	case kernelStatusCodeABIVersion:
 		return "abi-version"
-	case nativeabi.StatusInvalidArgument:
+	case kernelStatusCodeInvalidArgument:
 		return "invalid-argument"
-	case nativeabi.StatusInput:
+	case kernelStatusCodeInput:
 		return "input"
-	case nativeabi.StatusScratch:
+	case kernelStatusCodeScratch:
 		return "scratch"
-	case nativeabi.StatusRegistry:
+	case kernelStatusCodeRegistry:
 		return "registry"
-	case nativeabi.StatusEmission:
+	case kernelStatusCodeEmission:
 		return "emission"
-	case nativeabi.StatusOutputOverflow:
+	case kernelStatusCodeOutputOverflow:
 		return "output-overflow"
-	case nativeabi.StatusQueueOverflow:
+	case kernelStatusCodeQueueOverflow:
 		return "queue-overflow"
-	case nativeabi.StatusPanic:
+	case kernelStatusCodePanic:
 		return "panic"
 	default:
 		return ""
@@ -246,6 +267,99 @@ func kernelPanicStatus(recovered any) (uint32, error) {
 		return 9, nil
 	default:
 		return 0, fmt.Errorf("unmapped bridge panic %q", text)
+	}
+}
+
+// TestKernelStatusTableMatchesBridge pins the kernelStatusCodes table against
+// statuses the real bridge returns for crafted mesh calls, so a drift between
+// the literals and the engine ABI fails here instead of silently renaming a
+// corpus category. The scenes reuse the TestKernelMeshView builders; the
+// queue-overflow row has no scene reaching that path and is covered only by
+// the name table below, and the panic row is pinned through kernelPanicStatus.
+func TestKernelStatusTableMatchesBridge(t *testing.T) {
+	version := nativeabi.EngineABIVersion()
+	newScratch := func() []uint64 { return make([]uint64, kernelMeshViewScratchWords) }
+	newOutput := func() []uint64 { return make([]uint64, kernelMeshViewOutputWords) }
+	shortcut := newKernelMeshViewSection(kernelMeshViewRegistry(15))
+	shortcutInput := shortcut.encode()
+
+	overCapacity := make([]kernelMeshEntry, 97)
+	for index := range overCapacity {
+		overCapacity[index] = kernelMeshEntry{id: uint16(index)}
+	}
+	registryInput := newKernelMeshViewSection(overCapacity)
+	registryInput.setBlock(0, 0, 0, 1)
+	registryInput.markAirFacesVisible(1)
+
+	emissionInput := newKernelMeshViewSection(kernelMeshViewRegistry(15))
+	emissionInput.setBlock(0, 0, 0, 1)
+	emissionInput.markAirFacesVisible(1, 2, 3)
+	emissionInput.entries[2].emission = 16
+
+	litInput := newKernelMeshViewSection(kernelMeshViewRegistry(15))
+	for x := int32(0); x < 16; x++ {
+		for z := int32(0); z < 16; z++ {
+			litInput.setBlock(x, 0, z, 1)
+		}
+	}
+	litInput.setBlock(8, 1, 8, 2)
+	litInput.markAirFacesVisible(1, 2, 3)
+
+	probes := []struct {
+		name    string
+		version uint32
+		input   []byte
+		scratch []uint64
+		output  []uint64
+		code    uint32
+		status  string
+	}{
+		{"ok", version, shortcutInput, newScratch(), newOutput(), kernelStatusCodeOK, "ok"},
+		{"abi version", version + 1, shortcutInput, newScratch(), newOutput(), kernelStatusCodeABIVersion, "abi-version"},
+		{"invalid argument", version, nil, newScratch(), newOutput(), kernelStatusCodeInvalidArgument, "invalid-argument"},
+		{"input", version, make([]byte, 64), newScratch(), newOutput(), kernelStatusCodeInput, "input"},
+		{"scratch", version, shortcutInput, make([]uint64, 8), newOutput(), kernelStatusCodeScratch, "scratch"},
+		{"registry", version, registryInput.encode(), newScratch(), newOutput(), kernelStatusCodeRegistry, "registry"},
+		{"emission", version, emissionInput.encode(), newScratch(), newOutput(), kernelStatusCodeEmission, "emission"},
+		{"output overflow", version, litInput.encode(), newScratch(), make([]uint64, 16), kernelStatusCodeOutputOverflow, "output-overflow"},
+	}
+	for _, probe := range probes {
+		status, _ := nativeabi.MeshSection(probe.version, probe.input, probe.scratch, probe.output)
+		if uint32(status) != probe.code {
+			t.Fatalf("%s: status=%d, want code %d", probe.name, uint32(status), probe.code)
+		}
+		if name := kernelStatusName(uint32(status)); name != probe.status {
+			t.Fatalf("%s: status name=%q, want %q", probe.name, name, probe.status)
+		}
+	}
+
+	names := map[uint32]string{
+		kernelStatusCodeOK:              "ok",
+		kernelStatusCodeABIVersion:      "abi-version",
+		kernelStatusCodeInvalidArgument: "invalid-argument",
+		kernelStatusCodeInput:           "input",
+		kernelStatusCodeScratch:         "scratch",
+		kernelStatusCodeRegistry:        "registry",
+		kernelStatusCodeEmission:        "emission",
+		kernelStatusCodeOutputOverflow:  "output-overflow",
+		kernelStatusCodeQueueOverflow:   "queue-overflow",
+		kernelStatusCodePanic:           "panic",
+	}
+	for code, want := range names {
+		if got := kernelStatusName(code); got != want {
+			t.Fatalf("status %d: name=%q, want %q", code, got, want)
+		}
+	}
+	if got := kernelStatusName(42); got != "" {
+		t.Fatalf("unknown status: name=%q, want empty", got)
+	}
+
+	panicCode, err := kernelPanicStatus("nativeabi: collision Rust panic")
+	if err != nil {
+		t.Fatalf("panic text unmapped: %v", err)
+	}
+	if panicCode != kernelStatusCodePanic {
+		t.Fatalf("panic code=%d, want %d", panicCode, kernelStatusCodePanic)
 	}
 }
 
@@ -568,7 +682,7 @@ func executeKernelMeshCase(input []byte, args kernelArguments) map[string]any {
 	for index := range output {
 		output[index] = 0xa5a5a5a5a5a5a5a5
 	}
-	status, count := nativeabi.MeshSection(nativeabi.ABIVersion, input, scratch, output)
+	status, count := nativeabi.MeshSection(nativeabi.EngineABIVersion(), input, scratch, output)
 	arena := make([]byte, 0, len(output)*8)
 	for _, word := range output {
 		var raw [8]byte

@@ -197,7 +197,7 @@ func kernelMeshViewRegistry(emission uint8) []kernelMeshEntry {
 // kernelMeshViewRun invokes the raw ABI once with caller-owned scratch and
 // output buffers.
 func kernelMeshViewRun(input []byte, scratch, output []uint64) (nativeabi.Status, int) {
-	return nativeabi.MeshSection(nativeabi.ABIVersion, input, scratch, output)
+	return nativeabi.MeshSection(nativeabi.EngineABIVersion(), input, scratch, output)
 }
 
 // assertUntouched fails when a call wrote any word of a canary-filled output

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "total_files": 1243,
-  "total_comments": 38566,
+  "total_files": 1242,
+  "total_comments": 38478,
   "files": [
     {
       "path": "packages/audit/armor_domain_test.go",
@@ -2390,8 +2390,8 @@
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
-      "count": 331,
-      "digest": "c5d3ae132ad7128093e374e58523ef152a0a03ea26e611f9948671dcd1d9f955"
+      "count": 303,
+      "digest": "cefeee6250d96a723ffa0bcf7af8dc9d9d60d46d51fc0ff8c3962c74f3529590"
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/fluid_eval.rs",
@@ -2400,8 +2400,8 @@
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/fluid_rescan.rs",
-      "count": 180,
-      "digest": "08a296dec06017f398180f17bb0813428b6b6ab5100512635bc3e52dac346f8f"
+      "count": 169,
+      "digest": "1a4b989c55a2a667631c722e6e58d7d7e45ae076baf5d17db108b24dcf0eea31"
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/greedy/bed.rs",
@@ -2420,8 +2420,8 @@
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/greedy/mod.rs",
-      "count": 68,
-      "digest": "1ae407397ef6ca5bc6d6672c73e8f1fac8cd403aade2db817a6aff3034fded2d"
+      "count": 61,
+      "digest": "134da4c6ef0db7efcf736ecc84244ae85edfc7602c35cbde67d51ed059b3ea25"
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/greedy/plant_tests.rs",
@@ -2440,8 +2440,8 @@
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/greedy/torch.rs",
-      "count": 50,
-      "digest": "25a362655ceb43d5cc1167b7fa6be773841929ce3cb6c082d93ced15e135f246"
+      "count": 42,
+      "digest": "ed041c6e760e66df3dc7edb6d8943efe34e9e310668f1157dd72a94d0cea8df2"
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/greedy/torch_tests.rs",
@@ -2455,13 +2455,8 @@
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/input.rs",
-      "count": 128,
-      "digest": "206f40a5f4d3a9adffe4c56584eeb9a31ae41db568bf55e05464f2edadf72cf4"
-    },
-    {
-      "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
-      "count": 1,
-      "digest": "8e4b06356edcd1ff3480fb1c587ae826f52bddc8e24fa3bb7672a589ff9d2522"
+      "count": 105,
+      "digest": "9445f81e07e554eeac7aeb6b08bf720ed2f74543b3ae74f028364d9f8da2c84f"
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/light.rs",
@@ -2470,13 +2465,13 @@
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/lod.rs",
-      "count": 193,
-      "digest": "1bc9d8d52fc571410ad65dde5a3b1059451897f9c3c46279d8bd9ec7c9142b4b"
+      "count": 190,
+      "digest": "ed08f764ef3e30fafb91db23cc096ef6d28d6243d744c3787cc7441d99e670f6"
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/quad.rs",
-      "count": 77,
-      "digest": "71d33536bd53019bd6533c2686d7bed22db068f6e0a5fb8c5fd6685f376d960c"
+      "count": 72,
+      "digest": "27dcf1304cee240260f9b7987a85aeb3e45d38919fc7a70436e24b79c923a4b9"
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/step.rs",
@@ -2485,8 +2480,8 @@
     },
     {
       "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-      "count": 372,
-      "digest": "6910b872b72f9d2266563175794c3d2b93b879555bb391c072c34eed1c60d2c3"
+      "count": 370,
+      "digest": "62ee0d3754d1153254de98c40595ab9de367e0c85b2f9291bec5110f4ffbc6b0"
     },
     {
       "path": "packages/engine/include/mornlea_client.h",
