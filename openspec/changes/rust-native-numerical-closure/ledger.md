@@ -534,3 +534,26 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestWorldgenProbe'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelWorldgenProbe'`, `--lib probe` 3/3, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~63s, no drift).
 - Review: Task Reviewer subagent: spec compliant with all seven brief checks present; no Important findings and no Minor notes. No deferred minor from this node.
 - Rollback: Revert `9c1ed669`.
+
+## 2026-09-26 — Node 3.7 dispatch preflight
+
+- Frontier: 3.6 accepted and recorded by `dca66a6e`; 3.7 is next. Worktree clean at BASE `dca66a6e`; `tests/numerical_migration/tree_blocks.rs` holds the 2.6 typed ordered-record tests; oracle `kernel_tree_blocks_test.go` accepted at 2.6.
+- Preflight scan (packet `plans/02-adapters.md#node-3-7`, dispatch packet `worker-briefs.md` node 3.7, brief 5.7/adapter table, `tasks.md` node 3.7):
+  - 3.7 ↔ 3.5/3.6: disjoint hunks (`tree_blocks_with` vs chunk/probe); both landed and closed. Serial `ffi.rs` order frozen; no conflict.
+  - 3.7 ↔ 2.6: consumes the accepted tree provider and its at-least-capacity ruling (larger destination succeeds with suffix untouched); `src/worldgen.rs` read-only here. No conflict.
+  - Derived-artifact inventory: the tree family pins the header, `native_test.go`, `src/worldgen.rs`; none is edited here and new/edited files are unpinned, so the package-wide oracle run must stay fully green with no expected mismatch.
+- Ruling: keep `parse_tree_blocks_input` + route the parsed request through shared `tree_blocks` visitor geometry with `encode_tree_blocks` staging; no typed `TreeRequest` rebuild, no bound change, no at-least-capacity change. Cost if wrong: none — admission and geometry provably unchanged.
+- Dispatch: implementer subagent for node 3.7 from BASE `dca66a6e`; brief `task-3.7-brief.md` in the session workspace, report `task-3.7-report.md` in the same workspace.
+
+## 2026-09-26 — Node 3.7 tree ABI adapter
+
+- Predecessor SHA: `dca66a6e`
+- Result SHA: `cbf835ef` (provider `ba2b3e46`, review polish `cbf835ef`; no manifest refresh — tree family pins only the untouched header/test/core files, and the package-wide oracle run stayed green)
+- Implementation summary:
+  - `src/ffi.rs` `tree_blocks_with` hunk: admission byte-identical; only a 3-line English comment naming the shared `tree_blocks` visitor route. Same geometry, same checked `needed` arithmetic, same single copy.
+  - `tests/numerical_migration/tree_blocks.rs`: `tree_blocks_abi_order` calls the real exported symbol for seed-0 (3,-64,5) and seed-1 (-7,311,-13) with FULL output bytes (count + every ordered 8-byte record) vs the typed provider's encoding, `needed - 1` status-7 full canary with checked arithmetic, and `needed + 16` status-0 prefix/suffix split (at-least-capacity).
+- Verification:
+  - Baseline GREEN before the route change (same geometry): migration tree_blocks 7/7; post-change GREEN with identical bytes.
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestTreeBlocks'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelTreeBlocks'`, `--lib tree_blocks` 8/8, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (no drift).
+- Review: Task Reviewer subagent: spec compliant with all six brief pins; no Important findings; two Minor notes (raw status literals, unchecked `as u32` cast) both fixed in `cbf835ef` (named status consts scoped to the test, `u32::try_from`). No deferred minor from this node.
+- Rollback: Revert `cbf835ef`, `ba2b3e46` in that order.
