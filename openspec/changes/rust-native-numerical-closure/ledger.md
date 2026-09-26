@@ -964,3 +964,34 @@ match the tree, 0 mismatches.
 - This closure feeds the separate complete-F1 zero-gap acceptance; F2
   unstarted, default runtime unchanged.
 - Rollback: this ledger/status entry only; all implementation commits stay.
+
+## 2026-09-27 — Final whole-branch review + fix wave, change complete
+
+- Reviewer (`opus`, branch `372da827..dae91034`, 82 commits / 176 files):
+  **Ready to merge? With fixes.** Strengths: genuine RED→GREEN throughout,
+  ABI v11 credibly frozen, shared-core discipline, 40-case corpus integrity,
+  no scope leakage. Zero Critical-behavioral and zero Important findings.
+  One Minor (plan-mandated collision dual-execution debt in
+  `collision_resolve_with`, bounded ≤4096, behaviorally correct) →
+  follow-up change, not this branch.
+- Critical (process): `tasks.md` 3.1–3.11 boxes unchecked while ledger held
+  per-node acceptance with SHAs and reviews — prior controllers recorded
+  ledger entries without flipping boxes. Fix wave (this entry): all twelve
+  section-3 boxes now `[x]`, each backed by its ledger acceptance entry and
+  re-verified by the final review's branch pass; plus the reviewer's packet
+  one-liner (4.1 closeout verifies all ledger-accepted nodes have `[x]`).
+  Ruling: controller applied this docs-only fix directly instead of a fix
+  subagent — `tasks.md` is controller-owned (workers never edit it), the
+  flip adds no new claim beyond ledger evidence the final review already
+  verified, and `openspec validate --type change --strict` re-checks status
+  coherence. Cost if wrong: a box without evidence; mitigated by the
+  per-node SHA entries and the reviewer's independent branch verification.
+- Deferred triage confirmed: D1/D2/D3 all stay deferred (test-strengthening
+  only; fail-closed mapping; pre-existing doc) — same three ledger minors,
+  no action this branch.
+- Architecture skill: no change (reviewer concurs; source-hash rule already
+  promoted earlier).
+- All `tasks.md` boxes in sections 1–4 are now `[x]`; change validation
+  re-run below. Implementation complete: eleven numerical routes with
+  executed Go-vs-Rust evidence, ABI v11 frozen, 6/6 integrated gates green
+  on `7a48b002`. Archive/merge remain explicit user decisions (not taken).
