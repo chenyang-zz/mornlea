@@ -294,13 +294,15 @@ pub unsafe extern "C" fn mornlea_mesh_section(
     {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
     }
-    // SAFETY: 指针已检查非空且满足 usize 对齐，调用期间独占写入一个值。
-    unsafe { output_len.write(0) };
-    if abi_version != ABI_VERSION {
-        return MORNLEA_STATUS_ABI_VERSION;
-    }
+    // The `output_len` pointer itself is validated above by address only; the
+    // metadata word stays untouched through every check below, and the clear
+    // runs only after the complete range and overlap preflight, so an aliased
+    // `output_len` is never stored through.
     if input.is_null() || scratch.is_null() || output.is_null() {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
+    }
+    if abi_version != ABI_VERSION {
+        return MORNLEA_STATUS_ABI_VERSION;
     }
     if !input_range_is_valid(input, input_len) {
         return MORNLEA_STATUS_INPUT;
@@ -345,7 +347,16 @@ pub unsafe extern "C" fn mornlea_mesh_section(
         return MORNLEA_STATUS_INVALID_ARGUMENT;
     }
 
-    // SAFETY: output_len 已验证非空、对齐、地址范围和与其他 buffer 不重叠。
+    // The metadata word is cleared here: every range and overlap check above
+    // passed, so `output_len` is exclusive for this call, and a valid
+    // non-aliased pointer reads zero on every later error path.
+    // SAFETY: `output_len` is non-null, aligned, address-valid, and disjoint
+    // from every other buffer.
+    unsafe { output_len.write(0) };
+
+    // SAFETY: `output_len` is non-null, aligned, address-valid, exclusive
+    // for this call, and disjoint from every other buffer; the exclusive
+    // borrow below is sound.
     let published = unsafe { &mut *output_len };
     catch_and_publish(published, || {
         // SAFETY: input 非空，范围不超过 isize::MAX 且地址加法不回绕；调用方声明其可读。
@@ -748,10 +759,11 @@ pub unsafe extern "C" fn mornlea_lod_shell(
 /// `mornlea_lod_shell` 的校验与发布核心;generator 参数只为注入 panic 测试
 /// (同 collision/raycast 的 *_with 先例),生产路径恒传 [`lod_shell`]。
 ///
-/// 校验顺序镜像 `mornlea_mesh_section`:先验证 `output_len` metadata 指针并
-/// 清零(此后任何提前返回调用方都能读到确定值),再依次检查 ABI 版本、
-/// 空指针、输入/输出范围与两两重叠;生成与编码全部在本地缓冲完成后才
-/// 一次性拷贝发布,失败路径不触碰调用方输出。
+/// Validation order mirrors `mornlea_mesh_section`: the `output_len` metadata
+/// pointer is validated by address only, then null-pointer checks, the ABI
+/// version handshake, and every range/overlap check run before the metadata
+/// word is cleared; generation and encoding complete in a local buffer and
+/// publish in one copy, so failure paths never touch caller output.
 unsafe fn lod_shell_with(
     abi_version: u32,
     input: *const u8,
@@ -767,13 +779,15 @@ unsafe fn lod_shell_with(
     {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
     }
-    // SAFETY: 指针已检查非空且满足 usize 对齐，调用期间独占写入一个值。
-    unsafe { output_len.write(0) };
-    if abi_version != ABI_VERSION {
-        return MORNLEA_STATUS_ABI_VERSION;
-    }
+    // The `output_len` pointer itself is validated above by address only; the
+    // metadata word stays untouched through every check below, and the clear
+    // runs only after the complete range and overlap preflight, so an aliased
+    // `output_len` is never stored through.
     if input.is_null() || output.is_null() {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
+    }
+    if abi_version != ABI_VERSION {
+        return MORNLEA_STATUS_ABI_VERSION;
     }
     if !input_range_is_valid(input, input_len) {
         return MORNLEA_STATUS_INPUT;
@@ -797,6 +811,13 @@ unsafe fn lod_shell_with(
     {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
     }
+
+    // The metadata word is cleared here: every range and overlap check above
+    // passed, so `output_len` is exclusive for this call, and a valid
+    // non-aliased pointer reads zero on every later error path.
+    // SAFETY: `output_len` is non-null, aligned, address-valid, and disjoint
+    // from every other buffer.
+    unsafe { output_len.write(0) };
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: input 非空，范围不超过 isize::MAX 且地址加法不回绕；已验证与 output/output_len 不重叠。
@@ -1092,10 +1113,11 @@ pub unsafe extern "C" fn mornlea_fluid_eval_batch(
 /// panic 测试(同 collision/raycast/lod 的 *_with 先例),生产路径恒传
 /// [`eval_one`]。
 ///
-/// 校验顺序镜像 `mornlea_lod_shell`:先验证 `output_len` metadata 指针并
-/// 清零(此后任何提前返回调用方都能读到确定值),再依次检查 ABI 版本、
-/// 空指针、输入/输出范围与两两重叠;求值与编码全部在本地缓冲完成后才
-/// 一次性拷贝发布,失败路径不触碰调用方输出。
+/// Validation order mirrors `mornlea_lod_shell`: the `output_len` metadata
+/// pointer is validated by address only, then null-pointer checks, the ABI
+/// version handshake, and every range/overlap check run before the metadata
+/// word is cleared; evaluation and encoding complete in a local buffer and
+/// publish in one copy, so failure paths never touch caller output.
 unsafe fn fluid_eval_batch_with(
     abi_version: u32,
     input: *const u8,
@@ -1111,13 +1133,15 @@ unsafe fn fluid_eval_batch_with(
     {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
     }
-    // SAFETY: 指针已检查非空且满足 usize 对齐，调用期间独占写入一个值。
-    unsafe { output_len.write(0) };
-    if abi_version != ABI_VERSION {
-        return MORNLEA_STATUS_ABI_VERSION;
-    }
+    // The `output_len` pointer itself is validated above by address only; the
+    // metadata word stays untouched through every check below, and the clear
+    // runs only after the complete range and overlap preflight, so an aliased
+    // `output_len` is never stored through.
     if input.is_null() || output.is_null() {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
+    }
+    if abi_version != ABI_VERSION {
+        return MORNLEA_STATUS_ABI_VERSION;
     }
     if !input_range_is_valid(input, input_len) {
         return MORNLEA_STATUS_INPUT;
@@ -1141,6 +1165,13 @@ unsafe fn fluid_eval_batch_with(
     {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
     }
+
+    // The metadata word is cleared here: every range and overlap check above
+    // passed, so `output_len` is exclusive for this call, and a valid
+    // non-aliased pointer reads zero on every later error path.
+    // SAFETY: `output_len` is non-null, aligned, address-valid, and disjoint
+    // from every other buffer.
+    unsafe { output_len.write(0) };
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: input 非空，范围不超过 isize::MAX 且地址加法不回绕；已验证与 output/output_len 不重叠。
@@ -1228,10 +1259,11 @@ pub unsafe extern "C" fn mornlea_fluid_rescan(
 /// 测试(同 collision/raycast/lod/eval 的 *_with 先例),生产路径恒传
 /// [`fluid_rescan`]。
 ///
-/// 校验顺序镜像 `mornlea_lod_shell`:先验证 `output_len` metadata 指针并
-/// 清零(此后任何提前返回调用方都能读到确定值),再依次检查 ABI 版本、
-/// 空指针、输入/输出范围与两两重叠;扫描与编码全部在本地缓冲完成后才
-/// 一次性拷贝发布,失败路径不触碰调用方输出。
+/// Validation order mirrors `mornlea_lod_shell`: the `output_len` metadata
+/// pointer is validated by address only, then null-pointer checks, the ABI
+/// version handshake, and every range/overlap check run before the metadata
+/// word is cleared; scanning and encoding complete in a local buffer and
+/// publish in one copy, so failure paths never touch caller output.
 unsafe fn fluid_rescan_with(
     abi_version: u32,
     input: *const u8,
@@ -1247,13 +1279,15 @@ unsafe fn fluid_rescan_with(
     {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
     }
-    // SAFETY: 指针已检查非空且满足 usize 对齐，调用期间独占写入一个值。
-    unsafe { output_len.write(0) };
-    if abi_version != ABI_VERSION {
-        return MORNLEA_STATUS_ABI_VERSION;
-    }
+    // The `output_len` pointer itself is validated above by address only; the
+    // metadata word stays untouched through every check below, and the clear
+    // runs only after the complete range and overlap preflight, so an aliased
+    // `output_len` is never stored through.
     if input.is_null() || output.is_null() {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
+    }
+    if abi_version != ABI_VERSION {
+        return MORNLEA_STATUS_ABI_VERSION;
     }
     if !input_range_is_valid(input, input_len) {
         return MORNLEA_STATUS_INPUT;
@@ -1277,6 +1311,13 @@ unsafe fn fluid_rescan_with(
     {
         return MORNLEA_STATUS_INVALID_ARGUMENT;
     }
+
+    // The metadata word is cleared here: every range and overlap check above
+    // passed, so `output_len` is exclusive for this call, and a valid
+    // non-aliased pointer reads zero on every later error path.
+    // SAFETY: `output_len` is non-null, aligned, address-valid, and disjoint
+    // from every other buffer.
+    unsafe { output_len.write(0) };
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: input 非空，范围不超过 isize::MAX 且地址加法不回绕；已验证与 output/output_len 不重叠。
@@ -2546,7 +2587,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INPUT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
     }
 
     #[test]
@@ -2568,7 +2609,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INPUT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
     }
 
     #[test]
@@ -2609,7 +2650,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_ABI_VERSION);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
     }
 
     #[test]
@@ -2689,7 +2730,7 @@ mod tests {
             )
         };
         assert_eq!(null_input, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         output_len = usize::MAX;
         // SAFETY: scratch 指针有效但长度被刻意缩短一个字节。
@@ -2706,7 +2747,7 @@ mod tests {
             )
         };
         assert_eq!(short_scratch, MORNLEA_STATUS_SCRATCH);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         output_len = usize::MAX;
         // SAFETY: output 指针有效且对齐，capacity 被刻意缩短一个元素。
@@ -2723,7 +2764,7 @@ mod tests {
             )
         };
         assert_eq!(short_output, MORNLEA_STATUS_OUTPUT_OVERFLOW);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
     }
 
     #[test]
@@ -2762,7 +2803,7 @@ mod tests {
             )
         };
         assert_eq!(null_scratch, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         output_len = usize::MAX;
         // SAFETY: 除被测的空 output 指针外，其余指针均有效且对齐。
@@ -2779,7 +2820,7 @@ mod tests {
             )
         };
         assert_eq!(null_output, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         output_len = usize::MAX;
         // SAFETY: scratch 分配足够大；加一字节只用于验证未对齐检查，函数不会解引用。
@@ -2796,7 +2837,7 @@ mod tests {
             )
         };
         assert_eq!(misaligned_scratch, MORNLEA_STATUS_SCRATCH);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         output_len = usize::MAX;
         // SAFETY: scratch 额外分配了一个 u64；加四字节仅用于验证 8-byte 对齐检查。
@@ -2813,7 +2854,7 @@ mod tests {
             )
         };
         assert_eq!(four_byte_aligned_scratch, MORNLEA_STATUS_SCRATCH);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         output_len = usize::MAX;
         // SAFETY: output 分配足够大；加一字节只用于验证未对齐检查，函数不会解引用。
@@ -2830,7 +2871,7 @@ mod tests {
             )
         };
         assert_eq!(misaligned_output, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         let mut output_len_storage = [usize::MAX, usize::MAX];
         // SAFETY: output_len 分配足够大；加一字节只用于验证未对齐检查，函数不会解引用。
@@ -2895,7 +2936,7 @@ mod tests {
         };
 
         assert_eq!(status, MORNLEA_STATUS_SCRATCH);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
     }
 
     #[test]
@@ -2925,7 +2966,7 @@ mod tests {
         };
 
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
     }
 
     #[test]
@@ -2937,10 +2978,11 @@ mod tests {
             std::slice::from_raw_parts_mut(shared_input.as_mut_ptr().cast::<u8>(), input.len())
                 .copy_from_slice(&input);
         }
+        let before_shared_input = shared_input.clone();
         let mut scratch = vec![0_u64; SCRATCH_BYTES.div_ceil(size_of::<u64>())];
         let mut output = vec![0_u64; 6 * 4096];
 
-        // SAFETY: output_len 刻意指向 input；入口可写零，但必须在构造 input slice 前拒绝别名。
+        // SAFETY: output_len 刻意指向 input；入口必须在构造 input slice 前拒绝别名，且不得经别名写入。
         let input_status = unsafe {
             mornlea_mesh_section(
                 ABI_VERSION,
@@ -2954,8 +2996,9 @@ mod tests {
             )
         };
         assert_eq!(input_status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(shared_input[0], 0);
+        assert_eq!(shared_input, before_shared_input);
 
+        let before_output = output.clone();
         // SAFETY: output_len 刻意指向 output；入口必须在构造 output slice 前拒绝别名。
         let output_status = unsafe {
             mornlea_mesh_section(
@@ -2970,7 +3013,7 @@ mod tests {
             )
         };
         assert_eq!(output_status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output[0], 0);
+        assert_eq!(output, before_output);
     }
 
     #[test]
@@ -2998,11 +3041,11 @@ mod tests {
             )
         };
         assert_eq!(input_status, MORNLEA_STATUS_SCRATCH);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         let mut shared_output_len = vec![usize::MAX; SCRATCH_BYTES.div_ceil(size_of::<usize>())];
         let shared_output_len_ptr = shared_output_len.as_mut_ptr();
-        // SAFETY: 除被测的 scratch/output_len 重叠外，其余指针与容量都有效；入口先将 output_len 原子清零再拒绝重叠。
+        // SAFETY: 除被测的 scratch/output_len 重叠外，其余指针与容量都有效；入口不得经别名写入即拒绝重叠。
         let output_len_status = unsafe {
             mornlea_mesh_section(
                 ABI_VERSION,
@@ -3016,7 +3059,7 @@ mod tests {
             )
         };
         assert_eq!(output_len_status, MORNLEA_STATUS_SCRATCH);
-        assert_eq!(shared_output_len[0], 0);
+        assert_eq!(shared_output_len, vec![usize::MAX; shared_output_len.len()]);
     }
 
     use super::{WORLDGEN_CHUNK_OUTPUT_BYTES, mornlea_worldgen_chunk, mornlea_worldgen_probe};
@@ -3487,7 +3530,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_ABI_VERSION);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
         assert_eq!(output, canary);
     }
 
@@ -3571,7 +3614,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         // 空输出指针。
         status = unsafe {
@@ -3585,7 +3628,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         // 地址回绕的输入指针。
         status = unsafe {
@@ -3599,7 +3642,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INPUT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         // 空输出长度指针:必须在任何写入前拒绝。
         status = unsafe {
@@ -3796,16 +3839,17 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
         assert_eq!(shared, input);
 
-        // output_len 与 input 别名:入口先清零 metadata 再拒绝(与 mesh 出口一致)。
+        // output_len 与 input 别名:入口不得经别名写入即拒绝。
         let mut shared_input = vec![0_usize; input.len().div_ceil(size_of::<usize>())];
         // SAFETY: shared_input 容量覆盖完整 encoded input,先写入合法输入。
         unsafe {
             std::slice::from_raw_parts_mut(shared_input.as_mut_ptr().cast::<u8>(), input.len())
                 .copy_from_slice(&input);
         }
+        let before_shared_input = shared_input.clone();
         let mut output = vec![0xA5_u8; 64];
         let output_canary = output.clone();
         // SAFETY: output_len 刻意指向 input 缓冲,验证别名拒绝。
@@ -3820,10 +3864,10 @@ mod tests {
             )
         };
         assert_eq!(input_status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(shared_input[0], 0);
+        assert_eq!(shared_input, before_shared_input);
         assert_eq!(output, output_canary);
 
-        // output_len 与 output 别名:同样先清零再拒绝。
+        // output_len 与 output 别名:入口不得经别名写入即拒绝。
         let mut shared_output = vec![0xA5_usize; 16];
         let before = shared_output.clone();
         // SAFETY: output 与 output_len 刻意指向同一缓冲,验证别名拒绝。
@@ -3838,8 +3882,7 @@ mod tests {
             )
         };
         assert_eq!(output_status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(shared_output[0], 0);
-        assert_eq!(shared_output[1..], before[1..]);
+        assert_eq!(shared_output, before);
     }
 
     use super::{fluid_eval_batch_with, mornlea_fluid_eval_batch};
@@ -3905,7 +3948,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_ABI_VERSION);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
         assert_eq!(output, canary);
     }
 
@@ -4079,7 +4122,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         // 空输出指针。
         // SAFETY: 输入指针来自有效 Vec;仅验证空输出指针的拒绝路径。
@@ -4094,7 +4137,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         // 地址回绕的输入指针。
         // SAFETY: 其余指针来自有效 Vec;仅验证回绕地址的拒绝路径。
@@ -4109,7 +4152,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INPUT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         // 空输出长度指针:必须在任何写入前拒绝。
         // SAFETY: 指针来自有效 Vec;仅验证空 metadata 指针的拒绝路径。
@@ -4178,16 +4221,17 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
         assert_eq!(shared, input);
 
-        // output_len 与 input 别名:入口先清零 metadata 再拒绝(与 lod 出口一致)。
+        // output_len 与 input 别名:入口不得经别名写入即拒绝。
         let mut shared_input = vec![0_usize; input.len().div_ceil(size_of::<usize>())];
         // SAFETY: shared_input 容量覆盖完整 encoded input,先写入合法输入。
         unsafe {
             std::slice::from_raw_parts_mut(shared_input.as_mut_ptr().cast::<u8>(), input.len())
                 .copy_from_slice(&input);
         }
+        let before_shared_input = shared_input.clone();
         let mut output = vec![0xA5_u8; 24];
         let output_canary = output.clone();
         // SAFETY: output_len 刻意指向 input 缓冲,验证别名拒绝。
@@ -4202,10 +4246,10 @@ mod tests {
             )
         };
         assert_eq!(input_status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(shared_input[0], 0);
+        assert_eq!(shared_input, before_shared_input);
         assert_eq!(output, output_canary);
 
-        // output_len 与 output 别名:同样先清零再拒绝。
+        // output_len 与 output 别名:入口不得经别名写入即拒绝。
         let mut shared_output = vec![0xA5_usize; 4];
         let before = shared_output.clone();
         // SAFETY: output 与 output_len 刻意指向同一缓冲,验证别名拒绝。
@@ -4220,8 +4264,7 @@ mod tests {
             )
         };
         assert_eq!(output_status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(shared_output[0], 0);
-        assert_eq!(shared_output[1..], before[1..]);
+        assert_eq!(shared_output, before);
     }
 
     use super::{fluid_rescan_with, mornlea_fluid_rescan};
@@ -4441,7 +4484,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_ABI_VERSION);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
         assert_eq!(output, canary);
 
         // input/output 别名。
@@ -4459,7 +4502,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
         assert_eq!(shared, valid);
     }
 
@@ -4483,7 +4526,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         // 空输出指针。
         // SAFETY: 输入指针来自有效 Vec;仅验证空输出指针的拒绝路径。
@@ -4498,7 +4541,7 @@ mod tests {
             )
         };
         assert_eq!(status, MORNLEA_STATUS_INVALID_ARGUMENT);
-        assert_eq!(output_len, 0);
+        assert_eq!(output_len, usize::MAX);
 
         // 空输出长度指针:必须在任何写入前拒绝。
         // SAFETY: 指针来自有效 Vec;仅验证空 metadata 指针的拒绝路径。
@@ -4537,5 +4580,343 @@ mod tests {
         assert_eq!(status, MORNLEA_STATUS_PANIC);
         assert_eq!(output_len, 0);
         assert_eq!(output, canary);
+    }
+
+    #[test]
+    fn metadata_alias_mesh() {
+        // The metadata word shares storage with the input arena: preflight
+        // must reject the overlap with the overlap status and must not store
+        // through the alias, so every canary byte survives.
+        let mut scratch = vec![0_u64; SCRATCH_BYTES / size_of::<u64>()];
+        let mut output = vec![0_u64; 6 * 4096];
+        let mut input_arena = vec![0xa5a5_a5a5_usize; 8];
+        let before_input = input_arena.clone();
+        // SAFETY: all pointers are aligned and in bounds; the metadata word
+        // deliberately sits at the start of the input range.
+        let input_status = unsafe {
+            mornlea_mesh_section(
+                ABI_VERSION,
+                input_arena.as_ptr().cast(),
+                input_arena.len() * size_of::<usize>(),
+                scratch.as_mut_ptr().cast(),
+                SCRATCH_BYTES,
+                output.as_mut_ptr(),
+                output.len(),
+                input_arena.as_mut_ptr(),
+            )
+        };
+        assert_eq!(input_status, MORNLEA_STATUS_INVALID_ARGUMENT);
+        assert_eq!(input_arena, before_input);
+
+        // The metadata word shares storage with the output arena.
+        let input = valid_input();
+        let mut shared_output = vec![0xa5a5_a5a5_u64; 6 * 4096];
+        let before_output = shared_output.clone();
+        // SAFETY: all pointers are aligned and in bounds; the metadata word
+        // deliberately sits at the start of the output range.
+        let output_status = unsafe {
+            mornlea_mesh_section(
+                ABI_VERSION,
+                input.as_ptr(),
+                input.len(),
+                scratch.as_mut_ptr().cast(),
+                SCRATCH_BYTES,
+                shared_output.as_mut_ptr(),
+                shared_output.len(),
+                shared_output.as_mut_ptr().cast(),
+            )
+        };
+        assert_eq!(output_status, MORNLEA_STATUS_INVALID_ARGUMENT);
+        assert_eq!(shared_output, before_output);
+
+        // The metadata word shares storage with the scratch arena.
+        let mut shared_scratch = vec![0xa5a5_a5a5_u64; SCRATCH_BYTES / size_of::<u64>()];
+        let before_scratch = shared_scratch.clone();
+        // SAFETY: all pointers are aligned and in bounds; the metadata word
+        // deliberately sits at the start of the scratch range.
+        let scratch_status = unsafe {
+            mornlea_mesh_section(
+                ABI_VERSION,
+                input.as_ptr(),
+                input.len(),
+                shared_scratch.as_mut_ptr().cast(),
+                SCRATCH_BYTES,
+                output.as_mut_ptr(),
+                output.len(),
+                shared_scratch.as_mut_ptr().cast(),
+            )
+        };
+        assert_eq!(scratch_status, MORNLEA_STATUS_SCRATCH);
+        assert_eq!(shared_scratch, before_scratch);
+
+        // A valid non-aliased metadata pointer on a semantically invalid
+        // request is cleared to zero while the payload stays untouched.
+        let short = input[..input.len() - 1].to_vec();
+        let mut payload = vec![0xa5a5_a5a5_u64; 6 * 4096];
+        let payload_canary = payload.clone();
+        let mut output_len = usize::MAX;
+        // SAFETY: every pointer is valid and aligned; only the input length
+        // is one byte short so parsing fails after the metadata clear.
+        let invalid_status = unsafe {
+            mornlea_mesh_section(
+                ABI_VERSION,
+                short.as_ptr(),
+                short.len(),
+                scratch.as_mut_ptr().cast(),
+                SCRATCH_BYTES,
+                payload.as_mut_ptr(),
+                payload.len(),
+                &mut output_len,
+            )
+        };
+        assert_eq!(invalid_status, MORNLEA_STATUS_INPUT);
+        assert_eq!(output_len, 0);
+        assert_eq!(payload, payload_canary);
+    }
+
+    #[test]
+    fn metadata_alias_lod() {
+        // The metadata word shares storage with the input arena: preflight
+        // must reject the overlap with the overlap status and must not store
+        // through the alias, so every canary byte survives.
+        let mut output = vec![0xa5_u8; 64];
+        let output_canary = output.clone();
+        let mut input_arena = vec![0xa5a5_a5a5_usize; 8];
+        let before_input = input_arena.clone();
+        // SAFETY: all pointers are aligned and in bounds; the metadata word
+        // deliberately sits at the start of the input range.
+        let input_status = unsafe {
+            mornlea_lod_shell(
+                ABI_VERSION,
+                input_arena.as_ptr().cast(),
+                input_arena.len() * size_of::<usize>(),
+                output.as_mut_ptr(),
+                output.len(),
+                input_arena.as_mut_ptr(),
+            )
+        };
+        assert_eq!(input_status, MORNLEA_STATUS_INVALID_ARGUMENT);
+        assert_eq!(input_arena, before_input);
+        assert_eq!(output, output_canary);
+
+        // The metadata word shares storage with the output arena.
+        let input = lod_shell_input(0, 0, 64, 4);
+        let mut shared_output = vec![0xa5a5_a5a5_usize; 8];
+        let before_output = shared_output.clone();
+        // SAFETY: all pointers are aligned and in bounds; the metadata word
+        // deliberately sits at the start of the output range.
+        let output_status = unsafe {
+            mornlea_lod_shell(
+                ABI_VERSION,
+                input.as_ptr(),
+                input.len(),
+                shared_output.as_mut_ptr().cast(),
+                shared_output.len() * size_of::<usize>(),
+                shared_output.as_mut_ptr(),
+            )
+        };
+        assert_eq!(output_status, MORNLEA_STATUS_INVALID_ARGUMENT);
+        assert_eq!(shared_output, before_output);
+
+        // A valid non-aliased metadata pointer on a semantically invalid
+        // request is cleared to zero while the payload stays untouched.
+        let mut bad_magic = input.clone();
+        bad_magic[0] = b'X';
+        let mut payload = vec![0xa5_u8; 64];
+        let payload_canary = payload.clone();
+        let mut output_len = usize::MAX;
+        // SAFETY: every pointer is valid and aligned; only the magic is
+        // wrong so parsing fails after the metadata clear.
+        let invalid_status = unsafe {
+            call_lod_shell(
+                ABI_VERSION,
+                &bad_magic,
+                payload.as_mut_ptr(),
+                payload.len(),
+                &mut output_len,
+            )
+        };
+        assert_eq!(invalid_status, MORNLEA_STATUS_INPUT);
+        assert_eq!(output_len, 0);
+        assert_eq!(payload, payload_canary);
+
+        // A valid non-aliased metadata pointer on a capacity probe publishes
+        // the exact needed count while the payload stays untouched.
+        let probe_input = lod_shell_input(-3, 2, 64, 4);
+        let needed = expected_shell(&probe_input).len();
+        assert!(needed > 0);
+        let mut probe = vec![0xa5_u8; 8];
+        let probe_canary = probe.clone();
+        let mut probe_len = usize::MAX;
+        // SAFETY: every pointer is valid and aligned; only the capacity is
+        // zero so the two-phase probe reports the needed count.
+        let probe_status = unsafe {
+            call_lod_shell(
+                ABI_VERSION,
+                &probe_input,
+                probe.as_mut_ptr(),
+                0,
+                &mut probe_len,
+            )
+        };
+        assert_eq!(probe_status, MORNLEA_STATUS_OUTPUT_OVERFLOW);
+        assert_eq!(probe_len, needed);
+        assert_eq!(probe, probe_canary);
+    }
+
+    #[test]
+    fn metadata_alias_fluid_eval() {
+        // The metadata word shares storage with the input arena: preflight
+        // must reject the overlap with the overlap status and must not store
+        // through the alias, so every canary byte survives.
+        let mut output = vec![0xa5_u8; 24];
+        let output_canary = output.clone();
+        let mut input_arena = vec![0xa5a5_a5a5_usize; 8];
+        let before_input = input_arena.clone();
+        // SAFETY: all pointers are aligned and in bounds; the metadata word
+        // deliberately sits at the start of the input range.
+        let input_status = unsafe {
+            mornlea_fluid_eval_batch(
+                ABI_VERSION,
+                input_arena.as_ptr().cast(),
+                input_arena.len() * size_of::<usize>(),
+                output.as_mut_ptr(),
+                output.len(),
+                input_arena.as_mut_ptr(),
+            )
+        };
+        assert_eq!(input_status, MORNLEA_STATUS_INVALID_ARGUMENT);
+        assert_eq!(input_arena, before_input);
+        assert_eq!(output, output_canary);
+
+        // The metadata word shares storage with the output arena.
+        let input = encode_eval_input(&fluid_eval_two_items());
+        let mut shared_output = vec![0xa5a5_a5a5_usize; 3];
+        let before_output = shared_output.clone();
+        // SAFETY: all pointers are aligned and in bounds; the metadata word
+        // deliberately sits at the start of the output range.
+        let output_status = unsafe {
+            mornlea_fluid_eval_batch(
+                ABI_VERSION,
+                input.as_ptr(),
+                input.len(),
+                shared_output.as_mut_ptr().cast(),
+                shared_output.len() * size_of::<usize>(),
+                shared_output.as_mut_ptr(),
+            )
+        };
+        assert_eq!(output_status, MORNLEA_STATUS_INVALID_ARGUMENT);
+        assert_eq!(shared_output, before_output);
+
+        // A valid non-aliased metadata pointer on a semantically invalid
+        // request is cleared to zero while the payload stays untouched.
+        let mut wrong_layout = input.clone();
+        wrong_layout[0..4].copy_from_slice(&2_u32.to_le_bytes());
+        let mut payload = vec![0xa5_u8; 24];
+        let payload_canary = payload.clone();
+        let mut output_len = usize::MAX;
+        // SAFETY: every pointer is valid and aligned; only the layout
+        // version is wrong so parsing fails after the metadata clear.
+        let invalid_status = unsafe {
+            call_fluid_eval(
+                ABI_VERSION,
+                &wrong_layout,
+                payload.as_mut_ptr(),
+                payload.len(),
+                &mut output_len,
+            )
+        };
+        assert_eq!(invalid_status, MORNLEA_STATUS_INPUT);
+        assert_eq!(output_len, 0);
+        assert_eq!(payload, payload_canary);
+    }
+
+    #[test]
+    fn metadata_alias_fluid_rescan() {
+        // The metadata word shares storage with the input arena: preflight
+        // must reject the overlap with the overlap status and must not store
+        // through the alias, so every canary byte survives.
+        let mut output = vec![0xa5_u8; 64];
+        let output_canary = output.clone();
+        let mut input_arena = vec![0xa5a5_a5a5_usize; 8];
+        let before_input = input_arena.clone();
+        // SAFETY: all pointers are aligned and in bounds; the metadata word
+        // deliberately sits at the start of the input range.
+        let input_status = unsafe {
+            mornlea_fluid_rescan(
+                ABI_VERSION,
+                input_arena.as_ptr().cast(),
+                input_arena.len() * size_of::<usize>(),
+                output.as_mut_ptr(),
+                output.len(),
+                input_arena.as_mut_ptr(),
+            )
+        };
+        assert_eq!(input_status, MORNLEA_STATUS_INVALID_ARGUMENT);
+        assert_eq!(input_arena, before_input);
+        assert_eq!(output, output_canary);
+
+        // The metadata word shares storage with the output arena.
+        let input = fluid_rescan_test_box().build();
+        let mut shared_output = vec![0xa5a5_a5a5_usize; 8];
+        let before_output = shared_output.clone();
+        // SAFETY: all pointers are aligned and in bounds; the metadata word
+        // deliberately sits at the start of the output range.
+        let output_status = unsafe {
+            mornlea_fluid_rescan(
+                ABI_VERSION,
+                input.as_ptr(),
+                input.len(),
+                shared_output.as_mut_ptr().cast(),
+                shared_output.len() * size_of::<usize>(),
+                shared_output.as_mut_ptr(),
+            )
+        };
+        assert_eq!(output_status, MORNLEA_STATUS_INVALID_ARGUMENT);
+        assert_eq!(shared_output, before_output);
+
+        // A valid non-aliased metadata pointer on a semantically invalid
+        // request is cleared to zero while the payload stays untouched.
+        let mut wrong_layout = input.clone();
+        wrong_layout[0..4].copy_from_slice(&2_u32.to_le_bytes());
+        let mut payload = vec![0xa5_u8; 64];
+        let payload_canary = payload.clone();
+        let mut output_len = usize::MAX;
+        // SAFETY: every pointer is valid and aligned; only the layout
+        // version is wrong so parsing fails after the metadata clear.
+        let invalid_status = unsafe {
+            call_fluid_rescan(
+                ABI_VERSION,
+                &wrong_layout,
+                payload.as_mut_ptr(),
+                payload.len(),
+                &mut output_len,
+            )
+        };
+        assert_eq!(invalid_status, MORNLEA_STATUS_INPUT);
+        assert_eq!(output_len, 0);
+        assert_eq!(payload, payload_canary);
+
+        // A valid non-aliased metadata pointer on a capacity probe publishes
+        // the exact needed count while the payload stays untouched.
+        let view = parse_rescan_input(&input).expect("test box must parse");
+        let needed = module_scan(&view).len();
+        assert!(needed > 0);
+        let mut probe = vec![0xa5_u8; 1];
+        let mut probe_len = usize::MAX;
+        // SAFETY: every pointer is valid and aligned; only the capacity is
+        // short so the two-phase probe reports the needed count.
+        let probe_status = unsafe {
+            call_fluid_rescan(
+                ABI_VERSION,
+                &input,
+                probe.as_mut_ptr(),
+                probe.len(),
+                &mut probe_len,
+            )
+        };
+        assert_eq!(probe_status, MORNLEA_STATUS_OUTPUT_OVERFLOW);
+        assert_eq!(probe_len, needed);
+        assert_eq!(probe, vec![0xa5_u8; 1]);
     }
 }
