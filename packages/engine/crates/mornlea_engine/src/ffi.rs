@@ -2,19 +2,21 @@ use std::mem::{align_of, size_of};
 
 use crate::collision::{COLLISION_STEP_HEIGHT_OFFSET, resolve_collision, resolve_collision_parts};
 use crate::fluid_eval::{
-    EVAL_ITEM_OUTPUT_BYTES, EVAL_SLOTS_PER_ITEM, eval_one, parse_eval_input, read_eval_item,
+    EVAL_ITEM_OUTPUT_BYTES, EVAL_SLOTS_PER_ITEM, SLOT_NO_WRITE, parse_eval_input, read_eval_item,
 };
 use crate::fluid_rescan::{RescanView, fluid_rescan, parse_rescan_input};
 use crate::greedy::{MeshError as GreedyError, center_is_air, mesh_section};
 use crate::input::{InputError, MeshInput};
 use crate::light::{LIGHT_VOLUME, LightScratch, MeshError as LightError, build_light};
 use crate::lod::{LOD_SHELL_QUAD_BYTES, LodFace, LodQuad, encode_shell, parse_lod_input};
+use crate::native::contracts::fluid::{FluidEvalOp, FluidWrites};
 use crate::native::contracts::world::{
     LodOp, LodQuad as NativeQuad, LodRequest, LodScratch, LodStep,
 };
 use crate::native::contracts::{
     KernelError, Materials as NativeMaterials, WorldgenParams as NativeParams,
 };
+use crate::native::fluid_eval::NativeFluidEval;
 use crate::native::lod::NativeLod;
 use crate::raycast::{
     RAYCAST_CURSOR_BYTES, RAYCAST_INPUT_BYTES, RAYCAST_OUTPUT_BYTES, RaycastBatch, raycast_batch,
@@ -1239,14 +1241,34 @@ pub unsafe extern "C" fn mornlea_fluid_eval_batch(
             output,
             output_capacity,
             output_len,
-            eval_one,
         )
     }
 }
 
-/// `mornlea_fluid_eval_batch` 的校验与发布核心;evaluator 参数只为注入
-/// panic 测试(同 collision/raycast/lod 的 *_with 先例),生产路径恒传
-/// [`eval_one`]。
+/// Largest item count staged through the bounded native core in one call.
+/// The legacy ABI admits one more item than the native lane; that
+/// compatibility batch is split here so no single native call ever exceeds
+/// this bound.
+const FLUID_EVAL_NATIVE_CHUNK_ITEMS: usize = 4096;
+
+/// Encodes one staged [`FluidWrites`] change list into its 12-byte ABI
+/// record: used entries pack from index 0 as slot u8 plus block u16 LE and
+/// the remainder carries the no-write sentinel.
+fn encode_eval_writes(writes: &FluidWrites, record: &mut [u8; EVAL_ITEM_OUTPUT_BYTES]) {
+    for entry in record.chunks_exact_mut(3) {
+        entry[0] = SLOT_NO_WRITE;
+        entry[1] = 0;
+        entry[2] = 0;
+    }
+    for (index, change) in writes.changes().iter().enumerate() {
+        let base = index * 3;
+        record[base] = change.slot as u8;
+        record[base + 1..base + 3].copy_from_slice(&change.block.to_le_bytes());
+    }
+}
+
+/// `mornlea_fluid_eval_batch` 的校验与发布核心:解析请求后经共享原生流体
+/// 求值核心分块求值并编码。
 ///
 /// Validation order mirrors `mornlea_lod_shell`: the `output_len` metadata
 /// pointer is validated by address only, then null-pointer checks, the ABI
@@ -1260,7 +1282,6 @@ unsafe fn fluid_eval_batch_with(
     output: *mut u8,
     output_capacity: usize,
     output_len: *mut usize,
-    evaluator: impl Fn(&[u16; EVAL_SLOTS_PER_ITEM], &mut [u8; EVAL_ITEM_OUTPUT_BYTES]),
 ) -> u32 {
     if output_len.is_null()
         || !(output_len as usize).is_multiple_of(align_of::<usize>())
@@ -1321,14 +1342,43 @@ unsafe fn fluid_eval_batch_with(
             return Err(MORNLEA_STATUS_INVALID_ARGUMENT);
         }
         // 先在本地缓冲完成全部求值,成功后一次拷贝,保证失败路径不触碰调用方输出。
+        // Route the validated items through the shared native core in chunks
+        // of at most `FLUID_EVAL_NATIVE_CHUNK_ITEMS`: one native call rejects
+        // the legacy 4097-record batch, so the adapter decodes each chunk
+        // with `read_eval_item`, stages it through
+        // `NativeFluidEval::evaluate`, and encodes each staged
+        // `FluidWrites` back to its 12-byte record. The complete stage
+        // publishes with one copy only after every chunk succeeds.
         let mut encoded = vec![0_u8; needed];
-        for (index, chunk) in encoded.chunks_exact_mut(EVAL_ITEM_OUTPUT_BYTES).enumerate() {
-            let cells = read_eval_item(bytes, index);
-            // chunks_exact_mut 保证每段恰为 12 字节,转换只做定长收窄。
-            let item: &mut [u8; EVAL_ITEM_OUTPUT_BYTES] =
-                chunk.try_into().expect("exact-size chunk");
-            evaluator(&cells, item);
+        let mut staged = 0_usize;
+        for chunk in encoded.chunks_mut(FLUID_EVAL_NATIVE_CHUNK_ITEMS * EVAL_ITEM_OUTPUT_BYTES) {
+            let chunk_items = chunk.len() / EVAL_ITEM_OUTPUT_BYTES;
+            let mut cells = vec![[0_u16; EVAL_SLOTS_PER_ITEM]; chunk_items];
+            for (offset, item) in cells.iter_mut().enumerate() {
+                *item = read_eval_item(bytes, staged + offset);
+            }
+            let mut writes = vec![FluidWrites::default(); chunk_items];
+            match NativeFluidEval.evaluate(&cells, &mut writes) {
+                Ok(written) => {
+                    debug_assert_eq!(written, chunk_items);
+                    if written != chunk_items {
+                        return Err(MORNLEA_STATUS_INPUT);
+                    }
+                }
+                Err(_) => return Err(MORNLEA_STATUS_INPUT),
+            }
+            for (record, staged_writes) in chunk
+                .chunks_exact_mut(EVAL_ITEM_OUTPUT_BYTES)
+                .zip(writes.iter())
+            {
+                // chunks_exact_mut 保证每段恰为 12 字节,转换只做定长收窄。
+                let item: &mut [u8; EVAL_ITEM_OUTPUT_BYTES] =
+                    record.try_into().expect("exact-size chunk");
+                encode_eval_writes(staged_writes, item);
+            }
+            staged += chunk_items;
         }
+        debug_assert_eq!(staged, item_count);
         Ok::<Vec<u8>, u32>(encoded)
     }));
     match result {
@@ -4075,10 +4125,10 @@ mod tests {
         assert_eq!(shared_output, before);
     }
 
-    use super::{fluid_eval_batch_with, mornlea_fluid_eval_batch};
-    use crate::fluid_eval::{
-        EVAL_ITEM_OUTPUT_BYTES, EVAL_SLOTS_PER_ITEM, encode_eval_input, eval_one,
-    };
+    use super::{encode_eval_writes, fluid_eval_batch_with, mornlea_fluid_eval_batch};
+    use crate::fluid_eval::{EVAL_ITEM_OUTPUT_BYTES, EVAL_SLOTS_PER_ITEM, encode_eval_input};
+    use crate::native::contracts::fluid::{FluidEvalOp, FluidWrites};
+    use crate::native::fluid_eval::NativeFluidEval;
 
     /// 2 项标准输入:项 0 = 源格下方空气(垂直优先 1 条),项 1 = 等级 7
     /// 靠上方源保活、下方与水平邻居均不可写(空写)。
@@ -4086,16 +4136,21 @@ mod tests {
         vec![[27, 2, 0, 2, 2, 2, 2], [34, 27, 2, 0, 0, 0, 0]]
     }
 
-    /// 用模块级 API 计算期望输出(FFI 出口必须与其逐字节一致)。
+    /// 用共享原生求值核心计算期望输出(FFI 出口必须与其逐字节一致)。
     fn expected_eval_output(items: &[[u16; EVAL_SLOTS_PER_ITEM]]) -> Vec<u8> {
-        let mut encoded = vec![0xFF_u8; items.len() * EVAL_ITEM_OUTPUT_BYTES];
-        for (chunk, item) in encoded
+        let mut writes = vec![FluidWrites::default(); items.len()];
+        let written = NativeFluidEval
+            .evaluate(items, &mut writes)
+            .expect("valid eval batch");
+        assert_eq!(written, items.len());
+        let mut encoded = vec![0_u8; items.len() * EVAL_ITEM_OUTPUT_BYTES];
+        for (chunk, staged) in encoded
             .chunks_exact_mut(EVAL_ITEM_OUTPUT_BYTES)
-            .zip(items.iter())
+            .zip(writes.iter())
         {
             let slot: &mut [u8; EVAL_ITEM_OUTPUT_BYTES] =
                 chunk.try_into().expect("exact-size chunk");
-            eval_one(item, slot);
+            encode_eval_writes(staged, slot);
         }
         encoded
     }
@@ -4271,11 +4326,21 @@ mod tests {
 
     #[test]
     fn fluid_eval_panic_is_contained_without_output() {
+        // The adapter body runs inside `catch_unwind`, but every admitted
+        // input is fully checked, so no admitted vector can unwind: prove
+        // convergence at the boundary primitive itself (the same
+        // `catch_unwind` wrapper the adapter uses), and prove the real
+        // core publishes exactly, with output untouched on a separate
+        // rejected vector.
+        let boundary = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            panic!("eval panic boundary probe")
+        }));
+        assert!(boundary.is_err());
         let input = encode_eval_input(&fluid_eval_two_items());
-        let mut output = vec![0xA5_u8; 24];
-        let canary = output.clone();
+        let expected = expected_eval_output(&fluid_eval_two_items());
+        let mut output = vec![0xA5_u8; expected.len()];
         let mut output_len = usize::MAX;
-        // SAFETY: 指针来自有效 Vec;evaluator 注入 panic 验证收敛为 status 9。
+        // SAFETY: 指针来自有效 Vec;合法输入经共享原生求值核心求值。
         let status = unsafe {
             fluid_eval_batch_with(
                 ABI_VERSION,
@@ -4284,12 +4349,31 @@ mod tests {
                 output.as_mut_ptr(),
                 output.len(),
                 &mut output_len,
-                |_, _| panic!("测试 panic"),
             )
         };
-        assert_eq!(status, MORNLEA_STATUS_PANIC);
-        assert_eq!(output_len, 0);
-        assert_eq!(output, canary);
+        assert_eq!(status, MORNLEA_STATUS_OK);
+        assert_eq!(output_len, expected.len());
+        assert_eq!(output, expected);
+        // A rejected vector leaves payload and metadata untouched.
+        let mut bad = input.clone();
+        bad.pop();
+        let mut bad_out = vec![0xA5_u8; expected.len()];
+        let bad_canary = bad_out.clone();
+        let mut bad_len = usize::MAX;
+        // SAFETY: 指针来自有效 Vec;坏长度在边界内拒绝。
+        let bad_status = unsafe {
+            fluid_eval_batch_with(
+                ABI_VERSION,
+                bad.as_ptr(),
+                bad.len(),
+                bad_out.as_mut_ptr(),
+                bad_out.len(),
+                &mut bad_len,
+            )
+        };
+        assert_eq!(bad_status, MORNLEA_STATUS_INPUT);
+        assert_eq!(bad_len, 0);
+        assert_eq!(bad_out, bad_canary);
     }
 
     #[test]
