@@ -631,3 +631,28 @@
   - `make rust`, `go test ./packages/shared/nativeabi -run 'TestFluidRescan'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestFluidRescan'`, `--lib fluid_rescan` 19/19, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (no drift).
 - Review: Task Reviewer subagent: spec compliant (legacy caught-unwind-9 kept instead of a typed `MissingHalo` value is legitimate — status/canary/metadata identical, typed path covered by 2.9); no Important findings; two Minor English-comment notes both fixed in `3cfdb36c`. No deferred minor from this node.
 - Rollback: Revert `3cfdb36c`, `99c18494` in that order.
+
+## 2026-09-26 — Node 3.11 dispatch preflight
+
+- Frontier: 3.10 accepted and recorded by `efda696a`; 3.11 is the last family adapter. Worktree clean at BASE `efda696a`; `tests/numerical_migration/mesh.rs` holds the 2.10/2.11 typed scene tests; oracles `kernel_mesh_view_test.go` + `kernel_mesh_test.go` accepted at 2.10/2.11.
+- Preflight scan (packet `plans/02-adapters.md#node-3-11`, dispatch packet `worker-briefs.md` node 3.11, brief 5.11 geometry half, `tasks.md` node 3.11):
+  - 3.11 ↔ 3.1: the mesh hunk already carries the 3.1 metadata order; this node keeps it. No conflict.
+  - 3.11 ↔ 2.10/2.11: consumes the accepted view/light/geometry providers; `src/input.rs`, `src/light.rs`, `src/quad.rs`, `src/greedy/**` read-only in principle — but the route may orphan the direct-write `mesh_section`/`PackedStage`/`MeshError` items into `dead_code`, in which case the controller lands `#[cfg(test)]` gating WITH the matching `src/greedy/mod.rs` hash refresh same-commit per the derived-artifact rule (node-3.8 precedent).
+  - No injectable seam in the mesh hunk (direct calls verified); nothing to remove or re-own.
+- Ruling: stage-then-publish through the shared `mesh_geometry` core with a field-for-field decode of the validated wire bytes; light stays on the byte lane feeding the same core; capacity check before any caller write; `OutputInvariant` → 9; all-air shortcut first. Cost if wrong: none — admission and geometry provably shared.
+- Dispatch: two implementer attempts (first stalled in research, second implemented the fix without a report); the controller adopted the orphan test (genuine RED verified live) and implemented/verified the fix directly. Report `task-3.11-report.md` in the session workspace.
+
+## 2026-09-26 — Node 3.11 mesh ABI late-overflow repair
+
+- Predecessor SHA: `efda696a`
+- Result SHA: `ad811e13` (single commit incl. `src/greedy/mod.rs` gating + hash refresh; no other manifest change — mesh family pins only header/test/greedy, and the package-wide oracle run stayed green after the refresh)
+- Implementation summary:
+  - `src/ffi.rs` `mornlea_mesh_section` body: admission byte-identical (3.1 order, structural parse, all-air shortcut first, `validate_registry(true)`, byte-lane `build_light` 6/8). The direct-write tail is replaced: decode validated wire bytes field-for-field into owned view/registry (blocks u16, heights bool/i16, entries, visibility, air/barrier) → `try_new_registry` (6/5/9 mapping) → separate owned `MeshScratch::try_new()` → `mesh_geometry(TypedMeshAccess, light, MeshStage)` over the fixed 40960 stage (invariant → 9) → capacity check first (short → 7 + zero + untouched) → pack `packed()` + single copy + count. Legacy 552960-byte scratch stays the light workspace.
+  - `src/greedy/mod.rs`: `MeshError` + `PackedStage` + `mesh_section` marked `#[cfg(test)]` (now test-only; the `greedy` unit suite keeps the direct-write vehicle).
+  - `tests/numerical_migration/mesh.rs`: `mesh_abi_late_overflow` for the dense 32768-quad scene at exactly 24576 slots (genuine RED pre-fix: 24576 prefix slots written from slot 0), full-capacity full-bits parity + digest `0x99aaa0c381505725`, and the all-air structural-only exemption. Tmp probe deleted.
+  - `testdata/runtime-migration/contracts.json`: `src/greedy/mod.rs` hash refreshed (`5cfd1aa5…` → `93a63dba…`); `source_revision` unchanged, no case changes.
+- Verification:
+  - RED pre-fix: `left: Some(0), right: None` ("late overflow wrote 24576 payload slots starting at slot 0"); GREEN post-fix: migration mesh 4/4 with identical bits.
+  - `make rust`, `go test ./packages/shared/nativeabi -run 'TestMeshSection'`, `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelMesh'`, `--lib greedy` 35/35 + `light` 31/31 plus full `--lib` 274/274 and `native_contract` 80/80, clippy `-D warnings`, `cargo fmt --check`, full runtime-oracle package green (~63s, green only after the hash refresh).
+- Review: Task Reviewer subagent: spec compliant; no Important findings; four Minor notes (duplicated wire offsets, `expect` in the ABI closure, silent remainder drop, per-call heap — all documented as acceptable/future work, no action). No deferred minor from this node.
+- Rollback: Revert `ad811e13`.
