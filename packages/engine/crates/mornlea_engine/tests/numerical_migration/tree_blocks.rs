@@ -335,6 +335,11 @@ unsafe extern "C" {
 
 const ABI_CANARY: u8 = 0xA5;
 
+/// ABI status codes mirrored from the engine exports: only success and
+/// output-overflow appear in this adapter test.
+const TREE_STATUS_OK: u32 = 0;
+const TREE_STATUS_OUTPUT_OVERFLOW: u32 = 7;
+
 /// Builds the raw 28-byte `MTB1` tree request: magic + layout 1 + seed LE +
 /// x/y/z LE.
 fn tree_abi_input(seed: i64, x: i32, y: i32, z: i32) -> Vec<u8> {
@@ -352,7 +357,7 @@ fn tree_abi_input(seed: i64, x: i32, y: i32, z: i32) -> Vec<u8> {
 /// 8-byte record per entry (dx/dy/dz, reserved 0, block LE, reserved 0).
 fn tree_encoded(records: &[TreeBlock]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(4 + records.len() * 8);
-    bytes.extend_from_slice(&(records.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&u32::try_from(records.len()).unwrap().to_le_bytes());
     for record in records {
         bytes.push(record.offset[0] as u8);
         bytes.push(record.offset[1] as u8);
@@ -392,7 +397,7 @@ fn tree_blocks_abi_order() {
     let needed = 4usize.checked_add(count.checked_mul(8).unwrap()).unwrap();
     assert_eq!(needed, expected.len(), "needed matches the encoded bytes");
     let (status, output) = call_tree_abi(&input, needed);
-    assert_eq!(status, 0, "seed 0 at (3,-64,5) status");
+    assert_eq!(status, TREE_STATUS_OK, "seed 0 at (3,-64,5) status");
     assert_eq!(output, expected, "seed 0 at (3,-64,5) full output bytes");
 
     // Seed 1 at the negative root (-7,311,-13): the same full-bytes equality
@@ -400,7 +405,7 @@ fn tree_blocks_abi_order() {
     let high_input = tree_abi_input(1, -7, 311, -13);
     let high_expected = tree_encoded(&records_at(1, -7, 311, -13));
     let (status, high_output) = call_tree_abi(&high_input, high_expected.len());
-    assert_eq!(status, 0, "seed 1 at (-7,311,-13) status");
+    assert_eq!(status, TREE_STATUS_OK, "seed 1 at (-7,311,-13) status");
     assert_eq!(
         high_output, high_expected,
         "seed 1 at (-7,311,-13) full output bytes"
@@ -409,13 +414,13 @@ fn tree_blocks_abi_order() {
     // One byte short: status 7 with the full canary untouched.
     let short_before = vec![ABI_CANARY; needed - 1];
     let (status, short) = call_tree_abi(&input, needed - 1);
-    assert_eq!(status, 7, "short output status");
+    assert_eq!(status, TREE_STATUS_OUTPUT_OVERFLOW, "short output status");
     assert_eq!(short, short_before, "short output keeps the canary");
 
     // Larger destination: status 0 with the suffix beyond `needed` untouched,
     // pinning the at-least-capacity ruling.
     let (status, large) = call_tree_abi(&input, needed + 16);
-    assert_eq!(status, 0, "larger destination status");
+    assert_eq!(status, TREE_STATUS_OK, "larger destination status");
     assert_eq!(
         large[..needed],
         expected[..],
