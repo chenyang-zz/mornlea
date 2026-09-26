@@ -264,6 +264,321 @@ func TestPathfindOracleGrid(t *testing.T) {
 	pathfindOracleExport(t)
 }
 
+// Flat floor terrain shared by the search scenes: solid stone at the floor
+// level, air elsewhere.
+func pathfindOracleFlatFetch(floorY int32) func(x, y, z int32) (core.BlockID, bool) {
+	return func(x, y, z int32) (core.BlockID, bool) {
+		if y == floorY {
+			return core.StoneID, true
+		}
+		return core.AirID, true
+	}
+}
+
+// The transition matrix: every movement kind with its blocked-clearance
+// counterpart, plus the flat+gap double emission in one direction.
+func pathfindOracleTransitions(t *testing.T) {
+	flat := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 5, 3, 1,
+			pathfindOracleTable, pathfindOracleFlatFetch(63), nil)
+	})
+	assertPathfindOracleCells(t,
+		mustPathfindOraclePath(t, flat, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 4, Y: 64, Z: 0}).Waypoints,
+		[]pathfind.PathCell{{X: 0, Y: 64, Z: 0}, {X: 2, Y: 64, Z: 0}, {X: 4, Y: 64, Z: 0}})
+	assertPathfindOracleCells(t,
+		mustPathfindOraclePath(t, flat, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 2, Y: 64, Z: 0}).Waypoints,
+		[]pathfind.PathCell{{X: 0, Y: 64, Z: 0}, {X: 2, Y: 64, Z: 0}})
+
+	steps := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 2, 4, 1,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if (x == 0 && y == 63) || (x == 1 && y == 64) {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	assertPathfindOracleCells(t,
+		mustPathfindOraclePath(t, steps, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 1, Y: 65, Z: 0}).Waypoints,
+		[]pathfind.PathCell{{X: 0, Y: 64, Z: 0}, {X: 1, Y: 65, Z: 0}})
+
+	blockedClearance := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 2, 4, 1,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if (x == 0 && y == 63) || (x == 1 && y == 64) || (x == 0 && y == 66) {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	if _, err := pathfind.FindPath(blockedClearance, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 1, Y: 65, Z: 0}); !errors.Is(err, pathfind.ErrPathUnreachable) {
+		t.Fatalf("blocked jump clearance should be unreachable: %v", err)
+	}
+
+	descent := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 2, 4, 1,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if (x == 0 && y == 64) || (x == 1 && y == 63) {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	assertPathfindOracleCells(t,
+		mustPathfindOraclePath(t, descent, pathfind.PathCell{X: 0, Y: 65, Z: 0}, pathfind.PathCell{X: 1, Y: 64, Z: 0}).Waypoints,
+		[]pathfind.PathCell{{X: 0, Y: 65, Z: 0}, {X: 1, Y: 64, Z: 0}})
+
+	descentTwo := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 2, 4, 1,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if (x == 0 && y == 65) || (x == 1 && y == 63) {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	if _, err := pathfind.FindPath(descentTwo, pathfind.PathCell{X: 0, Y: 66, Z: 0}, pathfind.PathCell{X: 1, Y: 64, Z: 0}); !errors.Is(err, pathfind.ErrPathUnreachable) {
+		t.Fatalf("two-cell drop should be unreachable: %v", err)
+	}
+
+	oneGap := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 3, 3, 1,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if y == 63 && (x == 0 || x == 2) {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	assertPathfindOracleCells(t,
+		mustPathfindOraclePath(t, oneGap, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 2, Y: 64, Z: 0}).Waypoints,
+		[]pathfind.PathCell{{X: 0, Y: 64, Z: 0}, {X: 2, Y: 64, Z: 0}})
+
+	twoGap := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 4, 3, 1,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if y == 63 && (x == 0 || x == 3) {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	if _, err := pathfind.FindPath(twoGap, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 3, Y: 64, Z: 0}); !errors.Is(err, pathfind.ErrPathUnreachable) {
+		t.Fatalf("two-cell gap should be unreachable: %v", err)
+	}
+
+	blockedGapHead := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 3, 3, 1,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if (y == 63 && (x == 0 || x == 2)) || (x == 1 && y == 65) {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	if _, err := pathfind.FindPath(blockedGapHead, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 2, Y: 64, Z: 0}); !errors.Is(err, pathfind.ErrPathUnreachable) {
+		t.Fatalf("gap with blocked middle head should be unreachable: %v", err)
+	}
+}
+
+// Diamond ties and cost ties: symmetric routes freeze the first-insertion
+// choice, and the terraced climb pins the equal-cost parent retention.
+func pathfindOracleTies(t *testing.T) {
+	diamond := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 2, 3, 2,
+			pathfindOracleTable, pathfindOracleFlatFetch(63), nil)
+	})
+	assertPathfindOracleCells(t,
+		mustPathfindOraclePath(t, diamond, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 1, Y: 64, Z: 1}).Waypoints,
+		[]pathfind.PathCell{{X: 0, Y: 64, Z: 0}, {X: 1, Y: 64, Z: 0}, {X: 1, Y: 64, Z: 1}})
+	assertPathfindOracleCells(t,
+		mustPathfindOraclePath(t, diamond, pathfind.PathCell{X: 1, Y: 64, Z: 0}, pathfind.PathCell{X: 0, Y: 64, Z: 1}).Waypoints,
+		[]pathfind.PathCell{{X: 1, Y: 64, Z: 0}, {X: 0, Y: 64, Z: 0}, {X: 0, Y: 64, Z: 1}})
+
+	detour := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 8, 4, 4,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if y == 63 {
+					return core.StoneID, true
+				}
+				if x == 1 && z == 0 && y == 64 {
+					return core.StoneID, true
+				}
+				if x == 0 && z == 1 && y == 65 {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	assertPathfindOracleCells(t,
+		mustPathfindOraclePath(t, detour, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 7, Y: 64, Z: 3}).Waypoints,
+		[]pathfind.PathCell{
+			{X: 0, Y: 64, Z: 0}, {X: 1, Y: 65, Z: 0}, {X: 1, Y: 64, Z: 1},
+			{X: 3, Y: 64, Z: 1}, {X: 5, Y: 64, Z: 1}, {X: 7, Y: 64, Z: 1}, {X: 7, Y: 64, Z: 3},
+		})
+
+	terrace := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 60, Z: 0}, 7, 6, 5,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if z == 2 {
+					if x < 2 {
+						if y == 60 {
+							return core.StoneID, true
+						}
+						return core.AirID, true
+					}
+					if y == 61 {
+						return core.StoneID, true
+					}
+					return core.AirID, true
+				}
+				if y == 60 {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	assertPathfindOracleCells(t,
+		mustPathfindOraclePath(t, terrace, pathfind.PathCell{X: 0, Y: 61, Z: 2}, pathfind.PathCell{X: 6, Y: 62, Z: 2}).Waypoints,
+		[]pathfind.PathCell{
+			{X: 0, Y: 61, Z: 2}, {X: 1, Y: 61, Z: 2}, {X: 2, Y: 62, Z: 2},
+			{X: 4, Y: 62, Z: 2}, {X: 6, Y: 62, Z: 2},
+		})
+}
+
+// Start equals goal, non-standing endpoints and the revision identity that
+// travels with every successful result.
+func pathfindOracleEndpoints(t *testing.T) {
+	grid := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 100, Y: 63, Z: -50}, 3, 3, 1,
+			pathfindOracleTable, pathfindOracleFlatFetch(63),
+			[]pathfind.ChunkRevision{
+				{Chunk: core.ChunkPos{X: 3, Z: 1}, Revision: 9},
+				{Chunk: core.ChunkPos{X: 1, Z: 2}, Revision: 4},
+			})
+	})
+	start := pathfind.PathCell{X: 100, Y: 64, Z: -50}
+	result := mustPathfindOraclePath(t, grid, start, start)
+	assertPathfindOracleCells(t, result.Waypoints, []pathfind.PathCell{start})
+	assertPathfindOracleRevisions(t, result.Revisions, []pathfind.ChunkRevision{
+		{Chunk: core.ChunkPos{X: 1, Z: 2}, Revision: 4},
+		{Chunk: core.ChunkPos{X: 3, Z: 1}, Revision: 9},
+	})
+
+	unsupported := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 3, 3, 1,
+			pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+				if y == 63 && x != 0 {
+					return core.StoneID, true
+				}
+				return core.AirID, true
+			}, nil)
+	})
+	if _, err := pathfind.FindPath(unsupported, pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: 2, Y: 64, Z: 0}); !errors.Is(err, pathfind.ErrPathUnreachable) {
+		t.Fatalf("non-standing start should be unreachable: %v", err)
+	} else if errors.Is(err, pathfind.ErrPathBudgetExceeded) {
+		t.Fatalf("non-standing start hit the wrong category: %v", err)
+	}
+	if _, err := pathfind.FindPath(unsupported, pathfind.PathCell{X: 2, Y: 64, Z: 0}, pathfind.PathCell{X: 0, Y: 64, Z: 0}); !errors.Is(err, pathfind.ErrPathUnreachable) {
+		t.Fatalf("non-standing goal should be unreachable: %v", err)
+	} else if errors.Is(err, pathfind.ErrPathBudgetExceeded) {
+		t.Fatalf("non-standing goal hit the wrong category: %v", err)
+	}
+}
+
+// The exact budget boundary for the narrow corridor shape: a 4096-long
+// corridor succeeds at its far end while the 4097-long corridor exhausts the
+// budget at its far end.
+func pathfindOracleBudgetBoundary(t *testing.T) {
+	corridor := func(length int32) pathfind.PathGrid {
+		return mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+			return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: -1}, length, 3, 3,
+				pathfindOracleTable, func(x, y, z int32) (core.BlockID, bool) {
+					if y == 63 && z == 0 {
+						return core.StoneID, true
+					}
+					return core.AirID, true
+				}, nil)
+		})
+	}
+	inside := corridor(pathfind.MaxPathNodes)
+	result := mustPathfindOraclePath(t, inside,
+		pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: pathfind.MaxPathNodes - 1, Y: 64, Z: 0})
+	if first, last := result.Waypoints[0], result.Waypoints[len(result.Waypoints)-1]; first != (pathfind.PathCell{X: 0, Y: 64, Z: 0}) || last != (pathfind.PathCell{X: pathfind.MaxPathNodes - 1, Y: 64, Z: 0}) {
+		t.Fatalf("boundary path endpoints wrong: first %+v last %+v", first, last)
+	}
+	outside := corridor(pathfind.MaxPathNodes + 1)
+	if _, err := pathfind.FindPath(outside,
+		pathfind.PathCell{X: 0, Y: 64, Z: 0}, pathfind.PathCell{X: pathfind.MaxPathNodes, Y: 64, Z: 0}); !errors.Is(err, pathfind.ErrPathBudgetExceeded) {
+		t.Fatalf("4097-long corridor should exhaust the budget: %v", err)
+	} else if errors.Is(err, pathfind.ErrPathUnreachable) {
+		t.Fatalf("4097-long corridor hit the wrong category: %v", err)
+	}
+}
+
+// Same grid searched twice returns identical waypoints: determinism without
+// any scratch handle on the Go side.
+func pathfindOracleDeterminism(t *testing.T) {
+	grid := mustPathfindOracleGrid(t, func() (pathfind.PathGrid, error) {
+		return pathfind.NewPathGrid(core.BlockPos{X: 0, Y: 63, Z: 0}, 5, 3, 1,
+			pathfindOracleTable, pathfindOracleFlatFetch(63), nil)
+	})
+	start := pathfind.PathCell{X: 0, Y: 64, Z: 0}
+	goal := pathfind.PathCell{X: 4, Y: 64, Z: 0}
+	first := mustPathfindOraclePath(t, grid, start, goal)
+	second := mustPathfindOraclePath(t, grid, start, goal)
+	assertPathfindOracleCells(t, second.Waypoints, first.Waypoints)
+	assertPathfindOracleRevisions(t, second.Revisions, first.Revisions)
+}
+
+func TestPathfindOracleSearch(t *testing.T) {
+	pathfindOracleTransitions(t)
+	pathfindOracleTies(t)
+	pathfindOracleEndpoints(t)
+	pathfindOracleBudgetBoundary(t)
+	pathfindOracleDeterminism(t)
+	pathfindOracleSearchExport(t)
+}
+
+// pathfindOracleSearchExport publishes the locked search observations when the
+// export directory is named, in the same plain style as the grid producer:
+// two summary files under a search producer child, created exclusively so
+// reruns never silently replace evidence.
+func pathfindOracleSearchExport(t *testing.T) {
+	t.Helper()
+	exportDir := strings.TrimSpace(os.Getenv("RUNTIME_ORACLE_EXPORT_DIR"))
+	if exportDir == "" {
+		return
+	}
+	producerDir := filepath.Join(exportDir, "pathfind-search")
+	if err := os.MkdirAll(producerDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	summary := fmt.Sprintf(
+		"cases=17 transitions=corridor-jump-fall-gap-blocked-flatgap ties=diamond-detour-terrace endpoints=startgoal-nonstanding budget=4096-vs-4097 determinism=repeat-identical\n"+
+			"source=packages/shared/pathfind/pathfind.go sha=%s\n",
+		"unpinned",
+	)
+	for name, data := range map[string][]byte{
+		"search_summary.txt": []byte(summary),
+		"search_paths.txt":   []byte("corridor: (0,64,0) (2,64,0) (4,64,0); diamond: (0,64,0) (1,64,0) (1,64,1); terrace: (0,61,2) (1,61,2) (2,62,2) (4,62,2) (6,62,2)\n"),
+	} {
+		target := filepath.Join(producerDir, name)
+		file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			t.Fatalf("create exclusive %s: %v", target, err)
+		}
+		if _, err := file.Write(data); err != nil {
+			file.Close()
+			t.Fatalf("write %s: %v", target, err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatalf("close %s: %v", target, err)
+		}
+	}
+	t.Logf("exported pathfind search observations to %s", producerDir)
+}
+
 // pathfindOracleExport publishes the locked oracle observations when the
 // export directory is named, in the same plain style as the earlier kernel
 // oracle tests: two summary files under a grid producer child, created
