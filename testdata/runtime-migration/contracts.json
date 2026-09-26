@@ -1124,19 +1124,31 @@
       "numeric_semantics": "IEEE-754 binary32 little-endian; swept AABB; fail closed on invalid layout",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/collision.rs",
+          "sha256": "sha256:883b238943d62466b555b3005cb17dc72995275fa5396362c350777ff590219a"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:6a32a2e0ed9c9f3fc8e04ca3c5e16ca2ec4f6e4bfe9c007f51ed78151fe11928"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/collision.rs",
-          "sha256": "sha256:883b238943d62466b555b3005cb17dc72995275fa5396362c350777ff590219a"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:3e81f73f3c5ca75753f0bbc6b96bccfd4ba8b0d03a929c72496002fdb966c218"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_collision_resolve/11/floor-wall",
+        "kernel.mornlea_collision_resolve/11/invalid-used-nan",
+        "kernel.mornlea_collision_resolve/11/short-output-15"
+      ]
     },
     {
       "id": "kernel.mornlea_fluid_eval_batch",
@@ -17484,6 +17496,78 @@
         "0"
       ],
       "rust_consumer": "mornlea_domain"
+    },
+    {
+      "id": "kernel.mornlea_collision_resolve/11/floor-wall",
+      "family": "kernel.mornlea_collision_resolve",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 16
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/collision/floor-wall.input.bin",
+        "sha256": "sha256:120b466d45b3e34d4d0247386d117c1caeadb7af2d929eb5624fac6b34253d0e"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/collision/floor-wall.expected.json",
+        "sha256": "sha256:b20714fc575281bad7c2be52453d10aa2605bfac915d9fbfc718e74222d8b09b"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_collision_resolve/11/invalid-used-nan",
+      "family": "kernel.mornlea_collision_resolve",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 16
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/collision/invalid-used-nan.input.bin",
+        "sha256": "sha256:d553eb6c3952871286b7cec9869b3e30123e89a369073a25ceacd83339b4fdd0"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/collision/invalid-used-nan.expected.json",
+        "sha256": "sha256:8df0cbcc120820643663200c1c86e1fb9d1dccbd27f3f9f2b022d7b3e15c0f1b"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_collision_resolve/11/short-output-15",
+      "family": "kernel.mornlea_collision_resolve",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "short",
+        "output_capacity": 15
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/collision/short-output-15.input.bin",
+        "sha256": "sha256:120b466d45b3e34d4d0247386d117c1caeadb7af2d929eb5624fac6b34253d0e"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/collision/short-output-15.expected.json",
+        "sha256": "sha256:f1a1a8e4f6319c514e6c9beabf01007d1fb6d06d2f29f67ca63a987566d04969"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
     },
     {
       "id": "protocol.client.BoneMeal/45/decode-infinite-pitch",

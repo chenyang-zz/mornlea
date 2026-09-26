@@ -1,0 +1,9 @@
+{
+  "category": "input",
+  "fields": {
+    "output_len": 16,
+    "payload_sha256": "sha256:57f52e8a0c54a7f08350c602fa6852ff59e4e246fbe38aa369bdd7b7e89e013f",
+    "status": 3
+  },
+  "kind": "error"
+}

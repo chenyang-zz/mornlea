@@ -109,7 +109,15 @@ type NegativeCoverageExceptions map[CoveragePoint]string
 // negotiation group then appends the `ClientHello` and `LoginStart` routes,
 // and later packet groups append their own family, version and operation
 // routes here one node at a time. The closed union is verified at corpus
-// closure. A registration never carries an empty route set, so a consumer is
+// closure.
+//
+// The mornlea_engine consumer is the Rust numerical consumer. It carries the
+// ten engine ABI routes plus the independent Go/Rust pathfinding route, all
+// under the kernel operation the native closure executes; routes land with
+// nonempty cases one family at a time while working reconciliation tolerates
+// the routes still waiting for their import.
+//
+// A registration never carries an empty route set, so a consumer is
 // always born alongside routes that execute under it.
 func BaselineConsumerRegistry() ConsumerRegistry {
 	return ConsumerRegistry{
@@ -306,6 +314,22 @@ func BaselineConsumerRegistry() ConsumerRegistry {
 			Routes: map[ConsumerRoute]struct{}{
 				{FamilyID: "agent.http", Version: "v1", Operation: "agent-contract"}: {},
 				{FamilyID: "agent.mcp", Version: "v1", Operation: "agent-contract"}:  {},
+			},
+		},
+		"mornlea_engine": {
+			Kind: ConsumerRust,
+			Routes: map[ConsumerRoute]struct{}{
+				{FamilyID: "kernel.mornlea_collision_resolve", Version: "11", Operation: "kernel"}: {},
+				{FamilyID: "kernel.mornlea_physics_step", Version: "11", Operation: "kernel"}:      {},
+				{FamilyID: "kernel.mornlea_raycast_batch", Version: "11", Operation: "kernel"}:     {},
+				{FamilyID: "kernel.mornlea_worldgen_chunk", Version: "11", Operation: "kernel"}:    {},
+				{FamilyID: "kernel.mornlea_worldgen_probe", Version: "11", Operation: "kernel"}:    {},
+				{FamilyID: "kernel.mornlea_tree_blocks", Version: "11", Operation: "kernel"}:       {},
+				{FamilyID: "kernel.mornlea_lod_shell", Version: "11", Operation: "kernel"}:         {},
+				{FamilyID: "kernel.mornlea_fluid_eval_batch", Version: "11", Operation: "kernel"}:  {},
+				{FamilyID: "kernel.mornlea_fluid_rescan", Version: "11", Operation: "kernel"}:      {},
+				{FamilyID: "kernel.mornlea_mesh_section", Version: "11", Operation: "kernel"}:      {},
+				{FamilyID: "kernel.pathfind", Version: "1", Operation: "kernel"}:                   {},
 			},
 		},
 		"external:runtime-authority": {

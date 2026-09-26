@@ -215,8 +215,11 @@ func TestContractInventoryWorkingReportsZeroCaseFamilies(t *testing.T) {
 		t.Fatalf("ReconcileWorking failed: %v", err)
 	}
 
+	// The native closure imports kernel routes one family at a time: point at
+	// the next route still waiting for its import while earlier routes carry
+	// executed cases.
 	zeroCasePoint := CoveragePoint{
-		FamilyID: "kernel.mornlea_collision_resolve",
+		FamilyID: "kernel.mornlea_physics_step",
 		Version:  "11",
 	}
 	foundUncovered := false
@@ -264,7 +267,7 @@ func TestContractInventoryCompleteRejectsZeroCaseFamilies(t *testing.T) {
 	}
 
 	zeroCasePoint := CoveragePoint{
-		FamilyID: "kernel.mornlea_collision_resolve",
+		FamilyID: "kernel.mornlea_physics_step",
 		Version:  "11",
 	}
 	foundInError := false
@@ -532,6 +535,22 @@ func TestContractInventoryRejectsKnownConsumerOnUnsupportedRoute(t *testing.T) {
 			Routes: map[ConsumerRoute]struct{}{
 				{FamilyID: "agent.http", Version: "v1", Operation: "agent-contract"}: {},
 				{FamilyID: "agent.mcp", Version: "v1", Operation: "agent-contract"}:  {},
+			},
+		},
+		"mornlea_engine": {
+			Kind: ConsumerRust,
+			Routes: map[ConsumerRoute]struct{}{
+				{FamilyID: "kernel.mornlea_collision_resolve", Version: "11", Operation: "kernel"}: {},
+				{FamilyID: "kernel.mornlea_physics_step", Version: "11", Operation: "kernel"}:      {},
+				{FamilyID: "kernel.mornlea_raycast_batch", Version: "11", Operation: "kernel"}:     {},
+				{FamilyID: "kernel.mornlea_worldgen_chunk", Version: "11", Operation: "kernel"}:    {},
+				{FamilyID: "kernel.mornlea_worldgen_probe", Version: "11", Operation: "kernel"}:    {},
+				{FamilyID: "kernel.mornlea_tree_blocks", Version: "11", Operation: "kernel"}:       {},
+				{FamilyID: "kernel.mornlea_lod_shell", Version: "11", Operation: "kernel"}:         {},
+				{FamilyID: "kernel.mornlea_fluid_eval_batch", Version: "11", Operation: "kernel"}:  {},
+				{FamilyID: "kernel.mornlea_fluid_rescan", Version: "11", Operation: "kernel"}:      {},
+				{FamilyID: "kernel.mornlea_mesh_section", Version: "11", Operation: "kernel"}:      {},
+				{FamilyID: "kernel.pathfind", Version: "1", Operation: "kernel"}:                   {},
 			},
 		},
 		"external:runtime-authority": {
