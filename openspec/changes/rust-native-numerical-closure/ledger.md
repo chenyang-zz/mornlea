@@ -318,3 +318,29 @@
   - `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelMeshView' -count=1` passed; `go test ./packages/audit -run 'TestCommentBacktickIdentifiersExist'` passed after de-backticking the `MGM1` wire magic in the new producer comment.
 - Review: Task Reviewer subagent: Spec compliant; one Important finding (rejected raw cases lacked destination-untouched canary assertions) fixed in `49810017`; the scoped re-review marked it ADDRESSED with no new breakage. Deferred minor for the final whole-branch review: the typed rejection test does not pin that validation leaves the scratch untouched. Requirement artifacts were reconciled to the landed count-1 sentinel semantics.
 - Rollback: Revert `49810017`, `cfd0bf1c` in that order.
+
+## 2026-09-26 — Node 2.11 dispatch preflight
+
+- Frontier: 2.10 accepted and recorded by `4eace34c`; 2.11 is next. Worktree clean at BASE `4eace34cb48658cc8e8c3a7638b411778acce820`; `tests/native_contract/mesh.rs` and `tests/numerical_migration/mesh.rs` are empty registered stubs; `kernel_mesh_test.go` absent.
+- Preflight scan (packet `plans/01-providers.md#node-2-11`, dispatch packet `worker-briefs.md` node 2.11, brief 5.11 geometry half, `tasks.md` node 2.11):
+  - 2.11 ↔ 2.10: consumes the accepted `native::mesh` surface (`try_new_registry`, `build_light`) and adds only the geometry entry; 2.10 is closed. No conflict.
+  - 2.11 ↔ 3.1/3.11: `ffi.rs` read-only here; the typed geometry and stage behavior is what 3.11 adapts (24,576-slot preflight and alias/metadata cases remain 3.1/3.11). No conflict.
+  - Derived-artifact inventory: the mesh family pins `src/greedy/mod.rs`; 2.11 edits it, so the controller lands the matching hash refresh and the package-wide runtime-oracle run after the provider commit, following the accepted node 2.6–2.9 pattern. `src/quad.rs` and the greedy emission/test files are not pinned.
+- Ruling: the 2.11 commit subject is `feat(engine): stage safe native mesh geometry` (the node's dispatch packet wording); the file packet's "stage safe native mesh and light output" variant is a wording slip because this node adds no light behavior. Cost if wrong: commit-subject text only.
+- Dispatch: implementer subagent for node 2.11 from BASE `4eace34c`; report `task-2.11-report.md` in the session scratch directory.
+
+## 2026-09-26 — Node 2.11 mesh geometry and typed publication
+
+- Predecessor SHA: `4eace34c`
+- Result SHA: `6b3b7c74` (provider `373478c6`, review fix `6b3b7c74`, controller hash refresh `74620e9b`)
+- Implementation summary:
+  - `src/quad.rs` adds the checked quad construction/validation used before `packed()`.
+  - `src/greedy/mod.rs`, `src/greedy/torch.rs` and `src/greedy/bed.rs` route emission through one geometry core that keeps the existing face/slice/row/plant/model order and merge rules while staging into the bounded scratch; the untouched `plant_tests.rs`/`torch_tests.rs` remain the retention evidence.
+  - `src/native/mesh.rs` adds the typed geometry entry implementing the frozen `MeshOp` for the mesh provider: validate, stage into `MeshScratch.stage` (40960), exact needed count, single copy; late packing violations return `OutputInvariant` with the entire destination untouched; short destinations return exact `OutputTooSmall { needed, available }`.
+  - Tests: `tests/native_contract/mesh.rs` (12 tests), `tests/numerical_migration/mesh.rs` (3 tests, packed-bit/ordered-record parity against the raw ABI), Go producer `kernel_mesh_test.go` (`TestKernelMesh`, 4 exported cases under `task-2.11-exports/`).
+- Verification:
+  - `native_contract --test ... mesh` 12 passed; `numerical_migration --test ... mesh` 3 passed; `--lib greedy` 35 passed; full crate suite 380 passed.
+  - clippy `-D warnings`, `cargo fmt --all --check`, `gofmt -l ./packages` all clean.
+  - `go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelMesh' -count=1` passed; after the controller hash refresh (`src/greedy/mod.rs` `b2409165…` -> `5cfd1aa5…`), the package-wide `go test ./packages/tools/cmd/runtime-oracle -count=1` passed in 70.8s; `go test ./packages/audit -run '^TestCommentBacktickIdentifiersExist$'` passed after the fix round.
+- Review: Task Reviewer subagent: every node-2.11 functional item verified (packed-bit and ordered-record parity, not type presence); one Important finding (backticked `MGM1` in the new Go producer turned the repo-wide audit gate red) fixed in `6b3b7c74`, which also rewrote the three de-staled Chinese comment spots in English; the scoped re-review marked both items ADDRESSED with no new breakage.
+- Rollback: Revert `74620e9b`, `6b3b7c74`, `373478c6` in that order.
