@@ -8,7 +8,7 @@ pub mod fluid_eval;
 pub mod fluid_rescan;
 pub mod lod;
 #[allow(dead_code)]
-pub(crate) mod mesh;
+pub mod mesh;
 #[allow(dead_code)]
 pub(crate) mod pathfind;
 #[allow(dead_code)]

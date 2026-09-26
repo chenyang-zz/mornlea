@@ -1,4 +1,5 @@
-use crate::input::{MeshInput, RegistryView};
+use crate::input::{MeshInput, MeshViewAccess, RegistryView};
+use crate::native::contracts::{KernelError, MeshScratch, MeshView};
 use crate::quad::{Face, plant_material};
 
 pub(crate) const LIGHT_MIN: i32 = -16;
@@ -62,38 +63,159 @@ impl<'a> LightScratch<'a> {
     }
 }
 
+/// Read capability the shared light solver needs from one registry lane.
+///
+/// The byte ABI lane (`MeshInput` plus `RegistryView`) and the typed lane
+/// (`MeshView` plus its contract registry) answer the same questions, so the
+/// solver is generic over this trait and both lanes run exactly one
+/// implementation of the sky and block light rules.
+pub(crate) trait LightAccess {
+    fn block(&self, x: i32, y: i32, z: i32) -> u16;
+    fn sky_light(&self, x: i32, y: i32, z: i32) -> u8;
+    fn air_id(&self) -> u16;
+    fn contains(&self, id: u16) -> bool;
+    fn opaque(&self, id: u16) -> bool;
+    fn emission(&self, id: u16) -> u8;
+    fn light_attenuation(&self, id: u16) -> u8;
+    fn plant_block(&self, id: u16) -> bool;
+}
+
+/// Byte-lane access over the raw parser's borrowed input and registry
+/// snapshot; both references stay owned by the ABI call frame.
+struct RawLightAccess<'view, 'data> {
+    input: &'view MeshInput<'data>,
+    registry: &'view RegistryView<'data>,
+}
+
+impl LightAccess for RawLightAccess<'_, '_> {
+    fn block(&self, x: i32, y: i32, z: i32) -> u16 {
+        self.input.block(x, y, z)
+    }
+
+    fn sky_light(&self, x: i32, y: i32, z: i32) -> u8 {
+        self.input.sky_light(x, y, z)
+    }
+
+    fn air_id(&self) -> u16 {
+        self.input.air_id
+    }
+
+    fn contains(&self, id: u16) -> bool {
+        self.registry.contains(id)
+    }
+
+    fn opaque(&self, id: u16) -> bool {
+        self.registry.opaque(id)
+    }
+
+    fn emission(&self, id: u16) -> u8 {
+        self.registry.emission(id)
+    }
+
+    fn light_attenuation(&self, id: u16) -> u8 {
+        self.registry.light_attenuation(id)
+    }
+
+    fn plant_block(&self, id: u16) -> bool {
+        self.registry
+            .material(id, Face::NegX as usize)
+            .is_some_and(plant_material)
+    }
+}
+
+impl LightAccess for MeshViewAccess<'_> {
+    fn block(&self, x: i32, y: i32, z: i32) -> u16 {
+        MeshViewAccess::block(self, x, y, z)
+    }
+
+    fn sky_light(&self, x: i32, y: i32, z: i32) -> u8 {
+        MeshViewAccess::sky_light(self, x, y, z)
+    }
+
+    fn air_id(&self) -> u16 {
+        MeshViewAccess::air_id(self)
+    }
+
+    fn contains(&self, id: u16) -> bool {
+        MeshViewAccess::contains(self, id)
+    }
+
+    fn opaque(&self, id: u16) -> bool {
+        MeshViewAccess::opaque(self, id)
+    }
+
+    fn emission(&self, id: u16) -> u8 {
+        MeshViewAccess::emission(self, id)
+    }
+
+    fn light_attenuation(&self, id: u16) -> u8 {
+        MeshViewAccess::light_attenuation(self, id)
+    }
+
+    fn plant_block(&self, id: u16) -> bool {
+        MeshViewAccess::material(self, id, Face::NegX as usize).is_some_and(plant_material)
+    }
+}
+
+/// Raw byte-lane entry used by the engine ABI adapter; its behavior is pinned
+/// by the ABI tests.
 pub(crate) fn build_light(
     input: &MeshInput<'_>,
     registry: &RegistryView<'_>,
     scratch: &mut LightScratch<'_>,
 ) -> Result<(), MeshError> {
-    scratch.levels.fill(0);
-    scratch.reset_queue();
-    build_sky(input, registry, scratch)?;
-    scratch.reset_queue();
-    build_block(input, registry, scratch)
+    build_light_core(&RawLightAccess { input, registry }, scratch)
 }
 
-fn build_sky(
-    input: &MeshInput<'_>,
-    registry: &RegistryView<'_>,
+/// Typed native entry: builds sky and block light for one validated view into
+/// the typed scratch.
+///
+/// The caller (`native::mesh`) validates the view's registry first. Every build
+/// clears the complete level volume and empties the queue before each pass, so
+/// the caller may reuse one `MeshScratch` across sections without retained
+/// light or queue state.
+pub(crate) fn build_light_view(
+    view: &MeshView<'_>,
+    scratch: &mut MeshScratch,
+) -> Result<(), KernelError> {
+    let access = MeshViewAccess::new(view);
+    let mut light = LightScratch::new(&mut scratch.levels[..], &mut scratch.queue[..]);
+    build_light_core(&access, &mut light).map_err(|error| match error {
+        MeshError::EmissionOutOfRange => KernelError::EmissionOutOfRange,
+        MeshError::QueueOverflow => KernelError::QueueOverflow,
+    })
+}
+
+/// Runs the two light passes over one lane, resetting all owned scratch state
+/// first so a reused scratch can never carry levels or queue entries across
+/// builds.
+fn build_light_core(
+    access: &impl LightAccess,
     scratch: &mut LightScratch<'_>,
 ) -> Result<(), MeshError> {
+    scratch.levels.fill(0);
+    scratch.reset_queue();
+    build_sky(access, scratch)?;
+    scratch.reset_queue();
+    build_block(access, scratch)
+}
+
+fn build_sky(access: &impl LightAccess, scratch: &mut LightScratch<'_>) -> Result<(), MeshError> {
     let end = LIGHT_MIN + LIGHT_SIDE as i32;
     for x in LIGHT_MIN..end {
         for z in LIGHT_MIN..end {
             let mut direct = false;
             for y in (LIGHT_MIN..end).rev() {
-                if input.sky_light(x, y, z) == 15 {
+                if access.sky_light(x, y, z) == 15 {
                     direct = true;
                 }
                 if !direct {
                     continue;
                 }
-                let id = input.block(x, y, z);
-                if !registry.contains(id)
-                    || registry.opaque(id)
-                    || (id != input.air_id && !plant_block(registry, id))
+                let id = access.block(x, y, z);
+                if !access.contains(id)
+                    || access.opaque(id)
+                    || (id != access.air_id() && !access.plant_block(id))
                 {
                     direct = false;
                     continue;
@@ -136,12 +258,12 @@ fn build_sky(
     let mut start = 0;
     let mut end = scratch.tail;
     while start < scratch.tail {
-        let deferred = spread(input, registry, scratch, start..end, false)?;
+        let deferred = spread(access, scratch, start..end, false)?;
         let next_end = scratch.tail;
         // 没有任何有衰减的邻居被推迟时整个相位 B 是空转，直接跳过：这让不含流体的
         // 世界维持与固定扣减时代逐格相同的工作量。
         if deferred {
-            spread(input, registry, scratch, start..end, true)?;
+            spread(access, scratch, start..end, true)?;
         }
         // 空桶会自愈：start 不动、end 前移到当前 tail，下一轮自然落到再下一个桶。
         start = end;
@@ -159,8 +281,7 @@ fn build_sky(
 /// 返回值只在 `attenuating == false` 时有意义：为真表示本轮至少跳过了一个有衰减的
 /// 邻居，调用方据此决定要不要真的跑相位 B。
 fn spread(
-    input: &MeshInput<'_>,
-    registry: &RegistryView<'_>,
+    access: &impl LightAccess,
     scratch: &mut LightScratch<'_>,
     slots: std::ops::Range<usize>,
     attenuating: bool,
@@ -190,11 +311,11 @@ fn spread(
             if scratch.levels[next] >> 4 >= best {
                 continue;
             }
-            let id = input.block(nx, ny, nz);
-            if !registry.contains(id) || registry.opaque(id) {
+            let id = access.block(nx, ny, nz);
+            if !access.contains(id) || access.opaque(id) {
                 continue;
             }
-            let attenuation = registry.light_attenuation(id);
+            let attenuation = access.light_attenuation(id);
             if (attenuation != 0) != attenuating {
                 deferred |= !attenuating;
                 continue;
@@ -216,17 +337,13 @@ fn spread(
     Ok(deferred)
 }
 
-fn build_block(
-    input: &MeshInput<'_>,
-    registry: &RegistryView<'_>,
-    scratch: &mut LightScratch<'_>,
-) -> Result<(), MeshError> {
+fn build_block(access: &impl LightAccess, scratch: &mut LightScratch<'_>) -> Result<(), MeshError> {
     let end = LIGHT_MIN + LIGHT_SIDE as i32;
     let mut source_counts = [0_usize; 16];
     for x in LIGHT_MIN..end {
         for y in LIGHT_MIN..end {
             for z in LIGHT_MIN..end {
-                let level = registry.emission(input.block(x, y, z));
+                let level = access.emission(access.block(x, y, z));
                 if level == 0 {
                     continue;
                 }
@@ -251,7 +368,7 @@ fn build_block(
             for x in LIGHT_MIN..end {
                 for y in LIGHT_MIN..end {
                     for z in LIGHT_MIN..end {
-                        if registry.emission(input.block(x, y, z)) != level {
+                        if access.emission(access.block(x, y, z)) != level {
                             continue;
                         }
                         let index = light_index(x, y, z);
@@ -283,9 +400,9 @@ fn build_block(
                     continue;
                 }
                 let next = light_index(nx, ny, nz);
-                let id = input.block(nx, ny, nz);
+                let id = access.block(nx, ny, nz);
                 if scratch.levels[next] & BLOCK_MASK >= candidate
-                    || !block_light_destination(registry, id, input.air_id)
+                    || !block_light_destination(access, id)
                 {
                     continue;
                 }
@@ -299,14 +416,8 @@ fn build_block(
 }
 
 // block_light_destination 只放行空气与离散植物材质；未登记编号因无材质而关闭。
-fn block_light_destination(registry: &RegistryView<'_>, id: u16, air_id: u16) -> bool {
-    id == air_id || plant_block(registry, id)
-}
-
-fn plant_block(registry: &RegistryView<'_>, id: u16) -> bool {
-    registry
-        .material(id, Face::NegX as usize)
-        .is_some_and(plant_material)
+fn block_light_destination(access: &impl LightAccess, id: u16) -> bool {
+    id == access.air_id() || access.plant_block(id)
 }
 
 fn inside(x: i32, y: i32, z: i32) -> bool {
@@ -321,8 +432,13 @@ fn light_index(x: i32, y: i32, z: i32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{LIGHT_VOLUME, LightScratch, MeshError, build_light};
+    use super::{
+        LIGHT_VOLUME, LightScratch, MeshError, build_light, build_light_core, build_light_view,
+    };
     use crate::input::{MeshInput, tests::valid_input};
+    use crate::native::contracts::{
+        MeshModel, MeshRegistry, MeshRegistryEntry, MeshScratch, MeshView,
+    };
 
     const BLOCKS_OFFSET: usize = 16;
     const BLOCKS_BYTES: usize = 27 * 4096 * 2;
@@ -761,7 +877,11 @@ mod tests {
         let queue = Box::leak(vec![0; LIGHT_VOLUME].into_boxed_slice());
         let mut light = LightScratch::new(levels, queue);
 
-        super::build_sky(&input.mesh, &input.mesh.registry, &mut light)
+        let access = super::RawLightAccess {
+            input: &input.mesh,
+            registry: &input.mesh.registry,
+        };
+        super::build_sky(&access, &mut light)
             .expect("天空光队列溢出：每格至多入队一次的不变量已被破坏");
 
         let mut lit = 0;
@@ -902,5 +1022,218 @@ mod tests {
         InputFixture {
             mesh: MeshInput::parse(bytes).unwrap(),
         }
+    }
+
+    /// Typed-lane fixtures: a small registry plus one owned 3x3x3 neighborhood
+    /// view so the shared light core can be exercised through the typed view.
+    const TYPED_AIR: u16 = 0;
+    const TYPED_STONE: u16 = 1;
+    const TYPED_LAMP: u16 = 2;
+    const TYPED_BLOCKS: usize = 27 * 4096;
+
+    fn typed_entry(id: u16, emission: u8) -> MeshRegistryEntry {
+        MeshRegistryEntry {
+            id,
+            opaque: id == TYPED_STONE,
+            emission,
+            material: [0; 6],
+            fluid_height: 0,
+            light_attenuation: 0,
+            block_top_raw: 0,
+            model: MeshModel::Default,
+        }
+    }
+
+    /// The lamp entry is the only emitter; `emission` lets a rebuild reuse the
+    /// same blocks with a dark registry to expose retained light state.
+    fn typed_registry(emission: u8) -> MeshRegistry {
+        let entries = [
+            typed_entry(TYPED_AIR, 0),
+            typed_entry(TYPED_STONE, 0),
+            typed_entry(TYPED_LAMP, emission),
+        ];
+        let words = entries.len() * entries.len().div_ceil(64);
+        MeshRegistry::try_new(&entries, &vec![0_u64; words], TYPED_AIR, TYPED_STONE).unwrap()
+    }
+
+    struct TypedFixture {
+        blocks: Box<[u16; TYPED_BLOCKS]>,
+        heights_present: Box<[bool; 9]>,
+        heights: Box<[[i16; 256]; 9]>,
+    }
+
+    impl TypedFixture {
+        fn new() -> Self {
+            Self {
+                blocks: Box::new([0; TYPED_BLOCKS]),
+                heights_present: Box::new([false; 9]),
+                heights: Box::new([[0; 256]; 9]),
+            }
+        }
+
+        fn set_block(&mut self, x: i32, y: i32, z: i32, id: u16) {
+            self.blocks[typed_cell(x, y, z)] = id;
+        }
+
+        /// Pins one height cell inside its 16x16 section column. Presence is a
+        /// per-column flag, so callers must first darken or fill the section
+        /// (`set_height_section`) before opening a single cell.
+        fn set_height(&mut self, x: i32, z: i32, highest: i16) {
+            let (column, cell) = typed_height_slot(x, z);
+            self.heights[column][cell] = highest;
+        }
+
+        /// Mirrors the byte lane's `fill_height_section`: marks the whole
+        /// section column present with one pinned height.
+        fn set_height_section(&mut self, x: i32, z: i32, highest: i16) {
+            let (cx, _) = neighbor_cell(x);
+            let (cz, _) = neighbor_cell(z);
+            let column = cx * 3 + cz;
+            self.heights_present[column] = true;
+            for cell in 0..256 {
+                self.heights[column][cell] = highest;
+            }
+        }
+
+        fn view<'a>(&'a self, registry: &'a MeshRegistry) -> MeshView<'a> {
+            MeshView {
+                blocks: &self.blocks,
+                heights_present: &self.heights_present,
+                heights: &self.heights,
+                section_origin_y: 0,
+                registry,
+            }
+        }
+    }
+
+    /// Test-local mirror of the typed neighborhood indexing, used to place
+    /// fixture cells and to read levels back out of the scratch.
+    fn typed_cell(x: i32, y: i32, z: i32) -> usize {
+        let (cx, lx) = neighbor_cell(x);
+        let (cy, ly) = neighbor_cell(y);
+        let (cz, lz) = neighbor_cell(z);
+        ((cx * 3 + cy) * 3 + cz) * 4096 + ((ly << 8) | (lz << 4) | lx)
+    }
+
+    fn typed_height_slot(x: i32, z: i32) -> (usize, usize) {
+        let (cx, lx) = neighbor_cell(x);
+        let (cz, lz) = neighbor_cell(z);
+        (cx * 3 + cz, (lz << 4) | lx)
+    }
+
+    /// Reads one cell out of the typed scratch level volume. The volume has
+    /// its own index space, so the block-cell index cannot be reused here.
+    fn typed_level(scratch: &MeshScratch, x: i32, y: i32, z: i32) -> u8 {
+        scratch.levels[super::light_index(x, y, z)]
+    }
+
+    #[test]
+    fn typed_emitter_lights_fifteen_and_next_door_fourteen() {
+        let registry = typed_registry(15);
+        let mut fixture = TypedFixture::new();
+        fixture.set_block(8, 8, 8, TYPED_LAMP);
+        let view = fixture.view(&registry);
+        let mut scratch = MeshScratch::try_new().unwrap();
+
+        build_light_view(&view, &mut scratch).unwrap();
+
+        assert_eq!(typed_level(&scratch, 8, 8, 8) & 0x0f, 15);
+        assert_eq!(typed_level(&scratch, 9, 8, 8) & 0x0f, 14);
+    }
+
+    #[test]
+    fn typed_direct_sky_seed_is_fifteen_and_spreads_to_fourteen() {
+        let registry = typed_registry(0);
+        let mut fixture = TypedFixture::new();
+        fixture.set_height_section(8, 8, 31);
+        fixture.set_height(8, 8, 7);
+        let view = fixture.view(&registry);
+        let mut scratch = MeshScratch::try_new().unwrap();
+
+        build_light_view(&view, &mut scratch).unwrap();
+
+        assert_eq!(typed_level(&scratch, 8, 8, 8) >> 4, 15);
+        assert_eq!(typed_level(&scratch, 8, 8, 8) & 0x0f, 0);
+        assert_eq!(typed_level(&scratch, 9, 8, 8) >> 4, 14);
+    }
+
+    #[test]
+    fn typed_unknown_block_stops_block_light_propagation() {
+        let registry = typed_registry(15);
+        let mut fixture = TypedFixture::new();
+        // Solid stone everywhere except one lamp, one unknown id and one air
+        // cell: an open volume would let light detour around the unknown id.
+        fixture.blocks.fill(TYPED_STONE);
+        fixture.set_block(8, 8, 8, TYPED_LAMP);
+        fixture.set_block(9, 8, 8, 60000);
+        fixture.set_block(10, 8, 8, 0);
+        let view = fixture.view(&registry);
+        let mut scratch = MeshScratch::try_new().unwrap();
+
+        build_light_view(&view, &mut scratch).unwrap();
+
+        assert_eq!(typed_level(&scratch, 9, 8, 8) & 0x0f, 0);
+        assert_eq!(typed_level(&scratch, 10, 8, 8) & 0x0f, 0);
+    }
+
+    /// Bright-then-dark reuse of one shared scratch: the second build must
+    /// start from a cleared level volume and an empty queue. A third rebuild of
+    /// the bright section must then match a fresh scratch exactly, so neither
+    /// retained levels nor a retained queue tail can leak across calls.
+    #[test]
+    fn typed_reuse_resets_levels_and_queue_between_bright_and_dark() {
+        let registry = typed_registry(15);
+        let mut bright_fixture = TypedFixture::new();
+        bright_fixture.set_block(8, 8, 8, TYPED_LAMP);
+        let dark_fixture = TypedFixture::new();
+        let bright = bright_fixture.view(&registry);
+        let dark = dark_fixture.view(&registry);
+
+        let mut scratch = MeshScratch::try_new().unwrap();
+        build_light_view(&bright, &mut scratch).unwrap();
+        assert!(
+            scratch.levels.iter().any(|&level| level != 0),
+            "bright section must light the level volume"
+        );
+
+        build_light_view(&dark, &mut scratch).unwrap();
+        assert!(
+            scratch.levels.iter().all(|&level| level == 0),
+            "dark rebuild retained light from the bright section"
+        );
+
+        build_light_view(&bright, &mut scratch).unwrap();
+        let mut fresh = MeshScratch::try_new().unwrap();
+        build_light_view(&bright, &mut fresh).unwrap();
+        assert_eq!(
+            &scratch.levels[..],
+            &fresh.levels[..],
+            "rebuild after reuse diverged from a fresh scratch"
+        );
+    }
+
+    /// Queue capacity is exactly one enqueue per cell: the lamp registry fills
+    /// the whole 48^3 level volume with sources, so the exact-capacity queue
+    /// completes and a queue one word short overflows.
+    #[test]
+    fn typed_queue_exact_fill_completes_and_one_short_overflows() {
+        let registry = typed_registry(15);
+        let mut fixture = TypedFixture::new();
+        fixture.blocks.fill(TYPED_LAMP);
+        let view = fixture.view(&registry);
+        let mut scratch = MeshScratch::try_new().unwrap();
+        let access = crate::input::MeshViewAccess::new(&view);
+
+        let mut light = LightScratch::new(&mut scratch.levels[..], &mut scratch.queue[..]);
+        build_light_core(&access, &mut light).unwrap();
+        assert_eq!(light.tail(), LIGHT_VOLUME);
+
+        let mut short = MeshScratch::try_new().unwrap();
+        let mut light =
+            LightScratch::new(&mut short.levels[..], &mut short.queue[..LIGHT_VOLUME - 1]);
+        assert_eq!(
+            build_light_core(&access, &mut light),
+            Err(MeshError::QueueOverflow),
+        );
     }
 }

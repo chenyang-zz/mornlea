@@ -1,3 +1,5 @@
+use crate::native::contracts::{KernelError, MeshRegistry, MeshRegistryEntry, MeshView};
+
 const BLOCKS_BYTES: usize = 27 * 4096 * 2;
 const HEIGHTS_PRESENT_BYTES: usize = 9;
 const HEIGHTS_BYTES: usize = 9 * 256 * 2;
@@ -62,6 +64,151 @@ pub(crate) enum InputError {
     Emission,
 }
 
+impl From<InputError> for KernelError {
+    /// Maps the byte parser's rejection categories onto the typed kernel
+    /// error the native lanes surface to callers.
+    fn from(error: InputError) -> Self {
+        match error {
+            InputError::Input => Self::InvalidInput,
+            InputError::Registry => Self::InvalidRegistry,
+            InputError::Emission => Self::EmissionOutOfRange,
+        }
+    }
+}
+
+/// Structural registry rule shared by the byte parser and the typed lane:
+/// `1..=96` entries whose visibility table holds exactly `R * ceil(R / 64)`
+/// words — one bit per ordered (id, adjacent id) pair.
+///
+/// Returns the required total word count. The upper bound is a cross-language
+/// hand-synchronized capacity; Go keeps the matching
+/// `nativeMaxRegistryEntries` and the capacity sync test feeds a full table
+/// through this check.
+pub(crate) fn check_registry_shape(count: usize) -> Result<usize, InputError> {
+    if count == 0 || count > MAX_REGISTRY_ENTRIES {
+        return Err(InputError::Registry);
+    }
+    Ok(count * count.div_ceil(64))
+}
+
+/// One registry entry's semantic fields, decoded from either lane's storage.
+///
+/// The byte lane decodes the 20-byte record and the typed lane reads the
+/// contract fields; both then run the single range check below, so the two
+/// lanes cannot drift apart.
+pub(crate) struct RegistryEntrySpec {
+    pub(crate) id: u16,
+    pub(crate) opaque: u8,
+    pub(crate) emission: u8,
+    pub(crate) fluid_height: u8,
+    pub(crate) light_attenuation: u8,
+    pub(crate) block_top_raw: u8,
+    pub(crate) model: u8,
+}
+
+/// Validates one entry in table order plus every semantic range.
+///
+/// `previous` is the preceding accepted id: ids must strictly increase, which
+/// the binary-search lookups rely on. `reject_overbright` is only cleared by
+/// the light unit tests' over-bright fixture; production callers keep it set.
+///
+/// Field domains, in the order they are checked:
+///
+/// - `opaque` is a two-value flag (`0`/`1`).
+/// - `emission` is a 4-bit light level; `16` is out of range.
+/// - `fluid_height` is a 4-bit height raw value plus the `0` "not fluid"
+///   sentinel, so the legal domain is `0..=14`. `15` is reserved for the
+///   mesher's "fluid above too" full-cell case and must never be baked into an
+///   entry, which would otherwise paint a full-cell surface from a wrong entry.
+/// - `light_attenuation` is the extra sky-light cost per cell, legal `0..=1`.
+///   The `1` bound is the premise of the `light::build_sky` bucket proof (the
+///   per-cell step is only ever 1 or 2), not the sky-light value range. A `>= 2`
+///   attenuation would give 1/2/3 steps, let two brightness values share one
+///   bucket and break the "each cell enters the queue at most once" invariant,
+///   overflowing the exactly `LIGHT_VOLUME` queue on the render hot path.
+///   Supporting it is a separate change that generalizes the buckets.
+/// - `block_top_raw` is a 4-bit top-height raw value with the `0` "full cube"
+///   sentinel; the legal domain is `0..=14` and `15` cannot express any legal
+///   geometry (full cubes must write the sentinel).
+/// - `fluid_height` and `block_top_raw` are mutually exclusive: fluid corner
+///   heights are computed from the neighborhood while short blocks are driven
+///   by the constant field, so one entry must not carry both meanings.
+/// - `model` is the closed tag set `0..=6` (default, the five torch forms and
+///   the bed); unknown tags would silently fall back to default geometry.
+pub(crate) fn check_registry_entry(
+    previous: Option<u16>,
+    entry: RegistryEntrySpec,
+    reject_overbright: bool,
+) -> Result<(), InputError> {
+    if previous.is_some_and(|previous| previous >= entry.id) || entry.opaque > 1 {
+        return Err(InputError::Registry);
+    }
+    if reject_overbright && entry.emission > 15 {
+        return Err(InputError::Emission);
+    }
+    if entry.fluid_height > 14 {
+        return Err(InputError::Registry);
+    }
+    if entry.light_attenuation > 1 {
+        return Err(InputError::Registry);
+    }
+    if entry.block_top_raw > 14 {
+        return Err(InputError::Registry);
+    }
+    if entry.fluid_height != 0 && entry.block_top_raw != 0 {
+        return Err(InputError::Registry);
+    }
+    if entry.model > 6 {
+        return Err(InputError::Registry);
+    }
+    Ok(())
+}
+
+/// Validates a typed registry snapshot fully, closing the ranges the frozen
+/// contract constructor leaves open.
+///
+/// `MeshRegistry::try_new` already checks the entry count, strict id order,
+/// visibility word count, emission, fluid height and model. This second pass
+/// applies the same shared entry check the byte lane runs, plus the sentinel
+/// rules the typed lane must not skip: air and barrier must be distinct and
+/// both present, because the view falls back to the barrier id outside the
+/// owned neighborhood and the block-light pass falls back to the air id.
+pub(crate) fn validate_typed_registry(registry: &MeshRegistry) -> Result<(), InputError> {
+    let entries = registry.entries();
+    let required_words = check_registry_shape(entries.len())?;
+    if registry.visibility().len() != required_words {
+        return Err(InputError::Registry);
+    }
+    if registry.air() == registry.barrier() {
+        return Err(InputError::Registry);
+    }
+    let mut previous = None;
+    let mut has_air = false;
+    let mut has_barrier = false;
+    for entry in entries {
+        check_registry_entry(
+            previous,
+            RegistryEntrySpec {
+                id: entry.id,
+                opaque: u8::from(entry.opaque),
+                emission: entry.emission,
+                fluid_height: entry.fluid_height,
+                light_attenuation: entry.light_attenuation,
+                block_top_raw: entry.block_top_raw,
+                model: entry.model as u8,
+            },
+            true,
+        )?;
+        has_air |= entry.id == registry.air();
+        has_barrier |= entry.id == registry.barrier();
+        previous = Some(entry.id);
+    }
+    if !has_air || !has_barrier {
+        return Err(InputError::Registry);
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(crate) struct MeshInput<'a> {
     pub section_origin_y: i32,
@@ -93,10 +240,10 @@ impl<'a> MeshInput<'a> {
         }
         let registry_count = usize::from(read_u16(input, 8));
         let words_per_row = usize::from(read_u16(input, 10));
-        if registry_count == 0
-            || registry_count > MAX_REGISTRY_ENTRIES
-            || words_per_row != registry_count.div_ceil(64)
-        {
+        // After the shape check `registry_count <= 96`, so the wire table length
+        // `count * words_per_row` cannot overflow this multiplication.
+        let required_words = check_registry_shape(registry_count)?;
+        if registry_count * words_per_row != required_words {
             return Err(InputError::Registry);
         }
         let registry_bytes = registry_count
@@ -156,35 +303,20 @@ impl<'a> MeshInput<'a> {
     }
 
     pub(crate) fn block(&self, x: i32, y: i32, z: i32) -> u16 {
-        let Some((cx, lx)) = neighbor_cell(x) else {
-            return self.barrier_id;
-        };
-        let Some((cy, ly)) = neighbor_cell(y) else {
-            return self.barrier_id;
-        };
-        let Some((cz, lz)) = neighbor_cell(z) else {
-            return self.barrier_id;
-        };
-        let section = (cx * 3 + cy) * 3 + cz;
-        let cell = (ly << 8) | (lz << 4) | lx;
-        read_u16(self.blocks, (section * 4096 + cell) * 2)
+        match typed_cell_index(x, y, z) {
+            Some(index) => read_u16(self.blocks, index * 2),
+            None => self.barrier_id,
+        }
     }
 
     pub(crate) fn sky_light(&self, x: i32, y: i32, z: i32) -> u8 {
-        let Some((cx, lx)) = neighbor_cell(x) else {
+        let Some((column, cell)) = typed_height_slot(x, z) else {
             return 0;
         };
-        if neighbor_cell(y).is_none() {
+        if neighbor_cell(y).is_none() || self.heights_present[column] == 0 {
             return 0;
         }
-        let Some((cz, lz)) = neighbor_cell(z) else {
-            return 0;
-        };
-        let column = cx * 3 + cz;
-        if self.heights_present[column] == 0 {
-            return 0;
-        }
-        let highest = read_i16(self.heights, (column * 256 + (lz << 4) + lx) * 2);
+        let highest = read_i16(self.heights, (column * 256 + cell) * 2);
         u8::from(self.section_origin_y + y > i32::from(highest)) * 15
     }
 }
@@ -210,52 +342,21 @@ impl RegistryView<'_> {
         for index in 0..self.count {
             let offset = index * REGISTRY_ENTRY_BYTES;
             let id = read_u16(self.entries, offset);
-            if previous.is_some_and(|previous| previous >= id) || self.entries[offset + 2] > 1 {
-                return Err(InputError::Registry);
-            }
-            if reject_overbright && self.entries[offset + 3] > 15 {
-                return Err(InputError::Emission);
-            }
-            // fluid_height 是 4-bit 高度原值加「0=非流体」哨兵，合法域只有 0..=14；
-            // 15 被保留给「上方也是流体」的满格情形，那是 mesher 现算的、不会出现在
-            // 条目里，因此这里一并拒绝，免得错误的条目悄悄产生满格水面。
-            if self.entries[offset + 16] > 14 {
-                return Err(InputError::Registry);
-            }
-            // light_attenuation 的合法域是 **0..=1**。
-            //
-            // 这个 1 **不是**天空光值域（那是 0..15，两个数字碰巧都在附近，别看混）：
-            // 它是 `light::build_sky` 分桶推进的**算法前提**。那里的证明依赖「每格扣减
-            // 只可能是 1 或 2」，于是一个桶只装一种亮度、相位 A 产出的 L-1 与相位 B
-            // 产出的 L-2 落进不同桶段。衰减一旦到 2，扣减就有 1/2/3 三种，`B(L+1)` 的
-            // L-2 会和 `A(L)` 的 L-1 落进同一个桶段、桶不再单亮度，「每格至多入队一次」
-            // 随之失效，队列（容量恰好 LIGHT_VOLUME）就会溢出成渲染热路径上的 panic。
-            //
-            // 所以这里必须挡在最前面：真要支持 >= 2 的衰减，是一次独立变更——去把分桶
-            // 泛化成每个 step 一个桶，而不是放宽这条校验。
-            if self.entries[offset + 17] > 1 {
-                return Err(InputError::Registry);
-            }
-            // block_top_raw 的合法域是 0..=14：0 是「满格」哨兵，非零即短方块。
-            // 15 一旦出现就是编码方写错——满格必须写哨兵 0，放行会破坏 mesher
-            // 「非零即短」的单一判定，让满格方块被错误下沉。
-            if self.entries[offset + 18] > 14 {
-                return Err(InputError::Registry);
-            }
-            // 与 fluid_height 互斥：流体的角高度由 mesher 的邻域平均现算（含
-            // 「上方也是流体则取满格」规则），短方块由本字段常量驱动。同一
-            // 条目同时携带两套语义时行为无从定义（水下的耕地该听谁的？），
-            // 必须在最前面拒绝，Go 侧编码器同口径。
-            if self.entries[offset + 16] != 0 && self.entries[offset + 18] != 0 {
-                return Err(InputError::Registry);
-            }
-            // model tag 的封闭集合：0=默认、1..=5=火把五形态、6=床（八形态
-            // 共用单值床几何）。7 起的未知值拒绝——放行会让 mesher 静默回退
-            // 到默认几何。拒绝发生在 parse 期、任何几何产出之前，Go 侧编码
-            // 器同口径。
-            if self.entries[offset + 19] > 6 {
-                return Err(InputError::Registry);
-            }
+            // Every per-field range lives in `check_registry_entry` so the byte
+            // lane and the typed lane reject exactly the same tables.
+            check_registry_entry(
+                previous,
+                RegistryEntrySpec {
+                    id,
+                    opaque: self.entries[offset + 2],
+                    emission: self.entries[offset + 3],
+                    fluid_height: self.entries[offset + 16],
+                    light_attenuation: self.entries[offset + 17],
+                    block_top_raw: self.entries[offset + 18],
+                    model: self.entries[offset + 19],
+                },
+                reject_overbright,
+            )?;
             has_air |= id == air_id;
             has_barrier |= id == barrier_id;
             previous = Some(id);
@@ -362,6 +463,141 @@ impl RegistryView<'_> {
         };
         let offset = (row * self.words_per_row + column / 64) * 8;
         read_u64(self.visibility, offset) & (1 << (column % 64)) != 0
+    }
+}
+
+/// Resolves a neighborhood coordinate onto the 27-section cell index.
+///
+/// The byte lane and the typed lane share this rule: sections are ordered
+/// `(cx * 3 + cy) * 3 + cz` and a section cell packs `(ly << 8) | (lz << 4) | lx`
+/// with the low nibble per axis relative to its section. `None` means the
+/// coordinate lies outside the owned `-16..=31` neighborhood.
+pub(crate) fn typed_cell_index(x: i32, y: i32, z: i32) -> Option<usize> {
+    let (cx, lx) = neighbor_cell(x)?;
+    let (cy, ly) = neighbor_cell(y)?;
+    let (cz, lz) = neighbor_cell(z)?;
+    Some(((cx * 3 + cy) * 3 + cz) * 4096 + ((ly << 8) | (lz << 4) | lx))
+}
+
+/// Resolves a column coordinate onto `(column, cell)` of the 9x256 height
+/// tables; `None` means the coordinate lies outside the owned neighborhood.
+pub(crate) fn typed_height_slot(x: i32, z: i32) -> Option<(usize, usize)> {
+    let (cx, lx) = neighbor_cell(x)?;
+    let (cz, lz) = neighbor_cell(z)?;
+    Some((cx * 3 + cz, (lz << 4) | lx))
+}
+
+/// Read accessor over one validated typed registry snapshot.
+///
+/// Mirrors the query surface of `RegistryView` so both lanes answer the same
+/// questions for the light and mesh rules: ids are unique and sorted, absent
+/// ids fall back to the same neutral answers, and a face outside `0..6` has no
+/// material.
+pub(crate) struct TypedRegistryView<'a> {
+    entries: &'a [MeshRegistryEntry],
+}
+
+impl<'a> TypedRegistryView<'a> {
+    pub(crate) fn new(registry: &'a MeshRegistry) -> Self {
+        Self {
+            entries: registry.entries(),
+        }
+    }
+
+    fn index(&self, id: u16) -> Option<usize> {
+        self.entries
+            .binary_search_by(|entry| entry.id.cmp(&id))
+            .ok()
+    }
+
+    /// `contains` reports whether the id has an explicit entry; light uses it
+    /// to close unknown ids.
+    pub(crate) fn contains(&self, id: u16) -> bool {
+        self.index(id).is_some()
+    }
+
+    pub(crate) fn opaque(&self, id: u16) -> bool {
+        self.index(id)
+            .is_some_and(|index| self.entries[index].opaque)
+    }
+
+    pub(crate) fn emission(&self, id: u16) -> u8 {
+        self.index(id)
+            .map_or(0, |index| self.entries[index].emission)
+    }
+
+    pub(crate) fn light_attenuation(&self, id: u16) -> u8 {
+        self.index(id)
+            .map_or(0, |index| self.entries[index].light_attenuation)
+    }
+
+    pub(crate) fn material(&self, id: u16, face: usize) -> Option<u16> {
+        if face >= 6 {
+            return None;
+        }
+        self.index(id)
+            .map(|index| self.entries[index].material[face])
+    }
+}
+
+/// Read accessor over one validated typed section view.
+///
+/// Ownership: the accessor copies the view (its references are `Copy`) and owns
+/// no cells. Coordinates resolve through the same `typed_cell_index` /
+/// `typed_height_slot` rules as the byte lane, and a coordinate outside the
+/// owned 3x3x3 neighborhood answers the barrier id exactly like `MeshInput`.
+pub(crate) struct MeshViewAccess<'a> {
+    view: MeshView<'a>,
+    registry: TypedRegistryView<'a>,
+}
+
+impl<'a> MeshViewAccess<'a> {
+    pub(crate) fn new(view: &MeshView<'a>) -> Self {
+        Self {
+            view: *view,
+            registry: TypedRegistryView::new(view.registry),
+        }
+    }
+
+    pub(crate) fn block(&self, x: i32, y: i32, z: i32) -> u16 {
+        match typed_cell_index(x, y, z) {
+            Some(index) => self.view.blocks[index],
+            None => self.view.registry.barrier(),
+        }
+    }
+
+    pub(crate) fn sky_light(&self, x: i32, y: i32, z: i32) -> u8 {
+        let Some((column, cell)) = typed_height_slot(x, z) else {
+            return 0;
+        };
+        if neighbor_cell(y).is_none() || !self.view.heights_present[column] {
+            return 0;
+        }
+        u8::from(self.view.section_origin_y + y > i32::from(self.view.heights[column][cell])) * 15
+    }
+
+    pub(crate) fn air_id(&self) -> u16 {
+        self.view.registry.air()
+    }
+
+    pub(crate) fn contains(&self, id: u16) -> bool {
+        self.registry.contains(id)
+    }
+
+    pub(crate) fn opaque(&self, id: u16) -> bool {
+        self.registry.opaque(id)
+    }
+
+    pub(crate) fn emission(&self, id: u16) -> u8 {
+        self.registry.emission(id)
+    }
+
+    pub(crate) fn light_attenuation(&self, id: u16) -> u8 {
+        self.registry.light_attenuation(id)
+    }
+
+    pub(crate) fn material(&self, id: u16, face: usize) -> Option<u16> {
+        self.registry.material(id, face)
     }
 }
 
