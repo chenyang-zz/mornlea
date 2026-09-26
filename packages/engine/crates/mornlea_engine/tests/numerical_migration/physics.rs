@@ -223,15 +223,10 @@ fn physics_abi_native_bits() {
     assert_eq!(status, 0, "landing case status");
     assert_eq!(
         output,
-        vec![
-            0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x01, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ],
+        landing_output_known_good().to_vec(),
         "landing full 32-byte parity"
     );
     assert_eq!(output[24], 0b010, "landing clips the Y axis");
-    println!("landing bytes: {output:02x?}");
 
     // Jump: a grounded jump assigns `jump_speed` directly and rises by
     // `8.4 * 0.05 = 0.42` to y = 1.42.
@@ -259,7 +254,6 @@ fn physics_abi_native_bits() {
         ],
         "jump full 32-byte parity"
     );
-    println!("jump bytes: {output:02x?}");
 
     // Fluid drag: airborne in fluid with x velocity 2.0; air acceleration
     // pulls toward rest, then the 0.8 drag scales the horizontal speed.
@@ -287,7 +281,6 @@ fn physics_abi_native_bits() {
         ],
         "fluid full 32-byte parity"
     );
-    println!("fluid bytes: {output:02x?}");
 
     // Sneak plus sprint: sneaking wins, so the forward target is
     // `-(4.3 * 0.3)` with the Y velocity falling under gravity.
@@ -320,7 +313,6 @@ fn physics_abi_native_bits() {
         (-(4.3f32 * 0.3f32)).to_bits(),
         "sneak priority pins the forward speed"
     );
-    println!("sneak bytes: {output:02x?}");
 
     // One-ULP sweep boundary: `dy_max` one ULP below the integrated
     // displacement is accepted under the frozen one-ULP allowance. The
@@ -351,7 +343,6 @@ fn physics_abi_native_bits() {
         ],
         "one-ULP full 32-byte parity"
     );
-    println!("one-ULP bytes: {output:02x?}");
 
     // Two-ULP sweep boundary: `dy_max` two ULPs below the displacement is
     // rejected with status 3 and the destination stays untouched.
