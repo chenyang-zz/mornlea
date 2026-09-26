@@ -7,6 +7,7 @@ mod greedy;
 mod input;
 mod light;
 mod lod;
+mod pathfind;
 mod quad;
 mod raycast;
 mod step;
