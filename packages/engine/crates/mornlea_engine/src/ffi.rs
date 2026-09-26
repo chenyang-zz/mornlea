@@ -1267,8 +1267,7 @@ fn encode_eval_writes(writes: &FluidWrites, record: &mut [u8; EVAL_ITEM_OUTPUT_B
     }
 }
 
-/// `mornlea_fluid_eval_batch` 的校验与发布核心:解析请求后经共享原生流体
-/// 求值核心分块求值并编码。
+/// `mornlea_fluid_eval_batch` validation and publish core: parses the request, then evaluates in chunks through the shared native core and encodes.
 ///
 /// Validation order mirrors `mornlea_lod_shell`: the `output_len` metadata
 /// pointer is validated by address only, then null-pointer checks, the ABI
@@ -4340,7 +4339,7 @@ mod tests {
         let expected = expected_eval_output(&fluid_eval_two_items());
         let mut output = vec![0xA5_u8; expected.len()];
         let mut output_len = usize::MAX;
-        // SAFETY: 指针来自有效 Vec;合法输入经共享原生求值核心求值。
+        // SAFETY: pointers come from live vectors; valid input evaluates through the shared native core.
         let status = unsafe {
             fluid_eval_batch_with(
                 ABI_VERSION,
@@ -4360,7 +4359,7 @@ mod tests {
         let mut bad_out = vec![0xA5_u8; expected.len()];
         let bad_canary = bad_out.clone();
         let mut bad_len = usize::MAX;
-        // SAFETY: 指针来自有效 Vec;坏长度在边界内拒绝。
+        // SAFETY: pointers come from live vectors; the short input is rejected inside the boundary.
         let bad_status = unsafe {
             fluid_eval_batch_with(
                 ABI_VERSION,
