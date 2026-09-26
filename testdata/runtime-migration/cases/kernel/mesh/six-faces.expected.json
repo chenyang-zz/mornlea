@@ -1,0 +1,20 @@
+{
+  "category": "ok",
+  "fields": {
+    "output_capacity": 24576,
+    "output_count": 6,
+    "payload_sha256": "sha256:5df90d563bbf7c42de35fce5637f85f94820fc25abf2fd426097cc961a8b59ae",
+    "quads": [
+      "00000005807f0000",
+      "00009005807f0000",
+      "00002006807f0000",
+      "0000b006807f0000",
+      "00004007807f0000",
+      "0000d007807f0000"
+    ],
+    "quads_sha256": "sha256:9cbe65aa2da711d3f9df59d5968f6bc46e602f088f03adfd4d345dfdb95a443a",
+    "status": 0,
+    "used_payload_sha256": "sha256:9cbe65aa2da711d3f9df59d5968f6bc46e602f088f03adfd4d345dfdb95a443a"
+  },
+  "kind": "ok"
+}

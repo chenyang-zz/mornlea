@@ -1,0 +1,10 @@
+{
+  "category": "output-overflow",
+  "fields": {
+    "needed_bytes": 8,
+    "output_len": 7,
+    "payload_sha256": "sha256:8e6779dc67531152659c232566664185bfc1b4c8ef4459044609583c9327e404",
+    "status": 7
+  },
+  "kind": "error"
+}

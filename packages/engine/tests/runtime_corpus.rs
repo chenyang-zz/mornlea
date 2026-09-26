@@ -29,6 +29,7 @@ pub enum CorpusConsumer {
     ExternalRuntimeAuthority,
     Protocol,
     Storage,
+    Engine,
 }
 
 impl CorpusConsumer {
@@ -41,6 +42,7 @@ impl CorpusConsumer {
             CorpusConsumer::ExternalRuntimeAuthority => "external:runtime-authority",
             CorpusConsumer::Protocol => "mornlea_protocol",
             CorpusConsumer::Storage => "mornlea_storage",
+            CorpusConsumer::Engine => "mornlea_engine",
         }
     }
 
@@ -52,6 +54,7 @@ impl CorpusConsumer {
             "external:runtime-authority" => Some(CorpusConsumer::ExternalRuntimeAuthority),
             "mornlea_protocol" => Some(CorpusConsumer::Protocol),
             "mornlea_storage" => Some(CorpusConsumer::Storage),
+            "mornlea_engine" => Some(CorpusConsumer::Engine),
             _ => None,
         }
     }
@@ -936,4 +939,169 @@ pub fn assert_rejected_unchanged<T: PartialEq + std::fmt::Debug>(
 ) {
     assert!(error, "expected operation to fail");
     assert_eq!(before, after, "state changed on rejected operation");
+}
+
+/// Normalizes one engine ABI status code to the frozen corpus category shared
+/// with the Go producer. Unknown codes are a loader failure, never a silent
+/// pass.
+#[allow(dead_code)]
+pub fn engine_status_category(status: u32) -> Option<&'static str> {
+    match status {
+        0 => Some("ok"),
+        1 => Some("abi-version"),
+        2 => Some("invalid-argument"),
+        3 => Some("input"),
+        4 => Some("scratch"),
+        5 => Some("registry"),
+        6 => Some("emission"),
+        7 => Some("output-overflow"),
+        8 => Some("queue-overflow"),
+        9 => Some("panic"),
+        _ => None,
+    }
+}
+
+/// Normalizes one pathfinder failure to the frozen corpus category shared
+/// with the Go producer.
+#[allow(dead_code)]
+pub fn engine_pathfind_category(name: &str) -> Option<&'static str> {
+    match name {
+        "ok" => Some("ok"),
+        "invalid-grid" => Some("invalid-grid"),
+        "invalid-revision" => Some("invalid-revision"),
+        "scratch-too-small" => Some("scratch-too-small"),
+        "unreachable" => Some("unreachable"),
+        "budget-exceeded" => Some("budget-exceeded"),
+        "allocation" => Some("allocation"),
+        _ => None,
+    }
+}
+
+/// Renders the corpus digest form of raw bytes.
+#[allow(dead_code)]
+pub fn engine_digest_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+/// Validated binary-case arguments for one engine kernel case. Mesh cases
+/// count output capacity in `u64` slots and carry the scratch capacity
+/// beside them; every other binary family counts output capacity in bytes.
+#[allow(dead_code)]
+pub struct EngineBinaryArgs {
+    pub abi_version: u32,
+    pub output_capacity: usize,
+    pub scratch_capacity: Option<usize>,
+    pub buffer_variant: String,
+}
+
+/// Validates the frozen binary-case argument vocabulary identically on both
+/// producers. A missing applicable argument, an unknown variant, or a
+/// capacity above the harness byte budget fails case loading.
+#[allow(dead_code)]
+pub fn validate_engine_binary_arguments(
+    arguments: &serde_json::Value,
+    case_id: &str,
+    family: &str,
+) -> Result<EngineBinaryArgs, CorpusError> {
+    let object = arguments.as_object().ok_or_else(|| CorpusError {
+        message: format!("case {case_id} arguments must be an object"),
+    })?;
+    let abi_version = object
+        .get("abi_version")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or_else(|| CorpusError {
+            message: format!("case {case_id} arguments missing integer abi_version"),
+        })?;
+    let output_capacity = object
+        .get("output_capacity")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| usize::try_from(v).ok())
+        .filter(|v| *v > 0)
+        .ok_or_else(|| CorpusError {
+            message: format!("case {case_id} arguments missing positive output_capacity"),
+        })?;
+    let scratch_capacity = match object.get("scratch_capacity") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|v| usize::try_from(v).ok())
+                .filter(|v| *v > 0)
+                .ok_or_else(|| CorpusError {
+                    message: format!("case {case_id} arguments scratch_capacity must be positive"),
+                })?,
+        ),
+    };
+    let buffer_variant = object
+        .get("buffer_variant")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CorpusError {
+            message: format!("case {case_id} arguments missing buffer_variant"),
+        })?;
+    if buffer_variant != "normal" && buffer_variant != "short" {
+        return Err(CorpusError {
+            message: format!("case {case_id} unknown buffer_variant {buffer_variant}"),
+        });
+    }
+    let is_mesh = family == "kernel.mornlea_mesh_section";
+    if is_mesh != scratch_capacity.is_some() {
+        return Err(CorpusError {
+            message: format!("case {case_id} scratch_capacity applies to the mesh family only"),
+        });
+    }
+    let output_bytes = if is_mesh {
+        output_capacity.checked_mul(8).ok_or_else(|| CorpusError {
+            message: format!("case {case_id} mesh output capacity overflows"),
+        })?
+    } else {
+        output_capacity
+    };
+    if output_bytes as u64 > MAX_BINARY_BYTES {
+        return Err(CorpusError {
+            message: format!("case {case_id} output capacity exceeds the binary budget"),
+        });
+    }
+    if let Some(scratch) = scratch_capacity {
+        let scratch_bytes = scratch.checked_mul(8).ok_or_else(|| CorpusError {
+            message: format!("case {case_id} mesh scratch capacity overflows"),
+        })?;
+        if scratch_bytes as u64 > MAX_BINARY_BYTES {
+            return Err(CorpusError {
+                message: format!("case {case_id} scratch capacity exceeds the binary budget"),
+            });
+        }
+    }
+    Ok(EngineBinaryArgs {
+        abi_version,
+        output_capacity,
+        scratch_capacity,
+        buffer_variant: buffer_variant.to_string(),
+    })
+}
+
+/// Validates the frozen pathfind argument vocabulary: exactly one operation
+/// kind, grid or search.
+#[allow(dead_code)]
+pub fn validate_engine_pathfind_arguments(
+    arguments: &serde_json::Value,
+    case_id: &str,
+) -> Result<String, CorpusError> {
+    let object = arguments.as_object().ok_or_else(|| CorpusError {
+        message: format!("case {case_id} arguments must be an object"),
+    })?;
+    let kind = object
+        .get("operation_kind")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CorpusError {
+            message: format!("case {case_id} arguments missing operation_kind"),
+        })?;
+    if kind != "grid" && kind != "search" {
+        return Err(CorpusError {
+            message: format!("case {case_id} unknown operation_kind {kind}"),
+        });
+    }
+    Ok(kind.to_string())
 }

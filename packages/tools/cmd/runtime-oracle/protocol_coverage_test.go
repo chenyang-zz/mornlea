@@ -36,7 +36,7 @@ const (
 	// closedKernelCaseTotal is the numerical kernel slice total the native
 	// closure node imports: zero until that node lands its families, then the
 	// exact reviewed case count it registers.
-	closedKernelCaseTotal = 3
+	closedKernelCaseTotal = 40
 	// minProtocolFamilies is the reviewed protocol family count: 59 packet
 	// families plus the framing family.
 	minProtocolFamilies = 60

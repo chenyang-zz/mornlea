@@ -1,0 +1,9 @@
+{
+  "category": "panic",
+  "fields": {
+    "output_len": 64,
+    "payload_sha256": "sha256:bb626e5577021df95ea17eb6339e75904855b80087e40660931c4a89b302f74a",
+    "status": 9
+  },
+  "kind": "error"
+}

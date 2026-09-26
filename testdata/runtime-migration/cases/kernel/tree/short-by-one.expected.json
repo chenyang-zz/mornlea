@@ -1,0 +1,9 @@
+{
+  "category": "output-overflow",
+  "fields": {
+    "output_len": 467,
+    "payload_sha256": "sha256:2a27ebc54f04602674c6785f1e0ad0ec2bc11578080440c5dc598e0d9881ad72",
+    "status": 7
+  },
+  "kind": "error"
+}

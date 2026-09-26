@@ -1,0 +1,10 @@
+{
+  "category": "registry",
+  "fields": {
+    "output_capacity": 24576,
+    "output_count": 0,
+    "payload_sha256": "sha256:f3cdd415d37c36e7877425b8d44a433bce0fd6bbcb2cc7d1f2b10f8ec6a2e765",
+    "status": 5
+  },
+  "kind": "error"
+}

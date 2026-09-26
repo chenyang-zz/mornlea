@@ -16,3 +16,20 @@
 
 - 测试：`go test ./packages/shared/nativeabi -race -count=1`。
 - 当前文档入口：`docs/notes/go-rust-division.md`。
+
+## Package-local raw oracle (`kernel_oracle_test.go`)
+
+- `TestKernelABIRawOracle` is the package-local raw producer for the native
+  numerical corpus. The public bridge panics on every non-OK status, so
+  malformed and short-capacity observations are reachable only through the
+  package-private version helpers used here. Each case runs the real exported
+  symbol against a canary-filled caller arena, asserts the status and the
+  untouched-canary rule locally, and freezes the normalized observation.
+- Test-only code may use the existing cgo bridge but must not add a
+  production API, a second `import "C"`, or a tracked write. Drafts publish
+  create-exclusively under the `nativeabi-kernel` child of the external
+  directory named by `RUNTIME_ORACLE_EXPORT_DIR`; an unset variable exports
+  nothing. Export resolves through the nearest existing ancestor, rejects
+  repository containment and any symlink below that ancestor, validates every
+  asset path and duplicate before mutation, and rejects a preexisting final
+  child, so reruns never silently replace evidence.

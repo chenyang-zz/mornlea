@@ -1,0 +1,10 @@
+{
+  "category": "ok",
+  "fields": {
+    "output_len": 49164,
+    "payload_sha256": "sha256:7249f242403566c83f3f17ea88a4a6c695384262c72985ca62a7d0b28ebd9b75",
+    "status": 0,
+    "used_payload_sha256": "sha256:7249f242403566c83f3f17ea88a4a6c695384262c72985ca62a7d0b28ebd9b75"
+  },
+  "kind": "ok"
+}

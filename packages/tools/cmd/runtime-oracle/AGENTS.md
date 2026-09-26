@@ -877,11 +877,52 @@ only discriminator the manifest carries.
   `BaselineSourceRevision` stay on their recorded value until the controller
   integrates the reviewed candidate.
 
+## Numerical kernel closure (`kernel_test.go`, `inventory.go`)
+
+- `kernel_test.go` is the test-only producer and consumer for the eleven
+  numerical kernel routes (`kernel.mornlea_*` at ABI v11 plus
+  `kernel.pathfind` at v1, all under the `mornlea_engine` consumer with the
+  `kernel` operation). Binary observations execute through the public
+  `nativeabi` bridge with the stable panic text mapped back to the ABI status;
+  a panic outside that contract fails the case. Pathfinding observations
+  execute through the real `pathfind` grid constructor and search. Malformed
+  and short-capacity observations the public bridge cannot express raw execute
+  in `packages/shared/nativeabi/kernel_oracle_test.go` instead and are pinned
+  here by case ID, category and digest; the two-phase short probes additionally
+  carry the exact needed bytes their retry case republishes.
+- Binary case arguments carry `abi_version`, `output_capacity` in ABI bytes
+  (`u64` slots plus `scratch_capacity` for mesh) and `buffer_variant`
+  (`normal` or `short`); pathfind arguments carry `operation_kind` (`grid` or
+  `search`). Arenas initialize to `0xa5`; a failed call must leave them
+  untouched. Raycast inputs carry the 40-byte request plus the starting
+  64-byte cursor and run the full batch sequence to done on one reused arena.
+  Pathfind inputs carry Y-fast `blocks_rle`, `passable_ids` and decimal-string
+  `u64` revisions; the producer validates positive run counts with the exact
+  expanded product at or below 131072 before allocation.
+- Case assets live under `testdata/runtime-migration/cases/kernel/` as raw
+  request bytes plus normalized `kind`/`category`/`fields` JSON: whole-arena
+  digests everywhere, used-prefix digests on success, ordered float bit
+  strings for collision/physics/raycast records, ordered records or waypoints
+  where the route publishes them. Pathfind scene inputs render compactly so
+  the budget corridors stay inside the 256 KiB JSON budget. Rejection
+  categories outside the structural/admission/storage sets are covered by the
+  dedicated kernel vocabulary in `protocol_frame_test.go`.
+- Pathfind scene drafts export create-exclusively through
+  `RUNTIME_ORACLE_EXPORT_DIR` under the `kernel-pathfind` child; an unset
+  variable exports nothing. The binary drafts arrive from the nativeabi raw
+  oracle's `nativeabi-kernel` child instead. `TestKernelOracle` executes all
+  forty cases and requires one success, one failure and one boundary per
+  route; `TestKernelOracleMutationFailsComparison` proves a flipped float bit
+  and a moved waypoint both fail comparison and re-hashes the frozen files.
+  `TestKernelPathfindExport` pins the six scene shapes.
+
 ## Focused Verification
 
 ```bash
 go test ./packages/tools/cmd/runtime-oracle -run TestContractInventory -count=1
 go test ./packages/tools/cmd/runtime-oracle -list TestContractInventory
+go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelOracle' -count=1
+go test ./packages/tools/cmd/runtime-oracle -run '^TestKernelPathfindExport' -count=1
 go test ./packages/tools/cmd/runtime-oracle -run '^TestStorageCorpus' -count=1
 go test ./packages/tools/cmd/runtime-oracle -run '^TestProtocolOracleFrame' -count=1
 go test ./packages/tools/cmd/runtime-oracle -run '^TestProtocolInventoryPublicationOracle' -count=1

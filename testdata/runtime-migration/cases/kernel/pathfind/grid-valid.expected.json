@@ -1,0 +1,22 @@
+{
+  "category": "ok",
+  "fields": {
+    "revisions": [
+      {
+        "chunk": [
+          0,
+          0
+        ],
+        "revision": "1"
+      },
+      {
+        "chunk": [
+          1,
+          0
+        ],
+        "revision": "2"
+      }
+    ]
+  },
+  "kind": "ok"
+}

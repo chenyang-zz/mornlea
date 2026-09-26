@@ -1,0 +1,18 @@
+{
+  "category": "ok",
+  "fields": {
+    "f32_bits": [
+      "3f000000",
+      "3f800000",
+      "3f000000",
+      "00000000",
+      "00000000",
+      "00000000"
+    ],
+    "output_len": 32,
+    "payload_sha256": "sha256:0318946bb92b176893c6f1892e144f9b95fa8b20b76999c6f016991ecd6329bb",
+    "status": 0,
+    "used_payload_sha256": "sha256:0318946bb92b176893c6f1892e144f9b95fa8b20b76999c6f016991ecd6329bb"
+  },
+  "kind": "ok"
+}

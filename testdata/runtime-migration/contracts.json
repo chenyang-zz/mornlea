@@ -1133,7 +1133,7 @@
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:6a32a2e0ed9c9f3fc8e04ca3c5e16ca2ec4f6e4bfe9c007f51ed78151fe11928"
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
@@ -1141,7 +1141,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:3e81f73f3c5ca75753f0bbc6b96bccfd4ba8b0d03a929c72496002fdb966c218"
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
       "cases": [
@@ -1163,19 +1163,31 @@
       "numeric_semantics": "deterministic integer fluid ranks; little-endian packed records; fail closed on overflow",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/fluid_eval.rs",
+          "sha256": "sha256:edee12999cf0765710be7b5983e7a1051a81cfbf409c89075991b731562326d5"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/fluid_eval.rs",
-          "sha256": "sha256:edee12999cf0765710be7b5983e7a1051a81cfbf409c89075991b731562326d5"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_fluid_eval_batch/11/count-4097",
+        "kernel.mornlea_fluid_eval_batch/11/malformed-length",
+        "kernel.mornlea_fluid_eval_batch/11/vertical-priority"
+      ]
     },
     {
       "id": "kernel.mornlea_fluid_rescan",
@@ -1190,19 +1202,32 @@
       "numeric_semantics": "deterministic integer fluid ranks; little-endian packed records; fail closed on overflow",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/fluid_rescan.rs",
+          "sha256": "sha256:11732749e57f352dcfcc68554a9e753751d20d75eb8a44156108582f5cea2686"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/fluid_rescan.rs",
-          "sha256": "sha256:11732749e57f352dcfcc68554a9e753751d20d75eb8a44156108582f5cea2686"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_fluid_rescan/11/budget-one-retry",
+        "kernel.mornlea_fluid_rescan/11/budget-one-short",
+        "kernel.mornlea_fluid_rescan/11/interior-source",
+        "kernel.mornlea_fluid_rescan/11/outer-missing-halo"
+      ]
     },
     {
       "id": "kernel.mornlea_lod_shell",
@@ -1217,19 +1242,32 @@
       "numeric_semantics": "deterministic integer worldgen; little-endian packed voxels; layout-versioned MGW1/MTB1",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/lod.rs",
+          "sha256": "sha256:cc39353dac9378086dc6bb08c39f46912700a3071c721c58200e2623630b5c2c"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/lod.rs",
-          "sha256": "sha256:cc39353dac9378086dc6bb08c39f46912700a3071c721c58200e2623630b5c2c"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_lod_shell/11/exact-needed-retry",
+        "kernel.mornlea_lod_shell/11/exact-needed-short",
+        "kernel.mornlea_lod_shell/11/invalid-step",
+        "kernel.mornlea_lod_shell/11/step-two"
+      ]
     },
     {
       "id": "kernel.mornlea_mesh_section",
@@ -1244,19 +1282,31 @@
       "numeric_semantics": "little-endian packed records; fail closed on invalid layout, aliasing, or overflow",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/greedy/mod.rs",
+          "sha256": "sha256:93a63dba8ed69d8368d51541cd0bf6a5ea7d687db6ee803fbd77615895fb40f5"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/greedy/mod.rs",
-          "sha256": "sha256:93a63dba8ed69d8368d51541cd0bf6a5ea7d687db6ee803fbd77615895fb40f5"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_mesh_section/11/model-plant-late-overflow",
+        "kernel.mornlea_mesh_section/11/registry-97",
+        "kernel.mornlea_mesh_section/11/six-faces"
+      ]
     },
     {
       "id": "kernel.mornlea_physics_step",
@@ -1271,19 +1321,32 @@
       "numeric_semantics": "IEEE-754 binary32 little-endian; layout-versioned MGP1 header; reject non-finite used inputs",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/step.rs",
+          "sha256": "sha256:a431f36f3aa6a864042cfeb7e8f8efe4f77091af4e2a51c61c16151be56bd4ba"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/step.rs",
-          "sha256": "sha256:a431f36f3aa6a864042cfeb7e8f8efe4f77091af4e2a51c61c16151be56bd4ba"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_physics_step/11/axis-two",
+        "kernel.mornlea_physics_step/11/floor-landing",
+        "kernel.mornlea_physics_step/11/ulp-sweep-accept",
+        "kernel.mornlea_physics_step/11/ulp-sweep-reject"
+      ]
     },
     {
       "id": "kernel.mornlea_raycast_batch",
@@ -1298,19 +1361,31 @@
       "numeric_semantics": "IEEE-754 binary32 little-endian; bounded batch; fail closed on invalid layout",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/raycast.rs",
+          "sha256": "sha256:4ed2d1b9c91d84f8c630decd764a9a7fe3fac55290af50510611efda3e259713"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/raycast.rs",
-          "sha256": "sha256:4ed2d1b9c91d84f8c630decd764a9a7fe3fac55290af50510611efda3e259713"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_raycast_batch/11/record-65",
+        "kernel.mornlea_raycast_batch/11/second-batch",
+        "kernel.mornlea_raycast_batch/11/tampered-cursor"
+      ]
     },
     {
       "id": "kernel.mornlea_tree_blocks",
@@ -1325,19 +1400,31 @@
       "numeric_semantics": "deterministic integer worldgen; little-endian packed voxels; layout-versioned MGW1/MTB1",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
+          "sha256": "sha256:50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-          "sha256": "sha256:50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_tree_blocks/11/oak-order",
+        "kernel.mornlea_tree_blocks/11/root-y-minus-65",
+        "kernel.mornlea_tree_blocks/11/short-by-one"
+      ]
     },
     {
       "id": "kernel.mornlea_worldgen_chunk",
@@ -1352,19 +1439,31 @@
       "numeric_semantics": "deterministic integer worldgen; little-endian packed voxels; layout-versioned MGW1/MTB1",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
+          "sha256": "sha256:50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-          "sha256": "sha256:50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_worldgen_chunk/11/duplicate-material",
+        "kernel.mornlea_worldgen_chunk/11/seed-zero-chunk-zero",
+        "kernel.mornlea_worldgen_chunk/11/signed-extreme"
+      ]
     },
     {
       "id": "kernel.mornlea_worldgen_probe",
@@ -1379,19 +1478,32 @@
       "numeric_semantics": "deterministic integer worldgen; little-endian packed voxels; layout-versioned MGW1/MTB1",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
+          "sha256": "sha256:50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+        },
+        {
           "path": "packages/engine/include/mornlea_engine.h",
           "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/shared/nativeabi/kernel_oracle_test.go",
+          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
           "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
         },
         {
-          "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-          "sha256": "sha256:50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.mornlea_worldgen_probe/11/height-terrain-base",
+        "kernel.mornlea_worldgen_probe/11/mode-three",
+        "kernel.mornlea_worldgen_probe/11/query-64",
+        "kernel.mornlea_worldgen_probe/11/query-65"
+      ]
     },
     {
       "id": "kernel.pathfind",
@@ -1412,9 +1524,20 @@
         {
           "path": "packages/shared/pathfind/pathfind_test.go",
           "sha256": "sha256:540bbaf3d8d3d12b2717e0c2daa9e8e38d22a6e469d895c7ea22d0970571e031"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
+          "sha256": "sha256:30dfa18b75d9b63ab38aa5ad80b1619b3b8b47c65987e9686233db55e1cf0fe1"
         }
       ],
-      "cases": null
+      "cases": [
+        "kernel.pathfind/1/blocked-support",
+        "kernel.pathfind/1/corridor",
+        "kernel.pathfind/1/goal-pop-4096",
+        "kernel.pathfind/1/goal-pop-4097",
+        "kernel.pathfind/1/grid-invalid",
+        "kernel.pathfind/1/grid-valid"
+      ]
     },
     {
       "id": "protocol.client.BoneMeal",
@@ -17563,6 +17686,885 @@
       "expected": {
         "path": "testdata/runtime-migration/cases/kernel/collision/short-output-15.expected.json",
         "sha256": "sha256:f1a1a8e4f6319c514e6c9beabf01007d1fb6d06d2f29f67ca63a987566d04969"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_fluid_eval_batch/11/count-4097",
+      "family": "kernel.mornlea_fluid_eval_batch",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 49164
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-eval/count-4097.input.bin",
+        "sha256": "sha256:5edd86d596cba25e2ab6ac858ba3946af301b5bf6c3b1ce7af652ffdb3a8b3ec"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-eval/count-4097.expected.json",
+        "sha256": "sha256:96355175fb6e00a5f12e25e910bb675f6cf7c8a73abe35eb6f682cbcd352638f"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_fluid_eval_batch/11/malformed-length",
+      "family": "kernel.mornlea_fluid_eval_batch",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 12
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-eval/malformed-length.input.bin",
+        "sha256": "sha256:2a5443d10c69438398fc0ed5e3efc99eb02ae33d1b7828659cae6899ea74b9a6"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-eval/malformed-length.expected.json",
+        "sha256": "sha256:d8b5f581ab6c7d31d88ee55fb7f9537f7f8a4ca05cd3a8a9b53f44a16a073933"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_fluid_eval_batch/11/vertical-priority",
+      "family": "kernel.mornlea_fluid_eval_batch",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 24
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-eval/vertical-priority.input.bin",
+        "sha256": "sha256:34462802ef2a45f1352e7c6be998509c6099692b5cb0cfc8ee5530fc9a3a9e72"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-eval/vertical-priority.expected.json",
+        "sha256": "sha256:c0ab9f96518110d8c6bae0a395576be0baad0e0617530dac9422dbc8b34eb27a"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_fluid_rescan/11/budget-one-retry",
+      "family": "kernel.mornlea_fluid_rescan",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 8
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-rescan/budget-one-retry.input.bin",
+        "sha256": "sha256:0262794cfa1a343804b4ffc07d50e84782349400b1aa8b8ee5979e3212b803d0"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-rescan/budget-one-retry.expected.json",
+        "sha256": "sha256:cc6550788db87e94b97c20e2010c4c21ad5893310b1df1139422260dad509f63"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_fluid_rescan/11/budget-one-short",
+      "family": "kernel.mornlea_fluid_rescan",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "short",
+        "output_capacity": 7
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-rescan/budget-one-short.input.bin",
+        "sha256": "sha256:0262794cfa1a343804b4ffc07d50e84782349400b1aa8b8ee5979e3212b803d0"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-rescan/budget-one-short.expected.json",
+        "sha256": "sha256:486a79f5af6cec08af53b9a596221f876968e2bdb3266e4374223ab2460e338f"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_fluid_rescan/11/interior-source",
+      "family": "kernel.mornlea_fluid_rescan",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 20
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-rescan/interior-source.input.bin",
+        "sha256": "sha256:39484851df3eb4c71e9144a60ecaa6ee51b07249254bf62d79904a12db6e1da9"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-rescan/interior-source.expected.json",
+        "sha256": "sha256:7561a7349a2cd68e13f6fd5dc8afbfcc059fb4713d8e6e4ccaa686889ec66c96"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_fluid_rescan/11/outer-missing-halo",
+      "family": "kernel.mornlea_fluid_rescan",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 64
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-rescan/outer-missing-halo.input.bin",
+        "sha256": "sha256:111383ba4187b33291432fe55f2c463fdd988ec236386f0be367366cb7002675"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/fluid-rescan/outer-missing-halo.expected.json",
+        "sha256": "sha256:7a9e33ed122016322786bb593a8bf6fcf8b14b90dce67acdde3f0583f039c5a5"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_lod_shell/11/exact-needed-retry",
+      "family": "kernel.mornlea_lod_shell",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 4820
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/lod/exact-needed-retry.input.bin",
+        "sha256": "sha256:880b23283750a6ac2622ae277eb9981ed96665b46e4cd9cdd90e4822564bfd43"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/lod/exact-needed-retry.expected.json",
+        "sha256": "sha256:fec0d2421a8a65e4475d3a1974c31638f1ebe15d4da055f2ae061296ee10d148"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_lod_shell/11/exact-needed-short",
+      "family": "kernel.mornlea_lod_shell",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "short",
+        "output_capacity": 4819
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/lod/exact-needed-short.input.bin",
+        "sha256": "sha256:880b23283750a6ac2622ae277eb9981ed96665b46e4cd9cdd90e4822564bfd43"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/lod/exact-needed-short.expected.json",
+        "sha256": "sha256:acbeb2da7e5f43dab1822aa1d7b28cf9d4d98ce9f68876f42375f0af0a5e4050"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_lod_shell/11/invalid-step",
+      "family": "kernel.mornlea_lod_shell",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 1
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/lod/invalid-step.input.bin",
+        "sha256": "sha256:350523ef833c4c2f31becf5dd0ba7cd0eb39c41f396f168fa28947a258d8b013"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/lod/invalid-step.expected.json",
+        "sha256": "sha256:3c4f2530cfc71d1f846b6d67c14b194169079e530c4e3d6193cf14eb526a4a29"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_lod_shell/11/step-two",
+      "family": "kernel.mornlea_lod_shell",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 4820
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/lod/step-two.input.bin",
+        "sha256": "sha256:880b23283750a6ac2622ae277eb9981ed96665b46e4cd9cdd90e4822564bfd43"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/lod/step-two.expected.json",
+        "sha256": "sha256:fec0d2421a8a65e4475d3a1974c31638f1ebe15d4da055f2ae061296ee10d148"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_mesh_section/11/model-plant-late-overflow",
+      "family": "kernel.mornlea_mesh_section",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "short",
+        "output_capacity": 24576,
+        "scratch_capacity": 69120
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/mesh/model-plant-late-overflow.input.bin",
+        "sha256": "sha256:4008b842a567ab50a36c32a2601df2c7b959af3a73aa0e5282c876c23989360c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/mesh/model-plant-late-overflow.expected.json",
+        "sha256": "sha256:8140174e2f1745c709229161c1b58fb08acded2491ee071b889458cd01da9b86"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_mesh_section/11/registry-97",
+      "family": "kernel.mornlea_mesh_section",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 24576,
+        "scratch_capacity": 69120
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/mesh/registry-97.input.bin",
+        "sha256": "sha256:5a1166d50ab559679456eb0935853d7ac7a6e4d2e34e04b62e102f7a362303ab"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/mesh/registry-97.expected.json",
+        "sha256": "sha256:91aac8ba65c64ed85e7cc9ea45854e637ac589e358f22871552d2a16a1da9a4d"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_mesh_section/11/six-faces",
+      "family": "kernel.mornlea_mesh_section",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 24576,
+        "scratch_capacity": 69120
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/mesh/six-faces.input.bin",
+        "sha256": "sha256:91a54f023e4a0655aac9738bcde7e71134316c4a20c95dea2fa9d12665495e29"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/mesh/six-faces.expected.json",
+        "sha256": "sha256:8442f6fb9282c77266920cafa4c3e21e545ab80bfb30ec3b595a54bea68d9278"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_physics_step/11/axis-two",
+      "family": "kernel.mornlea_physics_step",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 32
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/physics/axis-two.input.bin",
+        "sha256": "sha256:8e619cb0f1b22a879130d09e164e6726d51b8afb09c9a1d0047d4ec6aaecc31c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/physics/axis-two.expected.json",
+        "sha256": "sha256:5e6b50efda972d861b4fd239efbf5640584493d4e01f593b7432ac0765b5ab08"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_physics_step/11/floor-landing",
+      "family": "kernel.mornlea_physics_step",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 32
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/physics/floor-landing.input.bin",
+        "sha256": "sha256:bbcf612f20587f766c02ac87cdaaa0a1da4d06931ae2d4390bfa8188012ae7df"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/physics/floor-landing.expected.json",
+        "sha256": "sha256:e4a4c0491f911ada98a5adca880292569f02191715be76185e975d1af84505e7"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_physics_step/11/ulp-sweep-accept",
+      "family": "kernel.mornlea_physics_step",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 32
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/physics/ulp-sweep-accept.input.bin",
+        "sha256": "sha256:ac6577ddf1061414c86211c8c38febc77bf82e93f85a880240429d41fede75c3"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/physics/ulp-sweep-accept.expected.json",
+        "sha256": "sha256:a81db92d711f8359de17878c0f6b4922779311317cb5085e01a625e7e06f6bac"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_physics_step/11/ulp-sweep-reject",
+      "family": "kernel.mornlea_physics_step",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 32
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/physics/ulp-sweep-reject.input.bin",
+        "sha256": "sha256:17cff78a0d55194844eae48ef06a6e34fc07f71665479bbc7421563e5d44b44c"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/physics/ulp-sweep-reject.expected.json",
+        "sha256": "sha256:5e6b50efda972d861b4fd239efbf5640584493d4e01f593b7432ac0765b5ab08"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_raycast_batch/11/record-65",
+      "family": "kernel.mornlea_raycast_batch",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 1280
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/raycast/record-65.input.bin",
+        "sha256": "sha256:e1db654c907430a45723bb091d7d572718b188016ae0b6bcc1686eee51745f49"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/raycast/record-65.expected.json",
+        "sha256": "sha256:bc229ab03dc1306338d317860c1bd05f57c748ae039fcdf190ebd97f86a8af85"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_raycast_batch/11/second-batch",
+      "family": "kernel.mornlea_raycast_batch",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 1280
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/raycast/second-batch.input.bin",
+        "sha256": "sha256:d1d3d4073e0fc5eae0fc8b858d7c5bfb8bb0618f0e82d32c968476d510bd449e"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/raycast/second-batch.expected.json",
+        "sha256": "sha256:61ebd606ef5fb634dbe67e404d90c4b9749d172755a82a8708c49395bea1c735"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_raycast_batch/11/tampered-cursor",
+      "family": "kernel.mornlea_raycast_batch",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 1280
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/raycast/tampered-cursor.input.bin",
+        "sha256": "sha256:35e58f5710dae9a77691c2ef095bd1e4a400e58627112039a7efb1ad50425de3"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/raycast/tampered-cursor.expected.json",
+        "sha256": "sha256:e74a02dcbf74c32fce82356ca8bc3920047e28e082c9b6566449c2100c2336dd"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_tree_blocks/11/oak-order",
+      "family": "kernel.mornlea_tree_blocks",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 1028
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/tree/oak-order.input.bin",
+        "sha256": "sha256:8099a1c1aa98c84834b910ce3b42eda132f55c26845633f29c058cfa17c00186"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/tree/oak-order.expected.json",
+        "sha256": "sha256:08a557c5b7b42835277a176b50afd156b502418a802b55fa581674b29d220f02"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_tree_blocks/11/root-y-minus-65",
+      "family": "kernel.mornlea_tree_blocks",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 1028
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/tree/root-y-minus-65.input.bin",
+        "sha256": "sha256:9f77c3f089a27596d3efe891b5addd6eb9a61236ebca1a779be33fbd0b600e81"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/tree/root-y-minus-65.expected.json",
+        "sha256": "sha256:24e04ed9b9764fa47093161b9d3af9fbf52fb0e0ee98d7612ef77653b4937c8d"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_tree_blocks/11/short-by-one",
+      "family": "kernel.mornlea_tree_blocks",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "short",
+        "output_capacity": 467
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/tree/short-by-one.input.bin",
+        "sha256": "sha256:8099a1c1aa98c84834b910ce3b42eda132f55c26845633f29c058cfa17c00186"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/tree/short-by-one.expected.json",
+        "sha256": "sha256:1d2803774511cf33b064052ce168746026a9b11f3d6f0426702598f492189003"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_worldgen_chunk/11/duplicate-material",
+      "family": "kernel.mornlea_worldgen_chunk",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 196608
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-chunk/duplicate-material.input.bin",
+        "sha256": "sha256:66d1322bdab00f948b37b9addcd49544b698e65ece034868982e9a8c599d7add"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-chunk/duplicate-material.expected.json",
+        "sha256": "sha256:1c1943e88d906d0cdd58bd78ba7ab05718c426f064aa2935a86a1d4e002c2a53"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_worldgen_chunk/11/seed-zero-chunk-zero",
+      "family": "kernel.mornlea_worldgen_chunk",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 196608
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-chunk/seed-zero-chunk-zero.input.bin",
+        "sha256": "sha256:a1498f69050e69175409955a35fe1b74f7269fba28dbb5816a93b3fdeab57214"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-chunk/seed-zero-chunk-zero.expected.json",
+        "sha256": "sha256:e821748b217baeb7abfcd2f981306ab3072deb608d19df5daf246ddfd387bd35"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_worldgen_chunk/11/signed-extreme",
+      "family": "kernel.mornlea_worldgen_chunk",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 196608
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-chunk/signed-extreme.input.bin",
+        "sha256": "sha256:bb7fb78bf8c19b972992267162de26709e94f69b4f625c5a2493cacdd5dd276a"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-chunk/signed-extreme.expected.json",
+        "sha256": "sha256:d8de71db104cfbac8e2b4fd2da62ca52a30aa36e168a2d244a3623055d3d9df5"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_worldgen_probe/11/height-terrain-base",
+      "family": "kernel.mornlea_worldgen_probe",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 24
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-probe/height-terrain-base.input.bin",
+        "sha256": "sha256:edf52d2aad5a089fb44da1847b06be1abfa21c1bb8674f3c7791309685949d53"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-probe/height-terrain-base.expected.json",
+        "sha256": "sha256:58df6ac7f421a4207cf27d51b1d29f1b3613c8f7be9b4ffbe5f3c2333bcee5e0"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_worldgen_probe/11/mode-three",
+      "family": "kernel.mornlea_worldgen_probe",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 8
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-probe/mode-three.input.bin",
+        "sha256": "sha256:69d28e815d32a7e798966408b635cd96d23681f8d2ddb37eea820f253f57b4cb"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-probe/mode-three.expected.json",
+        "sha256": "sha256:470d9aee538f32f0ebe49d66813a4113be160b686f18653c96f3b20371a35e2c"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_worldgen_probe/11/query-64",
+      "family": "kernel.mornlea_worldgen_probe",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 512
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-probe/query-64.input.bin",
+        "sha256": "sha256:804f2fd00960961fc68badcccd2ec42cc2a5654ab3c4516579ce3a6863a16eb0"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-probe/query-64.expected.json",
+        "sha256": "sha256:53f1a58f8bb8b504c2fb082df2166c60435015bca8a393a92ec5da3b90c8ed63"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.mornlea_worldgen_probe/11/query-65",
+      "family": "kernel.mornlea_worldgen_probe",
+      "version": "11",
+      "operation": "kernel",
+      "arguments": {
+        "abi_version": 11,
+        "buffer_variant": "normal",
+        "output_capacity": 520
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-probe/query-65.input.bin",
+        "sha256": "sha256:996e0596d3ab4885c67124bc59ede65727fb81768d5d322abed77a79b4bef668"
+      },
+      "input_format": "binary",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/worldgen-probe/query-65.expected.json",
+        "sha256": "sha256:0f229f73214b5bfb2118a3b767ebf8b9ca05cfd4ac6821a856ce90361ba0a82d"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.pathfind/1/blocked-support",
+      "family": "kernel.pathfind",
+      "version": "1",
+      "operation": "kernel",
+      "arguments": {
+        "operation_kind": "search"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/blocked-support.input.json",
+        "sha256": "sha256:b5b7a916c9c7318db29cbaa949785a88108a61f1e28654ecf95873c3fed24711"
+      },
+      "input_format": "json",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/blocked-support.expected.json",
+        "sha256": "sha256:9411013a2ec6f65e19be0813994ae95c8843bc9268e98ac7b5605d8d87c631c2"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.pathfind/1/corridor",
+      "family": "kernel.pathfind",
+      "version": "1",
+      "operation": "kernel",
+      "arguments": {
+        "operation_kind": "search"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/corridor.input.json",
+        "sha256": "sha256:cc3da0b3226c79a39c5a2360b423f03ea04ec7e8a6a446278591a78acd0c7c31"
+      },
+      "input_format": "json",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/corridor.expected.json",
+        "sha256": "sha256:de0917b564258f7c057a67f69230c0e2806016d8384f106669c0ae3c9c237305"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.pathfind/1/goal-pop-4096",
+      "family": "kernel.pathfind",
+      "version": "1",
+      "operation": "kernel",
+      "arguments": {
+        "operation_kind": "search"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/goal-pop-4096.input.json",
+        "sha256": "sha256:ab15c39da85e00cf0db09027acf36320d124e5e8a0a8483a6bb6b201506b0584"
+      },
+      "input_format": "json",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/goal-pop-4096.expected.json",
+        "sha256": "sha256:8aa87cd7130d92b41e4c715b045f0f1df8c57373f9818150f28d3c4fa628012c"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.pathfind/1/goal-pop-4097",
+      "family": "kernel.pathfind",
+      "version": "1",
+      "operation": "kernel",
+      "arguments": {
+        "operation_kind": "search"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/goal-pop-4097.input.json",
+        "sha256": "sha256:a70ce631eb21ad3f680228d90eec4c5713c1f3c859a0073665bee2c0a8a3e729"
+      },
+      "input_format": "json",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/goal-pop-4097.expected.json",
+        "sha256": "sha256:6527979737a3441604feb084b699f386673f8c478045d7e77c9b176b5cebff04"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.pathfind/1/grid-invalid",
+      "family": "kernel.pathfind",
+      "version": "1",
+      "operation": "kernel",
+      "arguments": {
+        "operation_kind": "grid"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/grid-invalid.input.json",
+        "sha256": "sha256:7530803fa208f4b15da16e8763832b01a998dc9684be9cb2646d6790b92a2bed"
+      },
+      "input_format": "json",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/grid-invalid.expected.json",
+        "sha256": "sha256:c33041eb1c30e57b71445f690decf17b257ab963cad0489afa09e79cbbe3b431"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "mornlea_engine"
+    },
+    {
+      "id": "kernel.pathfind/1/grid-valid",
+      "family": "kernel.pathfind",
+      "version": "1",
+      "operation": "kernel",
+      "arguments": {
+        "operation_kind": "grid"
+      },
+      "input": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/grid-valid.input.json",
+        "sha256": "sha256:78d75729215112ce2282ca7006b873aaaba77d9f8a27ff81f23982a294fa0d4d"
+      },
+      "input_format": "json",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/kernel/pathfind/grid-valid.expected.json",
+        "sha256": "sha256:33c4620164e5ad40e8006483a4b5842f45300af5f2b04180d845c2a06880d118"
       },
       "checkpoints": [
         "0"

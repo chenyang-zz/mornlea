@@ -215,31 +215,87 @@ func TestContractInventoryWorkingReportsZeroCaseFamilies(t *testing.T) {
 		t.Fatalf("ReconcileWorking failed: %v", err)
 	}
 
-	// The native closure imports kernel routes one family at a time: point at
-	// the next route still waiting for its import while earlier routes carry
-	// executed cases.
+	// The native closure imports kernel routes one family at a time and is now
+	// closed, so the zero-case shape is exercised on a synthetic working copy:
+	// drop the physics cases and physics must report uncovered while the
+	// imported collision route stays covered.
+	drained := Inventory{
+		SchemaVersion:  inventory.SchemaVersion,
+		SourceRevision: inventory.SourceRevision,
+		Identities:     inventory.Identities,
+	}
+	for _, family := range inventory.Families {
+		cloned := family
+		cloned.SupportedVersions = append([]string(nil), family.SupportedVersions...)
+		cloned.Sources = append([]SourceSpec(nil), family.Sources...)
+		if family.ID == "kernel.mornlea_physics_step" {
+			cloned.Cases = nil
+		} else {
+			cloned.Cases = append([]string(nil), family.Cases...)
+		}
+		drained.Families = append(drained.Families, cloned)
+	}
+	for _, c := range inventory.Cases {
+		if c.Family == "kernel.mornlea_physics_step" {
+			continue
+		}
+		drained.Cases = append(drained.Cases, c)
+	}
+	drainedReport, err := ReconcileWorking(
+		root,
+		drained,
+		families,
+		live,
+		BaselineConsumerRegistry(),
+		BaselineNegativeCoverageExceptions(),
+	)
+	if err != nil {
+		t.Fatalf("ReconcileWorking on drained inventory failed: %v", err)
+	}
 	zeroCasePoint := CoveragePoint{
 		FamilyID: "kernel.mornlea_physics_step",
 		Version:  "11",
 	}
 	foundUncovered := false
-	for _, pt := range report.Uncovered {
+	for _, pt := range drainedReport.Uncovered {
 		if pt == zeroCasePoint {
 			foundUncovered = true
 			break
 		}
 	}
 	if !foundUncovered {
-		t.Fatalf("expected zero-case family %v in Uncovered, got %v", zeroCasePoint, report.Uncovered)
+		t.Fatalf("expected zero-case family %v in Uncovered, got %v", zeroCasePoint, drainedReport.Uncovered)
 	}
-	for _, pt := range report.Covered {
+	for _, pt := range drainedReport.Covered {
 		if pt == zeroCasePoint {
 			t.Fatalf("expected zero-case family %v NOT in Covered", zeroCasePoint)
 		}
 	}
+	collisionPoint := CoveragePoint{
+		FamilyID: "kernel.mornlea_collision_resolve",
+		Version:  "11",
+	}
+	foundCovered := false
+	for _, pt := range drainedReport.Covered {
+		if pt == collisionPoint {
+			foundCovered = true
+			break
+		}
+	}
+	if !foundCovered {
+		t.Fatalf("expected imported family %v in Covered, got %v", collisionPoint, drainedReport.Covered)
+	}
 
-	assertCoveragePointsSorted(t, "Covered", report.Covered)
-	assertCoveragePointsSorted(t, "Uncovered", report.Uncovered)
+	assertCoveragePointsSorted(t, "Covered", drainedReport.Covered)
+	assertCoveragePointsSorted(t, "Uncovered", drainedReport.Uncovered)
+
+	// The frozen inventory itself is closed: every kernel route reports
+	// covered and nothing stays uncovered on the working path.
+	for _, pt := range report.Uncovered {
+		if strings.HasPrefix(pt.FamilyID, "kernel.") {
+			t.Fatalf("closed kernel point %v is still uncovered", pt)
+		}
+	}
 }
 
 func TestContractInventoryCompleteRejectsZeroCaseFamilies(t *testing.T) {
@@ -249,9 +305,35 @@ func TestContractInventoryCompleteRejectsZeroCaseFamilies(t *testing.T) {
 		t.Fatalf("load frozen inventory: %v", err)
 	}
 
+	// The closed frozen inventory carries no zero-case kernel family, so the
+	// rejection shape is exercised on a synthetic working copy drained of the
+	// physics cases; acceptance of the frozen inventory itself is asserted
+	// after the rejection.
+	drained := Inventory{
+		SchemaVersion:  inventory.SchemaVersion,
+		SourceRevision: inventory.SourceRevision,
+		Identities:     inventory.Identities,
+	}
+	for _, family := range inventory.Families {
+		cloned := family
+		cloned.SupportedVersions = append([]string(nil), family.SupportedVersions...)
+		cloned.Sources = append([]SourceSpec(nil), family.Sources...)
+		if family.ID == "kernel.mornlea_physics_step" {
+			cloned.Cases = nil
+		} else {
+			cloned.Cases = append([]string(nil), family.Cases...)
+		}
+		drained.Families = append(drained.Families, cloned)
+	}
+	for _, c := range inventory.Cases {
+		if c.Family == "kernel.mornlea_physics_step" {
+			continue
+		}
+		drained.Cases = append(drained.Cases, c)
+	}
 	report, err := ReconcileComplete(
 		root,
-		inventory,
+		drained,
 		families,
 		live,
 		BaselineConsumerRegistry(),
@@ -294,6 +376,27 @@ func TestContractInventoryCompleteRejectsZeroCaseFamilies(t *testing.T) {
 
 	assertCoveragePointsSorted(t, "Covered", report.Covered)
 	assertCoveragePointsSorted(t, "Uncovered", report.Uncovered)
+
+	// The frozen inventory itself completes only when no other family is left
+	// uncovered: with every kernel route imported, complete acceptance must
+	// not name a kernel point.
+	completeReport, completeErr := ReconcileComplete(
+		root,
+		inventory,
+		families,
+		live,
+		BaselineConsumerRegistry(),
+		BaselineNegativeCoverageExceptions(),
+	)
+	_ = completeReport
+	if completeErr != nil {
+		if strings.Contains(completeErr.Error(), "kernel.") {
+			t.Fatalf("ReconcileComplete rejects a closed kernel point: %v", completeErr)
+		}
+		t.Logf("ReconcileComplete still rejects non-kernel points: %v", completeErr)
+	} else {
+		t.Log("ReconcileComplete accepts the closed corpus")
+	}
 }
 
 func TestContractInventoryRejectsUnknownConsumer(t *testing.T) {

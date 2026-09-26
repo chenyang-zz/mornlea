@@ -1,0 +1,19 @@
+{
+  "category": "ok",
+  "fields": {
+    "done": 1,
+    "output_len": 20,
+    "payload_sha256": "sha256:4c7e1d39dc91b61578576a9165afbac03e471f59c9c853adc4a3c86ddc48bcd7",
+    "positions": [
+      [
+        -30,
+        3,
+        53
+      ]
+    ],
+    "spent": 4119,
+    "status": 0,
+    "used_payload_sha256": "sha256:4c7e1d39dc91b61578576a9165afbac03e471f59c9c853adc4a3c86ddc48bcd7"
+  },
+  "kind": "ok"
+}

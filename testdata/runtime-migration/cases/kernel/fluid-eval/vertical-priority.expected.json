@@ -1,0 +1,11 @@
+{
+  "category": "ok",
+  "fields": {
+    "output_hex": "021c00ff0000ff0000ff0000ff0000ff0000ff0000ff0000",
+    "output_len": 24,
+    "payload_sha256": "sha256:04c7203033a9a9e0ac712ead6fc59df62d2be410f2f76e3e419d627069076dd3",
+    "status": 0,
+    "used_payload_sha256": "sha256:04c7203033a9a9e0ac712ead6fc59df62d2be410f2f76e3e419d627069076dd3"
+  },
+  "kind": "ok"
+}

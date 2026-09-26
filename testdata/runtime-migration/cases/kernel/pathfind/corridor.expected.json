@@ -1,0 +1,39 @@
+{
+  "category": "ok",
+  "fields": {
+    "revisions": [
+      {
+        "chunk": [
+          0,
+          0
+        ],
+        "revision": "1"
+      },
+      {
+        "chunk": [
+          1,
+          0
+        ],
+        "revision": "2"
+      }
+    ],
+    "waypoints": [
+      [
+        0,
+        64,
+        0
+      ],
+      [
+        2,
+        64,
+        0
+      ],
+      [
+        4,
+        64,
+        0
+      ]
+    ]
+  },
+  "kind": "ok"
+}

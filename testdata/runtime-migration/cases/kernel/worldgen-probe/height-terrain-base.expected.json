@@ -1,0 +1,16 @@
+{
+  "category": "ok",
+  "fields": {
+    "output_count": 3,
+    "output_len": 24,
+    "payload_sha256": "sha256:ce99cda159bdab1e255f65f8b5ede5c5d4c42853bb8ae01b63dbb5259800827e",
+    "records": [
+      "4300000000000000",
+      "0000000002000000",
+      "0000000002000000"
+    ],
+    "status": 0,
+    "used_payload_sha256": "sha256:ce99cda159bdab1e255f65f8b5ede5c5d4c42853bb8ae01b63dbb5259800827e"
+  },
+  "kind": "ok"
+}
