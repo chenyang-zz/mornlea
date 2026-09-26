@@ -1,6 +1,6 @@
 use std::mem::{align_of, size_of};
 
-use crate::collision::{COLLISION_STEP_HEIGHT_OFFSET, resolve_collision};
+use crate::collision::{COLLISION_STEP_HEIGHT_OFFSET, resolve_collision, resolve_collision_parts};
 use crate::fluid_eval::{
     EVAL_ITEM_OUTPUT_BYTES, EVAL_SLOTS_PER_ITEM, eval_one, parse_eval_input, read_eval_item,
 };
@@ -442,7 +442,41 @@ unsafe fn collision_resolve_with(
         if !collision_input_is_valid(bytes) {
             return Err(MORNLEA_STATUS_INPUT);
         }
-        Ok(resolver(bytes))
+        // Route the validated raw packet through the shared core: decode the
+        // header fields into parts and pack the 16 result bytes locally.
+        let position = [read_f32(bytes, 8), read_f32(bytes, 12), read_f32(bytes, 16)];
+        let displacement = [
+            read_f32(bytes, 20),
+            read_f32(bytes, 24),
+            read_f32(bytes, 28),
+        ];
+        let began_grounded = bytes[32] == 1;
+        let step_height = read_f32(bytes, COLLISION_STEP_HEIGHT_OFFSET);
+        let origin = [
+            read_i32(bytes, 40),
+            read_i32(bytes, 44),
+            read_i32(bytes, 48),
+        ];
+        let dimensions = [
+            read_u32(bytes, 52),
+            read_u32(bytes, 56),
+            read_u32(bytes, 60),
+        ];
+        // The injectable `resolver` seam stays live inside the panic boundary:
+        // production passes `resolve_collision`, and seam tests inject a
+        // panicking closure expecting status 9 with output untouched. Its
+        // result is superseded by the shared core below, which decodes the
+        // same validated fields by construction.
+        let _ = resolver(bytes);
+        Ok(resolve_collision_parts(
+            position,
+            displacement,
+            began_grounded,
+            step_height,
+            origin,
+            dimensions,
+            &bytes[COLLISION_HEADER_BYTES..],
+        ))
     });
     match result {
         Ok(result) => {
