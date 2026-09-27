@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(claude --version 2>&1; echo \"---\"; claude plugin --help 2>&1 | head -n 80; echo \"===\"; cmd --version 2>&1 | head -n 20; echo \"===\"; codex --version 2>&1 | head -n 20)",
+      "Shell(claude plugin list 2>&1; echo \"===MARKETPLACES===\"; claude plugin marketplace list 2>&1; echo \"===CODE-X-SKILLS===\"; ls -la .codex/skills/ 2>&1; ls -la ~/.codex/skills/ 2>&1 | head -n 50; echo \"===CLAUDE-SKILLS===\"; ls -la .claude/skills/ 2>&1; echo \"===CMD-HELP===\"; cmd --help 2>&1 | head -n 100)",
+      "Shell(cmd:*)",
+      "Shell(ls:*)",
+      "Shell(codex:*)",
+      "Shell(claude:*)",
+      "Shell(cmd skills list -d 2>&1 | head -n 200; echo \"===CONFIG===\"; cat ~/.commandcode/config.json 2>&1; echo \"===CMD-SKILLS-DIR===\"; ls -la ~/.commandcode/skills/ 2>&1 | head -n 50; ls -la ./.commandcode/ 2>&1 | head -n 50; ls -la ~/.agents/skills/.arkcli-managed-skills.json 2>&1; cat ~/.agents/skills/.arkcli-managed-skills.json 2>&1 | head -n 100)",
+      "Shell(ls \"$COMMANDCODE_SCRATCHPAD\" 2>&1; git clone --depth 1 --filter=blob:none --sparse https://github.com/obra/superpowers.git \"$COMMANDCODE_SCRATCHPAD/superpowers\" 2>&1 | tail -n 5; git -C \"$COMMANDCODE_SCRATCHPAD/superpowers\" sparse-checkout set skills 2>&1 | tail -n 3; ls \"$COMMANDCODE_SCRATCHPAD/superpowers/skills\" 2>&1)",
+      "Shell(ls \"$COMMANDCODE_SCRATCHPAD/superpowers/skills/brainstorming/\" 2>&1; echo \"===\"; ls \"$COMMANDCODE_SCRATCHPAD/superpowers/skills/using-superpowers/\" 2>&1; echo \"=== sample SKILL header ===\"; head -n 30 \"$COMMANDCODE_SCRATCHPAD/superpowers/skills/brainstorming/SKILL.md\" 2>&1)",
+      "Shell(ls -la .commandcode/skills/ 2>&1; echo \"===GLOBAL-AGENTS===\"; ls ~/.agents/skills/ | grep -i -E \"brain|super|writing|test-driven|debugging\" 2>&1; echo \"===DEBUG-LIST===\"; cmd skills list -d 2>&1 | grep -A2 -i \"brainstorming\" | head -n 20; echo \"===FIND-BRAIN===\"; find /Users/chen -maxdepth 4 -name \"*brainstorming*\" -type d 2>/dev/null | head -n 20)",
+      "Shell(cmd skills list -d 2>&1 | tail -n 60; echo \"===ENV===\"; env | grep -i -E \"commandcode|agents|skills\" | head -n 20; echo \"===GLOBAL-CANDIDATES===\"; ls -la ~/.commandcode/ 2>&1; ls -la ~/.agents/ 2>&1 | head -n 30)",
+      "Shell(ls -la .commandcode/skills/brainstorming/ 2>&1; echo \"===REMOVE-HELP===\"; cmd skills remove --help 2>&1 | head -n 30)",
+      "Shell(cat:*)",
+      "Shell(cmd skills add obra/superpowers -s brainstorming --global 2>&1 | tail -n 10; echo \"===CHECK===\"; ls ~/.agents/skills/ | grep -i brainstorm 2>&1; ls ~/.commandcode/skills/ 2>&1 | head -n 20; cmd skills list 2>&1 | grep -i brainstorm | head -n 5)",
+      "Shell(echo \"=== commandcode-skills ===\"; ls -la ~/.commandcode/skills/ 2>&1; echo \"=== agents-skills-grep ===\"; ls ~/.agents/skills/ 2>&1 | grep -i -E \"brain|super|writing|test|debug\" || echo \"(none in ~/.agents/skills)\"; echo \"=== list ===\"; cmd skills list 2>&1 | head -n 15)",
+      "Shell(for:*)",
+      "Shell(do:*)",
+      "Shell(done:*)",
+      "Shell(ls ~/.commandcode/skills/ 2>&1; echo \"===TOTAL===\"; cmd skills list 2>&1 | head -n 25; echo \"===ACTIVATE-TEST===\"; head -n 8 ~/.commandcode/skills/using-superpowers/SKILL.md 2>&1)",
+      "Shell(for d in ~/.commandcode/skills/*/; do n=$(basename \"$d\"); if [ -f \"$d/SKILL.md\" ]; then h=$(head -n 4 \"$d/SKILL.md\" | tr '\\n' ' '); echo \"OK $n :: $h\"; else echo \"MISS $n (no SKILL.md)\"; fi; done; echo \"===DEBUG-SKIPPED===\"; cmd skills list -d 2>&1 | grep -i -E \"skip|error|fail\" | head -n 20 || echo \"(no skipped/error lines)\"; echo \"===REPO-CLEANUP===\"; ls -la .commandcode/ 2>&1; git status --short --branch 2>&1 | head -n 10)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}
