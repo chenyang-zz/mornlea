@@ -533,3 +533,36 @@ fn mesh_abi_late_overflow() {
         "the all-air shortcut must not touch the payload"
     );
 }
+
+#[test]
+fn all_air_custom_visibility_matches_the_abi_empty_stream() {
+    let registry = registry(
+        &[
+            entry(AIR, false, [0; 6], MeshModel::Default),
+            entry(BARRIER, true, [1; 6], MeshModel::Default),
+            entry(
+                STANDING_TORCH,
+                false,
+                [WHEAT_MATERIAL; 6],
+                MeshModel::StandingTorch,
+            ),
+        ],
+        &[(0, 0)],
+    );
+    let section = Section::air();
+    let mut raw = dense_raw_input(AIR, 0);
+    let visibility_offset = raw.len() - 3 * 8;
+    raw[visibility_offset..visibility_offset + 8].copy_from_slice(&1_u64.to_le_bytes());
+    let (status, written, output) = call_mesh_abi(&raw, LEGACY_MIN_SLOTS);
+    assert_eq!(status, MESH_STATUS_OK);
+    assert_eq!(written, 0);
+    assert_eq!(output, vec![MESH_ABI_CANARY; LEGACY_MIN_SLOTS]);
+
+    let mut scratch = MeshScratch::try_new().unwrap();
+    let mut dst = vec![MeshQuad::default(); STAGE_QUADS];
+    assert_eq!(
+        NativeMesh.mesh(&section.view(&registry), &mut scratch, &mut dst),
+        Ok(written)
+    );
+    assert!(dst.iter().all(|quad| *quad == MeshQuad::default()));
+}

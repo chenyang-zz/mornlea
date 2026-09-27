@@ -10,7 +10,7 @@ use mornlea_engine::native::contracts::{
     KernelError, MeshModel, MeshOp, MeshQuad, MeshRegistry, MeshRegistryEntry, MeshScratch,
     MeshView,
 };
-use mornlea_engine::native::mesh::{NativeMesh, try_new_registry};
+use mornlea_engine::native::mesh::{NativeMesh, build_light, try_new_registry};
 
 const AIR: u16 = 0;
 const BARRIER: u16 = 1;
@@ -483,4 +483,175 @@ fn registry_validation_precedes_geometry_publication() {
         Err(KernelError::InvalidRegistry)
     );
     assert_eq!(dst, canary, "a rejected registry must not publish geometry");
+}
+
+#[test]
+fn present_heights_reject_unrepresentable_section_origins_without_publication() {
+    let registry = faces_registry();
+    let mut section = Section::air();
+    section.set(8, 8, 8, STONE);
+    section.heights_present[0] = true;
+    let canary = canary_quads();
+    let mut scratch = MeshScratch::try_new().unwrap();
+
+    for origin in [i32::MIN, i32::MAX, i32::MIN + 15, i32::MAX - 30] {
+        let mut view = section.view(&registry);
+        view.section_origin_y = origin;
+        let mut dst = canary;
+        assert_eq!(
+            NativeMesh.mesh(&view, &mut scratch, &mut dst),
+            Err(KernelError::InvalidInput),
+            "origin {origin} cannot represent the complete height sample window",
+        );
+        assert_eq!(
+            dst, canary,
+            "origin {origin} must preserve every destination slot"
+        );
+    }
+}
+
+#[test]
+fn public_light_rejects_unrepresentable_height_sample_origins() {
+    let registry = faces_registry();
+    let mut section = Section::air();
+    section.heights_present[8] = true;
+    let mut scratch = MeshScratch::try_new().unwrap();
+    for origin in [i32::MIN, i32::MAX] {
+        let mut view = section.view(&registry);
+        view.section_origin_y = origin;
+        assert_eq!(
+            build_light(&view, &mut scratch),
+            Err(KernelError::InvalidInput)
+        );
+    }
+}
+
+#[test]
+fn representable_height_sample_boundaries_are_admitted() {
+    let registry = faces_registry();
+    let mut section = Section::air();
+    section.set(8, 8, 8, STONE);
+    section.heights_present.fill(true);
+    let mut scratch = MeshScratch::try_new().unwrap();
+    for origin in [i32::MIN + 16, i32::MAX - 31] {
+        let mut view = section.view(&registry);
+        view.section_origin_y = origin;
+        assert_eq!(
+            NativeMesh.mesh(&view, &mut scratch, &mut [MeshQuad::default(); 6]),
+            Ok(6),
+        );
+    }
+}
+
+#[test]
+fn unused_height_samples_do_not_restrict_section_origin() {
+    let registry = faces_registry();
+    let mut section = Section::air();
+    section.set(8, 8, 8, STONE);
+    let mut scratch = MeshScratch::try_new().unwrap();
+    for origin in [i32::MIN, i32::MAX] {
+        let mut view = section.view(&registry);
+        view.section_origin_y = origin;
+        assert_eq!(
+            NativeMesh.mesh(&view, &mut scratch, &mut [MeshQuad::default(); 6]),
+            Ok(6),
+        );
+    }
+}
+
+#[test]
+fn invalid_registry_precedes_origin_admission_and_the_air_shortcut() {
+    let mut bad = entry(BARRIER, true, [1; 6], MeshModel::Default);
+    bad.light_attenuation = 2;
+    let registry = MeshRegistry::try_new(
+        &[entry(AIR, false, [0; 6], MeshModel::Default), bad],
+        &[1, 0],
+        AIR,
+        BARRIER,
+    )
+    .unwrap();
+    let mut section = Section::air();
+    section.heights_present.fill(true);
+    let mut view = section.view(&registry);
+    view.section_origin_y = i32::MAX;
+    let canary = canary_quads();
+    let mut dst = canary;
+    let mut scratch = MeshScratch::try_new().unwrap();
+    assert_eq!(
+        NativeMesh.mesh(&view, &mut scratch, &mut dst),
+        Err(KernelError::InvalidRegistry),
+    );
+    assert_eq!(dst, canary);
+}
+
+#[test]
+fn all_air_center_ignores_custom_air_visibility_and_preserves_destination() {
+    let registry = registry(
+        &[
+            entry(AIR, false, [0; 6], MeshModel::Default),
+            entry(BARRIER, true, [1; 6], MeshModel::Default),
+        ],
+        &[(0, 0)],
+    );
+    let section = Section::air();
+    let canary = canary_quads();
+    let mut dst = canary;
+    let mut scratch = MeshScratch::try_new().unwrap();
+    assert_eq!(
+        NativeMesh.mesh(&section.view(&registry), &mut scratch, &mut dst),
+        Ok(0)
+    );
+    assert_eq!(dst, canary);
+}
+
+#[test]
+fn scratch_reuse_after_origin_rejection_and_air_matches_fresh_output() {
+    let mut lamp = entry(STONE, true, [10; 6], MeshModel::Default);
+    lamp.emission = 15;
+    let bright_registry = registry(
+        &[
+            entry(AIR, false, [0; 6], MeshModel::Default),
+            entry(BARRIER, true, [1; 6], MeshModel::Default),
+            lamp,
+        ],
+        &[(0, 0), (2, 0)],
+    );
+    let mut bright = Section::air();
+    bright.set(8, 8, 8, STONE);
+    let mut scratch = MeshScratch::try_new().unwrap();
+    let mut dst = vec![MeshQuad::default(); STAGE_QUADS];
+    let count = NativeMesh
+        .mesh(&bright.view(&bright_registry), &mut scratch, &mut dst)
+        .unwrap();
+    assert!(dst[..count].iter().any(|quad| quad.light() != 0));
+
+    let mut invalid = Section::air();
+    invalid.heights_present.fill(true);
+    let mut view = invalid.view(&bright_registry);
+    view.section_origin_y = i32::MIN;
+    let before = dst.clone();
+    assert_eq!(
+        NativeMesh.mesh(&view, &mut scratch, &mut dst),
+        Err(KernelError::InvalidInput)
+    );
+    assert_eq!(dst, before);
+
+    let air = Section::air();
+    assert_eq!(
+        NativeMesh.mesh(&air.view(&bright_registry), &mut scratch, &mut dst),
+        Ok(0)
+    );
+    assert_eq!(dst, before);
+
+    let dark_registry = faces_registry();
+    let mut reused = [MeshQuad::default(); 6];
+    let mut fresh = [MeshQuad::default(); 6];
+    let view = bright.view(&dark_registry);
+    assert_eq!(NativeMesh.mesh(&view, &mut scratch, &mut reused), Ok(6));
+    assert_eq!(
+        NativeMesh.mesh(&view, &mut MeshScratch::try_new().unwrap(), &mut fresh),
+        Ok(6)
+    );
+    assert_eq!(reused, fresh);
+    assert!(reused.iter().all(|quad| quad.light() == 0));
 }

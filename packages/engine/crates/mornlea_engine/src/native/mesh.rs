@@ -43,9 +43,18 @@ pub fn try_new_registry(
 /// reads any block. On success the scratch owns the complete level volume and
 /// an empty queue; reusing the same scratch for another view resets both before
 /// that build. A rejected call may leave partial levels in the scratch but
-/// publishes no light result.
+/// publishes no light result. Present height columns require a representable
+/// origin-relative sample window; absent columns never use that arithmetic.
 pub fn build_light(view: &MeshView<'_>, scratch: &mut MeshScratch) -> Result<(), KernelError> {
     crate::input::validate_typed_registry(view.registry)?;
+    // Native callers receive a typed rejection before the shared solver adds
+    // neighborhood offsets. The transitional ABI retains its own admission.
+    if view.heights_present.contains(&true)
+        && (view.section_origin_y.checked_sub(16).is_none()
+            || view.section_origin_y.checked_add(31).is_none())
+    {
+        return Err(KernelError::InvalidInput);
+    }
     crate::light::build_light_view(view, scratch)
 }
 
@@ -80,6 +89,15 @@ impl MeshOp for NativeMesh {
         dst: &mut [MeshQuad],
     ) -> Result<usize, KernelError> {
         build_light(view, scratch)?;
+        // The center is section 13 in the owned 3x3x3 neighborhood. Preserve
+        // the ABI's empty-center observation even when a valid custom table
+        // marks air faces visible; light has already reset reusable scratch.
+        if view.blocks[13 * 4096..14 * 4096]
+            .iter()
+            .all(|&block| block == view.registry.air())
+        {
+            return Ok(0);
+        }
         let access = crate::greedy::TypedMeshAccess::new(view);
         let MeshScratch {
             levels,
