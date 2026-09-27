@@ -138,6 +138,10 @@ Validation: the same three 1.1b tests were re-run from the repository root and e
 
 Independent review approved node 1.1c at `a4ec13066eb8b255ff5bc67e838743429a16df05`. Deferred minor for the final branch review and for the node 3.4a dispatch: `plans/01-server-slices.md` still calls `StoreLimits` proposed and subject to 1.1b/c fit. `plans/02-core-seams.md` is the declaration authority for the accepted per-lane caps. Architecture skill: no change.
 
+## Task 1.2 contract acceptance, 2026-09-27
+
+Independent review approved the compiling S1 contract and consumer double at `12c44a91677ea4bcc1abb876ab271185e9ff7d18` through `23cf4993d0baf8c8c86e350e6598cab1b8f3f843`. Locked `server_contract` `contract_double` passed 9 tests after the atomic staging and publication fix. This SHA is the contract predecessor for later nodes. A double is not a real server. Deferred minors for the final branch review: `all_ports_type_flow` contains an assertion that cannot fail; `run_phase` maps every provider error to `RuleReject::StaleObservation`; `MailboxPort::carry` installs the batch and then returns `Capacity`. Architecture skill: no change.
+
 ## Task 1.2 compiling contract, 2026-09-27
 
 Baseline before this edit was `87b01ca5f50cfaa33a236aa8beedb2565e5a6d3a`. The crate `packages/engine/crates/mornlea_server` now declares the checked server, save, and agent types from the execution and core-seam plans, keeps `AuthorityState` opaque, and registers the later topic modules empty of behavior. The executing consumer double is not server acceptance. No world rule, reducer, transport adapter, or disk backend was added. `HandshakeLimits` is not declared in the core-seam plan and was not invented.

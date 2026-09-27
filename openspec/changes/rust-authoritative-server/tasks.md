@@ -2,7 +2,7 @@
 
 Node 1.1a is complete. The remaining nodes are pending. [Execution contract and dependency graph](plans/00-execution.md), [compile-ready S1 seams](plans/02-core-seams.md) and [exact worker packets](plans/01-server-slices.md) are part of this plan. These new crate/tests are prospective until their owning nodes land; `-- --list` alone is never provider acceptance. Record the accepted contract SHA, fixture identity, behavioral red/green and focused commit for each node in `ledger.md`. A worker edits only packet-owned files. F1 complete acceptance is a hard prerequisite; the current Go server remains the production authority until the separate product cutover.
 
-[Controller algorithms and concrete acceptance tables](plans/04-refined-nodes.md) cover every command and rule branch. The 48 pending nodes include separate real filesystem and Agent lifecycle/integration owners.
+[Controller algorithms and concrete acceptance tables](plans/04-refined-nodes.md) cover every command and rule branch. The 47 pending nodes include separate real filesystem and Agent lifecycle/integration owners.
 
 See the [node-by-node dependency and ownership gate](plans/03-parallel-readiness.md) before dispatch. It refines the linked packets without duplicating status.
 
@@ -13,7 +13,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 1.1a Verify the sealed complete F1 prerequisite and enumerate server capabilities.
 - [x] 1.1b Record command, chunk-result and persistence high-water from every supported server replay.
 - [x] 1.1c Freeze S1 bounds and source-bound capability-to-test mappings before the contract landing.
-- [ ] 1.2 Land compiling S1 contract, bounded types and executing consumer double; freeze its SHA.
+- [x] 1.2 Land compiling S1 contract, bounded types and executing consumer double; freeze its SHA.
 - [ ] 1.3 Implement session admission, sequenced intake and control-plane separation.
 - [ ] 1.4 Implement bounded tick/chunk mailboxes and cancellation.
 - [ ] 1.5a Implement owned tick publication and bounded slow-receiver outboxes.
