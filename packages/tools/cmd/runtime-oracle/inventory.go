@@ -555,6 +555,25 @@ func reconcileInventory(
 			problems = append(problems, "family "+family.ID+" has no provenance sources")
 			continue
 		}
+		if family.Kind == "kernel" {
+			required := make(map[string]bool, len(family.Sources))
+			listedPaths := make(map[string]bool, len(listed.Sources))
+			for _, source := range family.Sources {
+				required[source.Path] = true
+			}
+			for _, source := range listed.Sources {
+				if listedPaths[source.Path] || !required[source.Path] {
+					problems = append(problems, fmt.Sprintf("family %s has unexpected or duplicate required provenance source %s", family.ID, source.Path))
+				}
+				listedPaths[source.Path] = true
+			}
+			for path := range required {
+				if !listedPaths[path] {
+					problems = append(problems, fmt.Sprintf("family %s is missing required provenance source %s", family.ID, path))
+				}
+			}
+		}
+
 		for _, src := range listed.Sources {
 			if err := validateCorpusPath(src.Path); err != nil {
 				problems = append(problems, fmt.Sprintf("family %s source path: %v", family.ID, err))

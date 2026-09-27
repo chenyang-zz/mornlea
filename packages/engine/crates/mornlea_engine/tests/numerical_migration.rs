@@ -700,10 +700,14 @@ fn execute_engine_pathfind(case: &FrozenCase) -> serde_json::Value {
         z: get_i32("origin", 2),
     };
     let size = [get_u32("size", 0), get_u32("size", 1), get_u32("size", 2)];
-    let cells = size[0] as usize * size[1] as usize * size[2] as usize;
-    if cells > ENGINE_MAX_CELLS {
+    let cells = size.into_iter().try_fold(1_usize, |count, extent| {
+        count
+            .checked_mul(extent as usize)
+            .filter(|&cells| extent != 0 && cells <= ENGINE_MAX_CELLS)
+    });
+    let Some(cells) = cells else {
         return serde_json::json!({"kind": "error", "category": "invalid-grid", "fields": {}});
-    }
+    };
     let mut blocks: Vec<u16> = Vec::new();
     for run in input
         .get("blocks_rle")
@@ -724,7 +728,7 @@ fn execute_engine_pathfind(case: &FrozenCase) -> serde_json::Value {
         if id > 65535 || count == 0 {
             return serde_json::json!({"kind": "error", "category": "invalid-grid", "fields": {}});
         }
-        if blocks.len() as u64 + count > ENGINE_MAX_CELLS as u64 {
+        if count > ENGINE_MAX_CELLS as u64 - blocks.len() as u64 {
             return serde_json::json!({"kind": "error", "category": "invalid-grid", "fields": {}});
         }
         blocks.extend(std::iter::repeat_n(id as u16, count as usize));
@@ -818,6 +822,9 @@ fn execute_engine_pathfind(case: &FrozenCase) -> serde_json::Value {
                 .iter()
                 .map(|cell| serde_json::json!([cell.x, cell.y, cell.z]))
                 .collect::<Vec<_>>();
+            let normalized = result.revisions().iter().map(|revision| {
+                serde_json::json!({"chunk": revision.chunk, "revision": revision.revision.to_string()})
+            }).collect::<Vec<_>>();
             serde_json::json!({"kind": "ok", "category": "ok", "fields": {"revisions": normalized, "waypoints": waypoints}})
         }
         Err(error) => {
@@ -1028,4 +1035,67 @@ fn engine_kernel_corpus_mutation_fails_comparison() {
     waypoints[0] = serde_json::Value::Array(moved);
     let err = std::panic::catch_unwind(|| assert_normalized(&corridor, mutated));
     assert!(err.is_err(), "mutated waypoint must fail comparison");
+}
+
+#[test]
+fn engine_path_corpus_rejects_overflow_before_blocks() {
+    let original = runtime_corpus::load_case("kernel.pathfind/1/corridor");
+    for extent in [u32::MAX, 1 << 22] {
+        let mut case = original.clone();
+        case.input_json.as_mut().unwrap()["size"] = serde_json::json!([extent, extent, extent]);
+        let outcome = execute_engine_pathfind(&case);
+        assert_eq!(outcome["category"], "invalid-grid");
+    }
+}
+
+#[test]
+fn engine_kernel_provenance_binds_live_sources() {
+    let root = runtime_corpus::find_repo_root();
+    let (bytes, _) = runtime_corpus::read_bounded_file(
+        &root.join("testdata/runtime-migration/contracts.json"),
+        runtime_corpus::MAX_MANIFEST_BYTES,
+    );
+    let manifest = runtime_corpus::decode_strict_json(&bytes, "numerical source pins").unwrap();
+    for family in manifest["families"].as_array().unwrap() {
+        if family["kind"] != "kernel" {
+            continue;
+        }
+        let sources = family["sources"].as_array().unwrap();
+        let mut seen = HashSet::new();
+        for source in sources {
+            let path = source["path"].as_str().unwrap();
+            runtime_corpus::validate_relative_path(path);
+            assert!(seen.insert(path), "duplicate source {path}");
+            let data = std::fs::read(root.join(path)).unwrap();
+            assert_eq!(
+                engine_digest_hex(&data),
+                source["sha256"],
+                "source drift: {path}"
+            );
+        }
+        let id = family["id"].as_str().unwrap();
+        assert!(
+            seen.contains("packages/engine/crates/mornlea_engine/tests/numerical_migration.rs")
+        );
+        let provider = match id {
+            "kernel.mornlea_collision_resolve" => "collision",
+            "kernel.mornlea_physics_step" => "physics",
+            "kernel.mornlea_raycast_batch" => "raycast",
+            "kernel.mornlea_worldgen_chunk" => "worldgen",
+            "kernel.mornlea_worldgen_probe" => "world_probe",
+            "kernel.mornlea_tree_blocks" => "tree",
+            "kernel.mornlea_lod_shell" => "lod",
+            "kernel.mornlea_fluid_eval_batch" => "fluid_eval",
+            "kernel.mornlea_fluid_rescan" => "fluid_rescan",
+            "kernel.mornlea_mesh_section" => "mesh",
+            "kernel.pathfind" => "pathfind",
+            _ => panic!("unknown numerical source policy {id}"),
+        };
+        assert!(seen.contains(
+            format!("packages/engine/crates/mornlea_engine/src/native/{provider}.rs").as_str()
+        ));
+        if id != "kernel.pathfind" {
+            assert!(seen.contains("packages/engine/crates/mornlea_engine/src/ffi.rs"));
+        }
+    }
 }

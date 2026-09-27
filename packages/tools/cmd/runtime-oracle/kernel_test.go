@@ -1137,7 +1137,7 @@ func executeKernelPathfindCase(t *testing.T, id string, spec CaseSpec, input []b
 		waypoints = append(waypoints, [3]int32{cell.X, cell.Y, cell.Z})
 	}
 	return map[string]any{"kind": "ok", "category": "ok", "fields": map[string]any{
-		"revisions": normalizeKernelFixtureRevisions(t, id, fixture),
+		"revisions": normalizeKernelResultRevisions(result.Revisions),
 		"waypoints": waypoints,
 	}}
 }
@@ -1149,6 +1149,9 @@ func executeKernelPathfindCase(t *testing.T, id string, spec CaseSpec, input []b
 func buildKernelPathGrid(fixture kernelPathfindInput) (pathfind.PathGrid, string, string) {
 	cells := uint64(1)
 	for _, extent := range fixture.Size {
+		if extent == 0 || uint64(extent) > 131072/cells {
+			return pathfind.PathGrid{}, "", "invalid-grid"
+		}
 		cells *= uint64(extent)
 	}
 	if cells > 131072 {
@@ -1157,6 +1160,9 @@ func buildKernelPathGrid(fixture kernelPathfindInput) (pathfind.PathGrid, string
 	var total uint64
 	for _, run := range fixture.BlocksRLE {
 		if run[0] < 0 || run[0] > 65535 || run[1] <= 0 {
+			return pathfind.PathGrid{}, "", "invalid-grid"
+		}
+		if uint64(run[1]) > cells-total {
 			return pathfind.PathGrid{}, "", "invalid-grid"
 		}
 		total += uint64(run[1])
@@ -1207,6 +1213,16 @@ func passableKernelBlockSet(ids []uint16) map[core.BlockID]bool {
 		set[core.BlockID(id)] = true
 	}
 	return set
+}
+
+// `normalizeKernelResultRevisions` preserves the revision values actually returned
+// by the search rather than reconstructing observations from fixture inputs.
+func normalizeKernelResultRevisions(revisions []pathfind.ChunkRevision) []map[string]any {
+	rendered := make([]map[string]any, 0, len(revisions))
+	for _, revision := range revisions {
+		rendered = append(rendered, map[string]any{"chunk": []int32{revision.Chunk.X, revision.Chunk.Z}, "revision": strconv.FormatUint(revision.Revision, 10)})
+	}
+	return rendered
 }
 
 // normalizeKernelFixtureRevisions renders the normalized revision identity
@@ -1643,5 +1659,80 @@ func assertKernelPathfindBudgetSuccess(t *testing.T, actual map[string]any) {
 	if waypoints[0] != [3]int32{0, 64, 0} || waypoints[len(waypoints)-1] != [3]int32{4095, 64, 0} {
 		t.Fatalf("goal-pop-4096 endpoints=%v/%v, want [0 64 0]/[4095 64 0]",
 			waypoints[0], waypoints[len(waypoints)-1])
+	}
+}
+
+// `TestKernelProvenanceRequiresLiveImplementation` binds the frozen corpus to
+// the providers and consumers that execute it, including the safe Rust facade.
+func TestKernelProvenanceRequiresLiveImplementation(t *testing.T) {
+	root := mustRepoRoot(t)
+	inventory, err := LoadInventory(filepath.Join(root, InventoryRelPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const crate = "packages/engine/crates/mornlea_engine/"
+	providers := map[string]string{
+		"collision_resolve": "collision", "physics_step": "physics", "raycast_batch": "raycast",
+		"worldgen_chunk": "worldgen", "worldgen_probe": "world_probe", "tree_blocks": "tree",
+		"lod_shell": "lod", "fluid_eval_batch": "fluid_eval", "fluid_rescan": "fluid_rescan", "mesh_section": "mesh",
+	}
+	for _, family := range inventory.Families {
+		if family.Kind != "kernel" {
+			continue
+		}
+		required := []string{crate + "tests/numerical_migration.rs", "packages/tools/cmd/runtime-oracle/kernel_test.go"}
+		if family.ID == "kernel.pathfind" {
+			required = append(required, crate+"src/native/pathfind.rs", crate+"src/native/contracts/pathfind.rs", crate+"src/pathfind.rs")
+		} else {
+			provider, ok := providers[strings.TrimPrefix(family.ID, "kernel.mornlea_")]
+			if !ok {
+				t.Fatalf("missing source policy for %s", family.ID)
+			}
+			required = append(required, crate+"src/native/"+provider+".rs", crate+"src/ffi.rs")
+		}
+		seen := make(map[string]bool)
+		for _, source := range family.Sources {
+			seen[source.Path] = true
+		}
+		for _, source := range required {
+			if !seen[source] {
+				t.Fatalf("%s is missing implementation source %s", family.ID, source)
+			}
+		}
+	}
+}
+
+func TestKernelProvenanceRejectsMissingRequiredSource(t *testing.T) {
+	root, families, live := discoverLive(t)
+	cases, err := DiscoverCases(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := inventoryFrom(live, families, cases)
+	const removed = "packages/engine/crates/mornlea_engine/src/collision.rs"
+	for i := range inventory.Families {
+		if inventory.Families[i].ID != "kernel.mornlea_collision_resolve" {
+			continue
+		}
+		sources := inventory.Families[i].Sources
+		for j, source := range sources {
+			if source.Path == removed {
+				inventory.Families[i].Sources = append(sources[:j:j], sources[j+1:]...)
+				break
+			}
+		}
+	}
+	_, err = ReconcileWorking(root, inventory, families, live, BaselineConsumerRegistry(), BaselineNegativeCoverageExceptions())
+	if err == nil || !strings.Contains(err.Error(), "required provenance") {
+		t.Fatalf("missing required implementation source: %v", err)
+	}
+}
+
+func TestKernelPathGridRejectsOverflowBeforeAllocation(t *testing.T) {
+	for _, size := range [][3]uint32{{1 << 22, 1 << 22, 1 << 22}, {^uint32(0), ^uint32(0), ^uint32(0)}} {
+		_, _, failure := buildKernelPathGrid(kernelPathfindInput{Size: size})
+		if failure != "invalid-grid" {
+			t.Fatalf("size %v accepted: %q", size, failure)
+		}
 	}
 }

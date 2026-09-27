@@ -1125,23 +1125,71 @@
       "sources": [
         {
           "path": "packages/engine/crates/mornlea_engine/src/collision.rs",
-          "sha256": "sha256:883b238943d62466b555b3005cb17dc72995275fa5396362c350777ff590219a"
+          "sha256": "883b238943d62466b555b3005cb17dc72995275fa5396362c350777ff590219a"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/collision.rs",
+          "sha256": "fb50763409061f68736be0c02d6f2c805baa38deb90756f8bde1a03dfb9b831b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/collision.rs",
+          "sha256": "16bfb4a8538e33763a42b8b78520e6ad14921e14fbdb60b2438223fbd06a4a6a"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/collision.rs",
+          "sha256": "469e896b3482b654d31386d2e3928f05ded230e56ab3db8df0c4168249a937d0"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1163,24 +1211,72 @@
       "numeric_semantics": "deterministic integer fluid ranks; little-endian packed records; fail closed on overflow",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
           "path": "packages/engine/crates/mornlea_engine/src/fluid_eval.rs",
-          "sha256": "sha256:edee12999cf0765710be7b5983e7a1051a81cfbf409c89075991b731562326d5"
+          "sha256": "edee12999cf0765710be7b5983e7a1051a81cfbf409c89075991b731562326d5"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/fluid.rs",
+          "sha256": "86ec179e4b136807f7a40342d3b7c1e44765546a0563a6b4712ef018df381b3c"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/fluid_eval.rs",
+          "sha256": "731eb56665f5683191951a70764a968fea523569f3fa0c62f3d7f0945e5bee51"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/fluid_eval.rs",
+          "sha256": "a37d3770c1cd642a296b4b19c527499e49f5176f62f4048596b81c410a6f37ae"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1202,24 +1298,72 @@
       "numeric_semantics": "deterministic integer fluid ranks; little-endian packed records; fail closed on overflow",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
           "path": "packages/engine/crates/mornlea_engine/src/fluid_rescan.rs",
-          "sha256": "sha256:11732749e57f352dcfcc68554a9e753751d20d75eb8a44156108582f5cea2686"
+          "sha256": "11732749e57f352dcfcc68554a9e753751d20d75eb8a44156108582f5cea2686"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/fluid.rs",
+          "sha256": "86ec179e4b136807f7a40342d3b7c1e44765546a0563a6b4712ef018df381b3c"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/fluid_rescan.rs",
+          "sha256": "b614e6555e5ce0737c88a152f057edcf5ccd0bc52cbc7c74270a85f41d24b019"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/fluid_rescan.rs",
+          "sha256": "33f5988fb104ce11087f5cfb188be0020981ba0fc0ba610b06aef48fd7f6fe29"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1242,24 +1386,76 @@
       "numeric_semantics": "deterministic integer worldgen; little-endian packed voxels; layout-versioned MGW1/MTB1",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
           "path": "packages/engine/crates/mornlea_engine/src/lod.rs",
-          "sha256": "sha256:a804a11ef0235ef584853a9dc9306ce84ef2ac6fd836b82c2075059ba923b6f7"
+          "sha256": "a804a11ef0235ef584853a9dc9306ce84ef2ac6fd836b82c2075059ba923b6f7"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/world.rs",
+          "sha256": "4d3ce7543768690dec1e475f6f2c417d42ffebc72892e9dc13fd67b0953d2b8a"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/lod.rs",
+          "sha256": "a479b842a40d60e9e99afaab3dbcd1b3fdfdac275e1c09c78662456aba5ae34e"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
+          "sha256": "50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/lod.rs",
+          "sha256": "5c1bb2187d8f50db58e7a23e240db32a4eb3521395064aa735250f51e2351687"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1282,24 +1478,92 @@
       "numeric_semantics": "little-endian packed records; fail closed on invalid layout, aliasing, or overflow",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/greedy/bed.rs",
+          "sha256": "d8cd12fbbe11d57c05aa285ef72528aa39d4817c09a1aa2cf89933bf46f8fca6"
+        },
+        {
           "path": "packages/engine/crates/mornlea_engine/src/greedy/mod.rs",
-          "sha256": "sha256:93a63dba8ed69d8368d51541cd0bf6a5ea7d687db6ee803fbd77615895fb40f5"
+          "sha256": "93a63dba8ed69d8368d51541cd0bf6a5ea7d687db6ee803fbd77615895fb40f5"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/greedy/torch.rs",
+          "sha256": "31d1070393507e727efc93c854110e36d7c283baeaa635511fd277ba0e624db4"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/input.rs",
+          "sha256": "1616caef1d7a02535f25feaf19d0fd4e0df4150f4ff0458d6c9c7c0043b63708"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/light.rs",
+          "sha256": "2e64da327385d9b8b20e584549021f5fd1f62c3ac503d27cdd85f8347cad247d"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mesh.rs",
+          "sha256": "f13abaa6c657007ec24dd99f515299b1edb01a4059bbb93acc9f76faff086ab9"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mesh.rs",
+          "sha256": "6790d17396211e60de5169a704747becd7ef56e0e1319803dd4a18735a5fc63d"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/quad.rs",
+          "sha256": "57524003c0e83eb78c95fd2c950790a95ad3d1790161e18584311ec1f51e144e"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/mesh.rs",
+          "sha256": "dfe10bd8855de3317ba0699e5ef333e29c8e359bc5d8de525b25a0d5d5944a88"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1321,24 +1585,80 @@
       "numeric_semantics": "IEEE-754 binary32 little-endian; layout-versioned MGP1 header; reject non-finite used inputs",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/collision.rs",
+          "sha256": "883b238943d62466b555b3005cb17dc72995275fa5396362c350777ff590219a"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/collision.rs",
+          "sha256": "16bfb4a8538e33763a42b8b78520e6ad14921e14fbdb60b2438223fbd06a4a6a"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/physics.rs",
+          "sha256": "9feffb86b97aa33e898cb941c3aa00c60b75256c3658a4557becf67f980d3b54"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/physics.rs",
+          "sha256": "5e5270aadb511588a8603dc3745a8c6ae3802f4a82c045208846d1f0a3d6cb66"
+        },
+        {
           "path": "packages/engine/crates/mornlea_engine/src/step.rs",
-          "sha256": "sha256:a431f36f3aa6a864042cfeb7e8f8efe4f77091af4e2a51c61c16151be56bd4ba"
+          "sha256": "a431f36f3aa6a864042cfeb7e8f8efe4f77091af4e2a51c61c16151be56bd4ba"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/physics.rs",
+          "sha256": "bc198494ec8a83753c3d1ea937bd21c0e7496d4a7da14fe2e416377698b77fae"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1361,24 +1681,72 @@
       "numeric_semantics": "IEEE-754 binary32 little-endian; bounded batch; fail closed on invalid layout",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/raycast.rs",
+          "sha256": "1738cb81c4b8233573eb6849c78763d66be1d9517d71fbcb99820b9273d734f3"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/raycast.rs",
+          "sha256": "0f9b41af7e1b3b81b1f77acdbce797dff6e3102c2dafa143cc556e67ff8e174d"
+        },
+        {
           "path": "packages/engine/crates/mornlea_engine/src/raycast.rs",
-          "sha256": "sha256:4ed2d1b9c91d84f8c630decd764a9a7fe3fac55290af50510611efda3e259713"
+          "sha256": "4ed2d1b9c91d84f8c630decd764a9a7fe3fac55290af50510611efda3e259713"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/raycast.rs",
+          "sha256": "cc0aebcf54cbdc0838789a014b2eb3aab9eb10909f9c57d7562967bf8d2f0d0f"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1400,24 +1768,72 @@
       "numeric_semantics": "deterministic integer worldgen; little-endian packed voxels; layout-versioned MGW1/MTB1",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/world.rs",
+          "sha256": "4d3ce7543768690dec1e475f6f2c417d42ffebc72892e9dc13fd67b0953d2b8a"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/tree.rs",
+          "sha256": "76d0616a755410de42225421faabab4bc14ce44222da6a84963b8d548746ac2b"
+        },
+        {
           "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-          "sha256": "sha256:50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+          "sha256": "50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/tree_blocks.rs",
+          "sha256": "0b118c0f41705d4ca3bca60fa153077cb03a5614a1267585fd4db485ca52d516"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1439,24 +1855,72 @@
       "numeric_semantics": "deterministic integer worldgen; little-endian packed voxels; layout-versioned MGW1/MTB1",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/world.rs",
+          "sha256": "4d3ce7543768690dec1e475f6f2c417d42ffebc72892e9dc13fd67b0953d2b8a"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/worldgen.rs",
+          "sha256": "f940e2adbf3838aa717fad93995586c10c53a5bb384a7d8b26edf48fe2164fda"
+        },
+        {
           "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-          "sha256": "sha256:50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+          "sha256": "50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/worldgen_chunk.rs",
+          "sha256": "974be486eaab95024203b8f6e80403dd145894a095a6c4d8bc87027d377a3464"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1478,24 +1942,72 @@
       "numeric_semantics": "deterministic integer worldgen; little-endian packed voxels; layout-versioned MGW1/MTB1",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/ffi.rs",
+          "sha256": "8264622dfd9e23bd0ec9dbaa9f393d4ad50cdcca949395c543e285c041337711"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/world.rs",
+          "sha256": "4d3ce7543768690dec1e475f6f2c417d42ffebc72892e9dc13fd67b0953d2b8a"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/world_probe.rs",
+          "sha256": "37c2ab26cdf03bb5db1f33ffd8eac126d81411b2ca73a3dd81867d8a3cf5c448"
+        },
+        {
           "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-          "sha256": "sha256:50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+          "sha256": "50d7704bcc7d8d6defe97026b457bcc56a1367677b72ad3af396b534a20cada0"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/worldgen_probe.rs",
+          "sha256": "43764e10cb8e113a0dd1e183b514879cd58f228e79439866d0158623fb77fbf1"
         },
         {
           "path": "packages/engine/include/mornlea_engine.h",
-          "sha256": "sha256:26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+          "sha256": "26d19f6fc265ebee750ff7ce9f15212321237c2f94f137ff2ff7af652dc58c9f"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
         },
         {
           "path": "packages/shared/nativeabi/kernel_oracle_test.go",
-          "sha256": "sha256:5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+          "sha256": "5d1cd7f6a880f20de9675af157202edaa5de6f035010579c51388b25fc03cfed"
+        },
+        {
+          "path": "packages/shared/nativeabi/native.go",
+          "sha256": "836cfd7351e186bddc218ce79abb4701ce9b80353c30c7d400b76cf359906fba"
         },
         {
           "path": "packages/shared/nativeabi/native_test.go",
-          "sha256": "sha256:43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+          "sha256": "43e3da7c40a54cd568e1497c4e92d73b8ee497818732e78f8706073a18fef20c"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
         }
       ],
       "cases": [
@@ -1518,16 +2030,68 @@
       "numeric_semantics": "integer path costs; fixed neighbor expansion order; bounded node budget; distinct unreachable and budget failures",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_engine/src/lib.rs",
+          "sha256": "ce0f1964638008f13261b85a6e0a9ed4460d35a34c7b16c6ce8b579d634545f1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/mod.rs",
+          "sha256": "9a217dc805124a5bb008948320d3db1a876f9c097dcb08fe31e2c3104439593b"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/contracts/pathfind.rs",
+          "sha256": "ade56e90ffb019da5d83d23bd48033e8e8a1c22db5329048690985cbf2a62a5e"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
+          "sha256": "703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/native/pathfind.rs",
+          "sha256": "8cdc7facca2d41e0596712c2617ebf6f8502b9a53926bebe63097063c5377d44"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/src/pathfind.rs",
+          "sha256": "27089bb86f140383005ca26c0ec113f28c2a03375db1768865308754a2a34f5f"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
+          "sha256": "d020b653a8df3e52bcc138a49dc94175e7e30fe32751af882c666ccacd4224c1"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/path_grid.rs",
+          "sha256": "b70c2846468f761b9c98208d966b9bf81765de94763f65df5b280a8e0dbbafc8"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration/path_search.rs",
+          "sha256": "60c33a76680524a1e1c478e61fd19d8b55b226f8be2db96fbfd632071c87b441"
+        },
+        {
+          "path": "packages/engine/tests/runtime_corpus.rs",
+          "sha256": "11a06331de4a049c850474396883b7f26a5c7d0e0f1999b266639eddd3f4cb14"
+        },
+        {
           "path": "packages/shared/pathfind/pathfind.go",
-          "sha256": "sha256:228bbfa1c2682a242f89084f59c2843a415829fae534ad3b0c048494b7263878"
+          "sha256": "228bbfa1c2682a242f89084f59c2843a415829fae534ad3b0c048494b7263878"
         },
         {
           "path": "packages/shared/pathfind/pathfind_test.go",
-          "sha256": "sha256:540bbaf3d8d3d12b2717e0c2daa9e8e38d22a6e469d895c7ea22d0970571e031"
+          "sha256": "540bbaf3d8d3d12b2717e0c2daa9e8e38d22a6e469d895c7ea22d0970571e031"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/discover.go",
+          "sha256": "1637efa8683de40bbb0d64dc684aea8940fa9a665077c7a3378d20cfb971da68"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/inventory.go",
+          "sha256": "3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
-          "sha256": "sha256:fd03269d4d583ae72535b2228176d69b467999ecc50ac6aad9167c04029aced9"
+          "sha256": "42cca23a9dfc5ab5175b0504c29d0a3481ee774487d0dcbc22a673c5c052a5cc"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/pathfind_test.go",
+          "sha256": "ebd7245a16e81fdd148f5a9c122d9267362d37367f880fff6e22acf7abf90cbb"
         }
       ],
       "cases": [

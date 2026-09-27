@@ -162,7 +162,7 @@ func Discover(root string) ([]Family, Identities, error) {
 			CurrentVersion: "1", SupportedVersions: []string{"1"},
 			Source: "packages/shared/pathfind/pathfind.go", EventualOwner: ownerEngine,
 			NumericSemantics: "integer path costs; fixed neighbor expansion order; bounded node budget; distinct unreachable and budget failures",
-			Sources:          makeSourceSpecs(root, []string{"packages/shared/pathfind/pathfind.go", "packages/shared/pathfind/pathfind_test.go"}),
+			Sources:          makeSourceSpecs(root, kernelFixtures("pathfind")),
 		},
 		{
 			ID: "agent.http", Kind: "agent", Role: "input",
@@ -398,26 +398,42 @@ func kernelSemantics(name string) string {
 	}
 }
 
+// `kernelFixtures` names the complete live implementation and replay boundary.
+// A frozen family must retain this exact set so omitted providers cannot hide drift.
 func kernelFixtures(name string) []string {
-	rust := map[string]string{
-		"mornlea_mesh_section":      "packages/engine/crates/mornlea_engine/src/greedy/mod.rs",
-		"mornlea_collision_resolve": "packages/engine/crates/mornlea_engine/src/collision.rs",
-		"mornlea_raycast_batch":     "packages/engine/crates/mornlea_engine/src/raycast.rs",
-		"mornlea_physics_step":      "packages/engine/crates/mornlea_engine/src/step.rs",
-		"mornlea_worldgen_chunk":    "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-		"mornlea_worldgen_probe":    "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-		"mornlea_tree_blocks":       "packages/engine/crates/mornlea_engine/src/worldgen.rs",
-		"mornlea_lod_shell":         "packages/engine/crates/mornlea_engine/src/lod.rs",
-		"mornlea_fluid_eval_batch":  "packages/engine/crates/mornlea_engine/src/fluid_eval.rs",
-		"mornlea_fluid_rescan":      "packages/engine/crates/mornlea_engine/src/fluid_rescan.rs",
-	}
+	const engine = "packages/engine/crates/mornlea_engine/"
 	fixtures := []string{
-		"packages/engine/include/mornlea_engine.h",
-		"packages/shared/nativeabi/native_test.go",
+		engine + "src/lib.rs", engine + "src/native/mod.rs", engine + "src/native/contracts/mod.rs",
+		engine + "tests/numerical_migration.rs", "packages/engine/tests/runtime_corpus.rs",
+		"packages/tools/cmd/runtime-oracle/discover.go", "packages/tools/cmd/runtime-oracle/inventory.go",
+		"packages/tools/cmd/runtime-oracle/kernel_test.go",
 	}
-	if path, ok := rust[name]; ok {
-		fixtures = append(fixtures, path)
+	if name == "pathfind" {
+		fixtures = append(fixtures, "packages/shared/pathfind/pathfind.go", "packages/shared/pathfind/pathfind_test.go",
+			"packages/tools/cmd/runtime-oracle/pathfind_test.go", engine+"src/pathfind.rs",
+			engine+"src/native/pathfind.rs", engine+"src/native/contracts/pathfind.rs",
+			engine+"tests/numerical_migration/path_grid.rs", engine+"tests/numerical_migration/path_search.rs")
+	} else {
+		fixtures = append(fixtures, "packages/engine/include/mornlea_engine.h", engine+"src/ffi.rs",
+			"packages/shared/nativeabi/native_test.go", "packages/shared/nativeabi/kernel_oracle_test.go",
+			"packages/shared/nativeabi/native.go")
+		sources := map[string][]string{
+			"mornlea_collision_resolve": {"src/collision.rs", "src/native/collision.rs", "src/native/contracts/collision.rs", "tests/numerical_migration/collision.rs"},
+			"mornlea_physics_step":      {"src/step.rs", "src/collision.rs", "src/native/physics.rs", "src/native/contracts/physics.rs", "src/native/contracts/collision.rs", "tests/numerical_migration/physics.rs"},
+			"mornlea_raycast_batch":     {"src/raycast.rs", "src/native/raycast.rs", "src/native/contracts/raycast.rs", "tests/numerical_migration/raycast.rs"},
+			"mornlea_worldgen_chunk":    {"src/worldgen.rs", "src/native/worldgen.rs", "src/native/contracts/world.rs", "tests/numerical_migration/worldgen_chunk.rs"},
+			"mornlea_worldgen_probe":    {"src/worldgen.rs", "src/native/world_probe.rs", "src/native/contracts/world.rs", "tests/numerical_migration/worldgen_probe.rs"},
+			"mornlea_tree_blocks":       {"src/worldgen.rs", "src/native/tree.rs", "src/native/contracts/world.rs", "tests/numerical_migration/tree_blocks.rs"},
+			"mornlea_lod_shell":         {"src/worldgen.rs", "src/lod.rs", "src/native/lod.rs", "src/native/contracts/world.rs", "tests/numerical_migration/lod.rs"},
+			"mornlea_fluid_eval_batch":  {"src/fluid_eval.rs", "src/native/fluid_eval.rs", "src/native/contracts/fluid.rs", "tests/numerical_migration/fluid_eval.rs"},
+			"mornlea_fluid_rescan":      {"src/fluid_rescan.rs", "src/native/fluid_rescan.rs", "src/native/contracts/fluid.rs", "tests/numerical_migration/fluid_rescan.rs"},
+			"mornlea_mesh_section":      {"src/input.rs", "src/light.rs", "src/quad.rs", "src/greedy/mod.rs", "src/greedy/bed.rs", "src/greedy/torch.rs", "src/native/mesh.rs", "src/native/contracts/mesh.rs", "tests/numerical_migration/mesh.rs"},
+		}
+		for _, path := range sources[name] {
+			fixtures = append(fixtures, engine+path)
+		}
 	}
+	sort.Strings(fixtures)
 	return fixtures
 }
 
