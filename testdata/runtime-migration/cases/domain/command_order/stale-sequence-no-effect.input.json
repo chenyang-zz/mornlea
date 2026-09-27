@@ -1,0 +1,14 @@
+{
+  "consumer": "mornlea_domain",
+  "rule": "stale-sequence-no-effect",
+  "tick": 7,
+  "commands": [
+    {
+      "session": 1,
+      "sequence": 0,
+      "arrival_index": 0,
+      "kind": "select_hotbar",
+      "slot": 7
+    }
+  ]
+}

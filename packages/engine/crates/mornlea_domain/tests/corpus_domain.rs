@@ -45,11 +45,13 @@ use support::{
     DispatchError, ExecuteCase, ExecutedCase, OwnsCase, assert_domain_normalized, execute_checked,
 };
 
-/// The domain.input ordering case stays with `external:runtime-authority`
-/// because its expectation reports authoritative behavior
-/// `mornlea_domain::order_commands` cannot produce; the handwritten
-/// `command_order` tests remain the domain ordering proof.
-const EXTERNAL_AUTHORITY_CASE_ID: &str = "domain.input/45/session-sequence-arrival";
+/// Input evidence stays with `external:runtime-authority` because ordering
+/// alone cannot produce admitted/discarded world effects. Independent
+/// `command_order` tests prove the pure domain ordering contract.
+const EXTERNAL_AUTHORITY_CASE_IDS: [&str; 2] = [
+    "domain.input/45/session-sequence-arrival",
+    "domain.input/45/stale-sequence-no-effect",
+];
 
 /// Exact integrated total across the eleven closed topics.
 const TOTAL_DOMAIN_CASES: usize = 533;
@@ -243,30 +245,26 @@ fn corpus_domain_executes_exact_unique_partition() {
 fn corpus_domain_excludes_external_authority_case() {
     let root = runtime_corpus::find_repo_root();
 
-    // The external authority case is not loaded as domain work.
     let domain_cases =
         try_load_cases_from_root(&root, CorpusConsumer::Domain).expect("load domain cases");
-    assert!(
-        !domain_cases
-            .iter()
-            .any(|case| case.id == EXTERNAL_AUTHORITY_CASE_ID),
-        "the external authority case must not be loaded as a domain case",
-    );
-
-    // It still exists under its own consumer, and no domain topic claims or
-    // dispatches it.
     let authority_cases = try_load_cases_from_root(&root, CorpusConsumer::ExternalRuntimeAuthority)
         .expect("load external runtime authority cases");
-    let authority = authority_cases
-        .iter()
-        .find(|case| case.id == EXTERNAL_AUTHORITY_CASE_ID)
-        .unwrap_or_else(|| panic!("external authority case missing from its own consumer"));
-    for topic in TOPICS {
+    for id in EXTERNAL_AUTHORITY_CASE_IDS {
         assert!(
-            !(topic.owns)(authority),
-            "the external authority case must not dispatch to topic {}",
-            topic.name
+            !domain_cases.iter().any(|case| case.id == id),
+            "external authority case {id} must not be loaded as domain work",
         );
+        let authority = authority_cases
+            .iter()
+            .find(|case| case.id == id)
+            .unwrap_or_else(|| panic!("external authority case {id} missing from its consumer"));
+        for topic in TOPICS {
+            assert!(
+                !(topic.owns)(authority),
+                "external authority case {id} must not dispatch to topic {}",
+                topic.name
+            );
+        }
     }
 }
 
@@ -468,15 +466,12 @@ fn corpus_structure() {
 
     let authority_cases = try_load_cases_from_root(&root, CorpusConsumer::ExternalRuntimeAuthority)
         .expect("load authority cases");
-    assert_eq!(
-        authority_cases.len(),
-        1,
-        "expected exactly 1 external:runtime-authority case"
-    );
-    assert_eq!(
-        authority_cases[0].id, "domain.input/45/session-sequence-arrival",
-        "external runtime authority case must be domain.input/45/session-sequence-arrival"
-    );
+    assert_eq!(authority_cases.len(), EXTERNAL_AUTHORITY_CASE_IDS.len());
+    let authority_ids: HashSet<_> = authority_cases
+        .iter()
+        .map(|case| case.id.as_str())
+        .collect();
+    assert_eq!(authority_ids, HashSet::from(EXTERNAL_AUTHORITY_CASE_IDS));
 
     let agent_cases = try_load_cases_from_root(&root, CorpusConsumer::ExternalAgentContract)
         .expect("load agent contract cases");
@@ -509,19 +504,16 @@ fn corpus_structure() {
         );
     }
 
-    // 3. Verify external runtime case does not match any domain owner
-    let authority_case = &authority_cases[0];
-    assert!(!identity_text::owns(authority_case));
-    assert!(!values::owns(authority_case));
-    assert!(!command_control::owns(authority_case));
-    assert!(!command_inventory::owns(authority_case));
-    assert!(!event_player::owns(authority_case));
-    assert!(!event_world::owns(authority_case));
-    assert!(!event_inventory::owns(authority_case));
-    assert!(!event_people::owns(authority_case));
-    assert!(!event_mobs::owns(authority_case));
-    assert!(!event_objects::owns(authority_case));
-    assert!(!event_chat::owns(authority_case));
+    // Authority observations remain outside every pure domain topic.
+    for authority_case in &authority_cases {
+        for topic in TOPICS {
+            assert!(
+                !(topic.owns)(authority_case),
+                "external case claimed by {}",
+                topic.name
+            );
+        }
+    }
 
     // 4. Exact single ownership of every domain case
     let mut seen_ids = HashSet::new();

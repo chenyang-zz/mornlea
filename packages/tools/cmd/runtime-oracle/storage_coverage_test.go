@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-const closedSaveSourceRevision = "f75dfcf4db03eebdbf07deb5e3ff512e6c417a28"
+const closedSaveSourceRevision = "6ad4e022a39fc195d4aec10e30500f10b1ba48a6"
 
 var closedSaveFamilyCounts = map[string]int{
 	"save.region":         27,

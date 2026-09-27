@@ -1,0 +1,69 @@
+{
+  "kind": "error",
+  "category": "stale-sequence",
+  "fields": {
+    "admitted": [],
+    "chunk_hash": "sha256:ab1aef9450fda3ee7d8e62834e085753f42fb3f851d82edfe718f18809069288",
+    "chunk_hash_before": "sha256:ab1aef9450fda3ee7d8e62834e085753f42fb3f851d82edfe718f18809069288",
+    "chunk_revision": "1",
+    "chunk_revision_before": "1",
+    "commands": [
+      {
+        "session": "1",
+        "sequence": "0",
+        "arrival_index": "0",
+        "kind": "select_hotbar",
+        "slot": 7
+      }
+    ],
+    "discarded": [
+      {
+        "session": "1",
+        "sequence": "0",
+        "arrival_index": "0",
+        "kind": "select_hotbar",
+        "slot": 7
+      }
+    ],
+    "inventory_after": [
+      {
+        "session": "1",
+        "hash": "sha256:5450daf4d78015b60abf422686e9a6fdb6a14b6d13a9317e4e05129d4c618329"
+      }
+    ],
+    "inventory_before": [
+      {
+        "session": "1",
+        "hash": "sha256:5450daf4d78015b60abf422686e9a6fdb6a14b6d13a9317e4e05129d4c618329"
+      }
+    ],
+    "last_admitted_sequence": [
+      {
+        "session": "1",
+        "sequence": "0"
+      }
+    ],
+    "last_admitted_sequence_before": [
+      {
+        "session": "1",
+        "sequence": "0"
+      }
+    ],
+    "placed_blocks": 0,
+    "placement_successes": [],
+    "rejections": [],
+    "selected_hotbar": [
+      {
+        "session": "1",
+        "slot": 0
+      }
+    ],
+    "selected_hotbar_before": [
+      {
+        "session": "1",
+        "slot": 0
+      }
+    ],
+    "tick": "7"
+  }
+}

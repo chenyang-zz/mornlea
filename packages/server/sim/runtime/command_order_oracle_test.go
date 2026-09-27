@@ -15,6 +15,7 @@ package runtime_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -39,9 +41,9 @@ const (
 	// commandOrderCorpusRelDir is the repository-relative directory holding the
 	// frozen ordering corpus case.
 	commandOrderCorpusRelDir = "testdata/runtime-migration/cases/domain/command_order"
-	// commandOrderCaseLabel is the corpus label of the one case this node
-	// registers, and the subject of both corpus files.
-	commandOrderCaseLabel = "session-sequence-arrival"
+	// `commandOrderCaseLabel` names the retained success evidence.
+	commandOrderCaseLabel      = "session-sequence-arrival"
+	commandOrderStaleCaseLabel = "stale-sequence-no-effect"
 	// commandOrderTick is the tick the frozen case submits its commands in.
 	commandOrderTick = uint64(7)
 	// commandOrderSessionTwo is the second session the frozen case names.
@@ -93,13 +95,14 @@ type commandOrderCase struct {
 	input commandOrderInput
 }
 
-// commandOrderCases is the ordered case table the producer executes.
+// `commandOrderCases` is the ordered case table the producer executes.
 //
-// The one row is the packet's exact red input: two sessions at tick seven, with
+// The success row retains two sessions at tick seven, with
 // session one carrying a sequence eight selection, a sequence nine selection at
 // arrival zero and a sequence nine block placement at arrival one. The contested
 // pair is what makes the case worth freezing, because a kind-name ordering would
-// hand the sequence nine slot to the block placement.
+// hand the sequence nine slot to the block placement. The stale row observes a
+// discarded command against one live session's initial sequence boundary.
 func commandOrderCases() []commandOrderCase {
 	return []commandOrderCase{
 		{
@@ -113,6 +116,17 @@ func commandOrderCases() []commandOrderCase {
 					{Session: 1, Sequence: 9, ArrivalIndex: 0, Kind: "select_hotbar", Slot: 2},
 					{Session: 1, Sequence: 9, ArrivalIndex: 1, Kind: "place_block", Slot: 0, Yaw: commandOrderYaw},
 					{Session: 1, Sequence: 8, ArrivalIndex: 2, Kind: "select_hotbar", Slot: 1},
+				},
+			},
+		},
+		{
+			label: commandOrderStaleCaseLabel,
+			input: commandOrderInput{
+				Consumer: commandOrderConsumer,
+				Rule:     commandOrderStaleCaseLabel,
+				Tick:     commandOrderTick,
+				Commands: []commandOrderInputCommand{
+					{Session: 1, Sequence: 0, ArrivalIndex: 0, Kind: "select_hotbar", Slot: 7},
 				},
 			},
 		},
@@ -180,6 +194,15 @@ type commandOrderRecord struct {
 // commandOrderRun is everything one batch submission to the real authority
 // produced.
 type commandOrderRun struct {
+	// The before/after observations belong to the batch tick; later boundary
+	// probes cannot alter this evidence.
+	BeforeSelections           []commandOrderSessionSelection
+	BeforeLastAdmittedSequence []commandOrderSessionSequence
+	InventoryBefore            []commandOrderSessionHash
+	InventoryAfter             []commandOrderSessionHash
+	BeforeChunkRevision        uint64
+	BeforeChunkHash            string
+	ChunkHash                  string
 	// Selections is each session's hotbar selection after the batch tick.
 	Selections []commandOrderSessionSelection
 	// PlacementSlotCounts is each session's remaining count in the slot the
@@ -199,6 +222,11 @@ type commandOrderRun struct {
 	LastAdmittedSequence []commandOrderSessionSequence
 }
 
+type commandOrderSessionHash struct {
+	Session string `json:"session"`
+	Hash    string `json:"hash"`
+}
+
 // TestCommandOrderOracle executes the frozen ordering case through the real
 // authoritative engine and proves the committed corpus still matches what the
 // authority produces.
@@ -212,6 +240,100 @@ type commandOrderRun struct {
 func TestCommandOrderOracle(t *testing.T) {
 	records := commandOrderExecute(t)
 	commandOrderVerifyCorpus(t, records)
+}
+
+// `TestCommandOrderOracleExportDrafts` keeps candidate creation separate from
+// frozen corpus verification, which must still fail before publication.
+func TestCommandOrderOracleExportDrafts(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("RUNTIME_ORACLE_EXPORT_DIR")) == "" {
+		t.Skip("external draft export requires an explicit directory")
+	}
+	records := commandOrderExecute(t)
+	for _, record := range records {
+		if record.label != commandOrderCaseLabel {
+			continue
+		}
+		for name, data := range commandOrderRecordAssets(t, record) {
+			frozen, err := os.ReadFile(filepath.Join(commandOrderRepoRoot(t), commandOrderCorpusRelDir, name))
+			if err != nil {
+				t.Fatalf("read retained success fixture %s: %v", name, err)
+			}
+			if !bytes.Equal(frozen, data) {
+				t.Fatalf("retained success fixture %s drifted", name)
+			}
+		}
+	}
+	commandOrderExportDrafts(t, records)
+}
+
+// `TestCommandOrderOracleExportRejectsSymlinkedAncestor` requires the real
+// exporter to reject redirection before creating any draft in its target.
+func TestCommandOrderOracleExportRejectsSymlinkedAncestor(t *testing.T) {
+	parent := t.TempDir()
+	real := filepath.Join(parent, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RUNTIME_ORACLE_EXPORT_DIR", filepath.Join(link, "new"))
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(binary, "-test.run=^TestCommandOrderOracleExportDrafts$", "-test.v")
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "symlink") {
+		t.Fatalf("export through symlink ancestor was not rejected: err=%v\n%s", err, output)
+	}
+	entries, err := os.ReadDir(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("rejected export changed symlink target: %v", entries)
+	}
+}
+
+// `TestCommandOrderOracleStaleSequenceNoEffect` catches stale sequence admission
+// and requires the real authority's unchanged state before classifying a discard.
+func TestCommandOrderOracleStaleSequenceNoEffect(t *testing.T) {
+	spec := commandOrderCases()[1].input
+	run := commandOrderRunCase(t, spec)
+	outcome, err := commandOrderRejectedOutcomeFor(spec, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Kind != "error" || outcome.Category != "stale-sequence" {
+		t.Fatalf("observed discard classified as %+v", outcome)
+	}
+	if got := commandOrderSelectionFor(t, run, 1); got != 0 {
+		t.Fatalf("stale command selected slot %d, want 0", got)
+	}
+	admitted := outcome.Fields["admitted"].([]commandOrderCommandRef)
+	discarded := outcome.Fields["discarded"].([]commandOrderCommandRef)
+	if len(admitted) != 0 || len(discarded) != 1 ||
+		len(run.LastAdmittedSequence) != 1 || run.LastAdmittedSequence[0].Sequence != "0" ||
+		len(run.PlacementSuccesses) != 0 || run.PlacedBlocks != 0 || len(run.Rejections) != 0 {
+		t.Fatalf("stale batch did not leave a single observed discard: %+v", outcome)
+	}
+	if run.InventoryBefore[0] != run.InventoryAfter[0] ||
+		run.BeforeChunkRevision != run.ChunkRevision || run.BeforeChunkHash != run.ChunkHash {
+		t.Fatalf("stale batch changed inventory or world: %+v", run)
+	}
+
+	// A fresh sequence changes the real selection; the rejection normalizer
+	// must refuse that admitted run instead of manufacturing failure evidence.
+	accepted := spec
+	accepted.Commands = append([]commandOrderInputCommand(nil), spec.Commands...)
+	accepted.Commands[0].Sequence = 1
+	accepted.Commands[0].Slot = 6
+	acceptedRun := commandOrderRunCase(t, accepted)
+	if _, err := commandOrderRejectedOutcomeFor(accepted, acceptedRun); err == nil {
+		t.Fatal("rejection normalizer accepted an admitted command")
+	}
 }
 
 // TestCommandOrderOracleReversedArrivalChoosesTheEarliestArrival proves the
@@ -255,10 +377,20 @@ func commandOrderExecute(t *testing.T) []commandOrderRecord {
 	records := make([]commandOrderRecord, 0, len(cases))
 	for _, entry := range cases {
 		run := commandOrderRunCase(t, entry.input)
+		var outcome commandOrderOutcome
+		if entry.label == commandOrderStaleCaseLabel {
+			var err error
+			outcome, err = commandOrderRejectedOutcomeFor(entry.input, run)
+			if err != nil {
+				t.Fatalf("classify executed stale case: %v", err)
+			}
+		} else {
+			outcome = commandOrderOutcomeFor(t, entry.input, run)
+		}
 		records = append(records, commandOrderRecord{
 			label:   entry.label,
 			input:   entry.input,
-			outcome: commandOrderOutcomeFor(t, entry.input, run),
+			outcome: outcome,
 		})
 	}
 	return records
@@ -277,29 +409,54 @@ func commandOrderRunCase(t *testing.T, spec commandOrderInput) commandOrderRun {
 	t.Helper()
 
 	engine, sessionOne, chunkPos := readyFlatEngineStocked(t, stockedHotbar(core.ItemStone))
-	engine.RegisterPlayer(commandOrderSessionTwo, runtime.PlayerRestore{
-		SpawnDimension: core.Overworld,
-		SpawnAnchor:    chunkPos,
-	})
+	sessions := []runtime.SessionID{sessionOne}
+	if spec.Rule != commandOrderStaleCaseLabel {
+		engine.RegisterPlayer(commandOrderSessionTwo, runtime.PlayerRestore{
+			SpawnDimension: core.Overworld,
+			SpawnAnchor:    chunkPos,
+		})
+		sessions = append(sessions, commandOrderSessionTwo)
+	}
 	for engine.TickCount() < spec.Tick {
 		engine.Step()
+	}
+	run := commandOrderRun{
+		BeforeChunkRevision: commandOrderChunkRevision(t, engine, chunkPos),
+		BeforeChunkHash:     commandOrderChunkHash(t, engine, chunkPos),
+	}
+	for _, session := range sessions {
+		snapshot, ok := engine.PlayerSnapshot(session)
+		if !ok {
+			t.Fatalf("session %d has no snapshot before the batch tick", session)
+		}
+		label := strconv.FormatUint(uint64(session), 10)
+		run.BeforeSelections = append(run.BeforeSelections, commandOrderSessionSelection{
+			Session: label, Slot: int(snapshot.Inventory.Hotbar.Selected),
+		})
+		run.BeforeLastAdmittedSequence = append(run.BeforeLastAdmittedSequence, commandOrderSessionSequence{
+			Session: label, Sequence: strconv.FormatUint(engine.InputSequenceHighWater(session), 10),
+		})
+		run.InventoryBefore = append(run.InventoryBefore, commandOrderSessionHash{
+			Session: label, Hash: commandOrderInventoryHash(t, snapshot.Inventory),
+		})
 	}
 	for _, command := range spec.Commands {
 		engine.Enqueue(commandOrderRuntimeCommand(command))
 	}
 	result := engine.Step()
 
-	run := commandOrderRun{
-		PlacedBlocks:  commandOrderPlacedBlocks(result),
-		ChunkRevision: commandOrderChunkRevision(t, engine, chunkPos),
-	}
-	sessions := []runtime.SessionID{sessionOne, commandOrderSessionTwo}
+	run.PlacedBlocks = commandOrderPlacedBlocks(result)
+	run.ChunkRevision = commandOrderChunkRevision(t, engine, chunkPos)
+	run.ChunkHash = commandOrderChunkHash(t, engine, chunkPos)
 	for _, session := range sessions {
 		snapshot, ok := engine.PlayerSnapshot(session)
 		if !ok {
 			t.Fatalf("session %d has no snapshot after the batch tick", session)
 		}
 		label := strconv.FormatUint(uint64(session), 10)
+		run.InventoryAfter = append(run.InventoryAfter, commandOrderSessionHash{
+			Session: label, Hash: commandOrderInventoryHash(t, snapshot.Inventory),
+		})
 		run.Selections = append(run.Selections, commandOrderSessionSelection{
 			Session: label,
 			Slot:    int(snapshot.Inventory.Hotbar.Selected),
@@ -380,6 +537,30 @@ func commandOrderChunkRevision(t *testing.T, engine *runtime.Engine, chunkPos co
 	return revision
 }
 
+// `commandOrderChunkHash` fingerprints logical blocks independently of the
+// revision, so an uncommitted write cannot masquerade as unchanged world state.
+func commandOrderChunkHash(t *testing.T, engine *runtime.Engine, chunkPos core.ChunkPos) string {
+	t.Helper()
+	chunk, _, ok := engine.CloneReadyChunk(core.ChunkKey{Dimension: core.Overworld, Pos: chunkPos})
+	if !ok {
+		t.Fatalf("shared chunk %+v is not ready for observation", chunkPos)
+	}
+	hash := chunk.Hash()
+	return "sha256:" + hex.EncodeToString(hash[:])
+}
+
+// `commandOrderInventoryHash` covers the entire inventory, including selection,
+// rather than only the slot a submitted command names.
+func commandOrderInventoryHash(t *testing.T, inventory core.Inventory) string {
+	t.Helper()
+	data, err := json.Marshal(inventory)
+	if err != nil {
+		t.Fatalf("encode observed inventory: %v", err)
+	}
+	hash := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(hash[:])
+}
+
 // commandOrderPlacementSuccesses renders the authority's own placement reports.
 func commandOrderPlacementSuccesses(result runtime.TickResult) []commandOrderCommandRef {
 	successes := make([]commandOrderCommandRef, 0, len(result.PlacementSuccesses))
@@ -423,7 +604,7 @@ func commandOrderProbeAdmissionBoundary(
 	highest := make(map[runtime.SessionID]uint64)
 	for _, command := range spec.Commands {
 		session := runtime.SessionID(command.Session)
-		if command.Sequence > highest[session] {
+		if current, exists := highest[session]; !exists || command.Sequence > current {
 			highest[session] = command.Sequence
 		}
 	}
@@ -437,6 +618,9 @@ func commandOrderProbeAdmissionBoundary(
 	for _, session := range sessions {
 		atBoundary := highest[session]
 		before, _ := engine.PlayerSnapshot(session)
+		if before.Inventory.Hotbar.Selected == commandOrderProbeSlot {
+			t.Fatalf("session %d already selects the probe slot, so admission would be unobservable", session)
+		}
 		engine.Enqueue(runtime.Command{
 			Session: session, Sequence: atBoundary, Kind: runtime.CommandSelectHotbar,
 			Slot: commandOrderProbeSlot,
@@ -511,6 +695,63 @@ func commandOrderOutcomeFor(t *testing.T, spec commandOrderInput, run commandOrd
 	}
 	commandOrderAssertConsistency(t, spec, run, fields)
 	return commandOrderOutcome{Kind: "ok", Category: commandOrderCaseLabel, Fields: fields}
+}
+
+// `commandOrderRejectedOutcomeFor` classifies an observed silent discard. It
+// refuses admitted, changed, or incomplete observations instead of fabricating
+// a wire rejection that the authority never emits for stale sequences.
+func commandOrderRejectedOutcomeFor(spec commandOrderInput, run commandOrderRun) (commandOrderOutcome, error) {
+	if len(spec.Commands) != 1 || spec.Commands[0].Kind != "select_hotbar" {
+		return commandOrderOutcome{}, fmt.Errorf("stale rejection requires one observable hotbar command")
+	}
+	if len(run.BeforeSelections) != 1 || len(run.Selections) != 1 ||
+		len(run.InventoryBefore) != 1 || len(run.InventoryAfter) != 1 ||
+		len(run.BeforeLastAdmittedSequence) != 1 || len(run.LastAdmittedSequence) != 1 {
+		return commandOrderOutcome{}, fmt.Errorf("stale rejection requires complete live-session observations")
+	}
+	command := spec.Commands[0]
+	session := strconv.FormatUint(command.Session, 10)
+	before, after := run.BeforeSelections[0], run.Selections[0]
+	if before.Session != session || after.Session != session ||
+		before.Slot != after.Slot || after.Slot == int(command.Slot) {
+		return commandOrderOutcome{}, fmt.Errorf("command was admitted or its discard was unobservable")
+	}
+	initial, boundary := run.BeforeLastAdmittedSequence[0], run.LastAdmittedSequence[0]
+	if initial.Session != session || boundary.Session != session ||
+		initial.Sequence != "0" || boundary.Sequence != initial.Sequence ||
+		command.Sequence > commandOrderUint(boundary.Sequence) {
+		return commandOrderOutcome{}, fmt.Errorf("observed admission boundary does not explain a stale discard")
+	}
+	if run.InventoryBefore[0].Session != session || run.InventoryBefore[0].Hash == "" ||
+		run.InventoryBefore[0] != run.InventoryAfter[0] ||
+		run.BeforeChunkHash == "" || run.BeforeChunkHash != run.ChunkHash ||
+		run.BeforeChunkRevision != run.ChunkRevision ||
+		run.PlacedBlocks != 0 || len(run.PlacementSuccesses) != 0 || len(run.Rejections) != 0 {
+		return commandOrderOutcome{}, fmt.Errorf("discard changed inventory or world, or emitted a command result")
+	}
+	ref := commandOrderNormalizeCommand(command)
+	return commandOrderOutcome{
+		Kind: "error", Category: "stale-sequence",
+		Fields: map[string]any{
+			"tick":                          strconv.FormatUint(spec.Tick, 10),
+			"commands":                      []commandOrderCommandRef{ref},
+			"admitted":                      []commandOrderCommandRef{},
+			"discarded":                     []commandOrderCommandRef{ref},
+			"selected_hotbar_before":        run.BeforeSelections,
+			"selected_hotbar":               run.Selections,
+			"inventory_before":              run.InventoryBefore,
+			"inventory_after":               run.InventoryAfter,
+			"chunk_hash_before":             run.BeforeChunkHash,
+			"chunk_hash":                    run.ChunkHash,
+			"chunk_revision_before":         strconv.FormatUint(run.BeforeChunkRevision, 10),
+			"chunk_revision":                strconv.FormatUint(run.ChunkRevision, 10),
+			"placed_blocks":                 run.PlacedBlocks,
+			"placement_successes":           run.PlacementSuccesses,
+			"rejections":                    run.Rejections,
+			"last_admitted_sequence_before": run.BeforeLastAdmittedSequence,
+			"last_admitted_sequence":        run.LastAdmittedSequence,
+		},
+	}, nil
 }
 
 // commandOrderNormalizeCommand renders one frozen command in the normalized
@@ -793,6 +1034,130 @@ func commandOrderLastSelection(admitted []commandOrderCommandRef, session string
 		}
 	}
 	return last, found
+}
+
+func commandOrderRecordAssets(t *testing.T, record commandOrderRecord) map[string][]byte {
+	t.Helper()
+	input, err := json.MarshalIndent(record.input, "", "  ")
+	if err != nil {
+		t.Fatalf("encode corpus input for %s: %v", record.label, err)
+	}
+	outcome, err := json.MarshalIndent(record.outcome, "", "  ")
+	if err != nil {
+		t.Fatalf("encode corpus outcome for %s: %v", record.label, err)
+	}
+	return map[string][]byte{
+		record.label + ".input.json":    append(input, '\n'),
+		record.label + ".expected.json": append(outcome, '\n'),
+	}
+}
+
+// `commandOrderExportDrafts` writes only a fresh external producer child. The
+// tracked corpus remains controller-owned, and exclusive creation makes a
+// repeated export fail instead of silently replacing reviewed observations.
+func commandOrderExportDrafts(t *testing.T, records []commandOrderRecord) {
+	t.Helper()
+	exportRoot := strings.TrimSpace(os.Getenv("RUNTIME_ORACLE_EXPORT_DIR"))
+	if exportRoot == "" {
+		return
+	}
+	assets := make(map[string][]byte, len(records)*2)
+	for _, record := range records {
+		if record.label != commandOrderCaseLabel && record.label != commandOrderStaleCaseLabel {
+			t.Fatalf("unknown export case %q", record.label)
+		}
+		for name, data := range commandOrderRecordAssets(t, record) {
+			if _, exists := assets[name]; exists {
+				t.Fatalf("duplicate export asset %s", name)
+			}
+			assets[name] = data
+		}
+	}
+	abs, err := filepath.Abs(exportRoot)
+	if err != nil {
+		t.Fatalf("resolve export root: %v", err)
+	}
+	ancestor := abs
+	for {
+		if _, err := os.Lstat(ancestor); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("inspect export ancestor: %v", err)
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			t.Fatalf("export root has no existing ancestor: %s", abs)
+		}
+		ancestor = parent
+	}
+	// Match the existing draft protocol: platform root aliases are trusted,
+	// while user-created symlinks must never redirect a publication directory.
+	for component := ancestor; component != filepath.Dir(component); component = filepath.Dir(component) {
+		if component == "/var" || component == "/tmp" || component == "/etc" {
+			break
+		}
+		info, err := os.Lstat(component)
+		if err != nil {
+			t.Fatalf("inspect export path %s: %v", component, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("export symlink component rejected: %s", component)
+		}
+	}
+	resolvedAncestor, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		t.Fatalf("resolve export ancestor: %v", err)
+	}
+	tail, err := filepath.Rel(ancestor, abs)
+	if err != nil {
+		t.Fatalf("resolve export suffix: %v", err)
+	}
+	resolvedExport := filepath.Join(resolvedAncestor, tail)
+	repo, err := filepath.EvalSymlinks(commandOrderRepoRoot(t))
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	if resolvedExport == repo || strings.HasPrefix(resolvedExport, repo+string(filepath.Separator)) ||
+		resolvedAncestor == repo || strings.HasPrefix(resolvedAncestor, repo+string(filepath.Separator)) {
+		t.Fatalf("export root is inside the repository: %s", resolvedExport)
+	}
+	info, err := os.Stat(resolvedAncestor)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("export ancestor is not a directory: %s", resolvedAncestor)
+	}
+	current := resolvedAncestor
+	if tail != "." {
+		for _, part := range strings.Split(tail, string(filepath.Separator)) {
+			if part == "" || part == "." || part == ".." {
+				t.Fatalf("export root escapes its ancestor: %s", abs)
+			}
+			current = filepath.Join(current, part)
+			if err := os.Mkdir(current, 0o755); err != nil {
+				t.Fatalf("create exclusive export directory %s: %v", current, err)
+			}
+		}
+	}
+	child := filepath.Join(resolvedExport, "runtime-authority")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatalf("create exclusive producer child: %v", err)
+	}
+	names := make([]string, 0, len(assets))
+	for name := range assets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		file, err := os.OpenFile(filepath.Join(child, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			t.Fatalf("create exclusive draft %s: %v", name, err)
+		}
+		_, writeErr := file.Write(assets[name])
+		closeErr := file.Close()
+		if writeErr != nil || closeErr != nil {
+			t.Fatalf("write draft %s: write=%v close=%v", name, writeErr, closeErr)
+		}
+	}
+	t.Logf("exported %d authority drafts to %s", len(assets), child)
 }
 
 // commandOrderVerifyCorpus proves the committed files still match what the

@@ -312,32 +312,15 @@ func TestProtocolCorpusComplete(t *testing.T) {
 			t.Fatalf("protocol point %s/%s is not covered", id, protocolVersion)
 		}
 	}
-	nonProtocolUncovered := make([]string, 0, len(report.Uncovered))
-	for _, pt := range report.Uncovered {
-		if strings.HasPrefix(pt.FamilyID, protocolFamilyPrefix) {
-			t.Fatalf("protocol point %s/%s remains uncovered", pt.FamilyID, pt.Version)
-		}
-		nonProtocolUncovered = append(nonProtocolUncovered, pt.FamilyID+"/"+pt.Version)
+	if len(report.Uncovered) != 0 {
+		t.Fatalf("frozen foundation still has uncovered points: %v", report.Uncovered)
 	}
-	if len(nonProtocolUncovered) == 0 {
-		t.Fatal("no uncovered point remains outside the protocol slice; complete acceptance must stay unclaimed")
-	}
-	t.Logf("non-protocol uncovered points remain visible: %s", strings.Join(nonProtocolUncovered, ", "))
 
-	// Complete acceptance still refuses: the remaining gaps are exactly the
-	// non-protocol points logged above, so this node never claims F1.
-	_, completeErr := ReconcileComplete(root, frozen, families, live, consumers, BaselineNegativeCoverageExceptions())
-	if completeErr == nil {
-		t.Fatal("ReconcileComplete accepted the manifest; the protocol-only closure must not claim complete F1")
-	}
-	invErr, ok := completeErr.(*InventoryError)
-	if !ok {
-		t.Fatalf("ReconcileComplete error type %T, want *InventoryError", completeErr)
-	}
-	for _, problem := range invErr.Problems {
-		if strings.Contains(problem, "uncovered point "+protocolFamilyPrefix) {
-			t.Fatalf("complete acceptance reports a protocol gap: %s", problem)
-		}
+	// Complete reconciliation must now accept the integrated foundation;
+	// protocol-specific mutation checks continue to reject missing evidence.
+	completeReport, completeErr := ReconcileComplete(root, frozen, families, live, consumers, BaselineNegativeCoverageExceptions())
+	if completeErr != nil || len(completeReport.Uncovered) != 0 {
+		t.Fatalf("complete foundation reconciliation: report=%v error=%v", completeReport, completeErr)
 	}
 	if frozen.SourceRevision != BaselineSourceRevision {
 		t.Fatalf("frozen source revision %s does not match the Go baseline %s", frozen.SourceRevision, BaselineSourceRevision)
@@ -702,7 +685,7 @@ func TestProtocolCorpusNonProtocolEvidenceUnchanged(t *testing.T) {
 			t.Fatalf("case %s belongs to no reviewed corpus slice", c.ID)
 		}
 	}
-	if domainCases != 534 || agentCases != 154 || protocolCases != 436 || saveCases != 269 {
+	if domainCases != 535 || agentCases != 154 || protocolCases != 436 || saveCases != 269 {
 		t.Fatalf("corpus totals drifted: domain %d, agent %d, protocol %d, save %d", domainCases, agentCases, protocolCases, saveCases)
 	}
 	// The numerical kernel slice is owned by the native closure node: it grows

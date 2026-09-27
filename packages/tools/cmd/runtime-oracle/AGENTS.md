@@ -55,6 +55,12 @@ or Agent process packages. These boundaries are enforced by `packages/audit`
   through `save.chunk/9/decode` plus `save.chunk/9/encode`; and
   `save.companion/1/decode` through `save.companion/4/decode`, plus
   `save.companion/5/decode` and `save.companion/5/encode`.
+- `TestRuntimeFoundationCompleteAcceptance` requires all discovered supported
+  points to reconcile completely and freezes the exact `domain.input` source
+  union. Its mutation gate independently removes rejection evidence, every
+  source binding, expected bytes, the consumer route and all family cases.
+  `stale-sequence` belongs only to executed-domain rejection vocabulary; its
+  real authority observations remain external to pure Rust ordering.
 - Enforcement: `TestContractInventoryReconcilesFrozenCorpus`,
   `TestContractInventoryWorkingReportsZeroCaseFamilies`,
   `TestContractInventoryCompleteRejectsZeroCaseFamilies`,
@@ -853,9 +859,9 @@ only discriminator the manifest carries.
   `protocol.server.` prefix.
 - The same test runs `ReconcileWorking` under the closed union and requires
   every protocol family/version point to be covered while no protocol point
-  stays uncovered; `ReconcileComplete` must still refuse with only the
-  non-protocol uncovered points, so the protocol closure never claims complete
-  F1. The tracked tree stays byte-identical through the run.
+  stays uncovered; `ReconcileComplete` additionally requires zero uncovered
+  points across the integrated foundation. Synthetic mutation refusals remain
+  independently enforced. The tracked tree stays byte-identical through the run.
 - `TestProtocolCorpusClosureMutationsFail` pins each drift class the closure
   names against a synthetic working manifest: a zero-case family, a duplicate
   case ID, a case with no registered route, a missing source hash, a
@@ -866,7 +872,8 @@ only discriminator the manifest carries.
   reproducing the frozen expectation first so the refusals are attributable to
   the mutation.
 - `TestProtocolCorpusNonProtocolEvidenceUnchanged` pins the reviewed exact
-  totals — 534 domain, 154 agent and 436 protocol cases — and re-reconciles
+  totals — 535 domain (including two external authority cases), 154 agent
+  and 436 protocol cases — and re-reconciles
   the complete manifest so any protocol-side rewrite of a domain or agent case
   fails.
 - `TestProtocolCorpusClosureCandidateExport` stages the one-time source

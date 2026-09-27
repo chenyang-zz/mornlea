@@ -377,26 +377,16 @@ func TestContractInventoryCompleteRejectsZeroCaseFamilies(t *testing.T) {
 	assertCoveragePointsSorted(t, "Covered", report.Covered)
 	assertCoveragePointsSorted(t, "Uncovered", report.Uncovered)
 
-	// The frozen inventory itself completes only when no other family is left
-	// uncovered: with every kernel route imported, complete acceptance must
-	// not name a kernel point.
+	// The synthetic empty-family refusal above must not conceal a gap in
+	// the unmodified frozen inventory.
 	completeReport, completeErr := ReconcileComplete(
-		root,
-		inventory,
-		families,
-		live,
-		BaselineConsumerRegistry(),
-		BaselineNegativeCoverageExceptions(),
+		root, inventory, families, live,
+		BaselineConsumerRegistry(), BaselineNegativeCoverageExceptions(),
 	)
-	_ = completeReport
-	if completeErr != nil {
-		if strings.Contains(completeErr.Error(), "kernel.") {
-			t.Fatalf("ReconcileComplete rejects a closed kernel point: %v", completeErr)
-		}
-		t.Logf("ReconcileComplete still rejects non-kernel points: %v", completeErr)
-	} else {
-		t.Log("ReconcileComplete accepts the closed corpus")
+	if completeErr != nil || len(completeReport.Uncovered) != 0 {
+		t.Fatalf("closed frozen corpus: report=%v error=%v", completeReport, completeErr)
 	}
+
 }
 
 func TestContractInventoryRejectsUnknownConsumer(t *testing.T) {

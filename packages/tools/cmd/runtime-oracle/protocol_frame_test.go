@@ -820,6 +820,12 @@ var corpusStorageCategories = map[string]bool{
 	"output_too_small": true,
 }
 
+// `corpusExecutedDomainCategories` names observed authority discards; these
+// outcomes describe execution rather than login or structural decoding.
+var corpusExecutedDomainCategories = map[string]bool{
+	"stale-sequence": true,
+}
+
 // corpusKernelCategories is the frozen numerical-kernel vocabulary: the nine
 // engine ABI status names the native corpus normalizes rejections to, plus
 // the six pathfinder failure names the independent Go and Rust search
@@ -896,7 +902,8 @@ func TestCorpusOutcomeVocabularyMatchesExecutionContract(t *testing.T) {
 		if corpusStructuralCategories[outcome.Category] ||
 			corpusAdmissionCategories[outcome.Category] ||
 			corpusStorageCategories[outcome.Category] ||
-			corpusKernelCategories[outcome.Category] {
+			corpusKernelCategories[outcome.Category] ||
+			corpusExecutedDomainCategories[outcome.Category] {
 			continue
 		}
 		t.Fatalf("%s publishes rejection category %q, which is not in the frozen execution contract vocabulary", path, outcome.Category)

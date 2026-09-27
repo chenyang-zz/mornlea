@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "source_revision": "f75dfcf4db03eebdbf07deb5e3ff512e6c417a28",
+  "source_revision": "6ad4e022a39fc195d4aec10e30500f10b1ba48a6",
   "identities": {
     "protocol": 45,
     "chunk_schema": 9,
@@ -952,6 +952,26 @@
       "numeric_semantics": "little-endian integers; IEEE-754 binary32; canonical uvarint; reject NaN/Inf and unknown IDs",
       "sources": [
         {
+          "path": "packages/engine/crates/mornlea_domain/src/input/order.rs",
+          "sha256": "sha256:bf791c88aad5b35a61022650030f072f8f75a7d36b2f3a92a0eca5376ee6d66c"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_domain/tests/command_order.rs",
+          "sha256": "sha256:696eb5c19f11842952385192eba12bc812f05c37a594fe9b156b8e111d738e80"
+        },
+        {
+          "path": "packages/engine/crates/mornlea_domain/tests/corpus_domain.rs",
+          "sha256": "sha256:a35eca2d6d646a61f51f13121cceb5820b1495580770c44fb61cbc2cfefae258"
+        },
+        {
+          "path": "packages/server/sim/runtime/command_order_oracle_test.go",
+          "sha256": "sha256:73c119358b758a1ff0f9e443d69392040028fefec19bed84dfba9417f091b686"
+        },
+        {
+          "path": "packages/server/sim/runtime/engine_step.go",
+          "sha256": "sha256:99a3aa88d7258fb6c50a407c01a6c2f68abaad8d180f215fcf6ed4b964124d1b"
+        },
+        {
           "path": "packages/shared/network/protocol/message_command.go",
           "sha256": "sha256:f0a95793cd7021ba7a137373e26cad2d16e6742092f2ecb94d13c44b69d114f1"
         },
@@ -960,12 +980,21 @@
           "sha256": "sha256:2d8cd5cf00bd24b4f354c5700b527bb37dfd6b7e2386340875d4cb07035b1142"
         },
         {
-          "path": "packages/server/sim/runtime/engine_step.go",
-          "sha256": "sha256:99a3aa88d7258fb6c50a407c01a6c2f68abaad8d180f215fcf6ed4b964124d1b"
+          "path": "packages/tools/cmd/runtime-oracle/inventory_test.go",
+          "sha256": "sha256:5b1854dcf865f1f464d94ff4c3d03be38c6803d7cb0dce6a36c93baa9d57327d"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/protocol_coverage_test.go",
+          "sha256": "sha256:7959610dd6db918d8993d1036084c676c01ba1f488f8241349ce221edff08de8"
+        },
+        {
+          "path": "packages/tools/cmd/runtime-oracle/protocol_frame_test.go",
+          "sha256": "sha256:c75161dce7effb02744a40f6e590b08d4390812b355640bc20a104b0f1876007"
         }
       ],
       "cases": [
-        "domain.input/45/session-sequence-arrival"
+        "domain.input/45/session-sequence-arrival",
+        "domain.input/45/stale-sequence-no-effect"
       ]
     },
     {
@@ -1185,7 +1214,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -1276,7 +1305,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -1371,7 +1400,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -1463,7 +1492,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -1571,7 +1600,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -1666,7 +1695,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -1754,7 +1783,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -1841,7 +1870,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -1928,7 +1957,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -2015,7 +2044,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -2095,7 +2124,7 @@
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/inventory.go",
-          "sha256": "sha256:3947316a6146a5f2403644f5bcf15a20f249351b0d822988020231c611842165"
+          "sha256": "sha256:447c82b7d5c0aeb0eb08370787ed6a10b60f9b40bbba9cd5d821649fb9545033"
         },
         {
           "path": "packages/tools/cmd/runtime-oracle/kernel_test.go",
@@ -16309,6 +16338,25 @@
       "expected": {
         "path": "testdata/runtime-migration/cases/domain/command_order/session-sequence-arrival.expected.json",
         "sha256": "sha256:e9ee48ad8d451014981729697fe67acf9a797426d2f30cf11cbb6c7f2bd4d601"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "external:runtime-authority"
+    },
+    {
+      "id": "domain.input/45/stale-sequence-no-effect",
+      "family": "domain.input",
+      "version": "45",
+      "operation": "order",
+      "input": {
+        "path": "testdata/runtime-migration/cases/domain/command_order/stale-sequence-no-effect.input.json",
+        "sha256": "sha256:1c5a754d4bccb6ba9904c7aa5f07381a8c1b5d497aa834ca98d31b4fc611478e"
+      },
+      "input_format": "json",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/domain/command_order/stale-sequence-no-effect.expected.json",
+        "sha256": "sha256:1ef5027c5df4087948eb5d125995991b28ff99d294c0f143f134a439b4237f4e"
       },
       "checkpoints": [
         "0"

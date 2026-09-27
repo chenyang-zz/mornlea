@@ -578,8 +578,10 @@ enforced by `tests/runtime_contract.rs` (`production_manifest_has_no_codec_kerne
   names across the mob, passive, projectile, item-drop and chat families:
   kind, health, grazing, despawn-reason, dimension and velocity bits, a
   block index, a record-order swap and a chat branch category.
-- `domain.input/45/session-sequence-arrival` is assigned to `external:runtime-authority`
-  because its expectation carries authoritative admission, deduplication, and world effects.
+- `domain.input/45/session-sequence-arrival` and
+  `domain.input/45/stale-sequence-no-effect` are assigned to `external:runtime-authority`
+  because their expectations carry authoritative admission, deduplication,
+  discard and world observations. Pure domain execution still covers 533 cases.
 - `support.rs` provides shared strict JSON parsing, primitive type readers, exact-array
   length bounds, float-token and UUID hex parsers, normalized outcome builders, and
   command wire-stripping comparison.
