@@ -19,6 +19,7 @@ pub struct ClientLimits {
     message_work: usize,        // maximum 4096 per step
     mesh_work: usize,           // maximum 4096 per step
     preparation_results: usize,// proposed maximum 4096
+    preparation_bytes: usize,  // proposed maximum 64 MiB job/result ownership
     family_records: usize,     // target maximum 4096 per family per frame
     frame_bytes: usize,        // proposed maximum 8 MiB owned payload
 }
@@ -46,9 +47,9 @@ The table is the family inventory; [02-family-schemas.md](02-family-schemas.md) 
 | --- | --- | --- | --- |
 | `session@1` | phase, epoch, player ID when admitted, terminal reason; phase is monotonic within epoch | 1.3 | P13 |
 | `input@1` | local sequence, semantic action and receipt; whole batch validates before enqueue; device mapping stays in P11 | 2.1 | P10/P11 |
-| `terrain@1` | dimension/section key, content revision, generation, material class, light/mesh reference and `Remove|Upsert`; removal first | 2.5 | P8 |
+| `terrain@1` | dimension/near-section or far-tile key, visibility, content revision, generation, material class, light/mesh reference and `Remove|Upsert`; removal first | 2.5 | P8 |
 | `actors@1` | kind, stable ID, dimension, transform, motion, animation/effect intent, `Remove|Upsert`; despawn first | 2.6a–2.6g | P9 |
-| `player-view@1` | confirmed/predicted pose attribution, look target, movement state, correction marker | 2.2 | P9 |
+| `player-view@1` | confirmed/predicted pose attribution, look target, movement state, correction marker, checked MiningState | 2.2 | P9 |
 | `inventory-ui@1` | selected slot, stack list, container token/revision, crafting/furnace outcome, rejection/close | 2.7a1–2.7a5 | P10 |
 | `world-ui@1` | time/weather, survival state, chat/task state, prompt and bounded display text | 2.7b1–2.7b6 | P10 |
 | `audio-cues@1` | typed confirmed/predicted/local provenance, cue ID, epoch-scoped dedup key, category, optional position, playback parameters | 2.8 | P11 |
@@ -74,3 +75,7 @@ F1 complete + F2 accepted S2 → F3 1.1 inventory → F3 1.2 C1/C2 compile-ready
 ```
 
 P12 evidence tool schema can be developed against the F3 diagnostics contract in parallel with feature implementations after C2/G1 land. P13 launcher/release waits for F2/F3 real integration; P14 default switch waits for all required P8–P13 gates and two distinct release cycles. A compile-ready double is not a real provider or real integration. A feature may write candidate evidence before P12 handoff, but tracked image/producer changes require the existing per-case human review and approval rule.
+
+## Refinement precedence
+
+Read [direct accepted predecessors](03-parallel-readiness.md) and [refined node decisions](04-refined-nodes.md) with this packet. Split parent IDs are retained here only as historical grouping; their child packets own execution. The dependency register controls readiness, and refined source mappings control absent fields. No worker infers a missing signature, capacity, source fact or shared-file edit.

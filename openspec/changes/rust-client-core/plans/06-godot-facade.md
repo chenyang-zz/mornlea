@@ -1,0 +1,32 @@
+# G1 owned Godot facade contract
+
+This is the controller's planned method/value schema for 3.1b and host adoption in 3.2. It becomes callable only after the accepted C1/C2 contract, pure-core lifecycle, G1 descriptors and actual adapter tests pass. Python never handles packet bytes or native pointers. The bridge copies every value and validates again before calling C1. The earlier method-name list is completed by this packet.
+
+## Value conversion and closed results
+
+Godot owns Dictionary/Array/String/scalar copies. Struct dictionaries contain exactly the fields of the checked Rust record in 02-family-schemas and 05-supporting-values; tagged unions are exactly `{tag: <Rust variant name>, value: <owned variant payload or null>}`. Options are null or that field's owned value; vectors are arrays. No absent field becomes zero. All f32/f64 values become finite Godot floats. u8/u16/u32 and i8/i32 are checked Godot integers; **every u64** is canonical decimal String (zero is `"0"`, no sign/leading zero, at most 20 digits, checked <=u64::MAX). IDs with UUID bytes are 32 lowercase hex digits; digests are fixed-length lowercase hex. This avoids loss of the unsigned range through Godot's signed integer. Family/type tags are closed and case-sensitive. Each field's numeric/text/count bound is the accepted Rust bound, not a permissive Python conversion.
+
+`CoreToken` is exactly `{slot:u32,generation:U64Text}`; slot is nonzero and maps to a private bridge arena. A stale generation returns InvalidState before dereference. Tokens are never pointers. All methods return exactly `{ok:bool,value:<declared value or null>,error:<ErrorValue or null>}`. Success has error=null; failure has value=null. `ErrorValue` is `{class:<closed ClientError name>,resource:<String or null>,limit:<U64Text or null>,observed:<U64Text or null>}`; capacity details come from the actual owner. Diagnostic resource strings are frozen registered keys, not arbitrary error prose. close success has value=null. Panic maps to Internal through the same failure shape, preserving prior visible state.
+
+The input batch shape is exactly `{epoch:U64Text,actions:[{intent:{tag:<ClientIntent name>,value:<accepted checked payload parts or null>},container:<ContainerToken or null>,crafting:<CraftingViewToken or null>}]}`. Accepted payload parts and exact variant names come from the twenty C1 actions and their F1 public parts/getters in the compiling 1.2 mapping table; do not serialize wire bytes. Nullary actions require value=null. ContainerToken is exactly `{epoch:U64Text,reference:<ContainerRef parts>,confirmed_revision:U64Text}`; reference is `{chunk:{x:i32,z:i32},kind:<accepted ContainerKind tag>,slot:u8,generation:u32}`. CraftingViewToken is exactly `{epoch:U64Text,confirmed_revision:U64Text,size:<accepted CraftingSize tag>}`; it has no ContainerRef/generation. Bridge validation builds InputAction and calls C1 once; it never assigns a sequence or validates container authority independently. Missing/extra payload fields and an irrelevant/missing/stale token reject the complete batch.
+
+## Exact methods
+
+| Godot-callable method | Arguments | Success value |
+| --- | --- | --- |
+| `open_core` | checked `ClientConfig` value; connector registry is a native registered capability ID, never a Python callback | CoreToken |
+| `connect` | CoreToken, checked Endpoint, checked ClientIdentity | SessionEpoch as U64Text; pending admission only |
+| `submit_typed_input` | CoreToken, epoch U64Text, InputBatch dictionary above | InputReceipt closed union from C1 |
+| `step` | CoreToken, epoch U64Text, `{messages:u16,meshes:u16}` | checked StepReport copy |
+| `pull_typed_frame` | CoreToken, epoch U64Text | `{layout_major:u16,layout_minor:u16,session_epoch:U64Text,confirmed_revision:U64Text,frame_index:U64Text,families:[{key:{logical_name:String,major:u16,minor:u16},records:[<closed family record>]}]}` |
+| `family_table` | CoreToken | `{producer:"rust-client-core",descriptors:[{logical_name:String,numeric_id:u16,major:u16,minor:u16,record_limit:U64Text,record_bytes:U64Text}]}` |
+| `reset` | CoreToken, current epoch U64Text | new SessionEpoch as U64Text, after invalidation |
+| `close` | CoreToken | null; repeated close of the same issued token succeeds without another release |
+
+Endpoint is the checked C1 union: Memory has `{connector_id:U64Text}` and TCP has `{host:String,port:u16}`; TCP host is a validated numeric IP, not a blocking DNS lookup. ClientIdentity is `{login:<accepted LoginStart parts>,requested_view_distance:u8}` with exact v45 identity/name constraints. ClientConfig includes accepted ClientLimits, hello/login milliseconds u32 (5000/10000), and the native connector capability; the bridge receives no process/socket owner from Python. Field/key mismatch fails before open/connect. Exact config and login payload schema examples are registered during 1.2 and executed in 3.1b, not left for feature workers to invent.
+
+`apply_typed_frame(frame:dict)->None` is the one feature method invoked by the existing host. In Rust mode the host calls step/pull once, validates the complete returned frame and required descriptors, then passes the same immutable-by-convention owned copy to features in dependency order. Features retain derived resources, never mutate or drive the session. A failed result leaves the prior host frame and feature resources intact. 3.2 exclusively owns host method migration and activation/rollback mapping; providers do not add an `apply_frame` alias.
+
+## Compiling examples and actual adapter acceptance
+
+3.1b owns `mornlea_godot/tests/rust_producer.rs` and freezes a complete method schema table there. Test each of twenty actions and every container region with exact round-trip payload fields; empty/129-action, altered token, extra field, bad tag, u64::MAX and u64::MAX+1, invalid UUID/hash, bad result shape, missing family, mixed frame and stale CoreToken. Assert no core call on decoding failure, one submit on success, no queued sequence on rejection and no borrowed Rust storage after pull. Pin mining Idle/Active and near-section/far-tile geometry in frame examples. Real adapter tests execute C1 plus the bridge; dictionary round-trips alone do not accept a provider. 3.2 tests actual host `apply_typed_frame` dispatch, one session/step, required-family rollback and idempotent close through this facade. Capability and Python project gates remain required.

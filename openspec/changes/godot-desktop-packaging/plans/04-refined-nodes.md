@@ -1,0 +1,17 @@
+# Refined node decisions
+
+Unsplit nodes retain the exact files, APIs, algorithms, red/green cases, commands and rollback in the existing worker packet. The dependency register adds readiness requirements and does not grant edits to shared files.
+
+## Node 2.4a: Target wrapper routing
+
+Controller owns only `scripts/godot/{godot,fetch,build-python-runtime,build-extension}.sh` and `scripts/godot/platform/dispatch_check.py` and `scripts/godot/platform/dispatch_check_test.py`. Consume accepted per-target preparation providers and manifest; reject wrong actual host before build and preserve qualified Darwin path. Table-test macos/windows/linux dispatch, missing provider, wrong architecture and accidental non-target payload. Run `python3 -m unittest discover -s scripts/godot/platform -p dispatch_check_test.py`, project check and each actual-host provider self-check. Commit wrappers only; launcher/export/report are excluded. Rollback restores wrappers and keeps accepted target payloads intact.
+
+## Node 2.4b: Real native launcher
+
+Controller owns `packages/engine/crates/mornlea_client_core/src/bin/mornlea-desktop-launcher.rs`, `packages/engine/crates/mornlea_client_core/tests/local_release_contract/launcher.rs`, client `src/local/control.rs`/`tests/local_release_contract/control.rs`, and server `packages/engine/crates/mornlea_server/src/{bin/mornlea-server.rs,activation/local_control.rs}`/`tests/persistence_failure/local_control.rs`. Both control ends and their shared golden records have this one serial owner; revalidate F2 opt-in and shutdown after this adapter addition. Consume real generic/Unix/Windows ProcessGroup, authenticated ReadyProof and launch progress; no stdout-based authority. Start one leased loopback Rust child, connect only after proof, cancel/flush/force-kill/reap by deadline, and prevent second start before old group is gone. Tests startup, wrong nonce/binary/lease, child+grandchild exit, cancel during login, failed flush and lost supervision. Run Rust `local_release_contract` launcher suite on supported hosts and F2 persistence-failure suite. Commit launcher integration; default entry and export presets are excluded. Rollback selects prior explicit launcher, never automatic Go fallback.
+
+## Node 2.4c: Closure/report integration
+
+Controller owns `scripts/godot/desktop-release-check.sh`, `apps/mornlea-godot/export_presets.cfg`, `packages/engine/crates/mornlea_client_core/tests/local_release_contract/release_report.rs`, shared test registration and release manifest. Consume accepted wrappers, launcher and resolver. Validate transitive target closure, package/runtime/asset/source hashes, actual-host editor/headless/export/relocation/100-cycle outcomes and named backup. A missing case/identity, non-target library, mixed runtime or partial StopReport fails before report publication. Run `scripts/godot/desktop-release-check.sh --self-test`, full Rust release target, project check and `go test ./packages/audit -run ReleaseUnit -count=1`. The self-test does not qualify a target; actual 3.1/3.2/3.3 target reports are independent after this node. Commit harness/manifest/presets together; rollback preserves previous complete release.
+
+The local process supporting declarations in 02-local-supervision are part of 1.2, not worker choices. P13 closeout waits for all three actual-host reports, save restore and package-bound P12 evidence. Shared wrappers/test roots never overlap with platform workers or P14 default-entry edits.

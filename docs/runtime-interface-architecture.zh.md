@@ -1,6 +1,6 @@
 ---
 doc_id: runtime-interface-architecture
-doc_revision: 2026-09-25.1
+doc_revision: 2026-09-27.2
 language: zh-CN
 counterpart: runtime-interface-architecture.md
 status: target-not-current
@@ -44,7 +44,7 @@ mornlea_server（规划中；唯一权威与 tick 所有者）
 | D0 | `mornlea_domain`：已校验 ID、坐标、值、封闭的 `Command`、`CommandEnvelope`、`Event`、`RoutedEvent` | protocol、server、client core、回放 | 现有；扩展须经过行为变更评审。 |
 | P0 | `mornlea_protocol`：v45 报文注册、分帧、准入、语义转换 | server、client core、传输测试 | 现有；除非另行批准，线协议保持 v45。 |
 | S0 | `mornlea_storage`：带版本的记录编解码和迁移 | server 存储工作线程、离线工具 | 编解码接口现有；I/O 所有者仍是目标。 |
-| K0 | `mornlea_engine` 安全数值门面和寻路 | server、client core、准备线程 | 目标 F1 收口；不得复制数值算法。 |
+| K0 | `mornlea_engine` 安全数值门面和寻路 | server、client core、准备线程 | 数值实现 `9b843bbc` 已接受；完整 F1 零缺口封印仍独立待验收。不得复制数值算法。 |
 | S1 | `mornlea_server::core`：入口、排序 tick、路由观察结果 | 传输适配器、回放、存储 | 完整 F1 后的目标接口；F2 首个共享契约。 |
 | S2 | `mornlea_server::transport`：Memory/TCP 分帧与会话准入 | 本地游玩、局域网、客户端测试 | S1 后的目标接口；共用核心路径。 |
 | S3 | `mornlea_server::persistence`：异步请求、确认与恢复 | server core、激活工具 | S1/S0 后的目标接口；世界只允许一个可写租约。 |
@@ -135,17 +135,17 @@ ClientCore::close() -> Result<(), ClientError>;
 | 逻辑家族 | 生产者 → 消费者 | 最小语义载荷及顺序 | 功能所有者 |
 | --- | --- | --- | --- |
 | `session@1` | client core → 宿主 | 连接阶段、epoch、玩家身份、终止原因；每代际状态单调 | F3/P13 |
-| `input@1` | 宿主 → client core | 有序设备事件、动作状态、指针/射线意图、本地序号及回执；整批拒绝 | F3/P10 |
-| `terrain@1` | client core → 世界功能 | 维度、chunk/section 键、内容 revision、代数、有类型网格/光照/材质引用、更新与移除 | P8 |
+| `input@1` | 宿主 → client core | 有序的有类型语义动作及已校验容器令牌、动作/射线意图、本地序号及回执；设备映射属于呈现侧，整批拒绝 | F3/P10 |
+| `terrain@1` | client core → 世界功能 | 维度、有类型近环 section/远环 tile 键及可见性、内容 revision、代数、有类型网格/光照/材质引用、更新与移除 | P8 |
 | `actors@1` | client core → 角色功能 | 稳定种类/ID、维度、变换、运动、动画/特效意图、生成/更新/消失顺序 | P9 |
-| `player-view@1` | client core → 玩家功能 | 已确认/预测姿态来源、注视目标、运动状态、纠正标记 | F3/P9 |
-| `inventory-ui@1` | client core → UI 功能 | 选中槽、物品堆、容器引用/revision、制作/熔炉结果、拒绝与关闭结果 | P10 |
+| `player-view@1` | client core → 玩家功能 | 已确认/预测姿态来源、注视目标、运动状态、纠正标记、已校验挖掘状态 | F3/P9 |
+| `inventory-ui@1` | client core → UI 功能 | 选中槽、物品堆、已接受容器引用及本地确认 revision 令牌、制作/熔炉结果、拒绝与关闭结果 | P10 |
 | `world-ui@1` | client core → UI 功能 | 时间、天气、生存状态、聊天/任务状态、交互提示、稳定显示文本 | P10 |
-| `audio-cues@1` | client core → 音频功能 | 提示 ID、源/事件 ID、位置或非空间标记、类别、播放参数、一次性去重键 | P11 |
+| `audio-cues@1` | client core → 音频功能 | 提示 ID、确认观察/可选事件身份或预测输入/本地事件序号、位置或非空间标记、类别、播放参数、一次性去重键 | P11 |
 | `lifecycle@1` | client core/桥接 → 宿主 | epoch 开/关/重置、功能激活/释放代数、资源失效顺序 | F3/P8–P11 |
 | `diagnostics@1` | client core/桥接 → 宿主 | 有类型的队列峰值、拒绝原因、生产者身份、契约版本、帧/tick 关联 | P12 |
 
-地形移除必须早于相同 section 键的复用；晚到的网格结果若 epoch、chunk 代数或内容 revision 不匹配则丢弃。出现后续更新或打开之前，角色消失和 UI 容器关闭不得省略。音频去重按 epoch 与权威事件身份限定；没有音频设备只停止播放，不抹去提示/结果记录。设备、纹理、场景和音频资源由 Godot 主线程所有者管理，重置或禁用功能时释放。UI 不得根据乐观动画重建真实库存。
+地形移除必须早于相同 section 键的复用；晚到的网格结果若 epoch、chunk 代数或内容 revision 不匹配则丢弃。出现后续更新或打开之前，角色消失和 UI 容器关闭不得省略。音频去重按 epoch 与来源归属限定：有真实事件身份时使用该身份，否则使用确认观察键、预测输入序号或本地事件序号；没有音频设备只停止播放，不抹去提示/结果记录。设备、纹理、场景和音频资源由 Godot 主线程所有者管理，重置或禁用功能时释放。UI 不得根据乐观动画重建真实库存。
 
 每个家族落地时，所有者发布精确字段 schema：量纲、合法区间、顺序、记录/字节上限、可选/必需字段、兼容性示例，以及非法、过期、溢出测试。未具备该契约包及真实生产者/Godot 消费者集成结果的规划家族保持禁用。这是受控扩展点，不允许交付无类型或不完整的家族。
 
@@ -201,4 +201,4 @@ Python 功能宿主目前已有一套结构性试点接口：`validate_feature(f
 
 本文在实现前冻结**所有权、依赖方向、语义类别、身份和失败策略**。准确的 Rust 声明、新队列数值、二进制家族布局和数字 ID 只有在各自可编译接口落地并记录 SHA 后才成为可调用约束。这样的区别既避免把尚未构建的 API 说成已存在，也让后续任务共享一套总接口图。
 
-发表时仍有这些缺口：完整 F1 数值门面/寻路及零缺口验收；F2 server crate 与经过测量的队列/时限契约；F3 client-core crate 与 Rust 核心 Godot 生产者；目标语义家族 schema/注册表；音频/生命周期从符号名到数字名的宿主协商；完整真实集成证据。上表为每项指定了所有者。未来功能若不在表中，应先以 OpenSpec delta 明确权威、生产者/消费者、语义家族或私有接口、版本影响、上限、测试与契约落地；不得分叉现有服务器、客户端镜像或宿主桥接。
+数值归档后的核验更新：安全 native 门面与寻路已在 `9b843bbc` 接受。完整 F1 仍拒绝 `domain.input/45`；[最终验收后续变更](../openspec/changes/rust-runtime-foundation-acceptance/proposal.md) 负责真实外部权威拒绝证据及强制零缺口封印。剩余缺口：F2 server crate 与经过测量的队列/时限契约；F3 client-core crate 与 Rust 核心 Godot 生产者；目标语义家族 schema/注册表；音频/生命周期从符号名到数字名的宿主协商；完整真实集成证据。上表为每项指定了所有者。未来功能若不在表中，应先以 OpenSpec delta 明确权威、生产者/消费者、语义家族或私有接口、版本影响、上限、测试与契约落地；不得分叉现有服务器、客户端镜像或宿主桥接。

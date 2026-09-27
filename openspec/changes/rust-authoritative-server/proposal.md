@@ -4,7 +4,7 @@ Rust shared contracts alone do not move authoritative ticks, validation or persi
 
 ## Status and prerequisites
 
-Planning only: F2 in [`docs/architecture-target.md`](../../../docs/architecture-target.md). The accepted [F1 baseline](../archive/2026-09-22-rust-runtime-foundation-baseline/proposal.md) is not complete F1 acceptance. F2 remains blocked on the archived [domain-event successor](../archive/2026-09-22-rust-domain-event-completion/proposal.md), separate protocol and storage evidence, safe public numerical APIs and pathfinding, and a final F1 acceptance that rejects uncovered families. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence, an archived baseline or OpenSpec status is insufficient.
+Planning only: F2 in [`docs/architecture-target.md`](../../../docs/architecture-target.md). The accepted [F1 baseline](../archive/2026-09-22-rust-runtime-foundation-baseline/proposal.md) is not complete F1 acceptance. The numerical successor is now archived and accepted; the remaining final F1 gate is owned by [rust-runtime-foundation-acceptance](../rust-runtime-foundation-acceptance/proposal.md). F2 remains blocked on the archived [domain-event successor](../archive/2026-09-22-rust-domain-event-completion/proposal.md), separate protocol and storage evidence, safe public numerical APIs and pathfinding, and a final F1 acceptance that rejects uncovered families. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence, an archived baseline or OpenSpec status is insufficient.
 
 ## What Changes
 

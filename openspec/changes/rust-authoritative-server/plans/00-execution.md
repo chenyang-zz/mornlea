@@ -68,3 +68,7 @@ complete F1 SHA → F2 1.1 inventory → F2 1.2 S1 contract
 ```
 
 F2 3.1 consumes the rule modules and therefore follows their provider tests even where modules have no file overlap. The transport, persistence and Agent adapters may be built against S1 doubles while rules run, but final F2 integration is serial. S2 is accepted only after common validation and both real Memory/TCP adapter parity cases pass on one SHA; 3.2 alone is insufficient. The tool/test registry, corpus manifest, crate exports and activation/rollback owner are serial regardless of edit disjointness. F3 may consume the accepted S2 contract before full F2 completion, but F3 real integration cannot close without full F2 parity.
+
+## Refinement precedence
+
+Read [direct accepted predecessors](03-parallel-readiness.md) and [refined node decisions](04-refined-nodes.md) with this packet. Split parent IDs are retained here only as historical grouping; their child packets own execution. The dependency register controls readiness, and refined source mappings control absent fields. No worker infers a missing signature, capacity, source fact or shared-file edit.

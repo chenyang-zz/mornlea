@@ -2,15 +2,20 @@
 
 All nodes are pending. [Execution contract and dependency graph](plans/00-execution.md), [compile-ready S1 seams](plans/02-core-seams.md) and [exact worker packets](plans/01-server-slices.md) are part of this plan. These new crate/tests are prospective until their owning nodes land; `-- --list` alone is never provider acceptance. Record the accepted contract SHA, fixture identity, behavioral red/green and focused commit for each node in `ledger.md`. A worker edits only packet-owned files. F1 complete acceptance is a hard prerequisite; the current Go server remains the production authority until the separate product cutover.
 
+See the [node-by-node dependency and ownership gate](plans/03-parallel-readiness.md) before dispatch. It refines the linked packets without duplicating status.
+
 See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
 ## 1. Contract and lifecycle
 
-- [ ] 1.1 Verify complete F1 zero-gap acceptance and enumerate supported server capabilities.
+- [ ] 1.1a Verify the sealed complete F1 prerequisite and enumerate server capabilities.
+- [ ] 1.1b Record command, chunk-result and persistence high-water from every supported server replay.
+- [ ] 1.1c Freeze S1 bounds and source-bound capability-to-test mappings before the contract landing.
 - [ ] 1.2 Land compiling S1 contract, bounded types and executing consumer double; freeze its SHA.
 - [ ] 1.3 Implement session admission, sequenced intake and control-plane separation.
 - [ ] 1.4 Implement bounded tick/chunk mailboxes and cancellation.
-- [ ] 1.5 Implement owned publication, slow-receiver policy and shutdown report.
+- [ ] 1.5a Implement owned tick publication and bounded slow-receiver outboxes.
+- [ ] 1.5b Implement one final unpublished tick and retryable shutdown phases.
 - [ ] 1.6 Implement authority-resolved atomic placement/mining transaction and failure invariants.
 
 ## 2. Independent authoritative rule providers

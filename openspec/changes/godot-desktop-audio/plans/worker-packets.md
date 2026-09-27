@@ -23,3 +23,7 @@ Read this change's design/delta spec and accepted F3 `audio-cues@1`, `input@1`, 
 **4.1 Closeout — controller.** Re-enumerate cues/devices, record tests/counts/rollback, update guides and architecture-skill ruling.
 
 **4.2 Stage gate — controller:** `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check`, `make test-race`, `openspec validate --all --strict --no-interactive` on recorded SHA. 2.1, 2.3 and 2.4 can overlap after 1.2; 2.2 follows 2.1; 3.x/4.x serial.
+
+## Refinement precedence
+
+Read [direct accepted predecessors](03-parallel-readiness.md) and [refined node decisions](04-refined-nodes.md) with this packet. Split parent IDs are retained here only as historical grouping; their child packets own execution. The dependency register controls readiness, and refined source mappings control absent fields. No worker infers a missing signature, capacity, source fact or shared-file edit.

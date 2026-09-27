@@ -1,0 +1,11 @@
+# Refined node decisions
+
+Unsplit nodes retain the exact files, APIs, algorithms, red/green cases, commands and rollback in the existing worker packet. The dependency register adds readiness requirements and does not grant edits to shared files.
+
+## Exact scene, manifest and test ownership
+
+P8 1.2 controller also owns `scripts/godot/godot-terrain-check.sh`: register `terrain_rust_core_check.py`, `terrain_lod_check.py` and `terrain_material_check.py` before providers, require every selected script to report nonzero cases, and test an omitted script/zero case failure. The existing pilot runner does not discover these prospective tests. It must distinguish pilot and accepted Rust producer instead of building Go as the target prerequisite. After 1.2 acceptance, transfer only `apps/mornlea-godot/tests/scripts/terrain_rust_core_check.py` to 2.4; the shared shell runner stays read-only to all workers. Its focused command is `make godot-terrain-check`; qualification records Rust producer and harness SHA.
+
+P8 3.1 serially owns `apps/mornlea-godot/features/world/world_feature.py`, `apps/mornlea-godot/features/world/feature_root.tscn`, existing `features/lod/feature.tres`, new `features/world/terrain_lod/feature.tres`, and both catalogs in addition to its original packet. The current world root owns native attach/ingest/frame; 2.4 alone cannot change that owner. Keep logical capability `lod`, move its declared scene/manifest reference to the new terrain_lod directory atomically, and remove the old reserved manifest from the registry without enabling duplicate LOD owners. The feature ID remains stable; old manifest is retained only in the explicitly selected prior profile.
+
+The 32-completion drain and native section upload are separate limits. Preserve current upload bound 64 combined Near-section/Far-tile resource uploads per host frame, with tests 64/65; preserve accepted drain 32/33 with FIFO carry and stale discard. Neither implies a live resource-pool cap; 1.1 separately records Near/Far and combined live count/byte caps. Far obeys its accepted C2 byte budget as well as the shared64 upload slots; mixed63Near+1Far succeeds and64Near+1Far carries the last upload FIFO. A frame cannot exceed either bound or partially replace a resource. Candidate GPU capture remains downstream of P12 2.4, and dummy renderer output cannot accept pixels.

@@ -2,6 +2,8 @@
 
 All nodes are pending. [Worker packets](plans/worker-packets.md) and [local supervision contract](plans/02-local-supervision.md) and [platform preparation packets](plans/03-platform-preparation.md) define exact readiness, ownership, interfaces, concrete red/green cases, commands, exclusions and rollback. New targets/scripts are prospective until their owning node lands. `ledger.md` binds source/package/fixture identity and the accepted contract SHA to nonzero test counts and scoped commits. A mock, plan validation or candidate capture cannot substitute for real integration or required approval.
 
+See the [node-by-node dependency and ownership gate](plans/03-parallel-readiness.md) before dispatch. It refines the linked packets without duplicating status.
+
 See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
 ## 1. Prerequisite and contract gate
@@ -22,7 +24,9 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 2.3c1 Verify and prepare pinned Linux Godot editor.
 - [ ] 2.3c2 Build and verify relocatable Linux embedded Python payload.
 - [ ] 2.3c3 Build and verify Linux native Rust/GDExtension payload.
-- [ ] 2.4 Integrate strict desktop release closure harness.
+- [ ] 2.4a Route shared build wrappers to accepted target-specific providers.
+- [ ] 2.4b Integrate the Rust desktop launcher with actual supervisor and readiness providers.
+- [ ] 2.4c Integrate strict package closure and identity-complete release reports.
 
 ## 3. Qualification, handoff or cutover
 

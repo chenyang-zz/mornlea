@@ -33,3 +33,7 @@ Read this change's design/delta spec, [local supervision contract](02-local-supe
 **4.1 Release inventory/guide closeout — controller.** Require 3.1–3.4 real target reports for every supported target, package closure, rollback and per-case candidate evidence; record architecture-skill ruling.
 
 **4.2 Stage gate — controller:** `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check`, `make test-race`, `openspec validate --all --strict --no-interactive` on one SHA. Unavailable required target remains pending. P14, not P13, changes default startup.
+
+## Refinement precedence
+
+Read [direct accepted predecessors](03-parallel-readiness.md) and [refined node decisions](04-refined-nodes.md) with this packet. Split parent IDs are retained here only as historical grouping; their child packets own execution. The dependency register controls readiness, and refined source mappings control absent fields. No worker infers a missing signature, capacity, source fact or shared-file edit.

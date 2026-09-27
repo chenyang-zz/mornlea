@@ -39,3 +39,7 @@ Read this change's design/delta spec, [strict evidence schema](02-evidence-schem
 **4.1 Coverage/guide closeout — controller.** Enumerate all registry cases/producer adapters, record candidate/handoff/rollback and architecture-skill ruling.
 
 **4.2 Stage gate — controller:** `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check`, `make test-race`, `openspec validate --all --strict --no-interactive` on one SHA. The phase-2 acceptance gate is a real deliverable independent of later feature handoffs; do not mark full P12 complete until phase 3 closes.
+
+## Refinement precedence
+
+Read [direct accepted predecessors](03-parallel-readiness.md) and [refined node decisions](04-refined-nodes.md) with this packet. Split parent IDs are retained here only as historical grouping; their child packets own execution. The dependency register controls readiness, and refined source mappings control absent fields. No worker infers a missing signature, capacity, source fact or shared-file edit.

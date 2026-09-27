@@ -2,6 +2,8 @@
 
 All nodes are pending. [Worker packets](plans/worker-packets.md) define exact readiness, files, interfaces, cases, commands, exclusions and rollback. New tests/scripts are prospective until their owning node lands. `ledger.md` records accepted prerequisite SHA, fixture identity, behavioral red/green, nonzero discovery, scoped commits and integration evidence. Shared registries, catalogs and real integration have one serial controller owner.
 
+See the [node-by-node dependency and ownership gate](plans/03-parallel-readiness.md) before dispatch. It refines the linked packets without duplicating status.
+
 See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
 ## 1. Prerequisite and contract gate
@@ -17,7 +19,9 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 ## 3. Serial assembly and evidence
 
 - [ ] 3.1 Assemble real F2/F3/G1 cue/input transcript parity.
-- [ ] 3.2 Qualify macOS, Windows and Linux independently.
+- [ ] 3.2a Qualify fake/no-device cue and input cases on macOS.
+- [ ] 3.2b Qualify fake/no-device cue and input cases on Windows.
+- [ ] 3.2c Qualify fake/no-device cue and input cases on Linux.
 - [ ] 3.3 Capture untracked candidate desktop evidence after P12 phase 2.
 ## 4. Closeout
 

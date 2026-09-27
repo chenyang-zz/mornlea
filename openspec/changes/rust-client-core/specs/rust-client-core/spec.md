@@ -31,6 +31,14 @@ A presentation frame SHALL represent one coherent session epoch and confirmed re
 - **WHEN** a frame is assembled or applied
 - **THEN** it MUST reject the inconsistent publication and retain the last valid state
 
+#### Scenario: Extreme accepted drop coordinates
+
+- **GIVEN** a protocol-valid DropId with chunk x equal to i32::MAX and block index zero
+- **WHEN** C2 projects its location
+- **THEN** it MUST preserve the identity and publish exact finite f64 x34359738352
+- **AND** it MUST NOT narrow through an overflowing i32 world coordinate or reject the valid observation
+- **AND** an index98304 MUST fail frame validation without changing the previous frame
+
 #### Scenario: Capacity exhaustion
 
 - **GIVEN** a bounded input or output batch exceeds capacity

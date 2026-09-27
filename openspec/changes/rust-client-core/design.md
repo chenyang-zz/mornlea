@@ -47,3 +47,11 @@ Implementation follows failing contract/replay tests, minimum implementation, th
 Record source SHA, corpus digest/coverage, command, discovered/executed tests, result, failure cases and rollback proof in `ledger.md`. Rust stage completion requires its full declared inventory, not only the first successful slice. Commit each independently verified task; if an inventory item exceeds one session, refine it into explicit capability tasks before implementation rather than checking off a broad placeholder. Planning validation proves artifact structure only.
 
 At implementation closeout run formatting, `make rust-check`, `make dev-check` (including all six Go-module vet commands), `make test-race`, `go test ./packages/audit -count=1`, and `openspec validate --all --strict --no-interactive`. Add the change-specific replay, failure-injection and platform gates. No graphical foreground window may be started by automated tests.
+
+## Post-numerical-closure planning decisions
+
+The [node dependency and ownership register](plans/03-parallel-readiness.md) and [refined node decisions](plans/04-refined-nodes.md) are normative execution inputs alongside the original packets. Preserve prior scope and separate source-contract, real-provider and real-integration acceptance. Numerical completion does not supply complete F1 acceptance; use the independently owned [foundation successor](../rust-runtime-foundation-acceptance/proposal.md).
+
+The controller compared wholesale migration resequencing, immediate parallel dispatch from prospective signatures, and bounded refinement of existing nodes. Bounded refinement preserves reviewed scope and existing node identities while making dependencies, shared edits and source-information limits decidable. Immediate dispatch remains blocked by missing accepted contract/provider SHAs. Broad shared files stay serial; only disjoint providers with accepted predecessors can overlap.
+
+Supporting declarations and packet-to-owned-value mappings are fixed in [05-supporting-values](plans/05-supporting-values.md). Task observations have no invented task ID/generation; container revision is local attribution; absent actor associations stay absent. The checked drop inverse is private C2, with explicit extreme-coordinate rejection.

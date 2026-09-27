@@ -2,6 +2,8 @@
 
 All nodes are pending. [C1/C2/G1 contract and graph](plans/00-client-contract.md), [typed family schema](plans/02-family-schemas.md) and [worker packets](plans/01-client-slices.md) define prerequisites, exact exclusive files, cases and commands. New crate/test targets are prospective until their owning nodes land. `ledger.md` records accepted contract SHA, fixtures, red/green and scoped commits. The current Go pilot remains explicitly selectable for rollback until the separate product cutover.
 
+See the [node-by-node dependency and ownership gate](plans/03-parallel-readiness.md) before dispatch. It refines the linked packets without duplicating status.
+
 See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
 ## 1. C1 contract and session
@@ -17,6 +19,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 2.1 Implement semantic typed input, UI token and local sequence validation.
 - [ ] 2.2 Implement reversible prediction and authoritative correction replay.
 - [ ] 2.3 Implement bounded preparation scheduling and stale-result rejection.
+- [ ] 2.3b Implement bounded far-tile LOD preparation and stale completion cancellation.
 - [ ] 2.4 Assemble and atomically publish validated immutable frames.
 - [ ] 2.5 Publish `terrain@1` semantics.
 - [ ] 2.6a Project remote players into `actors@1`.
@@ -43,9 +46,12 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 
 ## 3. Serial adapter and real integration
 
-- [ ] 3.1 Assign G1 registry descriptors and land the safe Rust Godot adapter.
+- [ ] 3.1a Assign and validate G1 logical-to-numeric descriptors without enabling features.
+- [ ] 3.1b Connect the safe Rust core adapter and migrate Godot-callable methods serially.
 - [ ] 3.2 Implement symbolic family negotiation and one-session feature host activation.
-- [ ] 3.3 Implement reset/reconnect/teardown and explicit 100-cycle Rust session smoke.
+- [ ] 3.3a Implement core reset, reconnect and close with queued-work invalidation.
+- [ ] 3.3b Implement native Godot/Python release ordering and boundary panic containment.
+- [ ] 3.3c Qualify rebuilt Rust producer artifacts through 100 real headless session cycles.
 - [ ] 3.4 Integrate real F2 Memory/TCP server, C1/C2 and G1 against all accepted families.
 
 ## 4. Closeout

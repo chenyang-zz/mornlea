@@ -4,7 +4,7 @@ The Godot pilot still receives its session, mirror, prediction and presentation 
 
 ## Status and prerequisites
 
-Planning only: F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md). Blocked on completed [F1](../rust-runtime-foundation/proposal.md) and the accepted [F2](../rust-authoritative-server/proposal.md) protocol/session contract. F3 final integration acceptance requires the F2 Rust server parity evidence. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
+Planning only: F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md). Blocked on completed [F1](../rust-runtime-foundation-acceptance/proposal.md) and the accepted [F2](../rust-authoritative-server/proposal.md) protocol/session contract. F3 final integration acceptance requires the F2 Rust server parity evidence. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
 
 ## What Changes
 
@@ -12,6 +12,7 @@ Planning only: F3 in [`docs/architecture-target.md`](../../../docs/architecture-
 - Adapt the existing Rust Godot extension to the Rust core while preserving typed Python intent and feature views.
 - Prove transcript, correction, stale/reset, capacity and lifecycle parity against offline Go evidence and the Rust server.
 - Publish versioned presentation families required by P8–P11 without implementing those features or transferring visual baseline ownership.
+- Specify the scoped presentation exception for extreme admitted drop chunk coordinates: preserve identity and compute exact finite f64 geometry instead of inheriting Go's narrowed i32 shift wrap. The delta scenario pins that boundary; protocol/save/gameplay validity does not change.
 
 ## Capabilities
 

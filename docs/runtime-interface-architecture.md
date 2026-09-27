@@ -1,6 +1,6 @@
 ---
 doc_id: runtime-interface-architecture
-doc_revision: 2026-09-25.1
+doc_revision: 2026-09-27.2
 language: en
 counterpart: runtime-interface-architecture.zh.md
 status: target-not-current
@@ -44,7 +44,7 @@ Each row names the **one owner** of a boundary. `Existing` means source and test
 | D0 | `mornlea_domain`: checked IDs, locations, values, closed `Command`, `CommandEnvelope`, `Event`, `RoutedEvent` | protocol, server, client core, replay | Existing; extend only with a reviewed behavioral change. |
 | P0 | `mornlea_protocol`: v45 packet registry, framing, admission, semantic conversion | server, client core, transport tests | Existing; wire schema stays v45 unless separately changed. |
 | S0 | `mornlea_storage`: versioned record codecs and migrations | server persistence worker, offline tooling | Existing codec surface; I/O owner is target. |
-| K0 | `mornlea_engine` safe numerical facade and pathfinding | server, client core, preparation workers | Target F1 closure; no client or server duplicate algorithm. |
+| K0 | `mornlea_engine` safe numerical facade and pathfinding | server, client core, preparation workers | Accepted numerical implementation `9b843bbc`; complete F1 zero-gap seal remains separate. No client or server duplicate algorithm. |
 | S1 | `mornlea_server::core`: ingress, ordered tick, routed observations | transport adapters, replay, persistence | Target after complete F1; first F2 shared landing. |
 | S2 | `mornlea_server::transport`: Memory/TCP framing and session admission | local play, LAN, client tests | Target after S1; one core path. |
 | S3 | `mornlea_server::persistence`: async requests, acknowledgments, recovery | server core, activation tooling | Target after S1/S0; one writable world lease. |
@@ -135,17 +135,17 @@ This table is the **target logical bridge catalog**. The existing pilot ABI has 
 | Logical family | Producer → consumer | Minimum semantic payload and ordering | Feature owner |
 | --- | --- | --- | --- |
 | `session@1` | client core → host | connection phase, epoch, player identity, terminal reason; transitions are monotonic per epoch | F3/P13 |
-| `input@1` | host → client core | ordered device events, action state, pointer/ray intent, local sequence and receipt; whole-batch rejection | F3/P10 |
-| `terrain@1` | client core → world feature | dimension, chunk/section key, content revision, generation, typed mesh/light/material references, upserts and removals | P8 |
+| `input@1` | host → client core | ordered typed semantic actions with checked container tokens, action/ray intent, local sequence and receipt; device mapping remains in presentation, whole-batch rejection | F3/P10 |
+| `terrain@1` | client core → world feature | dimension, typed near-section/far-tile key and visibility, content revision, generation, typed mesh/light/material references, upserts and removals | P8 |
 | `actors@1` | client core → actor features | stable kind/ID, dimension, transform, motion, animation and effect intent, spawn/update/despawn order | P9 |
-| `player-view@1` | client core → player feature | confirmed/predicted pose attribution, look target, movement state, correction marker | F3/P9 |
-| `inventory-ui@1` | client core → UI feature | selected slot, item stacks, container reference/revision, crafting/furnace results, rejection and close outcomes | P10 |
+| `player-view@1` | client core → player feature | confirmed/predicted pose attribution, look target, movement state, correction marker, checked mining state | F3/P9 |
+| `inventory-ui@1` | client core → UI feature | selected slot, item stacks, accepted container reference and local confirmed-revision token, crafting/furnace results, rejection and close outcomes | P10 |
 | `world-ui@1` | client core → UI feature | time, weather, survival state, chat/task state, interaction prompts, stable display text | P10 |
-| `audio-cues@1` | client core → audio feature | cue ID, source/event ID, position or non-spatial flag, category, playback parameters and one-shot dedup key | P11 |
+| `audio-cues@1` | client core → audio feature | cue ID, confirmed observation/optional event identity or predicted input/local event sequence, position or non-spatial flag, category, playback parameters and one-shot dedup key | P11 |
 | `lifecycle@1` | client core/bridge → host | epoch open/close/reset, feature activation/release generation and resource invalidation order | F3/P8–P11 |
 | `diagnostics@1` | client core/bridge → host | typed queue high-water, rejected-work reason, producer identity, contract version, frame/tick correlation | P12 |
 
-Terrain removals precede reuse of a section key; a late mesh completion is discarded if epoch, chunk generation or content revision no longer matches. Actor despawns and UI container closes cannot be omitted when a later upsert or opening is shown. Audio cue dedup is scoped by epoch and authoritative event identity; missing audio hardware suppresses playback only, not the cue/outcome record. Device, texture, scene and audio-resource lifetime belongs to the Godot main-thread owner and is released on reset/feature disable. UI never reconstructs inventory truth from optimistic animation.
+Terrain removals precede reuse of a section key; a late mesh completion is discarded if epoch, chunk generation or content revision no longer matches. Actor despawns and UI container closes cannot be omitted when a later upsert or opening is shown. Audio cue dedup is scoped by epoch and source provenance: actual event identity where present, otherwise the confirmed observation key, predicted input sequence or local event sequence; missing audio hardware suppresses playback only, not the cue/outcome record. Device, texture, scene and audio-resource lifetime belongs to the Godot main-thread owner and is released on reset/feature disable. UI never reconstructs inventory truth from optimistic animation.
 
 For each family landing, the owner publishes an exact field schema with units, valid ranges, ordering, count/byte caps, optional/required fields, compatibility examples, and one invalid/stale/overflow test. A planned family remains disabled until that packet exists and its producer and Godot consumer pass real integration. This is a controlled extension point, not permission to ship an untyped or incomplete family.
 
@@ -201,4 +201,4 @@ Acceptance is three separate results: contract/double, real provider, and real i
 
 This map intentionally freezes **ownership, direction, semantic categories, identity and failure policy** before implementation. Exact Rust declarations, new queue numbers, binary family layouts and numeric IDs become binding only through their specific compile-ready landing and recorded SHA. This distinction avoids claiming an unbuilt API is already callable while still letting later task design use one global interface map.
 
-Known gaps at publication: complete F1 numerical facade/pathfinding and zero-gap acceptance; F2 server crate and measured queue/deadline contract; F3 client-core crate and Rust-core Godot producer; target semantic family schemas/registry; symbolic-to-numeric host negotiation for audio/lifecycle; complete real integration evidence. Each gap has one owner above. A future feature missing from this table starts with an OpenSpec delta naming its authority, producer/consumer, semantic family or private surface, version effect, limits, tests and contract landing. It does not fork the existing server, client mirror or host bridge.
+Verified update after numerical archive: the safe native facade and pathfinding are accepted at `9b843bbc`. Complete F1 still rejects `domain.input/45`; [the final acceptance successor](../openspec/changes/rust-runtime-foundation-acceptance/proposal.md) owns observed external-authority rejection and the mandatory zero-gap seal. Remaining gaps: F2 server crate and measured queue/deadline contract; F3 client-core crate and Rust-core Godot producer; target semantic family schemas/registry; symbolic-to-numeric host negotiation for audio/lifecycle; complete real integration evidence. Each gap has one owner above. A future feature missing from this table starts with an OpenSpec delta naming its authority, producer/consumer, semantic family or private surface, version effect, limits, tests and contract landing. It does not fork the existing server, client mirror or host bridge.
