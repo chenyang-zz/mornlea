@@ -7,10 +7,13 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use mornlea_domain::{
-    BlockPos, ChunkPos, Command, CommandText, CompanionId, Dimension, FiniteVec3, HotbarSlot,
-    LookAngles, PlayerId,
+    BlockPos, ChunkPos, Command, CommandRejection, CommandText, CompanionId, Dimension, Event,
+    EventRecipient, FiniteVec3, HotbarSlot, LookAngles, PlayerId, ProjectileId, ProjectileKind,
+    RejectReason, RoutedEvent,
 };
-use mornlea_protocol::{LoginStart, LoginSuccess, PlayIntent, ServerPacket, admit_login};
+use mornlea_protocol::{
+    LoginStart, LoginSuccess, PlayIntent, ProtocolCodec, ServerPacket, admit_login,
+};
 use mornlea_server::contracts::*;
 use mornlea_server::state::{AuthorityState, ShutdownIo, TickContext, resolve_place};
 use mornlea_storage::{Chunk, ChunkSave, ItemStack, Metadata};
@@ -369,6 +372,124 @@ fn compound_rejects_partial() {
     ]));
     assert_eq!(rejected, Err(RuleReject::StaleObservation));
     assert_eq!(context.read().inventory(actor).unwrap().selected, slot(0));
+}
+
+#[test]
+fn compound_projectile_insert_is_atomic() {
+    let mut endpoint = server();
+    let session = endpoint
+        .admit(login(11, "Faye"), TransportKind::Memory)
+        .unwrap();
+    let mut context = TickContext::harness(
+        &mut endpoint.authority,
+        TickBudget::try_new(1, 0, 0, 0, 0).unwrap(),
+    );
+    let actor = ActorKey::Player(session);
+    let original = InventoryRecord::empty();
+    context.preload_inventory(actor, original);
+    for index in 1..MAX_PROJECTILE_RECORDS {
+        context
+            .stage(insert_projectile(projectile(index as u64, actor)))
+            .unwrap();
+    }
+    assert_eq!(context.projectile_len(), MAX_PROJECTILE_RECORDS - 1);
+    let patch = InventoryPatch::try_new(actor, original, original.with_selected(slot(1))).unwrap();
+    let rejected = context.stage(RuleEffect::Compound(vec![
+        RuleEffect::Inventory(patch),
+        insert_projectile(projectile(1_000, actor)),
+        insert_projectile(projectile(1_001, actor)),
+    ]));
+    assert_eq!(
+        rejected,
+        Err(RuleReject::ResourceFull(Resource::RuleEffects))
+    );
+    assert_eq!(context.projectile_len(), MAX_PROJECTILE_RECORDS - 1);
+    assert_eq!(context.read().inventory(actor).unwrap().selected, slot(0));
+}
+
+fn projectile(id: u64, owner: ActorKey) -> ProjectileRecord {
+    ProjectileRecord {
+        id: ProjectileId::try_new(id).unwrap(),
+        owner,
+        dimension: Dimension::OVERWORLD,
+        position: FiniteVec3::try_new([0.0, 64.0, 0.0]).unwrap(),
+        velocity: FiniteVec3::try_new([0.0, 0.0, 1.0]).unwrap(),
+        kind: ProjectileKind::Arrow,
+        damage: 1,
+        age: 0,
+    }
+}
+
+fn insert_projectile(record: ProjectileRecord) -> RuleEffect {
+    RuleEffect::Projectile {
+        before: None,
+        after: Some(record),
+    }
+}
+
+#[test]
+fn event_publication_reaches_outbox() {
+    let mut endpoint = server();
+    let session = endpoint
+        .admit(login(12, "Gia"), TransportKind::Memory)
+        .unwrap();
+    let event = Event::CommandRejected(CommandRejection::new(4, RejectReason::InvalidRay));
+    let packet = ServerPacket::try_from(event.clone()).unwrap();
+    let mut codec = ProtocolCodec::new().unwrap();
+    let mut buffer = vec![0u8; 64];
+    let written = codec.encode_server_into(&packet, &mut buffer).unwrap();
+    let expected = buffer[..written].to_vec();
+
+    endpoint
+        .authority
+        .publish(TickPublication {
+            tick: 0,
+            events: vec![RoutedEvent::new(
+                EventRecipient::Session(session.get()),
+                event,
+            )],
+            control: vec![ControlReply {
+                session,
+                packet: ServerPacket::LoginSuccess(LoginSuccess::new(
+                    endpoint.authority.session(session).unwrap().player_id,
+                    7,
+                )),
+            }],
+            counters: TickCounters::default(),
+        })
+        .unwrap();
+    let frames = endpoint.authority.take_outbox(session, 8, 4096).unwrap();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0], expected);
+    assert_ne!(frames[0].len(), frames[1].len());
+    assert_eq!(frames[1].len(), 24);
+
+    let refused = endpoint.authority.publish(TickPublication {
+        tick: 1,
+        events: vec![RoutedEvent::new(
+            EventRecipient::Session(0),
+            Event::CommandRejected(CommandRejection::new(5, RejectReason::NoTarget)),
+        )],
+        control: vec![ControlReply {
+            session,
+            packet: ServerPacket::LoginSuccess(LoginSuccess::new(
+                endpoint.authority.session(session).unwrap().player_id,
+                7,
+            )),
+        }],
+        counters: TickCounters::default(),
+    });
+    assert!(matches!(
+        refused,
+        Err(ServerError::InvalidInput { field: "packet" })
+    ));
+    assert!(
+        endpoint
+            .authority
+            .take_outbox(session, 8, 4096)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

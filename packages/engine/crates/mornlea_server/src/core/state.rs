@@ -2,14 +2,18 @@
 //!
 //! Sibling modules do not read these fields. They call the ports below.
 //! Staging a compound effect checks every component against the pre-effect
-//! overlay and applies the whole effect only after that check succeeds.
+//! overlay, counting projectile inserts in that compound, and applies the
+//! whole effect only after that check succeeds. A later rejection restores
+//! the overlay. Publication encodes control packets and routed events through
+//! the existing protocol conversion before it appends any frame.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use mornlea_domain::{
-    CommandEnvelope, CommandEnvelopeParts, Dimension, PlayerId, RoutedEvent, WorldState,
+    CommandEnvelope, CommandEnvelopeParts, Dimension, EventRecipient, PlayerId, RoutedEvent,
+    WorldState,
 };
-use mornlea_protocol::{AdmittedLogin, PlayIntent, ServerPacket};
+use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket};
 use mornlea_storage::{Metadata, PlayerLocation, PlayerSave, StoredPlayer};
 
 use super::contracts::*;
@@ -465,23 +469,63 @@ impl AuthorityState {
     }
 
     pub fn publish(&mut self, publication: TickPublication) -> Result<(), ServerError> {
-        for reply in publication.control {
-            let Some(record) = self.sessions.get_mut(&reply.session) else {
+        let mut codec =
+            ProtocolCodec::new().map_err(|_| ServerError::InvalidInput { field: "packet" })?;
+        let mut pending = Vec::new();
+        for event in &publication.events {
+            let packet = ServerPacket::try_from(event.event().clone())
+                .map_err(|_| ServerError::InvalidInput { field: "packet" })?;
+            let frame = encode_packet(&mut codec, &packet)?;
+            match event.recipient() {
+                EventRecipient::Session(raw) => {
+                    let session = SessionKey::from_raw(raw)
+                        .ok_or(ServerError::InvalidInput { field: "packet" })?;
+                    if !self.sessions.contains_key(&session) {
+                        return Err(ServerError::StaleSession { session });
+                    }
+                    pending.push(PendingFrame::One { session, frame });
+                }
+                EventRecipient::Broadcast => pending.push(PendingFrame::Broadcast { frame }),
+            }
+        }
+        for reply in &publication.control {
+            if !self.sessions.contains_key(&reply.session) {
                 return Err(ServerError::StaleSession {
                     session: reply.session,
                 });
-            };
-            if record.outbox_closed {
-                continue;
             }
-            if record.outbox.len() >= self.limits.session_outbox() {
-                record.outbox_closed = true;
-                continue;
+            let frame = encode_packet(&mut codec, &reply.packet)?;
+            pending.push(PendingFrame::One {
+                session: reply.session,
+                frame,
+            });
+        }
+        for item in pending {
+            match item {
+                PendingFrame::One { session, frame } => self.append_frame(session, frame),
+                PendingFrame::Broadcast { frame } => {
+                    let sessions: Vec<SessionKey> = self.sessions.keys().copied().collect();
+                    for session in sessions {
+                        self.append_frame(session, frame.clone());
+                    }
+                }
             }
-            let frame = encode_packet(&reply.packet)?;
-            record.outbox.push(frame);
         }
         Ok(())
+    }
+
+    fn append_frame(&mut self, session: SessionKey, frame: Vec<u8>) {
+        let Some(record) = self.sessions.get_mut(&session) else {
+            return;
+        };
+        if record.outbox_closed {
+            return;
+        }
+        if record.outbox.len() >= self.limits.session_outbox() {
+            record.outbox_closed = true;
+            return;
+        }
+        record.outbox.push(frame);
     }
 
     pub fn take_outbox(
@@ -916,12 +960,27 @@ fn save_from_stored(stored: StoredPlayer) -> Result<PlayerSave, ServerError> {
     Ok(save)
 }
 
-fn encode_packet(packet: &ServerPacket) -> Result<Vec<u8>, ServerError> {
-    match packet {
-        ServerPacket::LoginSuccess(record) => record
-            .encode()
-            .map_err(|_| ServerError::InvalidInput { field: "packet" }),
-        _ => Err(ServerError::InvalidInput { field: "packet" }),
+enum PendingFrame {
+    One { session: SessionKey, frame: Vec<u8> },
+    Broadcast { frame: Vec<u8> },
+}
+
+/// Encodes one packet with the protocol codec. A short buffer is resized to
+/// the length the codec reports. Any other codec refusal is the existing
+/// packet input error; this function does not choose a wire layout.
+fn encode_packet(codec: &mut ProtocolCodec, packet: &ServerPacket) -> Result<Vec<u8>, ServerError> {
+    let mut buffer = vec![0u8; 64];
+    loop {
+        match codec.encode_server_into(packet, &mut buffer) {
+            Ok(written) => {
+                buffer.truncate(written);
+                return Ok(buffer);
+            }
+            Err(ProtocolError::OutputTooSmall { needed, .. }) if needed > buffer.len() => {
+                buffer.resize(needed, 0);
+            }
+            Err(_) => return Err(ServerError::InvalidInput { field: "packet" }),
+        }
     }
 }
 
@@ -1269,8 +1328,13 @@ impl<'a> TickContext<'a> {
     }
 
     pub fn stage(&mut self, effect: RuleEffect) -> Result<(), RuleReject> {
-        self.validate_effect(&effect, false)?;
+        let mut pending_projectiles = 0usize;
+        self.validate_effect(&effect, false, &mut pending_projectiles)?;
         self.apply_effect(effect)
+    }
+
+    pub fn projectile_len(&self) -> usize {
+        self.projectiles.len()
     }
 
     pub fn emit(&mut self, event: mornlea_domain::RoutedEvent) -> Result<(), ServerError> {
@@ -1331,17 +1395,19 @@ impl<'a> TickContext<'a> {
             .collect()
     }
 
-    fn validate_effect(&self, effect: &RuleEffect, nested: bool) -> Result<(), RuleReject> {
+    fn validate_effect(
+        &self,
+        effect: &RuleEffect,
+        nested: bool,
+        pending_projectiles: &mut usize,
+    ) -> Result<(), RuleReject> {
         match effect {
             RuleEffect::Compound(parts) => {
                 if nested || parts.len() > EFFECT_BUDGET {
                     return Err(RuleReject::ResourceFull(Resource::RuleEffects));
                 }
-                if parts.len() > EFFECT_BUDGET {
-                    return Err(RuleReject::ResourceFull(Resource::RuleEffects));
-                }
                 for part in parts {
-                    self.validate_effect(part, true)?;
+                    self.validate_effect(part, true, pending_projectiles)?;
                 }
                 Ok(())
             }
@@ -1356,11 +1422,12 @@ impl<'a> TickContext<'a> {
                 self.validate_writes(&txn.writes)
             }
             RuleEffect::Projectile { after: Some(_), .. } => {
-                if self.projectiles.len() >= MAX_PROJECTILE_RECORDS {
-                    Err(RuleReject::ResourceFull(Resource::RuleEffects))
-                } else {
-                    Ok(())
+                let occupied = self.projectiles.len().saturating_add(*pending_projectiles);
+                if occupied >= MAX_PROJECTILE_RECORDS {
+                    return Err(RuleReject::ResourceFull(Resource::RuleEffects));
                 }
+                *pending_projectiles = pending_projectiles.saturating_add(1);
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -1385,8 +1452,20 @@ impl<'a> TickContext<'a> {
     fn apply_effect(&mut self, effect: RuleEffect) -> Result<(), RuleReject> {
         match effect {
             RuleEffect::Compound(parts) => {
+                let inventories = self.inventories.clone();
+                let world = self.world;
+                let blocks = self.blocks.clone();
+                let projectiles = self.projectiles.clone();
+                let environment = self.environment.clone();
                 for part in parts {
-                    self.apply_effect(part)?;
+                    if let Err(error) = self.apply_effect(part) {
+                        self.inventories = inventories;
+                        self.world = world;
+                        self.blocks = blocks;
+                        self.projectiles = projectiles;
+                        self.environment = environment;
+                        return Err(error);
+                    }
                 }
                 Ok(())
             }

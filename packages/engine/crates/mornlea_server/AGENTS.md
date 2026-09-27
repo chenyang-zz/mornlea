@@ -17,8 +17,17 @@ against this file.
   constructor before they reserve command storage. `AuthorityState` keeps
   world, sessions, queues, tick, and publication private to `src/core/state.rs`.
 - `TickContext::stage` validates every component of a compound effect before
-  it applies any component. `contract_double::compound_rejects_partial`
-  requires a second-component failure to leave the first component absent.
+  it applies any component, counting projectile inserts already accepted in
+  that compound. `contract_double::compound_rejects_partial` and
+  `contract_double::compound_projectile_insert_is_atomic` require a
+  second-component failure to leave every earlier component absent.
+- `AuthorityState::publish` encodes `TickPublication` events with
+  `ServerPacket::try_from(Event)` and encodes every control packet through
+  `ProtocolCodec::encode_server_into` before appending. A conversion or
+  encode refusal returns `ServerError::InvalidInput` for field `packet` and
+  appends none of that publication.
+  `contract_double::event_publication_reaches_outbox` requires the encoded
+  non-login event in the outbox.
 - `SubmitSaveError` returns the refused `SaveRequest`. `SaveCompletion`
   echoes the submitted key and revision.
   `contract_double::completion_returns_ownership` pins both.
