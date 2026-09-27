@@ -1,6 +1,6 @@
 use std::mem::{align_of, size_of};
 
-use crate::collision::{COLLISION_STEP_HEIGHT_OFFSET, resolve_collision, resolve_collision_parts};
+use crate::collision::{COLLISION_STEP_HEIGHT_OFFSET, resolve_collision};
 use crate::fluid_eval::{
     EVAL_ITEM_OUTPUT_BYTES, EVAL_SLOTS_PER_ITEM, SLOT_NO_WRITE, parse_eval_input, read_eval_item,
 };
@@ -546,41 +546,9 @@ unsafe fn collision_resolve_with(
         if !collision_input_is_valid(bytes) {
             return Err(MORNLEA_STATUS_INPUT);
         }
-        // Route the validated raw packet through the shared core: decode the
-        // header fields into parts and pack the 16 result bytes locally.
-        let position = [read_f32(bytes, 8), read_f32(bytes, 12), read_f32(bytes, 16)];
-        let displacement = [
-            read_f32(bytes, 20),
-            read_f32(bytes, 24),
-            read_f32(bytes, 28),
-        ];
-        let began_grounded = bytes[32] == 1;
-        let step_height = read_f32(bytes, COLLISION_STEP_HEIGHT_OFFSET);
-        let origin = [
-            read_i32(bytes, 40),
-            read_i32(bytes, 44),
-            read_i32(bytes, 48),
-        ];
-        let dimensions = [
-            read_u32(bytes, 52),
-            read_u32(bytes, 56),
-            read_u32(bytes, 60),
-        ];
-        // The injectable `resolver` seam stays live inside the panic boundary:
-        // production passes `resolve_collision`, and seam tests inject a
-        // panicking closure expecting status 9 with output untouched. Its
-        // result is superseded by the shared core below, which decodes the
-        // same validated fields by construction.
-        let _ = resolver(bytes);
-        Ok(resolve_collision_parts(
-            position,
-            displacement,
-            began_grounded,
-            step_height,
-            origin,
-            dimensions,
-            &bytes[COLLISION_HEADER_BYTES..],
-        ))
+        // The resolver owns the single shared-core invocation. Publish its
+        // complete result only after validation and panic containment.
+        Ok(resolver(bytes))
     });
     match result {
         Ok(result) => {
@@ -1772,6 +1740,40 @@ mod tests {
             panic!("测试 panic")
         });
         assert_eq!(result, Err(MORNLEA_STATUS_PANIC));
+    }
+
+    #[test]
+    fn collision_publishes_the_single_resolver_result() {
+        let mut input = [0_u8; 64 + 4 * 196];
+        input[0..4].copy_from_slice(b"MGC1");
+        input[4..8].copy_from_slice(&1_u32.to_le_bytes());
+        for (offset, value) in [(8, 0.5_f32), (12, 1.0), (16, 0.5), (36, 0.6)] {
+            input[offset..offset + 4].copy_from_slice(&value.to_bits().to_le_bytes());
+        }
+        input[52..56].copy_from_slice(&1_u32.to_le_bytes());
+        input[56..60].copy_from_slice(&4_u32.to_le_bytes());
+        input[60..64].copy_from_slice(&1_u32.to_le_bytes());
+        let calls = std::cell::Cell::new(0);
+        let expected = [0x3c; COLLISION_OUTPUT_BYTES];
+        let mut output = [0xa5; COLLISION_OUTPUT_BYTES + 2];
+        let status = unsafe {
+            collision_resolve_with(
+                ABI_VERSION,
+                input.as_ptr(),
+                input.len(),
+                output[1..].as_mut_ptr(),
+                COLLISION_OUTPUT_BYTES,
+                |_| {
+                    calls.set(calls.get() + 1);
+                    expected
+                },
+            )
+        };
+        assert_eq!(status, MORNLEA_STATUS_OK);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(&output[1..1 + COLLISION_OUTPUT_BYTES], &expected);
+        assert_eq!(output[0], 0xa5);
+        assert_eq!(output[COLLISION_OUTPUT_BYTES + 1], 0xa5);
     }
 
     #[test]

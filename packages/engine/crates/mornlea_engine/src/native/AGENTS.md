@@ -1,7 +1,7 @@
 # Native Numerical Implementation Guides
 
 ## Purpose
-This directory contains the safe, typed Rust native traits and contracts (`contracts/`) for numerical engine operations, as well as the implementation of individual provider lanes (collision, physics, raycast, worldgen, etc.). These contracts provide the ABI boundary for the Go server and future embedded Python runtime.
+This directory contains the safe, typed Rust native traits and contracts (`contracts/`) for numerical engine operations, as well as the implementation of individual provider lanes (collision, physics, raycast, worldgen, etc.). These contracts are the safe Rust numerical facade for future Rust core callers. Transitional Go callers use the separate C ABI adapters in `src/ffi.rs`. Godot's embedded Python owns presentation and accesses qualified presentation bridges; it does not call these numerical contracts directly or own authoritative state.
 
 ## Submodules
 - `contracts/`: Shared request/result contracts, public operation traits, and error enums.
