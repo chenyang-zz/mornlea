@@ -425,8 +425,8 @@ func kernelFixtures(name string) []string {
 			"mornlea_worldgen_probe":    {"src/worldgen.rs", "src/native/world_probe.rs", "src/native/contracts/world.rs", "tests/numerical_migration/worldgen_probe.rs"},
 			"mornlea_tree_blocks":       {"src/worldgen.rs", "src/native/tree.rs", "src/native/contracts/world.rs", "tests/numerical_migration/tree_blocks.rs"},
 			"mornlea_lod_shell":         {"src/worldgen.rs", "src/lod.rs", "src/native/lod.rs", "src/native/contracts/world.rs", "tests/numerical_migration/lod.rs"},
-			"mornlea_fluid_eval_batch":  {"src/fluid_eval.rs", "src/native/fluid_eval.rs", "src/native/contracts/fluid.rs", "tests/numerical_migration/fluid_eval.rs"},
-			"mornlea_fluid_rescan":      {"src/fluid_rescan.rs", "src/native/fluid_rescan.rs", "src/native/contracts/fluid.rs", "tests/numerical_migration/fluid_rescan.rs"},
+			"mornlea_fluid_eval_batch":  {"src/worldgen.rs", "src/fluid_eval.rs", "src/native/fluid_eval.rs", "src/native/contracts/fluid.rs", "tests/numerical_migration/fluid_eval.rs"},
+			"mornlea_fluid_rescan":      {"src/worldgen.rs", "src/fluid_eval.rs", "src/fluid_rescan.rs", "src/native/fluid_rescan.rs", "src/native/contracts/fluid.rs", "tests/numerical_migration/fluid_rescan.rs"},
 			"mornlea_mesh_section":      {"src/input.rs", "src/light.rs", "src/quad.rs", "src/greedy/mod.rs", "src/greedy/bed.rs", "src/greedy/torch.rs", "src/native/mesh.rs", "src/native/contracts/mesh.rs", "tests/numerical_migration/mesh.rs"},
 		}
 		for _, path := range sources[name] {
