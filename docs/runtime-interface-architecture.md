@@ -1,6 +1,6 @@
 ---
 doc_id: runtime-interface-architecture
-doc_revision: 2026-09-27.2
+doc_revision: 2026-09-27.3
 language: en
 counterpart: runtime-interface-architecture.zh.md
 status: target-not-current
@@ -44,7 +44,7 @@ Each row names the **one owner** of a boundary. `Existing` means source and test
 | D0 | `mornlea_domain`: checked IDs, locations, values, closed `Command`, `CommandEnvelope`, `Event`, `RoutedEvent` | protocol, server, client core, replay | Existing; extend only with a reviewed behavioral change. |
 | P0 | `mornlea_protocol`: v45 packet registry, framing, admission, semantic conversion | server, client core, transport tests | Existing; wire schema stays v45 unless separately changed. |
 | S0 | `mornlea_storage`: versioned record codecs and migrations | server persistence worker, offline tooling | Existing codec surface; I/O owner is target. |
-| K0 | `mornlea_engine` safe numerical facade and pathfinding | server, client core, preparation workers | Accepted numerical implementation `9b843bbc`; complete F1 zero-gap seal remains separate. No client or server duplicate algorithm. |
+| K0 | `mornlea_engine` safe numerical facade and pathfinding | server, client core, preparation workers | Accepted numerical implementation `9b843bbc`; [complete F1 seal](../openspec/changes/rust-runtime-foundation-acceptance/acceptance.json) binds source `d042982d`. No client or server duplicate algorithm. |
 | S1 | `mornlea_server::core`: ingress, ordered tick, routed observations | transport adapters, replay, persistence | Target after complete F1; first F2 shared landing. |
 | S2 | `mornlea_server::transport`: Memory/TCP framing and session admission | local play, LAN, client tests | Target after S1; one core path. |
 | S3 | `mornlea_server::persistence`: async requests, acknowledgments, recovery | server core, activation tooling | Target after S1/S0; one writable world lease. |
@@ -201,4 +201,4 @@ Acceptance is three separate results: contract/double, real provider, and real i
 
 This map intentionally freezes **ownership, direction, semantic categories, identity and failure policy** before implementation. Exact Rust declarations, new queue numbers, binary family layouts and numeric IDs become binding only through their specific compile-ready landing and recorded SHA. This distinction avoids claiming an unbuilt API is already callable while still letting later task design use one global interface map.
 
-Verified update after numerical archive: the safe native facade and pathfinding are accepted at `9b843bbc`. Complete F1 still rejects `domain.input/45`; [the final acceptance successor](../openspec/changes/rust-runtime-foundation-acceptance/proposal.md) owns observed external-authority rejection and the mandatory zero-gap seal. Remaining gaps: F2 server crate and measured queue/deadline contract; F3 client-core crate and Rust-core Godot producer; target semantic family schemas/registry; symbolic-to-numeric host negotiation for audio/lifecycle; complete real integration evidence. Each gap has one owner above. A future feature missing from this table starts with an OpenSpec delta naming its authority, producer/consumer, semantic family or private surface, version effect, limits, tests and contract landing. It does not fork the existing server, client mirror or host bridge.
+Verified foundation update: the safe native facade and pathfinding are accepted at `9b843bbc`. The [final acceptance seal](../openspec/changes/rust-runtime-foundation-acceptance/acceptance.json) binds source `d042982d`,112 supported points,1434 cases and zero gaps. Its two `domain.input/45` authority rows retain the real external Go producer; F2 still owns Rust authoritative effects. Remaining gaps: F2 server crate and measured queue/deadline contract; F3 client-core crate and Rust-core Godot producer; target semantic family schemas/registry; symbolic-to-numeric host negotiation for audio/lifecycle; complete real integration evidence. Each gap has one owner above. A future feature missing from this table starts with an OpenSpec delta naming its authority, producer/consumer, semantic family or private surface, version effect, limits, tests and contract landing. It does not fork the existing server, client mirror or host bridge.

@@ -12,7 +12,7 @@
 
 ## Global constraints
 
-- Baseline for this planning revision: `974458f0`; numerical implementation accepted at `9b843bbc`; complete F1 remains unaccepted until the [foundation successor](../../rust-runtime-foundation-acceptance/tasks.md) seals it.
+- Planning baseline: `974458f0`; numerical implementation accepted at `9b843bbc`. Complete F1 is sealed at source `d042982d33bb1694d768b75b01c297bd02534a08` in the [foundation acceptance identity](../../rust-runtime-foundation-acceptance/acceptance.json): 112 supported points, 1434 cases, zero gaps. Verify that exact source/corpus identity before dispatch; all runtime nodes in this change remain pending.
 - Preserve protocol v45, player/chunk v9, metadata v6, companions v5, hostiles v2, passives v1, engine ABI v11, renderer client ABI v19 and scenario v23. The pilot core ABI 1.1 is a distinct rollback surface.
 - Upstream contract SHA is an execution-time ledger value, never the planning SHA. Every provider owns exactly its packet files; all other sources and parent/shared entrypoints are read-only.
 - New target files/tests/CLI flags remain prospective until their owning predecessor lands. Discovery must contain the selected case; a filter with zero executions fails acceptance.

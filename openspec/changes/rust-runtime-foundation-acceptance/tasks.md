@@ -1,6 +1,6 @@
 # Final F1 acceptance implementation plan
 
-Implementation in progress; status is recorded below. [Exact packets and evidence](plans/00-acceptance.md) define editable/read-only files, test-first steps, commands and rollback. This change closes the remaining `domain.input/45` rejection gap and seals F1, while F2 still owns real Rust authority parity. Only this file tracks status.
+Implementation and final acceptance are complete; status is recorded below. [Exact packets and evidence](plans/00-acceptance.md) define editable/read-only files, test-first steps, commands and rollback. This change closes the remaining `domain.input/45` rejection gap and seals F1, while F2 still owns real Rust authority parity. Only this file tracks status.
 
 ## 1. Real rejection and corpus integrity
 
@@ -11,4 +11,4 @@ Implementation in progress; status is recorded below. [Exact packets and evidenc
 ## 2. Integrated acceptance and downstream seal
 
 - [x] 2.1 Execute every required Rust/Go corpus consumer and full stage gates on the integrated source.
-- [ ] 2.2 Seal zero-gap foundation evidence and bind F2/F3 prerequisites without starting their runtime implementation.
+- [x] 2.2 Seal zero-gap foundation evidence and bind F2/F3 prerequisites without starting their runtime implementation.

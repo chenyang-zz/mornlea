@@ -1,0 +1,563 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "accepted_date": "2026-09-27",
+  "accepted_source_sha": "d042982d33bb1694d768b75b01c297bd02534a08",
+  "gate_evidence_commit": "3ea7af9fc7c4b85a31ccebc1c4b745505f8406b1",
+  "corpus_path": "testdata/runtime-migration/contracts.json",
+  "corpus_source_revision": "6ad4e022a39fc195d4aec10e30500f10b1ba48a6",
+  "corpus_sha256": "sha256:8b5813ecce2fe866ab1c4786a35925e8aadd9aab476196abb189d3c72d4f28f3",
+  "corpus_digest_format": "runtime-oracle CanonicalCorpusDigest schema 2; verified by mandatory exact-set gate",
+  "family_count": 86,
+  "case_count": 1434,
+  "coverage_point_format": "family_id/version; ordered by family_id then version",
+  "discovered_supported_points": [
+    "agent.http/v1",
+    "agent.mcp/v1",
+    "domain.command_control/current",
+    "domain.command_inventory/current",
+    "domain.event/1",
+    "domain.identity_values/current",
+    "domain.input/45",
+    "domain.values/current",
+    "kernel.mornlea_collision_resolve/11",
+    "kernel.mornlea_fluid_eval_batch/11",
+    "kernel.mornlea_fluid_rescan/11",
+    "kernel.mornlea_lod_shell/11",
+    "kernel.mornlea_mesh_section/11",
+    "kernel.mornlea_physics_step/11",
+    "kernel.mornlea_raycast_batch/11",
+    "kernel.mornlea_tree_blocks/11",
+    "kernel.mornlea_worldgen_chunk/11",
+    "kernel.mornlea_worldgen_probe/11",
+    "kernel.pathfind/1",
+    "protocol.client.BoneMeal/45",
+    "protocol.client.ChatCommand/45",
+    "protocol.client.ClientHello/45",
+    "protocol.client.CloseContainer/45",
+    "protocol.client.CollectWater/45",
+    "protocol.client.DropSelectedItem/45",
+    "protocol.client.DropStack/45",
+    "protocol.client.EquipArmor/45",
+    "protocol.client.KeepAliveReply/45",
+    "protocol.client.LoginStart/45",
+    "protocol.client.MoveContainerStack/45",
+    "protocol.client.MoveCraftingStack/45",
+    "protocol.client.MoveInventoryStack/45",
+    "protocol.client.MoveStackPartial/45",
+    "protocol.client.OpenContainer/45",
+    "protocol.client.PlaceBlock/45",
+    "protocol.client.PlaceWater/45",
+    "protocol.client.PlayerInput/45",
+    "protocol.client.QuickMoveStack/45",
+    "protocol.client.RequestChunkResync/45",
+    "protocol.client.SelectHotbar/45",
+    "protocol.client.TakeCraftingOutput/45",
+    "protocol.client.TillSoil/45",
+    "protocol.frame/45",
+    "protocol.server.BlockChanges/45",
+    "protocol.server.ChatEvent/45",
+    "protocol.server.ChestState/45",
+    "protocol.server.ChunkSnapshot/45",
+    "protocol.server.CombatHit/45",
+    "protocol.server.CommandRejected/45",
+    "protocol.server.CompanionDespawn/45",
+    "protocol.server.CompanionSpawn/45",
+    "protocol.server.CompanionStates/45",
+    "protocol.server.ContainerClosed/45",
+    "protocol.server.CraftingState/45",
+    "protocol.server.Disconnect/45",
+    "protocol.server.ForgetChunks/45",
+    "protocol.server.FurnaceState/45",
+    "protocol.server.HandshakeReject/45",
+    "protocol.server.HostileDespawn/45",
+    "protocol.server.HostileSpawn/45",
+    "protocol.server.HostileState/45",
+    "protocol.server.InventoryState/45",
+    "protocol.server.ItemDropRemoves/45",
+    "protocol.server.ItemDropUpserts/45",
+    "protocol.server.KeepAlive/45",
+    "protocol.server.LoginReject/45",
+    "protocol.server.LoginSuccess/45",
+    "protocol.server.PassiveDespawn/45",
+    "protocol.server.PassiveSpawn/45",
+    "protocol.server.PassiveState/45",
+    "protocol.server.PlaceBlockSucceeded/45",
+    "protocol.server.PlayerState/45",
+    "protocol.server.ProjectileDespawn/45",
+    "protocol.server.ProjectileSpawn/45",
+    "protocol.server.ProjectileState/45",
+    "protocol.server.RemotePlayerDespawn/45",
+    "protocol.server.RemotePlayerSpawn/45",
+    "protocol.server.RemotePlayerStates/45",
+    "protocol.server.ServerHello/45",
+    "save.chunk/1",
+    "save.chunk/2",
+    "save.chunk/3",
+    "save.chunk/4",
+    "save.chunk/5",
+    "save.chunk/6",
+    "save.chunk/7",
+    "save.chunk/8",
+    "save.chunk/9",
+    "save.companion/1",
+    "save.companion/2",
+    "save.companion/3",
+    "save.companion/4",
+    "save.companion/5",
+    "save.hostile/1",
+    "save.hostile/2",
+    "save.passive/1",
+    "save.player/1",
+    "save.player/2",
+    "save.player/3",
+    "save.player/4",
+    "save.player/5",
+    "save.player/6",
+    "save.player/7",
+    "save.player/8",
+    "save.player/9",
+    "save.region/1",
+    "save.world-metadata/1",
+    "save.world-metadata/2",
+    "save.world-metadata/3",
+    "save.world-metadata/4",
+    "save.world-metadata/5",
+    "save.world-metadata/6"
+  ],
+  "covered_points": [
+    "agent.http/v1",
+    "agent.mcp/v1",
+    "domain.command_control/current",
+    "domain.command_inventory/current",
+    "domain.event/1",
+    "domain.identity_values/current",
+    "domain.input/45",
+    "domain.values/current",
+    "kernel.mornlea_collision_resolve/11",
+    "kernel.mornlea_fluid_eval_batch/11",
+    "kernel.mornlea_fluid_rescan/11",
+    "kernel.mornlea_lod_shell/11",
+    "kernel.mornlea_mesh_section/11",
+    "kernel.mornlea_physics_step/11",
+    "kernel.mornlea_raycast_batch/11",
+    "kernel.mornlea_tree_blocks/11",
+    "kernel.mornlea_worldgen_chunk/11",
+    "kernel.mornlea_worldgen_probe/11",
+    "kernel.pathfind/1",
+    "protocol.client.BoneMeal/45",
+    "protocol.client.ChatCommand/45",
+    "protocol.client.ClientHello/45",
+    "protocol.client.CloseContainer/45",
+    "protocol.client.CollectWater/45",
+    "protocol.client.DropSelectedItem/45",
+    "protocol.client.DropStack/45",
+    "protocol.client.EquipArmor/45",
+    "protocol.client.KeepAliveReply/45",
+    "protocol.client.LoginStart/45",
+    "protocol.client.MoveContainerStack/45",
+    "protocol.client.MoveCraftingStack/45",
+    "protocol.client.MoveInventoryStack/45",
+    "protocol.client.MoveStackPartial/45",
+    "protocol.client.OpenContainer/45",
+    "protocol.client.PlaceBlock/45",
+    "protocol.client.PlaceWater/45",
+    "protocol.client.PlayerInput/45",
+    "protocol.client.QuickMoveStack/45",
+    "protocol.client.RequestChunkResync/45",
+    "protocol.client.SelectHotbar/45",
+    "protocol.client.TakeCraftingOutput/45",
+    "protocol.client.TillSoil/45",
+    "protocol.frame/45",
+    "protocol.server.BlockChanges/45",
+    "protocol.server.ChatEvent/45",
+    "protocol.server.ChestState/45",
+    "protocol.server.ChunkSnapshot/45",
+    "protocol.server.CombatHit/45",
+    "protocol.server.CommandRejected/45",
+    "protocol.server.CompanionDespawn/45",
+    "protocol.server.CompanionSpawn/45",
+    "protocol.server.CompanionStates/45",
+    "protocol.server.ContainerClosed/45",
+    "protocol.server.CraftingState/45",
+    "protocol.server.Disconnect/45",
+    "protocol.server.ForgetChunks/45",
+    "protocol.server.FurnaceState/45",
+    "protocol.server.HandshakeReject/45",
+    "protocol.server.HostileDespawn/45",
+    "protocol.server.HostileSpawn/45",
+    "protocol.server.HostileState/45",
+    "protocol.server.InventoryState/45",
+    "protocol.server.ItemDropRemoves/45",
+    "protocol.server.ItemDropUpserts/45",
+    "protocol.server.KeepAlive/45",
+    "protocol.server.LoginReject/45",
+    "protocol.server.LoginSuccess/45",
+    "protocol.server.PassiveDespawn/45",
+    "protocol.server.PassiveSpawn/45",
+    "protocol.server.PassiveState/45",
+    "protocol.server.PlaceBlockSucceeded/45",
+    "protocol.server.PlayerState/45",
+    "protocol.server.ProjectileDespawn/45",
+    "protocol.server.ProjectileSpawn/45",
+    "protocol.server.ProjectileState/45",
+    "protocol.server.RemotePlayerDespawn/45",
+    "protocol.server.RemotePlayerSpawn/45",
+    "protocol.server.RemotePlayerStates/45",
+    "protocol.server.ServerHello/45",
+    "save.chunk/1",
+    "save.chunk/2",
+    "save.chunk/3",
+    "save.chunk/4",
+    "save.chunk/5",
+    "save.chunk/6",
+    "save.chunk/7",
+    "save.chunk/8",
+    "save.chunk/9",
+    "save.companion/1",
+    "save.companion/2",
+    "save.companion/3",
+    "save.companion/4",
+    "save.companion/5",
+    "save.hostile/1",
+    "save.hostile/2",
+    "save.passive/1",
+    "save.player/1",
+    "save.player/2",
+    "save.player/3",
+    "save.player/4",
+    "save.player/5",
+    "save.player/6",
+    "save.player/7",
+    "save.player/8",
+    "save.player/9",
+    "save.region/1",
+    "save.world-metadata/1",
+    "save.world-metadata/2",
+    "save.world-metadata/3",
+    "save.world-metadata/4",
+    "save.world-metadata/5",
+    "save.world-metadata/6"
+  ],
+  "uncovered": [],
+  "consumer_counts": {
+    "corpus_frame": 3,
+    "external:agent-contract": 154,
+    "external:runtime-authority": 2,
+    "mornlea_domain": 533,
+    "mornlea_engine": 40,
+    "mornlea_protocol": 433,
+    "mornlea_storage": 269
+  },
+  "consumer_case_set_digest_format": "SHA256 of lexicographically sorted case IDs, each followed by LF; partitions are disjoint and their union is every corpus case",
+  "consumer_case_sets": {
+    "corpus_frame": {
+      "count": 3,
+      "case_ids_sha256": "sha256:b3e89c43f209a65115fde044f163c7fb66de5bec3cd694ef42fbfd93bae65190"
+    },
+    "external:agent-contract": {
+      "count": 154,
+      "case_ids_sha256": "sha256:7d0e886cf1f4a04dd871c410d929119af2642cb05a7b643a740eb684e2c3509f"
+    },
+    "external:runtime-authority": {
+      "count": 2,
+      "case_ids_sha256": "sha256:d398a5635cd8978e4cc0dd833a0b9ad82aa5b24da9c9b0a772f8cdcac2075a25"
+    },
+    "mornlea_domain": {
+      "count": 533,
+      "case_ids_sha256": "sha256:8a50642514621c128f7f907ea7a1d52941bc6626007fe46901473508f347a103"
+    },
+    "mornlea_engine": {
+      "count": 40,
+      "case_ids_sha256": "sha256:163fed5eda18ffe357ee7d0cb90ab8c2b8962a3928f2ed455d3a559f190d58af"
+    },
+    "mornlea_protocol": {
+      "count": 433,
+      "case_ids_sha256": "sha256:9bbf6fa686138a43d9189a9c7a578bcac117362753c460b93775013b59b705e9"
+    },
+    "mornlea_storage": {
+      "count": 269,
+      "case_ids_sha256": "sha256:61cad8aa2ce3f0db9e48c579c34bdb58b41c2cbcc6864051902a7650b02d67c6"
+    }
+  },
+  "consumer_execution": {
+    "mornlea_domain": {
+      "target": "corpus_domain",
+      "tests_passed": 54,
+      "cases": 533
+    },
+    "mornlea_protocol": {
+      "target": "protocol_corpus",
+      "tests_passed": 24,
+      "cases": 433
+    },
+    "corpus_frame": {
+      "target": "protocol_corpus",
+      "cases": 3,
+      "note": "Executed read_frame/write_frame; shares the 24-test protocol target, not 24 additional tests"
+    },
+    "mornlea_storage": {
+      "target": "storage_corpus",
+      "tests_passed": 90,
+      "cases": 269
+    },
+    "mornlea_engine": {
+      "targets": {
+        "native_contract": 91,
+        "numerical_migration": 68
+      },
+      "cases": 40
+    },
+    "external:agent-contract": {
+      "target": "Go TestRuntimeAgentContract*",
+      "cases": 154,
+      "owner": "pure Go HTTP/MCP/mine schema validator and DTO/tool producer; no Python Agent runtime parity claim"
+    },
+    "external:runtime-authority": {
+      "target": "Go TestCommandOrderOracle*",
+      "cases": 2,
+      "owner": "real transitional Go authority Engine.Step; pure Rust ordering does not own world/inventory effects"
+    },
+    "pure_ordering": {
+      "target": "command_order",
+      "tests_passed": 12,
+      "note": "Separate pure Rust ordering invariants; does not execute authoritative effects"
+    }
+  },
+  "input_evidence": {
+    "producer": "packages/server/sim/runtime/command_order_oracle_test.go",
+    "producer_sha256": "sha256:73c119358b758a1ff0f9e443d69392040028fefec19bed84dfba9417f091b686",
+    "sources": [
+      {
+        "path": "packages/engine/crates/mornlea_domain/src/input/order.rs",
+        "sha256": "sha256:bf791c88aad5b35a61022650030f072f8f75a7d36b2f3a92a0eca5376ee6d66c"
+      },
+      {
+        "path": "packages/engine/crates/mornlea_domain/tests/command_order.rs",
+        "sha256": "sha256:696eb5c19f11842952385192eba12bc812f05c37a594fe9b156b8e111d738e80"
+      },
+      {
+        "path": "packages/engine/crates/mornlea_domain/tests/corpus_domain.rs",
+        "sha256": "sha256:a35eca2d6d646a61f51f13121cceb5820b1495580770c44fb61cbc2cfefae258"
+      },
+      {
+        "path": "packages/server/sim/runtime/command_order_oracle_test.go",
+        "sha256": "sha256:73c119358b758a1ff0f9e443d69392040028fefec19bed84dfba9417f091b686"
+      },
+      {
+        "path": "packages/server/sim/runtime/engine_step.go",
+        "sha256": "sha256:99a3aa88d7258fb6c50a407c01a6c2f68abaad8d180f215fcf6ed4b964124d1b"
+      },
+      {
+        "path": "packages/shared/network/protocol/message_command.go",
+        "sha256": "sha256:f0a95793cd7021ba7a137373e26cad2d16e6742092f2ecb94d13c44b69d114f1"
+      },
+      {
+        "path": "packages/shared/network/protocol/packet_test.go",
+        "sha256": "sha256:2d8cd5cf00bd24b4f354c5700b527bb37dfd6b7e2386340875d4cb07035b1142"
+      },
+      {
+        "path": "packages/tools/cmd/runtime-oracle/inventory_test.go",
+        "sha256": "sha256:5b1854dcf865f1f464d94ff4c3d03be38c6803d7cb0dce6a36c93baa9d57327d"
+      },
+      {
+        "path": "packages/tools/cmd/runtime-oracle/protocol_coverage_test.go",
+        "sha256": "sha256:7959610dd6db918d8993d1036084c676c01ba1f488f8241349ce221edff08de8"
+      },
+      {
+        "path": "packages/tools/cmd/runtime-oracle/protocol_frame_test.go",
+        "sha256": "sha256:c75161dce7effb02744a40f6e590b08d4390812b355640bc20a104b0f1876007"
+      }
+    ],
+    "new_case": {
+      "id": "domain.input/45/stale-sequence-no-effect",
+      "family": "domain.input",
+      "version": "45",
+      "operation": "order",
+      "input": {
+        "path": "testdata/runtime-migration/cases/domain/command_order/stale-sequence-no-effect.input.json",
+        "sha256": "sha256:1c5a754d4bccb6ba9904c7aa5f07381a8c1b5d497aa834ca98d31b4fc611478e"
+      },
+      "input_format": "json",
+      "expected": {
+        "path": "testdata/runtime-migration/cases/domain/command_order/stale-sequence-no-effect.expected.json",
+        "sha256": "sha256:1ef5027c5df4087948eb5d125995991b28ff99d294c0f143f134a439b4237f4e"
+      },
+      "checkpoints": [
+        "0"
+      ],
+      "rust_consumer": "external:runtime-authority"
+    },
+    "external_authority_case_ids": [
+      "domain.input/45/session-sequence-arrival",
+      "domain.input/45/stale-sequence-no-effect"
+    ]
+  },
+  "preservation": {
+    "baseline_source_sha": "6ad4e022a39fc195d4aec10e30500f10b1ba48a6",
+    "original_case_records_unchanged": 1433,
+    "original_unique_assets_unchanged": 2882,
+    "protocol_save_abi_versions_unchanged": true,
+    "production_behavior_unchanged": true
+  },
+  "commands": [
+    {
+      "command": "go test ./packages/tools/cmd/runtime-oracle -race -count=1",
+      "exit_code": 0,
+      "seconds": 441.1,
+      "log": "/private/tmp/mornlea-f1-full-01.log",
+      "log_sha256": "sha256:9cb66d54697d31b5da0408294b08f82133989ae0421c83e252831b1dc1f2beca"
+    },
+    {
+      "command": "go test ./packages/server/sim/runtime -run '^TestCommandOrderOracle' -count=1 -v",
+      "exit_code": 0,
+      "seconds": 1.39,
+      "log": "/private/tmp/mornlea-f1-full-02.log",
+      "log_sha256": "sha256:226799f014e3064b741ffff70b6695baeff2208dc98c8b509ad94b02f2dd468e"
+    },
+    {
+      "command": "rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_domain --test corpus_domain --test command_order --locked",
+      "exit_code": 0,
+      "seconds": 1.99,
+      "log": "/private/tmp/mornlea-f1-full-03.log",
+      "log_sha256": "sha256:884480c137293f9300a5e9dd3296256e8cc7c26bda693f3098149207604722c4"
+    },
+    {
+      "command": "rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_protocol --test protocol_corpus --locked",
+      "exit_code": 0,
+      "seconds": 6.23,
+      "log": "/private/tmp/mornlea-f1-full-04.log",
+      "log_sha256": "sha256:7b5a43712da3d2e665b02279d385063f4672a30651b0a694830504cfa3174e8f"
+    },
+    {
+      "command": "rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test storage_corpus --locked",
+      "exit_code": 0,
+      "seconds": 3.81,
+      "log": "/private/tmp/mornlea-f1-full-05.log",
+      "log_sha256": "sha256:b9768d61b330a9985c389ce116fe72225ebcf368b731fbd919583de88a7fe3b4"
+    },
+    {
+      "command": "rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --test numerical_migration --locked",
+      "exit_code": 0,
+      "seconds": 7.45,
+      "log": "/private/tmp/mornlea-f1-full-06.log",
+      "log_sha256": "sha256:bb6d7736ca6f7b44b2e64128b9bbcede4bfc14a6a912d8bc9c49edac61ad854e"
+    },
+    {
+      "command": "rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all -- --check",
+      "exit_code": 0,
+      "seconds": 0.92,
+      "log": "/private/tmp/mornlea-f1-full-07.log",
+      "log_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "make rust",
+      "exit_code": 0,
+      "seconds": 1.88,
+      "log": "/private/tmp/mornlea-f1-full-08.log",
+      "log_sha256": "sha256:c06b55482320013d91e5fa9059176a9eb768cef543f67cf58cbbe0b0cf1a9a8c"
+    },
+    {
+      "command": "make rust-check",
+      "exit_code": 0,
+      "seconds": 39.76,
+      "log": "/private/tmp/mornlea-f1-full-09.log",
+      "log_sha256": "sha256:f24efd6ec422a3cab528db972906861592b0c5a4cd87f0e9154a32ec4aa48a30"
+    },
+    {
+      "command": "make dev-check",
+      "exit_code": 0,
+      "seconds": 219.11,
+      "log": "/private/tmp/mornlea-f1-full-10.log",
+      "log_sha256": "sha256:f546b4e7556f23c7eeca95c53bbd94d5daff0a9ccc155ea5a90ce8767a753dd8"
+    },
+    {
+      "command": "make test-race",
+      "exit_code": 0,
+      "seconds": 750.39,
+      "log": "/private/tmp/mornlea-f1-full-11.log",
+      "log_sha256": "sha256:35bf5ed6b73d7b26a56aa238f4da4201160dc9cb03205608edb75b2656295881"
+    },
+    {
+      "command": "go test ./packages/audit -count=1",
+      "exit_code": 0,
+      "seconds": 93.04,
+      "log": "/private/tmp/mornlea-f1-full-12.log",
+      "log_sha256": "sha256:7d6d3d7af72bfbc2a65d2a6a5e9bcea5cd152dd3bf084bb569d86e58f5503fbc"
+    },
+    {
+      "command": "openspec validate --all --strict --no-interactive",
+      "exit_code": 0,
+      "seconds": 1.21,
+      "log": "/private/tmp/mornlea-f1-full-13.log",
+      "log_sha256": "sha256:fa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67"
+    },
+    {
+      "command": "go test ./packages/shared/companion -run '^TestRuntimeAgentContract' -race -count=1 -v",
+      "exit_code": 0,
+      "log": "/private/tmp/mornlea-f1-agent-consumer.log",
+      "log_sha256": "sha256:f7a3aa9090ae328b0db6f1c47c73780f924764e5d6a6fc06c08516ead9b612e6"
+    },
+    {
+      "command": "go test ./packages/tools/cmd/runtime-oracle -run '^TestRuntimeFoundationCompleteAcceptance' -count=1 -v",
+      "exit_code": 0,
+      "log": "/private/tmp/mornlea-f1-mandatory-green.log",
+      "log_sha256": "sha256:598a6c299b6d59d280333a533767d52a9b8b7084b53a8846f7007f0c570b8662"
+    },
+    {
+      "command": "go test ./packages/audit -run '^(TestDocumentationLinks|TestDocumentationSemanticClaims|TestCompletedDocumentationPairsAreSynchronized|TestDocumentationManifestClassifiesCurrentMarkdown|TestOpenSpecLanguage|TestOpenSpecLanguageDebt|TestBaselineVersionsMatchCode)$' -count=1 -v",
+      "exit_code": 0,
+      "log": "/private/tmp/mornlea-f1-seal-doc-audit.log",
+      "log_sha256": "sha256:363f37ccd6f3e7c0af6c55544441dadd844c75cb9d5e3f4a4155c0bb0992f0dc"
+    },
+    {
+      "command": "go test ./packages/tools/cmd/runtime-oracle -run '^TestRuntimeFoundationCompleteAcceptance' -count=1 -v",
+      "exit_code": 0,
+      "log": "/private/tmp/mornlea-f1-seal-final-mandatory.log",
+      "log_sha256": "sha256:a45aee8b174d014df603e275c8e70d12be9e141f6c92fb5740616f7ffc6940a9"
+    },
+    {
+      "command": "openspec validate --all --strict --no-interactive",
+      "exit_code": 0,
+      "log": "/private/tmp/mornlea-f1-seal-final-openspec.log",
+      "log_sha256": "sha256:fa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67"
+    }
+  ],
+  "predecessor_ledgers": [
+    "../archive/2026-09-22-rust-runtime-foundation-baseline/ledger.md",
+    "../archive/2026-09-22-rust-domain-event-completion/ledger.md",
+    "../archive/2026-09-24-rust-protocol-completion/ledger.md",
+    "../archive/2026-09-25-rust-storage-codec-closure/ledger.md",
+    "../archive/2026-09-27-rust-native-numerical-closure/ledger.md"
+  ],
+  "numerical_accepted_source_sha": "9b843bbc9d43678d8ef62c0f0996a120cd11d4ca",
+  "governance_working_overlay": {
+    "paths": [
+      ".claude/skills/mornlea-architecture/SKILL.md",
+      ".codex/skills/mornlea-architecture/SKILL.md"
+    ],
+    "sha256": "sha256:7c8694310fba363e8f5f81d64bbf54cd5dc05f006b391b40c8c13c29ea09b54a",
+    "user_claude_bytes_preserved": true,
+    "codex_mirror_synced_verbatim": true,
+    "excluded_from_f1_commits": true,
+    "committed_pre_overlay_pair_matches": true,
+    "reason": "Preserve pre-existing user skill work while satisfying byte-identical working mirror gate; no new architecture-skill promotion"
+  },
+  "downstream": {
+    "F2": "1.1a may verify this exact seal and enumerate capabilities; measurement, bounds and compiling S1 landing still precede providers",
+    "F3": "1.1 also requires accepted F2 common S2 (3.2) plus both actual Memory (3.3a) and TCP (3.3b) adapters on one SHA; still blocked",
+    "rust_authority_runtime_accepted": false,
+    "rust_client_integration_accepted": false
+  },
+  "rollback": {
+    "owner": "controller",
+    "unit": "Invalidate/revert this seal and prerequisite metadata; revert d042982d as one coherent producer/gate/corpus unit if input evidence is withdrawn",
+    "dependent_action": "Block every consumer of this source/corpus identity and revalidate affected prerequisites before redispatch",
+    "numerical_and_historical_archives": "Retain accepted numerical implementation and archived predecessor evidence"
+  },
+  "independent_review": {
+    "reviewer": "GPT-6 Sol; read-only independent specification and quality review",
+    "result": "PASS; no remaining important finding",
+    "scope": "Exact supported and consumer sets, source/asset/log hashes, real external evidence, prerequisites, bilingual revision, rollback and preserved governance overlay"
+  }
+}
