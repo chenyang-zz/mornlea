@@ -1,7 +1,5 @@
 use mornlea_engine::native::contracts::KernelError;
-use mornlea_engine::native::contracts::raycast::{
-    Ray, RayBatch, RayCursor, RayFace, RayRecord, RaycastOp,
-};
+use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RayFace, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
 
 #[test]
@@ -178,34 +176,19 @@ fn test_multi_batch_continuation() {
 }
 
 #[test]
-fn test_error_leaves_cursor_unchanged() {
-    struct FailingProvider;
-    impl RaycastOp for FailingProvider {
-        fn next_batch(&self, cursor: &mut RayCursor) -> Result<RayBatch, KernelError> {
-            let local_cursor = cursor.clone();
-            // Mutate local state
-            // we don't have access to pub(crate) fields from tests? Actually we might.
-            // But we don't need to. We can just simulate error.
-            let records = [RayRecord {
-                cell: [0; 3],
-                face: RayFace::Origin,
-                distance: 0.0,
-            }; 64];
-            let batch = RayBatch::from_parts(records, 65, false)?; // Error out
-            *cursor = local_cursor; // This would happen on success
-            Ok(batch)
-        }
-    }
-
+fn retained_batch_is_independent_of_later_cursor_advances() {
     let ray = Ray {
-        origin: [0.0; 3],
+        origin: [0.5; 3],
         direction: [1.0, 0.0, 0.0],
-        maximum: 10.0,
+        maximum: 200.0,
     };
     let mut cursor = RayCursor::try_new(ray).unwrap();
-    let cursor_before = cursor.clone();
-
-    let op = FailingProvider;
-    assert!(op.next_batch(&mut cursor).is_err());
-    assert_eq!(cursor, cursor_before);
+    let first = NativeRaycast.next_batch(&mut cursor).unwrap();
+    let first_before = first;
+    for _ in 0..4 {
+        NativeRaycast.next_batch(&mut cursor).unwrap();
+    }
+    assert_eq!(first, first_before);
+    assert_eq!(first.records()[63].cell, [63, 0, 0]);
+    assert_eq!(first.records()[63].distance.to_bits(), 62.5_f32.to_bits());
 }

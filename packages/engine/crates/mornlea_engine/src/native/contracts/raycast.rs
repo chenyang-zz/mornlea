@@ -57,10 +57,9 @@ impl RayBatch {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RayCursor {
     pub(crate) ray: Ray,
-    pub(crate) current_cell: [i32; 3],
-    pub(crate) distance: f32,
-    pub(crate) done: bool,
-    pub(crate) initialized: bool,
+    // Complete private DDA state keeps each continuation bounded regardless of
+    // traversal history; safe callers cannot fabricate cursor history.
+    pub(crate) continuation: Option<crate::raycast::RaycastCursor>,
 }
 
 impl RayCursor {
@@ -79,10 +78,7 @@ impl RayCursor {
         }
         Ok(Self {
             ray,
-            current_cell: [0; 3],
-            distance: 0.0,
-            done: false,
-            initialized: false,
+            continuation: None,
         })
     }
 
@@ -91,7 +87,9 @@ impl RayCursor {
     }
 
     pub fn is_done(&self) -> bool {
-        self.done
+        self.continuation
+            .as_ref()
+            .is_some_and(|cursor| cursor.state == 2)
     }
 }
 

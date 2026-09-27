@@ -34,6 +34,12 @@ struct CollisionInput<'a> {
 }
 
 pub(crate) trait CollisionCells {
+    /// Native views admit each actual read prism before traversal. Legacy byte
+    /// callers keep their established admission and panic-to-status boundary.
+    fn scan_is_admitted(&self, _minimum: [f32; 3], _maximum: [f32; 3]) -> bool {
+        true
+    }
+
     fn loaded(&self, position: [i32; 3]) -> bool;
     fn count(&self, position: [i32; 3]) -> usize;
     fn bounds(&self, position: [i32; 3], index: usize) -> Bounds;
@@ -305,9 +311,16 @@ fn clip_axis<C: CollisionCells>(
         maximum[axis] += requested;
     }
 
-    let (minimum_x, maximum_x) = block_range(minimum[0] - EPSILON, maximum[0] + EPSILON);
-    let (minimum_y, maximum_y) = block_range(minimum[1] - EPSILON, maximum[1] + EPSILON);
-    let (minimum_z, maximum_z) = block_range(minimum[2] - EPSILON, maximum[2] + EPSILON);
+    let minimum = minimum.map(|value| value - EPSILON);
+    let maximum = maximum.map(|value| value + EPSILON);
+    if !input.cells.scan_is_admitted(minimum, maximum) {
+        // A rejected native scan must not read cells. Its wrapper discards this
+        // blocked placeholder and returns the recorded typed admission error.
+        return (0.0, true, false);
+    }
+    let (minimum_x, maximum_x) = block_range(minimum[0], maximum[0]);
+    let (minimum_y, maximum_y) = block_range(minimum[1], maximum[1]);
+    let (minimum_z, maximum_z) = block_range(minimum[2], maximum[2]);
     let mut moved = requested;
     let mut was_clipped = false;
     let mut hit_unknown = false;
@@ -460,6 +473,9 @@ fn bounds_are_collision_free<C: CollisionCells>(
     position: Vector,
 ) -> (bool, bool) {
     let player = player_bounds(position);
+    if !input.cells.scan_is_admitted(player.minimum, player.maximum) {
+        return (false, false);
+    }
     let (minimum_x, maximum_x) = block_range(player.minimum[0], player.maximum[0]);
     let (minimum_y, maximum_y) = block_range(player.minimum[1], player.maximum[1]);
     let (minimum_z, maximum_z) = block_range(player.minimum[2], player.maximum[2]);
@@ -716,6 +732,49 @@ mod tests {
         fn put_f32(&mut self, offset: usize, value: f32) {
             self.bytes[offset..offset + 4].copy_from_slice(&value.to_bits().to_le_bytes());
         }
+    }
+
+    struct RejectingScan {
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl super::CollisionCells for RejectingScan {
+        fn scan_is_admitted(&self, _minimum: [f32; 3], _maximum: [f32; 3]) -> bool {
+            self.calls.set(self.calls.get() + 1);
+            false
+        }
+        fn loaded(&self, _position: [i32; 3]) -> bool {
+            panic!("rejected scan read a cell")
+        }
+        fn count(&self, _position: [i32; 3]) -> usize {
+            panic!("rejected scan read a box count")
+        }
+        fn bounds(&self, _position: [i32; 3], _index: usize) -> super::Bounds {
+            panic!("rejected scan read bounds")
+        }
+    }
+
+    #[test]
+    fn collision_rejected_scans_never_enter_cell_loops() {
+        let cells = RejectingScan {
+            calls: std::cell::Cell::new(0),
+        };
+        let input = super::CollisionInputData {
+            cells: &cells,
+            position: [0.5, 1.0, 0.5],
+            displacement: [1.0, -1.0, 1.0],
+            began_grounded: true,
+            step_height: 0.6,
+        };
+        let _ = super::resolve_move_and_step(&input);
+        assert!(
+            cells.calls.get() > 0 && cells.calls.get() <= 10,
+            "solver scan work remains fixed after rejection"
+        );
+        assert_eq!(
+            super::bounds_are_collision_free(&input, input.position),
+            (false, false)
+        );
     }
 
     #[test]

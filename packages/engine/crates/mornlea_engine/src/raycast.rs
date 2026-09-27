@@ -19,6 +19,7 @@ pub(crate) struct RaycastInput {
     pub(crate) maximum: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RaycastCursor {
     pub(crate) state: u8,
     pub(crate) cell: [i32; 3],
@@ -69,6 +70,8 @@ impl RaycastCursor {
     }
 
     pub(crate) fn start(input: &RaycastInput) -> Self {
+        #[cfg(test)]
+        work::initialized();
         let mut cursor = Self {
             state: 1,
             cell: input.origin.map(floor_to_i32),
@@ -130,27 +133,21 @@ pub(crate) fn raycast_cursor_overflow_is_valid(
             && initial.delta[axis] == f32::INFINITY
 }
 
-pub(crate) fn raycast_batch(input_bytes: &[u8], cursor_bytes: &[u8]) -> RaycastBatch {
-    let input = RaycastInput::decode(input_bytes);
-    let fresh = cursor_bytes[8] == 0;
-    let mut cursor = if fresh {
-        RaycastCursor::start(&input)
-    } else {
-        RaycastCursor::decode(cursor_bytes)
-    };
-    let mut output = [0_u8; RAYCAST_OUTPUT_BYTES];
+/// Advances one bounded DDA batch from retained state. Both native and byte
+/// callers use this walk, preserving tie order and float additions across
+/// continuation without traversing any prior cells again.
+pub(crate) fn advance_raycast(
+    cursor: &mut RaycastCursor,
+    maximum: f32,
+    emit_origin: bool,
+    mut emit: impl FnMut([i32; 3], u8, f32),
+) -> usize {
     let mut count = 0;
-
     if cursor.state == 2 {
-        return RaycastBatch {
-            cursor: cursor.encode(),
-            output,
-            count,
-            done: true,
-        };
+        return count;
     }
-    if fresh {
-        write_record(&mut output, count, cursor.cell, 0xff, 0.0);
+    if emit_origin {
+        emit(cursor.cell, 0xff, 0.0);
         count += 1;
     }
     while count < RAYCAST_RECORD_CAPACITY {
@@ -162,21 +159,34 @@ pub(crate) fn raycast_batch(input_bytes: &[u8], cursor_bytes: &[u8]) -> RaycastB
             axis = 2;
         }
         let distance = cursor.maximum[axis];
-        if distance > input.maximum {
+        if distance > maximum {
             cursor.state = 2;
             break;
         }
+        #[cfg(test)]
+        work::advanced();
         cursor.cell[axis] = cursor.cell[axis].wrapping_add(cursor.step[axis]);
         cursor.maximum[axis] += cursor.delta[axis];
-        write_record(
-            &mut output,
-            count,
-            cursor.cell,
-            entry_face(axis, cursor.step[axis]),
-            distance,
-        );
+        emit(cursor.cell, entry_face(axis, cursor.step[axis]), distance);
         count += 1;
     }
+    count
+}
+
+pub(crate) fn raycast_batch(input_bytes: &[u8], cursor_bytes: &[u8]) -> RaycastBatch {
+    let input = RaycastInput::decode(input_bytes);
+    let fresh = cursor_bytes[8] == 0;
+    let mut cursor = if fresh {
+        RaycastCursor::start(&input)
+    } else {
+        RaycastCursor::decode(cursor_bytes)
+    };
+    let mut output = [0_u8; RAYCAST_OUTPUT_BYTES];
+    let mut slot = 0;
+    let count = advance_raycast(&mut cursor, input.maximum, fresh, |cell, face, distance| {
+        write_record(&mut output, slot, cell, face, distance);
+        slot += 1;
+    });
     RaycastBatch {
         cursor: cursor.encode(),
         output,
@@ -446,5 +456,26 @@ mod tests {
             read_i32(output, offset + 4),
             read_i32(output, offset + 8),
         ]
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod work {
+    use std::cell::Cell;
+    thread_local! { static COUNTS: Cell<(usize, usize)> = const { Cell::new((0, 0)) }; }
+    pub(crate) fn initialized() {
+        COUNTS.with(|c| {
+            let (starts, advances) = c.get();
+            c.set((starts + 1, advances));
+        });
+    }
+    pub(crate) fn advanced() {
+        COUNTS.with(|c| {
+            let (starts, advances) = c.get();
+            c.set((starts, advances + 1));
+        });
+    }
+    pub(crate) fn take() -> (usize, usize) {
+        COUNTS.with(|c| c.replace((0, 0)))
     }
 }

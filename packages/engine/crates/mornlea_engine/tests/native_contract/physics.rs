@@ -423,3 +423,130 @@ fn negative_dt_tuning_accepted() {
     let res = op.step(&request);
     assert!(res.is_ok(), "{:?}", res);
 }
+
+fn empty_request(grid: CollisionGrid<'_>) -> PhysicsRequest<'_> {
+    PhysicsRequest {
+        state: PhysicsState {
+            position: [0.5, 1.0, 0.5],
+            velocity: [0.0; 3],
+            on_ground: false,
+        },
+        controls: PhysicsControls {
+            move_x: 0,
+            move_z: 0,
+            jump: false,
+            yaw_sin: 0.0,
+            yaw_cos: 1.0,
+            body_in_fluid: false,
+            sprinting: false,
+            sneaking: false,
+        },
+        tuning: base_tuning(),
+        sweep: SweepBounds {
+            minimum: [-1.0; 3],
+            maximum: [1.0; 3],
+        },
+        grid,
+    }
+}
+
+#[test]
+fn uncovered_actual_scan_returns_invalid_input_without_unwind() {
+    let cells = [CollisionCell::try_new(
+        true,
+        [Aabb {
+            minimum: [0.0; 3],
+            maximum: [0.0; 3],
+        }; 8],
+        0,
+    )
+    .unwrap()];
+    let grid = CollisionGrid::try_new([0; 3], [1; 3], &cells).unwrap();
+    let request = empty_request(grid);
+    let result = std::panic::catch_unwind(|| NativePhysics.step(&request));
+    assert!(result.is_ok(), "a safe physics call must not unwind");
+    assert_eq!(result.unwrap(), Err(KernelError::InvalidInput));
+}
+
+#[test]
+fn extreme_finite_scans_reject_without_unwind() {
+    let cells = [CollisionCell::try_new(
+        true,
+        [Aabb {
+            minimum: [0.0; 3],
+            maximum: [0.0; 3],
+        }; 8],
+        0,
+    )
+    .unwrap(); 4];
+    let grid = CollisionGrid::try_new([0; 3], [1, 4, 1], &cells).unwrap();
+    let mut displaced = empty_request(grid);
+    displaced.state.velocity[0] = f32::MAX;
+    displaced.state.on_ground = true;
+    displaced.tuning.ground_deceleration = 0.0;
+    displaced.tuning.fixed_delta_seconds = 1.0;
+    displaced.tuning.air_acceleration = 0.0;
+    displaced.tuning.gravity = 0.0;
+    displaced.sweep.minimum = [-f32::MAX; 3];
+    displaced.sweep.maximum = [f32::MAX; 3];
+    let mut distant = empty_request(grid);
+    distant.state.position[0] = -f32::MAX;
+    for request in [displaced, distant] {
+        let result = std::panic::catch_unwind(|| NativePhysics.step(&request));
+        assert!(
+            result.is_ok(),
+            "finite input must not escape through a panic"
+        );
+        assert_eq!(result.unwrap(), Err(KernelError::InvalidInput));
+    }
+}
+
+#[test]
+fn unused_step_prism_does_not_reject_covered_actual_reads() {
+    let cells = [CollisionCell::try_new(
+        true,
+        [Aabb {
+            minimum: [0.0; 3],
+            maximum: [0.0; 3],
+        }; 8],
+        0,
+    )
+    .unwrap(); 4];
+    let grid = CollisionGrid::try_new([0; 3], [1, 4, 1], &cells).unwrap();
+    let mut request = empty_request(grid);
+    request.tuning.step_height = f32::MAX;
+    let result = NativePhysics.step(&request).unwrap();
+    assert_eq!(
+        result.state.position.map(f32::to_bits),
+        [0.5_f32, 0.92, 0.5].map(f32::to_bits)
+    );
+    assert!(!result.used_step);
+}
+
+#[test]
+fn saturated_scan_coordinates_and_derived_overflow_are_invalid() {
+    let cells = [CollisionCell::try_new(
+        true,
+        [Aabb {
+            minimum: [0.0; 3],
+            maximum: [0.0; 3],
+        }; 8],
+        0,
+    )
+    .unwrap(); 4];
+    let grid = CollisionGrid::try_new([i32::MAX, 0, 0], [1, 4, 1], &cells).unwrap();
+    let mut overflow = empty_request(grid);
+    overflow.state.position[0] = f32::MAX;
+    overflow.state.velocity[0] = f32::MAX;
+    overflow.state.on_ground = true;
+    overflow.tuning.fixed_delta_seconds = 1.0;
+    overflow.tuning.ground_deceleration = 0.0;
+    overflow.tuning.gravity = 0.0;
+    overflow.sweep.minimum = [-f32::MAX; 3];
+    overflow.sweep.maximum = [f32::MAX; 3];
+    let mut outside = empty_request(grid);
+    outside.state.position[0] = 2_147_483_648.0;
+    for request in [overflow, outside] {
+        assert_eq!(NativePhysics.step(&request), Err(KernelError::InvalidInput));
+    }
+}

@@ -1,6 +1,6 @@
 use std::mem::size_of;
 
-use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
+use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RayFace, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
 
 unsafe extern "C" {
@@ -380,4 +380,88 @@ fn raycast_abi_cursor_sequence() {
     assert_eq!(overlap_arena, overlap_before, "overlap arenas preserved");
     assert_eq!(overlap_count, 0, "overlap count cleared");
     assert_eq!(overlap_done, 0, "overlap done cleared");
+}
+
+#[test]
+fn raycast_late_native_batches_match_uninterrupted_abi() {
+    for ray in [
+        Ray {
+            origin: [0.5; 3],
+            direction: [1.0, 0.0, 0.0],
+            maximum: 20_000.0,
+        },
+        Ray {
+            origin: [-0.25, 0.5, -0.25],
+            direction: [-1.0, 1.0, -1.0],
+            maximum: 200.0,
+        },
+        Ray {
+            origin: [2_147_483_648.0, 0.5, 0.5],
+            direction: [1.0, 0.0, 0.0],
+            maximum: 1.0,
+        },
+    ] {
+        let input = raw_raycast_input(ray.origin, ray.direction, ray.maximum);
+        let mut raw_cursor = raw_raycast_cursor();
+        let mut native = RayCursor::try_new(ray).unwrap();
+        for _ in 0..400 {
+            let mut raw_output = [0; ABI_OUTPUT_BYTES];
+            let mut count = 0;
+            let mut done = 0;
+            assert_eq!(
+                call_raycast_abi(
+                    &input,
+                    &mut raw_cursor,
+                    0,
+                    &mut raw_output,
+                    0,
+                    &mut count,
+                    &mut done
+                ),
+                0
+            );
+            let batch = NativeRaycast.next_batch(&mut native).unwrap();
+            assert_eq!(batch.records().len(), count);
+            assert_eq!(batch.is_done(), done == 1);
+            for (record, bytes) in batch
+                .records()
+                .iter()
+                .zip(raw_output.chunks_exact(ABI_RECORD_BYTES))
+            {
+                let raw_cell = std::array::from_fn::<_, 3, _>(|axis| {
+                    i32::from_le_bytes(bytes[axis * 4..axis * 4 + 4].try_into().unwrap())
+                });
+                assert_eq!(record.cell, raw_cell);
+                let face = match record.face {
+                    RayFace::Origin => 255,
+                    RayFace::NegX => 0,
+                    RayFace::PosX => 1,
+                    RayFace::NegY => 2,
+                    RayFace::PosY => 3,
+                    RayFace::NegZ => 4,
+                    RayFace::PosZ => 5,
+                };
+                assert_eq!(face, bytes[12]);
+                assert_eq!(
+                    record.distance.to_bits(),
+                    u32::from_le_bytes(bytes[16..20].try_into().unwrap())
+                );
+            }
+            if batch.is_done() {
+                if ray.maximum == 20_000.0 {
+                    let last = batch.records().last().unwrap();
+                    assert_eq!(last.cell, [20_000, 0, 0]);
+                    assert_eq!(last.distance.to_bits(), 19_999.5_f32.to_bits());
+                }
+                let repeat = NativeRaycast.next_batch(&mut native).unwrap();
+                assert!(repeat.is_done() && repeat.records().is_empty());
+                break;
+            }
+        }
+        // The axis-aligned case reaches the late continuation calls and the
+        // shorter tie/coordinate cases pin their complete terminating streams.
+        if ray.origin[0] < 2_147_483_648.0 {
+            assert!(native.is_done());
+        }
+    }
 }

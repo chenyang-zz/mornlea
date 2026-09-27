@@ -443,3 +443,57 @@ fn landing_output_known_good() -> [u8; PHYSICS_OUTPUT_BYTES] {
         0x00, 0x00,
     ]
 }
+
+#[test]
+fn physics_unused_step_keeps_legacy_prism_acceptance() {
+    let mut raw = RawStep::empty_prism(
+        [0.5, 1.0, 0.5],
+        [0.0; 3],
+        false,
+        false,
+        0,
+        0,
+        false,
+        false,
+        false,
+        [-1.0; 3],
+        [1.0; 3],
+    );
+    RawStep::put_f32(&mut raw.bytes, 48, f32::MAX);
+    let (status, bytes) = call_physics_abi(&raw.bytes);
+    assert_eq!(status, 0);
+    assert_eq!(
+        f32::from_le_bytes(bytes[4..8].try_into().unwrap()).to_bits(),
+        0.92_f32.to_bits()
+    );
+    assert_eq!(bytes[26], 0);
+}
+
+#[test]
+fn physics_uncovered_abi_prism_keeps_panic_status_and_canary() {
+    let mut raw = RawStep::empty_prism(
+        [0.5, 1.0, 0.5],
+        [0.0; 3],
+        false,
+        false,
+        0,
+        0,
+        false,
+        false,
+        false,
+        [-1.0; 3],
+        [1.0; 3],
+    );
+    raw.bytes[120..124].copy_from_slice(&1_u32.to_le_bytes());
+    raw.bytes
+        .truncate(RAW_STEP_HEADER_BYTES + RAW_STEP_CELL_BYTES);
+    let (status, bytes) = call_physics_abi(&raw.bytes);
+    assert_eq!(status, 9);
+    assert_eq!(
+        bytes,
+        [CANARY_WORD; PHYSICS_OUTPUT_BYTES / 4]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>()
+    );
+}
