@@ -4,7 +4,7 @@ Rust shared contracts alone do not move authoritative ticks, validation or persi
 
 ## Status and prerequisites
 
-Planning only: F2 in [`docs/architecture-target.md`](../../../docs/architecture-target.md). The accepted [F1 baseline](../archive/2026-09-22-rust-runtime-foundation-baseline/proposal.md) is not complete F1 acceptance. The numerical successor is now archived and accepted; the remaining final F1 gate is owned by [rust-runtime-foundation-acceptance](../rust-runtime-foundation-acceptance/proposal.md). F2 remains blocked on the archived [domain-event successor](../archive/2026-09-22-rust-domain-event-completion/proposal.md), separate protocol and storage evidence, safe public numerical APIs and pathfinding, and a final F1 acceptance that rejects uncovered families. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence, an archived baseline or OpenSpec status is insufficient.
+F2 planning is complete but implementation remains pending. Complete F1 is accepted at source `d042982d33bb1694d768b75b01c297bd02534a08` and corpus `sha256:8b5813ecce2fe866ab1c4786a35925e8aadd9aab476196abb189d3c72d4f28f3`, covering112 supported points/1434 executed cases/zero gaps; see the [foundation seal](../rust-runtime-foundation-acceptance/acceptance.json). D0/P0/S0/K0 and the numerical implementation are implemented prerequisites. The initial runnable task verifies that seal and inventories source-bound server coverage. Parallel providers remain blocked until the new S1 compile-ready contract and consumer doubles are accepted on an implementation SHA. Planning validation cannot close an implementation checkbox.
 
 ## What Changes
 

@@ -2,6 +2,8 @@
 
 All nodes are pending. [Execution contract and dependency graph](plans/00-execution.md), [compile-ready S1 seams](plans/02-core-seams.md) and [exact worker packets](plans/01-server-slices.md) are part of this plan. These new crate/tests are prospective until their owning nodes land; `-- --list` alone is never provider acceptance. Record the accepted contract SHA, fixture identity, behavioral red/green and focused commit for each node in `ledger.md`. A worker edits only packet-owned files. F1 complete acceptance is a hard prerequisite; the current Go server remains the production authority until the separate product cutover.
 
+[Controller algorithms and concrete acceptance tables](plans/04-refined-nodes.md) cover every command and rule branch. The 51 pending nodes include separate real filesystem and Agent lifecycle/integration owners.
+
 See the [node-by-node dependency and ownership gate](plans/03-parallel-readiness.md) before dispatch. It refines the linked packets without duplicating status.
 
 See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
@@ -21,18 +23,22 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 ## 2. Independent authoritative rule providers
 
 - [ ] 2.1a Implement chunk acquisition and stale-generation rejection.
-- [ ] 2.1b Implement world placement/mining geometry through the atomic transaction.
+- [ ] 2.1b Implement world placement/internal interaction geometry through the atomic transaction.
+- [ ] 2.1c Implement continuous mining progress, tool reset and atomic completion.
 - [ ] 2.2 Implement time, season, weather and environment transition replay.
 - [ ] 2.3 Implement bounded fluid rescan and update scheduling.
 - [ ] 2.4a Implement bounded farmland moisture.
-- [ ] 2.4b Implement trample, snow and crop random ticks.
+- [ ] 2.4b Implement actor trample and snow footprints.
+- [ ] 2.4d Implement deterministic crop, dry farmland, tree, grass and snow random rules.
 - [ ] 2.4c Implement ordered block-support sweeps.
 - [ ] 2.5a Implement authoritative player control and movement.
 - [ ] 2.5b Implement survival transitions and correction observations.
+- [ ] 2.5c Implement atomic eating inventory and hunger settlement.
 - [ ] 2.6a Implement inventory authority and item conservation.
-- [ ] 2.6b Implement containers and chest revision validation.
+- [ ] 2.6b Implement containers and generation/view validation.
 - [ ] 2.6c Implement atomic workbench crafting.
 - [ ] 2.6d Implement tick-driven furnaces.
+- [ ] 2.6e Implement farming tools, bone meal and atomic buckets.
 - [ ] 2.7a Implement hostile lifecycle and targeting.
 - [ ] 2.7b Implement projectiles and hit validation.
 - [ ] 2.7c Implement one-time hostile death and combat outcomes.
@@ -50,8 +56,13 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 3.3b Implement the TCP adapter over common admission.
 - [ ] 3.4a Implement bounded durable store mailbox.
 - [ ] 3.4b Implement autosave, retry, backpressure and flush scheduling.
+- [ ] 3.4c Implement real region commit, crash boundaries and compaction.
+- [ ] 3.4d Implement standalone atomic file persistence.
 - [ ] 3.5 Implement exclusive world lease, recovery and named-backup rollback.
-- [ ] 3.6 Implement bounded loopback Agent adapter and candidate revalidation.
+- [ ] 3.6a Implement Agent HTTP wire and lease provider.
+- [ ] 3.6b Implement frozen snapshot registry and MCP provider.
+- [ ] 3.6c Implement Agent task, dialogue and memory ownership.
+- [ ] 3.6d Execute Rust integration with the actual Python Agent and MCP.
 - [ ] 3.7 Prove real local/remote, save/restart and Agent integration against the full inventory.
 - [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup.
 

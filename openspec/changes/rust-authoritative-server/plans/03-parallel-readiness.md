@@ -43,35 +43,44 @@ Every local ID below is in this change's `tasks.md`. External `F1-final` means `
 | `1.5b` | `1.5a` | controller; serial shared files | Implement one final unpublished tick and retryable shutdown phases. |
 | `1.6` | `1.2` | controller; serial shared files | Implement authority-resolved atomic placement/mining transaction and failure invariants. |
 | `2.1a` | `1.2,1.4` | isolated provider; exact packet files only | Implement chunk acquisition and stale-generation rejection. |
-| `2.1b` | `1.6,2.1a,2.6a` | isolated provider; exact packet files only | Implement world placement/mining geometry through the atomic transaction. |
+| `2.1b` | `1.6,2.1a,2.6a` | isolated provider; exact packet files only | Implement world placement/internal interaction geometry through the atomic transaction. |
+| `2.1c` | `1.6,2.1b,2.5a,2.6a` | isolated provider; exact packet files only | Implement continuous mining progress, tool reset and atomic completion. |
 | `2.2` | `1.2` | isolated provider; exact packet files only | Implement time, season, weather and environment transition replay. |
-| `2.3` | `1.2,2.1a` | isolated provider; exact packet files only | Implement bounded fluid rescan and update scheduling. |
+| `2.3` | `1.2,1.6,2.1a` | isolated provider; exact packet files only | Implement bounded fluid rescan and update scheduling. |
 | `2.4a` | `2.3` | isolated provider; exact packet files only | Implement bounded farmland moisture. |
-| `2.4b` | `2.4a,2.5a,2.8a` | isolated provider; exact packet files only | Implement trample, snow and crop random ticks. |
-| `2.4c` | `2.4b,2.1b` | isolated provider; exact packet files only | Implement ordered block-support sweeps. |
+| `2.4b` | `2.4a,2.5a,2.8a` | isolated provider; exact packet files only | Implement actor trample and snow footprints. |
+| `2.4d` | `2.4b,2.1b` | isolated provider; exact packet files only | Implement deterministic crop, dry farmland, tree, grass and snow random rules. |
+| `2.4c` | `2.4d,2.1b` | isolated provider; exact packet files only | Implement ordered block-support sweeps. |
 | `2.5a` | `1.3,2.1a` | isolated provider; exact packet files only | Implement authoritative player control and movement. |
 | `2.5b` | `2.5a` | isolated provider; exact packet files only | Implement survival transitions and correction observations. |
+| `2.5c` | `2.5b,2.6a` | isolated provider; exact packet files only | Implement atomic eating inventory and hunger settlement. |
 | `2.6a` | `1.2` | isolated provider; exact packet files only | Implement inventory authority and item conservation. |
-| `2.6b` | `2.6a` | isolated provider; exact packet files only | Implement containers and chest revision validation. |
+| `2.6b` | `2.6a` | isolated provider; exact packet files only | Implement containers and generation/view validation. |
 | `2.6c` | `2.6b` | isolated provider; exact packet files only | Implement atomic workbench crafting. |
 | `2.6d` | `2.6b` | isolated provider; exact packet files only | Implement tick-driven furnaces. |
+| `2.6e` | `1.6,2.1b,2.6a,2.4a` | isolated provider; exact packet files only | Implement farming tools, bone meal and atomic buckets. |
 | `2.7a` | `1.2,2.1a` | isolated provider; exact packet files only | Implement hostile lifecycle and targeting. |
-| `2.7b` | `2.7a` | isolated provider; exact packet files only | Implement projectiles and hit validation. |
-| `2.7c` | `2.7b` | isolated provider; exact packet files only | Implement one-time hostile death and combat outcomes. |
-| `2.8a` | `1.2,2.1a` | isolated provider; exact packet files only | Implement passive lifecycle. |
+| `2.7b` | `2.7a,2.6a` | isolated provider; exact packet files only | Implement projectiles and hit validation. |
+| `2.7c` | `2.7b,2.5a,2.6a,2.8a` | isolated provider; exact packet files only | Implement one-time hostile death and combat outcomes. |
+| `2.8a` | `1.2,1.6,2.1a` | isolated provider; exact packet files only | Implement passive lifecycle. |
 | `2.8b` | `2.6a,2.7c,2.8a` | isolated provider; exact packet files only | Implement item drops and pickup. |
 | `2.8c` | `2.5b,2.2,2.8a` | isolated provider; exact packet files only | Implement sleeping and time transition. |
 | `2.9a` | `1.2` | isolated provider; exact packet files only | Implement sessionless companion candidate provenance and admission. |
-| `2.9b` | `2.9a,1.6,2.1a,2.6a,2.1b` | isolated provider; exact packet files only | Revalidate and execute companion actions through the shared mutation pipeline. |
-| `3.1` | `1.3,1.4,1.5b,1.6,2.1b,2.2,2.3,2.4c,2.5b,2.6c,2.6d,2.7c,2.8a,2.8b,2.8c,2.9b` | controller; serial shared files | Integrate the one authoritative tick reducer after all rule providers. |
+| `2.9b` | `2.9a,1.6,2.1a,2.6a,2.1b,2.1c` | isolated provider; exact packet files only | Revalidate and execute companion actions through the shared mutation pipeline. |
+| `3.1` | `1.3,1.4,1.5b,1.6,2.1c,2.2,2.3,2.4c,2.5c,2.6c,2.6d,2.6e,2.7c,2.8b,2.8c,2.9b` | controller; serial shared files | Integrate the one authoritative tick reducer after all rule providers. |
 | `3.2` | `1.2,1.3` | isolated provider; exact packet files only | Land the common protocol/login/validation transport path. |
 | `3.3a` | `3.2` | isolated provider; exact packet files only | Implement the Memory adapter over common admission. |
 | `3.3b` | `3.2` | isolated provider; exact packet files only | Implement the TCP adapter over common admission. |
 | `3.4a` | `1.2` | isolated provider; exact packet files only | Implement bounded durable store mailbox. |
 | `3.4b` | `3.4a` | isolated provider; exact packet files only | Implement autosave, retry, backpressure and flush scheduling. |
-| `3.5` | `3.4b` | isolated provider; exact packet files only | Implement exclusive world lease, recovery and named-backup rollback. |
-| `3.6` | `1.2,2.9a` | isolated provider; exact packet files only | Implement bounded loopback Agent adapter and candidate revalidation. |
-| `3.7` | `3.1,3.3a,3.3b,3.5,3.6` | controller; serial shared files | Prove real local/remote, save/restart and Agent integration against the full inventory. |
+| `3.4c` | `1.2` | isolated provider; exact packet files only | Implement real region commit, crash boundaries and compaction. |
+| `3.4d` | `1.2` | isolated provider; exact packet files only | Implement standalone atomic file persistence. |
+| `3.5` | `3.4b,3.4c,3.4d` | isolated provider; exact packet files only | Implement exclusive world lease, recovery and named-backup rollback. |
+| `3.6a` | `1.2` | isolated provider; exact packet files only | Implement Agent HTTP wire and lease provider. |
+| `3.6b` | `1.2` | isolated provider; exact packet files only | Implement frozen snapshot registry and MCP provider. |
+| `3.6c` | `3.6a,3.6b,2.9a` | isolated provider; exact packet files only | Implement Agent task, dialogue and memory ownership. |
+| `3.6d` | `3.6c,2.9b,3.1,3.5` | controller; serial shared files | Execute Rust integration with the actual Python Agent and MCP. |
+| `3.7` | `3.1,3.3a,3.3b,3.5,3.6d` | controller; serial shared files | Prove real local/remote, save/restart and Agent integration against the full inventory. |
 | `3.8` | `3.7` | controller; serial shared files | Qualify explicit opt-in activation and rollback without changing default startup. |
 | `4.1` | `3.8` | controller; serial shared files | Reconcile zero-gap inventory, real-provider/integration evidence and guides. |
 | `4.2` | `4.1` | controller; serial shared files | Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA. |

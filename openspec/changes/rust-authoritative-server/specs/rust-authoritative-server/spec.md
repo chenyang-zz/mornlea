@@ -29,7 +29,8 @@ Memory and TCP sessions SHALL use identical login, packet, validation, sequencin
 
 - **GIVEN** equivalent sessions send the same stale or invalid action over Memory and TCP
 - **WHEN** the server validates their actions
-- **THEN** both MUST receive equivalent rejection and neither MUST mutate world state
+- **THEN** both MUST observe the same existing-protocol outcome and neither MUST mutate world state
+- **AND** stale or duplicate applied sequences MUST be silently discarded without a CommandRejected packet; an internal capacity classification MUST NOT create a new wire reason
 
 #### Scenario: Agent timeout and untrusted candidate
 
@@ -56,7 +57,9 @@ Tick and network work SHALL obey explicit queue, capacity and time/work budgets.
 
 - **GIVEN** queues are full while storage or Agent requests are pending
 - **WHEN** shutdown or cancellation occurs
-- **THEN** it MUST terminate within the declared bound, preserve failure reporting and release owned resources without dropping acknowledged durable work
+- **THEN** each attempt MUST return within its caller deadline with its retained phase and outstanding ownership
+- **AND** an unsuccessful attempt MUST preserve frozen authority and exclusive world ownership for retry, without dropping acknowledged durable work
+- **AND** successful completion MUST release owned resources without replaying the final tick or completed sync
 
 ### Requirement: Authority selection is reversible
 
@@ -67,3 +70,27 @@ An opt-in Rust deployment SHALL select exactly one server authority. Rollback MU
 - **GIVEN** a world is already owned by another server or its data is incompatible with the proposed rollback runtime
 - **WHEN** activation or rollback is requested
 - **THEN** it MUST fail explicitly rather than dual-write or silently downgrade the save
+
+### Requirement: Acceptance distinguishes actual providers and integrations
+
+A contract or consumer-double pass SHALL NOT accept a provider or full integration. Every supported command, rule branch and lifecycle SHALL map to source-bound positive, failure and boundary results from real Rust code. Rust Agent acceptance MUST execute the actual independent Python HTTP service and MCP consumer against the new Rust producer on a rebuilt source identity.
+
+#### Scenario: Double-only Agent result
+
+- **GIVEN** existing Go/Python integration or a Rust fake-service test passes
+- **WHEN** F2 Agent integration is evaluated
+- **THEN** the Rust-to-real-Python/MCP gate MUST remain incomplete until that actual path executes nonempty assertions
+
+#### Scenario: Sequence ordering and delayed budget
+
+- **GIVEN** one session queues sequences9,9,8 before a tick and has no applied sequence
+- **WHEN** the complete eligible batch is reduced
+- **THEN** sequence8 MUST precede the first9 and the second9 MUST have no state or rejection event
+- **AND** a zero or partial work budget MUST preserve the original receipt identity and earliest tick for carried records
+
+#### Scenario: Per-key interrupted persistence
+
+- **GIVEN** a save commits one region/key and fails another
+- **WHEN** the owner processes completion
+- **THEN** only validated committed revisions MUST be acknowledged and uncommitted snapshots MUST remain retryable
+- **AND** a corrupt active region payload eligible for fallback MUST load the older payload with the supported promoted logical revision and rewrite flag without writing during load

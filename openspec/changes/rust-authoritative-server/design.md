@@ -1,8 +1,8 @@
 ## Context
 
-The accepted F1 baseline supplies only a reviewed subset of shared Rust contracts and offline evidence. The archived domain-event successor and later protocol, storage, numerical-API and pathfinding successors must close before final F1 acceptance. The Go server remains the current production owner. F2 creates an opt-in Rust replacement only after that acceptance; P14 separately controls the default product switch. The complete rule inventory must be reconciled before claiming parity.
+Complete F1 is sealed at source `d042982d33bb1694d768b75b01c297bd02534a08` and corpus `sha256:8b5813ecce2fe866ab1c4786a35925e8aadd9aab476196abb189d3c72d4f28f3`:112 points,1434 cases,zero gaps. Its D0/P0/S0/K0 APIs are implemented. Go remains the production authority. F2 supplies a separately qualified opt-in Rust server; P14 controls default switch.
 
-The [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns F2 rows S1–S4 over existing D0/P0/S0 and planned K0. Before server capability tasks are dispatched independently, land S1 as a compile-ready shared contract with tested success/failure doubles and record its accepted SHA; S2/S3/S4 providers and serial integration then use that identity. The map does not complete F1 or make the signatures currently callable.
+The [target interface map](../../../docs/runtime-interface-architecture.md) assigns S1–S4. The [exact declaration packet](plans/02-core-seams.md) and [algorithms/test tables](plans/04-refined-nodes.md) complete the design. Node1.2 must land compile-ready S1/S3/S4 declarations, checked values and executing consumer doubles on an accepted SHA before providers;3.2 similarly lands S2 before either transport adapter. Planned signatures have no runtime acceptance.
 
 ## Goals / Non-Goals
 
@@ -40,7 +40,7 @@ A live shadow server cannot validate safely by writing the same world. A Go fall
 
 ## Migration Plan
 
-Accept complete F1, including the domain-event, protocol, storage, numerical-API and pathfinding successors; freeze server coverage; implement independently verified core capabilities; run offline differential and transport/persistence failure tests; qualify opt-in activation and rollback. The archived baseline and any one successor are insufficient authorization to begin F2 implementation. F3 can consume an accepted protocol/session contract during development, but final integration acceptance needs the complete F2 result.
+Verify the accepted complete F1 seal; freeze source-bound server coverage and measured bounds; implement independently verified core capabilities; run offline differential and transport/persistence failure tests; qualify opt-in activation and rollback. The archived baseline and any one successor are insufficient authorization to begin F2 implementation. F3 can consume an accepted protocol/session contract during development, but final integration acceptance needs the complete F2 result.
 
 ## Validation and completion evidence
 
@@ -52,6 +52,16 @@ At implementation closeout run formatting, `make rust-check`, `make dev-check` (
 
 ## Post-numerical-closure planning decisions
 
-The [node dependency and ownership register](plans/03-parallel-readiness.md) and [refined node decisions](plans/04-refined-nodes.md) are normative execution inputs alongside the original packets. Preserve prior scope and separate source-contract, real-provider and real-integration acceptance. Numerical completion does not supply complete F1 acceptance; use the independently owned [foundation successor](../rust-runtime-foundation-acceptance/proposal.md).
+The [node dependency and ownership register](plans/03-parallel-readiness.md) and [refined node decisions](plans/04-refined-nodes.md) are normative execution inputs alongside the original packets. Preserve prior scope and separate source-contract, real-provider and real-integration acceptance. Complete F1 acceptance is recorded in the independently owned [foundation successor](../rust-runtime-foundation-acceptance/proposal.md).
 
 The controller compared wholesale migration resequencing, immediate parallel dispatch from prospective signatures, and bounded refinement of existing nodes. Bounded refinement preserves reviewed scope and existing node identities while making dependencies, shared edits and source-information limits decidable. Immediate dispatch remains blocked by missing accepted contract/provider SHAs. Broad shared files stay serial; only disjoint providers with accepted predecessors can overlap.
+
+## Review correction decisions
+
+The controller used installed Superpowers brainstorming and writing-plans and chose explicit typed state/effect ports over mutable state exposure or provider-designed types. Intake preserves sorted-batch sequence semantics; resource refusal is internal/silent close where v45 has no matching reason. Receipts name earliest eligibility; carry preserves provenance. Atomic footprint/output transactions include tool wear, container removal and actor-specific products. Rule packets include every accepted command plus random world branches; shared algorithms/expected fixture values are controller-authored.
+
+Persistence uses existing MCGR/MCGB bank commits and standalone atomic replacement, OS world.lock and per-key partial acknowledgments. A journal/global checkpoint was rejected because it would change the compatibility oracle. Go selection/estimate budgets remain distinct from proposed Rust hard retained-ownership caps. Completion backlog is measured explicitly before bounds acceptance.
+
+Agent HTTP remains schema v1 with no source_tick/attempt fields; private u64 attempt/source_tick distinguish callbacks from game world time. HTTP/lease, frozen snapshot/MCP, task/dialogue/memory and real-process gate have separate nodes. Test-only process owners launch the real Python gateway with deterministic model fixtures; production never launches or embeds Python. Shutdown exposes once-only phases and a failure report, retaining frozen Agent/world ownership on retry. Release is not given a fabricated idempotent receipt.
+
+Opt-in activation and rollback execute stop/wait/verify-or-restore/start against selected real binaries and disposable worlds. Dry-run remains inspection only. Parallel packet/file/DAG updates preserve accepted F3 S2 alias and all F2 checkboxes remain pending.

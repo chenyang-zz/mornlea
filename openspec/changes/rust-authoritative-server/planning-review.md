@@ -196,3 +196,30 @@ Required decision: freeze the rollback entry and each failure result. Execute ac
 The current task topology can be retained. Before S1 landing, reconcile compatibility decisions, complete source-bound capability coverage, freeze exact shared declarations and concrete oracles, and update every affected producer/consumer packet together. Persistence/Agent lifecycle and real integration also require their own complete decisions and bounded task/file ownership. Measure all retained ownership lanes before accepting limits. Re-run structural, type/coverage and semantic review after correction.
 
 The source-bound inventory entry may gather current facts, but no missing design is delegated to an implementation worker. A passing strict OpenSpec validator does not accept these semantic gaps. No F2 checkbox is closed by this review. Architecture skill: no change; existing verified project rules already require these decisions.
+
+## Correction review, 2026-09-27
+
+The user authorized repair after the original audit. This section supersedes the initial failed-readiness result for **planning completeness**. The controller authored revised contracts/algorithms and expanded42 nodes to51 bounded nodes. Three GPT-6 Sol reviewers independently rechecked rules/core, storage/transport/rollback and Agent/MCP; their follow-up findings were corrected, and all three reported no residual material planning finding. This does not supply an accepted S1/S2 implementation SHA or a provider/integration result; all51 task checkboxes remain pending.
+
+| Finding | Final decision / concrete acceptance owner |
+| --- | --- |
+|R01|[S1 ordering](plans/02-core-seams.md),1.3/1.4/3.1 `sorted_9_9_8`; intake does not advance sequence. |
+|R02|[wire failure matrix](plans/02-core-seams.md), stale silent no-effect, only existing15 gameplay reasons; common Memory/TCP tests3.2/3.3. |
+|R03|[exact ports/value tables](plans/02-core-seams.md), state getters/core ports/runtime/effects/SystemRule/phase calls;1.2 all_ports_type_flow; workers design no shared types. |
+|R04|[atomic footprint/output](plans/02-core-seams.md),1.6/2.1b/new2.1c progress, tool, cross-chunk pair/container and human-drop/companion-credit cases. |
+|R05|[complete routing and algorithm table](plans/04-refined-nodes.md), all19 Command variants/3 PlayIntent kinds; new2.4d random,2.5c eating,2.6e tools, armor/quick/drop assigned explicitly. |
+|R06|[typed helpers and source cases](plans/02-core-seams.md), [numeric algorithms](plans/04-refined-nodes.md);162-neighbor reservation/global moisture, per-dimension section-aware fluid, furnace pause and exact call order. |
+|R07|2.7b production129th spawn evicts minimum ID, retained2..129; defensive insertion separately refuses. |
+|R08|2.6b ContainerRef generation+private ViewLease/current distance, no fabricated wire token/revision; crafting viewgrid0..8/inventory9..44. |
+|R09|New3.4c region commit/crash/compaction,3.4d standalone replacement,3.5 OS lease and read-only fallback; no invented journal/checkpoint. |
+|R10|ShutdownPorts/ShutdownFailure and serial phases including AgentClose/McpClose; once-only final tick/sync/release and failed-close retry,1.5b/3.7. |
+|R11|New3.6a HTTP/lease,3.6b snapshot/MCP,3.6c task/dialogue/memory; distinct control_revision/lease_fence; exact snapshot/status fields and versioned schema DTOs. |
+|R12|New3.6d four nonempty actual Rust-to-Python/MCP cases, real FD3 fixture/rebuild identity/no skipped executable;3.7 repeats. Existing Go/Python gate alone cannot close it. |
+|R13|1.1b measures queue/held/completion/retry and actor/metadata lanes; ticket dedup distinguishes copies; S3 raw limits and encoded reservations are separate proof units. |
+|R14|Receipt earliest tick, original carry identity, per-session monotonic index/exhaustion;1.4 zero/prefix carry observes actual execution tick separately. |
+|R15|Proposal/design bind accepted F1 source/corpus; unimplemented F2 distinction preserved. |
+|R16|Exact ConnectionCore/TransportAuthority and login load/prepare/install/send-ack/activate contract, numeric owned-buffer bounds, fragment/terminalEOF, heartbeat;3.2 then both3.3 adapters. |
+|R17|SaveAuthority selection/return/partial ack and completion carrying original snapshots; metadata process-local sequence; worker compression reservation/prefix commit;3.4a/b real ack oracle filters. |
+|R18|3.8 callable real activation/rollback, selected F1 previous Go binary+offline verifier identity, quiescence and resumable two-directory-renames; dry-run not acceptance. |
+
+Additional review corrections preserve inactive drop countdowns and u32 age/lifetime, nondefault captured tunables, actual projectile damage and passive flee source, typed internal/companion fixtures, source task-status text, heartbeat-preserved lease fence and metadata without a stored revision. The predecessor graph and all downstream count/index consumers are reconciled. Final structural/gate evidence is in [ledger.md](ledger.md). Architecture skill: no change; these are future task contracts, not newly verified runtime architecture.
