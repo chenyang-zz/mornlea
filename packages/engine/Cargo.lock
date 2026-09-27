@@ -991,6 +991,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mornlea_server"
+version = "0.1.0"
+dependencies = [
+ "mornlea_domain",
+ "mornlea_engine",
+ "mornlea_protocol",
+ "mornlea_storage",
+ "sha2",
+]
+
+[[package]]
 name = "mornlea_storage"
 version = "0.1.0"
 dependencies = [

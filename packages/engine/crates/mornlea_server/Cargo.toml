@@ -1,0 +1,17 @@
+[package]
+name = "mornlea_server"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+mornlea_domain = { path = "../mornlea_domain" }
+mornlea_engine = { path = "../mornlea_engine" }
+mornlea_protocol = { path = "../mornlea_protocol" }
+mornlea_storage = { path = "../mornlea_storage" }
+
+[dev-dependencies]
+sha2 = "0.10"

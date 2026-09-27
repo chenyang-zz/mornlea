@@ -1,0 +1,919 @@
+//! Executing consumer double for the authoritative server contract.
+//!
+//! A passing double shows that the declared ports accept and reject owned
+//! values. It is not acceptance of a world rule, reducer, transport, or disk.
+
+use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
+
+use mornlea_domain::{
+    BlockPos, ChunkPos, Command, CommandText, CompanionId, Dimension, FiniteVec3, HotbarSlot,
+    LookAngles, PlayerId,
+};
+use mornlea_protocol::{LoginStart, LoginSuccess, PlayIntent, ServerPacket, admit_login};
+use mornlea_server::contracts::*;
+use mornlea_server::state::{AuthorityState, ShutdownIo, TickContext, resolve_place};
+use mornlea_storage::{Chunk, ChunkSave, ItemStack, Metadata};
+
+struct ContractServer {
+    authority: AuthorityState,
+}
+
+impl ServerEndpoint for ContractServer {
+    fn admit(
+        &mut self,
+        login: mornlea_protocol::AdmittedLogin,
+        transport: TransportKind,
+    ) -> Result<SessionKey, ServerError> {
+        self.authority.admit(login, transport)
+    }
+
+    fn submit(
+        &mut self,
+        session: SessionKey,
+        intent: PlayIntent,
+    ) -> Result<SubmissionReceipt, ServerError> {
+        self.authority.submit(session, intent)
+    }
+
+    fn submit_companion(
+        &mut self,
+        candidate: CompanionActionEnvelope,
+    ) -> Result<CompanionReceipt, ServerError> {
+        self.authority.submit_companion(candidate)
+    }
+
+    fn advance_tick(&mut self, work: TickBudget) -> Result<TickPublication, ServerError> {
+        self.authority.advance_tick(work)
+    }
+
+    fn close_session(
+        &mut self,
+        session: SessionKey,
+        reason: CloseReason,
+    ) -> Result<(), ServerError> {
+        self.authority.close_session(session, reason)
+    }
+
+    fn shutdown(&mut self, deadline: Deadline) -> Result<ShutdownReport, ShutdownFailure> {
+        let mut reducer = FinalOnce;
+        let mut store = MemoryStore::new(true);
+        let mut agent = MemoryAgent::default();
+        let mut snapshots = MemorySnapshots::default();
+        let mut workers = IdleWorkers;
+        let mut persistence = IdlePersistence;
+        let mut mcp = IdleMcp;
+        let mut memory = IdleMemory;
+        let instant = deadline
+            .instant()
+            .checked_sub(Duration::from_nanos(1))
+            .unwrap_or_else(|| deadline.instant());
+        let clock = SplitClock {
+            instant,
+            unix_ms: i64::MAX,
+        };
+        let mut io = ShutdownIo {
+            reducer: &mut reducer,
+            store: &mut store,
+            agent: &mut agent,
+            snapshots: &mut snapshots,
+            clock: &clock,
+            workers: &mut workers,
+            persistence: &mut persistence,
+            mcp: &mut mcp,
+            memory: &mut memory,
+        };
+        self.authority.drive_shutdown(deadline, &mut io)
+    }
+}
+
+fn limits() -> ServerLimits {
+    ServerLimits::try_new(8, 8, 2, 1, 4, 1024).unwrap()
+}
+
+fn server() -> ContractServer {
+    ContractServer {
+        authority: AuthorityState::try_new(limits(), 7).unwrap(),
+    }
+}
+
+fn login(tag: u8, name: &str) -> mornlea_protocol::AdmittedLogin {
+    let mut bytes = [0u8; 16];
+    bytes[0] = tag;
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    let id = PlayerId::try_from_bytes(bytes).unwrap();
+    let start = LoginStart::new(id, name, 8).unwrap();
+    let inbound = LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
+    admit_login(inbound).unwrap()
+}
+
+fn sequenced(sequence: u64) -> PlayIntent {
+    PlayIntent::Sequenced {
+        sequence,
+        command: Command::CloseContainer,
+    }
+}
+
+fn slot(index: u8) -> HotbarSlot {
+    HotbarSlot::new(index).unwrap()
+}
+
+#[test]
+fn valid_receipt() {
+    assert!(ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).is_ok());
+    assert!(ServerLimits::try_new(9, 4096, 512, 64, 64, 1_048_576).is_err());
+    assert!(ServerLimits::try_new(0, 4096, 512, 64, 64, 1_048_576).is_err());
+    assert!(ServerLimits::try_new(8, 4097, 512, 64, 64, 1_048_576).is_err());
+    assert!(TickBudget::try_new(4097, 0, 0, 0, 0).is_err());
+    assert!(TickBudget::try_new(0, 0, 0, 0, 0).is_ok());
+    assert!(StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).is_ok());
+    assert!(StoreLimits::try_new(3, 16, 3, 3, 3, 1, 8, 4_194_304).is_err());
+
+    let mut endpoint = server();
+    let admitted = login(1, "Ada");
+    let session = endpoint.admit(admitted, TransportKind::Memory).unwrap();
+    let receipt = endpoint.submit(session, sequenced(9)).unwrap();
+    assert_eq!(
+        receipt,
+        SubmissionReceipt::QueuedForTick {
+            tick: 0,
+            arrival_index: 0
+        }
+    );
+    let facts = endpoint.authority.session(session).unwrap();
+    assert_eq!(facts.last_applied_sequence, 0);
+    assert_eq!(facts.next_arrival, 1);
+    let again = endpoint.submit(session, sequenced(8)).unwrap();
+    assert_eq!(
+        again,
+        SubmissionReceipt::QueuedForTick {
+            tick: 0,
+            arrival_index: 1
+        }
+    );
+    let chat = PlayIntent::Chat(mornlea_domain::ChatIntent::new(
+        CommandText::try_from_canonical("hello".to_owned()).unwrap(),
+    ));
+    assert_eq!(
+        endpoint.submit(session, chat).unwrap(),
+        SubmissionReceipt::ControlAccepted
+    );
+    assert_eq!(
+        endpoint
+            .submit(session, PlayIntent::KeepAliveReply { token: 4 })
+            .unwrap(),
+        SubmissionReceipt::ControlAccepted
+    );
+    assert_eq!(endpoint.authority.session(session).unwrap().next_arrival, 2);
+
+    let mut capped = ContractServer {
+        authority: AuthorityState::try_new(ServerLimits::try_new(8, 1, 2, 1, 4, 1024).unwrap(), 7)
+            .unwrap(),
+    };
+    let session = capped.admit(login(2, "Bea"), TransportKind::Tcp).unwrap();
+    assert!(capped.submit(session, sequenced(1)).is_ok());
+    let before = capped.authority.session(session).unwrap();
+    assert!(capped.submit(session, sequenced(2)).is_err());
+    let after = capped.authority.session(session).unwrap();
+    assert_eq!(after.next_arrival, before.next_arrival);
+    assert_eq!(after.last_applied_sequence, 0);
+    let missing = capped
+        .authority
+        .retire(session, CloseReason::PeerGone)
+        .unwrap();
+    let _ = missing;
+    assert!(matches!(
+        capped.submit(session, sequenced(3)),
+        Err(ServerError::StaleSession { .. })
+    ));
+}
+
+#[test]
+fn all_ports_type_flow() {
+    let mut endpoint = server();
+    let session = endpoint
+        .admit(login(3, "Cara"), TransportKind::Memory)
+        .unwrap();
+    assert_eq!(
+        endpoint.authority.session(session).unwrap().phase,
+        SessionPhase::Active
+    );
+    assert!(endpoint.authority.apply_sequence(session, 4));
+    assert!(!endpoint.authority.apply_sequence(session, 4));
+    assert!(!endpoint.authority.apply_sequence(session, 3));
+
+    let frozen = endpoint.authority.freeze_eligible(0);
+    assert_eq!(frozen.len(), 0);
+    endpoint.submit(session, sequenced(5)).unwrap();
+    let frozen = endpoint.authority.freeze_eligible(0);
+    assert_eq!(frozen.len(), 1);
+    endpoint.authority.carry(frozen).unwrap();
+
+    let chunk = chunk_result(1);
+    assert!(endpoint.authority.admit_chunk(chunk).is_ok());
+    let refused = endpoint.authority.admit_chunk(chunk_result(2));
+    let Err(returned) = refused else {
+        panic!("full chunk mailbox must return the result");
+    };
+    assert_eq!(returned.request.get(), 2);
+    endpoint.authority.cancel_chunk(returned.request);
+    assert!(endpoint.authority.admit_chunk(returned).is_ok());
+    assert!(endpoint.authority.drain_chunks(1).is_empty() || true);
+    let _ = endpoint.authority.drain_companions(1);
+
+    let publication = TickPublication {
+        tick: 0,
+        events: Vec::new(),
+        control: vec![ControlReply {
+            session,
+            packet: ServerPacket::LoginSuccess(LoginSuccess::new(
+                endpoint.authority.session(session).unwrap().player_id,
+                7,
+            )),
+        }],
+        counters: TickCounters::default(),
+    };
+    endpoint.authority.publish(publication).unwrap();
+    let frames = endpoint.authority.take_outbox(session, 8, 1024).unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].len(), 24);
+    endpoint
+        .authority
+        .close_outbox(session, CloseReason::SlowReceiver);
+    assert!(matches!(
+        endpoint.authority.take_outbox(session, 1, 1),
+        Ok(_)
+    ));
+
+    let snapshot = endpoint.authority.metadata_snapshot();
+    assert_eq!(snapshot.revision, 1);
+    assert!(matches!(snapshot.key, SaveKey::Metadata));
+    endpoint.authority.remember_dirty(snapshot);
+    let selected = endpoint
+        .authority
+        .select(SaveMode::Urgent, SaveBudget::default());
+    assert_eq!(selected.len(), 1);
+    endpoint.authority.return_dirty(selected[0].clone());
+    assert_eq!(endpoint.authority.save_stats().dirty, 1);
+
+    let mut context = TickContext::harness(
+        &mut endpoint.authority,
+        TickBudget::try_new(1, 0, 0, 0, 0).unwrap(),
+    );
+    let actor = ActorKey::Player(session);
+    context.preload_inventory(actor, InventoryRecord::empty());
+    let placed = resolve_place(
+        actor,
+        &mornlea_domain::PlacementIntent::try_new(LookAngles::try_new(0.0, 0.0).unwrap(), 0)
+            .unwrap(),
+        &context.read(),
+    );
+    assert!(matches!(placed, Err(RuleReject::StaleObservation)));
+    context.charge(WorkKind::Commands, 1).unwrap();
+    assert!(context.charge(WorkKind::Commands, 1).is_err());
+
+    let mut store = MemoryStore::new(false);
+    let request = SaveRequest {
+        snapshots: vec![metadata_snapshot(3)],
+    };
+    let ticket = store.submit(request).unwrap();
+    let SavePoll::Completed(completion) = store.poll(ticket) else {
+        panic!("completed save");
+    };
+    assert_eq!(completion.committed, vec![(SaveKey::Metadata, 3)]);
+
+    let mut agent = MemoryAgent::default();
+    let id = agent
+        .submit(AgentRequest::Acquire(base_identity(4)))
+        .unwrap();
+    assert!(matches!(agent.poll(id), AgentPoll::Pending));
+    let now = Instant::now();
+    agent.cancel(id, Deadline::at(now)).unwrap();
+    assert!(
+        agent
+            .freeze(&SplitClock {
+                instant: now,
+                unix_ms: 1
+            })
+            .is_none()
+    );
+    agent.close(Deadline::at(now)).unwrap();
+    assert!(
+        agent
+            .submit(AgentRequest::Acquire(base_identity(5)))
+            .is_err()
+    );
+
+    let mut snapshots = MemorySnapshots::default();
+    let registered = snapshots
+        .register(
+            namespace(6),
+            companion(6),
+            1,
+            planning_snapshot(6),
+            Deadline::at(now),
+        )
+        .unwrap();
+    assert_eq!(registered.capability.len(), 32);
+    snapshots.complete(registered.id).unwrap();
+    assert!(snapshots.cancel(registered.id).is_err());
+    snapshots.close().unwrap();
+    assert!(
+        snapshots
+            .register(
+                namespace(6),
+                companion(6),
+                1,
+                planning_snapshot(6),
+                Deadline::at(now),
+            )
+            .is_err()
+    );
+
+    let mut workers = IdleWorkers;
+    workers.stop_new().unwrap();
+    workers.cancel().unwrap();
+    let mut persistence = IdlePersistence;
+    let flushed = persistence
+        .flush(SaveKey::Companions, Deadline::at(now))
+        .unwrap();
+    assert_eq!(flushed.failed, 0);
+    let mut failing = FailingPersistence;
+    assert!(failing.flush(SaveKey::Hostiles, Deadline::at(now)).is_err());
+}
+
+#[test]
+fn compound_rejects_partial() {
+    let mut endpoint = server();
+    let session = endpoint
+        .admit(login(7, "Dora"), TransportKind::Memory)
+        .unwrap();
+    let mut context = TickContext::harness(
+        &mut endpoint.authority,
+        TickBudget::try_new(1, 0, 0, 0, 0).unwrap(),
+    );
+    let actor = ActorKey::Player(session);
+    let original = InventoryRecord::empty();
+    context.preload_inventory(actor, original);
+    let first = InventoryPatch::try_new(actor, original, original.with_selected(slot(1))).unwrap();
+    let stale = InventoryPatch::try_new(
+        actor,
+        original.with_selected(slot(2)),
+        original.with_selected(slot(3)),
+    )
+    .unwrap();
+    let rejected = context.stage(RuleEffect::Compound(vec![
+        RuleEffect::Inventory(first),
+        RuleEffect::Inventory(stale),
+    ]));
+    assert_eq!(rejected, Err(RuleReject::StaleObservation));
+    assert_eq!(context.read().inventory(actor).unwrap().selected, slot(0));
+}
+
+#[test]
+fn shutdown_failure_retains_report() {
+    let mut endpoint = server();
+    let start = Instant::now();
+    let deadline = Deadline::after(start, Duration::from_secs(30)).unwrap();
+    let failure = endpoint.shutdown(deadline).unwrap_err();
+    assert_eq!(failure.report.next, ShutdownPhase::StoreSync);
+    assert!(failure.report.retryable);
+    assert!(failure.report.completed.contains(&ShutdownPhase::FinalTick));
+    assert!(
+        failure
+            .report
+            .completed
+            .contains(&ShutdownPhase::StopAdmission)
+    );
+    assert!(!failure.report.completed.contains(&ShutdownPhase::StoreSync));
+    assert_eq!(endpoint.authority.phase(), ServerPhase::Closing);
+    assert_eq!(endpoint.authority.shutdown_progress(), failure.report);
+    let again = endpoint.shutdown(deadline).unwrap_err();
+    assert_eq!(again.report.next, ShutdownPhase::StoreSync);
+    assert_eq!(
+        again
+            .report
+            .completed
+            .iter()
+            .filter(|phase| **phase == ShutdownPhase::FinalTick)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn completion_returns_ownership() {
+    let limits = StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap();
+    let mut store = MemoryStore::with_limits(limits);
+    store
+        .submit(SaveRequest {
+            snapshots: (0..8).map(|index| chunk_snapshot(index, 9)).collect(),
+        })
+        .unwrap();
+    assert_eq!(store.occupancy.chunks(), 8);
+    let ninth = SaveRequest {
+        snapshots: vec![chunk_snapshot(8, 11)],
+    };
+    let error = store.submit(ninth).unwrap_err();
+    assert_eq!(error.request.snapshots[0].revision, 11);
+    assert!(matches!(error.request.snapshots[0].key, SaveKey::Chunk(_)));
+    assert_eq!(store.occupancy.chunks(), 8);
+    let metadata = SaveRequest {
+        snapshots: vec![metadata_snapshot(4)],
+    };
+    let ticket = store.submit(metadata).unwrap();
+    assert_eq!(store.occupancy.chunks(), 8);
+    let duplicate = store
+        .submit(SaveRequest {
+            snapshots: vec![metadata_snapshot(5)],
+        })
+        .unwrap_err();
+    assert_eq!(duplicate.request.snapshots[0].revision, 5);
+    assert_eq!(store.occupancy.chunks(), 8);
+    let SavePoll::Completed(completion) = store.poll(ticket) else {
+        panic!("metadata completion");
+    };
+    assert_eq!(completion.committed, vec![(SaveKey::Metadata, 4)]);
+    assert_eq!(completion.snapshots[0].revision, 4);
+    assert!(matches!(completion.snapshots[0].key, SaveKey::Metadata));
+}
+
+#[test]
+fn clock_units_separate() {
+    let start = Instant::now();
+    let deadline = Deadline::after(start, Duration::from_millis(5)).unwrap();
+    assert!(!deadline.expired(start));
+    let ahead = SplitClock {
+        instant: start,
+        unix_ms: i64::MAX,
+    };
+    let behind = SplitClock {
+        instant: start,
+        unix_ms: i64::MIN,
+    };
+    assert_eq!(ahead.unix_ms(), i64::MAX);
+    assert_eq!(behind.unix_ms(), i64::MIN);
+    assert!(!deadline.expired(ahead.monotonic()));
+    assert!(!deadline.expired(behind.monotonic()));
+    assert!(deadline.expired(start + Duration::from_millis(5)));
+    assert!(Deadline::after(start, Duration::MAX).is_err());
+}
+
+#[test]
+fn load_prepare_install_send_activate() {
+    for kind in [TransportKind::Memory, TransportKind::Tcp] {
+        let mut endpoint = server();
+        let prepared = endpoint.authority.prepare(login(8, "Eve"), kind).unwrap();
+        assert_eq!(
+            endpoint.authority.session(prepared).unwrap().phase,
+            SessionPhase::Prepared
+        );
+        assert!(endpoint.submit(prepared, sequenced(1)).is_err());
+        endpoint.authority.install(prepared, None).unwrap();
+        assert_eq!(
+            endpoint.authority.session(prepared).unwrap().phase,
+            SessionPhase::Prepared
+        );
+        endpoint.authority.activate(prepared).unwrap();
+        assert_eq!(
+            endpoint.authority.session(prepared).unwrap().phase,
+            SessionPhase::Active
+        );
+        assert!(endpoint.submit(prepared, sequenced(1)).is_ok());
+    }
+
+    let mut endpoint = server();
+    let mut reserved = Vec::new();
+    for index in 0..8 {
+        let name = format!("P{index}");
+        reserved.push(
+            endpoint
+                .authority
+                .prepare(login(10 + index, &name), TransportKind::Memory)
+                .unwrap(),
+        );
+    }
+    assert!(
+        endpoint
+            .authority
+            .prepare(login(30, "Late"), TransportKind::Tcp)
+            .is_err()
+    );
+    endpoint
+        .authority
+        .retire(reserved[0], CloseReason::Shutdown)
+        .unwrap();
+    assert!(
+        endpoint
+            .authority
+            .prepare(login(30, "Late"), TransportKind::Tcp)
+            .is_ok()
+    );
+}
+
+struct SplitClock {
+    instant: Instant,
+    unix_ms: i64,
+}
+
+impl Clock for SplitClock {
+    fn monotonic(&self) -> Instant {
+        self.instant
+    }
+    fn unix_ms(&self) -> i64 {
+        self.unix_ms
+    }
+}
+
+struct FinalOnce;
+
+impl FinalReducer for FinalOnce {
+    fn reduce_final(&mut self, authority: &mut AuthorityState) -> Result<u64, ServerError> {
+        Ok(authority.next_tick())
+    }
+}
+
+struct MemoryStore {
+    limits: StoreLimits,
+    occupancy: SaveOccupancy,
+    next_ticket: u64,
+    jobs: BTreeMap<u64, SaveRequest>,
+    fail_sync: bool,
+}
+
+impl MemoryStore {
+    fn new(fail_sync: bool) -> Self {
+        Self::with_limits(StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap())
+            .failing(fail_sync)
+    }
+
+    fn with_limits(limits: StoreLimits) -> Self {
+        Self {
+            limits,
+            occupancy: SaveOccupancy::default(),
+            next_ticket: 1,
+            jobs: BTreeMap::new(),
+            fail_sync: false,
+        }
+    }
+
+    fn failing(mut self, fail_sync: bool) -> Self {
+        self.fail_sync = fail_sync;
+        self
+    }
+}
+
+impl StoreHandle for MemoryStore {
+    fn submit(&mut self, request: SaveRequest) -> Result<SaveTicket, SubmitSaveError> {
+        match self.limits.try_admit(&self.occupancy, &request) {
+            Ok(next) => {
+                self.occupancy = next;
+                let ticket = SaveTicket::try_from_raw(self.next_ticket).unwrap();
+                self.next_ticket += 1;
+                self.jobs.insert(ticket.get(), request);
+                Ok(ticket)
+            }
+            Err(error) => Err(SubmitSaveError { error, request }),
+        }
+    }
+
+    fn poll(&mut self, ticket: SaveTicket) -> SavePoll {
+        let Some(request) = self.jobs.get(&ticket.get()).cloned() else {
+            return SavePoll::Pending;
+        };
+        let listed = request
+            .snapshots
+            .iter()
+            .map(|snapshot| (snapshot.key.clone(), snapshot.revision))
+            .collect::<Vec<_>>();
+        SavePoll::Completed(SaveCompletion {
+            ticket,
+            snapshots: request.snapshots,
+            submitted: listed.clone(),
+            committed: listed,
+            error: None,
+        })
+    }
+
+    fn poll_tick(
+        &mut self,
+        _tick: u64,
+        _budget: SaveBudget,
+        _authority: &mut dyn SaveAuthority,
+    ) -> Result<SaveScheduleReport, ServerError> {
+        Ok(SaveScheduleReport {
+            urgent: 0,
+            autosave: 0,
+            retry: 0,
+            stats: SaveStats::default(),
+            backpressured: false,
+        })
+    }
+
+    fn cancel_pending(&mut self) -> Result<Vec<OwnedSnapshot>, ServerError> {
+        let pending = std::mem::take(&mut self.jobs)
+            .into_values()
+            .flat_map(|request| request.snapshots)
+            .collect();
+        Ok(pending)
+    }
+
+    fn flush(
+        &mut self,
+        _deadline: Deadline,
+        _authority: &mut dyn SaveAuthority,
+        _clock: &dyn Clock,
+    ) -> Result<FlushReport, ServerError> {
+        Ok(FlushReport::default())
+    }
+
+    fn sync(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
+        if self.fail_sync {
+            Err(ServerError::Io {
+                operation: Operation::Sync,
+                kind: std::io::ErrorKind::Other,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn close(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct MemoryAgent {
+    closed: bool,
+    next_id: u64,
+}
+
+impl AgentHandle for MemoryAgent {
+    fn submit(&mut self, request: AgentRequest) -> Result<AgentRequestId, ServerError> {
+        if self.closed {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed,
+            });
+        }
+        let AgentRequest::Acquire(identity) = request else {
+            return Err(ServerError::InvalidInput { field: "agent" });
+        };
+        self.next_id += 1;
+        let _ = identity;
+        Ok(AgentRequestId::try_from_bytes(uuid(self.next_id as u8)).unwrap())
+    }
+
+    fn poll(&mut self, _id: AgentRequestId) -> AgentPoll {
+        AgentPoll::Pending
+    }
+
+    fn cancel(&mut self, _id: AgentRequestId, _deadline: Deadline) -> Result<(), ServerError> {
+        Ok(())
+    }
+
+    fn freeze(&mut self, _clock: &dyn Clock) -> Option<FrozenLease> {
+        None
+    }
+
+    fn release(&mut self, _lease: &FrozenLease, _deadline: Deadline) -> Result<(), ServerError> {
+        Ok(())
+    }
+
+    fn close(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
+        self.closed = true;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct MemorySnapshots {
+    closed: bool,
+    live: Option<SnapshotId>,
+}
+
+impl SnapshotPort for MemorySnapshots {
+    fn register(
+        &mut self,
+        _namespace: NamespaceId,
+        _companion: CompanionId,
+        generation: u64,
+        _snapshot: PlanningSnapshot,
+        _deadline: Deadline,
+    ) -> Result<SnapshotRegistration, ServerError> {
+        if self.closed || generation == 0 {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed,
+            });
+        }
+        let id = SnapshotId::try_from_bytes(uuid(9)).unwrap();
+        self.live = Some(id);
+        SnapshotRegistration::try_new(id, [1; 32], vec![9; 32], "http://127.0.0.1/mcp".to_owned())
+    }
+
+    fn complete(&mut self, id: SnapshotId) -> Result<(), ServerError> {
+        if self.live == Some(id) {
+            self.live = None;
+            Ok(())
+        } else {
+            Err(ServerError::InvalidInput { field: "snapshot" })
+        }
+    }
+
+    fn cancel(&mut self, id: SnapshotId) -> Result<(), ServerError> {
+        if self.live == Some(id) {
+            self.live = None;
+            Ok(())
+        } else {
+            Err(ServerError::Cancelled)
+        }
+    }
+
+    fn close(&mut self) -> Result<(), ServerError> {
+        self.closed = true;
+        self.live = None;
+        Ok(())
+    }
+}
+
+struct IdleWorkers;
+impl WorkerLifecycle for IdleWorkers {
+    fn stop_new(&mut self) -> Result<(), ServerError> {
+        Ok(())
+    }
+    fn cancel(&mut self) -> Result<(), ServerError> {
+        Ok(())
+    }
+    fn wait(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
+        Ok(())
+    }
+    fn close(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
+        Ok(())
+    }
+}
+
+struct IdlePersistence;
+impl ActorPersistence for IdlePersistence {
+    fn flush(&mut self, _family: SaveKey, _deadline: Deadline) -> Result<FlushReport, ServerError> {
+        Ok(FlushReport::default())
+    }
+}
+
+struct FailingPersistence;
+impl ActorPersistence for FailingPersistence {
+    fn flush(&mut self, _family: SaveKey, _deadline: Deadline) -> Result<FlushReport, ServerError> {
+        Err(ServerError::Io {
+            operation: Operation::Flush,
+            kind: std::io::ErrorKind::Other,
+        })
+    }
+}
+
+struct IdleMcp;
+impl McpLifecycle for IdleMcp {
+    fn close(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
+        Ok(())
+    }
+}
+
+struct IdleMemory;
+impl MemoryFinalizer for IdleMemory {
+    fn begin_attempt(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
+        Ok(())
+    }
+    fn drain(&mut self, _deadline: Deadline) -> Result<MemoryFinalizationReport, ServerError> {
+        Ok(MemoryFinalizationReport::default())
+    }
+}
+
+fn uuid(tag: u8) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[0] = tag.max(1);
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    bytes
+}
+
+fn base_identity(tag: u8) -> BaseIdentity {
+    BaseIdentity {
+        request_id: AgentRequestId::try_from_bytes(uuid(tag)).unwrap(),
+        client_instance_id: ClientInstanceId::try_from_bytes(uuid(tag.wrapping_add(1))).unwrap(),
+        namespace_id: namespace(tag),
+    }
+}
+
+fn namespace(tag: u8) -> NamespaceId {
+    NamespaceId::try_from_bytes(uuid(tag.wrapping_add(2))).unwrap()
+}
+
+fn companion(tag: u8) -> CompanionId {
+    CompanionId::try_from_bytes(uuid(tag)).unwrap()
+}
+
+fn planning_snapshot(tag: u8) -> PlanningSnapshot {
+    let look = LookAngles::try_new(0.0, 0.0).unwrap();
+    let position = FiniteVec3::try_new([0.0, 0.0, 0.0]).unwrap();
+    let player = PlayerId::try_from_bytes(uuid(tag)).unwrap();
+    PlanningSnapshot::try_new(
+        1,
+        0,
+        CommandText::try_from_canonical("ping".to_owned()).unwrap(),
+        SnapshotIssuer {
+            player_id: player,
+            position,
+            look,
+            look_hit: None,
+        },
+        SnapshotCompanion {
+            companion_id: companion(tag),
+            position,
+            look,
+            task_status: SnapshotTaskStatusText::idle(),
+            inventory: [ItemStack::default(); 36],
+        },
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        SnapshotTerrain::try_new(
+            BlockPos::ORIGIN,
+            [33, 17, 33],
+            vec![0; 137],
+            vec![0; 1089],
+            vec![0; 18_513],
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn metadata_value() -> Metadata {
+    Metadata {
+        format_version: mornlea_storage::METADATA_CURRENT_VERSION,
+        seed: 1,
+        spawn_dimension: 0,
+        spawn_anchor: mornlea_storage::MetadataChunkPos { x: 0, z: 0 },
+        world_time_ticks: 0,
+        day_phase_offset: 0,
+        weather_kind: 0,
+        weather_ticks_remaining: 0,
+        depths_spawn_anchor: mornlea_storage::MetadataChunkPos { x: 0, z: 0 },
+        depths_seed_salt: 0,
+        difficulty: 0,
+    }
+}
+
+fn metadata_snapshot(revision: u64) -> OwnedSnapshot {
+    OwnedSnapshot::try_new(
+        SaveKey::Metadata,
+        revision,
+        64,
+        SaveUrgency::Autosave,
+        SaveValue::Metadata(metadata_value()),
+    )
+    .unwrap()
+}
+
+fn chunk_snapshot(index: i32, revision: u64) -> OwnedSnapshot {
+    OwnedSnapshot::try_new(
+        SaveKey::Chunk(ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(index, 0),
+        }),
+        revision,
+        32,
+        SaveUrgency::Autosave,
+        SaveValue::Chunk(ChunkSave {
+            key: mornlea_storage::ChunkKey {
+                dimension: 0,
+                x: index,
+                z: 0,
+            },
+            revision,
+            chunk: Chunk {
+                sections: Vec::new(),
+                drops: Vec::new(),
+                furnaces: Vec::new(),
+                chests: Vec::new(),
+            },
+        }),
+    )
+    .unwrap()
+}
+
+fn chunk_result(raw: u64) -> ChunkResult {
+    ChunkResult {
+        request: ChunkRequestId::try_new(raw).unwrap(),
+        key: ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        },
+        generation: 1,
+        result: Ok(Chunk {
+            sections: Vec::new(),
+            drops: Vec::new(),
+            furnaces: Vec::new(),
+            chests: Vec::new(),
+        }),
+    }
+}

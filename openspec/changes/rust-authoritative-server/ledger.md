@@ -137,3 +137,19 @@ Ruling: the constructor maxima measured by task 1.1b at `c6bb98719c8d6cc1fb53a89
 Validation: the same three 1.1b tests were re-run from the repository root and exited 0. `git diff --check` passed. `npx --yes @fission-ai/openspec@1.7.0 validate rust-authoritative-server --type change --strict --no-interactive` reported the change valid. Baseline before this edit was `d8ae6ef6aa30becccb746429233bbe38e6f965cc`. Architecture skill: no change; these are measured constructor numbers for this change, not a new cross-task architecture rule.
 
 Independent review approved node 1.1c at `a4ec13066eb8b255ff5bc67e838743429a16df05`. Deferred minor for the final branch review and for the node 3.4a dispatch: `plans/01-server-slices.md` still calls `StoreLimits` proposed and subject to 1.1b/c fit. `plans/02-core-seams.md` is the declaration authority for the accepted per-lane caps. Architecture skill: no change.
+
+## Task 1.2 compiling contract, 2026-09-27
+
+Baseline before this edit was `87b01ca5f50cfaa33a236aa8beedb2565e5a6d3a`. The crate `packages/engine/crates/mornlea_server` now declares the checked server, save, and agent types from the execution and core-seam plans, keeps `AuthorityState` opaque, and registers the later topic modules empty of behavior. The executing consumer double is not server acceptance. No world rule, reducer, transport adapter, or disk backend was added. `HandshakeLimits` is not declared in the core-seam plan and was not invented.
+
+A deliberately non-atomic compound stage applied the first inventory patch and then rejected the second. `contract_double::compound_rejects_partial` failed before the atomic stage was restored:
+
+```
+assertion `left == right` failed
+  left: HotbarSlot(1)
+ right: HotbarSlot(0)
+```
+
+The atomic stage validates every component before applying any, and the same test then passed with the selected slot still at 0. A refused save returns the original snapshots. A completed save echoes the exact key and revision.
+
+Validation from the repository root, all exit 0: `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --no-deps --format-version 1` lists `mornlea_server`. `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked -- --list` lists 8 tests, including every required double. `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked contract_double` passed 7 tests. The same binary's inventory row check also passed. `git diff --check` passed. Commit message: `feat(server): land compiling authoritative server contract`. Architecture skill: no change; this lands the change-local contract and does not add a new cross-task architecture rule.
