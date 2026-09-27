@@ -527,10 +527,10 @@ pub fn find_path(
         return Err(PathError::Unreachable);
     };
     if start == goal {
-        let revisions: Box<[[i32; 2]]> = grid
+        let revisions: Box<[_]> = grid
             .revisions()
             .iter()
-            .map(|entry| entry.chunk)
+            .copied()
             .collect::<Vec<_>>()
             .into_boxed_slice();
         return Ok(PathResult::new(Box::new([start]), revisions));
@@ -551,10 +551,10 @@ pub fn find_path(
         expansions += 1;
         if current == goal_index {
             let waypoints = reconstruct(&mut space, grid, cells, start_index, goal_index)?;
-            let revisions: Box<[[i32; 2]]> = grid
+            let revisions: Box<[_]> = grid
                 .revisions()
                 .iter()
-                .map(|entry| entry.chunk)
+                .copied()
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
             return Ok(PathResult::new(waypoints, revisions));

@@ -56,3 +56,7 @@ The contract node is the only start dependency for the six lanes. Chunk, probe, 
 ## Migration Plan
 
 Land the interface contract with compiler and test-double evidence. Implement six independent lanes, reviewing and committing each behavior node with its Go/ABI source-bound cases. Integrate FFI adapters one family at a time, preserving ABI v11. Merge the eleven corpus routes and run numerical closure, then pass its evidence to the separate complete F1 acceptance. Rollback reverts the affected native provider, adapter and corpus fragment together; no default runtime or save is switched.
+
+## Global review correction rulings
+
+The [review repair packet](plans/04-review-repairs.md) governs the corrected full revision result, fallible reusable path workspace, checked extreme-coordinate transitions, bounded persistent ray DDA, actual-read physics admission, typed mesh origin validation and complete live corpus provenance. Legacy ABI admission and layouts remain unchanged.

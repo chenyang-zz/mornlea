@@ -104,10 +104,10 @@ fn assert_revisions_match_grid(
     grid: &PathGrid,
     scene: &str,
 ) {
-    let want: Vec<[i32; 2]> = grid.revisions().iter().map(|entry| entry.chunk).collect();
+    let want = grid.revisions();
     assert_eq!(
         result.revisions(),
-        want.as_slice(),
+        want,
         "{scene}: normalized revision identity must flow into the result"
     );
 }

@@ -136,11 +136,11 @@ impl PathScratch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathResult {
     pub(crate) waypoints: Box<[PathCell]>,
-    pub(crate) revisions: Box<[[i32; 2]]>,
+    pub(crate) revisions: Box<[PathRevision]>,
 }
 
 impl PathResult {
-    pub fn new(waypoints: Box<[PathCell]>, revisions: Box<[[i32; 2]]>) -> Self {
+    pub fn new(waypoints: Box<[PathCell]>, revisions: Box<[PathRevision]>) -> Self {
         Self {
             waypoints,
             revisions,
@@ -151,7 +151,7 @@ impl PathResult {
         &self.waypoints
     }
 
-    pub fn revisions(&self) -> &[[i32; 2]] {
+    pub fn revisions(&self) -> &[PathRevision] {
         &self.revisions
     }
 }

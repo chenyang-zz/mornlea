@@ -995,3 +995,9 @@ match the tree, 0 mismatches.
   re-run below. Implementation complete: eleven numerical routes with
   executed Go-vs-Rust evidence, ABI v11 frozen, 6/6 integrated gates green
   on `7a48b002`. Archive/merge remain explicit user decisions (not taken).
+
+## Global review, 2026-09-27
+
+Three isolated read-only reviews of `54c7a761` found lost path revision numbers, unchecked path sizes/neighbors, non-reusable path scratch, physics uncovered reads, ray history replay, mesh origin overflow/all-air divergence, duplicate collision solving and incomplete source pins. These are acceptance blockers. Current dev was merged cleanly as `a860f38c`; root user-owned changes are preserved. Full gates were stopped after green rust/fmt/rust-check when blockers arrived; dev-check and later gates are not claimed. Controller selected the linked repair packet using Superpowers brainstorming/writing-plans. Family repair isolation reduces multi-file reasoning retention and prevents ownership overlap; source hash refresh and all shared integration stay serial. Architecture skill: no change.
+
+Public revision contract corrected before repair dispatch: consumer assertion first failed with E0277 (chunk-only result versus PathRevision); real-provider projection now copies full values. `cargo test --test numerical_migration --locked path_search` passed; `cargo test --test native_contract --locked contracts` passed 3 tests. Logs: `/tmp/mornlea-review-contract-{red,green}.log`. This accepts the compile-ready contract only; provider repairs and corpus acceptance remain open.
