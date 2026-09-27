@@ -135,3 +135,5 @@ Ruling: the constructor maxima measured by task 1.1b at `c6bb98719c8d6cc1fb53a89
 `testdata/runtime-migration/server/capacity-measurements.json` gains an `accepted_maxima` object and keeps the measured samples: 75 runtime, 5 persistence, and 6 actor cases. `fits_ceilings` remains true.
 
 Validation: the same three 1.1b tests were re-run from the repository root and exited 0. `git diff --check` passed. `npx --yes @fission-ai/openspec@1.7.0 validate rust-authoritative-server --type change --strict --no-interactive` reported the change valid. Baseline before this edit was `d8ae6ef6aa30becccb746429233bbe38e6f965cc`. Architecture skill: no change; these are measured constructor numbers for this change, not a new cross-task architecture rule.
+
+Independent review approved node 1.1c at `a4ec13066eb8b255ff5bc67e838743429a16df05`. Deferred minor for the final branch review and for the node 3.4a dispatch: `plans/01-server-slices.md` still calls `StoreLimits` proposed and subject to 1.1b/c fit. `plans/02-core-seams.md` is the declaration authority for the accepted per-lane caps. Architecture skill: no change.
