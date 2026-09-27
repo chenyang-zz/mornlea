@@ -50,3 +50,43 @@ Focused acceptance:
 Rust targets executed12 command-order tests and54 domain-corpus tests, with zero failures/ignored tests. The exact pure-domain partition stays533; both authority cases stay external. Real authority executes both frozen rows plus no-effect/admitted-refusal/reversed-arrival and exporter-symlink tests; explicit draft publication alone skips with unset environment.
 
 Independent GPT-6 Sol reviewer approved combined nodes1.1–1.3 for specification compliance and quality, independently confirming original-case preservation and current source/asset hashes. The one important exporter finding is resolved; stale guide claims are corrected. `git diff --check` passed. Nodes1.1–1.3 now close as one unit; node2.1 full gates and node2.2 seal remain open. Architecture skill: no change; this applies existing ownership/revalidation rules and preserves the user-owned skill edit.
+
+## Complete consumer and stage-gate execution
+
+Integrated source checkpoint: `d042982d` (code, provider, consumers and frozen corpus); working changes beyond it are evidence/status only, plus the preserved unrelated user edits. Toolchains observed: `go version go1.26.0 darwin/arm64` and `rustc1.97.1 (8bab26f4f 2026-07-14)`.
+
+Additional required external-consumer confirmation: `go test ./packages/shared/companion -run '^TestRuntimeAgentContract' -race -count=1 -v` passed, exit0; log `/private/tmp/mornlea-f1-agent-consumer.log`. This executes all154 HTTP/MCP/mine-validation fixtures through the existing pure Go schema validator, compares frozen observations and checks actual DTO/tool/rejection behavior. The oracle package itself only checks external Agent provenance and enumerates cases, so this direct producer run prevents claiming its recording double as actual external execution. The full six-module gates also include that producer. No Python Agent runtime parity is claimed.
+
+The 13-command integrated gate runner completed successfully; every final recorded exit is zero. Gate evidence is written to `/private/tmp/mornlea-f1-full-results.json` and individual logs. The failed first governance attempt and its scoped repair remain recorded below.
+
+### Full-gate governance mismatch and scoped repair
+
+`make dev-check` failed (exit2,285.89s) solely at `TestProjectArchitectureSkillsMatch`: the user-owned Claude architecture skill contained one additional live-provenance/source-hash paragraph absent from Codex. Direct `go test ./packages/audit -run '^TestProjectArchitectureSkillsMatch$' -count=1` reproduced the same failure. An initial progress message misidentified the differing clause as the model-delegation restriction; direct diff corrected that statement before repair.
+
+The controller copied the user-authored paragraph verbatim into the Codex working mirror and verified the Claude file's original bytes remain identical. No user change is reverted or overwritten. Exact overlap: `.claude/skills/mornlea-architecture/SKILL.md` is pre-existing user work; committing only its synchronized `.codex/skills/mornlea-architecture/SKILL.md` mirror would leave a byte-mismatched committed pair. Both associated skill edits therefore remain unstaged/uncommitted and are excluded from F1 commits. Hash evidence is `/private/tmp/mornlea-f1-skill-sync.json`; the seal records that working governance overlay explicitly. The committed pre-overlay pair is already byte-identical. Architecture skill: no new promotion; this is synchronization of existing user work only.
+
+The new paragraph's ordinary source-edit rule leaves `source_revision` pinned; this acceptance change's explicitly owned corpus-closure publication establishes the new pinned base once, rather than incrementing it for subsequent source-only edits. Existing evidence bindings and all unchanged corpus assets remain intact. Every failed gate will rerun without skips or exemption variables; earlier passing provider/corpus gates remain valid because this mirror does not alter any bound source or case.
+
+## Accepted complete-consumer node
+
+Integrated code/corpus SHA: `d042982d33bb1694d768b75b01c297bd02534a08`. All required consumers and stage gates completed on those exact bound sources and corpus; the governance working overlay above is explicitly excluded from implementation commits. Each command below exited zero.
+
+| Expanded command | Exit | Elapsed seconds | Execution log |
+| --- | ---: | ---: | --- |
+| `go test ./packages/tools/cmd/runtime-oracle -race -count=1` | 0 | 441.1 | `/private/tmp/mornlea-f1-full-01.log` |
+| `go test ./packages/server/sim/runtime -run '^TestCommandOrderOracle' -count=1 -v` | 0 | 1.39 | `/private/tmp/mornlea-f1-full-02.log` |
+| `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_domain --test corpus_domain --test command_order --locked` | 0 | 1.99 | `/private/tmp/mornlea-f1-full-03.log` |
+| `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_protocol --test protocol_corpus --locked` | 0 | 6.23 | `/private/tmp/mornlea-f1-full-04.log` |
+| `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_storage --test storage_corpus --locked` | 0 | 3.81 | `/private/tmp/mornlea-f1-full-05.log` |
+| `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test native_contract --test numerical_migration --locked` | 0 | 7.45 | `/private/tmp/mornlea-f1-full-06.log` |
+| `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all -- --check` | 0 | 0.92 | `/private/tmp/mornlea-f1-full-07.log` |
+| `make rust` | 0 | 1.88 | `/private/tmp/mornlea-f1-full-08.log` |
+| `make rust-check` | 0 | 39.76 | `/private/tmp/mornlea-f1-full-09.log` |
+| `make dev-check` | 0 | 219.11 | `/private/tmp/mornlea-f1-full-10.log` |
+| `make test-race` | 0 | 750.39 | `/private/tmp/mornlea-f1-full-11.log` |
+| `go test ./packages/audit -count=1` | 0 | 93.04 | `/private/tmp/mornlea-f1-full-12.log` |
+| `openspec validate --all --strict --no-interactive` | 0 | 1.21 | `/private/tmp/mornlea-f1-full-13.log` |
+
+Rust target execution counts: command_order 12; corpus_domain 54; protocol_corpus 24; storage_corpus 90; native_contract 91; numerical_migration 68. Every target executed nonzero tests with zero failures or ignored tests. These test counts are distinct from the corpus partitions: domain 533, protocol 433, frame 3, storage 269, engine 40, external Agent 154 and external authority 2, totaling 1434. The separately recorded real Go Agent command and real authority command executed their frozen partitions; passing registry doubles are not substituted for either.
+
+Independent review accepted the producer/gate/corpus unit and the governance mirror repair with no remaining important finding. The preserved Claude skill bytes equal the synchronized Codex working mirror; their committed pre-overlay pair also matches. No gate was skipped or exempted. Node2.1 is complete; node2.2 now owns the source/corpus seal and downstream prerequisite publication. Architecture skill: no change.

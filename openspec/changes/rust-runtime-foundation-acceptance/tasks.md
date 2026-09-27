@@ -10,5 +10,5 @@ Implementation in progress; status is recorded below. [Exact packets and evidenc
 
 ## 2. Integrated acceptance and downstream seal
 
-- [ ] 2.1 Execute every required Rust/Go corpus consumer and full stage gates on the integrated source.
+- [x] 2.1 Execute every required Rust/Go corpus consumer and full stage gates on the integrated source.
 - [ ] 2.2 Seal zero-gap foundation evidence and bind F2/F3 prerequisites without starting their runtime implementation.
