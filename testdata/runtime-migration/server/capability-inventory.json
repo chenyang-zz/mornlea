@@ -218,8 +218,8 @@
       "source": "packages/shared/network/protocol/registry.go#bytes[0:9468]",
       "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
       "fixture": "testdata/runtime-migration/contracts.json#protocol.client.KeepAliveReply/45",
-      "rust_node": "1.3,3.2",
-      "rust_test": "server_contract::session;local_remote_parity::common"
+      "rust_node": "3.2",
+      "rust_test": "common::coalesced_then_ingest_cap;common::login_success_send_ack_before_play"
     },
     {
       "id": "command.protocol.client.MoveContainerStack",
@@ -8062,6 +8062,73 @@
           "name": "TestRegionCanceledSaveDoesNotSwitchBank",
           "source": "packages/server/storage/chunk/region_test.go",
           "source_sha256": "sha256:e9c57bc1d0e0dab6eb4f2d88553cc5558cb46ca4e9418841fb60cabc7855b1ef"
+        }
+      ],
+      "expected_literals": []
+    },
+    {
+      "package": "./packages/server/storage/region",
+      "filter": ".*",
+      "selected_tests": [
+        {
+          "name": "TestSuperblockExactLayoutAndRoundTrip",
+          "source": "packages/server/storage/region/region_format_test.go",
+          "source_sha256": "sha256:fba650f85d1084bb8266cbdaa4c93952afeb0138e918e1e26da8aa44743c3232"
+        },
+        {
+          "name": "TestSuperblockRejectsCorruption",
+          "source": "packages/server/storage/region/region_format_test.go",
+          "source_sha256": "sha256:fba650f85d1084bb8266cbdaa4c93952afeb0138e918e1e26da8aa44743c3232"
+        },
+        {
+          "name": "TestRegionBankRoundTripAndSelection",
+          "source": "packages/server/storage/region/region_format_test.go",
+          "source_sha256": "sha256:fba650f85d1084bb8266cbdaa4c93952afeb0138e918e1e26da8aa44743c3232"
+        },
+        {
+          "name": "TestRegionBankExactLayout",
+          "source": "packages/server/storage/region/region_format_test.go",
+          "source_sha256": "sha256:fba650f85d1084bb8266cbdaa4c93952afeb0138e918e1e26da8aa44743c3232"
+        },
+        {
+          "name": "TestRegionBankAcceptsEmptyGenerationZeroAndMaxGeneration",
+          "source": "packages/server/storage/region/region_format_test.go",
+          "source_sha256": "sha256:fba650f85d1084bb8266cbdaa4c93952afeb0138e918e1e26da8aa44743c3232"
+        },
+        {
+          "name": "TestRegionBankRejectsCorruption",
+          "source": "packages/server/storage/region/region_format_test.go",
+          "source_sha256": "sha256:fba650f85d1084bb8266cbdaa4c93952afeb0138e918e1e26da8aa44743c3232"
+        },
+        {
+          "name": "TestEncodeRegionBankRejectsInvalidStructure",
+          "source": "packages/server/storage/region/region_format_test.go",
+          "source_sha256": "sha256:fba650f85d1084bb8266cbdaa4c93952afeb0138e918e1e26da8aa44743c3232"
+        },
+        {
+          "name": "TestSelectRegionBankValidityAndTies",
+          "source": "packages/server/storage/region/region_format_test.go",
+          "source_sha256": "sha256:fba650f85d1084bb8266cbdaa4c93952afeb0138e918e1e26da8aa44743c3232"
+        },
+        {
+          "name": "TestAllocatorNeverUsesActiveExtentsAndUsesFirstFit",
+          "source": "packages/server/storage/region/region_space_test.go",
+          "source_sha256": "sha256:7e84135425b6a8b28efc3084e447b2cdca37a95804b714c3cef95467273fa82d"
+        },
+        {
+          "name": "TestAllocatorAppendsOnlyWhenNoFreeExtentFits",
+          "source": "packages/server/storage/region/region_space_test.go",
+          "source_sha256": "sha256:7e84135425b6a8b28efc3084e447b2cdca37a95804b714c3cef95467273fa82d"
+        },
+        {
+          "name": "TestRegionForUsesFloorDivision",
+          "source": "packages/server/storage/region/coords_test.go",
+          "source_sha256": "sha256:2a2c68fe688ddea99c78aaab7ae1d3343575af869bf0c16a2f087c9c5193ea72"
+        },
+        {
+          "name": "TestRegionForHandlesMinInt32",
+          "source": "packages/server/storage/region/coords_test.go",
+          "source_sha256": "sha256:2a2c68fe688ddea99c78aaab7ae1d3343575af869bf0c16a2f087c9c5193ea72"
         }
       ],
       "expected_literals": []
