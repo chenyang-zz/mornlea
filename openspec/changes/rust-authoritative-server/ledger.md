@@ -107,3 +107,21 @@ Independent review approved node 1.1a after those corrections. Accepted commits 
 ## Task 1.1b ownership ruling, 2026-09-27
 
 The first 1.1b dispatch stopped before any test or measurement. `cachedPlayer`, `playerSaveScheduler`, `Companions`, `Hostiles`, and `Passives` are unexported owners in package `persistence`. A test in package `server` cannot read their snapshot tickets without a production accessor. Ruling: keep production code unchanged and place `TestMigrationActorCapacityReplay` in `packages/server/server/persistence/migration_actor_capacity_oracle_test.go`. Sample a worker-local held job from the gated Store call argument. Where `inFlightJob` exists, sample that field too. Do not add a production measurement API. The runtime and world-persistence tests stay on their original paths. Architecture skill: no change.
+
+## Task 1.1b capacity measurement, 2026-09-27
+
+Baseline `076fbcd7d4b535afe0dbcb7afb7836cfc6e173d1`. Package-local tests sampled command, ready-chunk, world save, and actor snapshot ownership. Held jobs are the values passed into the gated Store. `inFlightJob` was sampled on companions, hostiles, and passives. Players have no `inFlightJob` field, recorded as not applicable. No production accessor was added.
+
+Supported high water, with codec bytes rather than `EstimatedBytes`:
+
+- Commands: 4096 on `Engine.commands`. The 4097 fill is an unsupported probe.
+- Ready chunk results: 64 on `Engine.generated`. The 65 fill is an unsupported probe.
+- Pending chunk saves: 8 snapshots, 1206 encoded bytes, one region job (`save.chunk`, `save.region`).
+- Shared queue and `retryInFlight` slice: 1 snapshot, 149 encoded bytes, counted once.
+- Mixed queue, held `Store.SaveBatch` argument, completion, and retry: 152, 149, 152, and 153 bytes. Deduplicated total 4 snapshots, 606 bytes.
+- World metadata: 78 bytes, the `world.meta` file written by disk create.
+- Actor retained snapshots: 26 tickets, 7500 bytes. Players 8 within bound 8, 16 tickets, 5040 bytes. Companions count 2, bound 64, 3 tickets, 1755 bytes. Hostiles count 1, bound 64, 3 tickets, 315 bytes. Passives count 1, bound 32, 3 tickets, 312 bytes. Metadata 1 ticket, 78 bytes.
+
+`fits_ceilings` is true for ceilings 4096, 64, 8, and 4194304. An understated command report of 4095 against observed 4096 failed before the runtime assertion accepted 4096. The passing runtime test also rejects understated 4097, 63, and 65 reports, then accepts the observed counts. Merged `testdata/runtime-migration/server/capacity-measurements.json` has 75 runtime, 5 persistence, and 6 actor cases.
+
+Validation: `go test ./packages/server/sim/runtime -run '^TestMigrationCapacityReplay$' -count=1 -v` exited 0. `go test ./packages/server/server/persistence -run '^TestMigrationPersistenceCapacityReplay$' -count=1 -v` exited 0. `go test ./packages/server/server/persistence -run '^TestMigrationActorCapacityReplay$' -count=1 -v` exited 0. `git diff --check` passed. Architecture skill: no change.
