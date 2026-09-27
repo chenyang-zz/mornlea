@@ -51,3 +51,22 @@
   3. 上轮遗留未动项：疑似重复归档目录 `2026-08-29-tiered-swords-combat` 与 `2026-08-30-tiered-swords-combat`（仅 ledger 不同）、被 PR #124 取代的 `A-03-tiered-swords-combat` worktree（`8c9e7fe3`）、`archive/2026-08-28-placeable-torches/proposal.md` 延期与放弃章节占位符未兑现。
   4. 待澄清项继续挂起（潜行、梯子两项已随本轮出处入库落行关闭；回血计时冻结、旧区块注水迁移、水下呼吸装备/附魔、漏斗、创造/旁观模式、主菜单重入装配等仍开放）。
   5. `2026-08-31` 前后交付的 cozy 主题、dev-capture、pixel style、rust-render-world-cache、mining-crack-overlay、webview-game-ui-unification Phase 1 均为控制会话 change、无对应 backlog 行，本表不追溯补行；如需履历入表由用户裁决。
+
+## 2026-09-27（规划者第四轮）
+
+- **读取输入**：`docs/feature-backlog.md`、`docs/notes/agent-runs.md`（上轮 2026-09-02 第三轮）、`docs/notes/progress.md`、根 `AGENTS.md`（版本矩阵现为协议 v45、玩家 schema v9、区块 schema v9、metadata v6、`companions.ai` v5、`hostile_mobs` v2、`passive_mobs` v1、engine ABI v11、client ABI v19、benchmark scenario v23）、`openspec/config.yaml`、Discussion #71（`gh api graphql` 撞未认证共享限流 403 + token 仍失效不可用，改经 web-reader 读公开页：正文仍为首轮状态、60 条评论中 30 条隐藏项加载失败，可见评论止于 2026-08-30 F-07）、`origin/main`（`git fetch` 后头 `81a56bb8`）、`git branch -a`/`git worktree list` 及 6 个本地 worktree 头 SHA 与脏状态、上轮之后新归档的 48 个 change（`2026-09-02` 起）的 `proposal.md` 非目标/延期节横扫、`git ls-files` 来源入库校验（10 个新行来源全部已跟踪）。
+- **变更行**：
+  - 新增 `B-47`（弓合成配方，B-23 非目标「弓合成另立后续行」）、`B-48`（门/床潜行放置接线，B-42 Non-Goals + B-42 行待认领备注）、`B-49`（箭矢滞留与拾取，B-23 非目标）、`B-50`（敌对生物避水，water-avoidance 非目标）、`B-51`（难度伤害倍率，B-23 非目标「B-11 显式不含」）、`B-52`（草退化与蔓延光照条件，grass-spread 非目标）、`D-20`（被动牛表现打磨，cow-behavior「列为后续候选」）、`D-21`（护甲可见呈现，armor 非目标）、`E-20`（近环远环空洞带闭合，section-mesh「另行立项裁决」）、`E-21`（存档冷启动加载优先级，E-19 延期第 1 项）；全部有已入库出处，默认 `排队`，版本列只写方向性结论。
+  - 校对：`B-20` 备注补有界双维已交付（PR #168，第三维/并行 tick/专用传送 packet 显式排除，本行维持设计候选）；`B-36` 备注补未认领在途分支 `codex/b36-axes-shovels`（头 `2a745374`）与 worktree 脏改动（含本表），本轮不晋升；`B-39` 备注补 B-23 骨头掉落已交付（来源半边满足、配方半边待本行）；`D-15` 备注补 E-19 视距滑块归入视距半边。其余行状态与 git 一致，无待标完成行（B-02/B-11/B-23/B-24/B-27/B-33/B-34/B-35/B-42/D-19/E-19 均已由控制会话回填为已完成）。
+  - 未晋升：串行队首 B-36 前序 B-35 已完成、版本槽空闲，但 worktree 证据不一致（未认领在途分支活跃），按规则不晋升；B-37/B-38/B-39/B-40/B-44 保持排队（B-39/B-40 推进稳定编号，不得与 B-36 同时晋升）。
+- **未落行（判定）**：**待澄清**——`-connect` 远程加载屏（loading 非目标「如需覆盖另立」，价值待确认）、伙伴使用弓/投射物（B-23 非目标，C 组规则要求真实玩家验证先行）、钓鱼/闪电伤害/附魔/多材质护甲/护甲修复（weather/armor 非目标的否定式提及，无正向设计出处）、数字键快速放入（B-35 非目标，需先经 D-15 键位裁决）、加载中途取消（MC 亦无，价值待确认）。**丢弃/不落行**——跨容器快捷搬运与拖拽分批/自动整理（B-35 范围冻结排除；基础拖拽已由 `inventory-drag-drop` PR #182 交付但无 backlog 行，按第三轮先例不追溯补行）、潜行耐力（MC 无此机制）、splitmix64 收敛（E-19 延期 6，纯卫生，随后续触碰面顺手收敛）、掷骨者不攻击被动牛（既有行为细节，非独立缺口）。
+- **提交**：`85b9e64a`（docs: plan B-47..B-52, D-20..D-21, E-20..E-21）+ 本运行记录提交（两笔均在 `dev` 分支，见推送节）。
+- **推送**：**待定**——本轮工作区在 `dev` 分支（含用户未提交改动 `M .claude/skills/mornlea-architecture/SKILL.md` 与 `?? .commandcode/`，规划者未触碰）；docs 两笔提交需由用户决定是 cherry-pick 进 `main` 后 SSH 快进推送，抑或留在 `dev`。规划者不代做跨分支移植。
+- **讨论同步**：**未执行**——正文刷新脚本依赖 `gh api graphql`（token 失效 + 未认证限流，graphql 配额 0，重置约 02:00 UTC 后仍可能因无认证而拒绝）；状态变更评论（10 条落行 + 4 条校对）均未发出。正文镜像已落后三轮（仍列 A-03 已认领、B-04 排队、缺 B-38..B-52/D-13..D-21/E-15..E-21/F-09..F-11 共 30+ 行），以仓库文件为准。
+- **留给下一轮 / 用户**：
+  1. `gh` 的 github.com token 仍失效（`channing771`→`chenyang-zz` 迁移后未重认证），Discussion 正文 `--update` 与评论已积压三轮，待凭据恢复后一次性补发。
+  2. 2026-08-30 之后的新评论不可见（本轮仅确认正文 + 30 条旧评论），其中至少含 B-23 行备注引用的 discussioncomment-18412981；下轮优先翻页对账。
+  3. `codex/b36-axes-shovels` worktree 脏改动含 `docs/feature-backlog.md`——有另一会话正在改规划表，认领登记与处置属控制会话裁决；本轮 B-36 备注仅记录观察，未触碰其分支。
+  4. 无对应 backlog 行但已合入 `main` 的控制会话 change（grass-spread PR #181、inventory-drag-drop PR #182、weather/seasonal/snow、graze-lure、water-avoidance、menu-vista、section-mesh、held-items、godot-pilot P8–P14）是否追溯补履历行，待用户裁决（本轮维持第三轮先例：不补）。
+  5. 遗留未动项：疑似重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、被取代的 `A-03-tiered-swords-combat` worktree、torch proposal 延期章节占位符、F-04 仍无本机 worktree 可核对（`lan-server.md` 陈旧被 4 个归档 setup ruling 点名）。
+  6. 上轮待澄清（回血计时冻结、旧区块注水迁移、水下呼吸/附魔、漏斗、创造/旁观模式、主菜单重入装配、水中冲刺、鞘翅）继续挂起，本轮新增见上文「未落行」。
