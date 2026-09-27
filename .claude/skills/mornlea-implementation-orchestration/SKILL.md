@@ -13,6 +13,8 @@ For a new or materially revised multi-step plan, discover and read the installed
 
 The main Agent determines architecture, exact interfaces, behavior, lifecycle, error policy, compatibility, algorithms, performance bounds, task dependencies and test oracles. Read-only source fact extraction and independent criticism may be delegated; those agents do not own the design. Workers implement frozen decisions and return discrepancies for controller resolution. Do not use a catch-all family task or leave a design decision for an implementation worker.
 
+For a new or materially changed boundary consumed by multiple independently reviewable tasks, the controller first lands an accepted, compile-ready contract. Provider and consumer nodes name its SHA and own disjoint edits; shared adapters and final real integration stay serial. Test doubles establish consumer readiness, not provider or integration acceptance. Apply the selection and evidence rules in `docs/interface-first-parallel-development.md`; do not introduce an interface layer for a private one-task boundary or delegate solely because tasks can run concurrently.
+
 Before dispatch, apply the linked readiness checklist and record the result in the change ledger. Explicit session authorization and higher-priority runtime instructions take precedence over skill defaults; do not request redundant approval or send external messages merely because a skill suggests a workflow. Preserve any already-selected execution method. Planning-only work ends with reviewed artifacts, not automatic runtime implementation.
 
 ## Select the Mode

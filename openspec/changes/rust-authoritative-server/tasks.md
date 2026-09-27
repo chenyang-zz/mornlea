@@ -1,25 +1,56 @@
-These are implementation tasks, all still pending and blocked until complete F1 acceptance. The archived baseline is insufficient: the archived domain-event successor, separate protocol and storage evidence, safe public numerical APIs, pathfinding and a final zero-gap acceptance must all close first. Direct Cargo commands run from the repository root using the toolchain pinned by `packages/engine/rust-toolchain.toml`; reconcile the explicit pin if that file changes before implementation. New crate and named test targets below are planned outputs, not currently runnable commands. Register each named integration target with non-empty contract cases before using it as evidence; inspect `-- --list` and reject zero discovered tests. Add the failing scenario first, then the minimum implementation, and commit each verified node. Record coverage and the exact code SHA in `ledger.md`. Refine any node exceeding a session into explicit capability tasks before implementing it.
+# F2 Rust authoritative server implementation
 
-## 1. Prerequisites and core lifecycle
+All nodes are pending. [Execution contract and dependency graph](plans/00-execution.md), [compile-ready S1 seams](plans/02-core-seams.md) and [exact worker packets](plans/01-server-slices.md) are part of this plan. These new crate/tests are prospective until their owning nodes land; `-- --list` alone is never provider acceptance. Record the accepted contract SHA, fixture identity, behavioral red/green and focused commit for each node in `ledger.md`. A worker edits only packet-owned files. F1 complete acceptance is a hard prerequisite; the current Go server remains the production authority until the separate product cutover.
 
-- [ ] 1.1 Verify the final F1 acceptance ledger names the accepted domain-event, protocol, storage, numerical-API and pathfinding successors, binds their implementation SHAs and corpus identities, and reports zero uncovered supported families. Run the final F1 complete-acceptance command and its non-empty Rust/Go suites exactly as recorded there. Record acceptance or the specific blocker in this ledger; the archived baseline, the domain-event successor alone or a collection of planning files is not completion.
-- [ ] 1.2 Create `packages/engine/crates/mornlea_server/`, register it in the workspace, add its `AGENTS.md`, capability inventory, and non-empty `server_contract`, `server_replay`, `persistence_failure`, and `local_remote_parity` integration targets. Validate with `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --no-deps --format-version 1` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --tests --locked -- --list`; pin intended failing cases and reject empty suites.
-- [ ] 1.3 Implement server-owned session/tick/cancellation with bounded queues in `mornlea_server`, first testing ordering, saturation and shutdown. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked`.
+See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
-## 2. Authoritative capabilities
+## 1. Contract and lifecycle
 
-- [ ] 2.1 Port world/chunk/environment/fluid scheduling in `mornlea_server` using shared numerical kernels; add checkpoint replays and capacity failures for each inventory family before porting it. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_replay --locked`; append per-family coverage and scoped commit evidence to the ledger.
-- [ ] 2.2 Port player movement/actions/inventory and permission validation in `mornlea_server`; first cover rejection, item conservation, ordering and correction observations. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_replay --locked` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked`.
-- [ ] 2.3 Port actor/combat/drop/companion rules in `mornlea_server`; add deterministic outcome, despawn, stale command and overflow cases before each rule family. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_replay --locked`; incomplete families keep F2 blocked.
-- [ ] 2.4 Implement bounded persistence workers and recovery in `mornlea_server` over F1 storage; first inject failed reads/writes, interrupted saves, cancellation and restart against disposable copies. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test persistence_failure --locked`.
-- [ ] 2.5 Implement the versioned independent Agent service adapter in `mornlea_server`; add candidate revalidation, timeout, cancellation and service-isolation tests using a loopback fake service before integration. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked` and `make companion-agent-integration`.
+- [ ] 1.1 Verify complete F1 zero-gap acceptance and enumerate supported server capabilities.
+- [ ] 1.2 Land compiling S1 contract, bounded types and executing consumer double; freeze its SHA.
+- [ ] 1.3 Implement session admission, sequenced intake and control-plane separation.
+- [ ] 1.4 Implement bounded tick/chunk mailboxes and cancellation.
+- [ ] 1.5 Implement owned publication, slow-receiver policy and shutdown report.
+- [ ] 1.6 Implement authority-resolved atomic placement/mining transaction and failure invariants.
 
-## 3. Transport and authority acceptance
+## 2. Independent authoritative rule providers
 
-- [ ] 3.1 Add Memory and TCP adapters in `mornlea_server` over one login/codec/validation core, testing successful sessions, invalid/stale actions and shutdown through both. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test local_remote_parity --locked`.
-- [ ] 3.2 Add exclusive world ownership and explicit opt-in activation/rollback with a named backup and compatible schema verification; first test competing owners, incompatible rollback and crash recovery in temporary worlds. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test persistence_failure --locked` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked`; retain recovery reports and keep the current default startup unchanged.
+- [ ] 2.1a Implement chunk acquisition and stale-generation rejection.
+- [ ] 2.1b Implement world placement/mining geometry through the atomic transaction.
+- [ ] 2.2 Implement time, season, weather and environment transition replay.
+- [ ] 2.3 Implement bounded fluid rescan and update scheduling.
+- [ ] 2.4a Implement bounded farmland moisture.
+- [ ] 2.4b Implement trample, snow and crop random ticks.
+- [ ] 2.4c Implement ordered block-support sweeps.
+- [ ] 2.5a Implement authoritative player control and movement.
+- [ ] 2.5b Implement survival transitions and correction observations.
+- [ ] 2.6a Implement inventory authority and item conservation.
+- [ ] 2.6b Implement containers and chest revision validation.
+- [ ] 2.6c Implement atomic workbench crafting.
+- [ ] 2.6d Implement tick-driven furnaces.
+- [ ] 2.7a Implement hostile lifecycle and targeting.
+- [ ] 2.7b Implement projectiles and hit validation.
+- [ ] 2.7c Implement one-time hostile death and combat outcomes.
+- [ ] 2.8a Implement passive lifecycle.
+- [ ] 2.8b Implement item drops and pickup.
+- [ ] 2.8c Implement sleeping and time transition.
+- [ ] 2.9a Implement sessionless companion candidate provenance and admission.
+- [ ] 2.9b Revalidate and execute companion actions through the shared mutation pipeline.
+
+## 3. Adapters and serial integration
+
+- [ ] 3.1 Integrate the one authoritative tick reducer after all rule providers.
+- [ ] 3.2 Land the common protocol/login/validation transport path.
+- [ ] 3.3a Implement the Memory adapter over common admission.
+- [ ] 3.3b Implement the TCP adapter over common admission.
+- [ ] 3.4a Implement bounded durable store mailbox.
+- [ ] 3.4b Implement autosave, retry, backpressure and flush scheduling.
+- [ ] 3.5 Implement exclusive world lease, recovery and named-backup rollback.
+- [ ] 3.6 Implement bounded loopback Agent adapter and candidate revalidation.
+- [ ] 3.7 Prove real local/remote, save/restart and Agent integration against the full inventory.
+- [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup.
 
 ## 4. Closeout
 
-- [ ] 4.1 Reconcile the full capability inventory and prerequisite evidence in this change's `ledger.md`; leave completion blocked for missing supported cases. Review `packages/engine/AGENTS.md` and new crate guides, and promote only verified cross-task rules into both architecture skills. Validate with `go test ./packages/audit -count=1` and the full named suites above; record discovered and executed test counts.
-- [ ] 4.2 Run formatting and complete implementation stage gates: `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make rust-check`, `make dev-check`, `make test-race`, and `openspec validate --all --strict --no-interactive`. Record failures as blockers, not exclusions; retain the rollback result and fixture/report identities in `ledger.md` before syncing specs or archiving.
+- [ ] 4.1 Reconcile zero-gap inventory, real-provider/integration evidence and guides.
+- [ ] 4.2 Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA.

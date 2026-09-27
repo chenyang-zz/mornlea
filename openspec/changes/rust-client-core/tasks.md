@@ -1,24 +1,54 @@
-These are implementation tasks, all still pending. Direct Cargo commands run from the repository root using the toolchain pinned by `packages/engine/rust-toolchain.toml`; reconcile the explicit pin if that file changes before implementation. New crate and named test targets below are planned outputs, not currently runnable commands. Register each named integration target with non-empty contract cases before using it as evidence; inspect `-- --list` and reject zero discovered tests. Add the failing scenario first, then the minimum implementation, and commit each verified node. Record coverage and the exact code SHA in `ledger.md`. Refine any node exceeding a session into explicit capability tasks before implementing it.
+# F3 Rust client core and Godot bridge implementation
 
-## 1. Prerequisites and session owner
+All nodes are pending. [C1/C2/G1 contract and graph](plans/00-client-contract.md), [typed family schema](plans/02-family-schemas.md) and [worker packets](plans/01-client-slices.md) define prerequisites, exact exclusive files, cases and commands. New crate/test targets are prospective until their owning nodes land. `ledger.md` records accepted contract SHA, fixtures, red/green and scoped commits. The current Go pilot remains explicitly selectable for rollback until the separate product cutover.
 
-- [ ] 1.1 Read F1/F2 accepted inventories, protocol/session identity and ledger evidence; run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_protocol --test runtime_contract --locked` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test local_remote_parity --locked`. Record exact prerequisite revisions; final F3 acceptance additionally requires full F2 server parity.
-- [ ] 1.2 Register `packages/engine/crates/mornlea_client_core/` and its scoped guide; inventory typed families in `testdata/runtime-migration/client/`; create non-empty `session_replay`, `prediction_replay`, `presentation_contract`, and `lifecycle_contract` integration targets. Validate with `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --no-deps --format-version 1` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --tests --locked -- --list`; record failing contract cases before implementation.
-- [ ] 1.3 Implement Rust login, protocol session and client mirrors against offline Go transcripts, first testing malformed input, stale sequencing, disconnect and rejection. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test session_replay --locked`.
+See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
-## 2. Prediction and semantic publication
+## 1. C1 contract and session
 
-- [ ] 2.1 Implement Rust reversible prediction and reconciliation using the shared kernel; first test authoritative correction, pending-input replay, duplicate acknowledgment and session reset. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test prediction_replay --locked`.
-- [ ] 2.2 Implement preparation scheduling and immutable semantic frames in `mornlea_client_core`; first cover mixed revisions, epochs, capacity, drop/upsert priority and bounded work. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test presentation_contract --locked`.
-- [ ] 2.3 Publish versioned terrain/entity/UI/cue/input families from `mornlea_client_core`, mapping every current supported family and future feature requirement to explicit typed fields and tests. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test presentation_contract --locked`; unimplemented visual feature kinds remain disabled.
+- [ ] 1.1 Bind F1/F2 accepted prerequisites and enumerate all client semantic families.
+- [ ] 1.2 Land compiling C1/C2 contract, typed family schema, frame validator and executing consumer double.
+- [ ] 1.3 Implement login/session observation state machine.
+- [ ] 1.4 Implement confirmed mirror and atomic observation order.
+- [ ] 1.5 Implement bounded shared Memory/TCP I/O queues.
 
-## 3. Typed adapter and lifecycle acceptance
+## 2. Parallel input, prediction, preparation and family providers
 
-- [ ] 3.1 Adapt `packages/engine/crates/mornlea_godot/` to the Rust core through a tested Rust API; add failing producer identity, family negotiation and panic/failure tests before switching the selected adapter. Preserve the explicitly selected pilot rollback path without automatic Go fallback. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_godot --locked`, `make godot-python-check`, and `go test ./packages/audit -run 'Architecture|Godot' -count=1`; reconcile migration-only audit assumptions through reviewed test changes, never exemptions.
-- [ ] 3.2 Implement and test reset/reconnect/teardown with queued work and invalid transitions in `mornlea_client_core` and the bridge. Extend `scripts/godot/smoke.sh` and its Godot/Python harness with an explicit Rust-core session mode that rebuilds artifacts, asserts producer/revision identity, exercises queued session work, and rejects stale/Go selection; first add failing wrong-producer and startup-only cases. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test lifecycle_contract --locked` and the newly implemented `scripts/godot/smoke.sh --iterations 100 --isolated-python --core rust --exercise-session`; retain selected artifact identities, repeated lifecycle counts and resource evidence. The existing startup-only `make godot-smoke` remains a supplementary check, not Rust-session acceptance.
-- [ ] 3.3 Integrate local/remote Rust-server sessions and run offline parity for all accepted client families. Validate with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test session_replay --locked` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test local_remote_parity --locked`. Reconcile the pilot delta and family registry; no pixel update or default switch is authorized by passing these tests.
+- [ ] 2.1 Implement semantic typed input, UI token and local sequence validation.
+- [ ] 2.2 Implement reversible prediction and authoritative correction replay.
+- [ ] 2.3 Implement bounded preparation scheduling and stale-result rejection.
+- [ ] 2.4 Assemble and atomically publish validated immutable frames.
+- [ ] 2.5 Publish `terrain@1` semantics.
+- [ ] 2.6a Project remote players into `actors@1`.
+- [ ] 2.6c Project hostiles into `actors@1`.
+- [ ] 2.6d Project passives into `actors@1`.
+- [ ] 2.6e Project projectiles into `actors@1`.
+- [ ] 2.6f1 Project companions into `actors@1`.
+- [ ] 2.6f2 Project item drops into `actors@1`.
+- [ ] 2.6g Assemble the complete `actors@1` family.
+- [ ] 2.6b Publish `player-view@1` semantics.
+- [ ] 2.7a1 Project inventory and hotbar state.
+- [ ] 2.7a2 Project containers and chest revision.
+- [ ] 2.7a3 Project crafting state.
+- [ ] 2.7a4 Project furnace state.
+- [ ] 2.7a5 Assemble `inventory-ui@1`.
+- [ ] 2.7b1 Project environment state.
+- [ ] 2.7b2 Project survival state.
+- [ ] 2.7b3 Project chat state.
+- [ ] 2.7b4 Project task state.
+- [ ] 2.7b5 Project prompts.
+- [ ] 2.7b6 Assemble `world-ui@1`.
+- [ ] 2.8 Publish provenance-aware `audio-cues@1` semantics.
+- [ ] 2.9 Publish `diagnostics@1` semantics.
+
+## 3. Serial adapter and real integration
+
+- [ ] 3.1 Assign G1 registry descriptors and land the safe Rust Godot adapter.
+- [ ] 3.2 Implement symbolic family negotiation and one-session feature host activation.
+- [ ] 3.3 Implement reset/reconnect/teardown and explicit 100-cycle Rust session smoke.
+- [ ] 3.4 Integrate real F2 Memory/TCP server, C1/C2 and G1 against all accepted families.
 
 ## 4. Closeout
 
-- [ ] 4.1 Reconcile the full capability inventory and prerequisite evidence in this change's `ledger.md`; leave completion blocked for missing supported cases. Review `packages/engine/AGENTS.md` and new crate guides, and promote only verified cross-task rules into both architecture skills. Validate with `go test ./packages/audit -count=1` and the full named suites above; record discovered and executed test counts.
-- [ ] 4.2 Run formatting and complete implementation stage gates: `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make rust-check`, `make dev-check`, `make test-race`, and `openspec validate --all --strict --no-interactive`. Record failures as blockers, not exclusions; retain the rollback result and fixture/report identities in `ledger.md` before syncing specs or archiving.
+- [ ] 4.1 Reconcile zero-gap inventory, real provider/integration cases and guides.
+- [ ] 4.2 Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA.

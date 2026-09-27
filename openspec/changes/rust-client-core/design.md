@@ -2,6 +2,8 @@
 
 The existing Rust Godot extension dynamically loads a pilot Go client-core. Python already consumes typed semantic views. F1 and the accepted F2 protocol/session contract are prerequisites; this stage replaces client runtime ownership without turning pilot code into the final architecture.
 
+The [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns C1 session, C2 presentation and G1 bridge/registry after F2 S2, with target V1 families consumed by later features. Each shared boundary requires its own compile-ready contract landing and accepted SHA before disjoint consumers start; the Godot registry and real integration have serial owners. Planned facade signatures and logical family names do not imply a present Rust client-core or numeric ABI descriptors.
+
 ## Goals / Non-Goals
 
 Preserve typed presentation behavior while moving sessions, mirrors, prediction and frame production to Rust. Do not expand Go core behavior, migrate complete terrain/UI/actors/audio features, transfer tracked visual producers, delete the legacy renderer, or switch defaults.
@@ -18,7 +20,7 @@ Create the new crate guide and update `packages/engine/AGENTS.md`. Keep the old 
 
 Move the meaning of the current Go `FrameSnapshot` and typed input/view families into Rust records; do not freeze Go internal layouts as the final contract. One session epoch and one confirmed frame revision cover every sampled view. Rust owns network decoding, mirrors, correction, mesh scheduling and capacity/revision policy. Godot Python applies typed views in bounded batches and owns presentation resources. Unsupported family negotiation fails closed.
 
-Establish an inventory of frame/input/world/entity/UI/cue families under `testdata/runtime-migration/client/`, mapping each current source to Rust tests and required P8–P11 consumers. Publish versioned family contracts; leave new visual features disabled until their own changes pass. No production GDScript or Python raw ABI/wire access is introduced.
+Establish an inventory of frame/input/world/entity/UI/cue families under `testdata/runtime-migration/client/`, mapping each current source to Rust tests and required P8–P11 consumers. The [typed family and capacity packet](plans/02-family-schemas.md) fixes the ownership, provenance, identity, byte accounting and split-family assembly rules for the compile-ready contract. Publish versioned family contracts; leave new visual features disabled until their own changes pass. No production GDScript or Python raw ABI/wire access is introduced.
 
 ### Thread and lifecycle ownership
 

@@ -1,21 +1,30 @@
-Implementation is blocked on the accepted prerequisite evidence named in `design.md`. New test targets and scripts below are prospective: create them in the stated task, assert nonzero test discovery, then record red/green results. All commands run from the repository root; direct Cargo commands explicitly use the toolchain pinned by `packages/engine/rust-toolchain.toml`.
+# godot-ui-migration implementation tasks
 
-## 1. Prerequisite and test registration
+All nodes are pending. [Worker packets](plans/worker-packets.md) define exact readiness, files, interfaces, cases, commands, exclusions and rollback. New tests/scripts are prospective until their owning node lands. `ledger.md` records accepted prerequisite SHA, fixture identity, behavioral red/green, nonzero discovery, scoped commits and integration evidence. Shared registries, catalogs and real integration have one serial controller owner.
 
-- [ ] 1.1 In `ledger.md`, bind [F1](../rust-runtime-foundation/proposal.md), [F2](../rust-authoritative-server/proposal.md), and [F3](../rust-client-core/proposal.md) acceptance to the SHA under test and list the exact required semantic families. Reject missing prerequisite acceptance or unverified compatibility. Inspect `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --locked --no-deps --format-version 1`, run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core -p mornlea_godot --locked -- --list`, and record actual nonzero discovery; this inventory supplements, rather than substitutes for, the prerequisite ledgers.
-- [ ] 1.2 Register `packages/engine/crates/mornlea_client_core/tests/ui_contract.rs` and the feature's scoped Godot harness cases; start with failing cases named by this specification, then implement each following node against them. Verify discovery with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test ui_contract --locked -- --list` and red/green execution with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test ui_contract --locked`.
+See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
-## 2. Semantic UI and controls
+## 1. Prerequisite and contract gate
 
-- [ ] 2.1 In `packages/engine/crates/mornlea_client_core/tests/ui_contract.rs`, enumerate existing menu/HUD/container/confirmation fixtures and typed command families, then add failing stale-token/rejection/reset tests before implementing missing F3 UI publications. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test ui_contract --locked` and `make frontend-check` for the unchanged characterization producer.
-- [ ] 2.2 Create `scripts/godot/ui-check.sh` with nonzero-discovery failing Control lifecycle, focus, resize, token, and event-budget tests, then implement `apps/mornlea-godot/features/ui/` in embedded Python. Verify with `scripts/godot/ui-check.sh`, `make godot-python-check`, and `make godot-project-check`.
-- [ ] 2.3 In `features/ui/` and the UI harness, complete menus and container interaction mapping in bounded surface groups; prove unavailable actions stay disabled and rejected actions never become confirmed locally. Verify each group with `scripts/godot/ui-check.sh` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test ui_contract --locked` before enabling its catalog entry.
+- [ ] 1.1 Inventory all supported UI surfaces, intents and states.
+- [ ] 1.2 Register nonempty Rust/Godot UI harness with behavioral red.
+## 2. Parallel capability slices
 
-## 3. Replay and fixture ownership
+- [ ] 2.1 Adapt UI Controls to accepted F3 typed input and token validation.
+- [ ] 2.2 Implement menus, focus and loading Controls.
+- [ ] 2.3 Implement HUD and survival Controls.
+- [ ] 2.4a Implement inventory Control.
+- [ ] 2.4b Implement chest Control.
+- [ ] 2.4c Implement workbench Control.
+- [ ] 2.4d Implement furnace Control.
+- [ ] 2.4e Assemble container Controls.
+- [ ] 2.5a Implement chat/task Controls.
+- [ ] 2.5b Implement settings/debug Controls.
+## 3. Serial assembly and evidence
 
-- [ ] 3.1 Record UI intent/view transcript parity against frozen legacy fixtures in `ledger.md`, including stale token, hit, confirmation, rejection, focus, resize, and reset. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test ui_contract --locked` and `scripts/godot/ui-check.sh`.
-- [ ] 3.2 After P12 phase 2 capture/report acceptance is recorded in `ledger.md`, produce semantic and candidate evidence for `ui` using the explicit run directory `build/visual/migration/ui`. Verify with `scripts/godot/migration-evidence.sh --feature ui --run-dir build/visual/migration/ui --strict` and `go test ./packages/audit -run VisualBaselineRouting -count=1`. Obtain per-case human review and explicit handoff approval before any canonical producer or tracked-image update; otherwise keep candidate status and the previous producer.
+- [ ] 3.1 Assemble UI root and real F2/F3/G1 intent/view parity.
+- [ ] 3.2 Capture untracked candidate UI evidence after P12 phase 2.
 ## 4. Closeout
 
-- [ ] 4.1 Update this change's `ledger.md`, affected directory guides, and current architecture documentation only for behavior actually implemented; record source SHA, prerequisite evidence, tests discovered/executed, review, rollback, and architecture-skill ruling. Verify with `git diff --check` and `openspec validate godot-ui-migration --type change --strict --no-interactive`.
-- [ ] 4.2 Run formatting and full implementation gates: `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check` (including six-module vet), `make test-race` (all six Go modules), and `openspec validate --all --strict --no-interactive`. Record each actual result and tested SHA in `ledger.md`; do not mark implementation complete while any required platform, parity, or rollback case is unverified.
+- [ ] 4.1 Reconcile UI action coverage, guides and rollback.
+- [ ] 4.2 Run complete implementation stage gates.

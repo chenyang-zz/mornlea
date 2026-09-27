@@ -1,21 +1,25 @@
-Implementation is blocked on the accepted prerequisite evidence named in `design.md`. New test targets and scripts below are prospective: create them in the stated task, assert nonzero test discovery, then record red/green results. All commands run from the repository root; direct Cargo commands explicitly use the toolchain pinned by `packages/engine/rust-toolchain.toml`.
+# godot-desktop-audio implementation tasks
 
-## 1. Prerequisite and test registration
+All nodes are pending. [Worker packets](plans/worker-packets.md) define exact readiness, files, interfaces, cases, commands, exclusions and rollback. New tests/scripts are prospective until their owning node lands. `ledger.md` records accepted prerequisite SHA, fixture identity, behavioral red/green, nonzero discovery, scoped commits and integration evidence. Shared registries, catalogs and real integration have one serial controller owner.
 
-- [ ] 1.1 In `ledger.md`, bind [F1](../rust-runtime-foundation/proposal.md), [F2](../rust-authoritative-server/proposal.md), and [F3](../rust-client-core/proposal.md) acceptance to the SHA under test and list the exact required semantic families. Reject missing prerequisite acceptance or unverified compatibility. Inspect `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --locked --no-deps --format-version 1`, run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core -p mornlea_godot --locked -- --list`, and record actual nonzero discovery; this inventory supplements, rather than substitutes for, the prerequisite ledgers.
-- [ ] 1.2 Register `packages/engine/crates/mornlea_client_core/tests/desktop_contract.rs` and the feature's scoped Godot harness cases; start with failing cases named by this specification, then implement each following node against them. Verify discovery with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test desktop_contract --locked -- --list` and red/green execution with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test desktop_contract --locked`.
+See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
-## 2. Cues and desktop adapters
+## 1. Prerequisite and contract gate
 
-- [ ] 2.1 In `packages/engine/crates/mornlea_client_core/tests/desktop_contract.rs`, add failing confirmed cue, duplicate/stale cue, reset, focus release, and ordered-input overflow cases before implementing the Rust semantic families. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test desktop_contract --locked`.
-- [ ] 2.2 Create `scripts/godot/audio-check.sh` with nonzero-discovery fake-device, headless, duplicate playback, volume, and teardown tests, then implement audio in `apps/mornlea-godot/platform/desktop/`. Verify with `scripts/godot/audio-check.sh`, `make godot-python-check`, and `make godot-project-check`.
-- [ ] 2.3 Extend `scripts/godot/input-check.sh` with failing controller disconnect, focus loss, input budget, and repeated lifecycle cases before implementing desktop input adaptation. Verify with `make godot-input-check`, `make godot-python-check`, and `make godot-smoke`.
+- [ ] 1.1 Inventory cue, device, focus and asset cases per target.
+- [ ] 1.2 Register nonempty desktop harness with behavioral red.
+## 2. Parallel capability slices
 
-## 3. Device and replay acceptance
+- [ ] 2.1 Implement hashed cue-to-resource mapping.
+- [ ] 2.2 Implement deterministic fake/no-device audio adapter.
+- [ ] 2.3 Implement typed desktop input and focus release.
+- [ ] 2.4 Implement device generation and teardown lifecycle.
+## 3. Serial assembly and evidence
 
-- [ ] 3.1 In `ledger.md`, record per-target audio/input transcript parity and device/no-device teardown evidence, including actual target and runtime identity; qualify unavailable targets later rather than borrowing another target's pass. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test desktop_contract --locked`, `scripts/godot/audio-check.sh`, and `make godot-input-check` on each supported target. Real-device manual acceptance requires explicit user authorization.
-- [ ] 3.2 After P12 phase 2 capture/report acceptance is recorded in `ledger.md`, produce semantic and candidate evidence for `desktop` using the explicit run directory `build/visual/migration/desktop`. Verify with `scripts/godot/migration-evidence.sh --feature desktop --run-dir build/visual/migration/desktop --strict` and `go test ./packages/audit -run VisualBaselineRouting -count=1`. Obtain per-case human review and explicit handoff approval before any canonical producer or tracked-image update; otherwise keep candidate status and the previous producer.
+- [ ] 3.1 Assemble real F2/F3/G1 cue/input transcript parity.
+- [ ] 3.2 Qualify macOS, Windows and Linux independently.
+- [ ] 3.3 Capture untracked candidate desktop evidence after P12 phase 2.
 ## 4. Closeout
 
-- [ ] 4.1 Update this change's `ledger.md`, affected directory guides, and current architecture documentation only for behavior actually implemented; record source SHA, prerequisite evidence, tests discovered/executed, review, rollback, and architecture-skill ruling. Verify with `git diff --check` and `openspec validate godot-desktop-audio --type change --strict --no-interactive`.
-- [ ] 4.2 Run formatting and full implementation gates: `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check` (including six-module vet), `make test-race` (all six Go modules), and `openspec validate --all --strict --no-interactive`. Record each actual result and tested SHA in `ledger.md`; do not mark implementation complete while any required platform, parity, or rollback case is unverified.
+- [ ] 4.1 Reconcile cue/device coverage, guides and rollback.
+- [ ] 4.2 Run complete implementation stage gates.

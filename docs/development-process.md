@@ -1,6 +1,6 @@
 ---
 doc_id: development-process
-doc_revision: 2026-09-23.1
+doc_revision: 2026-09-25.1
 language: en
 counterpart: development-process.zh.md
 ---
@@ -21,6 +21,8 @@ For every new or materially revised multi-step implementation plan, the main Age
 Each worker receives exact editable/read-only files, predecessor interfaces, concrete implementation steps and code/algorithm examples, failing tests with expected results, validation commands, exclusions and rollback/integration ownership. The main Agent checks requirement coverage, matching types and an acyclic dependency graph. Broad milestones must become actual independently testable nodes; a missing design decision is not a ready task. A worker returns a contract discrepancy to the main Agent rather than inventing a policy.
 
 Keep decisions in the active OpenSpec `design.md`, status in `tasks.md`, and detailed linked briefs inside that change. Follow the readiness checklist in the project `mornlea-implementation-orchestration` skill. Discover the installed Superpowers resources instead of pinning machine-specific cache paths. Existing user authorization and higher-priority runtime rules control; planning skills do not create another approval flow, external communication or automatic runtime implementation.
+
+For a new or materially changed boundary shared by independent tasks, use the [interface-first parallel development guide](interface-first-parallel-development.md) to land one accepted contract before dispatch and to separate contract, provider and real integration evidence.
 
 ## Stages
 
@@ -67,6 +69,8 @@ Confirm `go test -list` sets when splitting files; sync delta specs and archive 
 
 ## Parallelism and conflicts
 Protocol, save-schema, engine/client ABI, and benchmark-scenario upgrades are mutually exclusive. Versioned core gameplay is serial. Parallel work is allowed only when file ownership and version impact do not overlap. Freeze scope after claiming and reconcile OpenSpec artifacts before changing it.
+
+The interface-first guide defines the additional dependency and ownership checks for parallel task readiness; it does not alter agent delegation policy.
 
 ## Quick reference
 

@@ -1,24 +1,31 @@
-Implementation is blocked on the accepted prerequisite evidence named in `design.md`. New test targets and scripts below are prospective: create them in the stated task, assert nonzero test discovery, then record red/green results. All commands run from the repository root; direct Cargo commands explicitly use the toolchain pinned by `packages/engine/rust-toolchain.toml`.
+# godot-default-client-switch implementation tasks
 
-## 1. Release gate and enforcement registration
+All nodes are pending. [Worker packets](plans/worker-packets.md) and [two-cycle evidence schema](plans/02-cycle-schema.md) define exact readiness, ownership, interfaces, concrete red/green cases, commands, exclusions and rollback. New targets/scripts are prospective until their owning node lands. `ledger.md` binds source/package/fixture identity and the accepted contract SHA to nonzero test counts and scoped commits. A mock, plan validation or candidate capture cannot substitute for real integration or required approval.
 
-- [ ] 1.1 In `ledger.md`, bind F1–F3 and all required P8–P13 acceptance ledgers to exact source/release identities, platform/feature coverage, and rollback artifacts. Verify plan integrity with `openspec validate --all --strict --no-interactive` and inspect `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --locked --no-deps --format-version 1`; neither command alone proves prerequisite completion.
-- [ ] 1.2 Create `scripts/godot/product-cutover-check.sh` and `packages/engine/crates/mornlea_client_core/tests/product_cutover.rs` with nonzero discovery and failing missing-prerequisite, one-cycle, mixed-runtime, and missing-rollback tests. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test product_cutover --locked -- --list` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test product_cutover --locked`.
-- [ ] 1.3 In `packages/audit/godot_entrypoints_test.go` and project/bootstrap audit files, add failing product-mode enforcement tests and preserve pilot-mode checks; reconcile the scoped pilot delta before changing Makefile or CI ownership. Verify with `go test ./packages/audit -run 'Godot|Architecture|ReleaseUnit' -count=1`. Do not skip or weaken unrelated checks.
+See the [cross-change dispatch map](plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
-## 2. Native diagnostics and complete release evidence
+## 1. Prerequisite and contract gate
 
-- [ ] 2.1 In the Rust desktop launcher, Godot project startup, and `tests/product_cutover.rs`, implement missing/corrupt runtime, prepared/unprepared source, export, and repeated-teardown diagnostics before Bootstrap retirement. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test product_cutover --locked`, `make godot-project-check`, and `make godot-smoke`.
-- [ ] 2.2 In release manifests and `product-cutover-check.sh`, add red-first transitive Go dependency, distinct ABI consumer, tooling exclusion, and partial-restore cases before implementation. Verify with `scripts/godot/product-cutover-check.sh --self-test` and `go test ./packages/audit -run 'Godot|Architecture|ReleaseUnit' -count=1`; self-test does not count as a release cycle.
-- [ ] 2.3 Run the first complete release cycle and record package/source/fixture identities plus successful previous-release restore in `build/release-evidence/cycle-1` and `ledger.md`. Verify with `scripts/godot/product-cutover-check.sh --run-dir build/release-evidence/cycle-1 --strict`, `make dev-check`, and `make test-race`; required P12 visual and P13 platform reports must be present and identity-matched.
-- [ ] 2.4 After a distinct subsequent release cycle, record its complete evidence and rollback in `build/release-evidence/cycle-2` and `ledger.md`. Verify with `scripts/godot/product-cutover-check.sh --run-dir build/release-evidence/cycle-2 --previous-cycle build/release-evidence/cycle-1 --strict`, `make dev-check`, and `make test-race`; duplicated build/run identities must fail the two-cycle rule.
+- [ ] 1.1 Bind accepted F1–F3/P8–P13 and enumerate product/ABI consumers.
+- [ ] 1.2 Land strict cycle-report contract and behavioral cutover harness.
+- [ ] 1.3 Land red-first product audit replacements while preserving pilot checks.
+## 2. Independent providers and serial integration
 
-## 3. Approved default switch and bounded retirement
+- [ ] 2.1 Implement native source/export setup diagnostics.
+- [ ] 2.2 Implement transitive product closure and mixed-runtime rejection.
+- [ ] 2.3a Build clean committed release candidate A.
+- [ ] 2.3b Run complete cycle-one target, feature and hard-error tests.
+- [ ] 2.3c Restore the previous release and seal cycle one.
+- [ ] 2.4a Build distinct subsequent release candidate B.
+- [ ] 2.4b Repeat complete cycle-two target, feature and hard-error tests.
+- [ ] 2.4c Restore the previous release and seal cycle two.
+## 3. Qualification, handoff or cutover
 
-- [ ] 3.1 After both release cycles pass and explicit cutover approval is recorded in `ledger.md`, update default launch/build/CI entry points and complete the scoped audit transition. Verify with `scripts/godot/product-cutover-check.sh --run-dir build/release-evidence/cycle-2 --previous-cycle build/release-evidence/cycle-1 --strict` and `go test ./packages/audit -run 'Godot|Architecture|ReleaseUnit' -count=1`.
-- [ ] 3.2 Retire migration Bootstrap and the pilot Go core from the selected product closure only after native diagnostics and Rust bridge linkage pass; preserve the stable project root and Python feature language. Verify with `make godot-project-check`, `make godot-python-check`, `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test product_cutover --locked`, and `scripts/godot/product-cutover-check.sh --run-dir build/release-evidence/cycle-2 --previous-cycle build/release-evidence/cycle-1 --strict`.
-- [ ] 3.3 In the explicit consumer inventory recorded in `ledger.md`, retire unused old renderer ABI v19 and Go runtime source consumers in separate verified nodes; retain approved offline tools and the complete rollback release. Verify each node with `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --locked --no-deps --format-version 1`, `go test ./packages/audit -count=1`, and `scripts/godot/product-cutover-check.sh --run-dir build/release-evidence/cycle-2 --previous-cycle build/release-evidence/cycle-1 --strict`; do not delete a consumer with unresolved ownership.
+- [ ] 3.1 Apply explicitly approved default switch after both cycles.
+- [ ] 3.2 Retire Bootstrap and pilot Go core from selected product closure.
+- [ ] 3.3 Retire independently inventoried old renderer ABI consumers.
+- [ ] 3.4 Retire independently inventoried Go real-time product edges.
 ## 4. Closeout
 
-- [ ] 4.1 Update this change's `ledger.md`, affected directory guides, and current architecture documentation only for behavior actually implemented; record source SHA, prerequisite evidence, tests discovered/executed, review, rollback, and architecture-skill ruling. Verify with `git diff --check` and `openspec validate godot-default-client-switch --type change --strict --no-interactive`.
-- [ ] 4.2 Run formatting and full implementation gates: `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check` (including six-module vet), `make test-race` (all six Go modules), and `openspec validate --all --strict --no-interactive`. Record each actual result and tested SHA in `ledger.md`; do not mark implementation complete while any required platform, parity, or rollback case is unverified.
+- [ ] 4.1 Reconcile D0–T1 release, retirement, guide and rollback evidence.
+- [ ] 4.2 Run final complete stage gates and restore verification.

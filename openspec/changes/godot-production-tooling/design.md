@@ -4,6 +4,8 @@ This revision changes planning artifacts only. Runtime behavior, version identit
 
 Implementation requires the relevant accepted F1, F2, and F3 exit evidence in their ledgers, including exact source SHA, fixture identities, command output, test discovery, and rollback decision. An existing proposal, checked planning status, text search, or optional-entry audit is not completion evidence. After a prerequisite is archived, resolve its ledger through its archive location and retain the accepted SHA. No task is complete merely because a test filter selected zero tests.
 
+Interface baseline: the [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns T1 replay/diagnostics and `diagnostics@1` to this boundary. Tooling consumes accepted runtime identities and producer schemas, while the [strict evidence, case registry and approval schema](plans/02-evidence-schema.md) is the controller-owned contract before independent adapters or visual handoffs; no tooling report may imply a missing family is implemented.
+
 ## Dependency phases and ownership
 
 Phase 1 consumes accepted F1 replay/schema contracts and F3 client-core; any authoritative server replay also requires F2 acceptance. Phase 2 publishes the capture/report contract independently of P8–P11 handoffs. Features then supply their own evidence. Phase 3 transfers only reviewed per-case producer ownership. This ordering avoids requiring completed features before tooling exists or requiring all tooling handoffs before features can capture.
@@ -26,7 +28,7 @@ After a partial handoff, the old full `make visual-check` or frontend command mu
 
 ## Approved update transaction
 
-A separate `scripts/godot/migration-handoff.sh --manifest <reviewed-manifest> --run-dir <explicit-directory>` consumes a manifest naming each approved case, exact run/hash, expected change, reviewer, explicit approval record, and rollback set. It is unavailable until phase 3. Comparison cannot invoke it implicitly. Stage images and registry changes outside the tracked tree, enumerate every generated file including motion side effects of existing world-update commands, verify the approved allowlist, then publish the complete set or restore the previous set on failure. Unapproved output is rejected or excluded before publication. Run the ownership-aware canonical dispatcher afterward; keep the old producer runnable for rollback.
+A separate `scripts/godot/migration-handoff.sh --manifest <reviewed-manifest> --run-dir <explicit-directory>` consumes a manifest binding each approved case to exact candidate/run/artifact/difference hashes, current and next owner, reviewer, explicit approval record hash, and rollback set. It is unavailable until phase 3. Comparison cannot invoke it implicitly. Stage images and registry changes outside the tracked tree, enumerate every generated file including motion side effects of existing world-update commands, verify the approved allowlist, then publish the complete set or restore the previous set on failure. Unapproved output is rejected or excluded before publication. Run the ownership-aware canonical dispatcher afterward; keep the old producer runnable for rollback.
 
 Reject automatic acceptance of cross-renderer differences because it bypasses semantic review. Reject widening pixel tolerance because it weakens regression protection. Reject placing capture/CLI dependencies in the client-core library because product release and hot paths must not depend on comparison tools.
 

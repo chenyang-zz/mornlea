@@ -1,25 +1,30 @@
-Implementation is blocked on the accepted prerequisite evidence named in `design.md`. New test targets and scripts below are prospective: create them in the stated task, assert nonzero test discovery, then record red/green results. All commands run from the repository root; direct Cargo commands explicitly use the toolchain pinned by `packages/engine/rust-toolchain.toml`. Tooling interfaces below do not exist yet; phase 2 must establish them before dependent feature visual tasks run.
+# godot-production-tooling implementation tasks
 
-## 1. Prerequisites and tool boundary
+All nodes are pending. [Worker packets](plans/worker-packets.md) and [strict evidence schema](plans/02-evidence-schema.md) define exact readiness, ownership, interfaces, concrete red/green cases, commands, exclusions and rollback. New targets/scripts are prospective until their owning node lands. `ledger.md` binds source/package/fixture identity and the accepted contract SHA to nonzero test counts and scoped commits. A mock, plan validation or candidate capture cannot substitute for real integration or required approval.
 
-- [ ] 1.1 In `ledger.md`, record accepted F1/F3 and applicable F2 SHA/fixture evidence. Verify actual packages with `rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --locked --no-deps --format-version 1` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_protocol -p mornlea_client_core --locked -- --list`; record nonzero discovery and prerequisite exit results.
-- [ ] 1.2 Register `packages/engine/crates/mornlea_client_core/tests/migration_evidence.rs`, the tooling-only CLI target, and source/release exclusion tests before implementation. Prove the library cannot depend on tooling modules and the target is discoverable with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test migration_evidence --locked -- --list`; record failing isolation/missing-case tests with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test migration_evidence --locked`.
+See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cross-change-dispatch.md) for parallel lanes and serial gates.
 
-## 2. Evidence contract available to feature changes
+## 1. Prerequisite and contract gate
 
-- [ ] 2.1 In the tooling-only Rust module and `testdata/visual-golden/producer-registry.json`, implement red-first schema, unique-case, producer ownership, coverage, identity, stale-run, and explicit-run checks; seed only verified current ownership and leave unimplemented candidates unavailable. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test migration_evidence --locked`.
-- [ ] 2.2 In `scripts/godot/migration-evidence.sh` and Godot capture harnesses, implement semantic replay plus UI/world/motion candidate capture without tracked writes; add failing dummy-renderer, focus, empty-output, completion-boundary, and bounded-work tests first. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test migration_evidence --locked`, `make godot-python-check`, and `make godot-project-check`.
-- [ ] 2.3 Implement strict report acceptance and difference artifacts in the Rust CLI, with failing missing/non-comparable/stale/empty mapping and I/O fixtures before implementation. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test migration_evidence --locked` and `scripts/godot/migration-evidence.sh --feature tooling-fixture --run-dir build/visual/migration/tooling-fixture --strict`; the controlled fixture profile must include both passing runs and expected nonzero failure invocations. Record this phase's accepted command/schema contract in `ledger.md` so feature evidence work can proceed before handoffs.
+- [ ] 1.1 Inventory canonical producers and release exclusions.
+- [ ] 1.2 Land the tooling-only strict run/report schema and behavioral double.
+## 2. Independent providers and serial integration
 
-- [ ] 2.4 Implement `scripts/godot/visual-regression.sh --run-dir <explicit-directory> --strict` and per-case producer adapters, with red-first mixed ownership, duplicate/missing owner, scoped legacy UI/world selection and motion-review completeness tests in `tests/migration_evidence.rs`. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test migration_evidence --locked` and `scripts/godot/visual-regression.sh --run-dir build/visual/migration/tooling-fixture --strict` against the controlled mixed-owner fixture. Do not redirect legacy Make targets before P14.
+- [ ] 2.1 Implement producer registry and required-case validation.
+- [ ] 2.2a Implement source-bound semantic replay adapter.
+- [ ] 2.2b Implement no-focus qualified GPU/motion capture.
+- [ ] 2.2c Integrate atomic candidate run orchestration.
+- [ ] 2.3 Implement strict artifact/report comparison.
+- [ ] 2.4 Integrate ownership-aware visual-regression dispatcher; accept phase-2 contract.
+## 3. Qualification, handoff or cutover
 
-## 3. Reviewed handoff and remaining tools
-
-- [ ] 3.1 Implement `scripts/godot/migration-handoff.sh` and its transaction tests against temporary baseline trees, starting with failing unapproved-write, world-to-motion side-effect, partial-I/O, registry mismatch, and rollback cases. Verify with `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test migration_evidence --locked` and `go test ./packages/audit -run VisualBaselineRouting -count=1`; test execution must not alter real tracked baselines.
-- [ ] 3.2 For each feature-owned approved case, record semantic parity, complete run identity, reviewed differences, explicit user approval, and rollback manifest in `ledger.md`; run the named handoff only for that reviewed manifest. Verify candidate evidence with `scripts/godot/migration-evidence.sh --feature world --run-dir build/visual/migration/world --strict` (repeat with each actual registered feature/run), then verify the approved canonical set with `scripts/godot/visual-regression.sh --run-dir build/visual/migration/post-handoff --strict` and `git diff --check`. The dispatcher captures each case with its registered owner; never run a full legacy producer against new-owner baselines. Full legacy checks belong to the retained previous release with its own baseline set. Without approval, retain candidate status and the old producer.
-- [ ] 3.3 In `scripts/godot/benchmark.sh`, migrate bounded scenario/report collection after red-first report identity/overflow/sample fixtures; retain numeric performance as informational. Verify with `make godot-benchmark` and `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_client_core --test migration_evidence --locked`.
-- [ ] 3.4 In `scripts/godot/`, add `tooling-check.sh` with explicit nonzero capture/devcapture/import/CI producer discovery and failing malformed-resource/cancellation cases, then move each tool independently. Update the relevant optional CI jobs in `.github/workflows/godot.yml` while preserving required-entry ownership until P14. Verify with `scripts/godot/tooling-check.sh`, `make godot-project-check`, and `go test ./packages/audit -run 'GodotIsOptionalForLegacyBuild|VisualBaselineRouting' -count=1`.
+- [ ] 3.1 Implement transactional per-case reviewed handoff.
+- [ ] 3.2 Transfer only explicitly approved cases and prove rollback.
+- [ ] 3.3 Implement informational benchmark report collector.
+- [ ] 3.4a Implement import resource checks.
+- [ ] 3.4b Implement developer capture checks.
+- [ ] 3.4c Integrate tooling CI without premature required-entry promotion.
 ## 4. Closeout
 
-- [ ] 4.1 Update this change's `ledger.md`, affected directory guides, and current architecture documentation only for behavior actually implemented; record source SHA, prerequisite evidence, tests discovered/executed, review, rollback, and architecture-skill ruling. Verify with `git diff --check` and `openspec validate godot-production-tooling --type change --strict --no-interactive`.
-- [ ] 4.2 Run formatting and full implementation gates: `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all --check`, `make godot-python-check`, `make rust-check`, `make dev-check` (including six-module vet), `make test-race` (all six Go modules), and `openspec validate --all --strict --no-interactive`. Record each actual result and tested SHA in `ledger.md`; do not mark implementation complete while any required platform, parity, or rollback case is unverified.
+- [ ] 4.1 Reconcile producer/adapter coverage, guides and rollback.
+- [ ] 4.2 Run complete implementation stage gates.

@@ -1,6 +1,6 @@
 ---
 doc_id: development-process
-doc_revision: 2026-09-23.1
+doc_revision: 2026-09-25.1
 language: zh-CN
 counterpart: development-process.md
 ---
@@ -21,6 +21,8 @@ OpenAI 原生编排采用隔离优先策略。经验证的 OpenAI ChatGPT/Codex 
 每个 worker 必须收到精确的可编辑/只读文件、前置接口、具体实现步骤及代码或算法示例、带预期结果的失败测试、验证命令、禁止范围，以及回滚和集成责任。主 Agent 检查需求覆盖、类型一致性和无环依赖图。宽泛里程碑必须拆成实际可独立验收的节点；缺少设计决策的任务不能标为可开工。worker 发现契约冲突时向主 Agent 提供证据，不自行发明策略。
 
 设计写入活跃 OpenSpec 的 `design.md`，状态只保存在 `tasks.md`，详细任务说明链接到同一 change 内。遵循项目 `mornlea-implementation-orchestration` skill 的开工检查表。发现并读取本机安装的 Superpowers，不固化某台机器的缓存路径。已有用户授权和更高优先级运行规则始终有效；规划 skill 不得额外制造审批流程、对外通信或自动启动运行时实现。
+
+当独立任务共用新边界或实质变化的边界时，按照[接口先行的并行开发指南](interface-first-parallel-development.zh.md)先验收一份契约，再派发任务，并分别保留契约、真实提供者和真实集成的证据。
 
 ## 阶段
 
@@ -45,3 +47,5 @@ openspec validate --all --strict --no-interactive
 5. 拆分测试文件时确认 `go test -list` 集合；同步/归档 OpenSpec，依据已验证事实更新文档。行为变更走 PR/CI（`gh pr create`、`gh pr checks --watch`，修复后重复直到绿色，再 `gh pr merge --merge`）；纯同步/归档文档可在本地门禁全绿后直接合并。保留历史证据和未决项。
 
 协议、存档 schema、engine/client ABI 和 benchmark scenario 升版互斥；版本化核心玩法串行，只有所有权和版本影响不重叠才可并行。
+
+接口先行指南补充了并行任务开工所需的依赖与所有权检查；它不改变代理委派政策。

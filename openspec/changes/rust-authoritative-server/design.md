@@ -2,6 +2,8 @@
 
 The accepted F1 baseline supplies only a reviewed subset of shared Rust contracts and offline evidence. The archived domain-event successor and later protocol, storage, numerical-API and pathfinding successors must close before final F1 acceptance. The Go server remains the current production owner. F2 creates an opt-in Rust replacement only after that acceptance; P14 separately controls the default product switch. The complete rule inventory must be reconciled before claiming parity.
 
+The [target runtime interface map](../../../docs/runtime-interface-architecture.md) assigns F2 rows S1–S4 over existing D0/P0/S0 and planned K0. Before server capability tasks are dispatched independently, land S1 as a compile-ready shared contract with tested success/failure doubles and record its accepted SHA; S2/S3/S4 providers and serial integration then use that identity. The map does not complete F1 or make the signatures currently callable.
+
 ## Goals / Non-Goals
 
 Move existing server behavior to one Rust owner while preserving external outcomes. Do not add gameplay, client presentation, implicit save conversions, concurrent Go/Rust authorities or a Python simulation loop.
@@ -20,7 +22,7 @@ Start with session/tick scheduling, then world/chunk/environment/fluid work, pla
 
 ### Persistence and independent Agent
 
-Storage workers own blocking I/O with bounded submission/acknowledgment and shutdown policies matching the current contract. Use test copies for migration and crash injection. Preserve the existing versioned loopback Agent HTTP/MCP boundary, cancellation and revalidation at the tick boundary. Do not embed, shell out to or import the independent Agent into the game runtime. The embedded Godot Python environment is unrelated.
+Storage workers own blocking I/O with bounded submission/acknowledgment and shutdown policies matching the current contract. Use test copies for migration and crash injection. The [S1 compile-ready seams](plans/02-core-seams.md) define one atomic world/inventory transaction, a separate sessionless companion ingress, measured budgets, save scheduling and retryable final-tick shutdown. Preserve the existing versioned loopback Agent HTTP/MCP boundary, cancellation and revalidation at the tick boundary. Do not embed, shell out to or import the independent Agent into the game runtime. The embedded Godot Python environment is unrelated.
 
 ### Authority selection and rollback
 
