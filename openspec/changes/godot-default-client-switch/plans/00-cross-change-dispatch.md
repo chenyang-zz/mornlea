@@ -1,10 +1,10 @@
 # Cross-change parallel dispatch map
 
-This is an index over the active OpenSpec `tasks.md` files, not a second status source. It applies the [target interface contract](../../../../docs/runtime-interface-architecture.md) and the archived protocol/storage worker-packet precedent. Detailed editable files, tests and rollback for a node live in that node's change-local `plans/` packet; the controller verifies its prerequisites at dispatch. All implementation checkboxes remain open. A packet is only dispatchable after its compile-ready upstream declaration, deterministic consumer double and accepted SHA actually exist; a plan file cannot supply that SHA.
+This is an index over the linked OpenSpec `tasks.md` files, not a second status source. It applies the [target interface contract](../../../../docs/runtime-interface-architecture.md) and the archived protocol/storage worker-packet precedent. Detailed editable files, tests and rollback for a node live in that node's change-local `plans/` packet; the controller verifies its prerequisites at dispatch. The numerical change is complete and archived; successor implementation checkboxes remain open. A packet is only dispatchable after its compile-ready upstream declaration, deterministic consumer double and accepted SHA actually exist; a plan file cannot supply that SHA.
 
 | Stage and status source | Open nodes | Detailed packet entry |
 | --- | ---: | --- |
-| [F1 numerical closure](../../rust-native-numerical-closure/tasks.md) | 29 | [Foundation packets](../../rust-native-numerical-closure/plans/00-foundation.md) and its linked provider/adapter/closure packets |
+| [F1 numerical closure](../../archive/2026-09-27-rust-native-numerical-closure/tasks.md) | 0 (29 complete) | [Foundation packets](../../archive/2026-09-27-rust-native-numerical-closure/plans/00-foundation.md) and its linked provider/adapter/closure packets |
 | [F2 authoritative server](../../rust-authoritative-server/tasks.md) | 39 | [S1 contract](../../rust-authoritative-server/plans/00-execution.md), [core seams](../../rust-authoritative-server/plans/02-core-seams.md), [server slices](../../rust-authoritative-server/plans/01-server-slices.md) |
 | [F3 client core and bridge](../../rust-client-core/tasks.md) | 37 | [C1/C2/G1 contract](../../rust-client-core/plans/00-client-contract.md), [family schema](../../rust-client-core/plans/02-family-schemas.md), [client slices](../../rust-client-core/plans/01-client-slices.md) |
 | [P8 terrain](../../godot-production-terrain/tasks.md) | 12 | [Terrain packets](../../godot-production-terrain/plans/worker-packets.md) |
@@ -15,11 +15,11 @@ This is an index over the active OpenSpec `tasks.md` files, not a second status 
 | [P13 packaging](../../godot-desktop-packaging/tasks.md) | 21 | [Release packets](../../godot-desktop-packaging/plans/worker-packets.md), [local supervision](../../godot-desktop-packaging/plans/02-local-supervision.md), [platform preparation](../../godot-desktop-packaging/plans/03-platform-preparation.md) |
 | [P14 cutover](../tasks.md) | 17 | [Cutover packets](worker-packets.md), [cycle schema](02-cycle-schema.md) |
 
-The nine revised changes contain 185 nodes; the existing F1 change has 29, for 214 open implementation nodes in this program. These counts are planning inventory, not completion evidence.
+The nine successor changes contain 185 open nodes; the numerical change has 29 accepted nodes. The separate complete F1 zero-gap acceptance is still outstanding and is not included in those successor node counts. Accepted implementation and gate evidence live in the linked ledgers.
 
 | Wave | Serial landing / accepted gate | Concurrent disjoint lanes after the gate | Serial join / acceptance |
 | --- | --- | --- | --- |
-| F1 numerical closure | Accept the existing D0/P0/S0 predecessor evidence, then F1 1.1 inventory and 1.2 compiling numerical contract | F1 native numerical providers and adapters under the F1 dependency graph | F1 3.12 corpus and 4.x establish complete D0/P0/S0/K0 zero-gap acceptance; no F2 worker before this final F1 ledger gate |
+| F1 numerical closure | Accepted corrected numerical contract `29b1ecf6` | Numerical providers and adapters are integrated at accepted implementation `9b843bbc` | Numerical closure is accepted; the separate complete D0/P0/S0/K0 zero-gap gate remains required before any F2 worker |
 | F2 S1 | F2 1.1 measured inventory, 1.2 compiling S1 types/double, serial 1.6 authority mutation transaction | F2 1.3–1.5 session/mailbox/publication; 2.1–2.9 disjoint rule modules as prerequisites allow, including 2.1b/2.9b after 1.6; 3.2 transport common, 3.4 store, 3.6 Agent with doubles | F2 3.1 one tick reducer; 3.3a/3.3b transport parity; 3.5 recovery; 3.7 real integration; 3.8 opt-in activation; 4.x |
 | F3 C1/C2 | Accepted F2 S2 and F3 1.1 measured inventory/1.2 compiling C1/C2 types/double | F3 1.3–1.5 session/mirror/I/O; 2.1–2.3 input/prediction/preparation as dependencies permit; 2.5–2.9 independent family providers | F3 2.4 one atomic frame owner, 3.1 one G1 registry/adapter owner, 3.2 host, 3.3 lifecycle, 3.4 real F2 integration (after full F2), 4.x |
 | Godot features | Accepted F3 family schema/G1 descriptors; P8–P11 each land inventory and test harness | P8 terrain modules; P9 actor-kind scenes; P10 UI Controls and typed intent; P11 audio/input/device lifecycle; disjoint feature directories and test modules | Each change's 3.1 real integration/catalog owner, then candidate evidence and 4.x |
@@ -35,4 +35,4 @@ The controller sends one packet with: (1) its exact node ID and accepted prerequ
 
 ## Initial runnable frontier
 
-As of this planning revision the Rust server and client-core crates do not exist, and F1 has not completed its zero-gap gate. The first implementation frontier is the already detailed F1 numerical-closure 1.1 inventory, followed by its 1.2 compile-ready native contract. The F2/F3 and Godot packets describe subsequent work; they become runnable only when their named prerequisite SHA and real test harness exist. This prevents a lower-capability worker from treating a future API sketch as present code.
+The numerical change has passed its integrated gates and is archived with accepted implementation `9b843bbc`. F1 still requires its separate complete zero-gap gate before dispatching F2. The F2/F3 and Godot packets describe subsequent work; they become runnable only when their named prerequisite SHA and real test harness exist. This prevents a lower-capability worker from treating a future API sketch as present code.

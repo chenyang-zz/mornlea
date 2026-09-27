@@ -1,6 +1,6 @@
 ---
 doc_id: interface-first-parallel-development
-doc_revision: 2026-09-25.2
+doc_revision: 2026-09-27.1
 language: en
 counterpart: interface-first-parallel-development.zh.md
 ---
@@ -70,6 +70,6 @@ An inventory name, an unexecuted test, type compilation, or a passing double can
 
 When implementation finds a discrepancy, the worker reports the verified source, a failing case, the exact conflicting field or operation, and affected tasks. The controller rules on the contract, updates the active design, behavioral delta spec if needed, all affected briefs and contract tests, and lands a new accepted SHA. Affected tasks rebase or otherwise adopt that identity and rerun their gates. Unaffected tasks may continue if they do not consume the changed surface. Wire, save and ABI changes retain their existing compatibility and exclusivity rules. No worker silently edits a shared declaration to satisfy a local test.
 
-## Planned example: Rust numerical closure
+## Accepted example: Rust numerical closure
 
-The active [numerical closure design](../openspec/changes/rust-native-numerical-closure/design.md) plans node 1.2 as a typed `mornlea_engine::native::contracts` landing with shared validated inputs and operation-trait doubles. After its **accepted implementation SHA**, disjoint collision, raycast, world, fluid, mesh and path provider nodes can start against that contract. The `ffi.rs` adapter and corpus registration have serial owners, followed by real ABI and source-bound corpus execution. At the time of this guide, the contract landing and providers are **planned, not implemented**; their OpenSpec status alone is not acceptance evidence. This example shows the task graph, not a claim that all lanes already pass.
+The archived [numerical closure design](../openspec/changes/archive/2026-09-27-rust-native-numerical-closure/design.md) uses a typed `mornlea_engine::native::contracts` landing with shared validated inputs and operation-trait doubles. The final review repairs accepted the corrected contract at `29b1ecf6` before dispatching disjoint path, motion and mesh work. The controller owned shared ABI adapters, corpus registration and serial integration. The [acceptance ledger](../openspec/changes/archive/2026-09-27-rust-native-numerical-closure/ledger.md) binds implementation `9b843bbc` to eleven executed numerical routes, 40 cases and passing integrated gates. The numerical change is complete; the separate complete F1 zero-gap acceptance remains a prerequisite for F2.

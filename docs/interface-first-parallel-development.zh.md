@@ -1,6 +1,6 @@
 ---
 doc_id: interface-first-parallel-development
-doc_revision: 2026-09-25.2
+doc_revision: 2026-09-27.1
 language: zh-CN
 counterpart: interface-first-parallel-development.md
 ---
@@ -70,6 +70,6 @@ counterpart: interface-first-parallel-development.md
 
 实现中发现冲突时，worker 报告已核实的来源、失败案例、确切冲突字段或操作，以及受影响任务。控制者裁定契约，更新活跃设计、必要的行为 delta spec、所有受影响任务说明和契约测试，再落地新的已验收 SHA。受影响任务变基或以其他方式采用新身份，并重跑门禁。未使用变化表面的任务可以继续。线协议、存档和 ABI 变更仍遵循既有兼容性与独占规则。worker 不得为通过本地测试而悄悄修改共享声明。
 
-## 规划示例：Rust 数值闭环
+## 已验收示例：Rust 数值闭环
 
-活跃的[数值闭环设计](../openspec/changes/rust-native-numerical-closure/design.md)规划将节点 1.2 用作类型化 `mornlea_engine::native::contracts` 契约落地，其中包含经过验证的共享输入和操作 trait 的测试替身。取得**已验收的实现 SHA**之后，文件互不重叠的碰撞、射线、世界、流体、网格和寻路提供者节点才可基于该契约开工。`ffi.rs` 适配和语料注册有串行负责人，之后执行真实 ABI 与来源绑定的语料测试。撰写本指南时，契约落地与提供者仍然**只有规划，尚未实现**；OpenSpec 状态本身不是验收证据。这个示例展示任务依赖关系，不宣称所有开发线已经通过。
+已归档的[数值闭环设计](../openspec/changes/archive/2026-09-27-rust-native-numerical-closure/design.md)使用类型化 `mornlea_engine::native::contracts` 契约落地，其中包含经过验证的共享输入和操作 trait 的测试替身。最终评审修复先在 `29b1ecf6` 验收修正后的契约，再派发文件互不重叠的寻路、运动和网格任务。控制者负责共用 ABI 适配器、语料注册和串行集成。[验收记录](../openspec/changes/archive/2026-09-27-rust-native-numerical-closure/ledger.md)将实现 `9b843bbc` 绑定到十一条实际执行的数值路径、40 个用例和通过的集成门禁。数值变更已经完成；独立的完整 F1 零缺口验收仍是启动 F2 的前提。

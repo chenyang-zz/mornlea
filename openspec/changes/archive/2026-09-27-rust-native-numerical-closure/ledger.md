@@ -1048,3 +1048,19 @@ Late dev integration `b79cc5d9e031b089a9079f3da7dca94285d3aec7` retains dev `8e7
 Metadata logs: `/tmp/mornlea-numerical-metadata-b79cc5d9e031/`. Final source-bound consumer again passed all seven corpus tests after dev integration. Closing task checkboxes and this ledger are bookkeeping only; strict validation is repeated before the closure commit. The separately owned complete F1 zero-gap acceptance may consume this accepted numerical SHA and corpus identity; this change neither completes that independent acceptance nor starts F2 or switches the production runtime.
 
 Rollback owns each provider together with its related adapter/corpus source pins; the corrected path public contract and dependent consumer expectations revert together. Do not revert the retained dev planning commits or unrelated root user work. Local dev integration and requested worktree/branch cleanup follow this accepted closure.
+
+## OpenSpec archive, 2026-09-27
+
+The user authorized archiving this completed change and pushing all existing local `dev` commits. Closure commit `b68078f1` is integrated into `dev`; all 29 tasks are accepted and no task remains open. The feature worktree and branch were removed, and the three managed repair worktrees were archived with recoverable snapshots.
+
+All five numerical requirements and ten scenarios were synchronized into `openspec/specs/rust-runtime-foundation/spec.md` after obtaining the current specification rules. Existing canonical requirements and Purpose remain intact. This change moved to `openspec/changes/archive/2026-09-27-rust-native-numerical-closure/` with its `.openspec.yaml` and all execution evidence. An independent read-only review identified external and cross-archive links; the controller updated those links, synchronized the bilingual interface-first example and its manifest revision, and corrected the active dispatch index to show numerical completion while retaining the separate complete F1 gate.
+
+Archive validation:
+
+- Before synchronization, `openspec validate --all --strict --no-interactive`: PASS, 128 items and zero failures.
+- After synchronization and archive, `openspec validate --all --strict --no-interactive`: PASS, 127 items and zero failures; the completed change is now excluded from active-change discovery. Log: `/tmp/mornlea-numerical-archive-openspec.log`.
+- `go test ./packages/audit -run '^(TestDocumentationLinks|TestDocumentationSemanticClaims|TestCompletedDocumentationPairsAreSynchronized|TestOpenSpecLanguage|TestOpenSpecLanguageDebt|TestDocumentationManifestClassifiesCurrentMarkdown|TestBaselineVersionsMatchCode)$' -count=1`: PASS.
+- Direct relative-link inspection of archived artifacts and the dispatch index: PASS, 90 existing targets.
+- `git diff --check`: PASS.
+
+These edits affect only specifications and archive/documentation metadata. Numerical code, tests, build inputs and frozen corpus remain identical to the accepted integrated implementation; its recorded runtime gates remain applicable. Architecture skill: no change. The pre-existing `.claude/skills/mornlea-architecture/SKILL.md` edit and untracked `.commandcode/` directory are excluded from this commit. Rollback of archive metadata restores the prior directory location, removes these five canonical additions and restores the corresponding links/status without reverting implementation history.

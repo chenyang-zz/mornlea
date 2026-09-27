@@ -2,7 +2,7 @@
 
 The code currently exposes ten numerical operations through engine ABI v11, but `mornlea_engine/src/lib.rs` keeps their Rust modules private. The frozen migration inventory names those ten plus `kernel.pathfind`; none is complete numerical evidence yet. The accepted F1 domain/event, protocol, region and storage changes establish adjacent contracts, while F2 remains planning-only. The final ownership direction is Rust server and client core over a windowless Rust numerical owner, with Godot/Python restricted to presentation.
 
-The historical foundation [kernel plan](../archive/2026-09-21-rust-runtime-foundation/plans/05-kernel.md) records field-level compatibility choices. This change copies the relevant executable decisions into [worker-briefs.md](worker-briefs.md), then changes the dependency topology so implementation can proceed by independent family after a contract landing. Current code and tests win where the historical extraction is stale.
+The historical foundation [kernel plan](../2026-09-21-rust-runtime-foundation/plans/05-kernel.md) records field-level compatibility choices. This change copies the relevant executable decisions into [worker-briefs.md](worker-briefs.md), then changes the dependency topology so implementation can proceed by independent family after a contract landing. Current code and tests win where the historical extraction is stale.
 
 ## Goals / Non-Goals
 
