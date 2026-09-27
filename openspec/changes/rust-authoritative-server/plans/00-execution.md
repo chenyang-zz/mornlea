@@ -17,9 +17,9 @@ pub struct SessionKey(NonZeroU64);
 pub enum TransportKind { Memory, Tcp }
 pub struct ServerLimits {
     max_players: u8,            // default 8, valid 1..=8
-    queued_commands: usize,     // proposed maximum 4096 records
+    queued_commands: usize,     // accepted maximum 4096 records
     session_outbox: usize,      // default 512 frames
-    ready_chunk_results: usize, // proposed maximum 64 records
+    ready_chunk_results: usize, // accepted maximum 64 records
     snapshot_chunks: usize,     // default 64 per publication step
     snapshot_bytes: usize,      // default 1 MiB per publication step
 }
@@ -42,7 +42,7 @@ pub trait ServerEndpoint {
 }
 ```
 
-The comments above document **planned contract fields**; production source comments added by implementation workers use English and never mention task IDs. The exact error variants, core state ports, rule effects/getters, receipt/order policy, S2 connection state machine, S3 ownership/acknowledgment and S4 lifecycle are defined in [02-core-seams.md](02-core-seams.md). That file is the single declaration authority; node1.2 lands it with consumer doubles. `SessionKey` is nonzero, monotonic and never reused. Constructor failure precedes allocation/mutation. Defaults8 players/512 outbox/64 snapshot chunks/1MiB snapshot publication come from Go;4096 command/64 ready-result and retained-save ceilings are Rust target proposals, subject to measured supported-run fit in1.1b/c. Go ingress has separate256 command/chat channels before its unbounded simulation inbox. Pending handshakes16 are S2-owned before login.
+The comments above document **planned contract fields**; production source comments added by implementation workers use English and never mention task IDs. The exact error variants, core state ports, rule effects/getters, receipt/order policy, S2 connection state machine, S3 ownership/acknowledgment and S4 lifecycle are defined in [02-core-seams.md](02-core-seams.md). That file is the single declaration authority; node1.2 lands it with consumer doubles. `SessionKey` is nonzero, monotonic and never reused. Constructor failure precedes allocation/mutation. Defaults8 players/512 outbox/64 snapshot chunks/1MiB snapshot publication come from Go;4096 command, 64 ready-result, and retained-save ceilings are the accepted constructor maxima from the 1.1b measurement. Go ingress has separate256 command/chat channels before its unbounded simulation inbox. Pending handshakes16 are S2-owned before login.
 
 `submit` validates session/phase/payload/capacity, then assigns earliest-eligible tick and per-session arrival identity. It never advances applied sequence at arrival. Freeze eligible batch, sort, process budgeted prefix, preserve original identity on carry; stale/duplicate applied sequences are silent no-effect. Example arrivals9/select2,9/place,8/select1 execute8,first9 and discard second9 without CommandRejected. QueuedForTick is admission only. Chat/keepalive stay control plane. All internal-to-wire/close decisions are fixed in02; no new v45 rejection reason is introduced. Tick never waits for disk/socket/Agent/GPU/Python.
 

@@ -6,6 +6,18 @@
     "pending_save_bytes": 4194304
   },
   "fits_ceilings": true,
+  "accepted_maxima": {
+    "queued_commands": 4096,
+    "ready_chunk_results": 64,
+    "pending_chunk_saves": 8,
+    "max_owned_encoded_bytes": 4194304,
+    "player_snapshots": 16,
+    "companion_snapshots": 3,
+    "hostile_snapshots": 3,
+    "passive_snapshots": 3,
+    "metadata_snapshots": 1,
+    "workers": 2
+  },
   "runtime": {
     "source_sha256": "sha256:1904257f2856d699b352eb67b417cc223deb938935f9f3e77b39a75c9225cc04",
     "cases": [
