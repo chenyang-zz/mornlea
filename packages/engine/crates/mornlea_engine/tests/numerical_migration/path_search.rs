@@ -12,6 +12,65 @@ use mornlea_engine::native::contracts::{
     PathBlockTable, PathCell, PathError, PathGrid, PathRevision, PathScratch,
 };
 use mornlea_engine::native::pathfind::{NativePathfind, find_path};
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+
+thread_local! {
+    // Counting is scoped to one test thread so parallel family tests are excluded.
+    static SEARCH_ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+    static SEARCH_FAIL_AFTER: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+struct SearchCountingAllocator;
+
+fn record_search_allocation() {
+    let _ = SEARCH_ALLOCATIONS.try_with(|count| {
+        if let Some(value) = count.get() {
+            count.set(Some(value + 1));
+        }
+    });
+}
+
+fn fail_search_allocation() -> bool {
+    SEARCH_FAIL_AFTER
+        .try_with(|remaining| match remaining.get() {
+            Some(0) => {
+                remaining.set(None);
+                true
+            }
+            Some(count) => {
+                remaining.set(Some(count - 1));
+                false
+            }
+            None => false,
+        })
+        .unwrap_or(false)
+}
+
+unsafe impl GlobalAlloc for SearchCountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        record_search_allocation();
+        if fail_search_allocation() {
+            return std::ptr::null_mut();
+        }
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(pointer, layout) }
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        record_search_allocation();
+        if fail_search_allocation() {
+            return std::ptr::null_mut();
+        }
+        unsafe { System.realloc(pointer, layout, size) }
+    }
+}
+
+#[global_allocator]
+static SEARCH_ALLOCATOR: SearchCountingAllocator = SearchCountingAllocator;
 
 /// Passable air id shared with the Go oracle table.
 const AIR: u16 = 0;
@@ -508,4 +567,187 @@ fn path_search_transition_matrix() {
     budget_boundary();
     scratch_reuse_success_failure_success();
     provider_matches_free_search();
+}
+
+fn extreme_horizontal_path(axis: usize, maximum: bool) {
+    let mut origin = cell(0, 0, 0);
+    let base = if maximum { i32::MAX - 1 } else { i32::MIN };
+    let (size, start, goal) = if axis == 0 {
+        origin.x = base;
+        ([2, 3, 1], cell(base, 1, 0), cell(base + 1, 1, 0))
+    } else {
+        origin.z = base;
+        ([1, 3, 2], cell(0, 1, base), cell(0, 1, base + 1))
+    };
+    let grid = build(
+        origin,
+        size,
+        &|_, y, _| if y == 0 { STONE } else { AIR },
+        Vec::new(),
+    );
+    let mut scratch = scratch_for(&grid);
+    let result =
+        find_path(&grid, start, goal, &mut scratch).expect("boundary goal must be reachable");
+    assert_eq!(result.waypoints(), &[start, goal]);
+    let reverse =
+        find_path(&grid, goal, start, &mut scratch).expect("reverse boundary path must exist");
+    assert_eq!(reverse.waypoints(), &[goal, start]);
+}
+
+#[test]
+fn path_search_x_minimum() {
+    extreme_horizontal_path(0, false);
+}
+
+#[test]
+fn path_search_x_maximum() {
+    extreme_horizontal_path(0, true);
+}
+
+#[test]
+fn path_search_z_minimum() {
+    extreme_horizontal_path(2, false);
+}
+
+#[test]
+fn path_search_z_maximum() {
+    extreme_horizontal_path(2, true);
+}
+
+#[test]
+fn path_search_warmed_unreachable_does_not_allocate() {
+    let grid = build(
+        cell(0, 0, 0),
+        [3, 3, 1],
+        &|x, y, _| if y == 0 || x == 1 { STONE } else { AIR },
+        Vec::new(),
+    );
+    let start = cell(0, 1, 0);
+    let goal = cell(2, 1, 0);
+    let mut scratch = scratch_for(&grid);
+    assert_eq!(
+        find_path(&grid, start, goal, &mut scratch),
+        Err(PathError::Unreachable)
+    );
+    SEARCH_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let result = find_path(&grid, start, goal, &mut scratch);
+    let allocations = SEARCH_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(result, Err(PathError::Unreachable));
+    assert_eq!(
+        allocations, 0,
+        "warmed failed searches must reuse their buffers"
+    );
+}
+
+#[test]
+fn path_search_result_retains_full_revisions_across_reuse() {
+    let revisions = vec![
+        PathRevision {
+            chunk: [2, 3],
+            revision: u64::MAX,
+        },
+        PathRevision {
+            chunk: [-1, 4],
+            revision: 23,
+        },
+        PathRevision {
+            chunk: [2, 3],
+            revision: u64::MAX,
+        },
+    ];
+    let grid = build(
+        cell(0, 0, 0),
+        [3, 3, 1],
+        &|_, y, _| if y == 0 { STONE } else { AIR },
+        revisions,
+    );
+    let expected = [
+        PathRevision {
+            chunk: [-1, 4],
+            revision: 23,
+        },
+        PathRevision {
+            chunk: [2, 3],
+            revision: u64::MAX,
+        },
+    ];
+    let mut scratch = scratch_for(&grid);
+    let first = find_path(&grid, cell(0, 1, 0), cell(2, 1, 0), &mut scratch).unwrap();
+    assert_eq!(first.revisions(), &expected);
+    assert_eq!(
+        find_path(&grid, cell(0, 0, 0), cell(2, 1, 0), &mut scratch),
+        Err(PathError::Unreachable)
+    );
+    let trivial = find_path(&grid, cell(1, 1, 0), cell(1, 1, 0), &mut scratch).unwrap();
+    assert_eq!(trivial.revisions(), &expected);
+    assert_eq!(trivial.waypoints(), &[cell(1, 1, 0)]);
+    assert_eq!(first.revisions(), &expected);
+    assert_eq!(first.waypoints(), &[cell(0, 1, 0), cell(2, 1, 0)]);
+}
+
+fn with_failed_allocation<T>(index: usize, operation: impl FnOnce() -> T) -> T {
+    SEARCH_FAIL_AFTER.with(|remaining| remaining.set(Some(index)));
+    let result = operation();
+    SEARCH_FAIL_AFTER.with(|remaining| remaining.set(None));
+    result
+}
+
+#[test]
+fn path_search_allocation_failures_are_typed() {
+    let table = with_failed_allocation(0, air_table_result);
+    assert_eq!(table, Err(PathError::Allocation));
+    SEARCH_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let scratch = PathScratch::try_with_capacity(9).unwrap();
+    let scratch_allocations = SEARCH_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    drop(scratch);
+    assert!(scratch_allocations > 0);
+    for index in 0..scratch_allocations {
+        let result = with_failed_allocation(index, || PathScratch::try_with_capacity(9));
+        assert!(matches!(result, Err(PathError::Allocation)));
+    }
+
+    let grid = build(
+        cell(0, 0, 0),
+        [3, 3, 1],
+        &|_, y, _| if y == 0 { STONE } else { AIR },
+        vec![PathRevision {
+            chunk: [0, 0],
+            revision: u64::MAX,
+        }],
+    );
+    let mut scratch = scratch_for(&grid);
+    let start = cell(0, 1, 0);
+    for goal in [start, cell(2, 1, 0)] {
+        SEARCH_ALLOCATIONS.with(|count| count.set(Some(0)));
+        let first = find_path(&grid, start, goal, &mut scratch).unwrap();
+        let result_allocations = SEARCH_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+        assert_eq!(
+            result_allocations, 2,
+            "only the exact path and revisions allocate"
+        );
+        for index in 0..result_allocations {
+            let rejected =
+                with_failed_allocation(index, || find_path(&grid, start, goal, &mut scratch));
+            assert_eq!(rejected, Err(PathError::Allocation));
+            let retry = find_path(&grid, start, goal, &mut scratch).unwrap();
+            assert_eq!(retry, first);
+        }
+    }
+}
+
+fn air_table_result() -> Result<PathBlockTable, PathError> {
+    PathBlockTable::from_passable_ids(&[AIR])
+}
+
+#[test]
+fn path_search_scratch_capacity_failure_can_reuse_smaller_grid() {
+    let larger = flat_floor(cell(0, 0, 0), [3, 3, 1], 0);
+    let smaller = flat_floor(cell(0, 0, 0), [2, 3, 1], 0);
+    let mut scratch = PathScratch::try_with_capacity(6).unwrap();
+    assert_eq!(
+        find_path(&larger, cell(0, 1, 0), cell(2, 1, 0), &mut scratch),
+        Err(PathError::ScratchTooSmall)
+    );
+    let result = find_path(&smaller, cell(0, 1, 0), cell(1, 1, 0), &mut scratch).unwrap();
+    assert_eq!(result.waypoints(), &[cell(0, 1, 0), cell(1, 1, 0)]);
 }

@@ -1,6 +1,6 @@
 //! Pure immutable reads over the frozen pathfinding grid.
 //!
-//! The grid owns its block snapshot: construction copies every block once and
+//! The grid owns its block snapshot: construction takes ownership of the blocks and
 //! validates shape and revision identity up front, so these readers never meet
 //! a half-built grid. They borrow the grid, copy out small values and keep no
 //! state, which is what lets later search work treat any grid as an immutable
@@ -17,7 +17,9 @@
 //! never yields a grid, so readers can rely on the origin, the sizes and the
 //! block length agreeing without re-checking them.
 
-use crate::native::contracts::pathfind::{PathCell, PathError, PathGrid, PathResult, PathScratch};
+use crate::native::contracts::pathfind::{
+    PathCell, PathError, PathGrid, PathResult, PathRevision, PathScratch,
+};
 
 /// Address of a local cell in Y-fast order, or `None` when a local coordinate
 /// lies outside the sizes or the address arithmetic would overflow.
@@ -117,16 +119,14 @@ enum CellState {
     Closed,
 }
 
-/// Working state for one search, allocated fresh per call.
+/// Working state owned exclusively by caller scratch across searches.
 ///
-/// `find_path` builds one `SearchSpace` sized by the grid cell count after
-/// the scratch-capacity check admits the grid, so the vectors never exceed
-/// the admitted bound. The vectors are indexed by flat cell address; the
-/// generation reset holds trivially because the state is fresh. The `heap`
+/// Construction reserves every vector and the heap to the admitted cell bound;
+/// search never grows these buffers. The vectors use flat cell addresses. The `heap`
 /// holds cell addresses ordered by `(f, insertion-ordinal)`; `position` maps
 /// an address back to its heap slot for decrease-key updates that retain the
 /// original ordinal.
-struct SearchSpace {
+pub(crate) struct SearchSpace {
     cost: Vec<u32>,
     parent: Vec<usize>,
     state: Vec<CellState>,
@@ -140,20 +140,20 @@ struct SearchSpace {
 }
 
 impl SearchSpace {
-    /// Builds zeroed working state for `cells` addresses.
-    fn new(cells: usize) -> Self {
-        Self {
-            cost: vec![u32::MAX; cells],
-            parent: vec![usize::MAX; cells],
-            state: vec![CellState::Unseen; cells],
-            generation: vec![0; cells],
-            position: vec![usize::MAX; cells],
-            ordinal: vec![u64::MAX; cells],
-            heap: Vec::new(),
-            key: vec![u64::MAX; cells],
+    /// Reserves all working memory before any search can begin.
+    pub(crate) fn try_new(cells: usize) -> Result<Self, PathError> {
+        Ok(Self {
+            cost: initialized_buffer(cells, u32::MAX)?,
+            parent: initialized_buffer(cells, usize::MAX)?,
+            state: initialized_buffer(cells, CellState::Unseen)?,
+            generation: initialized_buffer(cells, 0)?,
+            position: initialized_buffer(cells, usize::MAX)?,
+            ordinal: initialized_buffer(cells, u64::MAX)?,
+            heap: reserved_buffer(cells)?,
+            key: initialized_buffer(cells, u64::MAX)?,
             current: 0,
             insertions: 0,
-        }
+        })
     }
 
     /// Resets every call, including after a failure: the generation bump
@@ -183,6 +183,21 @@ impl SearchSpace {
             self.key[index] = u64::MAX;
         }
     }
+}
+
+/// Fallible exact reservation prevents implicit growth on the bounded call path.
+fn reserved_buffer<T>(count: usize) -> Result<Vec<T>, PathError> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|_| PathError::Allocation)?;
+    Ok(values)
+}
+
+fn initialized_buffer<T: Clone>(count: usize, value: T) -> Result<Vec<T>, PathError> {
+    let mut values = reserved_buffer(count)?;
+    values.resize(count, value);
+    Ok(values)
 }
 
 /// Address of a world cell inside the grid, or `None` outside the box.
@@ -409,56 +424,53 @@ fn expand_direction(
     let goal = step.goal;
     let parent = step.parent;
     let node_cost = step.node_cost;
-    let flat = PathCell {
-        x: cell.x + dx,
-        y: cell.y,
-        z: cell.z + dz,
+    let adjacent = match (cell.x.checked_add(dx), cell.z.checked_add(dz)) {
+        (Some(x), Some(z)) => Some(PathCell { x, y: cell.y, z }),
+        _ => None,
     };
-    if is_standing(grid, flat) {
-        let candidate = node_cost
-            .checked_add(COST_FLAT)
-            .ok_or(PathError::Allocation)?;
-        offer(space, grid, goal, flat, candidate, parent)?;
-    }
-    if let Some(clear_y) = cell.y.checked_add(2) {
-        let jump = PathCell {
-            x: cell.x + dx,
-            y: cell.y + 1,
-            z: cell.z + dz,
-        };
-        if is_standing(grid, jump) && is_passable(grid, cell.x, clear_y, cell.z) {
+    if let Some(flat) = adjacent {
+        if is_standing(grid, flat) {
             let candidate = node_cost
-                .checked_add(COST_JUMP)
+                .checked_add(COST_FLAT)
                 .ok_or(PathError::Allocation)?;
-            offer(space, grid, goal, jump, candidate, parent)?;
+            offer(space, grid, goal, flat, candidate, parent)?;
+        }
+        if let (Some(jump_y), Some(clear_y)) = (cell.y.checked_add(1), cell.y.checked_add(2)) {
+            let jump = PathCell { y: jump_y, ..flat };
+            if is_standing(grid, jump) && is_passable(grid, cell.x, clear_y, cell.z) {
+                let candidate = node_cost
+                    .checked_add(COST_JUMP)
+                    .ok_or(PathError::Allocation)?;
+                offer(space, grid, goal, jump, candidate, parent)?;
+            }
+        }
+        if let Some(low_y) = cell.y.checked_sub(1) {
+            let drop = PathCell { y: low_y, ..flat };
+            if is_standing(grid, drop) {
+                let candidate = node_cost
+                    .checked_add(COST_FALL)
+                    .ok_or(PathError::Allocation)?;
+                offer(space, grid, goal, drop, candidate, parent)?;
+            }
         }
     }
-    if let Some(low_y) = cell.y.checked_sub(1) {
-        let drop = PathCell {
-            x: cell.x + dx,
-            y: low_y,
-            z: cell.z + dz,
-        };
-        if is_standing(grid, drop) {
+    // Each transition is independent: a legal flat step does not suppress a gap.
+    if let (Some(x), Some(z), Some(middle), Some(head_y)) = (
+        cell.x.checked_add(2 * dx),
+        cell.z.checked_add(2 * dz),
+        adjacent,
+        cell.y.checked_add(1),
+    ) {
+        let gap = PathCell { x, y: cell.y, z };
+        if is_standing(grid, gap)
+            && is_passable(grid, middle.x, middle.y, middle.z)
+            && is_passable(grid, middle.x, head_y, middle.z)
+        {
             let candidate = node_cost
-                .checked_add(COST_FALL)
+                .checked_add(COST_GAP)
                 .ok_or(PathError::Allocation)?;
-            offer(space, grid, goal, drop, candidate, parent)?;
+            offer(space, grid, goal, gap, candidate, parent)?;
         }
-    }
-    let gap = PathCell {
-        x: cell.x + 2 * dx,
-        y: cell.y,
-        z: cell.z + 2 * dz,
-    };
-    if is_standing(grid, gap)
-        && is_passable(grid, cell.x + dx, cell.y, cell.z + dz)
-        && is_passable(grid, cell.x + dx, cell.y + 1, cell.z + dz)
-    {
-        let candidate = node_cost
-            .checked_add(COST_GAP)
-            .ok_or(PathError::Allocation)?;
-        offer(space, grid, goal, gap, candidate, parent)?;
     }
     Ok(())
 }
@@ -475,24 +487,35 @@ fn reconstruct(
     start: usize,
     goal: usize,
 ) -> Result<Box<[PathCell]>, PathError> {
-    let mut chain = Vec::new();
+    let mut count = 0;
     let mut cursor = goal;
     loop {
-        if chain.len() > cells {
+        if cursor >= cells || count == cells || space.generation[cursor] != space.current {
             return Err(PathError::Allocation);
         }
-        space.touch(cursor);
-        chain.push(index_cell(grid, cursor));
+        count += 1;
         if cursor == start {
             break;
         }
         cursor = space.parent[cursor];
-        if cursor == usize::MAX {
-            return Err(PathError::Allocation);
+    }
+    // Count first so the owned result has one fallible allocation and no growth.
+    let mut chain = reserved_buffer(count)?;
+    cursor = goal;
+    for _ in 0..count {
+        chain.push(index_cell(grid, cursor));
+        if cursor != start {
+            cursor = space.parent[cursor];
         }
     }
     chain.reverse();
     Ok(chain.into_boxed_slice())
+}
+
+fn owned_result(grid: &PathGrid, waypoints: Box<[PathCell]>) -> Result<PathResult, PathError> {
+    let mut revisions: Vec<PathRevision> = reserved_buffer(grid.revisions().len())?;
+    revisions.extend_from_slice(grid.revisions());
+    Ok(PathResult::new(waypoints, revisions.into_boxed_slice()))
 }
 
 /// Runs the deterministic bounded search over an immutable grid snapshot.
@@ -507,6 +530,7 @@ pub fn find_path(
     goal: PathCell,
     scratch: &mut PathScratch,
 ) -> Result<PathResult, PathError> {
+    scratch.space.reset();
     if !is_standing(grid, start) || !is_standing(grid, goal) {
         return Err(PathError::Unreachable);
     }
@@ -518,8 +542,7 @@ pub fn find_path(
     if cells > scratch_cells(scratch) {
         return Err(PathError::ScratchTooSmall);
     }
-    let mut space = SearchSpace::new(cells);
-    space.reset();
+    let space = &mut scratch.space;
     let Some(start_index) = cell_index(grid, start) else {
         return Err(PathError::Unreachable);
     };
@@ -527,20 +550,16 @@ pub fn find_path(
         return Err(PathError::Unreachable);
     };
     if start == goal {
-        let revisions: Box<[_]> = grid
-            .revisions()
-            .iter()
-            .copied()
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        return Ok(PathResult::new(Box::new([start]), revisions));
+        let mut waypoints = reserved_buffer(1)?;
+        waypoints.push(start);
+        return owned_result(grid, waypoints.into_boxed_slice());
     }
     // The start heuristic must be computable before insertion admits the call.
     heuristic(start, goal).ok_or(PathError::Allocation)?;
-    heap_insert(&mut space, grid, goal, start_index, 0, usize::MAX)?;
+    heap_insert(space, grid, goal, start_index, 0, usize::MAX)?;
     let mut expansions = 0_usize;
     loop {
-        let Some(current) = heap_pop(&mut space) else {
+        let Some(current) = heap_pop(space) else {
             return Err(PathError::Unreachable);
         };
         if expansions == MAX_EXPANSIONS {
@@ -550,14 +569,8 @@ pub fn find_path(
         space.state[current] = CellState::Closed;
         expansions += 1;
         if current == goal_index {
-            let waypoints = reconstruct(&mut space, grid, cells, start_index, goal_index)?;
-            let revisions: Box<[_]> = grid
-                .revisions()
-                .iter()
-                .copied()
-                .collect::<Vec<_>>()
-                .into_boxed_slice();
-            return Ok(PathResult::new(waypoints, revisions));
+            let waypoints = reconstruct(space, grid, cells, start_index, goal_index)?;
+            return owned_result(grid, waypoints);
         }
         let node_cost = space.cost[current];
         let cell = index_cell(grid, current);
@@ -569,15 +582,38 @@ pub fn find_path(
             node_cost,
         };
         for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-            expand_direction(&mut space, grid, &step, dx, dz)?;
+            expand_direction(space, grid, &step, dx, dz)?;
         }
     }
 }
 
-/// Reads the frozen scratch capacity.
-///
-/// `PathScratch.cells` is crate-visible, so the search reads the bound
-/// directly without touching the frozen surface.
+/// Reads the cell bound already reserved by the caller.
 fn scratch_cells(scratch: &PathScratch) -> usize {
-    scratch.cells
+    scratch.space.cost.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::contracts::pathfind::PathBlockTable;
+
+    #[test]
+    fn path_scratch_generation_wrap_retires_closed_cells() {
+        let grid = PathGrid::try_new(
+            PathCell { x: 0, y: 0, z: 0 },
+            [2, 3, 1],
+            vec![2, 0, 0, 2, 0, 0].into_boxed_slice(),
+            PathBlockTable::from_passable_ids(&[0]).unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+        let start = PathCell { x: 0, y: 1, z: 0 };
+        let goal = PathCell { x: 1, y: 1, z: 0 };
+        let mut scratch = PathScratch::try_with_capacity(6).unwrap();
+        find_path(&grid, start, goal, &mut scratch).unwrap();
+        // Reusing generation one after wrap must not retain the first search's closed marks.
+        scratch.space.current = u32::MAX;
+        let reversed = find_path(&grid, goal, start, &mut scratch).unwrap();
+        assert_eq!(reversed.waypoints(), &[goal, start]);
+    }
 }

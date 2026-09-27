@@ -28,7 +28,13 @@ pub struct PathBlockTable {
 
 impl PathBlockTable {
     pub fn from_passable_ids(passable: &[u16]) -> Result<Self, PathError> {
-        let mut table = vec![false; 65536].into_boxed_slice();
+        // Reserve on the heap before initialization so allocation failure is typed.
+        let mut table = Vec::new();
+        table
+            .try_reserve_exact(65536)
+            .map_err(|_| PathError::Allocation)?;
+        table.resize(65536, false);
+        let mut table = table.into_boxed_slice();
         for &id in passable {
             table[id as usize] = true;
         }
@@ -64,7 +70,10 @@ impl PathGrid {
         if size[0] == 0 || size[1] == 0 || size[2] == 0 {
             return Err(PathError::InvalidGrid);
         }
-        let cells = size[0] as usize * size[1] as usize * size[2] as usize;
+        let cells = (size[0] as usize)
+            .checked_mul(size[1] as usize)
+            .and_then(|count| count.checked_mul(size[2] as usize))
+            .ok_or(PathError::InvalidGrid)?;
         if cells > 131072 || blocks.len() != cells {
             return Err(PathError::InvalidGrid);
         }
@@ -83,26 +92,21 @@ impl PathGrid {
         if revisions.len() > 9 {
             return Err(PathError::InvalidRevision);
         }
-        revisions.sort_by_key(|a| a.chunk);
-        let mut deduped: Vec<PathRevision> = Vec::with_capacity(revisions.len());
-        for r in revisions {
-            #[allow(clippy::collapsible_if)]
-            if let Some(last) = deduped.last() {
-                if last.chunk == r.chunk {
-                    if last.revision != r.revision {
-                        return Err(PathError::InvalidRevision);
-                    }
-                    continue;
-                }
-            }
-            deduped.push(r);
+        // Conflicts are checked before in-place deduplication can discard identity.
+        revisions.sort_unstable_by_key(|a| a.chunk);
+        if revisions
+            .windows(2)
+            .any(|pair| pair[0].chunk == pair[1].chunk && pair[0].revision != pair[1].revision)
+        {
+            return Err(PathError::InvalidRevision);
         }
+        revisions.dedup_by_key(|revision| revision.chunk);
         Ok(Self {
             origin,
             size,
             blocks,
             passability,
-            revisions: deduped,
+            revisions,
         })
     }
 
@@ -120,16 +124,20 @@ impl PathGrid {
 }
 
 pub struct PathScratch {
-    #[allow(dead_code)]
-    pub(crate) cells: usize,
+    // The search owns no transient buffers; this exclusive scratch owns them all.
+    pub(crate) space: crate::pathfind::SearchSpace,
 }
 
 impl PathScratch {
+    /// Reserves every working buffer once within the grid cell bound.
+    /// Allocation failure leaves no partially constructed scratch available.
     pub fn try_with_capacity(cells: usize) -> Result<Self, PathError> {
         if cells > 131072 {
             return Err(PathError::InvalidGrid);
         }
-        Ok(Self { cells })
+        Ok(Self {
+            space: crate::pathfind::SearchSpace::try_new(cells)?,
+        })
     }
 }
 

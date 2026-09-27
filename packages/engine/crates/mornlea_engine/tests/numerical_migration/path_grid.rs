@@ -373,3 +373,24 @@ fn path_grid_shape_revision_and_snapshot() {
     ownership_snapshot();
     identical_constructions_agree();
 }
+
+#[test]
+fn path_grid_rejects_product_overflow() {
+    assert_eq!(
+        build(cell(0, 0, 0), [u32::MAX; 3], Vec::new(), Vec::new()),
+        Err(PathError::InvalidGrid)
+    );
+}
+
+#[test]
+fn path_grid_rejects_product_wrapping_to_zero() {
+    assert_eq!(
+        build(
+            cell(i32::MIN, i32::MIN, i32::MIN),
+            [1 << 22; 3],
+            Vec::new(),
+            Vec::new()
+        ),
+        Err(PathError::InvalidGrid)
+    );
+}
