@@ -1013,3 +1013,38 @@ Family integrations: path worker `c0e26eea` cherry-picked as `6233f7d2`, five ow
 Motion worker `8d8f2293` integrated after controller float-scan ruling; nine exclusive files, red panics/replay/nonfinite result, green 277 library/84 native/55 migration plus collision9/raycast18. Path independent rereview found no blockers across shape, transitions, reusable workspace, heap bounds, generation wrap, result allocation and revision ownership. Final corpus source refresh binds 197 family/source entries including the accepted transitive fluid helpers. Next acceptance uses the complete integrated source, not isolated green runs.
 
 Integrated provenance check caught an incorrect bare-hex refresh representation; corrected all kernel source values to the required `sha256:` form. Fresh Rust engine corpus 7/7 and Go provenance/overflow/frozen-inventory reconciliation gates passed on the integrated motion/path/mesh tree; log `/tmp/mornlea-review-integrated-corpus.log`. No accepted source uses unprefixed hashes. This checkpoint accepts final source binding while stage closure remains open.
+
+## Final global review acceptance, 2026-09-27
+
+Accepted implementation SHA: `9b843bbc9d43678d8ef62c0f0996a120cd11d4ca`; tree: `a515db6b090ad8c46a5d91181279362a8ef187f5`. Three GPT-6 Sol reviewers used isolated discovery and repair checkouts. Controller retained architectural decisions, public contract correction, adapter/corpus integration and rollback. Path and motion fixes received independent cross-review; controller reviewed mesh source and retained focused parity/reuse evidence. No remaining blockers were found. Added/revised worker comments were checked against applicable task IDs; none matched. Architecture skill: no change.
+
+| Specification scenarios | Executed acceptance |
+| --- | --- |
+| Valid and malformed native values | Eleven actual providers in native-contract/numerical-migration suites; physics uncovered/nonfinite reads and mesh origin validation now return typed failures; no native call requires an ABI byte request. |
+| Exact capacity and reusable scratch | Native publication/capacity tests and ABI canaries across destinations; path warm unreachable allocation count zero, fallible reserves and generation wrap; mesh rejected-call reuse; ray continuation has at most 64 shared advances. |
+| Deterministic tied paths and expansion limit | Real Go/Rust path corpus plus path-search movement/tie/decrease-key and 4096/4097 tests; both producers normalize actual complete returned revisions. |
+| ABI success and aliased metadata rejection | Existing v11 symbol/layout/status/capacity tests, native/ABI bitwise comparisons, metadata alias canaries and sole collision resolver publication. No version matrix change. |
+| Missing execution and altered evidence rejection | Eleven registered/executed routes and 40 cases, required-source removal rejection, changed scalar/waypoint comparison failures, fixture digests and 197 source bindings across 60 distinct files. Both consumers check actual evidence. |
+
+Full stage commands against the accepted implementation:
+
+- `rustup run 1.97.1 cargo fmt --manifest-path packages/engine/Cargo.toml --all -- --check`: PASS (exit 0, 0.92 seconds).
+- `make rust`: PASS (exit 0, 2.48 seconds).
+- `make rust-check`: PASS (exit 0, 21.62 seconds).
+- `make dev-check`: PASS (exit 0, 298.47 seconds).
+- `make test-race`: PASS (exit 0, 729.95 seconds).
+- `go test ./packages/audit -count=1`: PASS (exit 0, 94.04 seconds).
+- `openspec validate --all --strict --no-interactive`: PASS (exit 0, 2.09 seconds).
+
+Logs and machine-readable results: `/tmp/mornlea-numerical-final-9b843bbc9d43/`. All six Go modules participated in vet and complete race. The engine result was 279 library, 91 native-contract and 68 numerical-migration tests, with zero failures.
+
+Late dev integration `b79cc5d9e031b089a9079f3da7dca94285d3aec7` retains dev `8e71a28f` and its three planning commits. The diff from the accepted implementation contains only `docs/feature-backlog.md` and `docs/notes/agent-runs.md`; numerical sources, tests, contract/corpus files and build inputs are identical. Runtime gates remain evidence for the accepted implementation SHA; the documentation integration has its own fresh focused gates:
+
+- `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_engine --test numerical_migration --locked engine_`: PASS (exit 0, 0.69 seconds).
+- `go test ./packages/audit -count=1`: PASS (exit 0, 109.14 seconds).
+- `openspec validate rust-native-numerical-closure --type change --strict --no-interactive`: PASS (exit 0, 1.15 seconds).
+- `openspec validate --all --strict --no-interactive`: PASS (exit 0, 2.08 seconds).
+
+Metadata logs: `/tmp/mornlea-numerical-metadata-b79cc5d9e031/`. Final source-bound consumer again passed all seven corpus tests after dev integration. Closing task checkboxes and this ledger are bookkeeping only; strict validation is repeated before the closure commit. The separately owned complete F1 zero-gap acceptance may consume this accepted numerical SHA and corpus identity; this change neither completes that independent acceptance nor starts F2 or switches the production runtime.
+
+Rollback owns each provider together with its related adapter/corpus source pins; the corrected path public contract and dependent consumer expectations revert together. Do not revert the retained dev planning commits or unrelated root user work. Local dev integration and requested worktree/branch cleanup follow this accepted closure.
