@@ -1170,6 +1170,7 @@ pub struct AuthorityReadView<'a> {
     blocks: &'a BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
     actors: &'a [ActorRecord],
     runtimes: &'a BTreeMap<ActorKey, ActorRuntime>,
+    mining: &'a BTreeMap<ActorKey, MiningProgress>,
     environment: Option<&'a EnvironmentState>,
     containers: &'a BTreeMap<ContainerRef, ContainerRecord>,
     drops: &'a BTreeMap<ChunkKey, Vec<DropRecord>>,
@@ -1244,6 +1245,12 @@ impl<'a> AuthorityReadView<'a> {
     pub fn runtime(&self, key: ActorKey) -> Option<&'a ActorRuntime> {
         self.runtimes.get(&key)
     }
+    /// Provider-staged mining progress of one actor, if any. The mining
+    /// provider is the single writer through the `Mining` effect; progress is
+    /// transient tick state and never a save record.
+    pub fn mining(&self, key: ActorKey) -> Option<&'a MiningProgress> {
+        self.mining.get(&key)
+    }
     pub fn environment(&self) -> Option<&'a EnvironmentState> {
         self.environment
     }
@@ -1262,6 +1269,7 @@ pub struct TickContext<'a> {
     interactions: Vec<AuthorityInteraction>,
     actors: Vec<ActorRecord>,
     runtimes: BTreeMap<ActorKey, ActorRuntime>,
+    mining: BTreeMap<ActorKey, MiningProgress>,
     environment: Option<EnvironmentState>,
     budget: TickBudget,
     spent_commands: usize,
@@ -1309,6 +1317,7 @@ impl<'a> TickContext<'a> {
             interactions: Vec::new(),
             actors: Vec::new(),
             runtimes: BTreeMap::new(),
+            mining: BTreeMap::new(),
             environment: None,
             budget,
             spent_commands: 0,
@@ -1358,6 +1367,20 @@ impl<'a> TickContext<'a> {
         }
     }
 
+    /// Stages one mining progress record for fixture-driven progression,
+    /// replacing any earlier record for the same actor. Progress is transient
+    /// tick state owned by the mining provider; it never reaches a save.
+    pub fn preload_mining(&mut self, progress: MiningProgress) {
+        self.mining.insert(progress.actor, progress);
+    }
+
+    /// Stages one companion action envelope for fixture-driven intent reads,
+    /// appended in arrival order. Intake validation and admission stay with
+    /// the companion ingress owner; the tick reducer owns queue ordering.
+    pub fn preload_companion_action(&mut self, action: CompanionActionEnvelope) {
+        self.companions.push(action);
+    }
+
     pub fn read(&self) -> AuthorityReadView<'_> {
         AuthorityReadView {
             tick: self.authority.next_tick,
@@ -1369,6 +1392,7 @@ impl<'a> TickContext<'a> {
             blocks: &self.blocks,
             actors: &self.actors,
             runtimes: &self.runtimes,
+            mining: &self.mining,
             environment: self.environment.as_ref(),
             containers: &self.containers,
             drops: &self.drops,
@@ -1605,6 +1629,7 @@ impl<'a> TickContext<'a> {
                 // no effect arm that writes them and stay out.
                 let actors = self.actors.clone();
                 let runtimes = self.runtimes.clone();
+                let mining = self.mining.clone();
                 for part in parts {
                     if let Err(error) = self.apply_effect(part) {
                         self.inventories = inventories;
@@ -1614,6 +1639,7 @@ impl<'a> TickContext<'a> {
                         self.environment = environment;
                         self.actors = actors;
                         self.runtimes = runtimes;
+                        self.mining = mining;
                         return Err(error);
                     }
                 }
@@ -1633,6 +1659,20 @@ impl<'a> TickContext<'a> {
                 // Latest-wins overlay replace keyed by actor, mirroring the
                 // actor arm: one staged runtime record per actor.
                 self.runtimes.insert(record.key, record);
+                Ok(())
+            }
+            RuleEffect::Mining { actor, progress } => {
+                // Latest-wins overlay replace keyed by actor, mirroring the
+                // runtime arm: `Some` records progress, `None` clears it.
+                // The mining provider is the single writer of this lane.
+                match progress {
+                    Some(record) => {
+                        self.mining.insert(actor, record);
+                    }
+                    None => {
+                        self.mining.remove(&actor);
+                    }
+                }
                 Ok(())
             }
             RuleEffect::Inventory(patch) => {

@@ -814,7 +814,8 @@ pub fn resolve_place(
 /// settlement transaction: the block's drop stack, the mined container's
 /// captured contents, the human output capacity preflight and the selected
 /// tool's wear. Released primary and a ray over observed air resolve to
-/// `Ok(None)` — nothing to settle.
+/// `Ok(None)` — nothing to settle. Snow layers take the clear-only pre-branch
+/// below and settle with no drops and no capacity gate.
 pub fn resolve_mine(
     actor: ActorKey,
     control: &PlayerControl,
@@ -838,6 +839,29 @@ pub fn resolve_mine(
         return Ok(None);
     };
     let observed = hit.observed;
+    // Snow layers clear with no drops and no output-capacity gate, the exact
+    // snow branch (`packages/server/sim/entity/mining.go`): any held state
+    // clears the layer in one tick without calling the drop preflight. The
+    // wear path is the same selected-tool settlement below, so a durable held
+    // tool still wears once. This branch is human-only: companion mining
+    // proposals keep refusing snow layers through the companion mineable
+    // registry, whose explicit snow refusal is unchanged.
+    if is_snow_layer(observed.block) {
+        let inventory = *view.inventory(actor).ok_or(RuleReject::StaleObservation)?;
+        let patch = wear_selected_tool(&inventory, observed.block).map(|after| {
+            InventoryPatch::try_new(actor, inventory, after).expect("wear keeps the actor key")
+        });
+        let txn = BlockTxn {
+            producer: MutationProducer::Actor(actor),
+            tick: view.tick(),
+            writes: vec![BlockWrite::try_new(observed, AIR)?],
+            inventory: patch,
+            containers: Vec::new(),
+            drops: None,
+            mining: None,
+        };
+        return Ok(Some(ResolvedMining { txn }));
+    }
     let drop_item =
         block_drop(observed.block).ok_or(RuleReject::Wire(RejectReason::ProtectedBlock))?;
 
