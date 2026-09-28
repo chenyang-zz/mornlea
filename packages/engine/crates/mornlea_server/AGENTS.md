@@ -115,6 +115,12 @@ against this file.
   subtree appears. A failed load never double-retires its prepared session
   (regression-guarded). Play-frame wire envelopes and connection reaping
   belong to the adapter nodes.
+- `src/transport/memory.rs` owns the in-process adapter: owned frames move
+  through the shared connection core with codec-only envelope framing, the
+  S1 outbox drains FIFO without direct world mutation, success commits only
+  on acknowledgment, and the 513th frame retires only the slow receiver. The
+  adapter struct holds no authority handle, so the frame path is the only
+  mutation path.
 - `src/store/mailbox.rs` owns the durable store mailbox over the frozen
   `StoreHandle` surface: admission through the frozen `try_admit` lane/job
   caps and the 4 MiB reservation ceiling (a chunk reserves the compressed
