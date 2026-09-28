@@ -132,6 +132,13 @@ against this file.
   `read.runtime` lane for the Interaction-phase sneak gate (pinned by the
   reducer node). Poses are bounds-checked against the int32 edge before the
   kernels ever see them.
+- `src/rules/mining.rs` owns continuous mining progression on the
+  `MiningStep` phase: key-unchanged increments to saturation, key change
+  restarts at 1, completions through the 1.6 transaction exactly once, human
+  failure clearing vs companion-full retaining saturated progress, the
+  human-only snow clear without drop capacity, and bow-draw suppression.
+  Grass saturates but its seed roll belongs to the random-rules node;
+  companion settlement wear belongs to a 1.6 follow-up.
 - `src/store/scheduler.rs` owns save scheduling over the accepted mailbox:
   completions before due retries before urgent before cadence autosave (latched
   until dirty and in-flight clear), saturating-tick backoff 20…1200 with
