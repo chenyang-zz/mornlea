@@ -55,6 +55,9 @@ pub struct AuthorityState {
     interactions: Vec<AuthorityInteraction>,
     chunk_results: Vec<ChunkResult>,
     cancelled_chunks: BTreeSet<ChunkRequestId>,
+    chunk_cancel_discards: usize,
+    chunk_duplicate_discards: usize,
+    chunk_consumed_cancels: BTreeSet<ChunkRequestId>,
     metadata: Metadata,
     metadata_sequence: u64,
     dirty: Vec<OwnedSnapshot>,
@@ -103,6 +106,9 @@ impl AuthorityState {
             interactions: Vec::new(),
             chunk_results: Vec::new(),
             cancelled_chunks: BTreeSet::new(),
+            chunk_cancel_discards: 0,
+            chunk_duplicate_discards: 0,
+            chunk_consumed_cancels: BTreeSet::new(),
             metadata,
             metadata_sequence: 1,
             dirty: Vec::new(),
@@ -433,6 +439,22 @@ impl AuthorityState {
     #[allow(clippy::result_large_err)]
     pub fn admit_chunk(&mut self, result: ChunkResult) -> Result<(), ChunkResult> {
         if self.cancelled_chunks.remove(&result.request) {
+            // The tombstone rejects exactly one late completion. The consumed
+            // request stays recorded so one further repeat classifies as a
+            // duplicate instead of entering the queue.
+            self.chunk_cancel_discards += 1;
+            self.chunk_consumed_cancels.insert(result.request);
+            return Ok(());
+        }
+        if self
+            .chunk_results
+            .iter()
+            .any(|queued| queued.request == result.request)
+            || self.chunk_consumed_cancels.contains(&result.request)
+        {
+            // A repeated completion for an already-queued or already-discarded
+            // request is silently discarded; ownership is released here.
+            self.chunk_duplicate_discards += 1;
             return Ok(());
         }
         if self.chunk_results.len() >= self.limits.ready_chunk_results() {
@@ -451,6 +473,12 @@ impl AuthorityState {
         self.chunk_results
             .retain(|result| result.request != request);
         self.cancelled_chunks.insert(request);
+    }
+
+    /// Counted chunk-result discards: completions rejected by a cancellation
+    /// tombstone first, repeats second. Neither is ever installed.
+    pub fn chunk_discard_counts(&self) -> (usize, usize) {
+        (self.chunk_cancel_discards, self.chunk_duplicate_discards)
     }
 
     pub fn drain_companions(&mut self, max: usize) -> Vec<CompanionActionEnvelope> {
