@@ -124,6 +124,14 @@ against this file.
   movement node that stages held controls. Provider-level gameplay
   rejections collapse to a single error shape — the serial reducer owns the
   final contract for how they surface.
+- `src/rules/player_motion.rs` owns player motion on the `PlayerMotion`
+  phase plus `PlayerCommand` control intake: latest validated held controls
+  win per session (invalid clears), one authoritative advance through the F1
+  physics/collision kernels at dt 0.05 with tunables snapshotted, and the
+  held input staged into `ActorRuntime.controls` through the declared
+  `read.runtime` lane for the Interaction-phase sneak gate (pinned by the
+  reducer node). Poses are bounds-checked against the int32 edge before the
+  kernels ever see them.
 - `src/transport/memory.rs` owns the in-process adapter: owned frames move
   through the shared connection core with codec-only envelope framing, the
   S1 outbox drains FIFO without direct world mutation, success commits only
