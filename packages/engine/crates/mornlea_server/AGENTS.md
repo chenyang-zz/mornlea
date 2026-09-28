@@ -115,6 +115,15 @@ against this file.
   subtree appears. A failed load never double-retires its prepared session
   (regression-guarded). Play-frame wire envelopes and connection reaping
   belong to the adapter nodes.
+- `src/rules/world_mutation.rs` owns placement geometry on the
+  `Interaction` phase: current-look ray plus selected slot settled only
+  through the accepted 1.6 transaction, door/bed two-cell footprints with
+  one revision per changed chunk, same-tick first-wins contention, and an
+  internal door toggle that writes the lower cell only (Go-verified; the
+  upper half stays). Reach refusal is pinned; sneak refusal waits for the
+  movement node that stages held controls. Provider-level gameplay
+  rejections collapse to a single error shape — the serial reducer owns the
+  final contract for how they surface.
 - `src/transport/memory.rs` owns the in-process adapter: owned frames move
   through the shared connection core with codec-only envelope framing, the
   S1 outbox drains FIFO without direct world mutation, success commits only
