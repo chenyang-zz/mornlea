@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mornlea_domain::{
-    CommandEnvelope, CommandEnvelopeParts, ContainerRef, Dimension, EventRecipient, PlayerId,
-    RejectReason, RoutedEvent, WorldState,
+    CommandEnvelope, CommandEnvelopeParts, ContainerRef, Dimension, EventRecipient, MotionState,
+    PlayerId, RejectReason, RoutedEvent, WorldState,
 };
 use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket};
 use mornlea_storage::{Metadata, PlayerLocation, PlayerSave, StoredPlayer};
@@ -1189,6 +1189,7 @@ pub struct AuthorityReadView<'a> {
     actors: &'a [ActorRecord],
     runtimes: &'a BTreeMap<ActorKey, ActorRuntime>,
     mining: &'a BTreeMap<ActorKey, MiningProgress>,
+    pre_step: &'a BTreeMap<ActorKey, MotionState>,
     environment: Option<&'a EnvironmentState>,
     containers: &'a BTreeMap<ContainerRef, ContainerRecord>,
     viewers: &'a BTreeMap<SessionKey, ViewLease>,
@@ -1282,6 +1283,13 @@ impl<'a> AuthorityReadView<'a> {
     pub fn mining(&self, key: ActorKey) -> Option<&'a MiningProgress> {
         self.mining.get(&key)
     }
+    /// Pre-motion pose snapshotted at construction, if this actor was loaded
+    /// then. Motion providers overwrite the live record in place, so only
+    /// this snapshot names the step-start pose a post-step pass may compare
+    /// against.
+    pub fn pre_step_motion(&self, key: ActorKey) -> Option<MotionState> {
+        self.pre_step.get(&key).copied()
+    }
     pub fn environment(&self) -> Option<&'a EnvironmentState> {
         self.environment
     }
@@ -1318,6 +1326,28 @@ pub struct TickContext<'a> {
     events: Vec<RoutedEvent>,
     projectiles: Vec<ProjectileRecord>,
     deferred: Vec<(RulePhase, CommandEnvelope)>,
+    charges: Vec<(ActorKey, ActionKind)>,
+    /// Pre-motion actor poses, snapshotted once at construction from the
+    /// loaded actors and never written after. The reducer constructs one
+    /// context per tick from pre-motion authority, so the snapshot is
+    /// pre-step by construction; providers that need the step-start pose
+    /// (jump takeoffs, swim displacement) read it here instead of
+    /// re-deriving physics. No rollback entry: compounds never touch it.
+    pre_step: BTreeMap<ActorKey, MotionState>,
+}
+
+/// Exhaustion charge receipt one action provider notes for the survival
+/// provider to settle.
+///
+/// Mining and till receipts fire exactly on their successful completion forks
+/// (refused or interrupted work notes nothing); melee receipts fire exactly on
+/// a successful hit. Each receipt settles through the shared threshold loop at
+/// the next post-physics pass, so writers never touch hunger state directly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActionKind {
+    Mining,
+    Till,
+    Melee,
 }
 
 impl<'a> TickContext<'a> {
@@ -1333,6 +1363,11 @@ impl<'a> TickContext<'a> {
         let mut context = Self::from_parts(authority, budget);
         context.world = Some(initial.world);
         context.actors = initial.actors.clone();
+        // The fixture's initial actors are the pre-motion poses, so the
+        // snapshot taken here is pre-step by the same construction rule.
+        for actor in &context.actors {
+            context.pre_step.insert(actor.key, actor.motion);
+        }
         context
             .inventories
             .extend(initial.inventories.iter().cloned());
@@ -1367,6 +1402,8 @@ impl<'a> TickContext<'a> {
             events: Vec::new(),
             projectiles: Vec::new(),
             deferred: Vec::new(),
+            charges: Vec::new(),
+            pre_step: BTreeMap::new(),
         }
     }
 
@@ -1429,6 +1466,7 @@ impl<'a> TickContext<'a> {
             actors: &self.actors,
             runtimes: &self.runtimes,
             mining: &self.mining,
+            pre_step: &self.pre_step,
             environment: self.environment.as_ref(),
             containers: &self.containers,
             viewers: &self.viewers,
@@ -1577,6 +1615,28 @@ impl<'a> TickContext<'a> {
             .filter(|(listed, _)| *listed == phase)
             .map(|(_, command)| *command)
             .collect()
+    }
+
+    /// Notes one exhaustion charge receipt for an actor, to be settled by the
+    /// survival provider's post-physics pass. Writers own the firing rule (see
+    /// the `ActionKind` contract); the log itself only bounds memory.
+    pub fn note_charge(&mut self, actor: ActorKey, kind: ActionKind) -> Result<(), ServerError> {
+        if self.charges.len() >= EFFECT_BUDGET {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: EFFECT_BUDGET,
+                observed: self.charges.len() + 1,
+            });
+        }
+        self.charges.push((actor, kind));
+        Ok(())
+    }
+
+    /// Drains every noted charge receipt. The consumer settles its own actor's
+    /// receipts and re-notes the rest, so one drain never starves a later
+    /// per-actor pass in the same tick.
+    pub fn take_charges(&mut self) -> Vec<(ActorKey, ActionKind)> {
+        std::mem::take(&mut self.charges)
     }
 
     fn validate_effect(
