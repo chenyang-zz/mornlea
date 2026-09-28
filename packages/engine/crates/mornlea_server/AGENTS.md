@@ -95,6 +95,15 @@ against this file.
   identity is pending-inbox-scoped; the tick boundary re-enforces it. The
   `state.rs` `submit_companion` scaffold is per-companion and must be
   replaced, not composed, when the endpoint rewire lands.
+- `src/rules/world_acquisition.rs` owns the chunk-acquisition gate: keyed
+  wants (dimension+chunk in the map key, generation+request in the want
+  record) with consumed-first ordering so a drained-then-repeated completion
+  refuses `AlreadyConsumed`, stale generations and not-wanted or superseded
+  requests refused state-preservingly, and the 64-result ready cap refusing
+  whole. Accepted completions consume as rule-level records with
+  `PhaseReport` counts — the frozen `RuleEffect` has no chunk arm and the
+  authority keeps no chunk store, so payload landing and the
+  apply-once-before-physics wiring belong to the serial reducer node.
 - `src/store/mailbox.rs` owns the durable store mailbox over the frozen
   `StoreHandle` surface: admission through the frozen `try_admit` lane/job
   caps and the 4 MiB reservation ceiling (a chunk reserves the compressed
