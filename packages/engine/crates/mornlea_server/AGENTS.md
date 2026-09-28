@@ -71,6 +71,14 @@ against this file.
   tool and events unchanged. The `resolve_*` stubs at the end of `state.rs`
   remain the consumer double's scaffold until the endpoint rewire; the
   per-`SystemRule` replacement tables belong to their rule providers.
+- `src/rules/inventory.rs` owns the inventory authority provider: ordinary
+  inventory/armor settlement for `SelectHotbar`/`MoveInventory`/`EquipArmor`/
+  `MovePartial`/`QuickMove` over whole-record `InventoryPatch` staging —
+  stack moves with cap/remainder/swap, partial halves, the four-phase
+  quick-move credit, armor points 2/6/5/2 with wear only on actual reduction
+  (fall damage bypasses). Item conservation is the invariant and a refused
+  settlement stages nothing; sequence gating and actor-lifecycle checks stay
+  with the ordering/admission layer, mirroring Go's layering.
 - Topic modules under `src/rules/`, `src/transport/`, `src/store/`,
   `src/agent/`, and the remaining non-contract `src/core/` files are
   registered and empty of behavior. Later nodes own them. This crate does
