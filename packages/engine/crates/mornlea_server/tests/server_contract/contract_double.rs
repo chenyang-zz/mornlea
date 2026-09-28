@@ -181,11 +181,10 @@ fn valid_receipt() {
     let after = capped.authority.session(session).unwrap();
     assert_eq!(after.next_arrival, before.next_arrival);
     assert_eq!(after.last_applied_sequence, 0);
-    let missing = capped
+    capped
         .authority
         .retire(session, CloseReason::PeerGone)
         .unwrap();
-    let _ = missing;
     assert!(matches!(
         capped.submit(session, sequenced(3)),
         Err(ServerError::StaleSession { .. })
@@ -244,10 +243,7 @@ fn all_ports_type_flow() {
     endpoint
         .authority
         .close_outbox(session, CloseReason::SlowReceiver);
-    assert!(matches!(
-        endpoint.authority.take_outbox(session, 1, 1),
-        Ok(_)
-    ));
+    assert!(endpoint.authority.take_outbox(session, 1, 1).is_ok());
 
     let snapshot = endpoint.authority.metadata_snapshot();
     assert_eq!(snapshot.revision, 1);

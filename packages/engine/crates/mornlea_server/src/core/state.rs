@@ -425,6 +425,9 @@ impl AuthorityState {
         Ok(())
     }
 
+    // Refusal returns the original owned chunk result so the producer keeps
+    // ownership; the mailbox never stores or copies a rejected record.
+    #[allow(clippy::result_large_err)]
     pub fn admit_chunk(&mut self, result: ChunkResult) -> Result<(), ChunkResult> {
         if self.cancelled_chunks.remove(&result.request) {
             return Ok(());

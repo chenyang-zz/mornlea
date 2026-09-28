@@ -145,7 +145,7 @@ fn canonical_state_sha256(state: &mornlea_server::contracts::FixtureState) -> [u
     write_world(&mut hasher, state.world);
     hasher.update((state.actors.len() as u64).to_be_bytes());
     let mut inventories = state.inventories.clone();
-    inventories.sort_by(|left, right| actor_tag(left.0).cmp(&actor_tag(right.0)));
+    inventories.sort_by_key(|(key, _)| actor_tag(*key));
     for (key, inventory) in inventories {
         hasher.update(actor_tag(key));
         hasher.update([inventory.selected.get()]);

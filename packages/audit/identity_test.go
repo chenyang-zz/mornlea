@@ -184,6 +184,7 @@ func TestNativeEngineLibraryIdentity(t *testing.T) {
     "crates/mornlea_domain",
     "crates/mornlea_protocol",
     "crates/mornlea_storage",
+    "crates/mornlea_server",
 ]`, "crates/mornlea_mesh")
 	requireIdentity("packages/engine/crates/mornlea_engine/Cargo.toml", `name = "mornlea_engine"`, `name = "mornlea_mesh"`)
 	requireIdentity("packages/engine/crates/mornlea_engine/build.rs", "@rpath/libmornlea_engine.dylib", "libmornlea_mesh.dylib")

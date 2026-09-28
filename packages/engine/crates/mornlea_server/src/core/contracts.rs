@@ -482,6 +482,9 @@ pub struct StoreLimits {
 }
 
 impl StoreLimits {
+    // The eight lane ceilings are the frozen S1 store contract record; grouping
+    // them would hide which ceiling each constructor position names.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         workers: usize,
         player_snapshots: usize,
@@ -777,7 +780,7 @@ pub struct ControlReply {
     pub packet: ServerPacket,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TickCounters {
     pub executed_tick: u64,
     pub commands: usize,
@@ -787,21 +790,6 @@ pub struct TickCounters {
     pub farmland_reads: usize,
     pub carried: usize,
     pub stale: usize,
-}
-
-impl Default for TickCounters {
-    fn default() -> Self {
-        Self {
-            executed_tick: 0,
-            commands: 0,
-            fluid_by_dimension: Vec::new(),
-            rescan_by_dimension: Vec::new(),
-            farmland_checks: 0,
-            farmland_reads: 0,
-            carried: 0,
-            stale: 0,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1295,6 +1283,9 @@ pub struct MutationOutcome {
     pub drops_created: usize,
 }
 
+// The variant payloads are the pinned S1 rule-effect record; each variant owns
+// its complete effect so staging stays a single move with no allocation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuleEffect {
     Actor(ActorRecord),
@@ -1426,6 +1417,9 @@ pub struct RuleTunables {
 }
 
 impl RuleTunables {
+    // The tunable fields mirror the authoritative Go snapshot one-to-one; a
+    // grouped struct would fork the single checked parameter source.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         physics: PhysicsTuning,
         regen_delay: u32,
@@ -1689,6 +1683,9 @@ pub struct CompanionActionEnvelope {
 }
 
 impl CompanionActionEnvelope {
+    // Provenance identity is the frozen Agent admission record; every field is
+    // individually validated before any state changes.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         companion_id: CompanionId,
         source_tick: u64,
@@ -1705,15 +1702,15 @@ impl CompanionActionEnvelope {
                 field: "companion_generation",
             });
         }
-        if let CompanionAction::Move { yaw, .. } = action {
-            if !yaw.is_finite() {
-                return Err(ServerError::InvalidInput { field: "yaw" });
-            }
+        if let CompanionAction::Move { yaw, .. } = action
+            && !yaw.is_finite()
+        {
+            return Err(ServerError::InvalidInput { field: "yaw" });
         }
-        if let CompanionAction::Place { block, .. } = action {
-            if !registered_block(block) {
-                return Err(ServerError::InvalidInput { field: "block" });
-            }
+        if let CompanionAction::Place { block, .. } = action
+            && !registered_block(block)
+        {
+            return Err(ServerError::InvalidInput { field: "block" });
         }
         Ok(Self {
             companion_id,
@@ -1816,6 +1813,9 @@ impl Default for SaveBudget {
     }
 }
 
+// Save payloads are the frozen storage value union; each lane is bounded by
+// its own StoreLimits ceiling rather than by boxing the enum.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum SaveValue {
     Chunk(ChunkSave),
@@ -2016,6 +2016,9 @@ pub struct PlanRequest {
 }
 
 impl PlanRequest {
+    // The leased plan request mirrors the Agent HTTP contract record; fields
+    // are validated as one unit before the request becomes visible.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         leased: LeasedIdentity,
         run_id: RunId,
@@ -2119,27 +2122,25 @@ impl AgentPlan {
                 }
                 PlanStep::Follow { .. } => None,
             };
-            if let Some(y) = y {
-                if !(BLOCK_Y_MIN..=BLOCK_Y_MAX).contains(&y) {
-                    return Err(ServerError::InvalidInput { field: "plan_y" });
-                }
+            if let Some(y) = y
+                && !(BLOCK_Y_MIN..=BLOCK_Y_MAX).contains(&y)
+            {
+                return Err(ServerError::InvalidInput { field: "plan_y" });
             }
         }
         if let Some(index) = steps
             .iter()
             .position(|step| matches!(step, PlanStep::Follow { .. }))
-        {
-            if index + 1 != steps.len()
+            && (index + 1 != steps.len()
                 || steps
                     .iter()
                     .filter(|step| matches!(step, PlanStep::Follow { .. }))
                     .count()
-                    != 1
-            {
-                return Err(ServerError::InvalidInput {
-                    field: "plan_follow",
-                });
-            }
+                    != 1)
+        {
+            return Err(ServerError::InvalidInput {
+                field: "plan_follow",
+            });
         }
         Ok(Self { summary, steps })
     }
@@ -2514,6 +2515,9 @@ pub struct PlanningSnapshot {
 }
 
 impl PlanningSnapshot {
+    // The snapshot sections mirror the frozen Agent MCP snapshot payload; each
+    // position names one bounded section of the same record.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         source_tick: u64,
         world_time_ticks: u64,
@@ -2709,6 +2713,9 @@ pub enum ConnectionProgress {
     },
 }
 
+// The login success packet is carried whole so the poll hands the caller one
+// owned record; login lanes are bounded by the pending-login ceiling.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum LoginPoll {
     Pending,
@@ -2722,6 +2729,9 @@ pub enum LoginPoll {
     },
 }
 
+// A missing player initializes a canonical new player; the loaded record is
+// transferred whole to the session installer without a second copy.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum LoadPoll {
     Pending,
@@ -2765,6 +2775,9 @@ pub trait SessionPort {
 pub trait MailboxPort {
     fn freeze_eligible(&mut self, tick: u64) -> Vec<CommandEnvelope>;
     fn carry(&mut self, batch: Vec<CommandEnvelope>) -> Result<(), ServerError>;
+    // Refusal returns the original owned chunk result so the producer keeps
+    // ownership; the mailbox never stores or copies a rejected record.
+    #[allow(clippy::result_large_err)]
     fn admit_chunk(&mut self, result: ChunkResult) -> Result<(), ChunkResult>;
     fn drain_chunks(&mut self, max: usize) -> Vec<ChunkResult>;
     fn cancel_chunk(&mut self, request: ChunkRequestId);
