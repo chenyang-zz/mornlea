@@ -132,6 +132,14 @@ against this file.
   `read.runtime` lane for the Interaction-phase sneak gate (pinned by the
   reducer node). Poses are bounds-checked against the int32 edge before the
   kernels ever see them.
+- `src/rules/player_survival.rs` owns survival on the three actor phases:
+  regen/starvation with the exact counter gates, pre-physics oxygen and
+  drowning, post-physics exhaustion from motion charges (jump/swim/sprint
+  against the pre-step snapshot, mining/till/melee through the action
+  receipt seam) and fall damage, death-once with bed-preserving respawn,
+  and damage-event emission that the sleep node consumes for wake. The
+  serial reducer must construct contexts from pre-motion authority so the
+  pre-step snapshot holds.
 - `src/rules/mining.rs` owns continuous mining progression on the
   `MiningStep` phase: key-unchanged increments to saturation, key change
   restarts at 1, completions through the 1.6 transaction exactly once, human

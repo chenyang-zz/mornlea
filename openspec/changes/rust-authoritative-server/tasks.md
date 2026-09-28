@@ -32,7 +32,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 2.4d Implement deterministic crop, dry farmland, tree, grass and snow random rules.
 - [ ] 2.4c Implement ordered block-support sweeps.
 - [x] 2.5a Implement authoritative player control and movement.
-- [ ] 2.5b Implement survival transitions and correction observations.
+- [x] 2.5b Implement survival transitions and correction observations.
 - [ ] 2.5c Implement atomic eating inventory and hunger settlement.
 - [x] 2.6a Implement inventory authority and item conservation.
 - [x] 2.6b Implement containers and generation/view validation.
