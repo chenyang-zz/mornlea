@@ -87,6 +87,14 @@ against this file.
   mirrored constants and KAT literals reproduce the Go engine exactly;
   staging goes through `RuleEffect::Environment` plus the world publication
   record.
+- `src/core/companion_ingress.rs` owns the sessionless companion candidate
+  admission: whole-payload validation (provenance, digest, generation,
+  source tick, finite yaw, world-Y target bound) before a global four-slot
+  inbox reservation — every refusal leaves index and counters untouched, and
+  a human session is unavailable by type (sealed envelope). Duplicate
+  identity is pending-inbox-scoped; the tick boundary re-enforces it. The
+  `state.rs` `submit_companion` scaffold is per-companion and must be
+  replaced, not composed, when the endpoint rewire lands.
 - `src/store/mailbox.rs` owns the durable store mailbox over the frozen
   `StoreHandle` surface: admission through the frozen `try_admit` lane/job
   caps and the 4 MiB reservation ceiling (a chunk reserves the compressed
