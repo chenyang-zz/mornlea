@@ -87,10 +87,20 @@ against this file.
   mirrored constants and KAT literals reproduce the Go engine exactly;
   staging goes through `RuleEffect::Environment` plus the world publication
   record.
-- Topic modules under `src/rules/`, `src/transport/`, `src/store/`,
-  `src/agent/`, and the remaining non-contract `src/core/` files are
-  registered and empty of behavior. Later nodes own them. This crate does
-  not implement a world rule, reducer, transport adapter, or disk backend.
+- `src/store/mailbox.rs` owns the durable store mailbox over the frozen
+  `StoreHandle` surface: admission through the frozen `try_admit` lane/job
+  caps and the 4 MiB reservation ceiling (a chunk reserves the compressed
+  maximum plus envelope before encoding and shrinks to the actual length
+  after), one ownership ticket counted once across queue, workers and
+  completion, whole-request return on every refusal, per-key durable
+  revisions only after the backend commit, and stale-ticket completions
+  reported without clearing newer in-flight work. `poll_tick` performs no
+  I/O; the real disk backend is a later node and this module's tests drive
+  an explicitly named backend double.
+- Topic modules under `src/rules/`, `src/transport/`, `src/store/` and
+  `src/agent/` that are not named above stay registered and empty of
+  behavior. Later nodes own them. This crate does not implement the tick
+  reducer, a transport adapter, a real disk backend or the Agent host.
 
 ## Consumer double (`tests/server_contract/contract_double.rs`)
 
