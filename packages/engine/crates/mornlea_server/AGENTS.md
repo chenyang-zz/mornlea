@@ -60,6 +60,17 @@ against this file.
   `AuthorityState::drive_shutdown` is the contract-landing scaffold behind the
   consumer double's endpoint; the real endpoint rewires to this provider at
   the common transport integration node — do not extend the scaffold.
+- `src/core/mutation.rs` owns the authority-resolved world transaction: the
+  four `resolve_*` functions build complete private `BlockTxn`s — footprint
+  from the frozen Go block tables (door/bed two cells, cross-chunk), selected
+  item/tool wear with the Go exemption predicate, actor-specific output
+  preflight (human staged drops under per-chunk occupancy, companion
+  inventory credit) and captured container slots — and commit only through
+  `MutationTxn::{try_place, try_mine, try_system}`. No client-supplied target
+  or revision reaches commit; a refusal leaves world, inventory, containers,
+  tool and events unchanged. The `resolve_*` stubs at the end of `state.rs`
+  remain the consumer double's scaffold until the endpoint rewire; the
+  per-`SystemRule` replacement tables belong to their rule providers.
 - Topic modules under `src/rules/`, `src/transport/`, `src/store/`,
   `src/agent/`, and the remaining non-contract `src/core/` files are
   registered and empty of behavior. Later nodes own them. This crate does

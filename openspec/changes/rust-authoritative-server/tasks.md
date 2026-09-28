@@ -18,7 +18,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 1.4 Implement bounded tick/chunk mailboxes and cancellation.
 - [x] 1.5a Implement owned tick publication and bounded slow-receiver outboxes.
 - [x] 1.5b Implement one final unpublished tick and retryable shutdown phases.
-- [ ] 1.6 Implement authority-resolved atomic placement/mining transaction and failure invariants.
+- [x] 1.6 Implement authority-resolved atomic placement/mining transaction and failure invariants.
 
 ## 2. Independent authoritative rule providers
 
