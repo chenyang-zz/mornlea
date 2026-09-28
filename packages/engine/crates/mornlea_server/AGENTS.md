@@ -104,6 +104,17 @@ against this file.
   `PhaseReport` counts — the frozen `RuleEffect` has no chunk arm and the
   authority keeps no chunk store, so payload landing and the
   apply-once-before-physics wiring belong to the serial reducer node.
+- `src/transport/common.rs` owns the one shared transport admission path
+  both adapters call: frame decode, hello validation, a 16-deep prelogin
+  reservation (the seventeenth refuses `Capacity`), login admission through
+  the frozen prepare/install/activate lifecycle with send-acknowledgment
+  gating the single activation, and S2 coalesced ingress with its exact
+  byte cap. `TransportAuthority` and `HandshakeLimits` are declared here
+  with plan-exact signatures because the contract landing did not place
+  them; the declaration file moves only if a consumer outside the transport
+  subtree appears. A failed load never double-retires its prepared session
+  (regression-guarded). Play-frame wire envelopes and connection reaping
+  belong to the adapter nodes.
 - `src/store/mailbox.rs` owns the durable store mailbox over the frozen
   `StoreHandle` surface: admission through the frozen `try_admit` lane/job
   caps and the 4 MiB reservation ceiling (a chunk reserves the compressed

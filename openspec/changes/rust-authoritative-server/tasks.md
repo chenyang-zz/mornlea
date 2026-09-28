@@ -51,7 +51,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 ## 3. Adapters and serial integration
 
 - [ ] 3.1 Integrate the one authoritative tick reducer after all rule providers.
-- [ ] 3.2 Land the common protocol/login/validation transport path.
+- [x] 3.2 Land the common protocol/login/validation transport path.
 - [ ] 3.3a Implement the Memory adapter over common admission.
 - [ ] 3.3b Implement the TCP adapter over common admission.
 - [x] 3.4a Implement bounded durable store mailbox.
