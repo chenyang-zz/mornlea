@@ -534,32 +534,50 @@ impl AuthorityState {
                 frame,
             });
         }
+        let mut slow = Vec::new();
         for item in pending {
             match item {
-                PendingFrame::One { session, frame } => self.append_frame(session, frame),
+                PendingFrame::One { session, frame } => {
+                    if self.append_frame(session, frame) {
+                        slow.push(session);
+                    }
+                }
                 PendingFrame::Broadcast { frame } => {
                     let sessions: Vec<SessionKey> = self.sessions.keys().copied().collect();
                     for session in sessions {
-                        self.append_frame(session, frame.clone());
+                        if self.append_frame(session, frame.clone()) {
+                            slow.push(session);
+                        }
                     }
                 }
             }
         }
+        // A saturated receiver is retired only after the append loop so one
+        // session flips at most once per publication. Retirement frees the
+        // player slot exactly like a peer-gone close; the overflowing frame
+        // was dropped by the append and no Disconnect frame is appended.
+        for session in slow {
+            let _ = self.retire(session, CloseReason::SlowReceiver);
+        }
         Ok(())
     }
 
-    fn append_frame(&mut self, session: SessionKey, frame: Vec<u8>) {
+    /// Appends one frame to a receiver's outbox. Returns `true` only when
+    /// this append saturated the outbox and flipped it closed; the overflowing
+    /// frame is dropped and the caller owns the slow-receiver retirement.
+    fn append_frame(&mut self, session: SessionKey, frame: Vec<u8>) -> bool {
         let Some(record) = self.sessions.get_mut(&session) else {
-            return;
+            return false;
         };
         if record.outbox_closed {
-            return;
+            return false;
         }
         if record.outbox.len() >= self.limits.session_outbox() {
             record.outbox_closed = true;
-            return;
+            return true;
         }
         record.outbox.push(frame);
+        false
     }
 
     pub fn take_outbox(

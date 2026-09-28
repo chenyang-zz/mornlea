@@ -37,10 +37,22 @@ against this file.
 - `Clock::monotonic` and `Clock::unix_ms` stay separate.
   `contract_double::clock_units_separate` rejects a wall-clock value as a
   monotonic deadline.
+- `src/core/session.rs` owns the session provider over the state ports:
+  `admit`/`submit`/`close_session`/`apply_sorted_batch` (admission capacity,
+  control-plane split, retire-once, freeze-sort-apply with silent stale
+  discard). `src/core/mailbox.rs` owns the bounded mailboxes:
+  `budgeted_batch` (positional budgeted prefix, identity-preserving carry,
+  watermark walk), `admit_chunk_result` (admitted / cancelled-discarded /
+  duplicate-discarded classification via `chunk_discard_counts()`), and
+  `cancel_chunk_request` (one-shot tombstone). `src/core/publication.rs`
+  owns tick delivery: `publish_tick`, `drain_outbox`, `close_receiver`; a
+  saturated 512-frame outbox silently retires only that receiver with
+  `CloseReason::SlowReceiver` inside `AuthorityState::publish` — no
+  Disconnect frame is appended and publishing never blocks.
 - Topic modules under `src/rules/`, `src/transport/`, `src/store/`,
-  `src/agent/`, and the non-contract `src/core/` files are registered and
-  empty of behavior. Later nodes own them. This crate does not implement a
-  world rule, reducer, transport adapter, or disk backend.
+  `src/agent/`, and the remaining non-contract `src/core/` files are
+  registered and empty of behavior. Later nodes own them. This crate does
+  not implement a world rule, reducer, transport adapter, or disk backend.
 
 ## Consumer double (`tests/server_contract/contract_double.rs`)
 
