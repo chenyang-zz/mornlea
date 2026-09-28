@@ -79,6 +79,14 @@ against this file.
   (fall damage bypasses). Item conservation is the invariant and a refused
   settlement stages nothing; sequence gating and actor-lifecycle checks stay
   with the ordering/admission layer, mirroring Go's layering.
+- `src/rules/environment.rs` owns the end-of-tick environment provider: it
+  advances world time exactly once per tick (saturating, never wrapping),
+  keeps sleep as a `day_phase_offset` display change only, and rolls weather
+  and season through the frozen Go dice (SplitMix64 salts, segment/duration
+  intervals, restore-zero preserving kind and regenerating duration). The
+  mirrored constants and KAT literals reproduce the Go engine exactly;
+  staging goes through `RuleEffect::Environment` plus the world publication
+  record.
 - Topic modules under `src/rules/`, `src/transport/`, `src/store/`,
   `src/agent/`, and the remaining non-contract `src/core/` files are
   registered and empty of behavior. Later nodes own them. This crate does
