@@ -49,6 +49,17 @@ against this file.
   saturated 512-frame outbox silently retires only that receiver with
   `CloseReason::SlowReceiver` inside `AuthorityState::publish` — no
   Disconnect frame is appended and publishing never blocks.
+- `src/core/shutdown.rs` owns the retryable shutdown machine over the frozen
+  lifecycle ports: `shutdown` drives the 18-phase resumable sequence — stop
+  admission, one final unpublished tick, authority and Agent-lease freeze,
+  worker quiesce, Agent memory finalization, ordered family flush, store sync
+  as the durability barrier, Agent release with frozen-lease retention,
+  same-lease retry and expiry skip, then the Agent/MCP/store/worker closes.
+  Completed phases are never replayed and a failure keeps the failed phase as
+  the retry boundary with the lease and resources retained.
+  `AuthorityState::drive_shutdown` is the contract-landing scaffold behind the
+  consumer double's endpoint; the real endpoint rewires to this provider at
+  the common transport integration node — do not extend the scaffold.
 - Topic modules under `src/rules/`, `src/transport/`, `src/store/`,
   `src/agent/`, and the remaining non-contract `src/core/` files are
   registered and empty of behavior. Later nodes own them. This crate does
