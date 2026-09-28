@@ -35,7 +35,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 2.5b Implement survival transitions and correction observations.
 - [ ] 2.5c Implement atomic eating inventory and hunger settlement.
 - [x] 2.6a Implement inventory authority and item conservation.
-- [ ] 2.6b Implement containers and generation/view validation.
+- [x] 2.6b Implement containers and generation/view validation.
 - [ ] 2.6c Implement atomic workbench crafting.
 - [ ] 2.6d Implement tick-driven furnaces.
 - [ ] 2.6e Implement farming tools, bone meal and atomic buckets.

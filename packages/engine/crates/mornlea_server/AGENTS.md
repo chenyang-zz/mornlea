@@ -139,6 +139,13 @@ against this file.
   human-only snow clear without drop capacity, and bow-draw suppression.
   Grass saturates but its seed roll belongs to the random-rules node;
   companion settlement wear belongs to a 1.6 follow-up.
+- `src/rules/containers.rs` owns container views on `ContainerMove` plus
+  open/close admission: generation/dimension/range-validated leases with
+  output 38 never a destination, furnace input-then-fuel priority, repack
+  preview before commit, and close invalidating only after successful
+  repack. Container commits stage `RuleEffect::Container` and view leases
+  stage `RuleEffect::Viewer` through context overlays (both rollback-safe);
+  the overlay-to-authority commit leg belongs to the serial reducer.
 - `src/store/scheduler.rs` owns save scheduling over the accepted mailbox:
   completions before due retries before urgent before cadence autosave (latched
   until dirty and in-flight clear), saturating-tick backoff 20…1200 with
