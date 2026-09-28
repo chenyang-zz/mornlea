@@ -1169,6 +1169,7 @@ pub struct AuthorityReadView<'a> {
     inventories: &'a BTreeMap<ActorKey, InventoryRecord>,
     blocks: &'a BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
     actors: &'a [ActorRecord],
+    runtimes: &'a BTreeMap<ActorKey, ActorRuntime>,
     environment: Option<&'a EnvironmentState>,
     containers: &'a BTreeMap<ContainerRef, ContainerRecord>,
     drops: &'a BTreeMap<ChunkKey, Vec<DropRecord>>,
@@ -1237,6 +1238,12 @@ impl<'a> AuthorityReadView<'a> {
     pub fn actor(&self, key: ActorKey) -> Option<&'a ActorRecord> {
         self.actors.iter().find(|actor| actor.key == key)
     }
+    /// Provider-staged per-actor runtime record, if any. The motion provider
+    /// is the single writer of the held-controls lane; every other lane
+    /// belongs to its own provider and the serial reducer merges per field.
+    pub fn runtime(&self, key: ActorKey) -> Option<&'a ActorRuntime> {
+        self.runtimes.get(&key)
+    }
     pub fn environment(&self) -> Option<&'a EnvironmentState> {
         self.environment
     }
@@ -1254,6 +1261,7 @@ pub struct TickContext<'a> {
     companions: Vec<CompanionActionEnvelope>,
     interactions: Vec<AuthorityInteraction>,
     actors: Vec<ActorRecord>,
+    runtimes: BTreeMap<ActorKey, ActorRuntime>,
     environment: Option<EnvironmentState>,
     budget: TickBudget,
     spent_commands: usize,
@@ -1300,6 +1308,7 @@ impl<'a> TickContext<'a> {
             companions: Vec::new(),
             interactions: Vec::new(),
             actors: Vec::new(),
+            runtimes: BTreeMap::new(),
             environment: None,
             budget,
             spent_commands: 0,
@@ -1359,6 +1368,7 @@ impl<'a> TickContext<'a> {
             inventories: &self.inventories,
             blocks: &self.blocks,
             actors: &self.actors,
+            runtimes: &self.runtimes,
             environment: self.environment.as_ref(),
             containers: &self.containers,
             drops: &self.drops,
@@ -1594,6 +1604,7 @@ impl<'a> TickContext<'a> {
                 // component before applying any. Containers and drops have
                 // no effect arm that writes them and stay out.
                 let actors = self.actors.clone();
+                let runtimes = self.runtimes.clone();
                 for part in parts {
                     if let Err(error) = self.apply_effect(part) {
                         self.inventories = inventories;
@@ -1602,6 +1613,7 @@ impl<'a> TickContext<'a> {
                         self.projectiles = projectiles;
                         self.environment = environment;
                         self.actors = actors;
+                        self.runtimes = runtimes;
                         return Err(error);
                     }
                 }
@@ -1615,6 +1627,12 @@ impl<'a> TickContext<'a> {
                     Some(index) => self.actors[index] = record,
                     None => self.actors.push(record),
                 }
+                Ok(())
+            }
+            RuleEffect::Runtime(record) => {
+                // Latest-wins overlay replace keyed by actor, mirroring the
+                // actor arm: one staged runtime record per actor.
+                self.runtimes.insert(record.key, record);
                 Ok(())
             }
             RuleEffect::Inventory(patch) => {
