@@ -16,7 +16,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 1.2 Land compiling S1 contract, bounded types and executing consumer double; freeze its SHA.
 - [x] 1.3 Implement session admission, sequenced intake and control-plane separation.
 - [x] 1.4 Implement bounded tick/chunk mailboxes and cancellation.
-- [ ] 1.5a Implement owned tick publication and bounded slow-receiver outboxes.
+- [x] 1.5a Implement owned tick publication and bounded slow-receiver outboxes.
 - [ ] 1.5b Implement one final unpublished tick and retryable shutdown phases.
 - [ ] 1.6 Implement authority-resolved atomic placement/mining transaction and failure invariants.
 
