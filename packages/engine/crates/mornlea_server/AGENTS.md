@@ -130,6 +130,12 @@ against this file.
   on acknowledgment, and the 513th frame retires only the slow receiver. The
   adapter struct holds no authority handle, so the frame path is the only
   mutation path.
+- `src/transport/tcp.rs` owns the loopback TCP adapter: real sockets with
+  ephemeral ports, fragmented-frame reassembly with partial-arrival proof,
+  virtual 5 s/10 s expiries by clock advance only, peer-reset recovery with
+  continued session numbering, and slow-receiver isolation end to end. The
+  same transcript produces identical session IDs and event order on both
+  adapters (proven by the joint parity run, not by reading the sibling).
 - `src/store/mailbox.rs` owns the durable store mailbox over the frozen
   `StoreHandle` surface: admission through the frozen `try_admit` lane/job
   caps and the 4 MiB reservation ceiling (a chunk reserves the compressed

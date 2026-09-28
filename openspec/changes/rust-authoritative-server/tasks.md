@@ -53,7 +53,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 3.1 Integrate the one authoritative tick reducer after all rule providers.
 - [x] 3.2 Land the common protocol/login/validation transport path.
 - [x] 3.3a Implement the Memory adapter over common admission.
-- [ ] 3.3b Implement the TCP adapter over common admission.
+- [x] 3.3b Implement the TCP adapter over common admission.
 - [x] 3.4a Implement bounded durable store mailbox.
 - [ ] 3.4b Implement autosave, retry, backpressure and flush scheduling.
 - [ ] 3.4c Implement real region commit, crash boundaries and compaction.
