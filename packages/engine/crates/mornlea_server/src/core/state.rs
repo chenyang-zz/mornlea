@@ -64,6 +64,10 @@ pub struct AuthorityState {
     in_flight: Vec<OwnedSnapshot>,
     shutdown: ShutdownReport,
     final_consumed: bool,
+    /// Committed container viewer leases by session. The serial reducer owns
+    /// the overlay-commit leg that writes this store; providers only stage
+    /// viewer overlays on the tick context.
+    views: BTreeMap<SessionKey, ViewLease>,
 }
 
 impl AuthorityState {
@@ -123,7 +127,21 @@ impl AuthorityState {
                 retryable: true,
             },
             final_consumed: false,
+            views: BTreeMap::new(),
         })
+    }
+
+    /// Commits the tick's net viewer overlay into the committed view store.
+    /// The serial reducer calls this once at overlay commit with the drained
+    /// context overlay: present leases install, and leases the tick cleared
+    /// stay absent, so the store always carries the net live set. The next
+    /// tick reads committed leases through the overlay-first viewer getter,
+    /// which keeps a viewer visible until the tick that clears it. The full
+    /// cross-tick seeding and merge policy belongs to the serial reducer
+    /// integration; until it lands this store stays empty and the context
+    /// overlay is the sole lease source. Unwired: no caller exists yet.
+    pub fn commit_viewers(&mut self, overlay: BTreeMap<SessionKey, ViewLease>) {
+        self.views = overlay;
     }
 
     pub fn phase(&self) -> ServerPhase {
@@ -1173,6 +1191,8 @@ pub struct AuthorityReadView<'a> {
     mining: &'a BTreeMap<ActorKey, MiningProgress>,
     environment: Option<&'a EnvironmentState>,
     containers: &'a BTreeMap<ContainerRef, ContainerRecord>,
+    viewers: &'a BTreeMap<SessionKey, ViewLease>,
+    committed_viewers: &'a BTreeMap<SessionKey, ViewLease>,
     drops: &'a BTreeMap<ChunkKey, Vec<DropRecord>>,
 }
 
@@ -1227,6 +1247,17 @@ impl<'a> AuthorityReadView<'a> {
     pub fn container(&self, reference: ContainerRef) -> Option<ContainerRecord> {
         self.containers.get(&reference).cloned()
     }
+    /// Viewer lease for one session, staged overlay first and the committed
+    /// authority store second. The overlay carries the tick's net leases, so
+    /// a viewer stays visible here until the tick whose close clears it; the
+    /// committed fallback keeps the previous tick's leases readable until the
+    /// serial reducer reseeds the overlay.
+    pub fn viewer(&self, session: SessionKey) -> Option<ViewLease> {
+        self.viewers
+            .get(&session)
+            .copied()
+            .or_else(|| self.committed_viewers.get(&session).copied())
+    }
     /// Fixture-backed drop-slot occupancy of one chunk; each staged record
     /// occupies one of the fixed per-chunk drop slots. Drop identity
     /// allocation, aging and pickup stay with the drop provider.
@@ -1262,6 +1293,10 @@ pub struct TickContext<'a> {
     inventories: BTreeMap<ActorKey, InventoryRecord>,
     blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
     containers: BTreeMap<ContainerRef, ContainerRecord>,
+    /// Staged viewer leases by session. The container provider is the single
+    /// writer through the viewer staging arm; the serial reducer commits the
+    /// net overlay into the authority store at overlay commit.
+    viewers: BTreeMap<SessionKey, ViewLease>,
     drops: BTreeMap<ChunkKey, Vec<DropRecord>>,
     world: Option<WorldState>,
     commands: Vec<CommandEnvelope>,
@@ -1310,6 +1345,7 @@ impl<'a> TickContext<'a> {
             inventories: BTreeMap::new(),
             blocks: BTreeMap::new(),
             containers: BTreeMap::new(),
+            viewers: BTreeMap::new(),
             drops: BTreeMap::new(),
             world: None,
             commands: Vec::new(),
@@ -1343,9 +1379,9 @@ impl<'a> TickContext<'a> {
     }
 
     /// Stages one container record for fixture-driven resolver preflight,
-    /// replacing any earlier record with the same reference. Real container
-    /// semantics — generation validation, viewer leases, staging effects —
-    /// stay with the container provider.
+    /// replacing any earlier record with the same reference. Production
+    /// container commits stage container deltas through the container
+    /// staging arm instead; this entry point stays test setup only.
     pub fn preload_container(&mut self, record: ContainerRecord) {
         self.containers.insert(record.reference, record);
     }
@@ -1395,6 +1431,8 @@ impl<'a> TickContext<'a> {
             mining: &self.mining,
             environment: self.environment.as_ref(),
             containers: &self.containers,
+            viewers: &self.viewers,
+            committed_viewers: &self.authority.views,
             drops: &self.drops,
         }
     }
@@ -1578,6 +1616,15 @@ impl<'a> TickContext<'a> {
                 Some(current) if current == &patch.before => Ok(()),
                 _ => Err(RuleReject::StaleObservation),
             },
+            RuleEffect::Container { before, .. } => match self.containers.get(&before.reference) {
+                Some(current) if current == before => Ok(()),
+                _ => Err(RuleReject::StaleObservation),
+            },
+            RuleEffect::Viewer { session, view } => match view {
+                Some(lease) if lease.session() == *session => Ok(()),
+                None => Ok(()),
+                _ => Err(RuleReject::Wire(RejectReason::InvalidInput)),
+            },
             RuleEffect::Blocks(txn) => {
                 if txn.writes.len() > EFFECT_BUDGET {
                     return Err(RuleReject::ResourceFull(Resource::RuleEffects));
@@ -1618,14 +1665,17 @@ impl<'a> TickContext<'a> {
                 let inventories = self.inventories.clone();
                 let world = self.world;
                 let blocks = self.blocks.clone();
+                let containers = self.containers.clone();
+                let viewers = self.viewers.clone();
                 let projectiles = self.projectiles.clone();
                 let environment = self.environment.clone();
                 // Defensive enforcement of the seam rule that a rejected
                 // atomic effect leaves all components unchanged: actor
                 // records became effect-mutable with the `Actor` staging arm,
-                // so they join the rollback snapshot. No public path reaches
-                // this restore today because `stage` validates every
-                // component before applying any. Containers and drops have
+                // so they join the rollback snapshot, and container records
+                // and viewer leases join it with their own staging arms. No
+                // public path reaches this restore today because `stage`
+                // validates every component before applying any. Drops have
                 // no effect arm that writes them and stay out.
                 let actors = self.actors.clone();
                 let runtimes = self.runtimes.clone();
@@ -1635,6 +1685,8 @@ impl<'a> TickContext<'a> {
                         self.inventories = inventories;
                         self.world = world;
                         self.blocks = blocks;
+                        self.containers = containers;
+                        self.viewers = viewers;
                         self.projectiles = projectiles;
                         self.environment = environment;
                         self.actors = actors;
@@ -1677,6 +1729,21 @@ impl<'a> TickContext<'a> {
             }
             RuleEffect::Inventory(patch) => {
                 self.inventories.insert(patch.actor, patch.after);
+                Ok(())
+            }
+            RuleEffect::Container { after, .. } => {
+                self.containers.insert(after.reference, after);
+                Ok(())
+            }
+            RuleEffect::Viewer { session, view } => {
+                match view {
+                    Some(lease) => {
+                        self.viewers.insert(session, lease);
+                    }
+                    None => {
+                        self.viewers.remove(&session);
+                    }
+                }
                 Ok(())
             }
             RuleEffect::World(world) => {
