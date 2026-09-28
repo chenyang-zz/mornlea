@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mornlea_domain::{
-    CommandEnvelope, CommandEnvelopeParts, Dimension, EventRecipient, PlayerId, RoutedEvent,
-    WorldState,
+    CommandEnvelope, CommandEnvelopeParts, ContainerRef, Dimension, EventRecipient, PlayerId,
+    RejectReason, RoutedEvent, WorldState,
 };
 use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket};
 use mornlea_storage::{Metadata, PlayerLocation, PlayerSave, StoredPlayer};
@@ -1170,6 +1170,8 @@ pub struct AuthorityReadView<'a> {
     blocks: &'a BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
     actors: &'a [ActorRecord],
     environment: Option<&'a EnvironmentState>,
+    containers: &'a BTreeMap<ContainerRef, ContainerRecord>,
+    drops: &'a BTreeMap<ChunkKey, Vec<DropRecord>>,
 }
 
 impl<'a> AuthorityReadView<'a> {
@@ -1202,6 +1204,33 @@ impl<'a> AuthorityReadView<'a> {
             .find(|((key, block_pos), _)| key.dimension == dimension && *block_pos == pos)
             .map(|(_, observed)| observed.block)
     }
+    /// Same lookup as [`Self::block`] but returning the copied observation a
+    /// resolver needs to build `BlockWrite`s: the cell's generation, revision
+    /// and block together, so a resolved transaction carries the exact basis
+    /// it was certified against. `block()` stays unchanged.
+    pub fn observation(
+        &self,
+        dimension: Dimension,
+        pos: mornlea_domain::BlockPos,
+    ) -> Option<BlockObservation> {
+        self.blocks
+            .iter()
+            .find(|((key, block_pos), _)| key.dimension == dimension && *block_pos == pos)
+            .map(|(_, observed)| *observed)
+    }
+    /// Fixture-backed container lookup by exact reference. Real container
+    /// records, generation validation and viewer leases belong to the
+    /// container provider; this surface only lets a resolver capture the
+    /// staged slots of a mined container.
+    pub fn container(&self, reference: ContainerRef) -> Option<ContainerRecord> {
+        self.containers.get(&reference).cloned()
+    }
+    /// Fixture-backed drop-slot occupancy of one chunk; each staged record
+    /// occupies one of the fixed per-chunk drop slots. Drop identity
+    /// allocation, aging and pickup stay with the drop provider.
+    pub fn drops(&self, key: ChunkKey) -> &[DropRecord] {
+        self.drops.get(&key).map(Vec::as_slice).unwrap_or(&[])
+    }
     pub fn actors(&self) -> &'a [ActorRecord] {
         self.actors
     }
@@ -1218,6 +1247,8 @@ pub struct TickContext<'a> {
     authority: &'a mut AuthorityState,
     inventories: BTreeMap<ActorKey, InventoryRecord>,
     blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
+    containers: BTreeMap<ContainerRef, ContainerRecord>,
+    drops: BTreeMap<ChunkKey, Vec<DropRecord>>,
     world: Option<WorldState>,
     commands: Vec<CommandEnvelope>,
     companions: Vec<CompanionActionEnvelope>,
@@ -1262,6 +1293,8 @@ impl<'a> TickContext<'a> {
             authority,
             inventories: BTreeMap::new(),
             blocks: BTreeMap::new(),
+            containers: BTreeMap::new(),
+            drops: BTreeMap::new(),
             world: None,
             commands: Vec::new(),
             companions: Vec::new(),
@@ -1291,6 +1324,31 @@ impl<'a> TickContext<'a> {
         self.blocks.insert((observed.key, observed.pos), observed);
     }
 
+    /// Stages one container record for fixture-driven resolver preflight,
+    /// replacing any earlier record with the same reference. Real container
+    /// semantics — generation validation, viewer leases, staging effects —
+    /// stay with the container provider.
+    pub fn preload_container(&mut self, record: ContainerRecord) {
+        self.containers.insert(record.reference, record);
+    }
+
+    /// Stages one occupied drop slot for fixture-driven capacity preflight,
+    /// filed under the chunk its drop identity names. A drop identity naming
+    /// a dimension outside the supported pair has no chunk key and is
+    /// ignored rather than silently re-homed.
+    pub fn preload_drop(&mut self, record: DropRecord) {
+        if let Some(dimension) = u8::try_from(record.id.dimension())
+            .ok()
+            .and_then(|raw| Dimension::new(raw).ok())
+        {
+            let key = ChunkKey {
+                dimension,
+                pos: record.id.chunk(),
+            };
+            self.drops.entry(key).or_default().push(record);
+        }
+    }
+
     pub fn read(&self) -> AuthorityReadView<'_> {
         AuthorityReadView {
             tick: self.authority.next_tick,
@@ -1302,6 +1360,8 @@ impl<'a> TickContext<'a> {
             blocks: &self.blocks,
             actors: &self.actors,
             environment: self.environment.as_ref(),
+            containers: &self.containers,
+            drops: &self.drops,
         }
     }
 
@@ -1463,6 +1523,23 @@ impl<'a> TickContext<'a> {
                 }
                 Ok(())
             }
+            RuleEffect::Actor(record) => {
+                // The record's only own shape rule is the key/body pairing
+                // `ActorRecord::try_new` enforces; restating it here keeps a
+                // compound actor component from staging a mismatched body.
+                let paired = matches!(
+                    (&record.key, &record.body),
+                    (ActorKey::Player(_), ActorBody::Player(_))
+                        | (ActorKey::Companion(_), ActorBody::Companion(_))
+                        | (ActorKey::Hostile(_), ActorBody::Hostile(_))
+                        | (ActorKey::Passive(_), ActorBody::Passive(_))
+                );
+                if paired {
+                    Ok(())
+                } else {
+                    Err(RuleReject::Wire(RejectReason::InvalidInput))
+                }
+            }
             RuleEffect::Inventory(patch) => match self.inventories.get(&patch.actor) {
                 Some(current) if current == &patch.before => Ok(()),
                 _ => Err(RuleReject::StaleObservation),
@@ -1509,6 +1586,14 @@ impl<'a> TickContext<'a> {
                 let blocks = self.blocks.clone();
                 let projectiles = self.projectiles.clone();
                 let environment = self.environment.clone();
+                // Defensive enforcement of the seam rule that a rejected
+                // atomic effect leaves all components unchanged: actor
+                // records became effect-mutable with the `Actor` staging arm,
+                // so they join the rollback snapshot. No public path reaches
+                // this restore today because `stage` validates every
+                // component before applying any. Containers and drops have
+                // no effect arm that writes them and stay out.
+                let actors = self.actors.clone();
                 for part in parts {
                     if let Err(error) = self.apply_effect(part) {
                         self.inventories = inventories;
@@ -1516,8 +1601,19 @@ impl<'a> TickContext<'a> {
                         self.blocks = blocks;
                         self.projectiles = projectiles;
                         self.environment = environment;
+                        self.actors = actors;
                         return Err(error);
                     }
+                }
+                Ok(())
+            }
+            RuleEffect::Actor(record) => {
+                // Latest-wins overlay replace, mirroring the inventory arm: a
+                // staged actor snapshot supersedes the earlier record with
+                // the same key instead of accumulating duplicates.
+                match self.actors.iter().position(|actor| actor.key == record.key) {
+                    Some(index) => self.actors[index] = record,
+                    None => self.actors.push(record),
                 }
                 Ok(())
             }
