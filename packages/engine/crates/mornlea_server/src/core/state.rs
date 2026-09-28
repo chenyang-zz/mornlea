@@ -352,6 +352,17 @@ impl AuthorityState {
                 Ok(SubmissionReceipt::ControlAccepted)
             }
             PlayIntent::Sequenced { sequence, command } => {
+                // Intake order is seam-fixed: validate the whole payload before
+                // queue or arrival capacity, so a combined violation reports
+                // the payload boundary and never consumes capacity state.
+                let envelope = CommandEnvelope::try_new(CommandEnvelopeParts {
+                    tick: self.next_tick,
+                    session: session.get(),
+                    sequence,
+                    arrival_index: next_arrival,
+                    command,
+                })
+                .map_err(|_| ServerError::InvalidInput { field: "command" })?;
                 if self.commands.len() >= self.limits.queued_commands() {
                     return Err(ServerError::Capacity {
                         resource: Resource::Commands,
@@ -366,14 +377,6 @@ impl AuthorityState {
                         observed: usize::MAX,
                     });
                 }
-                let envelope = CommandEnvelope::try_new(CommandEnvelopeParts {
-                    tick: self.next_tick,
-                    session: session.get(),
-                    sequence,
-                    arrival_index: next_arrival,
-                    command,
-                })
-                .map_err(|_| ServerError::InvalidInput { field: "command" })?;
                 self.commands.push(envelope);
                 if let Some(record) = self.sessions.get_mut(&session) {
                     record.next_arrival = next_arrival.saturating_add(1);
