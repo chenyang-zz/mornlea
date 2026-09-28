@@ -14,7 +14,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 1.1b Record command, chunk-result and persistence high-water from every supported server replay.
 - [x] 1.1c Freeze S1 bounds and source-bound capability-to-test mappings before the contract landing.
 - [x] 1.2 Land compiling S1 contract, bounded types and executing consumer double; freeze its SHA.
-- [ ] 1.3 Implement session admission, sequenced intake and control-plane separation.
+- [x] 1.3 Implement session admission, sequenced intake and control-plane separation.
 - [ ] 1.4 Implement bounded tick/chunk mailboxes and cancellation.
 - [ ] 1.5a Implement owned tick publication and bounded slow-receiver outboxes.
 - [ ] 1.5b Implement one final unpublished tick and retryable shutdown phases.
