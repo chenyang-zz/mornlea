@@ -1398,6 +1398,8 @@ pub struct TickContext<'a> {
     authority: &'a mut AuthorityState,
     inventories: BTreeMap<ActorKey, InventoryRecord>,
     blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
+    /// Successful block mutations only, keyed in source chunk/index order.
+    changed: BTreeMap<(ChunkKey, u32), BlockObservation>,
     ready: BTreeMap<ChunkKey, ReadyChunk>,
     containers: BTreeMap<ContainerRef, ContainerRecord>,
     container_chunks: BTreeMap<ChunkKey, ContainerState>,
@@ -1456,6 +1458,7 @@ impl<'a> TickContext<'a> {
     /// Installs already validated compact data; preparation belongs off the tick.
     pub fn preload_ready_chunk(&mut self, chunk: ReadyChunk) {
         self.blocks.retain(|(key, _), _| *key != chunk.key);
+        self.changed.retain(|(key, _), _| *key != chunk.key);
         self.drops.insert(
             chunk.key,
             DropState::new(
@@ -1518,6 +1521,7 @@ impl<'a> TickContext<'a> {
             authority,
             inventories: BTreeMap::new(),
             blocks: BTreeMap::new(),
+            changed: BTreeMap::new(),
             ready: BTreeMap::new(),
             containers: BTreeMap::new(),
             container_chunks: BTreeMap::new(),
@@ -1565,6 +1569,12 @@ impl<'a> TickContext<'a> {
             .entry(observed.key)
             .or_insert_with(|| DropState::new(observed.key, [Default::default(); 32]));
         self.blocks.insert((observed.key, observed.pos), observed);
+    }
+
+    /// Snapshots only committed changed cells; support passes each take their
+    /// own snapshot so their writes cannot recursively extend that pass.
+    pub fn changed_blocks(&self) -> Vec<BlockObservation> {
+        self.changed.values().copied().collect()
     }
 
     /// Stages one container record for fixture-driven resolver preflight,
@@ -2129,6 +2139,7 @@ impl<'a> TickContext<'a> {
                 let inventories = self.inventories.clone();
                 let world = self.world;
                 let blocks = self.blocks.clone();
+                let changed = self.changed.clone();
                 let ready = self.ready.clone();
                 let containers = self.containers.clone();
                 let viewers = self.viewers.clone();
@@ -2151,6 +2162,7 @@ impl<'a> TickContext<'a> {
                         self.inventories = inventories;
                         self.world = world;
                         self.blocks = blocks;
+                        self.changed = changed;
                         self.ready = ready;
                         self.containers = containers;
                         self.viewers = viewers;
@@ -2277,6 +2289,13 @@ impl<'a> TickContext<'a> {
             observed.block = write.replacement;
             observed.revision = observed.revision.saturating_add(1);
             self.blocks.insert((observed.key, observed.pos), observed);
+            self.changed.insert(
+                (
+                    observed.key,
+                    mornlea_domain::chunk_block_index(observed.pos),
+                ),
+                observed,
+            );
             let Some(chunk) = self.ready.get(&observed.key) else {
                 continue;
             };
