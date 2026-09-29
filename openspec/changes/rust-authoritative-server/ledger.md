@@ -1046,3 +1046,18 @@ replay), clippy all-targets -D warnings, fmt/diff pass. Worker make rust and
 matching source Go tests pass; source inputs unchanged. Guide now distinguishes
 provider view ownership from later publication reach and workbench lifetime.
 Actual reducer scheduling remains open. Architecture skill:no change.
+
+
+Repository-wide NativeRaycast enumeration adds mining progress and door toggling
+to the incomplete classifier consumers; plan20 lists all8 current walkers. Go
+source confirms open door transparency even for door interaction, so the old
+upper/open-lower replay expectation must be corrected. Main first lands exact
+f64-trig/f32-product and f64-hypot/f32-inverse helpers with independently run Go
+bit vectors; one isolated consumer worker will receive the accepted SHA.
+Readonly workbench audit also disproves a presumed symmetric view exclusion:
+Go bench open clears container, but chest/furnace open preserves bench size and
+anchor. The migration preserves this source behavior; the follow-up task name
+now says source replacement. Source Open executes inline in PlayerCommand, not
+the previously noted Interaction phase; reducer scheduling must follow that
+verified sequence. No already accepted provider claimed scheduling acceptance.
+Architecture skill:no change.

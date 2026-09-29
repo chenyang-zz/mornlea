@@ -25,7 +25,8 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.1a Implement chunk acquisition and stale-generation rejection.
 - [x] 2.1b Implement world placement/internal interaction geometry through the atomic transaction.
 - [x] 2.1c0 Land shared source interaction target classification ([packet](plans/18-interaction-target-contract.md)).
-- [ ] 2.1c1 Migrate remaining authority interaction rays and preserve operation-specific water targeting.
+- [ ] 2.1c0a Land exact source look and ray normalization helpers ([packet](plans/20-interaction-ray-consumers.md)).
+- [ ] 2.1c1 Migrate remaining authority interaction rays and preserve operation-specific water targeting ([packet](plans/20-interaction-ray-consumers.md)).
 - [x] 2.1c Implement continuous mining progress, tool reset and atomic completion.
 - [x] 2.2 Implement time, season, weather and environment transition replay.
 - [x] 2.3 Implement bounded fluid rescan and update scheduling.
@@ -40,7 +41,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6a Implement inventory authority and item conservation.
 - [x] 2.6b Implement containers and generation/view validation.
 - [x] 2.6c Implement atomic workbench crafting.
-- [ ] 2.6c1 Complete workbench anchor lifecycle and container-view mutual exclusion.
+- [ ] 2.6c1 Complete workbench anchor lifecycle and source container-view replacement.
 - [x] 2.6d Implement tick-driven furnaces.
 - [x] 2.6e0 Add bounded tick-local mining suppression and action receipt preflight.
 - [x] 2.6e Implement farming tools, bone meal and atomic buckets.
