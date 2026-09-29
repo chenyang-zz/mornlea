@@ -1144,3 +1144,16 @@ by 2.7c2 and session lifecycle as recorded constraints. One isolated
 implementer owns crafting.rs plus the single aux field; containers.rs needs
 no edit.
 Architecture skill: no change.
+
+
+Ruling on the 2.6c1 contract conflict: the worker correctly stopped when the
+new aux field broke exhaustive constructors in read-only files, with exact
+sites and save-blindness proof. Main selects minimal mechanical expansion
+over storage redesign: plan22 now owns zero-behavior `workbench: None`
+initializers at the four named source sites and listed test literals
+(struct-update `settle_death` needs none), since the field mirrors the
+existing `respawn` position-in-aux precedent and save encoding never reads
+runtime. Containers source stays read-only; its test file allows mechanical
+init only. Cost if wrong: a missed literal fails compilation loudly at the
+worker's first build, caught before any behavior gate.
+Architecture skill: no change.

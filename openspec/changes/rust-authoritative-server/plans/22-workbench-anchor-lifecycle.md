@@ -18,7 +18,20 @@ S = packages/engine/crates/mornlea_server. Worker edits only:
 - S/tests/server_replay/crafting.rs: anchor lifecycle regressions.
 - S/src/core/contracts.rs: exactly one additive `ActorAux::Player` field
   `workbench: Option<BlockPos>` (see storage rule). Nothing else there.
-All other files read-only, including S/src/rules/containers.rs,
+- Mechanical `workbench: None` initializations made necessary by that field,
+  and nothing else, at: S/src/rules/player_survival.rs (~285),
+  S/src/rules/player_motion.rs (~384), S/src/rules/sleep.rs (~213, ~412),
+  and exhaustive `ActorAux::Player` literals/comparisons in
+  S/tests/server_contract/contract_double.rs (~1182),
+  S/tests/server_replay/containers.rs (~2145), S/tests/server_replay/mining.rs
+  (~253), S/tests/server_replay/eating.rs (~186),
+  S/tests/server_replay/player_survival.rs (~215, ~1112),
+  S/tests/server_replay/projectiles.rs (~357),
+  S/tests/server_replay/sleep.rs (~246, ~791, ~902). These are
+  zero-behavior initializers; `settle_death` already uses struct-update
+  syntax and needs none. If any further literal breaks, worker stops and
+  reports instead of widening scope.
+All other files read-only, including S/src/rules/containers.rs (source),
 S/src/core/container_store.rs, S/src/core/state.rs, death/session providers
 and guides. Main owns guides, artifacts, integration and rollback. No new
 dependencies, wire/save schema changes, Go source edits, fixture-only
@@ -106,7 +119,8 @@ fixtures; no combined same-tick open behavior is pinned here).
    until close; chest open preserves size and anchor; lapsed-only and
    already-covered close/refusal tests stay green.
 5. Run pinned focused crafting replay, container replay lease/close
-   regression, full server, clippy all-targets -D warnings, fmt, diff;
+   regression (mechanical aux initializers only, no behavioral edits there),
+   full server, clippy all-targets -D warnings, fmt, diff;
    `make rust` before focused Go workbench oracle tests
    (`TestWorkbenchOpenSetsSizeThreeWithoutContainerRef`,
    `TestWorkbenchOpenRejectsNonWorkbenchTarget`,
