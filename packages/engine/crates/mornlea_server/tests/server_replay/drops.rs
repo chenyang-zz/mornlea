@@ -1059,3 +1059,423 @@ fn invalid_drop_calls_and_extreme_feet_are_state_preserving() {
     }
     assert!(ctx.events().is_empty());
 }
+
+#[test]
+fn death_staged_loot_ages_and_counts_down_without_pickup() {
+    // Every death lane stages plain `Drops` effects through the same accepted
+    // batch shape: hostile flesh, passive beef and player loot differ only in
+    // source actor and delay. The hostile and passive lanes rehearse with the
+    // mining-facing delay while the player lane uses the player-drop delay.
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    ctx.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 1, chunk()).unwrap());
+    let tick = ctx.read().tick();
+    let picker = session(1);
+    let fallen = session(2);
+    for (actor, delay, loot) in [
+        (
+            ActorKey::Hostile(mornlea_domain::HostileId::try_new(5).unwrap()),
+            10,
+            stack(45, 1),
+        ),
+        (
+            ActorKey::Passive(mornlea_domain::PassiveId::try_new(7).unwrap()),
+            10,
+            stack(53, 1),
+        ),
+        (ActorKey::Player(fallen), 40, stack(1, 2)),
+    ] {
+        ctx.stage(RuleEffect::Drops(
+            DropBatch::try_new(
+                DropSource::Death { actor, tick },
+                Dimension::OVERWORLD,
+                FiniteVec3::try_new([0.5, 0.5, 0.5]).unwrap(),
+                vec![loot],
+                delay,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    }
+    let mut initial = ctx.snapshot_state(world());
+    initial
+        .actors
+        .push(player(picker, [0.5, 0.5, 0.5], ActorLifecycle::Active));
+    initial
+        .inventories
+        .push((ActorKey::Player(picker), InventoryRecord::empty()));
+    // All three death batches are visible to `advance` before any aging runs.
+    assert_eq!(initial.drops.len(), 3);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = context(&mut authority, &initial);
+    // One step ages every record once, counts each delay down and stages
+    // nothing while delays stay nonzero, so the picker gains nothing.
+    let report = provider::advance(&mut ctx, &[key()]).unwrap();
+    assert_eq!((report.examined, report.applied), (3, 0));
+    assert_eq!(ctx.read().drops(key()).len(), 3);
+    for drop in ctx.read().drops(key()) {
+        assert_eq!(drop.age, 1);
+        let expected = match drop.stack.item {
+            45 | 53 => 9,
+            _ => 39,
+        };
+        assert_eq!(drop.pickup_delay, expected);
+    }
+    assert_eq!(
+        ctx.read()
+            .inventory(ActorKey::Player(picker))
+            .unwrap()
+            .slots[0]
+            .count,
+        0
+    );
+    // A second step keeps counting down with no duplication, no removal and
+    // still no credit while every delay stays nonzero.
+    let report = provider::advance(&mut ctx, &[key()]).unwrap();
+    assert_eq!((report.examined, report.applied), (3, 0));
+    assert_eq!(ctx.read().drops(key()).len(), 3);
+    for drop in ctx.read().drops(key()) {
+        assert_eq!(drop.age, 2);
+        let expected = match drop.stack.item {
+            45 | 53 => 8,
+            _ => 38,
+        };
+        assert_eq!(drop.pickup_delay, expected);
+    }
+    assert_eq!(
+        ctx.read()
+            .inventory(ActorKey::Player(picker))
+            .unwrap()
+            .slots[0]
+            .count,
+        0
+    );
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn death_loot_untouchable_before_forty_then_picked_up_atomically() {
+    // Player death loot carries the player-drop delay, the same value panel
+    // drops rehearse with, so the countdown below doubles as the panel shape.
+    let picker = session(1);
+    let fallen = session(2);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut staging = TickContext::harness(&mut authority, TickBudget::full());
+    staging.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 1, chunk()).unwrap());
+    let tick = staging.read().tick();
+    staging
+        .stage(RuleEffect::Drops(
+            DropBatch::try_new(
+                DropSource::Death {
+                    actor: ActorKey::Player(fallen),
+                    tick,
+                },
+                Dimension::OVERWORLD,
+                FiniteVec3::try_new([0.5, 0.5, 0.5]).unwrap(),
+                vec![stack(1, 3)],
+                40,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    let mut initial = staging.snapshot_state(world());
+    initial
+        .actors
+        .push(player(picker, [0.5, 0.5, 0.5], ActorLifecycle::Active));
+    initial
+        .inventories
+        .push((ActorKey::Player(picker), InventoryRecord::empty()));
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = context(&mut authority, &initial);
+    for remaining in (1..40).rev() {
+        let report = provider::advance(&mut ctx, &[key()]).unwrap();
+        assert_eq!((report.examined, report.applied), (1, 0));
+        assert_eq!(ctx.read().drops(key())[0].pickup_delay, remaining);
+        assert_eq!(ctx.read().drops(key())[0].stack.count, 3);
+        assert_eq!(
+            ctx.read()
+                .inventory(ActorKey::Player(picker))
+                .unwrap()
+                .slots[0]
+                .count,
+            0
+        );
+    }
+    // After thirty nine steps the delay still reads one and the loot is
+    // untouched; the fortieth step clears the delay and atomically credits
+    // the pack while removing the record.
+    assert_eq!(ctx.read().drops(key())[0].pickup_delay, 1);
+    assert_eq!(ctx.read().drops(key()).len(), 1);
+    let report = provider::advance(&mut ctx, &[key()]).unwrap();
+    assert_eq!((report.examined, report.applied), (1, 1));
+    assert!(ctx.read().drops(key()).is_empty());
+    assert_eq!(
+        ctx.read()
+            .inventory(ActorKey::Player(picker))
+            .unwrap()
+            .slots[0],
+        stack(1, 3)
+    );
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn death_loot_partial_remainder_conserves_total() {
+    // A nearly full pack accepts only the merging head of death loot; the
+    // remainder splits off and stays on the ground with the total conserved.
+    let picker = session(1);
+    let fallen = session(2);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut staging = TickContext::harness(&mut authority, TickBudget::full());
+    staging.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 1, chunk()).unwrap());
+    let tick = staging.read().tick();
+    staging
+        .stage(RuleEffect::Drops(
+            DropBatch::try_new(
+                DropSource::Death {
+                    actor: ActorKey::Player(fallen),
+                    tick,
+                },
+                Dimension::OVERWORLD,
+                FiniteVec3::try_new([0.5, 0.5, 0.5]).unwrap(),
+                vec![stack(1, 3)],
+                40,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    let mut initial = staging.snapshot_state(world());
+    initial
+        .actors
+        .push(player(picker, [0.5, 0.5, 0.5], ActorLifecycle::Active));
+    let mut pack = InventoryRecord::empty();
+    pack.slots.fill(stack(1, 64));
+    pack.slots[0] = stack(1, 63);
+    let before: u32 = pack
+        .slots
+        .iter()
+        .map(|slot| u32::from(slot.count))
+        .sum::<u32>()
+        + 3;
+    initial.inventories.push((ActorKey::Player(picker), pack));
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = context(&mut authority, &initial);
+    for _ in 0..39 {
+        let report = provider::advance(&mut ctx, &[key()]).unwrap();
+        assert_eq!((report.examined, report.applied), (1, 0));
+    }
+    assert_eq!(ctx.read().drops(key())[0].pickup_delay, 1);
+    let report = provider::advance(&mut ctx, &[key()]).unwrap();
+    assert_eq!((report.examined, report.applied), (1, 1));
+    assert_eq!(
+        ctx.read()
+            .inventory(ActorKey::Player(picker))
+            .unwrap()
+            .slots[0],
+        stack(1, 64)
+    );
+    assert_eq!(ctx.read().drops(key())[0].stack, stack(1, 2));
+    let carried: u32 = ctx
+        .read()
+        .inventory(ActorKey::Player(picker))
+        .unwrap()
+        .slots
+        .iter()
+        .map(|slot| u32::from(slot.count))
+        .sum();
+    let grounded: u32 = ctx
+        .read()
+        .drops(key())
+        .iter()
+        .map(|drop| u32::from(drop.stack.count))
+        .sum();
+    assert_eq!(carried + grounded, before);
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn death_loot_expiry_precedes_pickup() {
+    // The delay clears on the same step the age reaches the lifetime ceiling,
+    // so expiry must win over the pickup that would otherwise be eligible.
+    let picker = session(1);
+    let fallen = session(2);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut staging = TickContext::harness(&mut authority, TickBudget::full());
+    staging.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 1, chunk()).unwrap());
+    let tick = staging.read().tick();
+    staging
+        .stage(RuleEffect::Drops(
+            DropBatch::try_new(
+                DropSource::Death {
+                    actor: ActorKey::Player(fallen),
+                    tick,
+                },
+                Dimension::OVERWORLD,
+                FiniteVec3::try_new([0.5, 0.5, 0.5]).unwrap(),
+                vec![stack(1, 2)],
+                1,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    let mut initial = staging.snapshot_state(world());
+    initial
+        .actors
+        .push(player(picker, [0.5, 0.5, 0.5], ActorLifecycle::Active));
+    initial
+        .inventories
+        .push((ActorKey::Player(picker), InventoryRecord::empty()));
+    initial.chunks[0].3.drops[0].age_ticks = 5999;
+    initial.drops[0].age = 5999;
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = context(&mut authority, &initial);
+    // Expiry stages removal only: the record disappears with no credit, no
+    // remainder and no observation for the waiting picker.
+    assert_eq!(provider::advance(&mut ctx, &[key()]).unwrap().applied, 1);
+    assert!(ctx.read().drops(key()).is_empty());
+    assert_eq!(
+        ctx.read()
+            .inventory(ActorKey::Player(picker))
+            .unwrap()
+            .slots[0]
+            .count,
+        0
+    );
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn death_loot_full_pack_preserves_world_output() {
+    // An eligible death batch against a full pack refuses pickup and leaves
+    // the world output unchanged with every item accounted for.
+    let picker = session(1);
+    let fallen = session(2);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut staging = TickContext::harness(&mut authority, TickBudget::full());
+    staging.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 1, chunk()).unwrap());
+    let tick = staging.read().tick();
+    staging
+        .stage(RuleEffect::Drops(
+            DropBatch::try_new(
+                DropSource::Death {
+                    actor: ActorKey::Player(fallen),
+                    tick,
+                },
+                Dimension::OVERWORLD,
+                FiniteVec3::try_new([0.5, 0.5, 0.5]).unwrap(),
+                vec![stack(1, 3)],
+                0,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    let mut initial = staging.snapshot_state(world());
+    initial
+        .actors
+        .push(player(picker, [0.5, 0.5, 0.5], ActorLifecycle::Active));
+    let mut full = InventoryRecord::empty();
+    full.slots.fill(stack(1, 64));
+    let before: u32 = full
+        .slots
+        .iter()
+        .map(|slot| u32::from(slot.count))
+        .sum::<u32>()
+        + 3;
+    initial.inventories.push((ActorKey::Player(picker), full));
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = context(&mut authority, &initial);
+    let report = provider::advance(&mut ctx, &[key()]).unwrap();
+    assert_eq!((report.examined, report.applied), (1, 0));
+    assert_eq!(ctx.read().drops(key())[0].stack.count, 3);
+    assert_eq!(
+        ctx.read().inventory(ActorKey::Player(picker)).unwrap(),
+        &full
+    );
+    let carried: u32 = ctx
+        .read()
+        .inventory(ActorKey::Player(picker))
+        .unwrap()
+        .slots
+        .iter()
+        .map(|slot| u32::from(slot.count))
+        .sum();
+    let grounded: u32 = ctx
+        .read()
+        .drops(key())
+        .iter()
+        .map(|drop| u32::from(drop.stack.count))
+        .sum();
+    assert_eq!(carried + grounded, before);
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn mining_ten_and_player_forty_delay_pin() {
+    // Read-only pin of the provider delay values: the mining resolution in
+    // `core/mutation.rs` stages through the actor basis delay, which reads the
+    // mining-facing tunable, while player death and panel drops rehearse with
+    // the player-drop tunable. The hostile and passive death rehearsals share
+    // the mining-facing value; the tunables pair documents both defaults.
+    let miner = session(1);
+    let fallen = session(2);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut staging = TickContext::harness(&mut authority, TickBudget::full());
+    staging.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 1, chunk()).unwrap());
+    let tick = staging.read().tick();
+    staging
+        .stage(RuleEffect::Drops(
+            DropBatch::try_new(
+                DropSource::Mining {
+                    actor: ActorKey::Player(miner),
+                    target: mornlea_domain::BlockPos::new(0, 0, 0),
+                    tick,
+                },
+                Dimension::OVERWORLD,
+                FiniteVec3::try_new([0.5, 0.5, 0.5]).unwrap(),
+                vec![stack(1, 1)],
+                10,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    staging
+        .stage(RuleEffect::Drops(
+            DropBatch::try_new(
+                DropSource::Death {
+                    actor: ActorKey::Player(fallen),
+                    tick,
+                },
+                Dimension::OVERWORLD,
+                FiniteVec3::try_new([0.5, 0.5, 0.5]).unwrap(),
+                vec![stack(2, 1)],
+                40,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    let initial = staging.snapshot_state(world());
+    assert_eq!(initial.drops.len(), 2);
+    // The staged outputs land with exactly the provider values, keyed by item
+    // so slot order never matters to the pin.
+    for drop in &initial.drops {
+        let expected = match drop.stack.item {
+            1 => 10,
+            _ => 40,
+        };
+        assert_eq!(drop.pickup_delay, expected);
+        assert_eq!(drop.age, 0);
+    }
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = context(&mut authority, &initial);
+    let report = provider::advance(&mut ctx, &[key()]).unwrap();
+    assert_eq!((report.examined, report.applied), (2, 0));
+    for drop in ctx.read().drops(key()) {
+        assert_eq!(drop.age, 1);
+        let expected = match drop.stack.item {
+            1 => 9,
+            _ => 39,
+        };
+        assert_eq!(drop.pickup_delay, expected);
+    }
+    assert!(ctx.events().is_empty());
+}
