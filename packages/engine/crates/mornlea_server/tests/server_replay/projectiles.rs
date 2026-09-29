@@ -551,7 +551,8 @@ fn ray_work_overflow_retains_projectile() {
     let result = provider::advance(
         &mut ctx,
         &[scope(Dimension::OVERWORLD, ChunkPos::new(0, 0), 100)],
-    );
+    )
+    .map(|outcome| outcome.report);
     assert_eq!(
         result,
         Err(mornlea_server::contracts::ServerError::Capacity {
@@ -613,7 +614,8 @@ fn huge_finite_velocity_refuses_without_mutation() {
         provider::advance(
             &mut ctx,
             &[scope(Dimension::OVERWORLD, ChunkPos::new(0, 0), 0)],
-        ),
+        )
+        .map(|outcome| outcome.report),
         Err(mornlea_server::contracts::ServerError::Capacity {
             resource: mornlea_server::contracts::Resource::RuleEffects,
             limit: 512,
@@ -1202,11 +1204,16 @@ fn passive_flee_and_shard_silence() {
             after: Some(shard),
         })
         .expect("shard");
-    provider::advance(
+    let outcome = provider::advance(
         &mut shard_ctx,
         &[scope(Dimension::OVERWORLD, ChunkPos::new(0, 0), 0)],
     )
     .expect("shard impact");
+    assert_eq!(
+        outcome.damaged_players,
+        vec![victim],
+        "the health decrease names the victim explicitly"
+    );
     let player = shard_ctx.read().actor(player_key).cloned().expect("player");
     assert_eq!(player.survival.health(), 17);
     assert_eq!(player.motion.velocity().get(), [0.0; 3]);
@@ -1231,9 +1238,15 @@ fn missing_impact_lanes_preserve_projectile_and_target() {
     let expected = Err(mornlea_server::contracts::ServerError::InvalidInput {
         field: "projectile_target",
     });
-    assert_eq!(provider::advance(&mut ctx, &scopes), expected);
+    assert_eq!(
+        provider::advance(&mut ctx, &scopes).map(|outcome| outcome.report),
+        expected
+    );
     ctx.preload_inventory(target, InventoryRecord::empty());
-    assert_eq!(provider::advance(&mut ctx, &scopes), expected);
+    assert_eq!(
+        provider::advance(&mut ctx, &scopes).map(|outcome| outcome.report),
+        expected
+    );
     assert_eq!(
         ctx.read().actor(target).expect("target").survival.health(),
         20
@@ -1254,7 +1267,10 @@ fn missing_impact_lanes_preserve_projectile_and_target() {
             after: Some(arrow(1, owner)),
         })
         .expect("arrow");
-    assert_eq!(provider::advance(&mut passive_ctx, &scopes), expected);
+    assert_eq!(
+        provider::advance(&mut passive_ctx, &scopes).map(|outcome| outcome.report),
+        expected
+    );
     assert_eq!(
         passive_ctx
             .read()
@@ -1296,7 +1312,8 @@ fn invalid_arrow_confirmation_preserves_hit_state() {
         provider::advance(
             &mut ctx,
             &[scope(Dimension::OVERWORLD, ChunkPos::new(0, 0), 0)],
-        ),
+        )
+        .map(|outcome| outcome.report),
         Err(mornlea_server::contracts::ServerError::InvalidInput {
             field: "projectile_target"
         })

@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mornlea_domain::{
     CommandEnvelope, CommandEnvelopeParts, ContainerRef, Dimension, EventRecipient, MotionState,
-    PlayerId, RejectReason, RoutedEvent, WorldState,
+    PlayerId, RejectReason, RoutedEvent, Weather, WorldState,
 };
 use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket};
 use mornlea_storage::{Metadata, PlayerLocation, PlayerSave, StoredPlayer};
@@ -1411,6 +1411,14 @@ pub struct TickContext<'a> {
     runtimes: BTreeMap<ActorKey, ActorRuntime>,
     mining: BTreeMap<ActorKey, MiningProgress>,
     environment: Option<EnvironmentState>,
+    /// Reducer-carried sleep record: the bed anchors plus the staged display
+    /// offset. The sleep provider is the single writer through the `Sleep`
+    /// staging arm; the serial reducer threads the record across the entry
+    /// and settlement calls and persists the settled copy here.
+    sleep_record: SleepState,
+    /// Reducer-owned sleeping sessions in ascending order. Settlement shrinks
+    /// the set on wakes and the transition; a successful bed entry grows it.
+    sleeping: BTreeSet<SessionKey>,
     budget: TickBudget,
     spent_commands: usize,
     spent_fluid: [usize; 2],
@@ -1480,6 +1488,33 @@ impl<'a> TickContext<'a> {
         Self::from_parts(authority, budget)
     }
 
+    /// Freezes the tick-start climate snapshot every provider consumes.
+    /// Derived once per tick from authority durability and never re-read
+    /// mid-tick: the seed and tick name the dice stream, world time and the
+    /// display offset come from stored metadata, the season offset is the
+    /// frozen seed derivation, weather maps its stored kind with the source
+    /// illegal-kind normalization to clear, difficulty passes through for
+    /// provider decoding, and tunables are the checked source snapshot. The
+    /// serial reducer calls this once before the first provider row.
+    pub(crate) fn freeze_environment(&mut self, tick: u64) {
+        let metadata = &self.authority.metadata;
+        let seed = self.authority.world_seed;
+        self.environment = Some(EnvironmentState {
+            seed,
+            next_tick: tick,
+            world_time: metadata.world_time_ticks,
+            // The stored offset is the metadata u64; the snapshot carries
+            // the u16 display range with the same wrapping conversion the
+            // source restore boundary applies.
+            day_phase_offset: metadata.day_phase_offset as u16,
+            season_offset: season_offset_from_seed(seed),
+            weather: Weather::try_new(metadata.weather_kind).unwrap_or(Weather::Clear),
+            weather_remaining: metadata.weather_ticks_remaining,
+            difficulty: metadata.difficulty,
+            tunables: RuleTunables::source_defaults(),
+        });
+    }
+
     pub fn from_fixture(
         authority: &'a mut AuthorityState,
         initial: &FixtureState,
@@ -1539,6 +1574,9 @@ impl<'a> TickContext<'a> {
             runtimes: BTreeMap::new(),
             mining: BTreeMap::new(),
             environment: None,
+            sleep_record: SleepState::try_new(Vec::new(), 0, None)
+                .expect("an empty sleep record satisfies the bed ceiling"),
+            sleeping: BTreeSet::new(),
             budget,
             spent_commands: 0,
             spent_fluid: [0, 0],
@@ -1636,6 +1674,14 @@ impl<'a> TickContext<'a> {
         self.companions.push(action);
     }
 
+    /// Production companion feed. The serial reducer pushes exactly the
+    /// drained intake queue in drain order, so admission and bounds stay with
+    /// the ingress owner and this mirrors the fixture preload with no second
+    /// bound of its own.
+    pub fn push_companion_action(&mut self, action: CompanionActionEnvelope) {
+        self.companions.push(action);
+    }
+
     pub fn read(&self) -> AuthorityReadView<'_> {
         AuthorityReadView {
             tick: self.authority.next_tick,
@@ -1664,6 +1710,29 @@ impl<'a> TickContext<'a> {
     /// Returns the complete net set for the reducer's full replacement commit.
     pub fn viewer_leases(&self) -> BTreeMap<SessionKey, ViewLease> {
         self.viewers.clone()
+    }
+
+    /// Reducer-carried sleep record under settlement.
+    pub fn sleep_record(&self) -> &SleepState {
+        &self.sleep_record
+    }
+
+    /// Persists the threaded sleep record: the entered copy after each bed
+    /// entry, the settled copy after the settlement batch.
+    pub fn set_sleep_record(&mut self, record: SleepState) {
+        self.sleep_record = record;
+    }
+
+    /// Reducer-owned sleeping sessions in ascending order.
+    pub fn sleeping(&self) -> Vec<SessionKey> {
+        self.sleeping.iter().copied().collect()
+    }
+
+    /// Persists the sleeping set: grown on bed entry, shrunk by settlement
+    /// wakes and the morning transition. Collection restores the ascending
+    /// order the settlement scans rely on.
+    pub fn set_sleeping(&mut self, sessions: Vec<SessionKey>) {
+        self.sleeping = sessions.into_iter().collect();
     }
 
     pub fn charge(&mut self, kind: WorkKind, units: usize) -> Result<(), ServerError> {
@@ -1738,6 +1807,43 @@ impl<'a> TickContext<'a> {
                 Resource::SaveBytes,
             ),
         }
+    }
+
+    /// Tick-charged fluid updates for one dimension. The reducer attributes
+    /// the per-dimension counters from these readers after the last row.
+    pub fn spent_fluid(&self, dimension: Dimension) -> usize {
+        dimension_index(dimension)
+            .map(|index| self.spent_fluid[index])
+            .unwrap_or(0)
+    }
+
+    /// Tick-charged rescan cells for one dimension, with the shared overshoot
+    /// already applied by the charging path.
+    pub fn spent_rescan(&self, dimension: Dimension) -> usize {
+        dimension_index(dimension)
+            .map(|index| self.spent_rescan[index])
+            .unwrap_or(0)
+    }
+
+    /// Tick-charged farmland candidates.
+    pub fn spent_farmland_checks(&self) -> usize {
+        self.spent_farmland_checks
+    }
+
+    /// Tick-charged farmland block reads.
+    pub fn spent_farmland_reads(&self) -> usize {
+        self.spent_farmland_reads
+    }
+
+    /// Tick-charged snapshot chunks. No publication counter carries them;
+    /// the save scheduler owns that attribution and reads them here.
+    pub fn spent_snapshot_chunks(&self) -> usize {
+        self.spent_snapshot_chunks
+    }
+
+    /// Tick-charged snapshot bytes, owned downstream like the chunk count.
+    pub fn spent_snapshot_bytes(&self) -> usize {
+        self.spent_snapshot_bytes
     }
 
     pub fn stage(&mut self, effect: RuleEffect) -> Result<(), RuleReject> {
@@ -2155,6 +2261,7 @@ impl<'a> TickContext<'a> {
                 let projectiles = self.projectiles.clone();
                 let damage_len = self.damage_intents.len();
                 let environment = self.environment.clone();
+                let sleep_record = self.sleep_record.clone();
                 // Defensive enforcement of the seam rule that a rejected
                 // atomic effect leaves all components unchanged: actor
                 // records became effect-mutable with the `Actor` staging arm,
@@ -2178,6 +2285,7 @@ impl<'a> TickContext<'a> {
                         self.projectiles = projectiles;
                         self.damage_intents.truncate(damage_len);
                         self.environment = environment;
+                        self.sleep_record = sleep_record;
                         self.actors = actors;
                         self.runtimes = runtimes;
                         self.mining = mining;
@@ -2285,6 +2393,13 @@ impl<'a> TickContext<'a> {
                 self.environment = Some(environment);
                 Ok(())
             }
+            RuleEffect::Sleep(record) => {
+                // Latest-wins overlay replace, mirroring the environment
+                // arm: the settlement stages the threaded record and the
+                // reducer persists the settled copy after the batch.
+                self.sleep_record = record;
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -2353,6 +2468,29 @@ fn block_key(dimension: Dimension, position: mornlea_domain::BlockPos) -> ChunkK
         dimension,
         pos: mornlea_domain::ChunkPos::new(position.x() >> 4, position.z() >> 4),
     }
+}
+
+/// Salt isolating the season-offset hash stream from the weather dice and
+/// entity streams (`seasonOffsetSalt`, shared/core/season.go).
+const SEASON_OFFSET_SALT: u64 = 0x005e_a50e_51ab_0001;
+/// Ticks per year the season offset ranges over (`YearTicks`).
+const SEASON_YEAR_TICKS: u64 = 288_000;
+
+/// Mirrors `SeasonOffsetFromSeed` (shared/core/season.go): one SplitMix64
+/// pass over the salted seed modulo the year length. A negative seed takes
+/// the same two's-complement bit pattern the source conversion produces, so
+/// restarts derive the identical offset.
+fn season_offset_from_seed(seed: i64) -> u32 {
+    (season_splitmix((seed as u64) ^ SEASON_OFFSET_SALT) % SEASON_YEAR_TICKS) as u32
+}
+
+/// The shared SplitMix64 terminator (Steele/Lea/Flood), copied from the
+/// source dice the season derivation cites.
+fn season_splitmix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
 }
 
 fn dimension_index(dimension: Dimension) -> Result<usize, ServerError> {

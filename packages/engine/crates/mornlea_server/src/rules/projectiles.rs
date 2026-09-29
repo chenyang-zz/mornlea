@@ -20,7 +20,7 @@ use mornlea_storage::ItemStack;
 use crate::core::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, BowProgress, DamageCause, InventoryPatch,
     PhaseReport, ProjectileRecord, Resource, RuleCall, RuleEffect, RulePhase, RuleReject,
-    ServerError,
+    ServerError, SessionKey,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
 use crate::rules::inventory;
@@ -90,18 +90,43 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
     }
 }
 
+/// One settled flight batch: the phase report plus the player sessions whose
+/// health actually decreased during the advance. The victim list mirrors the
+/// combat outcome shape beside it: the serial reducer unions both lists into
+/// the explicit sleep input, so no wire-event inference is needed downstream.
+/// Armor absorbs through the same reduction the impact path stages, so a hit
+/// that deals no damage is not a victim; healing never happens mid-advance,
+/// so every decrease is this batch's damage.
+pub struct ProjectileOutcome {
+    pub report: PhaseReport,
+    pub damaged_players: Vec<SessionKey>,
+}
+
 /// Advances the bounded, ID-ordered flight set once. Scope validation is
 /// complete before any projectile mutation; each flight record then settles
 /// its own remove, update or hit as an exact-before staged effect.
 pub fn advance(
     ctx: &mut TickContext<'_>,
     scopes: &[ProjectileScope],
-) -> Result<PhaseReport, ServerError> {
+) -> Result<ProjectileOutcome, ServerError> {
     if scopes.len() > MAX_SCOPES || scopes.iter().any(|scope| scope.radius > i64::MAX as u64) {
         return Err(ServerError::InvalidInput {
             field: "projectile_scopes",
         });
     }
+    // At most one health lane per resident player: the ceiling is structural,
+    // so the pre-step snapshot below always covers every player the advance
+    // can damage.
+    let mut before_health: Vec<(SessionKey, u8)> = Vec::new();
+    for actor in ctx.read().actors() {
+        let ActorKey::Player(session) = actor.key else {
+            continue;
+        };
+        if actor.lifecycle == ActorLifecycle::Active {
+            before_health.push((session, actor.survival.health()));
+        }
+    }
+    before_health.sort_unstable();
     let mut records = ctx.read().projectiles().to_vec();
     records.sort_by_key(|record| record.id);
     let mut applied = 0;
@@ -117,7 +142,20 @@ pub fn advance(
             applied += 1;
         }
     }
-    Ok(report(records.len(), applied))
+    let mut damaged_players = Vec::new();
+    for (session, health) in before_health {
+        let decreased = ctx
+            .read()
+            .actor(ActorKey::Player(session))
+            .is_some_and(|actor| actor.survival.health() < health);
+        if decreased {
+            damaged_players.push(session);
+        }
+    }
+    Ok(ProjectileOutcome {
+        report: report(records.len(), applied),
+        damaged_players,
+    })
 }
 
 fn flight_effect(

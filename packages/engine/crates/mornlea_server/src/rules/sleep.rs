@@ -37,17 +37,17 @@
 //!   and `player.go` (`applyDamage`, `beginReset`): a move axis or the jump
 //!   bit wakes, look-only input and the sprint bit do not, real damage wakes,
 //!   and every wake keeps the respawn record. The damage wake consumes the
-//!   accepted survival provider's victim-routed combat-hit observations; a
-//!   hit naming a hostile target is an attacker confirmation, not damage.
+//!   explicit victim list the serial reducer threads in: the union of the
+//!   combat and projectile outcomes covering every damage provider. A hit
+//!   naming a hostile target is an attacker confirmation, not damage, so it
+//!   never appears in that list.
 //! - The transition stages the updated [`SleepState`] record plus the
 //!   publication world record exactly like the environment provider's dual
 //!   staging: `pending_offset` names the staged morning offset for the
 //!   environment phase to consume once at tick end, and the world record
 //!   carries the new display offset with the untouched absolute clock.
 
-use mornlea_domain::{
-    BlockPos, CombatTarget, Dimension, Event, EventRecipient, WorldState, WorldStateParts,
-};
+use mornlea_domain::{BlockPos, Dimension, WorldState, WorldStateParts};
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
 
@@ -252,20 +252,23 @@ pub fn enter(
 ///
 /// The wake pass first removes every sleeper with real movement intent
 /// (a move axis or the jump bit on the staged held controls — look-only
-/// input and the sprint bit are neutral) or a routed damage observation from
-/// the survival provider; every wake keeps the bed record. The transition
-/// then fires only when at least one player is active and every active
-/// player is still asleep: a disconnect mid-sleep shrinks the eligible set,
-/// and a pending-respawn player is absent from the active roster so it
-/// neither triggers nor blocks. The morning transition inverts the display
-/// offset to `EffectiveMorningOffset(completed, DayArcTicks(
+/// input and the sprint bit are neutral) or an explicit damage victim from
+/// the reducer-threaded union of combat and projectile victims; every wake
+/// keeps the bed record. The transition then fires only when at least one
+/// player is active and every active player is still asleep: a disconnect
+/// mid-sleep shrinks the eligible set, and a pending-respawn player is
+/// absent from the active roster so it neither triggers nor blocks. The
+/// morning transition inverts the display offset to
+/// `EffectiveMorningOffset(completed, DayArcTicks(
 /// YearPhaseAt(completed, season_offset)), 0)` with `completed` the absolute
 /// time the environment phase will finish this tick at, stages the updated
 /// record plus the publication world record with the untouched absolute
 /// clock, and wakes every sleeper — including disconnected ones, so a stale
 /// flag cannot leak into the next all-asleep decision.
 ///
-/// `sleeping` and `active` are ascending session sets the reducer owns;
+/// `sleeping` and `active` are ascending session sets the reducer owns, and
+/// `damaged` is the reducer-threaded victim union; wire-event inference is
+/// banned here because an attacker confirmation shares the wire shape.
 /// `examined` counts both linear scans (the wake pass and the eligibility
 /// scan) and `applied` counts the staged transition.
 pub fn settle(
@@ -273,6 +276,7 @@ pub fn settle(
     record: &SleepState,
     sleeping: &[SessionKey],
     active: &[SessionKey],
+    damaged: &[SessionKey],
 ) -> Result<SettledSleep, ServerError> {
     let environment = ctx
         .read()
@@ -281,7 +285,6 @@ pub fn settle(
         .ok_or(ServerError::Internal {
             invariant: "sleep settlement snapshot",
         })?;
-    let damaged = damaged_sessions(ctx);
     let mut remaining = Vec::with_capacity(sleeping.len());
     for session in sleeping {
         let actor = ActorKey::Player(*session);
@@ -355,29 +358,6 @@ pub fn settle(
         record: updated,
         sleeping: Vec::new(),
     })
-}
-
-/// Sessions that took real damage this tick, read from the survival
-/// provider's victim-routed player-target combat hits. An attacker
-/// confirmation naming a hostile or passive target does not wake its
-/// recipient.
-fn damaged_sessions(ctx: &TickContext<'_>) -> Vec<SessionKey> {
-    let mut damaged = Vec::new();
-    for routed in ctx.events() {
-        let EventRecipient::Session(raw) = routed.recipient() else {
-            continue;
-        };
-        let Event::CombatHit(hit) = routed.event() else {
-            continue;
-        };
-        if hit.target() != CombatTarget::Player {
-            continue;
-        }
-        if let Some(session) = SessionKey::from_raw(raw) {
-            damaged.push(session);
-        }
-    }
-    damaged
 }
 
 /// The entry's runtime lane: the staged record when one exists, else the

@@ -24,9 +24,9 @@
 //!   `packages/server/sim/entity/tick.go`, `applyDamage` in
 //!   `packages/server/sim/entity/player.go`): a move axis or the jump bit
 //!   wakes, look-only input and the sprint bit do not, and real damage wakes.
-//!   The damage wake consumes the accepted survival provider's victim-routed
-//!   combat-hit observations; a hit naming a hostile target is an attacker
-//!   confirmation, not damage, and does not wake.
+//!   The damage wake consumes the explicit victim list the serial reducer
+//!   threads in; an attacker confirmation never enters that list, so its
+//!   recipient does not wake.
 //! - The seasonal morning transition
 //!   (`TestSleepThroughNightLandsOnSeasonalMorning` with
 //!   `settleSleepThroughNight` in `sleep.go` and `EffectiveMorningOffset`,
@@ -43,9 +43,9 @@
 //! No case chooses a value the oracle does not pin.
 
 use mornlea_domain::{
-    BlockPos, ChunkPos, CombatTarget, Dimension, Event, EventRecipient, FiniteVec3, HeldActions,
-    LookAngles, MotionState, MotionStateParts, Movement, PlayerControl, PlayerControlParts, Season,
-    SurvivalState, SurvivalStateParts, Weather, WorldState, WorldStateParts,
+    BlockPos, ChunkPos, Dimension, FiniteVec3, HeldActions, LookAngles, MotionState,
+    MotionStateParts, Movement, PlayerControl, PlayerControlParts, Season, SurvivalState,
+    SurvivalStateParts, Weather, WorldState, WorldStateParts,
 };
 use mornlea_protocol::{LoginStart, admit_login};
 use mornlea_server::contracts::{
@@ -411,7 +411,7 @@ fn seasonal_morning_disconnect_and_respawn() {
             WINTER_SOLSTICE_SEASON_OFFSET,
         )))
         .expect("environment");
-    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two])
+    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two], &[])
         .expect("morning settlement");
     assert_eq!(
         outcome.report,
@@ -465,7 +465,7 @@ fn seasonal_morning_disconnect_and_respawn() {
             WINTER_SOLSTICE_SEASON_OFFSET,
         )))
         .expect("environment");
-    let outcome = provider::settle(&mut context, &record, &[one, two], &[one])
+    let outcome = provider::settle(&mut context, &record, &[one, two], &[one], &[])
         .expect("settlement after disconnect");
     assert_eq!(
         outcome.report,
@@ -498,8 +498,8 @@ fn seasonal_morning_disconnect_and_respawn() {
             WINTER_SOLSTICE_SEASON_OFFSET,
         )))
         .expect("environment");
-    let outcome =
-        provider::settle(&mut context, &record, &[one], &[one, two]).expect("blocked settlement");
+    let outcome = provider::settle(&mut context, &record, &[one], &[one, two], &[])
+        .expect("blocked settlement");
     assert_eq!(
         outcome.report,
         PhaseReport {
@@ -528,7 +528,7 @@ fn seasonal_morning_disconnect_and_respawn() {
         )))
         .expect("environment");
     let outcome =
-        provider::settle(&mut context, &record, &[one], &[]).expect("empty active settlement");
+        provider::settle(&mut context, &record, &[one], &[], &[]).expect("empty active settlement");
     assert_eq!(outcome.report.applied, 0);
     assert_eq!(outcome.record, record);
     assert_eq!(context.read().world(), None);
@@ -577,7 +577,7 @@ fn movement_and_damage_wake_keep_respawn_record() {
         false,
         0.0,
     );
-    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two])
+    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two], &[])
         .expect("move-wake settlement");
     assert_eq!(outcome.sleeping, vec![two]);
     assert_eq!(outcome.report.applied, 0);
@@ -603,7 +603,7 @@ fn movement_and_damage_wake_keep_respawn_record() {
         false,
         0.0,
     );
-    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two])
+    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two], &[])
         .expect("movez-wake settlement");
     assert_eq!(outcome.sleeping, vec![two]);
 
@@ -627,7 +627,7 @@ fn movement_and_damage_wake_keep_respawn_record() {
         false,
         0.0,
     );
-    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two])
+    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two], &[])
         .expect("jump-wake settlement");
     assert_eq!(outcome.sleeping, vec![two]);
 
@@ -652,7 +652,7 @@ fn movement_and_damage_wake_keep_respawn_record() {
         false,
         0.5,
     );
-    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two])
+    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two], &[])
         .expect("look-only settlement");
     assert!(outcome.sleeping.is_empty());
     assert_eq!(outcome.report.applied, 1);
@@ -677,15 +677,15 @@ fn movement_and_damage_wake_keep_respawn_record() {
         false,
         0.0,
     );
-    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two])
+    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two], &[])
         .expect("sprint-only settlement");
     assert!(outcome.sleeping.is_empty());
     assert_eq!(outcome.report.applied, 1);
 
-    // Real damage wakes through the survival provider's victim-routed combat
-    // hit (`TestDamageCancelsSleepingKeepsRespawnPoint`); the bed record
-    // stays. A hit naming a hostile target is an attacker confirmation and
-    // does not wake its recipient.
+    // Real damage wakes through the reducer-threaded explicit victim list
+    // (`TestDamageCancelsSleepingKeepsRespawnPoint`); the bed record stays.
+    // An attacker confirmation never enters that list, so its recipient
+    // keeps sleeping.
     let mut state = authority();
     let mut context = harness_context(&mut state);
     context
@@ -695,22 +695,7 @@ fn movement_and_damage_wake_keep_respawn_record() {
             equinox_offset(SETTLE_WORLD_TIME),
         )))
         .expect("environment");
-    let victim_hit = mornlea_domain::CombatHit::try_new(1, 2, CombatTarget::Player).expect("hit");
-    let attacker_hit =
-        mornlea_domain::CombatHit::try_new(1, 3, CombatTarget::Hostile).expect("hit");
-    context
-        .emit(mornlea_domain::RoutedEvent::new(
-            EventRecipient::Session(one.get()),
-            Event::CombatHit(victim_hit),
-        ))
-        .expect("emit victim hit");
-    context
-        .emit(mornlea_domain::RoutedEvent::new(
-            EventRecipient::Session(two.get()),
-            Event::CombatHit(attacker_hit),
-        ))
-        .expect("emit attacker hit");
-    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two])
+    let outcome = provider::settle(&mut context, &record, &[one, two], &[one, two], &[one])
         .expect("damage-wake settlement");
     assert_eq!(
         outcome.sleeping,
