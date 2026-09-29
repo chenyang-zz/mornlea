@@ -37,3 +37,10 @@ Run `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml
 then crate clippy/fmt. Real provider acceptance additionally requires temporary
 filesystem and subprocess crash cases from the active OpenSpec packet. A
 mailbox or contract double does not accept on-disk persistence.
+
+`region_io.rs` owns one real region descriptor and its selected dual-bank view.
+A failed bank publication or reopen invalidates cached extents before reuse;
+only a successful durability barrier permits revision acknowledgment. The
+provider reports per-key commits separately from later errors. Compaction and
+same-owner retries retain the exclusive owner and use fallible file/directory
+close. Cross-region aggregation and the world lease belong to the disk backend.

@@ -698,3 +698,16 @@ RED/GREEN obligations. Windows directory opening/sync is not qualified by the
 Darwin runs; directory handles need backup semantics and FlushFileBuffers needs
 write access per Microsoft documentation. Do not add a success no-op or claim
 cross-platform durability. Platform acceptance remains an explicit gate.
+
+Region provider accepted from isolated e8b93cd7 +2ce38bfc. Three independently
+reviewed corrections passed behavioral RED/GREEN: compare only maximum-revision
+duplicates regardless of input order; invalidate bank state before any fallible
+reopen/refresh; observe directory close errors. Final Sol re-review has no
+remaining provider finding. Main integrated17 real-file cases, including four
+subprocess crash edges, same-owner uncertainty/reopen retries, fallback recovery,
+compaction and partial-owner outcomes. Complete main server suite passes218
+(16 parity,35 persistence,68 contract,99 replay), clippy/fmt/diff checks pass.
+Worker make rust and both packet Go region/chunk oracles pass. No codec or
+schema changes. Darwin filesystem behavior is the executed platform; the global
+Windows directory durability gate remains open at closeout, and real backend
+aggregation/lease acceptance remains3.5. Architecture skill: no change.
