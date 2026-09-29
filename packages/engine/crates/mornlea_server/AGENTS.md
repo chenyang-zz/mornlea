@@ -41,7 +41,20 @@ consume its cancellation and error contracts before joining the real backend.
   observations and never reconstruct an already loaded slot. Full-range stored
   chunk coordinates follow source int32 wrapping then float32 center rounding.
   Providers preflight with read().check_drop_batch and must revalidate at commit.
-  Mining/container/trample/death/pickup integration remains with its producer.
+  Mining and system block outputs use exact integer source cells rather than
+  round-tripping float centers. Other producer integration remains with its
+  provider.
+
+- `src/core/container_store.rs` owns fixed Ready furnace/chest slots keyed by
+  dimension and chunk. Wire references remain Overworld-only; internal reads
+  and `WorldContainer` effects carry dimension separately. Mining captures the
+  actual active slot and exact preimage, clears it while retaining generation,
+  and settles all outputs with the block write. Placement reserves the lowest
+  reusable inactive slot and skips exhausted generations. Compound effects
+  rehearse affected arrays before publishing; counters and contents share the
+  block/drop chunk revision. Sparse fixture containers never override a Ready
+  miss. Inventory/container transfers use one compound to conserve items when
+  a durable write refuses.
 
 - `ServerLimits`, `TickBudget`, and `StoreLimits` reject an over-ceiling
   constructor before they reserve command storage. `AuthorityState` keeps
@@ -100,9 +113,9 @@ consume its cancellation and error contracts before joining the real backend.
   four `resolve_*` functions build complete private `BlockTxn`s — footprint
   from the frozen Go block tables (door/bed two cells, cross-chunk), selected
   item/tool wear with the Go exemption predicate, actor-specific output
-  preflight (human staged drops under per-chunk occupancy, companion
+  preflight (human bounded drop merge/capacity rehearsal, companion
   inventory credit) and captured container slots — and commit only through
-  `MutationTxn::{try_place, try_mine, try_system}`. No client-supplied target
+  `MutationTxn::{try_place, try_mine, try_system, try_system_with_drops}`. No client-supplied target
   or revision reaches commit; a refusal leaves world, inventory, containers,
   tool and events unchanged. The `resolve_*` stubs at the end of `state.rs`
   remain the consumer double's scaffold until the endpoint rewire; the

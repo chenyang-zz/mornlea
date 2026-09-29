@@ -790,3 +790,23 @@ BlockTxn drop/container fields and false occupancy-only drop preflight, retainin
 Go slot allocation/generation and source integer cell identity. Main owns this
 tightly coupled core landing and exact Ready/sparse distinction; support/combat
 workers cannot consume prospective interfaces until its tested commit lands.
+
+
+Atomic world output contract accepted after Ready lookup, exact integer drop
+cell, and exhausted-revision container transfer behavioral REDs. Real fixed
+slots now participate in mining/placement and compound staging; human mining
+uses the exact merge rehearsal and captured records disappear exactly once.
+Ready tests cover both dimensions, actual nonzero slots/generations, inactive
+reuse/exhaustion, stale capture and late capacity refusal, full-slot legal merge,
+companion credit/rebirth, payload validation, shared dirty revision and F1 codec.
+Independent Sol review found stale flat replay alias revisions and a sparse
+fixture payload-validation bypass; both received behavioral REDs and fixes,
+then review approved. Three dirty-source restart cases now compare the complete
+restored snapshot. Pinned Rust1.97.1 full server277 tests (1 unit,16 parity,
+46 persistence,97 contract,117 replay), clippy/fmt, Go shared/world Chest/Furnace/
+Drop and sim/entity Mining/Mine/Placement/Place, strict OpenSpec and diff checks
+pass. An initial unpinned clippy invocation selected host1.98 and reported new
+lints in unchanged engine code; rerunning the repository's pinned toolchain
+passed without changing unrelated code. Architecture skill: no change. No
+wire/save version change. Provider/reducer integration remains with its named
+nodes; approval of this contract is not their acceptance.

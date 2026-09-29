@@ -636,12 +636,10 @@ fn human_drop_companion_credit() {
     let tool = context.read().inventory(player).expect("inventory").slots[0];
     assert_eq!(tool.item, ITEM_PICKAXE);
     assert_eq!(tool.durability, PICKAXE_DURABILITY - 1);
+    assert!(context.read().container(chest_reference()).is_none());
     assert_eq!(
-        context
-            .read()
-            .container(chest_reference())
-            .expect("container record"),
-        full_chest_record()
+        context.read().drops(overworld_key(chest_pos)).len(),
+        1 + CHEST_SLOTS
     );
     assert_eq!(context.events().len(), 0);
 
@@ -1182,4 +1180,338 @@ fn competing_target_first_wins() {
         1
     );
     assert_eq!(context.events().len(), 0);
+}
+
+fn loaded_context(
+    state: &mut AuthorityState,
+    session: SessionKey,
+    data: mornlea_storage::Chunk,
+    item: u16,
+) -> TickContext<'_> {
+    let mut ctx = harness_context(state);
+    ctx.stage(RuleEffect::Environment(environment())).unwrap();
+    ctx.stage(RuleEffect::Actor(player_actor(
+        session,
+        [0.5, 64.0, 0.5],
+        std::f32::consts::PI,
+        0.0,
+    )))
+    .unwrap();
+    ctx.preload_inventory(
+        ActorKey::Player(session),
+        hotbar_inventory(
+            0,
+            item,
+            if item == ITEM_PICKAXE { 1 } else { 3 },
+            if item == ITEM_PICKAXE {
+                PICKAXE_DURABILITY
+            } else {
+                0
+            },
+        ),
+    );
+    ctx.preload_ready_chunk(
+        mornlea_server::core::world::ReadyChunk::try_new(
+            overworld_key(BlockPos::new(0, 65, 2)),
+            1,
+            8,
+            data,
+        )
+        .unwrap(),
+    );
+    ctx
+}
+
+#[test]
+fn loaded_placement_allocates_lowest_reusable_slot_and_refuses_capacity_atomically() {
+    use super::world_outputs::{empty, put, world};
+    for (block, item, kind, capacity) in [
+        (CHEST, ITEM_CHEST, ContainerKind::Chest, 16),
+        (9, 8, ContainerKind::Furnace, 32),
+    ] {
+        for full in [false, true] {
+            let mut state = authority();
+            let session = state
+                .admit(admitted(71, "slot-place"), TransportKind::Memory)
+                .unwrap();
+            let actor = ActorKey::Player(session);
+            let mut data = empty();
+            put(&mut data, BlockPos::new(0, 65, 2), STONE);
+            match kind {
+                ContainerKind::Chest => {
+                    for (i, s) in data.chests.iter_mut().enumerate() {
+                        s.generation = if full || i == 0 { u32::MAX } else { 11 };
+                    }
+                }
+                ContainerKind::Furnace => {
+                    for (i, s) in data.furnaces.iter_mut().enumerate() {
+                        s.generation = if full || i == 0 { u32::MAX } else { 11 };
+                    }
+                }
+            }
+            let mut ctx = loaded_context(&mut state, session, data, item);
+            let before = ctx.snapshot_state(world());
+            let resolved = resolve_place(actor, &south_intent(), &ctx.read()).unwrap();
+            let outcome = ctx.transaction().try_place(resolved);
+            if full {
+                assert_eq!(
+                    outcome,
+                    Err(RuleReject::Wire(RejectReason::ContainerCapacity))
+                );
+                assert_eq!(ctx.snapshot_state(world()), before);
+            } else {
+                outcome.unwrap();
+                let record = ctx
+                    .read()
+                    .container_at(Dimension::OVERWORLD, BlockPos::new(0, 65, 1), kind)
+                    .unwrap();
+                assert_eq!(record.reference.slot(), 1);
+                assert_eq!(record.reference.generation(), 12);
+                assert_eq!(
+                    ctx.read()
+                        .observation(Dimension::OVERWORLD, BlockPos::new(0, 65, 1))
+                        .unwrap()
+                        .block,
+                    block
+                );
+                assert_eq!(ctx.read().inventory(actor).unwrap().slots[0].count, 2);
+                assert_eq!(
+                    ctx.read()
+                        .container_refs(overworld_key(BlockPos::new(0, 65, 1)))
+                        .len(),
+                    1
+                );
+                assert!(usize::from(record.reference.slot()) < capacity);
+            }
+        }
+    }
+}
+
+#[test]
+fn loaded_container_mining_removes_nonzero_slot_and_preserves_generation() {
+    use super::world_outputs::{empty, put, with_chest, world};
+    for furnace in [false, true] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(72, "slot-mine"), TransportKind::Memory)
+            .unwrap();
+        let actor = ActorKey::Player(session);
+        let target = BlockPos::new(0, 65, 2);
+        let data = if furnace {
+            let mut data = empty();
+            put(&mut data, target, 9);
+            data.furnaces[3] = mornlea_storage::FurnaceSlot {
+                generation: 9,
+                active: true,
+                block_index: mornlea_domain::chunk_block_index(target),
+                input: ItemStack {
+                    item: 6,
+                    count: 2,
+                    durability: 0,
+                },
+                fuel: ItemStack {
+                    item: 5,
+                    count: 1,
+                    durability: 0,
+                },
+                ..Default::default()
+            };
+            data
+        } else {
+            with_chest()
+        };
+        let mut ctx = loaded_context(&mut state, session, data, ITEM_PICKAXE);
+        let resolved = resolve_mine(
+            actor,
+            &primary_control(std::f32::consts::PI, 0.0),
+            &ctx.read(),
+        )
+        .unwrap()
+        .unwrap();
+        ctx.transaction().try_mine(resolved).unwrap();
+        let kind = if furnace {
+            ContainerKind::Furnace
+        } else {
+            ContainerKind::Chest
+        };
+        assert!(
+            ctx.read()
+                .container_at(Dimension::OVERWORLD, target, kind)
+                .is_none()
+        );
+        let snapshot = ctx.snapshot_state(world());
+        let data = &snapshot.chunks[0].3;
+        assert_eq!(snapshot.chunks[0].2, 9);
+        if furnace {
+            assert!(!data.furnaces[3].active);
+            assert_eq!(data.furnaces[3].generation, 9);
+        } else {
+            assert!(!data.chests[5].active);
+            assert_eq!(data.chests[5].generation, 7);
+        }
+        assert_eq!(
+            ctx.read().drops(overworld_key(target)).len(),
+            if furnace { 3 } else { 2 }
+        );
+        mornlea_storage::encode_chunk(&mornlea_storage::ChunkSave {
+            key: mornlea_storage::ChunkKey {
+                dimension: 0,
+                x: 0,
+                z: 0,
+            },
+            revision: 9,
+            chunk: data.clone(),
+        })
+        .unwrap();
+        assert_eq!(
+            ctx.read().inventory(actor).unwrap().slots[0].durability,
+            PICKAXE_DURABILITY - 1
+        );
+    }
+}
+
+#[test]
+fn mining_rechecks_loaded_container_capture_and_drop_capacity_without_spending_tool() {
+    use super::world_outputs::{with_chest, world};
+    for full in [false, true] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(73, "stale-mine"), TransportKind::Memory)
+            .unwrap();
+        let actor = ActorKey::Player(session);
+        let mut ctx = loaded_context(&mut state, session, with_chest(), ITEM_PICKAXE);
+        let target = BlockPos::new(0, 65, 2);
+        let resolved = resolve_mine(
+            actor,
+            &primary_control(std::f32::consts::PI, 0.0),
+            &ctx.read(),
+        )
+        .unwrap()
+        .unwrap();
+        if full {
+            for slot in 0..32 {
+                ctx.preload_drop(occupied_drop(slot));
+            }
+        } else {
+            let before = ctx
+                .read()
+                .container_at(Dimension::OVERWORLD, target, ContainerKind::Chest)
+                .unwrap();
+            let mut after = before.clone();
+            if let ContainerSlots::Chest(items) = &mut after.slots {
+                items[0].count = 3;
+            }
+            ctx.stage(RuleEffect::Container { before, after }).unwrap();
+        }
+        let before = ctx.snapshot_state(world());
+        assert!(ctx.transaction().try_mine(resolved).is_err());
+        assert_eq!(ctx.snapshot_state(world()), before);
+    }
+}
+
+#[test]
+fn full_drop_slots_allow_exact_same_cell_mining_merge() {
+    use super::world_outputs::{empty, put};
+    let mut state = authority();
+    let session = state
+        .admit(admitted(74, "merge-mine"), TransportKind::Memory)
+        .unwrap();
+    let actor = ActorKey::Player(session);
+    let target = BlockPos::new(0, 65, 2);
+    let mut data = empty();
+    put(&mut data, target, STONE);
+    for (index, drop) in data.drops.iter_mut().enumerate() {
+        *drop = mornlea_storage::DropSlot {
+            generation: 1,
+            active: true,
+            block_index: mornlea_domain::chunk_block_index(target),
+            stack: ItemStack {
+                item: if index == 0 { ITEM_STONE } else { ITEM_COAL },
+                count: if index == 0 { 63 } else { 64 },
+                durability: 0,
+            },
+            ..Default::default()
+        };
+    }
+    let mut ctx = loaded_context(&mut state, session, data, ITEM_PICKAXE);
+    let resolved = resolve_mine(
+        actor,
+        &primary_control(std::f32::consts::PI, 0.0),
+        &ctx.read(),
+    )
+    .unwrap()
+    .unwrap();
+    ctx.transaction().try_mine(resolved).unwrap();
+    assert_eq!(ctx.read().drops(overworld_key(target)).len(), 32);
+    assert_eq!(ctx.read().drops(overworld_key(target))[0].stack.count, 64);
+}
+
+#[test]
+fn companion_mines_loaded_container_once_and_rebirth_advances_retained_generation() {
+    use super::world_outputs::{with_chest, world};
+    let mut state = authority();
+    let mut ctx = harness_context(&mut state);
+    let id = companion_id();
+    let actor = ActorKey::Companion(id);
+    let target = BlockPos::new(0, 65, 2);
+    let mut data = with_chest();
+    for slot in &mut data.chests[..5] {
+        slot.generation = u32::MAX;
+    }
+    ctx.stage(RuleEffect::Environment(environment())).unwrap();
+    ctx.stage(RuleEffect::Actor(companion_actor(id, [0.5, 64.0, 0.5])))
+        .unwrap();
+    ctx.preload_inventory(actor, InventoryRecord::empty());
+    ctx.preload_ready_chunk(
+        mornlea_server::core::world::ReadyChunk::try_new(overworld_key(target), 1, 8, data)
+            .unwrap(),
+    );
+    let resolved = resolve_companion_mine(id, target, &ctx.read()).unwrap();
+    ctx.transaction().try_mine(resolved).unwrap();
+    assert!(
+        ctx.read()
+            .container_at(Dimension::OVERWORLD, target, ContainerKind::Chest)
+            .is_none()
+    );
+    assert!(ctx.read().drops(overworld_key(target)).is_empty());
+    let inventory = ctx.read().inventory(actor).unwrap();
+    assert_eq!(
+        inventory
+            .slots
+            .iter()
+            .filter(|s| s.item == ITEM_CHEST)
+            .map(|s| u32::from(s.count))
+            .sum::<u32>(),
+        1
+    );
+    assert_eq!(
+        inventory
+            .slots
+            .iter()
+            .filter(|s| s.item == ITEM_STONE)
+            .map(|s| u32::from(s.count))
+            .sum::<u32>(),
+        4
+    );
+    assert!(resolve_companion_mine(id, target, &ctx.read()).is_err());
+    let observed = ctx
+        .read()
+        .observation(Dimension::OVERWORLD, target)
+        .unwrap();
+    ctx.transaction()
+        .try_system(
+            SystemRule::Support,
+            vec![BlockWrite {
+                observed,
+                replacement: CHEST,
+            }],
+        )
+        .unwrap();
+    let reborn = ctx
+        .read()
+        .container_at(Dimension::OVERWORLD, target, ContainerKind::Chest)
+        .unwrap();
+    assert_eq!(reborn.reference.slot(), 5);
+    assert_eq!(reborn.reference.generation(), 8);
+    assert_eq!(ctx.snapshot_state(world()).chunks[0].2, 9);
 }

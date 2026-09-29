@@ -18,7 +18,8 @@ container reference over the unchanged wire surface.
 
 Main owns core/{contracts,state,world,mutation,mod}.rs, new
 core/container_store.rs, tests/server_contract/{world_outputs,mutation}.rs and
-test entry, narrowly affected mining fixtures, and rules/containers.rs only for
+test entry, tests/server_replay/containers.rs for the exhausted-revision atomicity
+regression, narrowly affected mining fixtures, and rules/containers.rs only for
 making its existing inventory/container settlement a single Compound. The
 current separate inventory-then-container calls would lose inventory if the
 new revision guard rejects the second operation. Other providers are read-only;

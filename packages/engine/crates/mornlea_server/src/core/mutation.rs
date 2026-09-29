@@ -15,24 +15,19 @@
 //! behavior, the boundary comment names the provider that owns the rest.
 
 use mornlea_domain::{
-    BlockPos, ChunkPos, CompanionId, ContainerKind, ContainerRef, Dimension, FiniteVec3,
-    PlacementIntent, PlayerControl, RejectReason, registered_block,
+    BlockPos, ChunkPos, CompanionId, ContainerKind, Dimension, FiniteVec3, PlacementIntent,
+    PlayerControl, RejectReason, registered_block,
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RayFace, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
 use mornlea_storage::ItemStack;
 
 use super::contracts::{
-    ActorKey, ActorLifecycle, BlockObservation, BlockTxn, BlockWrite, ChunkKey, ContainerRecord,
-    ContainerSlots, DropBatch, DropSource, EnvironmentState, InventoryPatch, InventoryRecord,
-    MutationProducer, ResolvedMining, ResolvedPlacement, RuleReject,
+    ActorKey, ActorLifecycle, BlockObservation, BlockTxn, BlockWrite, CapturedContainer, ChunkKey,
+    ContainerRecord, ContainerSlots, DropBatch, DropSource, EnvironmentState, InventoryPatch,
+    InventoryRecord, MutationProducer, ResolvedMining, ResolvedPlacement, RuleReject,
 };
 use super::state::AuthorityReadView;
-
-/// Fixed drop slots one chunk holds (`core.DropsPerChunk`,
-/// `packages/shared/core/drop.go`): the output budget the human mining path
-/// enforces before it clears a block.
-const DROPS_PER_CHUNK: usize = 32;
 
 /// Hotbar length inside the unified 36-slot inventory (`core.HotbarSlots`).
 const HOTBAR_SLOTS: usize = 9;
@@ -653,35 +648,23 @@ fn is_intact_sword(item: u16) -> bool {
     matches!(item, 47..=49)
 }
 
-/// Derives the container identity of a mined container block. Real chunks
-/// map block positions to container slots dynamically (`Chunk.ChestAt`,
-/// `packages/shared/world/chest.go`); this seam keeps only the declared
-/// exact-reference lookup, so the fixture convention is the first container
-/// of a fresh chunk — the lowest slot `PrepareChest`/`PrepareFurnace`
-/// returns on a fresh chunk and the first generation `CommitChest` mints.
-/// The container provider owns real position-to-reference records.
-fn container_reference(pos: BlockPos, block: u16) -> Option<ContainerRef> {
-    let kind = match block {
-        CHEST_BLOCK => ContainerKind::Chest,
-        FURNACE_BLOCK => ContainerKind::Furnace,
-        _ => return None,
-    };
-    ContainerRef::try_new(chunk_of(pos), kind, 0, 1).ok()
-}
-
 /// Captures the full slot record of a mined container block. A mined
 /// container with no staged record is unready — the same `ChunkNotReady`
 /// refusal the Go completion path publishes for a missing container record
 /// (`packages/server/sim/entity/mining.go`).
 fn capture_container(
     view: &AuthorityReadView<'_>,
+    dimension: Dimension,
     pos: BlockPos,
     block: u16,
     unobserved: RuleReject,
 ) -> Result<ContainerRecord, RuleReject> {
-    let reference =
-        container_reference(pos, block).ok_or(RuleReject::Wire(RejectReason::ChunkNotReady))?;
-    view.container(reference).ok_or(unobserved)
+    let kind = match block {
+        CHEST_BLOCK => ContainerKind::Chest,
+        FURNACE_BLOCK => ContainerKind::Furnace,
+        _ => return Err(unobserved),
+    };
+    view.container_at(dimension, pos, kind).ok_or(unobserved)
 }
 
 /// The non-empty contents of one container record in fixed slot order — a
@@ -876,12 +859,16 @@ pub fn resolve_mine(
     if observed.block == CHEST_BLOCK || observed.block == FURNACE_BLOCK {
         let record = capture_container(
             view,
+            basis.dimension,
             observed.pos,
             observed.block,
             RuleReject::Wire(RejectReason::ChunkNotReady),
         )?;
         stacks.extend(container_stacks(&record));
-        containers.push(record);
+        containers.push(CapturedContainer {
+            key: chunk_key(basis.dimension, observed.pos),
+            record,
+        });
     }
 
     // Preflight order is frozen: the item/tool basis comes before the output
@@ -893,19 +880,7 @@ pub fn resolve_mine(
         InventoryPatch::try_new(actor, inventory, after).expect("wear keeps the actor key")
     });
 
-    // Human output goes to staged drops: occupied chunk slots plus the
-    // batch's non-empty stacks over the fixed per-chunk budget refuse with
-    // `DropCapacity` (the Go occupancy rule of `Chunk.PrepareDropBatch`,
-    // `packages/shared/world/drop.go`, over `core.DropsPerChunk`).
-    let key = chunk_key(basis.dimension, observed.pos);
-    let occupied = view.drops(key).len();
-    let batch_stacks = stacks
-        .iter()
-        .filter(|stack| stack.item != ITEM_NONE && stack.count > 0)
-        .count();
-    if occupied + batch_stacks > DROPS_PER_CHUNK {
-        return Err(RuleReject::Wire(RejectReason::DropCapacity));
-    }
+    // Rehearse exact merge/split and retained-generation capacity before any write.
     let drops = DropBatch::try_new(
         DropSource::Mining {
             actor,
@@ -917,6 +892,7 @@ pub fn resolve_mine(
         stacks,
         basis.drop_pickup_delay,
     )?;
+    view.check_drop_batch(&drops)?;
 
     let txn = BlockTxn {
         producer: MutationProducer::Actor(actor),
@@ -1014,12 +990,16 @@ pub fn resolve_companion_mine(
     if observed.block == CHEST_BLOCK || observed.block == FURNACE_BLOCK {
         let record = capture_container(
             view,
+            basis.dimension,
             observed.pos,
             observed.block,
             RuleReject::StaleObservation,
         )?;
         stacks.extend(container_stacks(&record));
-        containers.push(record);
+        containers.push(CapturedContainer {
+            key: chunk_key(basis.dimension, observed.pos),
+            record,
+        });
     }
     let inventory = *view.inventory(key).ok_or(RuleReject::StaleObservation)?;
     let after =

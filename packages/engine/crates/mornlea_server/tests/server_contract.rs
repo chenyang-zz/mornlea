@@ -33,3 +33,6 @@ mod world_read;
 
 #[path = "server_contract/drop_store.rs"]
 mod drop_store;
+
+#[path = "server_contract/world_outputs.rs"]
+mod world_outputs;

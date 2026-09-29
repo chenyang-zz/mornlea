@@ -992,6 +992,13 @@ pub struct ContainerRecord {
     pub slots: ContainerSlots,
 }
 
+/// Internal chunk ownership retains dimension independently of a wire view reference.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CapturedContainer {
+    pub key: ChunkKey,
+    pub record: ContainerRecord,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ViewLease {
     session: SessionKey,
@@ -1051,6 +1058,7 @@ pub enum DropSource {
     System {
         rule: SystemRule,
         tick: u64,
+        target: BlockPos,
     },
     Mining {
         actor: ActorKey,
@@ -1252,7 +1260,7 @@ pub struct BlockTxn {
     pub(crate) tick: u64,
     pub(crate) writes: Vec<BlockWrite>,
     pub(crate) inventory: Option<InventoryPatch>,
-    pub(crate) containers: Vec<ContainerRecord>,
+    pub(crate) containers: Vec<CapturedContainer>,
     pub(crate) drops: Option<DropBatch>,
     pub(crate) mining: Option<MiningProgress>,
 }
@@ -1308,6 +1316,11 @@ pub enum RuleEffect {
     Actor(ActorRecord),
     Inventory(InventoryPatch),
     Container {
+        before: ContainerRecord,
+        after: ContainerRecord,
+    },
+    WorldContainer {
+        dimension: Dimension,
         before: ContainerRecord,
         after: ContainerRecord,
     },

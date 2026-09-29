@@ -1450,3 +1450,71 @@ fn stale_view_and_unauthorized() {
     );
     assert_no_effect(&before, &observed, RuleReject::StaleObservation);
 }
+
+#[test]
+fn exhausted_chunk_revision_cannot_debit_container_transfer() {
+    use mornlea_domain::chunk_block_index;
+    use mornlea_server::core::world::ReadyChunk;
+    use mornlea_storage::{Chunk, ContainerSnapshot, FurnaceSlot, StorageKind};
+    let session = player_session(61, "exhausted-transfer");
+    let target = BlockPos::new(0, 65, -1);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = viewer_scene(
+        &mut ctx,
+        session,
+        (target, FURNACE_BLOCK),
+        &[(0, stack(ITEM_RAW_IRON, 3))],
+    );
+    let mut chunk = Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    };
+    let index = chunk_block_index(target) as usize;
+    let mut packed = vec![0; 1024];
+    packed[(index % 4096) / 4] = u64::from(FURNACE_BLOCK) << ((index % 4) * 15);
+    chunk.sections[index / 4096] = ContainerSnapshot {
+        kind: StorageKind::Direct,
+        bits: 15,
+        single: 0,
+        palette: vec![],
+        packed,
+    };
+    chunk.furnaces[0] = FurnaceSlot {
+        active: true,
+        generation: 1,
+        block_index: index as u32,
+        ..Default::default()
+    };
+    let key = overworld_key(target);
+    ctx.preload_ready_chunk(ReadyChunk::try_new(key, 1, u64::MAX, chunk).unwrap());
+    let reference = ContainerRef::try_new(key.pos, ContainerKind::Furnace, 0, 1).unwrap();
+    let before = inventory_of(&ctx, actor);
+    let stored = container_of(&ctx, reference);
+    admit(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    admit(
+        &mut ctx,
+        &envelope(
+            session,
+            2,
+            Command::MoveContainer(
+                ContainerMove::try_new(key.pos, ContainerKind::Furnace, 0, 1, 0, 36).unwrap(),
+            ),
+        ),
+    )
+    .unwrap();
+    drain(&mut ctx).unwrap();
+    assert_eq!(inventory_of(&ctx, actor), before);
+    assert_eq!(container_of(&ctx, reference), stored);
+}

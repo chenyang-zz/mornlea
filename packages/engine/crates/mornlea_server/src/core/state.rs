@@ -16,6 +16,7 @@ use mornlea_domain::{
 use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket};
 use mornlea_storage::{Metadata, PlayerLocation, PlayerSave, StoredPlayer};
 
+use super::container_store::ContainerState;
 use super::contracts::*;
 use super::drop_store::{self, DropState};
 use super::world::ReadyChunk;
@@ -1195,6 +1196,7 @@ pub struct AuthorityReadView<'a> {
     pre_step: &'a BTreeMap<ActorKey, MotionState>,
     environment: Option<&'a EnvironmentState>,
     containers: &'a BTreeMap<ContainerRef, ContainerRecord>,
+    container_chunks: &'a BTreeMap<ChunkKey, ContainerState>,
     viewers: &'a BTreeMap<SessionKey, ViewLease>,
     committed_viewers: &'a BTreeMap<SessionKey, ViewLease>,
     drops: &'a BTreeMap<ChunkKey, DropState>,
@@ -1271,8 +1273,52 @@ impl<'a> AuthorityReadView<'a> {
     /// container provider; this surface only lets a resolver capture the
     /// staged slots of a mined container.
     pub fn container(&self, reference: ContainerRef) -> Option<ContainerRecord> {
-        self.containers.get(&reference).cloned()
+        self.world_container(Dimension::OVERWORLD, reference)
     }
+    /// Internal simulation keeps the chunk dimension even when wire views cannot.
+    pub fn world_container(
+        &self,
+        dimension: Dimension,
+        reference: ContainerRef,
+    ) -> Option<ContainerRecord> {
+        let key = ChunkKey {
+            dimension,
+            pos: reference.chunk(),
+        };
+        if let Some(chunk) = self.container_chunks.get(&key) {
+            return chunk.record(key, reference);
+        }
+        if dimension == Dimension::OVERWORLD {
+            self.containers.get(&reference).cloned()
+        } else {
+            None
+        }
+    }
+
+    /// Ready records resolve the actual stored position, slot and generation.
+    pub fn container_at(
+        &self,
+        dimension: Dimension,
+        pos: mornlea_domain::BlockPos,
+        kind: mornlea_domain::ContainerKind,
+    ) -> Option<ContainerRecord> {
+        let key = block_key(dimension, pos);
+        if let Some(chunk) = self.container_chunks.get(&key) {
+            return chunk.at(key, pos, kind);
+        }
+        // Sparse fixtures retain their explicit historical first-slot convention.
+        let reference = ContainerRef::try_new(key.pos, kind, 0, 1).ok()?;
+        self.world_container(dimension, reference)
+    }
+
+    /// Fixed array enumeration is bounded independently of total loaded chunks.
+    pub fn container_refs(&self, key: ChunkKey) -> Vec<ContainerRef> {
+        self.container_chunks
+            .get(&key)
+            .map(|chunk| chunk.references(key))
+            .unwrap_or_default()
+    }
+
     /// Viewer lease for one session, staged overlay first and the committed
     /// authority store second. The overlay carries the tick's net leases, so
     /// a viewer stays visible here until the tick whose close clears it; the
@@ -1292,7 +1338,7 @@ impl<'a> AuthorityReadView<'a> {
     /// Rehearse the entire output on one fixed slot copy; commit must recheck it.
     pub fn check_drop_batch(&self, batch: &DropBatch) -> Result<(), RuleReject> {
         drop_store::validate_batch(batch)?;
-        let (key, _) = drop_store::location(batch.dimension, batch.origin)?;
+        let (key, _) = drop_store::batch_location(batch)?;
         let mut next = self
             .drops
             .get(&key)
@@ -1354,6 +1400,7 @@ pub struct TickContext<'a> {
     blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
     ready: BTreeMap<ChunkKey, ReadyChunk>,
     containers: BTreeMap<ContainerRef, ContainerRecord>,
+    container_chunks: BTreeMap<ChunkKey, ContainerState>,
     /// Staged viewer leases by session. The container provider is the single
     /// writer through the viewer staging arm; the serial reducer commits the
     /// net overlay into the authority store at overlay commit.
@@ -1419,6 +1466,8 @@ impl<'a> TickContext<'a> {
                     .expect("Ready chunks own exactly 32 drop slots"),
             ),
         );
+        self.container_chunks
+            .insert(chunk.key, chunk.container_state());
         self.ready.insert(chunk.key, chunk);
     }
     pub fn harness(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
@@ -1437,6 +1486,9 @@ impl<'a> TickContext<'a> {
                 ReadyChunk::try_new(*key, *generation, *revision, chunk.clone())
                     .expect("fixture chunks must satisfy the storage contract"),
             );
+        }
+        for record in &initial.containers {
+            context.preload_container(record.clone());
         }
         for record in &initial.drops {
             context.preload_drop(record.clone());
@@ -1468,6 +1520,7 @@ impl<'a> TickContext<'a> {
             blocks: BTreeMap::new(),
             ready: BTreeMap::new(),
             containers: BTreeMap::new(),
+            container_chunks: BTreeMap::new(),
             viewers: BTreeMap::new(),
             drops: BTreeMap::new(),
             world: None,
@@ -1519,7 +1572,19 @@ impl<'a> TickContext<'a> {
     /// container commits stage container deltas through the container
     /// staging arm instead; this entry point stays test setup only.
     pub fn preload_container(&mut self, record: ContainerRecord) {
-        self.containers.insert(record.reference, record);
+        let key = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: record.reference.chunk(),
+        };
+        if let Some(chunk) = self.container_chunks.get(&key) {
+            assert_eq!(
+                chunk.record(key, record.reference).as_ref(),
+                Some(&record),
+                "fixture record cannot override Ready container slots"
+            );
+        } else {
+            self.containers.insert(record.reference, record);
+        }
     }
 
     /// Stages one occupied drop slot for fixture-driven capacity preflight,
@@ -1573,6 +1638,7 @@ impl<'a> TickContext<'a> {
             pre_step: &self.pre_step,
             environment: self.environment.as_ref(),
             containers: &self.containers,
+            container_chunks: &self.container_chunks,
             viewers: &self.viewers,
             committed_viewers: &self.authority.views,
             drops: &self.drops,
@@ -1659,16 +1725,19 @@ impl<'a> TickContext<'a> {
         let mut pending_projectiles = None;
         let mut pending_damage = 0;
         let mut pending_drops = BTreeMap::new();
+        let mut pending_containers = BTreeMap::new();
         self.validate_effect(
             &effect,
             false,
             &mut pending_projectiles,
             &mut pending_damage,
             &mut pending_drops,
+            &mut pending_containers,
         )?;
         self.apply_effect(effect)?;
         // Publish only the affected fixed slot copies after every other arm succeeds.
         self.drops.extend(pending_drops);
+        self.container_chunks.extend(pending_containers);
         Ok(())
     }
 
@@ -1688,27 +1757,59 @@ impl<'a> TickContext<'a> {
     /// Copies the staged overlay into a fixture state for the replay helper.
     /// The hash input is these logical fields, not the process layout.
     pub fn snapshot_state(&self, fallback_world: WorldState) -> FixtureState {
+        let chunks: Vec<_> = self
+            .ready
+            .values()
+            .map(|chunk| {
+                chunk.snapshot(
+                    self.blocks
+                        .values()
+                        .filter(|observed| observed.key == chunk.key),
+                    self.drops.get(&chunk.key),
+                    self.container_chunks.get(&chunk.key),
+                )
+            })
+            .collect();
+        let revisions: BTreeMap<_, _> = chunks
+            .iter()
+            .map(|(key, _, revision, _)| (*key, *revision))
+            .collect();
         FixtureState {
             runtime: self.runtimes.values().cloned().collect(),
             actors: self.actors.clone(),
-            chunks: self
-                .ready
-                .values()
-                .map(|chunk| {
-                    chunk.snapshot(
-                        self.blocks
-                            .values()
-                            .filter(|observed| observed.key == chunk.key),
-                        self.drops.get(&chunk.key),
-                    )
-                })
-                .collect(),
+            chunks,
             inventories: self
                 .inventories
                 .iter()
                 .map(|(key, inventory)| (*key, *inventory))
                 .collect(),
-            containers: Vec::new(),
+            containers: self
+                .container_chunks
+                .iter()
+                .filter(|(key, _)| key.dimension == Dimension::OVERWORLD)
+                .flat_map(|(key, owner)| {
+                    owner
+                        .references(*key)
+                        .into_iter()
+                        .filter_map(|reference| owner.record(*key, reference))
+                        .map(|mut record| {
+                            // Replay aliases name the materialized chunk, not the old tick basis.
+                            record.revision = revisions[key];
+                            record
+                        })
+                })
+                .chain(
+                    self.containers
+                        .values()
+                        .filter(|record| {
+                            !self.ready.contains_key(&ChunkKey {
+                                dimension: Dimension::OVERWORLD,
+                                pos: record.reference.chunk(),
+                            })
+                        })
+                        .cloned(),
+                )
+                .collect(),
             work: WorkState::default(),
             sleep: SleepState {
                 beds: Vec::new(),
@@ -1811,6 +1912,7 @@ impl<'a> TickContext<'a> {
         pending_projectiles: &mut Option<Vec<ProjectileRecord>>,
         pending_damage: &mut usize,
         pending_drops: &mut BTreeMap<ChunkKey, DropState>,
+        pending_containers: &mut BTreeMap<ChunkKey, ContainerState>,
     ) -> Result<(), RuleReject> {
         match effect {
             RuleEffect::Compound(parts) => {
@@ -1824,6 +1926,7 @@ impl<'a> TickContext<'a> {
                         pending_projectiles,
                         pending_damage,
                         pending_drops,
+                        pending_containers,
                     )?;
                 }
                 Ok(())
@@ -1849,10 +1952,17 @@ impl<'a> TickContext<'a> {
                 Some(current) if current == &patch.before => Ok(()),
                 _ => Err(RuleReject::StaleObservation),
             },
-            RuleEffect::Container { before, .. } => match self.containers.get(&before.reference) {
-                Some(current) if current == before => Ok(()),
-                _ => Err(RuleReject::StaleObservation),
-            },
+            RuleEffect::Container { before, after } => self.validate_container_patch(
+                Dimension::OVERWORLD,
+                before,
+                after,
+                pending_containers,
+            ),
+            RuleEffect::WorldContainer {
+                dimension,
+                before,
+                after,
+            } => self.validate_container_patch(*dimension, before, after, pending_containers),
             RuleEffect::Viewer { session, view } => match view {
                 Some(lease) if lease.session() == *session => Ok(()),
                 None => Ok(()),
@@ -1862,11 +1972,45 @@ impl<'a> TickContext<'a> {
                 if txn.writes.len() > EFFECT_BUDGET {
                     return Err(RuleReject::ResourceFull(Resource::RuleEffects));
                 }
-                self.validate_writes(&txn.writes)
+                self.validate_writes(&txn.writes)?;
+                if let Some(patch) = &txn.inventory
+                    && self.inventories.get(&patch.actor) != Some(&patch.before)
+                {
+                    return Err(RuleReject::StaleObservation);
+                }
+                for capture in &txn.containers {
+                    let current = if let Some(owner) = pending_containers.get(&capture.key) {
+                        owner.record(capture.key, capture.record.reference)
+                    } else {
+                        self.read()
+                            .world_container(capture.key.dimension, capture.record.reference)
+                    };
+                    if current.as_ref() != Some(&capture.record) {
+                        return Err(RuleReject::StaleObservation);
+                    }
+                }
+                for write in &txn.writes {
+                    let key = write.observed.key;
+                    if let Some(current) = self.container_chunks.get(&key) {
+                        let next = pending_containers
+                            .entry(key)
+                            .or_insert_with(|| current.clone());
+                        next.transition(key, write, &txn.containers)?;
+                        self.check_container_revision(key, next)?;
+                    }
+                }
+                if let Some(batch) = &txn.drops {
+                    drop_store::validate_batch(batch)?;
+                    let (key, _) = drop_store::batch_location(batch)?;
+                    let next = pending_drop_state(pending_drops, self.drops.get(&key), key)?;
+                    next.insert(key, batch)?;
+                    self.check_drop_revision(key, next)?;
+                }
+                Ok(())
             }
             RuleEffect::Drops(batch) => {
                 drop_store::validate_batch(batch)?;
-                let (key, _) = drop_store::location(batch.dimension, batch.origin)?;
+                let (key, _) = drop_store::batch_location(batch)?;
                 let next = pending_drop_state(pending_drops, self.drops.get(&key), key)?;
                 next.insert(key, batch)?;
                 self.check_drop_revision(key, next)
@@ -1891,6 +2035,49 @@ impl<'a> TickContext<'a> {
                 apply_projectile(records, before.as_ref(), after.as_ref())
             }
             _ => Ok(()),
+        }
+    }
+
+    fn check_container_revision(
+        &self,
+        key: ChunkKey,
+        next: &ContainerState,
+    ) -> Result<(), RuleReject> {
+        if next.dirty
+            && self
+                .ready
+                .get(&key)
+                .is_some_and(|chunk| chunk.revision == u64::MAX)
+        {
+            Err(RuleReject::StaleObservation)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn validate_container_patch(
+        &self,
+        dimension: Dimension,
+        before: &ContainerRecord,
+        after: &ContainerRecord,
+        pending: &mut BTreeMap<ChunkKey, ContainerState>,
+    ) -> Result<(), RuleReject> {
+        let key = ChunkKey {
+            dimension,
+            pos: before.reference.chunk(),
+        };
+        if let Some(current) = self.container_chunks.get(&key) {
+            let next = pending.entry(key).or_insert_with(|| current.clone());
+            next.patch(key, before, after)?;
+            self.check_container_revision(key, next)
+        } else if dimension == Dimension::OVERWORLD
+            && self.containers.get(&before.reference) == Some(before)
+            && before.reference == after.reference
+            && before.revision == after.revision
+        {
+            super::container_store::validate_slots(after)
+        } else {
+            Err(RuleReject::StaleObservation)
         }
     }
 
@@ -2013,7 +2200,25 @@ impl<'a> TickContext<'a> {
                 Ok(())
             }
             RuleEffect::Container { after, .. } => {
-                self.containers.insert(after.reference, after);
+                let key = ChunkKey {
+                    dimension: Dimension::OVERWORLD,
+                    pos: after.reference.chunk(),
+                };
+                if !self.container_chunks.contains_key(&key) {
+                    self.containers.insert(after.reference, after);
+                }
+                Ok(())
+            }
+            RuleEffect::WorldContainer {
+                dimension, after, ..
+            } => {
+                let key = ChunkKey {
+                    dimension,
+                    pos: after.reference.chunk(),
+                };
+                if dimension == Dimension::OVERWORLD && !self.container_chunks.contains_key(&key) {
+                    self.containers.insert(after.reference, after);
+                }
                 Ok(())
             }
             RuleEffect::Viewer { session, view } => {
@@ -2032,6 +2237,13 @@ impl<'a> TickContext<'a> {
                 Ok(())
             }
             RuleEffect::Blocks(txn) => {
+                for capture in &txn.containers {
+                    if capture.key.dimension == Dimension::OVERWORLD
+                        && !self.container_chunks.contains_key(&capture.key)
+                    {
+                        self.containers.remove(&capture.record.reference);
+                    }
+                }
                 self.apply_writes(&txn.writes);
                 if let Some(patch) = txn.inventory {
                     self.inventories.insert(patch.actor, patch.after);
@@ -2168,14 +2380,24 @@ impl<'ctx, 'auth> MutationTxn<'ctx, 'auth> {
         self.commit(BlockTxn::system(producer, tick, writes))
     }
 
-    fn commit(&mut self, txn: BlockTxn) -> Result<MutationOutcome, RuleReject> {
-        self.context.validate_writes(&txn.writes)?;
-        if let Some(patch) = &txn.inventory {
-            match self.context.inventories.get(&patch.actor) {
-                Some(current) if current == &patch.before => {}
-                _ => return Err(RuleReject::StaleObservation),
-            }
+    /// System block outputs and writes share the same bounded transaction.
+    pub fn try_system_with_drops(
+        &mut self,
+        producer: SystemRule,
+        writes: Vec<BlockWrite>,
+        drops: DropBatch,
+    ) -> Result<MutationOutcome, RuleReject> {
+        let tick = self.context.authority.next_tick;
+        if !matches!(drops.source,DropSource::System{rule,tick:source_tick,..} if rule==producer && source_tick==tick)
+        {
+            return Err(RuleReject::Wire(RejectReason::InvalidInput));
         }
+        let mut txn = BlockTxn::system(producer, tick, writes);
+        txn.drops = Some(drops);
+        self.commit(txn)
+    }
+
+    fn commit(&mut self, txn: BlockTxn) -> Result<MutationOutcome, RuleReject> {
         let changed = txn
             .writes
             .iter()
@@ -2190,13 +2412,10 @@ impl<'ctx, 'auth> MutationTxn<'ctx, 'auth> {
         let drops_created = txn
             .drops
             .as_ref()
-            .map(|drops| drops.stacks.len())
+            .map(|drops| drops.stacks.iter().filter(|stack| stack.count != 0).count())
             .unwrap_or(0);
         let inventory_changed = txn.inventory.is_some();
-        self.context.apply_writes(&txn.writes);
-        if let Some(patch) = txn.inventory {
-            self.context.inventories.insert(patch.actor, patch.after);
-        }
+        self.context.stage(RuleEffect::Blocks(txn))?;
         Ok(MutationOutcome {
             changed,
             inventory_changed,

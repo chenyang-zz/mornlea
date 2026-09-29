@@ -551,31 +551,27 @@ fn commit(
     if !can_repack(&inventory.slots, &inventory.crafting) {
         return false;
     }
+    let mut effects = Vec::with_capacity(2);
     if inventory != viewer.inventory {
         let patch = match InventoryPatch::try_new(viewer.actor, viewer.inventory, inventory) {
             Ok(patch) => patch,
             Err(_) => return false,
         };
-        if ctx.stage(RuleEffect::Inventory(patch)).is_err() {
-            return false;
-        }
+        effects.push(RuleEffect::Inventory(patch));
     }
     let next = ContainerRecord {
         reference: stored.reference,
         revision: stored.revision,
         slots,
     };
-    if next != *stored
-        && ctx
-            .stage(RuleEffect::Container {
-                before: stored.clone(),
-                after: next,
-            })
-            .is_err()
-    {
-        return false;
+    if next != *stored {
+        effects.push(RuleEffect::Container {
+            before: stored.clone(),
+            after: next,
+        });
     }
-    true
+    // A rejected durable container write must not spend the source inventory.
+    ctx.stage(RuleEffect::Compound(effects)).is_ok()
 }
 
 /// Final validity sweep over the computed sides, the `Valid` conjunction the

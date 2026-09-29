@@ -85,6 +85,10 @@ impl ReadyChunk {
         self.heights[((z & 15) * 16 + (x & 15)) as usize] = y as i16;
     }
 
+    pub(crate) fn container_state(&self) -> super::container_store::ContainerState {
+        super::container_store::ContainerState::new(&self.base, self.revision)
+    }
+
     pub(crate) fn drop_slots(&self) -> &[mornlea_storage::DropSlot] {
         &self.base.drops
     }
@@ -95,6 +99,7 @@ impl ReadyChunk {
         &self,
         writes: impl Iterator<Item = &'a BlockObservation>,
         drops: Option<&super::drop_store::DropState>,
+        containers: Option<&super::container_store::ContainerState>,
     ) -> (ChunkKey, u64, u64, Chunk) {
         let mut chunk = (*self.base).clone();
         let mut converted = BTreeSet::new();
@@ -123,7 +128,14 @@ impl ReadyChunk {
         if let Some(drops) = drops {
             chunk.drops = drops.slots.to_vec();
         }
-        let revision = if converted.is_empty() && !drops.is_some_and(|state| state.dirty) {
+        if let Some(containers) = containers {
+            chunk.furnaces = containers.furnaces.to_vec();
+            chunk.chests = containers.chests.to_vec();
+        }
+        let revision = if converted.is_empty()
+            && !drops.is_some_and(|state| state.dirty)
+            && !containers.is_some_and(|state| state.dirty)
+        {
             self.revision
         } else {
             self.revision

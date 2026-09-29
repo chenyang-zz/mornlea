@@ -5,7 +5,7 @@ use mornlea_domain::{
 };
 use mornlea_storage::{DropSlot, ItemStack, item_stack_limit};
 
-use super::contracts::{ChunkKey, DropBatch, DropRecord, Resource, RuleReject};
+use super::contracts::{ChunkKey, DropBatch, DropRecord, DropSource, Resource, RuleReject};
 
 /// Inactive generations remain owned even when the active observation is empty.
 /// Counter-only aging is intentionally not a durable mutation, matching the
@@ -86,7 +86,7 @@ impl DropState {
     /// All changes stay on this bounded rehearsal until the caller accepts it.
     pub(crate) fn insert(&mut self, key: ChunkKey, batch: &DropBatch) -> Result<(), RuleReject> {
         validate_batch(batch)?;
-        let (owner, index) = location(batch.dimension, batch.origin)?;
+        let (owner, index) = batch_location(batch)?;
         if owner != key {
             return Err(invalid());
         }
@@ -182,8 +182,35 @@ pub(crate) fn validate_batch(batch: &DropBatch) -> Result<(), RuleReject> {
     if batch.stacks.iter().any(|stack| !stack.is_valid()) {
         return Err(invalid());
     }
-    location(batch.dimension, batch.origin)?;
+    batch_location(batch)?;
     Ok(())
+}
+
+/// Block producers retain their integer authority target; actor-origin drops
+/// floor a pose. A rendered float center must never become a new block index.
+pub(crate) fn batch_location(batch: &DropBatch) -> Result<(ChunkKey, u32), RuleReject> {
+    let target = match batch.source {
+        DropSource::Mining { target, .. } | DropSource::System { target, .. } => target,
+        _ => return location(batch.dimension, batch.origin),
+    };
+    if !(-64..320).contains(&target.y()) {
+        return Err(invalid());
+    }
+    let expected = [
+        target.x() as f32 + 0.5,
+        target.y() as f32 + 0.5,
+        target.z() as f32 + 0.5,
+    ];
+    if batch.origin.get() != expected {
+        return Err(invalid());
+    }
+    Ok((
+        ChunkKey {
+            dimension: batch.dimension,
+            pos: ChunkPos::new(target.x() >> 4, target.z() >> 4),
+        },
+        chunk_block_index(target),
+    ))
 }
 
 pub(crate) fn drop_key(record: &DropRecord) -> Result<ChunkKey, RuleReject> {
