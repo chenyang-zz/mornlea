@@ -1222,3 +1222,15 @@ review approved all dimensions; two observations accepted as-is (loopback-only
 entropy honestly documented; one doc comment quoting a spec-mandated exact
 wire literal). 3.6c may now consume this SHA.
 Architecture skill: no change.
+
+
+Main routes node 3.6c directly at the normative refined packet
+(plans/04-refined-nodes.md Node3.6c): exact files, worker/queue caps,
+freeze/register/record dispatch, cancel-then-CancelRun failure paths, outcome
+install fences, dialogue/memory bounds and retry schedule, named tests, Go
+oracles and rollback are all controller-frozen there, consuming accepted
+3.6a/b providers, 02 Agent/Snapshot/action ports and 2.9a ingress. No new
+packet needed; one isolated implementer owns host.rs, memory.rs and the two
+new contract test topics. Production Rust must not import, embed, shell out
+to, or FFI the Python service.
+Architecture skill: no change.

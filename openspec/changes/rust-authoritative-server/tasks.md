@@ -82,7 +82,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.5 Implement exclusive world lease, recovery and named-backup rollback.
 - [x] 3.6a Implement Agent HTTP wire and lease provider.
 - [x] 3.6b Implement frozen snapshot registry and MCP provider ([packet](plans/04-refined-nodes.md)).
-- [ ] 3.6c Implement Agent task, dialogue and memory ownership.
+- [ ] 3.6c Implement Agent task, dialogue and memory ownership ([packet](plans/04-refined-nodes.md)).
 - [ ] 3.6d Execute Rust integration with the actual Python Agent and MCP.
 - [ ] 3.7 Prove real local/remote, save/restart and Agent integration against the full inventory.
 - [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup.
