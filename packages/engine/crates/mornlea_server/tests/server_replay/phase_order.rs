@@ -179,15 +179,15 @@ const ADMIT_CHAIN: &[&str] = &[
 /// and buckets, then panel drops.
 const GATE_CHAIN: &[&str] = &["world_mutation::run", "tools::run", "drops::run"];
 
-/// The full frozen dispatch chain in source order: intake loop with inline
-/// bed entries, intent, acquire, the per-actor survival line, companion
+/// The full frozen dispatch chain in source order: intake loop with bed
+/// collection, intent, acquire, the per-actor survival line, companion
 /// motion, hostile planning through player deaths, passive deaths, companion
-/// placement, the single ordered interaction loop with its door arm, sleep
-/// settlement, drops, furnaces, the world sweep row, container moves, mining,
-/// workbench lifecycle, support and the single climate close.
+/// placement, the single ordered interaction loop with its door arm and
+/// sequence-ordered bed entries, sleep settlement, drops, furnaces, the world
+/// sweep row, container moves, mining, workbench lifecycle, support and the
+/// single climate close.
 const DISPATCH_CHAIN: &[&str] = &[
     "admit_command",
-    "admit_bed_entries",
     "companions::run",
     "world_acquisition::run",
     "player_survival::run",
@@ -208,6 +208,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "companions::run",
     "route_interaction",
     "route_door",
+    "sleep::enter",
     "sleep::settle",
     "drops::run",
     "drops::advance",
@@ -336,15 +337,19 @@ fn deferred_interactions_keep_order() {
     let body = fn_body(&code, "fn dispatch_rows");
     chain_positions(
         body,
-        &["companions::run", "route_interaction", "sleep::settle"],
+        &[
+            "companions::run",
+            "route_interaction",
+            "route_door",
+            "sleep::enter",
+            "sleep::settle",
+        ],
     );
     chain_positions(
         fn_body(&code, "fn route_interaction"),
         &["world_mutation::run", "tools::run", "drops::run"],
     );
-    // Bed entries run inline at intake ahead of intent; door toggles settle
-    // through placement geometry in the row loop.
-    chain_positions(fn_body(&code, "fn admit_bed_entries"), &["sleep::enter"]);
+    // Door toggles settle through placement geometry in the row loop.
     chain_positions(fn_body(&code, "fn route_door"), &["world_mutation::run"]);
 }
 

@@ -50,9 +50,11 @@ const PROJECTILE_SCOPE_RADIUS: u64 = 2;
 /// Scope ceiling mirroring the eight-player structural bound.
 const MAX_SCOPES: usize = 8;
 
-/// Fluid requeue delay in ticks. The tunables own this value without a
-/// contract getter, so the reducer mirrors the source default the provider
-/// tests pin at every rescan and update call.
+/// Fluid requeue delay in ticks. The tunables own this value as the private
+/// `fluid_delay` field with no contract accessor, genuinely unreadable from
+/// this module while the contract stays frozen, so the reducer mirrors the
+/// source default the provider tests pin at every rescan and update call.
+/// Widening the accessor is contract-owner work.
 const FLUID_FLOW_DELAY: u64 = 5;
 
 /// Six face neighbors in kernel slot order, mirroring the source fluid
@@ -270,7 +272,18 @@ fn dispatch_rows(
     for envelope in dispatched {
         admit_command(context, envelope)?;
     }
-    admit_bed_entries(context)?;
+    // Bed-kind internal entries are collected here for the row loop below:
+    // intake owns validation and queueing while execution waits for its
+    // phase, the two-phase shape Go pins (`ApplyPlayerCommands` validates
+    // and queues bed commands, `SettleGameplay` executes them,
+    // `packages/server/sim/entity/tick.go`).
+    let mut bed_entries: Vec<AuthorityInteraction> = context
+        .read()
+        .interactions()
+        .iter()
+        .copied()
+        .filter(|interaction| interaction.kind == InteractionKind::Bed)
+        .collect();
     companions::run(context, batch_call(RulePhase::CompanionIntent))?;
     world_acquisition::run(context, batch_call(RulePhase::Acquire))?;
     for session in active_players(context) {
@@ -321,12 +334,37 @@ fn dispatch_rows(
         route_interaction(context, &envelope);
     }
     for interaction in context.read().interactions().to_vec() {
-        // Bed entries already ran inline at intake; only door toggles settle
-        // in this loop.
         if interaction.kind != InteractionKind::Door {
             continue;
         }
         route_door(context, &interaction)?;
+    }
+    // Bed entries execute here in sequence order, threading the record the
+    // settlement batch below consumes. This is the refined table's
+    // deferred-loop placement and Go's `SettleGameplay` execution half; the
+    // intake collection above is the `ApplyPlayerCommands` half. Ordinary
+    // refusals (daytime beds, silent geometry) skip without stopping the
+    // row; any other failure stops the tick.
+    bed_entries.sort_by_key(|interaction| interaction.sequence);
+    for interaction in &bed_entries {
+        let record = context.sleep_record().clone();
+        match sleep::enter(context, &record, interaction) {
+            Ok((report, entered)) => {
+                context.set_sleep_record(entered);
+                if report.applied == 1 {
+                    // A recorded anchor means the session fell asleep: entry
+                    // is the only grow path for the reducer-owned sleeping
+                    // set.
+                    let mut sleeping = context.sleeping();
+                    if !sleeping.contains(&interaction.session) {
+                        sleeping.push(interaction.session);
+                        context.set_sleeping(sleeping);
+                    }
+                }
+            }
+            Err(ServerError::InvalidInput { .. }) => {}
+            Err(error) => return Err(error),
+        }
     }
     let record = context.sleep_record().clone();
     let sleeping = context.sleeping();
@@ -469,44 +507,6 @@ fn route_interaction(context: &mut TickContext<'_>, envelope: &CommandEnvelope) 
         return;
     }
     let _ = drops::run(context, call);
-}
-
-/// Runs every bed-kind authority interaction inline at intake, threading
-/// the sleep record across entries.
-///
-/// This deviates from the refined table's deferred-loop placement: the Rust
-/// entry is atomic (ray plus record in one call) and the internal lane has
-/// no deferred queue, so it cannot ride the interaction bag. Go validates
-/// bed commands at intake (`ApplyPlayerCommands` in
-/// `packages/server/sim/entity/tick.go`) and executes them in its
-/// interactions loop (`SettleGameplay` there); the intake half anchors this
-/// placement. Ordinary refusals (daytime beds, silent geometry) skip without
-/// stopping intake; any other failure stops the tick.
-fn admit_bed_entries(context: &mut TickContext<'_>) -> Result<(), ServerError> {
-    for interaction in context.read().interactions().to_vec() {
-        if interaction.kind != InteractionKind::Bed {
-            continue;
-        }
-        let record = context.sleep_record().clone();
-        match sleep::enter(context, &record, &interaction) {
-            Ok((report, entered)) => {
-                context.set_sleep_record(entered);
-                if report.applied == 1 {
-                    // A recorded anchor means the session fell asleep: entry
-                    // is the only grow path for the reducer-owned sleeping
-                    // set.
-                    let mut sleeping = context.sleeping();
-                    if !sleeping.contains(&interaction.session) {
-                        sleeping.push(interaction.session);
-                        context.set_sleeping(sleeping);
-                    }
-                }
-            }
-            Err(ServerError::InvalidInput { .. }) => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
 }
 
 /// Settles one authority-owned door toggle through placement geometry. A
