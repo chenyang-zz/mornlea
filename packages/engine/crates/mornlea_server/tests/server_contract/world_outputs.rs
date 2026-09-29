@@ -400,7 +400,7 @@ fn invalid_or_stale_container_compound_preserves_every_output_lane() {
 }
 
 #[test]
-fn ordered_container_patches_see_prior_scratch_and_max_revision_noop_is_clean() {
+fn ordered_container_patches_preserve_explicit_durable_touch() {
     for revision in [8, u64::MAX] {
         let mut authority = state();
         let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
@@ -409,12 +409,20 @@ fn ordered_container_patches_see_prior_scratch_and_max_revision_noop_is_clean() 
             .read()
             .container(reference(ContainerKind::Chest, 5, 7))
             .unwrap();
-        ctx.stage(RuleEffect::Container {
+        let snapshot = ctx.snapshot_state(world());
+        let equal = RuleEffect::Container {
             before: before.clone(),
             after: before.clone(),
-        })
-        .unwrap();
-        assert_eq!(ctx.snapshot_state(world()).chunks[0].2, revision);
+        };
+        // Equal slots still mean an explicit successful container write; an
+        // idle furnace avoids staging this patch in the first place.
+        if revision == u64::MAX {
+            assert_eq!(ctx.stage(equal), Err(RuleReject::StaleObservation));
+            assert_eq!(ctx.snapshot_state(world()), snapshot);
+        } else {
+            ctx.stage(equal).unwrap();
+            assert_eq!(ctx.snapshot_state(world()).chunks[0].2, 9);
+        }
         let mut after = before.clone();
         after.slots = ContainerSlots::Chest([Default::default(); 27]);
         let effects = RuleEffect::Compound(vec![
@@ -429,7 +437,7 @@ fn ordered_container_patches_see_prior_scratch_and_max_revision_noop_is_clean() 
         ]);
         if revision == u64::MAX {
             assert!(ctx.stage(effects).is_err());
-            assert_eq!(ctx.snapshot_state(world()).chunks[0].2, revision);
+            assert_eq!(ctx.snapshot_state(world()), snapshot);
         } else {
             ctx.stage(effects).unwrap();
             assert_eq!(ctx.snapshot_state(world()).chunks[0].2, 9);

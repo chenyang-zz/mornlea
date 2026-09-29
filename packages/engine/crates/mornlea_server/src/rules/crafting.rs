@@ -1254,6 +1254,18 @@ fn close_bench(ctx: &mut TickContext<'_>, actor: ActorKey) -> bool {
     if before.crafting_size != CraftingSize::Workbench {
         return false;
     }
+    let Some(after) = closed_inventory(before) else {
+        return false;
+    };
+    stage_patch(ctx, actor, before, after).is_ok()
+}
+
+/// Previews only the extended bench cells before returning to a personal grid.
+/// A failed credit leaves the caller's record unchanged.
+pub(crate) fn closed_inventory(before: InventoryRecord) -> Option<InventoryRecord> {
+    if before.crafting_size != CraftingSize::Workbench {
+        return Some(before);
+    }
     let mut slots = before.slots;
     for cell in PERSONAL_GRID_EXTENT..CRAFTING_GRID_SLOTS {
         let held = before.crafting[cell];
@@ -1262,7 +1274,7 @@ fn close_bench(ctx: &mut TickContext<'_>, actor: ActorKey) -> bool {
         }
         let (next, leftover) = add_stack(&slots, held);
         if leftover.count != 0 {
-            return false;
+            return None;
         }
         slots = next;
     }
@@ -1272,7 +1284,7 @@ fn close_bench(ctx: &mut TickContext<'_>, actor: ActorKey) -> bool {
         after.crafting[cell] = ItemStack::default();
     }
     after.crafting_size = CraftingSize::Personal;
-    stage_patch(ctx, actor, before, after).is_ok()
+    Some(after)
 }
 
 struct RayHit {

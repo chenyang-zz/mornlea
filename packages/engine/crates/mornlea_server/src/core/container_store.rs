@@ -146,7 +146,8 @@ impl ContainerState {
                 if !next.is_valid() {
                     return Err(invalid());
                 }
-                self.dirty |= next != self.chests[index];
+                // An accepted patch is a durable source touch even when its slots match.
+                self.dirty = true;
                 self.chests[index] = next;
             }
             (
@@ -168,7 +169,8 @@ impl ContainerState {
                 if !next.is_valid() {
                     return Err(invalid());
                 }
-                self.dirty |= next != self.furnaces[index];
+                // Preserve the source revision barrier for inventory-only transfers.
+                self.dirty = true;
                 self.furnaces[index] = next;
             }
             _ => return Err(invalid()),

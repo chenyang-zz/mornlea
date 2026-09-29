@@ -4,7 +4,7 @@
 //! inventory debit and credit policy: inventory `0..35`, furnace input `36`,
 //! fuel `37` and output `38`, chest cells `36..62`. Crafting views (grid
 //! `0..8`, inventory `9..44`) belong to the crafting provider, which also
-//! owns workbench opens; container panel drops belong to the drops provider.
+//! owns workbench opens; this provider owns container panel drops.
 //!
 //! Mirrored Go rows, each cited at its site:
 //!
@@ -33,19 +33,12 @@
 //! - `packages/server/sim/entity/tick.go` (`CommandCloseFurnace`): closing a
 //!   viewed container clears the view.
 //!
-/// Leases and containers live in the tick staging overlay, never in
-/// pass-local memory: the open history is the deferred queue itself (a settled
-/// open authorizes later moves until a settled close), the first settled move
-/// binds the exact reference by staging a viewer lease, and every container
-/// write stages a container delta. Staged container deltas are what the serial
-/// reducer commits to world at overlay commit, and the staged viewer overlay
-/// is what the reducer commits into the authority view store at the same
-/// boundary; the next tick reads committed leases through the overlay-first
-/// viewer getter. Per-tick reach revalidation of live viewers stays with the
-/// publication path, mirroring the Go publish split.
+/// The context owns the complete net viewer set. Open binds the exact Ready
+/// record immediately, and close removes it; the reducer commits the set and
+/// prunes retired sessions. Publication owns later reach invalidation.
 use mornlea_domain::{
     BlockPos, Command, CommandEnvelope, ContainerKind, ContainerMove, ContainerRef, Dimension,
-    LookAngles, PartialMove, StackSource, StackView,
+    LookAngles, PartialMove, RejectReason, StackSource, StackView,
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
@@ -53,9 +46,10 @@ use mornlea_storage::ItemStack;
 
 use crate::contracts::{
     ActorKey, ActorLifecycle, ActorRecord, BlockObservation, ContainerRecord, ContainerSlots,
-    InventoryPatch, InventoryRecord, PhaseReport, RuleCall, RuleEffect, RulePhase, ServerError,
-    SessionKey, ViewLease,
+    InventoryPatch, InventoryRecord, PhaseReport, RuleCall, RuleEffect, RulePhase, RuleReject,
+    ServerError, SessionKey, ViewLease,
 };
+use crate::rules::{crafting, drops};
 use crate::state::{AuthorityReadView, TickContext};
 
 /// Unified player inventory length: hotbar `0..8` plus backpack `9..35`
@@ -110,12 +104,12 @@ const CHEST_BLOCK: u16 = 11;
 /// of which the call shape names.
 ///
 /// Admission (`RulePhase::PlayerCommand` with a command) routes the container
-/// family — open, close, whole moves and container-view partial and
-/// quick moves — into the deferred container phase and reports applied. It
+/// family — open, close, whole moves, container-view partial and quick moves,
+/// and container drops — into the deferred container phase and reports applied. It
 /// stages nothing observable, so a deferred move settles against the state
 /// the drain sees, including a generation the chunk replaced after admission.
-/// Every other command kind, including the inventory and crafting stack views
-/// and the container panel drop, belongs to its own provider and refuses
+/// Every other command kind, including the inventory and crafting stack views,
+/// belongs to its own provider and refuses
 /// without effect.
 ///
 /// Drain (`RulePhase::ContainerMove` with no command, actor or internal
@@ -146,7 +140,9 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
     let owned = match envelope.command() {
         Command::OpenContainer(_) | Command::CloseContainer | Command::MoveContainer(_) => true,
         Command::MovePartial(partial) => matches!(partial.view(), StackView::Container(_)),
-        Command::QuickMove(source) => matches!(source.view(), StackView::Container(_)),
+        Command::QuickMove(source) | Command::DropStack(source) => {
+            matches!(source.view(), StackView::Container(_))
+        }
         _ => false,
     };
     if !owned {
@@ -165,8 +161,7 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
 
 /// The single settlement pass over the deferred container queue in admission
 /// order. Each envelope settles against the overlay the earlier envelopes
-/// left and records its outcome, so the settled open history authorizes moves,
-/// the first settled move binds the viewer, and a settled close clears it.
+/// left and records its outcome; open binds the exact view and close clears it.
 /// Production runs this once per tick with a fresh staging context.
 fn drain(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, ServerError> {
     if call.actor.is_some() || call.command.is_some() || call.internal.is_some() {
@@ -176,16 +171,13 @@ fn drain(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
     let mut examined = 0;
     let mut applied = 0;
     let mut rejected = 0;
-    let mut history: Vec<(CommandEnvelope, bool)> = Vec::with_capacity(queued.len());
     for envelope in queued {
         examined += 1;
-        let settled = settle(ctx, &history, envelope);
-        if settled {
+        if settle_command(ctx, &envelope).is_ok() {
             applied += 1;
         } else {
             rejected += 1;
         }
-        history.push((envelope, settled));
     }
     Ok(PhaseReport {
         examined,
@@ -195,53 +187,77 @@ fn drain(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
     })
 }
 
-/// Reports whether one session holds an open view behind the settled queue
-/// history: only a successfully settled open authorizes, and only until a
-/// successfully settled close, which is the queue-ordered form of the Go
-/// viewed flag (`session.viewContainer` in
-/// `packages/server/sim/entity/engine.go`). Moves never flip it; a refused
-/// open or close leaves it exactly where it was.
-fn view_open(history: &[(CommandEnvelope, bool)], session: SessionKey) -> bool {
-    let mut open = false;
-    for (prior, applied) in history {
-        if !applied || prior.session() != session.get() {
-            continue;
-        }
-        match prior.command() {
-            Command::OpenContainer(_) => open = true,
-            Command::CloseContainer => open = false,
-            _ => {}
-        }
-    }
-    open
-}
-
-/// Settles one queued envelope against the current staged state, with the
-/// settled outcomes of the earlier queue as the open history. Every refusal
-/// path stages nothing, so the observable state hash is untouched.
-fn settle(
+/// Settles one command against the current authority view without queue history.
+/// Every refusal leaves the inventory, container, drops and lease unchanged.
+pub fn settle_command(
     ctx: &mut TickContext<'_>,
-    history: &[(CommandEnvelope, bool)],
-    envelope: CommandEnvelope,
-) -> bool {
-    match envelope.command() {
-        Command::OpenContainer(look) => settle_open(ctx, envelope, look),
-        Command::CloseContainer => settle_close(ctx, envelope),
-        Command::MoveContainer(movement) => settle_whole(ctx, history, envelope, movement),
+    envelope: &CommandEnvelope,
+) -> Result<PhaseReport, RuleReject> {
+    let session = SessionKey::from_raw(envelope.session())
+        .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    let supported = match envelope.command() {
+        Command::OpenContainer(_) | Command::CloseContainer | Command::MoveContainer(_) => true,
+        Command::MovePartial(partial) => matches!(partial.view(), StackView::Container(_)),
+        Command::QuickMove(source) | Command::DropStack(source) => {
+            matches!(source.view(), StackView::Container(_))
+        }
+        _ => false,
+    };
+    if !supported {
+        return Err(RuleReject::Wire(RejectReason::InvalidInput));
+    }
+    if matches!(
+        envelope.command(),
+        Command::MoveContainer(_)
+            | Command::MovePartial(_)
+            | Command::QuickMove(_)
+            | Command::DropStack(_)
+    ) {
+        let view = ctx.read();
+        let actor = ActorKey::Player(session);
+        let record = view
+            .actor(actor)
+            .filter(|record| record.lifecycle == ActorLifecycle::Active)
+            .ok_or(RuleReject::Wire(RejectReason::PlayerNotReady))?;
+        if record.dimension != Dimension::OVERWORLD {
+            return Err(RuleReject::Wire(RejectReason::InvalidInput));
+        }
+        view.inventory(actor)
+            .ok_or(RuleReject::Wire(RejectReason::PlayerNotReady))?;
+    }
+    let accepted = match envelope.command() {
+        Command::OpenContainer(look) => settle_open(ctx, session, look)?,
+        Command::CloseContainer => settle_close(ctx, session)?,
+        Command::MoveContainer(movement) => settle_whole(ctx, *envelope, movement)?,
         Command::MovePartial(partial) => {
             let StackView::Container(reference) = partial.view() else {
-                return false;
+                return Err(RuleReject::Wire(RejectReason::InvalidInput));
             };
-            settle_partial(ctx, history, envelope, reference, partial)
+            settle_partial(ctx, *envelope, reference, partial)?
         }
         Command::QuickMove(source) => {
             let StackView::Container(reference) = source.view() else {
-                return false;
+                return Err(RuleReject::Wire(RejectReason::InvalidInput));
             };
-            settle_quick(ctx, history, envelope, reference, source)
+            settle_quick(ctx, *envelope, reference, source)?
         }
-        _ => false,
+        Command::DropStack(source) => {
+            let StackView::Container(reference) = source.view() else {
+                return Err(RuleReject::Wire(RejectReason::InvalidInput));
+            };
+            return settle_drop(ctx, *envelope, reference, source);
+        }
+        _ => return Err(RuleReject::Wire(RejectReason::InvalidInput)),
+    };
+    if !accepted {
+        return Err(RuleReject::Wire(RejectReason::InvalidInput));
     }
+    Ok(PhaseReport {
+        examined: 1,
+        applied: 1,
+        carried: 0,
+        rejected: 0,
+    })
 }
 
 /// The viewer basis one settlement needs: an active player in the container
@@ -273,30 +289,6 @@ fn viewer_basis(ctx: &TickContext<'_>, envelope: CommandEnvelope) -> Option<View
     })
 }
 
-/// Authorizes one move reference for a viewer: the settled queue history must
-/// hold an open with no later close, and the first settled move binds the
-/// exact reference into the viewer overlay while later moves must name that
-/// same view. The private lease fields compare through their accessors only.
-fn bind_view(
-    ctx: &mut TickContext<'_>,
-    history: &[(CommandEnvelope, bool)],
-    session: SessionKey,
-    reference: ContainerRef,
-) -> bool {
-    if !view_open(history, session) {
-        return false;
-    }
-    match ctx.read().viewer(session) {
-        None => ctx
-            .stage(RuleEffect::Viewer {
-                session,
-                view: Some(ViewLease::new(session, reference)),
-            })
-            .is_ok(),
-        Some(lease) => lease.reference() == reference,
-    }
-}
-
 /// The move basis one transfer needs: the viewer plus the live container the
 /// reference names. The lookup key carries chunk, kind, slot and generation,
 /// so a retired generation or an unknown slot misses exactly like the Go
@@ -307,16 +299,21 @@ struct MoveBasis {
 }
 
 fn move_basis(
-    ctx: &mut TickContext<'_>,
-    history: &[(CommandEnvelope, bool)],
+    ctx: &TickContext<'_>,
     envelope: CommandEnvelope,
     reference: ContainerRef,
 ) -> Option<MoveBasis> {
     let viewer = viewer_basis(ctx, envelope)?;
-    if !bind_view(ctx, history, viewer.session, reference) {
+    let view = ctx.read();
+    if view.viewer(viewer.session).map(|lease| lease.reference()) != Some(reference)
+        || !view.ready_chunk(crate::contracts::ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: reference.chunk(),
+        })
+    {
         return None;
     }
-    let stored = ctx.read().container(reference)?;
+    let stored = view.container(reference)?;
     match (&stored.slots, reference.kind()) {
         (ContainerSlots::Chest(_), ContainerKind::Chest)
         | (ContainerSlots::Furnace { .. }, ContainerKind::Furnace) => {}
@@ -329,57 +326,83 @@ fn move_basis(
 /// furnace or a chest block within reach. A workbench hit refuses without
 /// effect — the workbench is an ordinary block whose opens only widen the
 /// crafting grid, owned by the crafting provider — as does a miss or an
-/// unobserved cell the authority cannot certify. A successful open authorizes
-/// the viewer's later moves through the settled queue history, mirroring the
-/// Go open establishing the single viewed container.
-fn settle_open(ctx: &mut TickContext<'_>, envelope: CommandEnvelope, look: LookAngles) -> bool {
-    let Some(session) = SessionKey::from_raw(envelope.session()) else {
-        return false;
-    };
+/// unobserved cell the authority cannot certify. A successful open immediately
+/// owns the single viewed container. The Ready slot binds now,
+/// so a later move cannot choose a different live record.
+fn settle_open(
+    ctx: &mut TickContext<'_>,
+    session: SessionKey,
+    look: LookAngles,
+) -> Result<bool, RuleReject> {
     let actor = ActorKey::Player(session);
     let view = ctx.read();
     let record = match view.actor(actor) {
         Some(record) if record.lifecycle == ActorLifecycle::Active => record.clone(),
-        _ => return false,
+        _ => return Err(RuleReject::Wire(RejectReason::PlayerNotReady)),
     };
+    view.inventory(actor)
+        .ok_or(RuleReject::Wire(RejectReason::PlayerNotReady))?;
+    if record.dimension != Dimension::OVERWORLD {
+        return Err(RuleReject::Wire(RejectReason::InvalidInput));
+    }
     let basis = match actor_basis(&view, &record) {
         Some(basis) => basis,
-        None => return false,
+        None => return Err(RuleReject::Wire(RejectReason::InvalidInput)),
     };
     let direction = look_direction(look.yaw(), look.pitch());
     let hit = match cast_ray(&view, basis.dimension, basis.eye, direction, basis.reach) {
         Ok(hit) => hit,
-        Err(_) => return false,
+        Err(RayFailure::Unavailable) => return Err(RuleReject::Wire(RejectReason::ChunkNotReady)),
+        Err(RayFailure::Invalid) => return Err(RuleReject::Wire(RejectReason::InvalidRay)),
     };
-    match hit.map(|found| found.observed.block) {
-        // A successful open authorizes the viewer's later moves through the
-        // settled queue history; the open itself stages nothing because the
-        // envelope carries no reference to bind.
-        Some(FURNACE_BLOCK) | Some(CHEST_BLOCK) => true,
-        // Any other hit refuses without effect: the workbench (`core.WorkbenchID`)
-        // is an ordinary block rather than a container, so its opens stay with
-        // the crafting provider, and any other block was never a container.
-        _ => false,
+    let hit = hit.ok_or(RuleReject::Wire(RejectReason::NoTarget))?;
+    let kind = match hit.observed.block {
+        FURNACE_BLOCK => ContainerKind::Furnace,
+        CHEST_BLOCK => ContainerKind::Chest,
+        _ => return Err(RuleReject::Wire(RejectReason::NoTarget)),
+    };
+    if !view.ready_chunk(hit.observed.key) {
+        return Err(RuleReject::Wire(RejectReason::ChunkNotReady));
     }
+    let stored = view
+        .container_at(Dimension::OVERWORLD, hit.observed.pos, kind)
+        .ok_or(RuleReject::Wire(RejectReason::NoTarget))?;
+    if view
+        .runtime(actor)
+        .and_then(|runtime| runtime.controls)
+        .is_some_and(|control| control.actions().sneaking)
+    {
+        return Err(RuleReject::Wire(RejectReason::InvalidInput));
+    }
+    ctx.stage(RuleEffect::Viewer {
+        session,
+        view: Some(ViewLease::new(session, stored.reference)),
+    })?;
+    Ok(true)
 }
 
 /// Settles one close: the bench repack preview runs over the current pack
 /// and grid, and only a successful preview clears the staged lease, mirroring
 /// the Go close row that refuses while the workbench grid cannot reclaim.
-/// The preview mutates nothing; the grid stays for the crafting provider. The
-/// settled close reads as closed to every later move in the queue history.
-fn settle_close(ctx: &mut TickContext<'_>, envelope: CommandEnvelope) -> bool {
-    let Some(viewer) = viewer_basis(ctx, envelope) else {
-        return false;
-    };
-    if !can_repack(&viewer.inventory.slots, &viewer.inventory.crafting) {
-        return false;
+/// The preview mutates nothing until the inventory and lease stage together.
+fn settle_close(ctx: &mut TickContext<'_>, session: SessionKey) -> Result<bool, RuleReject> {
+    let actor = ActorKey::Player(session);
+    let mut effects = Vec::with_capacity(2);
+    if let Some(before) = ctx.read().inventory(actor).copied() {
+        let after = crafting::closed_inventory(before)
+            .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+        if after != before {
+            effects.push(RuleEffect::Inventory(InventoryPatch::try_new(
+                actor, before, after,
+            )?));
+        }
     }
-    ctx.stage(RuleEffect::Viewer {
-        session: viewer.session,
+    effects.push(RuleEffect::Viewer {
+        session,
         view: None,
-    })
-    .is_ok()
+    });
+    ctx.stage(RuleEffect::Compound(effects))?;
+    Ok(true)
 }
 
 /// Settles one whole-stack container move, the exact `moveChestStack` /
@@ -389,13 +412,11 @@ fn settle_close(ctx: &mut TickContext<'_>, envelope: CommandEnvelope) -> bool {
 /// preview.
 fn settle_whole(
     ctx: &mut TickContext<'_>,
-    history: &[(CommandEnvelope, bool)],
     envelope: CommandEnvelope,
     movement: ContainerMove,
-) -> bool {
-    let Some(basis) = move_basis(ctx, history, envelope, movement.container()) else {
-        return false;
-    };
+) -> Result<bool, RuleReject> {
+    let basis = move_basis(ctx, envelope, movement.container())
+        .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
     let from = movement.from() as usize;
     let to = movement.to() as usize;
     let computed = match &basis.stored.slots {
@@ -425,10 +446,9 @@ fn settle_whole(
             })
         }
     };
-    let Some((inventory, slots)) = computed else {
-        return false;
-    };
-    commit(ctx, &basis.viewer, &basis.stored, inventory, slots)
+    let (inventory, slots) = computed.ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    commit(ctx, &basis.viewer, &basis.stored, inventory, slots)?;
+    Ok(true)
 }
 
 /// Settles one container-view partial move, the exact
@@ -438,14 +458,12 @@ fn settle_whole(
 /// admits the index.
 fn settle_partial(
     ctx: &mut TickContext<'_>,
-    history: &[(CommandEnvelope, bool)],
     envelope: CommandEnvelope,
     reference: ContainerRef,
     partial: PartialMove,
-) -> bool {
-    let Some(basis) = move_basis(ctx, history, envelope, reference) else {
-        return false;
-    };
+) -> Result<bool, RuleReject> {
+    let basis =
+        move_basis(ctx, envelope, reference).ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
     let from = partial.from() as usize;
     let to = partial.to() as usize;
     let computed = match &basis.stored.slots {
@@ -479,10 +497,9 @@ fn settle_partial(
             )
         }
     };
-    let Some((inventory, slots)) = computed else {
-        return false;
-    };
-    commit(ctx, &basis.viewer, &basis.stored, inventory, slots)
+    let (inventory, slots) = computed.ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    commit(ctx, &basis.viewer, &basis.stored, inventory, slots)?;
+    Ok(true)
 }
 
 /// Settles one container-view quick move, the exact `quickMoveChestStack` /
@@ -491,14 +508,12 @@ fn settle_partial(
 /// kind's target order.
 fn settle_quick(
     ctx: &mut TickContext<'_>,
-    history: &[(CommandEnvelope, bool)],
     envelope: CommandEnvelope,
     reference: ContainerRef,
     source: StackSource,
-) -> bool {
-    let Some(basis) = move_basis(ctx, history, envelope, reference) else {
-        return false;
-    };
+) -> Result<bool, RuleReject> {
+    let basis =
+        move_basis(ctx, envelope, reference).ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
     let from = source.slot() as usize;
     let computed = match &basis.stored.slots {
         ContainerSlots::Chest(cells) => quick_chest(&basis.viewer.inventory, cells, from)
@@ -527,36 +542,103 @@ fn settle_quick(
             })
         }
     };
-    let Some((inventory, slots)) = computed else {
-        return false;
+    let (inventory, slots) = computed.ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    commit(ctx, &basis.viewer, &basis.stored, inventory, slots)?;
+    Ok(true)
+}
+
+/// Debits the current unified source and publishes a foot-position drop in
+/// the same compound as the durable container touch.
+fn settle_drop(
+    ctx: &mut TickContext<'_>,
+    envelope: CommandEnvelope,
+    reference: ContainerRef,
+    source: StackSource,
+) -> Result<PhaseReport, RuleReject> {
+    let basis =
+        move_basis(ctx, envelope, reference).ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    let slot = usize::from(source.slot());
+    let mut inventory = basis.viewer.inventory;
+    let mut slots = basis.stored.slots.clone();
+    let held = match &mut slots {
+        ContainerSlots::Chest(cells) => {
+            let held = chest_slot(&inventory.slots, cells, slot)
+                .ok_or(RuleReject::Wire(RejectReason::InvalidSlot))?;
+            if !set_chest_slot(&mut inventory.slots, cells, slot, ItemStack::default()) {
+                return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+            }
+            held
+        }
+        ContainerSlots::Furnace {
+            slots,
+            fuel,
+            progress,
+        } => {
+            let mut view = FurnaceView {
+                input: slots[0],
+                fuel_slot: slots[1],
+                output: slots[2],
+                fuel: *fuel,
+                progress: *progress,
+            };
+            let held = furnace_slot(&inventory.slots, &view, slot)
+                .ok_or(RuleReject::Wire(RejectReason::InvalidSlot))?;
+            if !set_furnace_slot(&mut inventory.slots, &mut view, slot, ItemStack::default()) {
+                return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+            }
+            *slots = [view.input, view.fuel_slot, view.output];
+            *fuel = view.fuel;
+            *progress = view.progress;
+            held
+        }
     };
-    commit(ctx, &basis.viewer, &basis.stored, inventory, slots)
+    if held.count == 0 {
+        return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+    }
+    let batch = drops::prepare_player_drop(ctx, basis.viewer.session, envelope.sequence(), held)?;
+    let patch = InventoryPatch::try_new(basis.viewer.actor, basis.viewer.inventory, inventory)?;
+    let next = ContainerRecord {
+        reference: basis.stored.reference,
+        revision: basis.stored.revision,
+        slots,
+    };
+    ctx.stage(RuleEffect::Compound(vec![
+        RuleEffect::Inventory(patch),
+        RuleEffect::Container {
+            before: basis.stored,
+            after: next,
+        },
+        RuleEffect::Drops(batch),
+    ]))?;
+    Ok(PhaseReport {
+        examined: 1,
+        applied: 1,
+        carried: 0,
+        rejected: 0,
+    })
 }
 
 /// Commits one computed settlement: the final validity sweep and the bench
 /// repack preview run over the copies first, and only then do the inventory
 /// patch and the container delta stage together. Staged container deltas are
-/// what the serial reducer commits to world at overlay commit. A skipped
-/// stage on an unchanged side keeps the settlement exact without no-ops.
+/// what the serial reducer commits to world at overlay commit. An equal slot
+/// record still stages a durable source touch for inventory-only transfers.
 fn commit(
     ctx: &mut TickContext<'_>,
     viewer: &ViewerBasis,
     stored: &ContainerRecord,
     inventory: InventoryRecord,
     slots: ContainerSlots,
-) -> bool {
+) -> Result<(), RuleReject> {
     if !stacks_valid(&inventory, &slots) {
-        return false;
+        return Err(RuleReject::Wire(RejectReason::InvalidInput));
     }
     if !can_repack(&inventory.slots, &inventory.crafting) {
-        return false;
+        return Err(RuleReject::Wire(RejectReason::InvalidInput));
     }
     let mut effects = Vec::with_capacity(2);
     if inventory != viewer.inventory {
-        let patch = match InventoryPatch::try_new(viewer.actor, viewer.inventory, inventory) {
-            Ok(patch) => patch,
-            Err(_) => return false,
-        };
+        let patch = InventoryPatch::try_new(viewer.actor, viewer.inventory, inventory)?;
         effects.push(RuleEffect::Inventory(patch));
     }
     let next = ContainerRecord {
@@ -564,14 +646,12 @@ fn commit(
         revision: stored.revision,
         slots,
     };
-    if next != *stored {
-        effects.push(RuleEffect::Container {
-            before: stored.clone(),
-            after: next,
-        });
-    }
+    effects.push(RuleEffect::Container {
+        before: stored.clone(),
+        after: next,
+    });
     // A rejected durable container write must not spend the source inventory.
-    ctx.stage(RuleEffect::Compound(effects)).is_ok()
+    ctx.stage(RuleEffect::Compound(effects))
 }
 
 /// Final validity sweep over the computed sides, the `Valid` conjunction the
@@ -1320,6 +1400,11 @@ struct RayHit {
     observed: BlockObservation,
 }
 
+enum RayFailure {
+    Unavailable,
+    Invalid,
+}
+
 /// Walks the numerical ray kernel batch by batch and classifies every
 /// traversed cell against the authority view, the same walk the accepted
 /// resolvers perform: an unobserved cell refuses because the authority cannot
@@ -1331,13 +1416,12 @@ fn cast_ray(
     origin: [f32; 3],
     direction: [f32; 3],
     reach: f32,
-) -> Result<Option<RayHit>, ServerError> {
-    const REFUSAL: ServerError = ServerError::InvalidInput { field: "container" };
+) -> Result<Option<RayHit>, RayFailure> {
     let length =
         (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
             .sqrt();
     if !length.is_finite() || length < 1e-6 {
-        return Err(REFUSAL);
+        return Err(RayFailure::Invalid);
     }
     let normalized = [
         direction[0] / length,
@@ -1349,13 +1433,15 @@ fn cast_ray(
         direction: normalized,
         maximum: reach,
     })
-    .map_err(|_| REFUSAL)?;
+    .map_err(|_| RayFailure::Invalid)?;
     loop {
-        let batch = NativeRaycast.next_batch(&mut cursor).map_err(|_| REFUSAL)?;
+        let batch = NativeRaycast
+            .next_batch(&mut cursor)
+            .map_err(|_| RayFailure::Invalid)?;
         for record in batch.records() {
             let cell = BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
             match view.observation(dimension, cell) {
-                None => return Err(REFUSAL),
+                None => return Err(RayFailure::Unavailable),
                 Some(observed) if observed.block == AIR => {}
                 Some(observed) => return Ok(Some(RayHit { observed })),
             }

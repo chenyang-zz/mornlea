@@ -20,14 +20,15 @@ use std::collections::BTreeMap;
 use super::*;
 use mornlea_domain::{
     BlockPos, ChunkPos, Command, CommandEnvelope, CommandEnvelopeParts, ContainerKind,
-    ContainerMove, ContainerRef, Dimension, FiniteVec3, LookAngles, MotionState, MotionStateParts,
-    PartialMove, PlayerId, StackSource, StackView, SurvivalState, SurvivalStateParts,
+    ContainerMove, ContainerRef, CraftingSize, Dimension, FiniteVec3, HeldActions, LookAngles,
+    MotionState, MotionStateParts, Movement, PartialMove, PlayerControl, PlayerControlParts,
+    PlayerId, StackSource, StackView, SurvivalState, SurvivalStateParts,
 };
 use mornlea_protocol::{LoginStart, admit_login};
 use mornlea_server::contracts::{
-    ActorBody, ActorLifecycle, ActorRecord, BlockObservation, ChunkKey, ContainerRecord,
-    ContainerSlots, EnvironmentState, FixtureState, InventoryRecord, RuleEffect, RulePhase,
-    RuleTunables, SessionKey, SleepState, TransportKind, WorkState,
+    ActorAux, ActorBody, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation, ChunkKey,
+    ContainerRecord, ContainerSlots, EnvironmentState, FixtureState, InventoryRecord, RuleEffect,
+    RulePhase, RuleTunables, SessionKey, SleepState, TransportKind, WorkState,
 };
 use mornlea_server::rules::containers as provider;
 use mornlea_storage::{ItemStack, PlayerLocation, PlayerSave};
@@ -154,13 +155,13 @@ fn observation(pos: BlockPos, block: u16) -> BlockObservation {
 }
 
 fn chest_ref(slot: u8, generation: u32) -> ContainerRef {
-    ContainerRef::try_new(ChunkPos::new(0, 0), ContainerKind::Chest, slot, generation)
+    ContainerRef::try_new(ChunkPos::new(0, -1), ContainerKind::Chest, slot, generation)
         .expect("chest reference")
 }
 
 fn furnace_ref(slot: u8, generation: u32) -> ContainerRef {
     ContainerRef::try_new(
-        ChunkPos::new(0, 0),
+        ChunkPos::new(0, -1),
         ContainerKind::Furnace,
         slot,
         generation,
@@ -197,6 +198,91 @@ fn furnace_record(
             progress,
         },
     }
+}
+
+/// Installs the fixture's exact block and fixed slot in a compact Ready chunk.
+/// Reinstallation preserves other live slots in the same chunk and replaces
+/// a reused slot's generation before the command drains.
+fn install_container(context: &mut TickContext<'_>, record: ContainerRecord) {
+    use mornlea_domain::chunk_block_index;
+    use mornlea_server::core::world::ReadyChunk;
+    use mornlea_storage::{ChestSlot, Chunk, ContainerSnapshot, FurnaceSlot, StorageKind};
+
+    let key = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: record.reference.chunk(),
+    };
+    let mut records: Vec<_> = context
+        .read()
+        .container_refs(key)
+        .into_iter()
+        .filter(|reference| {
+            reference.kind() != record.reference.kind()
+                || reference.slot() != record.reference.slot()
+        })
+        .filter_map(|reference| context.read().container(reference))
+        .collect();
+    records.push(record);
+    let mut chunk = Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    };
+    for record in records {
+        let slot = usize::from(record.reference.slot());
+        let pos = BlockPos::new(slot as i32, 65, -1);
+        let index = chunk_block_index(pos) as usize;
+        let section = &mut chunk.sections[index / 4096];
+        if section.kind == StorageKind::Single {
+            *section = ContainerSnapshot {
+                kind: StorageKind::Direct,
+                bits: 15,
+                single: 0,
+                palette: vec![],
+                packed: vec![0; 1024],
+            };
+        }
+        let block = match record.slots {
+            ContainerSlots::Chest(items) => {
+                chunk.chests[slot] = ChestSlot {
+                    active: true,
+                    generation: record.reference.generation(),
+                    block_index: index as u32,
+                    items,
+                };
+                CHEST_BLOCK
+            }
+            ContainerSlots::Furnace {
+                slots,
+                fuel,
+                progress,
+            } => {
+                chunk.furnaces[slot] = FurnaceSlot {
+                    active: true,
+                    generation: record.reference.generation(),
+                    block_index: index as u32,
+                    input: slots[0],
+                    fuel: slots[1],
+                    output: slots[2],
+                    burn_ticks: fuel as u16,
+                    progress_ticks: progress as u8,
+                };
+                FURNACE_BLOCK
+            }
+        };
+        section.packed[(index % 4096) / 4] |= u64::from(block) << ((index % 4) * 15);
+    }
+    context.preload_ready_chunk(ReadyChunk::try_new(key, 1, 1, chunk).unwrap());
 }
 
 fn envelope(session: SessionKey, sequence: u64, command: Command) -> CommandEnvelope {
@@ -330,6 +416,483 @@ fn baseline_observed(state: &FixtureState) -> Observed {
     }
 }
 
+fn air_chunk(context: &mut TickContext<'_>, key: ChunkKey) {
+    use mornlea_server::core::world::ReadyChunk;
+    use mornlea_storage::{Chunk, ContainerSnapshot, StorageKind};
+    let chunk = Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    };
+    context.preload_ready_chunk(ReadyChunk::try_new(key, 1, 1, chunk).unwrap());
+}
+
+fn fixture_world() -> mornlea_domain::WorldState {
+    mornlea_domain::WorldState::try_new(mornlea_domain::WorldStateParts {
+        day_phase_offset: 0,
+        world_time_ticks: 0,
+        weather: mornlea_domain::Weather::Clear,
+        season: mornlea_domain::Season::Spring,
+        season_progress: 0,
+        temperature: 0,
+    })
+    .unwrap()
+}
+
+fn drop_from(
+    session: SessionKey,
+    sequence: u64,
+    reference: ContainerRef,
+    slot: u8,
+) -> CommandEnvelope {
+    envelope(
+        session,
+        sequence,
+        Command::DropStack(StackSource::try_new(StackView::Container(reference), slot).unwrap()),
+    )
+}
+
+#[test]
+fn lease_close_and_commit_do_not_resurrect_previous_view() {
+    let session = player_session(91, "lease-commit");
+    let target = BlockPos::new(0, 65, -1);
+    let reference = chest_ref(0, 1);
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    {
+        let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+        viewer_scene(&mut ctx, session, (target, CHEST_BLOCK), &[]);
+        install_container(&mut ctx, chest_record(0, 1, &[(0, stack(ITEM_DIRT, 2))]));
+        provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+        let leases = ctx.viewer_leases();
+        assert_eq!(leases[&session].reference(), reference);
+        drop(ctx);
+        authority.commit_viewers(leases);
+    }
+    {
+        let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+        viewer_scene(&mut ctx, session, (target, CHEST_BLOCK), &[]);
+        install_container(&mut ctx, chest_record(0, 1, &[(0, stack(ITEM_DIRT, 2))]));
+        assert_eq!(ctx.read().viewer(session).unwrap().reference(), reference);
+        provider::settle_command(&mut ctx, &envelope(session, 2, Command::CloseContainer)).unwrap();
+        assert!(ctx.read().viewer(session).is_none());
+        assert!(
+            provider::settle_command(
+                &mut ctx,
+                &envelope(
+                    session,
+                    3,
+                    Command::MoveContainer(
+                        ContainerMove::try_new(
+                            reference.chunk(),
+                            ContainerKind::Chest,
+                            0,
+                            1,
+                            36,
+                            0
+                        )
+                        .unwrap()
+                    )
+                )
+            )
+            .is_err()
+        );
+        let leases = ctx.viewer_leases();
+        assert!(leases.is_empty());
+        drop(ctx);
+        authority.commit_viewers(leases);
+    }
+    assert!(
+        TickContext::harness(&mut authority, TickBudget::full())
+            .read()
+            .viewer(session)
+            .is_none()
+    );
+}
+
+#[test]
+fn container_drop_is_whole_atomic_and_ages_only_on_next_step() {
+    use mornlea_server::rules::drops;
+    let session = player_session(92, "panel-drop");
+    let target = BlockPos::new(0, 65, -1);
+    let foot = overworld_key(BlockPos::new(0, 64, 0));
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = viewer_scene(&mut ctx, session, (target, CHEST_BLOCK), &[]);
+    install_container(&mut ctx, chest_record(0, 1, &[(26, stack(ITEM_STONE, 4))]));
+    air_chunk(&mut ctx, foot);
+    let reference = chest_ref(0, 1);
+    provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    drops::advance(&mut ctx, &[foot]).unwrap();
+    provider::settle_command(&mut ctx, &drop_from(session, 2, reference, 62)).unwrap();
+    assert_eq!(
+        container_cells(&container_of(&ctx, reference))[26],
+        ItemStack::default()
+    );
+    assert_eq!(inventory_of(&ctx, actor).slots[0], ItemStack::default());
+    assert_eq!(ctx.read().drops(foot)[0].stack, stack(ITEM_STONE, 4));
+    assert_eq!(
+        (
+            ctx.read().drops(foot)[0].age,
+            ctx.read().drops(foot)[0].pickup_delay
+        ),
+        (0, 40)
+    );
+    drops::advance(&mut ctx, &[foot]).unwrap();
+    assert_eq!(
+        (
+            ctx.read().drops(foot)[0].age,
+            ctx.read().drops(foot)[0].pickup_delay
+        ),
+        (1, 39)
+    );
+    assert!(ctx.events().is_empty());
+    let before = ctx.snapshot_state(fixture_world());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &drop_from(session, 3, reference, 62)),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::InvalidSlot
+        ))
+    );
+    assert_eq!(ctx.snapshot_state(fixture_world()), before);
+}
+
+#[test]
+fn close_previews_only_extended_grid_and_clears_missing_actor_view() {
+    let session = player_session(93, "close-preview");
+    let target = BlockPos::new(0, 65, -1);
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = viewer_scene(&mut ctx, session, (target, CHEST_BLOCK), &[]);
+    install_container(&mut ctx, chest_record(0, 1, &[]));
+    provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    let mut before = InventoryRecord::empty();
+    before.crafting_size = CraftingSize::Workbench;
+    before.crafting[0] = stack(ITEM_STONE, 1);
+    before.crafting[4] = stack(ITEM_DIRT, 2);
+    before.crafting[8] = stack(ITEM_DIRT, 3);
+    ctx.preload_inventory(actor, before);
+    provider::settle_command(&mut ctx, &envelope(session, 2, Command::CloseContainer)).unwrap();
+    let after = inventory_of(&ctx, actor);
+    assert_eq!(after.crafting_size, CraftingSize::Personal);
+    assert_eq!(after.crafting[0], stack(ITEM_STONE, 1));
+    assert_eq!(after.crafting[4], ItemStack::default());
+    assert_eq!(after.crafting[8], ItemStack::default());
+    assert_eq!(after.slots[0], stack(ITEM_DIRT, 5));
+    assert!(ctx.read().viewer(session).is_none());
+
+    provider::settle_command(&mut ctx, &envelope(session, 3, open_command())).unwrap();
+    let mut full = InventoryRecord::empty();
+    full.crafting_size = CraftingSize::Workbench;
+    full.slots.fill(stack(ITEM_STONE, 64));
+    full.crafting[4] = stack(ITEM_DIRT, 1);
+    ctx.preload_inventory(actor, full);
+    assert_eq!(
+        provider::settle_command(&mut ctx, &envelope(session, 4, Command::CloseContainer)),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::InvalidInput
+        ))
+    );
+    assert_eq!(inventory_of(&ctx, actor), full);
+    assert!(ctx.read().viewer(session).is_some());
+    full.crafting_size = CraftingSize::Personal;
+    full.crafting[4] = ItemStack::default();
+    full.crafting[0] = stack(ITEM_DIRT, 1);
+    ctx.preload_inventory(actor, full);
+    provider::settle_command(&mut ctx, &envelope(session, 5, Command::CloseContainer)).unwrap();
+    assert_eq!(inventory_of(&ctx, actor), full);
+    assert!(ctx.read().viewer(session).is_none());
+
+    let absent = player_session(94, "absent-close");
+    ctx.stage(RuleEffect::Viewer {
+        session: absent,
+        view: Some(mornlea_server::contracts::ViewLease::new(
+            absent,
+            chest_ref(0, 1),
+        )),
+    })
+    .unwrap();
+    provider::settle_command(&mut ctx, &envelope(absent, 1, Command::CloseContainer)).unwrap();
+    assert!(ctx.read().viewer(absent).is_none());
+}
+
+#[test]
+fn inventory_only_container_commands_touch_exact_referenced_chunk() {
+    let session = player_session(95, "source-touch");
+    let target = BlockPos::new(0, 65, -1);
+    let foot = overworld_key(BlockPos::new(0, 64, 0));
+    let source = overworld_key(target);
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = viewer_scene(
+        &mut ctx,
+        session,
+        (target, CHEST_BLOCK),
+        &[(0, stack(ITEM_DIRT, 2))],
+    );
+    install_container(&mut ctx, chest_record(0, 1, &[]));
+    air_chunk(&mut ctx, foot);
+    let reference = chest_ref(0, 1);
+    provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    provider::settle_command(
+        &mut ctx,
+        &envelope(
+            session,
+            2,
+            Command::MoveContainer(
+                ContainerMove::try_new(reference.chunk(), ContainerKind::Chest, 0, 1, 0, 1)
+                    .unwrap(),
+            ),
+        ),
+    )
+    .unwrap();
+    assert_eq!(inventory_of(&ctx, actor).slots[1], stack(ITEM_DIRT, 2));
+    let state = ctx.snapshot_state(fixture_world());
+    assert_eq!(
+        state.chunks.iter().find(|row| row.0 == source).unwrap().2,
+        2
+    );
+    assert_eq!(state.chunks.iter().find(|row| row.0 == foot).unwrap().2, 1);
+    provider::settle_command(&mut ctx, &drop_from(session, 3, reference, 1)).unwrap();
+    let state = ctx.snapshot_state(fixture_world());
+    assert_eq!(
+        state.chunks.iter().find(|row| row.0 == source).unwrap().2,
+        2
+    );
+    assert_eq!(state.chunks.iter().find(|row| row.0 == foot).unwrap().2, 2);
+    assert_eq!(ctx.read().drops(foot)[0].stack, stack(ITEM_DIRT, 2));
+}
+
+#[test]
+fn furnace_panel_drop_debits_input_fuel_and_output_without_repack_veto() {
+    let target = BlockPos::new(0, 65, -1);
+    let foot = overworld_key(BlockPos::new(0, 64, 0));
+    for (slot, expected) in [
+        (36, stack(ITEM_RAW_IRON, 2)),
+        (37, stack(ITEM_COAL, 3)),
+        (38, stack(ITEM_IRON_INGOT, 4)),
+    ] {
+        let session = player_session(96 + (slot - 36), "furnace-panel");
+        let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+        let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+        let actor = viewer_scene(&mut ctx, session, (target, FURNACE_BLOCK), &[]);
+        install_container(
+            &mut ctx,
+            furnace_record(
+                0,
+                1,
+                stack(ITEM_RAW_IRON, 2),
+                stack(ITEM_COAL, 3),
+                stack(ITEM_IRON_INGOT, 4),
+                3,
+            ),
+        );
+        air_chunk(&mut ctx, foot);
+        let mut full = InventoryRecord::empty();
+        full.slots.fill(stack(ITEM_STONE, 64));
+        full.crafting_size = CraftingSize::Workbench;
+        full.crafting[4] = stack(ITEM_DIRT, 1);
+        ctx.preload_inventory(actor, full);
+        let reference = furnace_ref(0, 1);
+        provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+        provider::settle_command(&mut ctx, &drop_from(session, 2, reference, slot)).unwrap();
+        assert_eq!(ctx.read().drops(foot)[0].stack, expected);
+        assert_eq!(inventory_of(&ctx, actor), full);
+        let stored = container_of(&ctx, reference);
+        let ContainerSlots::Furnace {
+            slots, progress, ..
+        } = stored.slots
+        else {
+            panic!("furnace")
+        };
+        assert_eq!(slots[usize::from(slot - 36)], ItemStack::default());
+        assert_eq!(progress, if slot == 36 { 0 } else { 3 });
+    }
+}
+
+#[test]
+fn full_drop_slots_refuse_then_same_cell_merge_preserves_source_atomicity() {
+    use mornlea_domain::chunk_block_index;
+    use mornlea_server::core::world::ReadyChunk;
+    use mornlea_storage::{Chunk, ContainerSnapshot, DropSlot, StorageKind};
+    let session = player_session(99, "drop-capacity");
+    let target = BlockPos::new(0, 65, -1);
+    let foot_pos = BlockPos::new(0, 64, 0);
+    let foot = overworld_key(foot_pos);
+    let reference = chest_ref(0, 1);
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = viewer_scene(&mut ctx, session, (target, CHEST_BLOCK), &[]);
+    install_container(&mut ctx, chest_record(0, 1, &[(0, stack(ITEM_DIRT, 1))]));
+    let mut chunk = Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    };
+    for slot in &mut chunk.drops {
+        *slot = DropSlot {
+            active: true,
+            generation: 1,
+            stack: stack(ITEM_STONE, 64),
+            block_index: chunk_block_index(foot_pos),
+            ..Default::default()
+        };
+    }
+    ctx.preload_ready_chunk(ReadyChunk::try_new(foot, 1, 1, chunk.clone()).unwrap());
+    provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    let before = ctx.snapshot_state(fixture_world());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &drop_from(session, 2, reference, 36)),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::DropCapacity
+        ))
+    );
+    assert_eq!(ctx.snapshot_state(fixture_world()), before);
+    assert_eq!(inventory_of(&ctx, actor).slots[0], ItemStack::default());
+    chunk.drops[0].stack = stack(ITEM_DIRT, 63);
+    ctx.preload_ready_chunk(ReadyChunk::try_new(foot, 1, 1, chunk).unwrap());
+    provider::settle_command(&mut ctx, &drop_from(session, 3, reference, 36)).unwrap();
+    assert_eq!(
+        container_cells(&container_of(&ctx, reference))[0],
+        ItemStack::default()
+    );
+    assert_eq!(ctx.read().drops(foot)[0].stack, stack(ITEM_DIRT, 64));
+}
+
+#[test]
+fn ready_open_binds_exact_slot_before_first_move() {
+    use mornlea_domain::chunk_block_index;
+    use mornlea_server::core::world::ReadyChunk;
+    use mornlea_storage::{ChestSlot, Chunk, ContainerSnapshot, StorageKind};
+
+    let session = player_session(90, "exact-open");
+    let target = BlockPos::new(0, 65, -1);
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = viewer_scene(
+        &mut ctx,
+        session,
+        (target, CHEST_BLOCK),
+        &[(0, stack(ITEM_DIRT, 3))],
+    );
+    assert_eq!(
+        provider::settle_command(&mut ctx, &envelope(session, 1, open_command())),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::ChunkNotReady
+        ))
+    );
+    assert!(ctx.read().viewer(session).is_none());
+    let mut chunk = Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    };
+    let index = chunk_block_index(target) as usize;
+    let mut packed = vec![0; 1024];
+    packed[(index % 4096) / 4] = u64::from(CHEST_BLOCK) << ((index % 4) * 15);
+    chunk.sections[index / 4096] = ContainerSnapshot {
+        kind: StorageKind::Direct,
+        bits: 15,
+        single: 0,
+        palette: vec![],
+        packed,
+    };
+    chunk.chests[7] = ChestSlot {
+        active: true,
+        generation: 9,
+        block_index: index as u32,
+        ..Default::default()
+    };
+    let key = overworld_key(target);
+    let mut without_slot = chunk.clone();
+    without_slot.chests[7] = ChestSlot::default();
+    ctx.preload_ready_chunk(ReadyChunk::try_new(key, 1, 1, without_slot).unwrap());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &envelope(session, 1, open_command())),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::NoTarget
+        ))
+    );
+    assert!(ctx.read().viewer(session).is_none());
+    ctx.preload_ready_chunk(ReadyChunk::try_new(key, 1, 1, chunk).unwrap());
+    let exact = ContainerRef::try_new(key.pos, ContainerKind::Chest, 7, 9).unwrap();
+    assert_eq!(
+        provider::settle_command(&mut ctx, &envelope(session, 1, open_command()))
+            .unwrap()
+            .applied,
+        1
+    );
+    assert_eq!(ctx.read().viewer(session).unwrap().reference(), exact);
+    assert_eq!(
+        provider::settle_command(
+            &mut ctx,
+            &envelope(
+                session,
+                2,
+                Command::OpenContainer(LookAngles::try_new(std::f32::consts::PI, 0.0).unwrap())
+            )
+        ),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::ChunkNotReady
+        ))
+    );
+    assert_eq!(ctx.read().viewer(session).unwrap().reference(), exact);
+    let wrong = ContainerRef::try_new(key.pos, ContainerKind::Chest, 0, 1).unwrap();
+    let before = inventory_of(&ctx, actor);
+    assert!(
+        provider::settle_command(
+            &mut ctx,
+            &envelope(
+                session,
+                2,
+                Command::MoveContainer(
+                    ContainerMove::try_new(
+                        wrong.chunk(),
+                        wrong.kind(),
+                        wrong.slot(),
+                        wrong.generation(),
+                        0,
+                        36
+                    )
+                    .unwrap()
+                )
+            )
+        )
+        .is_err()
+    );
+    assert_eq!(inventory_of(&ctx, actor), before);
+    assert_eq!(ctx.read().viewer(session).unwrap().reference(), exact);
+}
+
 #[test]
 fn late_close_and_generation() {
     let session = player_session(11, "late-close");
@@ -349,14 +912,17 @@ fn late_close_and_generation() {
         &[(0, stack(ITEM_DIRT, 10))],
     );
     let reference = furnace_ref(0, 1);
-    context.preload_container(furnace_record(
-        0,
-        1,
-        ItemStack::default(),
-        ItemStack::default(),
-        ItemStack::default(),
-        0,
-    ));
+    install_container(
+        &mut context,
+        furnace_record(
+            0,
+            1,
+            ItemStack::default(),
+            ItemStack::default(),
+            ItemStack::default(),
+            0,
+        ),
+    );
     let before_inventory = inventory_of(&context, actor);
     let before_container = container_of(&context, reference);
     let before_totals = item_totals(&before_inventory, &before_container);
@@ -404,14 +970,17 @@ fn late_close_and_generation() {
         (target, FURNACE_BLOCK),
         &[(0, stack(ITEM_DIRT, 10))],
     );
-    context.preload_container(furnace_record(
-        0,
-        1,
-        ItemStack::default(),
-        ItemStack::default(),
-        ItemStack::default(),
-        0,
-    ));
+    install_container(
+        &mut context,
+        furnace_record(
+            0,
+            1,
+            ItemStack::default(),
+            ItemStack::default(),
+            ItemStack::default(),
+            0,
+        ),
+    );
     let stale = ContainerMove::try_new(reference.chunk(), ContainerKind::Furnace, 0, 1, 0, 36)
         .expect("move");
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
@@ -422,14 +991,17 @@ fn late_close_and_generation() {
         )
         .is_ok()
     );
-    context.preload_container(furnace_record(
-        0,
-        2,
-        ItemStack::default(),
-        ItemStack::default(),
-        ItemStack::default(),
-        0,
-    ));
+    install_container(
+        &mut context,
+        furnace_record(
+            0,
+            2,
+            ItemStack::default(),
+            ItemStack::default(),
+            ItemStack::default(),
+            0,
+        ),
+    );
     let report = drain(&mut context).expect("drain settles the queue");
     assert_eq!(report.examined, 2);
     assert_eq!(report.applied, 1);
@@ -488,15 +1060,8 @@ fn late_close_and_generation() {
     assert_eq!(report.applied, 0);
     assert_eq!(report.rejected, 1);
 
-    // The lease survives drains through the staging overlay: open and drain,
-    // then move and drain again, then close and drain a third time. The
-    // second drain settles the move against the still-open view and binds
-    // the exact reference into the overlay; the third drain replays the
-    // settled move idempotently (empty source, nothing staged) and clears
-    // the lease on close; a fourth move then reads as closed. The
-    // authority-commit leg that carries the overlay across ticks belongs to
-    // the serial reducer integration, so this proof stays inside one tick
-    // context on purpose.
+    // Open binds immediately, and a later close removes the same lease.
+    // Replaying an already drained queue is not a new command admission.
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
     let mut context = TickContext::harness(&mut state, TickBudget::full());
     let actor = viewer_scene(
@@ -506,87 +1071,55 @@ fn late_close_and_generation() {
         &[(0, stack(ITEM_RAW_IRON, 4))],
     );
     let reference = furnace_ref(0, 1);
-    context.preload_container(furnace_record(
-        0,
-        1,
-        ItemStack::default(),
-        ItemStack::default(),
-        ItemStack::default(),
-        0,
-    ));
-    assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
-    let report = drain(&mut context).expect("first drain");
-    assert_eq!(
-        (report.examined, report.applied, report.rejected),
-        (1, 1, 0)
-    );
-    // The open stages no lease: authorization lives in the settled queue
-    // history, and only the first settled move binds the reference.
-    assert!(context.read().viewer(session).is_none());
-    assert!(
-        admit(
-            &mut context,
-            &envelope(
-                session,
-                2,
-                Command::MoveContainer(
-                    ContainerMove::try_new(reference.chunk(), ContainerKind::Furnace, 0, 1, 0, 36,)
-                        .expect("move"),
-                ),
-            ),
-        )
-        .is_ok()
-    );
-    let report = drain(&mut context).expect("second drain");
-    assert_eq!(
-        (report.examined, report.applied, report.rejected),
-        (2, 2, 0)
-    );
-    assert_eq!(inventory_of(&context, actor).slots[0], ItemStack::default());
-    let settled_container = container_of(&context, reference);
-    assert_eq!(
-        settled_container,
+    install_container(
+        &mut context,
         furnace_record(
             0,
             1,
-            stack(ITEM_RAW_IRON, 4),
+            ItemStack::default(),
             ItemStack::default(),
             ItemStack::default(),
             0,
-        )
+        ),
     );
-    let lease = context.read().viewer(session).expect("lease bound");
-    assert_eq!(lease.session(), session);
-    assert_eq!(lease.reference(), reference);
-    assert!(admit(&mut context, &envelope(session, 3, Command::CloseContainer)).is_ok());
-    let report = drain(&mut context).expect("third drain");
+    provider::settle_command(&mut context, &envelope(session, 1, open_command())).unwrap();
     assert_eq!(
-        (report.examined, report.applied, report.rejected),
-        (3, 2, 1)
+        context.read().viewer(session).unwrap().reference(),
+        reference
     );
+    provider::settle_command(
+        &mut context,
+        &envelope(
+            session,
+            2,
+            Command::MoveContainer(
+                ContainerMove::try_new(reference.chunk(), ContainerKind::Furnace, 0, 1, 0, 36)
+                    .unwrap(),
+            ),
+        ),
+    )
+    .unwrap();
+    assert_eq!(inventory_of(&context, actor).slots[0], ItemStack::default());
+    let settled_container = container_of(&context, reference);
+    assert_eq!(
+        container_cells(&settled_container)[0],
+        stack(ITEM_RAW_IRON, 4)
+    );
+    provider::settle_command(&mut context, &envelope(session, 3, Command::CloseContainer)).unwrap();
     assert!(context.read().viewer(session).is_none());
-    assert_eq!(container_of(&context, reference), settled_container);
-    // A move after the settled close reads as closed even with a live
-    // source: the input cell still holds the dirt, so only the cleared
-    // view can refuse this transfer.
     assert!(
-        admit(
+        provider::settle_command(
             &mut context,
             &envelope(
                 session,
                 4,
                 Command::MoveContainer(
-                    ContainerMove::try_new(reference.chunk(), ContainerKind::Furnace, 0, 1, 36, 1,)
-                        .expect("move"),
+                    ContainerMove::try_new(reference.chunk(), ContainerKind::Furnace, 0, 1, 36, 1)
+                        .unwrap(),
                 ),
-            ),
+            )
         )
-        .is_ok()
-    );
-    let report = drain(&mut context).expect("fourth drain");
-    assert_eq!(
-        (report.examined, report.applied, report.rejected),
-        (4, 2, 2)
+        .is_err()
     );
     assert_eq!(container_of(&context, reference), settled_container);
     assert_eq!(inventory_of(&context, actor).slots[1], ItemStack::default());
@@ -618,14 +1151,17 @@ fn furnace_output_and_priority() {
         &[(0, stack(ITEM_DIRT, 5))],
     );
     let reference = furnace_ref(0, 1);
-    context.preload_container(furnace_record(
-        0,
-        1,
-        ItemStack::default(),
-        ItemStack::default(),
-        stack(ITEM_IRON_INGOT, 3),
-        0,
-    ));
+    install_container(
+        &mut context,
+        furnace_record(
+            0,
+            1,
+            ItemStack::default(),
+            ItemStack::default(),
+            stack(ITEM_IRON_INGOT, 3),
+            0,
+        ),
+    );
     let before_inventory = inventory_of(&context, actor);
     let before_container = container_of(&context, reference);
     let partial_into_output =
@@ -656,14 +1192,17 @@ fn furnace_output_and_priority() {
         &[(0, stack(ITEM_RAW_IRON, 4))],
     );
     let reference = furnace_ref(0, 1);
-    context.preload_container(furnace_record(
-        0,
-        1,
-        ItemStack::default(),
-        ItemStack::default(),
-        ItemStack::default(),
-        0,
-    ));
+    install_container(
+        &mut context,
+        furnace_record(
+            0,
+            1,
+            ItemStack::default(),
+            ItemStack::default(),
+            ItemStack::default(),
+            0,
+        ),
+    );
     let start = (
         inventory_of(&context, actor),
         container_of(&context, reference),
@@ -718,14 +1257,17 @@ fn furnace_output_and_priority() {
         &[(0, stack(ITEM_COAL, 3))],
     );
     let reference = furnace_ref(0, 1);
-    context.preload_container(furnace_record(
-        0,
-        1,
-        ItemStack::default(),
-        ItemStack::default(),
-        ItemStack::default(),
-        0,
-    ));
+    install_container(
+        &mut context,
+        furnace_record(
+            0,
+            1,
+            ItemStack::default(),
+            ItemStack::default(),
+            ItemStack::default(),
+            0,
+        ),
+    );
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
     assert!(
         admit(
@@ -754,14 +1296,17 @@ fn furnace_output_and_priority() {
     let mut context = TickContext::harness(&mut state, TickBudget::full());
     let actor = viewer_scene(&mut context, session, (target, FURNACE_BLOCK), &[]);
     let reference = furnace_ref(0, 1);
-    context.preload_container(furnace_record(
-        0,
-        1,
-        ItemStack::default(),
-        ItemStack::default(),
-        stack(ITEM_IRON_INGOT, 3),
-        0,
-    ));
+    install_container(
+        &mut context,
+        furnace_record(
+            0,
+            1,
+            ItemStack::default(),
+            ItemStack::default(),
+            stack(ITEM_IRON_INGOT, 3),
+            0,
+        ),
+    );
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
     assert!(
         admit(
@@ -800,14 +1345,17 @@ fn furnace_output_and_priority() {
         &[(0, stack(ITEM_COAL, 3))],
     );
     let reference = furnace_ref(0, 1);
-    context.preload_container(furnace_record(
-        0,
-        1,
-        ItemStack::default(),
-        ItemStack::default(),
-        ItemStack::default(),
-        0,
-    ));
+    install_container(
+        &mut context,
+        furnace_record(
+            0,
+            1,
+            ItemStack::default(),
+            ItemStack::default(),
+            ItemStack::default(),
+            0,
+        ),
+    );
     let before_inventory = inventory_of(&context, actor);
     let before_container = container_of(&context, reference);
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
@@ -843,14 +1391,17 @@ fn furnace_output_and_priority() {
         &[(0, stack(ITEM_RAW_IRON, 2))],
     );
     let reference = furnace_ref(0, 1);
-    context.preload_container(furnace_record(
-        0,
-        1,
-        stack(ITEM_SAND, 5),
-        ItemStack::default(),
-        ItemStack::default(),
-        7,
-    ));
+    install_container(
+        &mut context,
+        furnace_record(
+            0,
+            1,
+            stack(ITEM_SAND, 5),
+            ItemStack::default(),
+            ItemStack::default(),
+            7,
+        ),
+    );
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
     assert!(
         admit(
@@ -909,7 +1460,7 @@ fn partial_absorb() {
         &[(0, stack(ITEM_DIRT, 7))],
     );
     let reference = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[]));
+    install_container(&mut context, chest_record(0, 1, &[]));
     let start = (
         inventory_of(&context, actor),
         container_of(&context, reference),
@@ -952,7 +1503,10 @@ fn partial_absorb() {
         &[(0, stack(ITEM_DIRT, 7))],
     );
     let reference = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[(0, stack(ITEM_DIRT, 63))]));
+    install_container(
+        &mut context,
+        chest_record(0, 1, &[(0, stack(ITEM_DIRT, 63))]),
+    );
     let start = (
         inventory_of(&context, actor),
         container_of(&context, reference),
@@ -990,7 +1544,10 @@ fn partial_absorb() {
     let mut context = TickContext::harness(&mut state, TickBudget::full());
     let actor = viewer_scene(&mut context, session, (target, CHEST_BLOCK), &[]);
     let reference = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[(0, stack(ITEM_DIRT, 7))]));
+    install_container(
+        &mut context,
+        chest_record(0, 1, &[(0, stack(ITEM_DIRT, 7))]),
+    );
     let start = (
         inventory_of(&context, actor),
         container_of(&context, reference),
@@ -1034,7 +1591,10 @@ fn partial_absorb() {
         &[(0, stack(ITEM_DIRT, 5))],
     );
     let reference = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[(0, stack(ITEM_STONE, 4))]));
+    install_container(
+        &mut context,
+        chest_record(0, 1, &[(0, stack(ITEM_STONE, 4))]),
+    );
     let before_inventory = inventory_of(&context, actor);
     let before_container = container_of(&context, reference);
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
@@ -1063,7 +1623,7 @@ fn partial_absorb() {
     let mut context = TickContext::harness(&mut state, TickBudget::full());
     let actor = viewer_scene(&mut context, session, (target, CHEST_BLOCK), &[]);
     let reference = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[]));
+    install_container(&mut context, chest_record(0, 1, &[]));
     let before_inventory = inventory_of(&context, actor);
     let before_container = container_of(&context, reference);
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
@@ -1106,7 +1666,7 @@ fn stale_view_and_unauthorized() {
         &[(0, stack(ITEM_DIRT, 5))],
     );
     let live = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[]));
+    install_container(&mut context, chest_record(0, 1, &[]));
     let before_inventory = inventory_of(&context, actor);
     let before_container = container_of(&context, live);
     let retired = chest_ref(0, 9);
@@ -1148,7 +1708,7 @@ fn stale_view_and_unauthorized() {
         &[(0, stack(ITEM_DIRT, 5))],
     );
     let live = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[]));
+    install_container(&mut context, chest_record(0, 1, &[]));
     let before_inventory = inventory_of(&context, actor);
     let before_container = container_of(&context, live);
     assert!(
@@ -1184,8 +1744,8 @@ fn stale_view_and_unauthorized() {
     );
     let first = chest_ref(0, 1);
     let second = chest_ref(1, 1);
-    context.preload_container(chest_record(0, 1, &[]));
-    context.preload_container(chest_record(1, 1, &[]));
+    install_container(&mut context, chest_record(0, 1, &[]));
+    install_container(&mut context, chest_record(1, 1, &[]));
     let before_inventory = inventory_of(&context, actor);
     let before_first = container_of(&context, first);
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
@@ -1249,7 +1809,10 @@ fn stale_view_and_unauthorized() {
         &[(0, stack(ITEM_DIRT, 5))],
     );
     let live = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[(0, stack(ITEM_DIRT, 64))]));
+    install_container(
+        &mut context,
+        chest_record(0, 1, &[(0, stack(ITEM_DIRT, 64))]),
+    );
     let before_inventory = inventory_of(&context, actor);
     let before_container = container_of(&context, live);
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
@@ -1280,7 +1843,10 @@ fn stale_view_and_unauthorized() {
         &[(0, stack(ITEM_DIRT, 5))],
     );
     let live = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[(0, stack(ITEM_DIRT, 60))]));
+    install_container(
+        &mut context,
+        chest_record(0, 1, &[(0, stack(ITEM_DIRT, 60))]),
+    );
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
     assert!(
         admit(
@@ -1317,7 +1883,7 @@ fn stale_view_and_unauthorized() {
         &[(0, stack(ITEM_DIRT, 5))],
     );
     let live = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[]));
+    install_container(&mut context, chest_record(0, 1, &[]));
     let start = (inventory_of(&context, actor), container_of(&context, live));
     let duplicate = envelope(
         session,
@@ -1350,7 +1916,10 @@ fn stale_view_and_unauthorized() {
     let first_actor = viewer_scene(&mut context, session, (target, CHEST_BLOCK), &[]);
     let second_actor = viewer_scene(&mut context, other, (target, CHEST_BLOCK), &[]);
     let live = chest_ref(0, 1);
-    context.preload_container(chest_record(0, 1, &[(0, stack(ITEM_DIRT, 10))]));
+    install_container(
+        &mut context,
+        chest_record(0, 1, &[(0, stack(ITEM_DIRT, 10))]),
+    );
     assert!(admit(&mut context, &envelope(session, 1, open_command())).is_ok());
     assert!(admit(&mut context, &envelope(other, 1, open_command())).is_ok());
     assert!(
@@ -1509,12 +2078,250 @@ fn exhausted_chunk_revision_cannot_debit_container_transfer() {
             session,
             2,
             Command::MoveContainer(
-                ContainerMove::try_new(key.pos, ContainerKind::Furnace, 0, 1, 0, 36).unwrap(),
+                ContainerMove::try_new(key.pos, ContainerKind::Furnace, 0, 1, 0, 1).unwrap(),
             ),
         ),
     )
     .unwrap();
-    drain(&mut ctx).unwrap();
+    assert_eq!(drain(&mut ctx).unwrap().rejected, 1);
+    assert_eq!(
+        provider::settle_command(
+            &mut ctx,
+            &envelope(
+                session,
+                3,
+                Command::MoveContainer(
+                    ContainerMove::try_new(key.pos, ContainerKind::Furnace, 0, 1, 0, 1).unwrap()
+                )
+            )
+        ),
+        Err(mornlea_server::contracts::RuleReject::StaleObservation)
+    );
     assert_eq!(inventory_of(&ctx, actor), before);
     assert_eq!(container_of(&ctx, reference), stored);
+}
+
+#[test]
+fn sneaking_open_preserves_previous_exact_lease() {
+    let session = player_session(100, "sneak-open");
+    let target = BlockPos::new(0, 65, -1);
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = viewer_scene(&mut ctx, session, (target, CHEST_BLOCK), &[]);
+    install_container(&mut ctx, chest_record(0, 1, &[]));
+    provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    let lease = ctx.read().viewer(session).unwrap();
+    ctx.stage(RuleEffect::Runtime(ActorRuntime {
+        key: actor,
+        controls: Some(PlayerControl::new(PlayerControlParts {
+            movement: Movement {
+                move_x: 0,
+                move_z: 0,
+                jump: false,
+            },
+            look: LookAngles::try_new(0.0, 0.0).unwrap(),
+            actions: HeldActions {
+                primary: false,
+                eating: false,
+                sprinting: false,
+                sneaking: true,
+            },
+        })),
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 300,
+        peak_y: 64.0,
+        exhaustion_milli: 0,
+        saturation_milli: 5_000,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Player { respawn: None },
+    }))
+    .unwrap();
+    assert_eq!(
+        provider::settle_command(&mut ctx, &envelope(session, 2, open_command())),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::InvalidInput
+        ))
+    );
+    assert_eq!(ctx.read().viewer(session), Some(lease));
+}
+
+#[test]
+fn actual_furnace_open_replaces_chest_lease() {
+    let session = player_session(101, "reopen-kind");
+    let target = BlockPos::new(0, 65, -1);
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    viewer_scene(&mut ctx, session, (target, CHEST_BLOCK), &[]);
+    install_container(&mut ctx, chest_record(0, 1, &[]));
+    install_container(
+        &mut ctx,
+        furnace_record(
+            1,
+            3,
+            ItemStack::default(),
+            ItemStack::default(),
+            ItemStack::default(),
+            0,
+        ),
+    );
+    air_chunk(&mut ctx, overworld_key(BlockPos::new(0, 65, 0)));
+    provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    assert_eq!(
+        ctx.read().viewer(session).unwrap().reference(),
+        chest_ref(0, 1)
+    );
+    let look = LookAngles::try_new(-0.8, 0.0).unwrap();
+    provider::settle_command(
+        &mut ctx,
+        &envelope(session, 2, Command::OpenContainer(look)),
+    )
+    .unwrap();
+    assert_eq!(
+        ctx.read().viewer(session).unwrap().reference(),
+        furnace_ref(1, 3)
+    );
+}
+
+#[test]
+fn container_inventory_region_drop_preserves_tool_durability() {
+    let session = player_session(102, "durable-panel");
+    let target = BlockPos::new(0, 65, -1);
+    let foot = overworld_key(BlockPos::new(0, 64, 0));
+    let tool = ItemStack {
+        item: 10,
+        count: 1,
+        durability: 17,
+    };
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = viewer_scene(&mut ctx, session, (target, CHEST_BLOCK), &[(35, tool)]);
+    install_container(&mut ctx, chest_record(0, 1, &[]));
+    let reference = chest_ref(0, 1);
+    provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    let before = ctx.snapshot_state(fixture_world());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &drop_from(session, 2, reference, 35)),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::ChunkNotReady
+        ))
+    );
+    assert_eq!(ctx.snapshot_state(fixture_world()), before);
+    air_chunk(&mut ctx, foot);
+    provider::settle_command(&mut ctx, &drop_from(session, 2, reference, 35)).unwrap();
+    assert_eq!(inventory_of(&ctx, actor).slots[35], ItemStack::default());
+    assert_eq!(ctx.read().drops(foot)[0].stack, tool);
+}
+
+#[test]
+fn two_viewers_cannot_drop_the_same_container_source_twice() {
+    let first = player_session(103, "first-dropper");
+    let second = player_session(104, "second-dropper");
+    let target = BlockPos::new(0, 65, -1);
+    let foot = overworld_key(BlockPos::new(0, 64, 0));
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    viewer_scene(&mut ctx, first, (target, CHEST_BLOCK), &[]);
+    viewer_scene(&mut ctx, second, (target, CHEST_BLOCK), &[]);
+    install_container(&mut ctx, chest_record(0, 1, &[(0, stack(ITEM_DIRT, 7))]));
+    air_chunk(&mut ctx, foot);
+    let reference = chest_ref(0, 1);
+    provider::settle_command(&mut ctx, &envelope(first, 1, open_command())).unwrap();
+    provider::settle_command(&mut ctx, &envelope(second, 1, open_command())).unwrap();
+    provider::settle_command(&mut ctx, &drop_from(first, 2, reference, 36)).unwrap();
+    let after = ctx.snapshot_state(fixture_world());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &drop_from(second, 2, reference, 36)),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::InvalidSlot
+        ))
+    );
+    assert_eq!(ctx.snapshot_state(fixture_world()), after);
+    assert_eq!(ctx.read().drops(foot).len(), 1);
+    assert_eq!(ctx.read().drops(foot)[0].stack, stack(ITEM_DIRT, 7));
+}
+
+#[test]
+fn exhausted_referenced_chunk_refuses_inventory_region_drop_atomically() {
+    use mornlea_server::core::world::ReadyChunk;
+    let session = player_session(105, "exhausted-drop");
+    let target = BlockPos::new(0, 65, -1);
+    let source = overworld_key(target);
+    let foot = overworld_key(BlockPos::new(0, 64, 0));
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    viewer_scene(
+        &mut ctx,
+        session,
+        (target, CHEST_BLOCK),
+        &[(0, stack(ITEM_DIRT, 3))],
+    );
+    install_container(&mut ctx, chest_record(0, 1, &[]));
+    let raw = ctx
+        .snapshot_state(fixture_world())
+        .chunks
+        .into_iter()
+        .find(|row| row.0 == source)
+        .unwrap()
+        .3;
+    ctx.preload_ready_chunk(ReadyChunk::try_new(source, 1, u64::MAX, raw).unwrap());
+    air_chunk(&mut ctx, foot);
+    let reference = chest_ref(0, 1);
+    provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    let before = ctx.snapshot_state(fixture_world());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &drop_from(session, 2, reference, 0)),
+        Err(mornlea_server::contracts::RuleReject::StaleObservation)
+    );
+    assert_eq!(ctx.snapshot_state(fixture_world()), before);
+    assert!(ctx.read().drops(foot).is_empty());
+}
+
+#[test]
+fn transfer_uses_live_lease_without_per_command_reach_veto() {
+    let session = player_session(106, "reach-publication");
+    let target = BlockPos::new(0, 65, -1);
+    let reference = chest_ref(0, 1);
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = viewer_scene(
+        &mut ctx,
+        session,
+        (target, CHEST_BLOCK),
+        &[(0, stack(ITEM_DIRT, 2))],
+    );
+    install_container(&mut ctx, chest_record(0, 1, &[]));
+    provider::settle_command(&mut ctx, &envelope(session, 1, open_command())).unwrap();
+    ctx.stage(RuleEffect::Actor(player_actor(
+        session,
+        [40.5, 64.0, 40.5],
+        0.0,
+        0.0,
+    )))
+    .unwrap();
+    provider::settle_command(
+        &mut ctx,
+        &envelope(
+            session,
+            2,
+            Command::MoveContainer(
+                ContainerMove::try_new(reference.chunk(), ContainerKind::Chest, 0, 1, 0, 36)
+                    .unwrap(),
+            ),
+        ),
+    )
+    .unwrap();
+    assert_eq!(inventory_of(&ctx, actor).slots[0], ItemStack::default());
+    assert_eq!(
+        container_cells(&container_of(&ctx, reference))[0],
+        stack(ITEM_DIRT, 2)
+    );
 }

@@ -134,15 +134,8 @@ impl AuthorityState {
         })
     }
 
-    /// Commits the tick's net viewer overlay into the committed view store.
-    /// The serial reducer calls this once at overlay commit with the drained
-    /// context overlay: present leases install, and leases the tick cleared
-    /// stay absent, so the store always carries the net live set. The next
-    /// tick reads committed leases through the overlay-first viewer getter,
-    /// which keeps a viewer visible until the tick that clears it. The full
-    /// cross-tick seeding and merge policy belongs to the serial reducer
-    /// integration; until it lands this store stays empty and the context
-    /// overlay is the sole lease source. Unwired: no caller exists yet.
+    /// Replaces committed leases with the tick's complete net viewer set.
+    /// The reducer owns this commit and retired-session pruning.
     pub fn commit_viewers(&mut self, overlay: BTreeMap<SessionKey, ViewLease>) {
         self.views = overlay;
     }
@@ -1198,7 +1191,6 @@ pub struct AuthorityReadView<'a> {
     containers: &'a BTreeMap<ContainerRef, ContainerRecord>,
     container_chunks: &'a BTreeMap<ChunkKey, ContainerState>,
     viewers: &'a BTreeMap<SessionKey, ViewLease>,
-    committed_viewers: &'a BTreeMap<SessionKey, ViewLease>,
     drops: &'a BTreeMap<ChunkKey, DropState>,
     projectiles: &'a [ProjectileRecord],
     damage_intents: &'a [DamageIntent],
@@ -1319,16 +1311,9 @@ impl<'a> AuthorityReadView<'a> {
             .unwrap_or_default()
     }
 
-    /// Viewer lease for one session, staged overlay first and the committed
-    /// authority store second. The overlay carries the tick's net leases, so
-    /// a viewer stays visible here until the tick whose close clears it; the
-    /// committed fallback keeps the previous tick's leases readable until the
-    /// serial reducer reseeds the overlay.
+    /// The context's complete net set is the sole viewer authority this tick.
     pub fn viewer(&self, session: SessionKey) -> Option<ViewLease> {
-        self.viewers
-            .get(&session)
-            .copied()
-            .or_else(|| self.committed_viewers.get(&session).copied())
+        self.viewers.get(&session).copied()
     }
     /// Immutable active slots in physical slot order. Fixed inactive generations
     /// stay private to the owner and survive empty active observations.
@@ -1517,6 +1502,7 @@ impl<'a> TickContext<'a> {
     }
 
     fn from_parts(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
+        let viewers = authority.views.clone();
         Self {
             authority,
             inventories: BTreeMap::new(),
@@ -1525,7 +1511,7 @@ impl<'a> TickContext<'a> {
             ready: BTreeMap::new(),
             containers: BTreeMap::new(),
             container_chunks: BTreeMap::new(),
-            viewers: BTreeMap::new(),
+            viewers,
             drops: BTreeMap::new(),
             world: None,
             commands: Vec::new(),
@@ -1650,11 +1636,15 @@ impl<'a> TickContext<'a> {
             containers: &self.containers,
             container_chunks: &self.container_chunks,
             viewers: &self.viewers,
-            committed_viewers: &self.authority.views,
             drops: &self.drops,
             projectiles: &self.projectiles,
             damage_intents: &self.damage_intents,
         }
+    }
+
+    /// Returns the complete net set for the reducer's full replacement commit.
+    pub fn viewer_leases(&self) -> BTreeMap<SessionKey, ViewLease> {
+        self.viewers.clone()
     }
 
     pub fn charge(&mut self, kind: WorkKind, units: usize) -> Result<(), ServerError> {
