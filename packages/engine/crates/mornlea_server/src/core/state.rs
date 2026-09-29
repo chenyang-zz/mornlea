@@ -2513,3 +2513,60 @@ fn apply_projectile(
         }
     }
 }
+
+#[cfg(test)]
+mod support_changed_rollback_tests {
+    use super::*;
+    use mornlea_domain::{BlockPos, ChunkPos};
+
+    /// A defensive compound failure must restore the mutation fact along
+    /// with the staged block, even when an earlier change already existed.
+    #[test]
+    fn later_apply_failure_restores_changed_cells() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            0,
+        )
+        .unwrap();
+        let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+        let key = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        };
+        let first = BlockPos::new(1, 64, 1);
+        let later = BlockPos::new(2, 64, 1);
+        for pos in [first, later] {
+            ctx.preload_block(BlockObservation::try_new(key, 1, 1, pos, 4).unwrap());
+        }
+        let initial = ctx.read().observation(Dimension::OVERWORLD, first).unwrap();
+        ctx.transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(initial, 0).unwrap()],
+            )
+            .unwrap();
+        let before = ctx.changed_blocks();
+        assert_eq!(before.len(), 1);
+        let next = ctx.read().observation(Dimension::OVERWORLD, later).unwrap();
+        let compound = RuleEffect::Compound(vec![
+            RuleEffect::Blocks(BlockTxn::system(
+                SystemRule::Support,
+                ctx.read().tick(),
+                vec![BlockWrite::try_new(next, 0).unwrap()],
+            )),
+            RuleEffect::Projectile {
+                before: None,
+                after: None,
+            },
+        ]);
+        // Directly exercise the defensive apply rollback: public `stage`
+        // validates every arm before applying any of them.
+        assert_eq!(
+            ctx.apply_effect(compound),
+            Err(RuleReject::Wire(RejectReason::InvalidInput))
+        );
+        assert_eq!(ctx.read().block(Dimension::OVERWORLD, first), Some(0));
+        assert_eq!(ctx.read().block(Dimension::OVERWORLD, later), Some(4));
+        assert_eq!(ctx.changed_blocks(), before);
+    }
+}
