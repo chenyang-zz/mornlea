@@ -484,3 +484,26 @@ acquire with AgentUnavailable/503; isolated reproduction and the next full run
 passed. Source investigation found the raw test listener is nonblocking while
 accepted sockets are not explicitly restored to blocking mode; investigate this
 possible platform race separately, without claiming it fixed here.
+
+
+## Agent HTTP test-peer race repair, 2026-09-29
+
+The independent Sol investigator reproduced Darwin accepted-socket inheritance
+with a disposable delayed-client probe. The nonblocking test listener's accepted
+stream returned WouldBlock even with a read timeout; the helper ignored the read
+failure, wrote its scripted response, and closed with the request unread. This
+explains the recorded intermittent acquire 503. Controller added
+`agent_http::accepted_connection_waits_for_request`: before any request is sent,
+the old helper already returns response data (`peek` Ok(1)), a behavioral RED.
+The test-only peer now explicitly restores blocking mode, checks the read timeout,
+and bounds writes by five seconds. Production HTTP/retry semantics are unchanged.
+This repair belongs to the existing Agent wire validation, not a new capability.
+Architecture skill: no change; platform-specific fixture hygiene is not a new
+cross-task ownership rule.
+
+
+HTTP peer repair GREEN: full server crate 154/154, scoped fmt/clippy and diff
+checks pass. Earlier repository audit at `a151c206` passed in 103.988s. The new
+regression executes real loopback sockets with a bounded pre-send peek and an
+exact delayed request/body assertion; the original acquire limit case also
+passes. This resolves the recorded 503 test-peer race without production changes.

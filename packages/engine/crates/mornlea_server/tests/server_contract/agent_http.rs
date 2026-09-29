@@ -137,6 +137,14 @@ impl TestServer {
                         std::thread::sleep(Duration::from_millis(2));
                         continue;
                     };
+                    // Accepted sockets inherit nonblocking mode on some platforms;
+                    // the scripted peer must wait for the complete bounded request.
+                    stream
+                        .set_nonblocking(false)
+                        .expect("blocking accepted stream");
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(5)))
+                        .expect("write timeout");
                     connections.fetch_add(1, Ordering::SeqCst);
                     let scripted = script.lock().unwrap().pop_front();
                     let recorded = read_request(&mut stream);
@@ -179,7 +187,7 @@ impl Drop for TestServer {
 }
 
 fn read_request(stream: &mut std::net::TcpStream) -> std::io::Result<Observed> {
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 1024];
     let head_end;
@@ -649,4 +657,45 @@ fn response_with_header_budget(target: usize, body_len: usize, body: &[u8]) -> V
         ],
         body,
     )
+}
+
+#[test]
+fn accepted_connection_waits_for_request() {
+    let server = TestServer::serve(vec![raw_response(
+        "HTTP/1.1 200 OK",
+        &[("Content-Length", "0".to_owned())],
+        &[],
+    )]);
+    let address = server.endpoint.strip_prefix("http://").unwrap();
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while server.connections.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "server did not accept client");
+        std::thread::yield_now();
+    }
+    // A server must not answer before this client has sent its request.
+    // This also exercises platforms that inherit the listener's nonblocking mode.
+    let mut first = [0u8; 1];
+    let early = client.peek(&mut first);
+    assert!(
+        matches!(early, Err(ref error) if matches!(error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)),
+        "server replied before receiving the request: {early:?}"
+    );
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client
+        .write_all(b"POST /delayed HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 4\r\n\r\nping")
+        .unwrap();
+    let mut response = Vec::new();
+    client.read_to_end(&mut response).unwrap();
+    assert!(response.starts_with(b"HTTP/1.1 200 OK"));
+    let observed = server.observed();
+    assert_eq!(observed.len(), 1);
+    assert_eq!(observed[0].path, "/delayed");
+    assert_eq!(observed[0].body, b"ping");
 }
