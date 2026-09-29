@@ -19,7 +19,8 @@
 use std::collections::BTreeSet;
 
 use mornlea_domain::{
-    ChunkPos, CommandEnvelope, CommandOrderScratch, ContainerRef, Dimension, order_commands,
+    BlockPos, ChunkPos, CommandEnvelope, CommandOrderScratch, ContainerRef, Dimension,
+    order_commands,
 };
 
 use super::contracts::{
@@ -49,8 +50,93 @@ const PROJECTILE_SCOPE_RADIUS: u64 = 2;
 /// Scope ceiling mirroring the eight-player structural bound.
 const MAX_SCOPES: usize = 8;
 
+/// Fluid requeue delay in ticks. The tunables own this value without a
+/// contract getter, so the reducer mirrors the source default the provider
+/// tests pin at every rescan and update call.
+const FLUID_FLOW_DELAY: u64 = 5;
+
+/// Six face neighbors in kernel slot order, mirroring the source fluid
+/// neighbor table (`fluidNeighbors` in `packages/server/fluid/queue.go`).
+const SIX_NEIGHBORS: [(i32, i32, i32); 6] = [
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 1, 0),
+    (0, -1, 0),
+    (0, 0, 1),
+    (0, 0, -1),
+];
+
 /// One frozen provider call: the context plus its exact call record.
 type ProviderCall = fn(&mut TickContext<'_>, RuleCall<'_>) -> Result<PhaseReport, ServerError>;
+
+/// Water source through level seven, mirrored beside the farmland
+/// provider's own range.
+fn is_fluid(block: u16) -> bool {
+    (27..=34).contains(&block)
+}
+
+/// Dry through wet farmland, mirrored beside the farmland provider's own
+/// range.
+fn is_farmland(block: u16) -> bool {
+    (35..=36).contains(&block)
+}
+
+/// Builds the tick-local fluid update queue from staged block writes,
+/// mirroring the source unified enqueue facade (`EnqueueBlockWrite` in
+/// `packages/server/sim/realm/environment.go`): every changed cell plus its
+/// six neighbors queues due now, so the update phase below evaluates this
+/// tick's dirt. Due now rather than now plus the flow delay because the
+/// schedule is tick-local: requeues the update stages at now plus the flow
+/// delay are future-due and belong to the cross-tick delay queues, which
+/// stay a recorded follow-up while the reducer holds no schedule across
+/// ticks.
+pub fn derive_fluid_schedule(context: &TickContext<'_>, tick: u64) -> fluids::FluidSchedule {
+    let mut schedule = fluids::FluidSchedule::new();
+    for observed in context.changed_blocks() {
+        schedule.enqueue_fluid(observed.key, observed.pos, tick);
+        for (dx, dy, dz) in SIX_NEIGHBORS {
+            let (Some(x), Some(y), Some(z)) = (
+                observed.pos.x().checked_add(dx),
+                observed.pos.y().checked_add(dy),
+                observed.pos.z().checked_add(dz),
+            ) else {
+                continue;
+            };
+            schedule.enqueue_fluid(
+                ChunkKey {
+                    dimension: observed.key.dimension,
+                    pos: ChunkPos::new(x >> 4, z >> 4),
+                },
+                BlockPos::new(x, y, z),
+                tick,
+            );
+        }
+    }
+    schedule
+}
+
+/// Builds the tick-local farmland candidate queue from staged block writes,
+/// following the moisture half of the same source facade: a fresh farmland
+/// cell queues one candidate, a fluid cell wakes its hydration window, both
+/// due now. The facade keys both arms on the (old, new) pair, but the staged
+/// overlay carries only the new value, so the arms fire on the new value
+/// instead. Over-enqueueing is safe: inspection is exact and every charge
+/// stays inside the frozen budgets.
+pub fn derive_farmland_schedule(
+    context: &TickContext<'_>,
+    tick: u64,
+) -> farmland::FarmlandSchedule {
+    let mut schedule = farmland::FarmlandSchedule::new();
+    for observed in context.changed_blocks() {
+        if is_farmland(observed.block) {
+            schedule.enqueue_candidate(observed.key, observed.pos, tick);
+        }
+        if is_fluid(observed.block) {
+            schedule.enqueue_candidate_window(observed.key, observed.pos, tick);
+        }
+    }
+    schedule
+}
 
 /// Reduces one claimed tick into its owned publication.
 ///
@@ -184,6 +270,7 @@ fn dispatch_rows(
     for envelope in dispatched {
         admit_command(context, envelope)?;
     }
+    admit_bed_entries(context)?;
     companions::run(context, batch_call(RulePhase::CompanionIntent))?;
     world_acquisition::run(context, batch_call(RulePhase::Acquire))?;
     for session in active_players(context) {
@@ -234,7 +321,12 @@ fn dispatch_rows(
         route_interaction(context, &envelope);
     }
     for interaction in context.read().interactions().to_vec() {
-        route_internal(context, &interaction)?;
+        // Bed entries already ran inline at intake; only door toggles settle
+        // in this loop.
+        if interaction.kind != InteractionKind::Door {
+            continue;
+        }
+        route_door(context, &interaction)?;
     }
     let record = context.sleep_record().clone();
     let sleeping = context.sleeping();
@@ -249,15 +341,31 @@ fn dispatch_rows(
     let furnace_interest = furnace_interest(context, &active_keys);
     furnaces::advance(context, &furnace_interest)?;
     fluids::run(context, batch_call(RulePhase::FluidRescan))?;
-    let mut fluid_schedule = fluids::FluidSchedule::new();
-    let scope: BTreeSet<ChunkKey> = active_keys.iter().copied().collect();
-    fluids::rescan(&mut fluid_schedule, context, &scope, tick, 0)?;
+    // Rescan starts empty: section cursors resume cross-tick state the
+    // reducer does not hold yet, and mutations never open sections (the
+    // boundary loader owns that). The scope still filters.
+    let mut scope: BTreeSet<ChunkKey> = active_keys.iter().copied().collect();
+    for observed in context.changed_blocks() {
+        scope.insert(observed.key);
+    }
+    let mut rescan_schedule = fluids::FluidSchedule::new();
+    fluids::rescan(
+        &mut rescan_schedule,
+        context,
+        &scope,
+        tick,
+        FLUID_FLOW_DELAY,
+    )?;
     fluids::run(context, batch_call(RulePhase::FluidUpdate))?;
-    fluids::update(&mut fluid_schedule, context, tick, 0)?;
+    let mut fluid_schedule = derive_fluid_schedule(context, tick);
+    fluids::update(&mut fluid_schedule, context, tick, FLUID_FLOW_DELAY)?;
     farmland::run(context, batch_call(RulePhase::Farmland))?;
-    let mut farmland_schedule = farmland::FarmlandSchedule::new();
+    let mut farmland_schedule = derive_farmland_schedule(context, tick);
     farmland::advance(&mut farmland_schedule, context, &scope, tick)?;
     crops::run(context, batch_call(RulePhase::Trample))?;
+    // Footprints stay fresh: the batch collects landing edges from the
+    // staged players every call and never carries, so changed blocks are
+    // not an input here.
     let mut footprints = crops::FootprintSchedule::new();
     crops::settle_tramples(&mut footprints, context)?;
     crops::run(context, batch_call(RulePhase::SnowFootprint))?;
@@ -363,48 +471,61 @@ fn route_interaction(context: &mut TickContext<'_>, envelope: &CommandEnvelope) 
     let _ = drops::run(context, call);
 }
 
-/// Routes one authority-owned interaction: bed entries thread the sleep
-/// record, door toggles settle through placement geometry. Ordinary
-/// refusals (daytime beds, silent geometry) skip without stopping the row.
-fn route_internal(
+/// Runs every bed-kind authority interaction inline at intake, threading
+/// the sleep record across entries.
+///
+/// This deviates from the refined table's deferred-loop placement: the Rust
+/// entry is atomic (ray plus record in one call) and the internal lane has
+/// no deferred queue, so it cannot ride the interaction bag. Go validates
+/// bed commands at intake (`ApplyPlayerCommands` in
+/// `packages/server/sim/entity/tick.go`) and executes them in its
+/// interactions loop (`SettleGameplay` there); the intake half anchors this
+/// placement. Ordinary refusals (daytime beds, silent geometry) skip without
+/// stopping intake; any other failure stops the tick.
+fn admit_bed_entries(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+    for interaction in context.read().interactions().to_vec() {
+        if interaction.kind != InteractionKind::Bed {
+            continue;
+        }
+        let record = context.sleep_record().clone();
+        match sleep::enter(context, &record, &interaction) {
+            Ok((report, entered)) => {
+                context.set_sleep_record(entered);
+                if report.applied == 1 {
+                    // A recorded anchor means the session fell asleep: entry
+                    // is the only grow path for the reducer-owned sleeping
+                    // set.
+                    let mut sleeping = context.sleeping();
+                    if !sleeping.contains(&interaction.session) {
+                        sleeping.push(interaction.session);
+                        context.set_sleeping(sleeping);
+                    }
+                }
+            }
+            Err(ServerError::InvalidInput { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Settles one authority-owned door toggle through placement geometry. A
+/// silent no-op skips without stopping the loop; any other failure stops
+/// the tick.
+fn route_door(
     context: &mut TickContext<'_>,
     interaction: &AuthorityInteraction,
 ) -> Result<(), ServerError> {
-    match interaction.kind {
-        InteractionKind::Bed => {
-            let record = context.sleep_record().clone();
-            match sleep::enter(context, &record, interaction) {
-                Ok((report, entered)) => {
-                    context.set_sleep_record(entered);
-                    if report.applied == 1 {
-                        // A recorded anchor means the session fell asleep:
-                        // entry is the only grow path for the reducer-owned
-                        // sleeping set.
-                        let mut sleeping = context.sleeping();
-                        if !sleeping.contains(&interaction.session) {
-                            sleeping.push(interaction.session);
-                            context.set_sleeping(sleeping);
-                        }
-                    }
-                    Ok(())
-                }
-                Err(ServerError::InvalidInput { .. }) => Ok(()),
-                Err(error) => Err(error),
-            }
-        }
-        InteractionKind::Door => {
-            let call = RuleCall {
-                phase: RulePhase::Interaction,
-                actor: None,
-                command: None,
-                internal: Some(interaction),
-            };
-            match world_mutation::run(context, call) {
-                Ok(_) => Ok(()),
-                Err(ServerError::InvalidInput { .. }) => Ok(()),
-                Err(error) => Err(error),
-            }
-        }
+    let call = RuleCall {
+        phase: RulePhase::Interaction,
+        actor: None,
+        command: None,
+        internal: Some(interaction),
+    };
+    match world_mutation::run(context, call) {
+        Ok(_) => Ok(()),
+        Err(ServerError::InvalidInput { .. }) => Ok(()),
+        Err(error) => Err(error),
     }
 }
 

@@ -1835,17 +1835,6 @@ impl<'a> TickContext<'a> {
         self.spent_farmland_reads
     }
 
-    /// Tick-charged snapshot chunks. No publication counter carries them;
-    /// the save scheduler owns that attribution and reads them here.
-    pub fn spent_snapshot_chunks(&self) -> usize {
-        self.spent_snapshot_chunks
-    }
-
-    /// Tick-charged snapshot bytes, owned downstream like the chunk count.
-    pub fn spent_snapshot_bytes(&self) -> usize {
-        self.spent_snapshot_bytes
-    }
-
     pub fn stage(&mut self, effect: RuleEffect) -> Result<(), RuleReject> {
         let mut pending_projectiles = None;
         let mut pending_damage = 0;

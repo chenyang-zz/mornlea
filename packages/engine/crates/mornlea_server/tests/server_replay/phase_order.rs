@@ -14,11 +14,30 @@
 //! between projectile and passive phases, real hunger settling before motion)
 //! needs actor and world seeding the frozen reducer surface does not supply;
 //! that layer is recorded for the integration owner, not invented here.
+//!
+//! The closing case is different: a placement and a tilling stage real dirt
+//! through providers the test drives directly on a seeded context, and the
+//! reducer's own dirty-driven derivation plus the fluid and support bodies
+//! prove the same-tick cascade genuinely. No endpoint seeding is involved;
+//! the row order around it stays with the source guard above.
 
-use mornlea_domain::{Command, PlayerId};
+use std::collections::BTreeSet;
+
+use mornlea_domain::{
+    BlockPos, ChunkPos, Command, CommandEnvelope, CommandEnvelopeParts, Dimension, FiniteVec3,
+    LookAngles, MotionState, MotionStateParts, PlacementIntent, PlayerId, SurvivalState,
+    SurvivalStateParts, Weather,
+};
 use mornlea_protocol::{LoginStart, PlayIntent, admit_login};
-use mornlea_server::contracts::{ServerLimits, TickBudget, TransportKind};
-use mornlea_server::state::AuthorityState;
+use mornlea_server::contracts::{
+    ActorBody, ActorKey, ActorLifecycle, ActorRecord, BlockObservation, ChunkKey, EnvironmentState,
+    InventoryRecord, RuleCall, RuleEffect, RulePhase, RuleTunables, ServerLimits, SessionKey,
+    TickBudget, TransportKind,
+};
+use mornlea_server::core::step;
+use mornlea_server::rules::{farmland, fluids, supports, tools, world_mutation};
+use mornlea_server::state::{AuthorityState, TickContext};
+use mornlea_storage::{ItemStack, PlayerLocation, PlayerSave};
 
 fn authority() -> AuthorityState {
     AuthorityState::try_new(
@@ -160,14 +179,15 @@ const ADMIT_CHAIN: &[&str] = &[
 /// and buckets, then panel drops.
 const GATE_CHAIN: &[&str] = &["world_mutation::run", "tools::run", "drops::run"];
 
-/// The full frozen dispatch chain in source order: intake loop, intent,
-/// acquire, the per-actor survival line, companion motion, hostile planning
-/// through player deaths, passive deaths, companion placement, the single
-/// ordered interaction loop with its internal arm, sleep settlement, drops,
-/// furnaces, the world sweep row, container moves, mining, workbench
-/// lifecycle, support and the single climate close.
+/// The full frozen dispatch chain in source order: intake loop with inline
+/// bed entries, intent, acquire, the per-actor survival line, companion
+/// motion, hostile planning through player deaths, passive deaths, companion
+/// placement, the single ordered interaction loop with its door arm, sleep
+/// settlement, drops, furnaces, the world sweep row, container moves, mining,
+/// workbench lifecycle, support and the single climate close.
 const DISPATCH_CHAIN: &[&str] = &[
     "admit_command",
+    "admit_bed_entries",
     "companions::run",
     "world_acquisition::run",
     "player_survival::run",
@@ -187,7 +207,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "passives::run",
     "companions::run",
     "route_interaction",
-    "route_internal",
+    "route_door",
     "sleep::settle",
     "drops::run",
     "drops::advance",
@@ -322,6 +342,10 @@ fn deferred_interactions_keep_order() {
         fn_body(&code, "fn route_interaction"),
         &["world_mutation::run", "tools::run", "drops::run"],
     );
+    // Bed entries run inline at intake ahead of intent; door toggles settle
+    // through placement geometry in the row loop.
+    chain_positions(fn_body(&code, "fn admit_bed_entries"), &["sleep::enter"]);
+    chain_positions(fn_body(&code, "fn route_door"), &["world_mutation::run"]);
 }
 
 #[test]
@@ -388,4 +412,246 @@ fn budget_carry_over_two_ticks() {
     assert_eq!(third.counters.commands, 1);
     assert_eq!(third.counters.carried, 0);
     assert_eq!(third.counters.stale, 0);
+}
+
+// Stable block numbers mirrored from the frozen const block in
+// `packages/shared/core/block.go`.
+const AIR: u16 = 0;
+const STONE: u16 = 2;
+const DIRT: u16 = 3;
+const FARMLAND_DRY: u16 = 35;
+const SHORT_GRASS: u16 = 84;
+// Stable item numbers mirrored from `packages/shared/core/item.go`.
+const ITEM_DIRT: u16 = 2;
+const ITEM_STONE_HOE: u16 = 30;
+
+fn uuid(tag: u8) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[0] = tag.max(1);
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    bytes
+}
+
+fn environment() -> EnvironmentState {
+    EnvironmentState {
+        seed: 7,
+        next_tick: 0,
+        world_time: 0,
+        day_phase_offset: 0,
+        season_offset: 0,
+        weather: Weather::Clear,
+        weather_remaining: 0,
+        difficulty: 0,
+        tunables: RuleTunables::source_defaults(),
+    }
+}
+
+fn player_body(position: [f32; 3]) -> PlayerSave {
+    PlayerSave {
+        player_id: mornlea_storage::PlayerId::from_bytes(uuid(1)),
+        revision: 1,
+        display_name: "Tester".to_owned(),
+        current: PlayerLocation {
+            dimension: 0,
+            position,
+        },
+        yaw: 0.0,
+        pitch: 0.0,
+        safe: None,
+        inventory: mornlea_storage::Inventory::default(),
+        health: 20,
+        hunger: 20,
+        saturation_milli: 5_000,
+        exhaustion_milli: 0,
+        respawn_present: false,
+        respawn_position: [0.0, 0.0, 0.0],
+        respawn_dimension: 0,
+        armor: [ItemStack::default(); 4],
+    }
+}
+
+fn player_actor(session: SessionKey, position: [f32; 3], yaw: f32, pitch: f32) -> ActorRecord {
+    ActorRecord::try_new(
+        ActorKey::Player(session),
+        ActorLifecycle::Active,
+        Dimension::OVERWORLD,
+        MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).expect("position"),
+            velocity: FiniteVec3::try_new([0.0, 0.0, 0.0]).expect("velocity"),
+            on_ground: true,
+        }),
+        LookAngles::try_new(yaw, pitch).expect("look"),
+        SurvivalState::try_new(SurvivalStateParts {
+            health: 20,
+            oxygen: 300,
+            hunger: 20,
+            saturation_zero: false,
+            armor_points: 0,
+        })
+        .expect("survival"),
+        ActorBody::Player(player_body(position)),
+    )
+    .expect("player actor")
+}
+
+fn overworld_key(pos: BlockPos) -> ChunkKey {
+    ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(pos.x() >> 4, pos.z() >> 4),
+    }
+}
+
+fn observation(pos: BlockPos, block: u16) -> BlockObservation {
+    BlockObservation::try_new(overworld_key(pos), 1, 1, pos, block).expect("block observation")
+}
+
+fn south_look() -> LookAngles {
+    LookAngles::try_new(std::f32::consts::PI, 0.0).expect("look")
+}
+
+fn east_look() -> LookAngles {
+    LookAngles::try_new(-std::f32::consts::PI / 2.0, 0.0).expect("look")
+}
+
+fn envelope(session: SessionKey, sequence: u64, command: Command) -> CommandEnvelope {
+    CommandEnvelope::try_new(CommandEnvelopeParts {
+        tick: 0,
+        session: session.get(),
+        sequence,
+        arrival_index: 0,
+        command,
+    })
+    .expect("envelope")
+}
+
+fn interaction_call(envelope: &CommandEnvelope) -> RuleCall<'_> {
+    RuleCall {
+        phase: RulePhase::Interaction,
+        actor: None,
+        command: Some(envelope),
+        internal: None,
+    }
+}
+
+fn support_call() -> RuleCall<'static> {
+    RuleCall {
+        phase: RulePhase::Support,
+        actor: None,
+        command: None,
+        internal: None,
+    }
+}
+
+/// A placed block reaches fluid evaluation and support sweeping in the same
+/// tick: the placement stages dirt, the reducer's dirty-driven derivation
+/// queues the cell plus its six neighbors for fluid update while firing no
+/// moisture arm for plain dirt, the update examines every queued cell
+/// without touching the solid, and the support sweep removes the wild grass
+/// the fresh dirt no longer holds. A tilled cell in the same scene proves
+/// the moisture arm genuinely: new farmland queues one candidate the
+/// moisture pass examines.
+#[test]
+fn place_reaches_fluid_and_support_same_tick() {
+    let placed = BlockPos::new(0, 65, 1);
+    let tilled = BlockPos::new(2, 65, 0);
+    let mut state = authority();
+    let session = state
+        .admit(login(33, "Place"), TransportKind::Memory)
+        .unwrap();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let actor = ActorKey::Player(session);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .expect("environment");
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            [0.5, 64.0, 0.5],
+            std::f32::consts::PI,
+            0.0,
+        )))
+        .expect("actor");
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = ItemStack {
+        item: ITEM_STONE_HOE,
+        count: 1,
+        durability: 2,
+    };
+    inventory.slots[1] = ItemStack {
+        item: ITEM_DIRT,
+        count: 1,
+        durability: 0,
+    };
+    context.preload_inventory(actor, inventory);
+    // Placement ray south: air, air, dirt face with stone below; the grass
+    // above the target waits for the support sweep.
+    for (pos, block) in [
+        (BlockPos::new(0, 65, 0), AIR),
+        (placed, AIR),
+        (BlockPos::new(0, 66, 1), SHORT_GRASS),
+        (BlockPos::new(0, 64, 1), STONE),
+        (BlockPos::new(0, 65, 2), DIRT),
+        // Tilling ray east, clear of the placement lane.
+        (BlockPos::new(1, 65, 0), AIR),
+        (tilled, DIRT),
+        (BlockPos::new(2, 66, 0), AIR),
+    ] {
+        context.preload_block(observation(pos, block));
+    }
+    let place = envelope(
+        session,
+        1,
+        Command::PlaceBlock(PlacementIntent::try_new(south_look(), 1).expect("placement intent")),
+    );
+    world_mutation::run(&mut context, interaction_call(&place)).expect("placement");
+    let till = envelope(session, 2, Command::TillSoil(east_look()));
+    tools::run(&mut context, interaction_call(&till)).expect("till");
+    let changed = context.changed_blocks();
+    assert_eq!(changed.len(), 2, "placement and tilling both stage dirt");
+    assert!(
+        changed
+            .iter()
+            .any(|cell| cell.pos == placed && cell.block == DIRT)
+    );
+    assert!(
+        changed
+            .iter()
+            .any(|cell| cell.pos == tilled && cell.block == FARMLAND_DRY)
+    );
+    // Dirty-driven fluid queue: each changed cell plus its six neighbors,
+    // sharing no cell here, all due now.
+    let mut fluid = step::derive_fluid_schedule(&context, 0);
+    assert_eq!(
+        fluid.pending_fluid(Dimension::OVERWORLD),
+        14,
+        "both dirt cells reach fluid evaluation with their neighborhoods"
+    );
+    // Only the fresh farmland fires a moisture arm; plain dirt queues
+    // nothing, matching the source facade's two arms.
+    let mut farm = step::derive_farmland_schedule(&context, 0);
+    assert_eq!(farm.pending_candidates(Dimension::OVERWORLD), 1);
+    let scope: BTreeSet<ChunkKey> = changed.iter().map(|cell| cell.key).collect();
+    let update = fluids::update(&mut fluid, &mut context, 0, 5).expect("fluid update");
+    assert_eq!(update.examined, 14);
+    assert_eq!(update.applied, 0, "no fluid is present to flow");
+    assert_eq!(
+        context.read().block(Dimension::OVERWORLD, placed),
+        Some(DIRT),
+        "fluid evaluation leaves the solid placement untouched"
+    );
+    let moisture = farmland::advance(&mut farm, &mut context, &scope, 0).expect("moisture check");
+    assert_eq!(moisture.examined, 1, "the fresh farmland is rechecked");
+    let support = supports::run(&mut context, support_call()).expect("support sweep");
+    assert_eq!(support.applied, 1, "the fresh dirt drops its grass");
+    assert_eq!(
+        context
+            .read()
+            .block(Dimension::OVERWORLD, BlockPos::new(0, 66, 1)),
+        Some(AIR)
+    );
+    assert_eq!(
+        context.read().block(Dimension::OVERWORLD, placed),
+        Some(DIRT)
+    );
 }
