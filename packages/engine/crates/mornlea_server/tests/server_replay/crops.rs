@@ -205,6 +205,7 @@ fn landing_context<'a>(
     authority: &'a mut AuthorityState,
     sessions: &[SessionKey],
     position: [f32; 3],
+    with_environment: bool,
 ) -> TickContext<'a> {
     let initial = FixtureState {
         runtime: Vec::new(),
@@ -237,9 +238,11 @@ fn landing_context<'a>(
             .stage(RuleEffect::Actor(player_actor(*session, position, true)))
             .expect("landed actor");
     }
-    context
-        .stage(RuleEffect::Environment(environment()))
-        .expect("environment");
+    if with_environment {
+        context
+            .stage(RuleEffect::Environment(environment()))
+            .expect("environment");
+    }
     context
 }
 
@@ -289,7 +292,12 @@ fn dual_landing_once() {
     let foot = BlockPos::new(0, 0, 0);
     let crop = BlockPos::new(0, 1, 0);
     let bare = BlockPos::new(5, 0, 0);
-    let mut context = landing_context(&mut authority, &[first, second, third], [0.5, 1.0, 0.5]);
+    let mut context = landing_context(
+        &mut authority,
+        &[first, second, third],
+        [0.5, 1.0, 0.5],
+        true,
+    );
     // Move the third actor's column onto its own bare farmland cell.
     context
         .stage(RuleEffect::Actor(player_actor(
@@ -406,7 +414,7 @@ fn capacity_and_second_write_fault() {
         .expect("session");
     let foot = BlockPos::new(0, 0, 0);
     let crop = BlockPos::new(0, 1, 0);
-    let mut context = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5]);
+    let mut context = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5], true);
     context.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_DRY), (crop, WHEAT_MATURE)]));
     for slot in 0..(DROPS_PER_CHUNK - 1) as u8 {
         context.preload_drop(occupied_drop(foot, slot));
@@ -494,7 +502,7 @@ fn environmental_crop_outputs_and_missing_environment() {
             .unwrap();
         let foot = BlockPos::new(0, 0, 0);
         let crop = BlockPos::new(0, 1, 0);
-        let mut ctx = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5]);
+        let mut ctx = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5], true);
         ctx.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_WET), (crop, block)]));
         let report =
             provider::settle_tramples(&mut provider::FootprintSchedule::new(), &mut ctx).unwrap();
@@ -515,20 +523,33 @@ fn environmental_crop_outputs_and_missing_environment() {
         );
     }
 
-    let mut check_authority = authority();
-    let session = check_authority
-        .admit(admitted(1, "Ada"), TransportKind::Memory)
-        .unwrap();
     let foot = BlockPos::new(0, 0, 0);
     let crop = BlockPos::new(0, 1, 0);
-    let mut ctx = landing_context(&mut check_authority, &[session], [0.5, 1.0, 0.5]);
-    ctx.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_DRY), (crop, 37)]));
-    assert_eq!(ctx.read().drops(chunk_key(crop)).len(), 0);
-    // A new context without a staged environment must preserve the pending landing.
     let mut authority = authority();
-    let mut missing = TickContext::harness(&mut authority, TickBudget::full());
+    let session = authority
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut missing = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5], false);
     missing.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_DRY), (crop, 37)]));
     let mut schedule = provider::FootprintSchedule::new();
+    // The landing edge is staged in actor poses; collection into the schedule
+    // has not begun, so a missing environment must leave both inputs intact.
+    assert_eq!(schedule.trample_pending(), 0);
+    assert!(
+        !missing
+            .read()
+            .pre_step_motion(ActorKey::Player(session))
+            .unwrap()
+            .on_ground()
+    );
+    assert!(
+        missing
+            .read()
+            .actor(ActorKey::Player(session))
+            .unwrap()
+            .motion
+            .on_ground()
+    );
     assert_eq!(
         provider::settle_tramples(&mut schedule, &mut missing),
         Err(mornlea_server::contracts::ServerError::InvalidInput {
@@ -539,6 +560,37 @@ fn environmental_crop_outputs_and_missing_environment() {
         missing.read().block(Dimension::OVERWORLD, foot),
         Some(FARMLAND_DRY)
     );
+    assert_eq!(missing.read().block(Dimension::OVERWORLD, crop), Some(37));
+    assert_eq!(missing.read().drops(chunk_key(crop)).len(), 0);
+    assert_eq!(schedule.trample_pending(), 0);
+    assert!(
+        !missing
+            .read()
+            .pre_step_motion(ActorKey::Player(session))
+            .unwrap()
+            .on_ground()
+    );
+    assert!(
+        missing
+            .read()
+            .actor(ActorKey::Player(session))
+            .unwrap()
+            .motion
+            .on_ground()
+    );
+
+    missing
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    let settled = provider::settle_tramples(&mut schedule, &mut missing).unwrap();
+    assert_eq!((settled.examined, settled.applied), (1, 1));
+    assert_eq!(missing.read().block(Dimension::OVERWORLD, foot), Some(DIRT));
+    assert_eq!(missing.read().block(Dimension::OVERWORLD, crop), Some(AIR));
+    assert_eq!(missing.read().drops(chunk_key(crop)).len(), 1);
+    assert_eq!(missing.read().drops(chunk_key(crop))[0].stack.item, 34);
+    let repeated = provider::settle_tramples(&mut schedule, &mut missing).unwrap();
+    assert_eq!(repeated.applied, 0);
+    assert_eq!(missing.read().drops(chunk_key(crop)).len(), 1);
 }
 
 #[test]
@@ -549,7 +601,7 @@ fn full_slots_merge_at_crop_cell_and_stale_ground_refuses() {
         .unwrap();
     let foot = BlockPos::new(0, 0, 0);
     let crop = BlockPos::new(0, 1, 0);
-    let mut ctx = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5]);
+    let mut ctx = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5], true);
     ctx.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_WET), (crop, WHEAT_MATURE)]));
     for slot in 0..32 {
         let mut drop = occupied_drop(foot, slot);
