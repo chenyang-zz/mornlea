@@ -147,6 +147,12 @@ against this file.
   and the section-aware 65536/4096/4095 rescan ceilings. The provider
   carries work in a caller-owned `FluidSchedule`; the serial reducer owns
   tick wiring.
+- `src/rules/eating.rs` owns atomic eating on the `Eating` phase: hold 32
+  with the start counting 1 and `(slot, item)` continuity, interrupt
+  precedence structural over settlement, and the one-compound settlement
+  (inventory, hunger, saturation with the frozen food table, progress
+  reset). Progress is transient only; the eating-ticks constant mirrors the
+  frozen tunables value (no getter exists on that field).
 - `src/rules/mining.rs` owns continuous mining progression on the
   `MiningStep` phase: key-unchanged increments to saturation, key change
   restarts at 1, completions through the 1.6 transaction exactly once, human
