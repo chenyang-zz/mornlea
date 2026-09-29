@@ -48,6 +48,11 @@ pub const CANCEL_RUN_TIMEOUT: Duration = Duration::from_millis(100);
 /// Dialogue RPC timeout and snapshot registration horizon.
 pub const DIALOGUE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Snapshot registration horizon for plan dispatch; same value as the
+/// dialogue timeout by packet, named separately so the plan path does not
+/// read as dialogue-coupled.
+pub const PLAN_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Hard ceiling for a dialogue RPC deadline.
 pub const DIALOGUE_TIMEOUT_MAX: Duration = Duration::from_secs(60);
 
@@ -630,7 +635,7 @@ impl PlanHost {
         })?;
         let instruction = dispatch.snapshot.instruction.clone();
         let frozen = dispatch.snapshot.clone();
-        let deadline = Deadline::after(clock.monotonic(), DIALOGUE_TIMEOUT).map_err(|_| {
+        let deadline = Deadline::after(clock.monotonic(), PLAN_REGISTER_TIMEOUT).map_err(|_| {
             ServerError::Agent {
                 code: AgentErrorCode::AgentUnavailable,
                 status: 503,
@@ -1246,7 +1251,9 @@ fn check_revision(
 }
 
 /// Emits the first-step action for a validated plan: mine holds, places,
-/// and clamped single-step moves toward go-to and follow targets.
+/// and clamped single-step moves toward go-to and follow targets. This is
+/// the task runner's emission site; the envelopes it builds are what the
+/// companion action provider admits.
 fn first_action(slot: &PlanSlot, tick: u64, plan: &AgentPlan) -> Option<CompanionActionEnvelope> {
     let first = plan.steps.first()?;
     let action = match first {

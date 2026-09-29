@@ -610,7 +610,7 @@ fn plan_current_world_revalidation() {
     .unwrap();
     let receipt = ingress
         .admit(&gate, 102, envelope)
-        .expect("task runner emits admissible 2.9a actions");
+        .expect("task runner emits admissible companion actions");
     assert_eq!(receipt.tick(), 102);
 }
 
