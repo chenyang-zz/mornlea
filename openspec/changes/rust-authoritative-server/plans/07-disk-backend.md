@@ -99,9 +99,11 @@ compaction cannot interleave on the same owner.
    `.mcgo-world-backup-v1.json` matching {source,seed,migration_version:1};
    matching reuse still syncs/closes the destination parent. Reject all other
    existing targets unchanged. New copy uses a unique sibling .<name>.tmp-*,
-   sorted recursive traversal and a <=64 KiB copy buffer. Reject symlinks and
-   nonregular files; skip world.lock, identity, and names matching Go's hidden
-   .tmp-/.compact-/.create- temporary convention. Preserve Unix permission bits.
+   sorted recursive traversal and a <=64 KiB copy buffer. Lstat each entry and
+   reject symlinks before exclusions. Skip world.lock, identity, and exact Go
+   hidden temporary patterns (a second dot is required, e.g. .a.tmp-*).
+   Reject remaining nonregular files after exclusions, matching Go even for a
+   temp-named FIFO. Preserve Unix permission bits.
    Sync and fallibly close each complete file, write identity with serde_json,
    sync directories bottom-up, recheck target absence and cancellation, rename,
    then sync/close parent without checking cancellation after publication.

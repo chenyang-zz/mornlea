@@ -14,9 +14,15 @@ filesystem provider boundary. Save bytes and schema validation remain in
   that exception to callers or add environment-based fault bypasses.
 - `region_io.rs` owns one region's bank/payload commits and compaction;
   `atomic_file.rs` owns standalone same-directory replacement.
-- `disk.rs`, `lease.rs` and `recovery.rs` are the serial join for exclusive world
-  ownership, decoded load/recovery and backup. Planned modules are not runtime
-  acceptance until their OpenSpec nodes pass.
+- `disk.rs` joins the standalone/region providers with bounded LRU ownership,
+  whole-request validation and exact partial acknowledgments. An evicted file
+  close consumes its descriptor even on failure: remove that cache entry while
+  retaining the world lease, so retries can reopen it or finish shutdown.
+- `lease.rs` acquires the native world.lock before metadata or save access;
+  only successful complete close releases it. `recovery.rs` streams named
+  backups with canonical source identity, exact Go exclusion patterns and
+  file/directory durability. Symlinks are rejected before exclusions and other
+  nonregular entries afterward. Matching backup retries still sync the parent.
 
 ## Failure and lifecycle
 

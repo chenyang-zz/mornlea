@@ -364,6 +364,43 @@ impl RegionIo {
             .map_err(|e| io_error(Operation::Sync, e))
     }
 
+    /// Use the selected bank and actual file length; unused tail and replaced
+    /// extents both count as waste, while malformed lengths never trigger work.
+    pub fn should_compact(&mut self, min_waste: u64, ratio: f64) -> Result<bool, ServerError> {
+        self.ensure_view()?;
+        if !ratio.is_finite() || ratio <= 0.0 {
+            return Ok(false);
+        }
+        let file_size = self
+            .file()?
+            .metadata()
+            .map_err(|error| io_error(Operation::Load, error))?
+            .len();
+        let data_start = u64::from(DATA_START_SECTOR) * u64::from(SECTOR_SIZE);
+        let Some(data_bytes) = file_size.checked_sub(data_start) else {
+            return Ok(false);
+        };
+        if data_bytes == 0 {
+            return Ok(false);
+        }
+        let live_bytes =
+            self.bank
+                .as_ref()
+                .ok_or(closed())?
+                .entries
+                .iter()
+                .try_fold(0u64, |total, entry| {
+                    total.checked_add(u64::from(entry.sector_count) * u64::from(SECTOR_SIZE))
+                });
+        let Some(live_bytes) = live_bytes else {
+            return Ok(false);
+        };
+        let Some(waste) = data_bytes.checked_sub(live_bytes) else {
+            return Ok(false);
+        };
+        Ok(waste >= min_waste && (waste as f64) >= ratio * (data_bytes as f64))
+    }
+
     pub fn close(&mut self) -> Result<(), ServerError> {
         self.closed = true;
         if let Some(file) = self.file.take() {

@@ -823,3 +823,19 @@ Worker make rust and Go Drop/Pickup oracle pass. Main full pinned server289
 (1 unit,16 parity,46 persistence,97 contract,129 replay), clippy/fmt and diff
 checks pass. Architecture skill: no change. All producer and actual reducer
 wiring remains explicit and unaccepted under2.8b/3.1.
+
+
+Disk backend accepted from3784bf6c plus137999f3 after independent Sol review.
+Real filesystem coverage includes Go/Rust lock contention both ways, partial
+region commits, LRU reopen, loaded migration facts, backup identity reuse and
+streaming faults. Review found a consumed descriptor retained in the eviction
+cache, overbroad hidden temporary matching, and symlink exclusion before lstat;
+three behavioral REDs and source-exact fixes passed targeted review. Plan07 now
+states the Go lstat/symlink→exclusion→nonregular order explicitly. Worker33
+recovery tests and actual Go storage/backup oracle pass. Main full pinned
+server322 tests (1 unit,16 parity,79 persistence,97 contract,129 replay),
+clippy/fmt, strict OpenSpec and diff checks pass. Native directory durability
+has executed on Darwin only; Windows qualification remains the full platform
+stage gate, and is not claimed by this provider acceptance. No default startup
+change, protocol/save schema change or real user-world access. Architecture
+skill: no change; the accepted retry/lease details remain in store/AGENTS.md.

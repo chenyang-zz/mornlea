@@ -6,7 +6,8 @@ OpenSpec behavior for this crate lives in
 `openspec/changes/rust-authoritative-server/`. The crate is a windowless rlib.
 Production dependencies are the F1 crates `mornlea_domain`,
 `mornlea_protocol`, and `mornlea_storage`, plus `mornlea_engine` for checked numerical kernels and
-`PhysicsTuning`. Native descriptor close uses target-scoped `libc` on Unix and
+`PhysicsTuning`; pinned `serde_json` handles the existing backup identity JSON.
+Native descriptor close uses target-scoped `libc` on Unix and
 `windows-sys` on Windows; all other unsafe code remains denied. It does not own
 GPU rendering, Godot presentation, or the
 Python Agent process. Workspace membership is `packages/engine/Cargo.toml`.
@@ -331,8 +332,9 @@ consume its cancellation and error contracts before joining the real backend.
   Live/Ready probes yet.
 - Topic modules under `src/rules/`, `src/transport/`, `src/store/` and
   `src/agent/` that are not named above stay registered and empty of
-  behavior. Later nodes own them. This crate does not implement the tick
-  reducer, a transport adapter, a real disk backend or the Agent host.
+  behavior. Later nodes own them. The actual tick reducer and Agent host remain
+  unaccepted; real transport and disk providers require their later endpoint
+  integration before full server acceptance.
 
 ## Consumer double (`tests/server_contract/contract_double.rs`)
 
