@@ -893,3 +893,13 @@ source behavior, with a regression, rather than inventing original-slot-only
 protection. All companion code is in entity/mining.go (no companion_mining.go
 source file exists). Its bed branch clears both halves, whereas its door branch
 is generic single-cell; preserve that asymmetry and original harvestability.
+
+
+Controller splits player drop commands into a checked Q/inventory/crafting body
+and later container consumer. Plan15 freezes a single authoritative foot-output
+function and typed RuleReject, with ordered Interaction invocation left to3.1.
+Container views still need their actual ray/reference binding and committed-close
+state completion before a panel drop can use them; do not accept that behavior
+from an existing move double. Main implements this coupled drops/crafting-helper
+node directly; three isolated traces own support/environment/mining. No file
+ownership overlap. Architecture skill:no change.
