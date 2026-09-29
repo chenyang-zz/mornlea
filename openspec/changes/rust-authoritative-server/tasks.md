@@ -28,7 +28,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.2 Implement time, season, weather and environment transition replay.
 - [x] 2.3 Implement bounded fluid rescan and update scheduling.
 - [x] 2.4a Implement bounded farmland moisture.
-- [ ] 2.4b Implement actor trample and snow footprints.
+- [x] 2.4b Implement actor trample and snow footprints.
 - [ ] 2.4d Implement deterministic crop, dry farmland, tree, grass and snow random rules.
 - [ ] 2.4c Implement ordered block-support sweeps.
 - [x] 2.5a Implement authoritative player control and movement.

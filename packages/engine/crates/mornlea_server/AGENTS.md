@@ -186,6 +186,14 @@ against this file.
   grass-to-dirt through the transaction with the frozen sampler salts.
   Death stages the terminal record with no loot (drops are a later node);
   flee arming belongs to the combat nodes.
+- `src/rules/crops.rs` owns actor footprints on the `Trample` and
+  `SnowFootprint` phases: landing-edge detection with the 0.6-width strict
+  2x2 AABB, farmland/crop settlement through single-write transactions with
+  the frozen capacity preflight (full capacity keeps the whole cell
+  silently), and the one exceptional second-write fault mirroring Go's
+  ordered two-commit stage — never a two-write transaction. Snow reduces
+  one tier per landing before random sampling; drop minting belongs to the
+  drop node.
 - `src/rules/hostile_actors.rs` owns the hostile lifecycle on the motion
   and burn-distant phases: global 64 with one night-window candidate per
   tick anchored by session-order rotation (never uuid order — the target
