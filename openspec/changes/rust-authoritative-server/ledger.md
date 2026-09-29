@@ -1186,3 +1186,15 @@ accepted run_companion consumer, and queue/drain mechanics stay with
 reducer/endpoint. One isolated implementer owns companions.rs plus its replay
 topic; resolvers, kernel, ingress and mining are read-only.
 Architecture skill: no change.
+
+
+Companion action execution accepted from fcb5ee1c (isolated worker, 2 files
++1800/-2). Intent validates payload/liveness with first-valid-per-ID arrival
+selection, Motion steps through the shared physics exit with neutral yaw
+retention, Placement settles ID-byte-ordered through the shared transaction;
+mining stays with the accepted consumer and provenance with ingress, both
+verified read-only. REDs named before the body; GREEN companions6, mining11,
+ingress3, full server223+127+79+16+2, fmt, packet clippy, and Go
+entity/runtime companion oracles pass. Independent review approved all eight
+dimensions with no findings.
+Architecture skill: no change.

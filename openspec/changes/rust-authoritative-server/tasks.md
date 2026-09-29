@@ -66,7 +66,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 2.8b Complete drop commands and all producer integration.
 - [x] 2.8c Implement sleeping and time transition.
 - [x] 2.9a Implement sessionless companion candidate provenance and admission.
-- [ ] 2.9b Revalidate and execute companion actions through the shared mutation pipeline ([packet](plans/23-companion-action-execution.md)).
+- [x] 2.9b Revalidate and execute companion actions through the shared mutation pipeline ([packet](plans/23-companion-action-execution.md)).
 
 ## 3. Adapters and serial integration
 
