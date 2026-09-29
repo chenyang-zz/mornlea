@@ -459,3 +459,28 @@ Independent GPT-6 Sol contract review: approved, no actionable findings. The
 review checked CAS identity, ordered preview/apply, damage capacity/rollback,
 fixture continuity, and derived consumers. Node 2.7b0 accepted at the scoped
 commit containing this record; provider dispatch records its resulting SHA.
+
+
+Node 2.6e readiness found two shared gaps: bucket suppression is absent, and a
+full exhaustion receipt lane can fail after a hoe transaction commits. The
+controller added 2.6e0 with nonmutating preflight and a bounded tick-local
+suppression set, keeping persistent ActorRuntime unchanged. Source ruling:
+Go farming.go writes dry farmland before the moisture phase; the prior packet's
+eager radius-four wetness clause was wrong and is corrected. Go tick.go emits
+PlacementSuccess only for buckets, not hoe/bone meal. Independent tools work
+remains red-first and waits for accepted repair SHA. These are source-backed
+compatibility decisions, not new gameplay. Architecture skill: no change.
+
+
+Action receipt validation: behavioral RED showed mining progress 2 instead of
+cleared and a successful charge preflight at full capacity. GREEN: mining
+regression and receipt boundary cases pass; full server suite passes 153 tests
+(16 transport,13 persistence,57 contract,67 replay). Scoped fmt/clippy, strict
+OpenSpec validation, Go `go test ./packages/server/sim/entity -run
+'Till|BoneMeal|Bucket' -count=1`, and diff checks pass. Independent Sol review
+approved with no actionable findings. Node 2.6e0 accepted at this scoped commit.
+The first full run failed the pre-existing `agent_http::limits_and_no_extra_keys`
+acquire with AgentUnavailable/503; isolated reproduction and the next full run
+passed. Source investigation found the raw test listener is nonblocking while
+accepted sockets are not explicitly restored to blocking mode; investigate this
+possible platform race separately, without claiming it fixed here.

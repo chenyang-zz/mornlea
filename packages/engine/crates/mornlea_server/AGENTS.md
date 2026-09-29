@@ -217,6 +217,10 @@ against this file.
   walker/hurler caps, and 600-tick distant removal staged as a terminal
   record (set removal is the serial reducer's; the read view's linear
   block scan is a reducer-node throughput concern).
+- Tick-local successful bucket receipts suppress mining only in the current
+  context (at most eight player keys). Tools check suppression and exhaustion
+  receipt capacity before their transaction, then record success with the same
+  exclusive context. No suppression flag enters saved actor state.
 - `src/rules/mining.rs` owns continuous mining progression on the
   `MiningStep` phase: key-unchanged increments to saturation, key change
   restarts at 1, completions through the 1.6 transaction exactly once, human

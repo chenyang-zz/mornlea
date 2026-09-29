@@ -173,7 +173,7 @@ Tests `eating::tick_31_32_atomic` initialhunger10/saturation0/bread2 givesunchan
 
 ### Node2.6e: Farming tools and buckets
 
-Editable `S/src/rules/tools.rs`, `S/tests/server_replay/tools.rs`; read-only02 ray/BlockTxn/Inventory ports, Go farming.go/bone_meal.go/bucket.go; after1.6/2.1b/2.6a/2.4a. Till intact selected hoe,grass/dirt+air above,derivewetnessbyradius4scan,atomicblock+durability1;lastpoint succeeds then brokenform. Bone meal immaturewheat/potato/carrot incrementsone andspendsone; mature/sapling refusesno consumption. Collect only sourcewater with emptybucket; place intoair/flowingwater with waterbucket,solid/source refuses; atomicallysubstitutebucket+block,successsuppressminingonlythistick,publishexistingplacementsequence. No trustedclienttarget.
+Editable `S/src/rules/tools.rs`, `S/tests/server_replay/tools.rs`; read-only02 ray/BlockTxn/Inventory ports, Go farming.go/bone_meal.go/bucket.go; after1.6/2.1b/2.6a/2.4a. Till intact selected hoe,grass/dirt+air above,write dry farmland immediately (Go farming.go); the later moisture phase hydrates it,atomicblock+durability1;lastpoint succeeds then brokenform. Bone meal immaturewheat/potato/carrot incrementsone andspendsone; mature/sapling refusesno consumption. Collect only sourcewater with emptybucket; place intoair/flowingwater with waterbucket,solid/source refuses; atomicallysubstitutebucket+block,successsuppressminingonlythistick,publishexistingplacementsequence. No trustedclienttarget.
 
 Tests `tools::hoe_last_point`, `tools::bone_meal_one_stage`, `tools::bucket_source_and_flowing`, `tools::bucket_failure_conservation`:hoe1 producesfarmland+brokenhoe;immaturecrop+1/bonemeal-1,mature/saplingunchanged;sourcecollectwater→air/empty→waterbucket,flowingplace→source/water→emptybucket;blocked/fullbudget hashunchanged. Run CT(server_replay,tools), `go test ./packages/server/sim/entity -run 'Till|BoneMeal|Bucket' -count=1`.3.1 tests bucket suppresses mine exactlyone tick; rollback two files. Commit `feat(server): implement authoritative tools and buckets`.
 
@@ -320,3 +320,44 @@ ranged caller share this function. The serial reducer/hostile combat integration
 owns ranged target/cooldown decisions before calling spawn; it must not omit the
 ranged call when integrating the provider. No client supplies an authoritative
 projectile record or subscription scope.
+
+
+### Node 2.6e0: Tick-local action settlement preflight
+
+Controller-owned files: `S/src/core/state.rs`, `S/src/rules/mining.rs`,
+`S/tests/server_replay/mining.rs`, `S/tests/server_contract/contract_double.rs`,
+and `S/AGENTS.md`. Accepted predecessor is mining checkpoint `e15b7410`; baseline
+includes projectile contract `611536fb`. No new wire or saved actor fields.
+
+Add `TickContext::check_charge_capacity(&self) -> Result<(), ServerError>` using
+the exact existing 4096-receipt ceiling and error of `note_charge`; that method
+calls the same preflight before appending. Add tick-local Player-key suppression
+with at most eight distinct keys: `check_mining_suppression(&self, actor: ActorKey)
+-> Result<(), ServerError>`, `suppress_mining(&mut self, actor: ActorKey) ->
+Result<(), ServerError>`, `mining_suppressed(&self, actor: ActorKey) -> bool`.
+Non-player keys return InvalidInput(actor); duplicate keys are idempotent; a ninth
+new key returns Capacity(Players,8,9). The set starts empty with every context
+and is excluded from fixtures and persistent runtime. Mining clears progress
+without ray traversal when this tick's Player key is suppressed.
+
+Tools preflight charge/suppression capacity before changing world or inventory,
+then append their receipt immediately after a successful transaction under the
+same exclusive context borrow. A refusal records neither receipt. Only bucket
+success suppresses mining; till emits a Till exhaustion receipt; bone meal does
+neither. This preserves Go bucket.go success plus mining.go interruption and
+clearing semantics. Immediate till result is always dry farmland (farming.go);
+the later moisture phase is the hydration owner. Only bucket success emits the
+existing PlacementSuccess sequence, as verified in tick.go.
+
+Behavioral tests: `mining::bucket_suppression_is_tick_local` starts progress on
+stone, suppresses the actor and asserts progress clears/block+tool remain,
+then creates a new context and proves mining resumes at one. Contract
+`action_receipt_preflight_and_suppression_capacity` checks nonmutating preflight
+at 4095/4096, exact capacity errors, duplicate suppression and ninth-key refusal.
+Start with compiling no-op suppression methods and an always-successful charge
+preflight to observe assertion failures, then implement bounded state and mining
+consumption. Focused commands are the server_replay mining filter and
+server_contract action_receipt filter; run the full server crate, fmt/clippy,
+Go entity Bucket oracle, strict OpenSpec and diff checks before committing
+`fix(server): preserve atomic action receipt boundaries`. The tools worker
+consumes this accepted SHA; controller owns integration and rollback.

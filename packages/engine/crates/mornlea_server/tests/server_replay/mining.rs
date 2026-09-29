@@ -1245,3 +1245,43 @@ fn last_durability_and_exemptions() {
         STONE
     );
 }
+
+#[test]
+fn bucket_suppression_is_tick_local() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(31, "Bucket"), TransportKind::Memory)
+        .unwrap();
+    let target = BlockPos::new(0, 65, 1);
+    {
+        let mut context = harness_context(&mut state);
+        let actor = south_scene(
+            &mut context,
+            session,
+            tool(ITEM_STONE_PICKAXE, 90),
+            &[(target, STONE)],
+        );
+        provider::run(&mut context, mine_call(actor)).unwrap();
+        assert_eq!(context.read().mining(actor).unwrap().elapsed, 1);
+        let inventory = *context.read().inventory(actor).unwrap();
+        context.check_mining_suppression(actor).unwrap();
+        context.suppress_mining(actor).unwrap();
+        provider::run(&mut context, mine_call(actor)).unwrap();
+        assert_eq!(context.read().mining(actor), None);
+        assert_eq!(
+            context.read().block(Dimension::OVERWORLD, target),
+            Some(STONE)
+        );
+        assert_eq!(context.read().inventory(actor), Some(&inventory));
+    }
+    let mut context = harness_context(&mut state);
+    let actor = south_scene(
+        &mut context,
+        session,
+        tool(ITEM_STONE_PICKAXE, 90),
+        &[(target, STONE)],
+    );
+    assert!(!context.mining_suppressed(actor));
+    provider::run(&mut context, mine_call(actor)).unwrap();
+    assert_eq!(context.read().mining(actor).unwrap().elapsed, 1);
+}

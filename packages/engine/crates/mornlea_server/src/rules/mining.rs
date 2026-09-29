@@ -702,6 +702,12 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
         .ok_or(ServerError::InvalidInput { field: "actor" })?;
     match actor {
         ActorKey::Player(_) => {
+            // Successful bucket use owns this tick's interaction. The receipt
+            // lives only in the tick context, so held mining resumes next tick.
+            if ctx.mining_suppressed(actor) {
+                let prior = ctx.read().mining(actor).cloned();
+                return stage_clear(ctx, actor, prior);
+            }
             let view = ctx.read();
             let held = view.runtime(actor).and_then(|record| record.controls);
             let bow_drawn = view

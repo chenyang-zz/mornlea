@@ -1293,3 +1293,60 @@ fn projectile_damage_staging_is_bounded_and_atomic() {
         Err(RuleReject::ResourceFull(Resource::RuleEffects))
     );
 }
+
+#[test]
+fn action_receipt_preflight_and_suppression_capacity() {
+    use mornlea_server::state::ActionKind;
+    let mut endpoint = server();
+    let mut actors = Vec::new();
+    for tag in 1..=9 {
+        let session = endpoint
+            .admit(login(tag, "Receipt"), TransportKind::Memory)
+            .unwrap();
+        actors.push(ActorKey::Player(session));
+        endpoint
+            .close_session(session, CloseReason::PeerGone)
+            .unwrap();
+    }
+    let mut ctx = TickContext::harness(&mut endpoint.authority, TickBudget::full());
+    for _ in 0..4095 {
+        ctx.note_charge(actors[0], ActionKind::Till).unwrap();
+    }
+    ctx.check_charge_capacity().unwrap();
+    ctx.check_charge_capacity().unwrap();
+    ctx.note_charge(actors[0], ActionKind::Till).unwrap();
+    assert_eq!(
+        ctx.check_charge_capacity(),
+        Err(ServerError::Capacity {
+            resource: Resource::Commands,
+            limit: 4096,
+            observed: 4097
+        })
+    );
+    assert_eq!(ctx.take_charges().len(), 4096);
+    ctx.check_charge_capacity().unwrap();
+    for actor in &actors[..8] {
+        ctx.check_mining_suppression(*actor).unwrap();
+        ctx.suppress_mining(*actor).unwrap();
+    }
+    ctx.suppress_mining(actors[0]).unwrap();
+    assert!(ctx.mining_suppressed(actors[0]));
+    assert_eq!(
+        ctx.check_mining_suppression(actors[8]),
+        Err(ServerError::Capacity {
+            resource: Resource::Players,
+            limit: 8,
+            observed: 9
+        })
+    );
+    assert!(ctx.suppress_mining(actors[8]).is_err());
+    assert!(!ctx.mining_suppressed(actors[8]));
+    let companion = ActorKey::Companion(
+        CompanionId::try_from_bytes([1, 2, 3, 4, 5, 6, 0x40, 8, 0x80, 10, 11, 12, 13, 14, 15, 16])
+            .unwrap(),
+    );
+    assert_eq!(
+        ctx.check_mining_suppression(companion),
+        Err(ServerError::InvalidInput { field: "actor" })
+    );
+}

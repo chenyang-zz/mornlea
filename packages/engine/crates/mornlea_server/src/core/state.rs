@@ -1338,6 +1338,7 @@ pub struct TickContext<'a> {
     damage_intents: Vec<DamageIntent>,
     deferred: Vec<(RulePhase, CommandEnvelope)>,
     charges: Vec<(ActorKey, ActionKind)>,
+    suppressed_mining: BTreeSet<ActorKey>,
     /// Pre-motion actor poses, snapshotted once at construction from the
     /// loaded actors and never written after. The reducer constructs one
     /// context per tick from pre-motion authority, so the snapshot is
@@ -1423,6 +1424,7 @@ impl<'a> TickContext<'a> {
             damage_intents: Vec::new(),
             deferred: Vec::new(),
             charges: Vec::new(),
+            suppressed_mining: BTreeSet::new(),
             pre_step: BTreeMap::new(),
         }
     }
@@ -1645,10 +1647,8 @@ impl<'a> TickContext<'a> {
             .collect()
     }
 
-    /// Notes one exhaustion charge receipt for an actor, to be settled by the
-    /// survival provider's post-physics pass. Writers own the firing rule (see
-    /// the `ActionKind` contract); the log itself only bounds memory.
-    pub fn note_charge(&mut self, actor: ActorKey, kind: ActionKind) -> Result<(), ServerError> {
+    /// Preflight receipt capacity before a transaction under the same exclusive context.
+    pub fn check_charge_capacity(&self) -> Result<(), ServerError> {
         if self.charges.len() >= EFFECT_BUDGET {
             return Err(ServerError::Capacity {
                 resource: Resource::Commands,
@@ -1656,6 +1656,41 @@ impl<'a> TickContext<'a> {
                 observed: self.charges.len() + 1,
             });
         }
+        Ok(())
+    }
+
+    /// Preflight the bounded, tick-local successful-bucket receipt.
+    pub fn check_mining_suppression(&self, actor: ActorKey) -> Result<(), ServerError> {
+        if !matches!(actor, ActorKey::Player(_)) {
+            return Err(ServerError::InvalidInput { field: "actor" });
+        }
+        if !self.suppressed_mining.contains(&actor) && self.suppressed_mining.len() >= 8 {
+            return Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: 8,
+                observed: 9,
+            });
+        }
+        Ok(())
+    }
+
+    /// Record successful bucket use after the checked transaction commits.
+    pub fn suppress_mining(&mut self, actor: ActorKey) -> Result<(), ServerError> {
+        self.check_mining_suppression(actor)?;
+        self.suppressed_mining.insert(actor);
+        Ok(())
+    }
+
+    /// Suppression is transient and never part of a saved actor record.
+    pub fn mining_suppressed(&self, actor: ActorKey) -> bool {
+        self.suppressed_mining.contains(&actor)
+    }
+
+    /// Notes one exhaustion charge receipt for an actor, to be settled by the
+    /// survival provider's post-physics pass. Writers own the firing rule (see
+    /// the `ActionKind` contract); the log itself only bounds memory.
+    pub fn note_charge(&mut self, actor: ActorKey, kind: ActionKind) -> Result<(), ServerError> {
+        self.check_charge_capacity()?;
         self.charges.push((actor, kind));
         Ok(())
     }
