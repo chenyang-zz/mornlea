@@ -1098,3 +1098,17 @@ mornlea_engine, but main forced a re-lint of those files and both packet and
 workspace clippy exit clean, so the finding is not load-bearing and the node
 closes; any real engine lint drift remains covered by closeout gate 4.2.
 Architecture skill: no change.
+
+
+Main qualified plan21 with the loaded brainstorming/writing-plans workflow
+for node 2.7a1. Producer/consumer split: new hostile_actions provider plans
+read-only from the pre-step overlay and applies staged intents, while hurler
+band steering reconciles inside the accepted motion path to avoid a new intent
+channel; cooldown gating stays settlement-side so walkers submit every in-range
+tick. One isolated implementer owns the new module plus narrow motion-band
+edits; contracts.rs gains only an additive HostileActions phase arm, and the
+eye/LOS duplication with the in-flight melee consumer is recorded for main's
+3.1 unification. Reducer order HostileActions-before-HostileMotion is a 3.1
+constraint from Go chase-before-step and cooldown-1 shot timing. No contract or
+provider acceptance follows from this packet alone.
+Architecture skill: no change.
