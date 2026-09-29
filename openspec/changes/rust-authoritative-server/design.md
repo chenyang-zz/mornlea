@@ -119,3 +119,7 @@ the next provider reads them. Replay snapshots preserve base content and
 increment each changed chunk once, separately from per-cell staging CAS.
 [The Ready world packet](plans/06-world-read-and-random.md) owns the accepted
 contract and random-rule refinement. Actual reducer integration remains open.
+
+The [exclusive backend packet](plans/07-disk-backend.md) fixes world-lock order,
+metadata sequence initialization, bounded region ownership, partial durable
+acknowledgments, and source-compatible named backups for the real disk join.

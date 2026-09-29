@@ -724,3 +724,16 @@ oracle and strict change validation pass. Final independent re-review has no
 provider blocker apart from the separately retained Windows directory gate.
 Actual root lease/backend aggregation is still3.5; no startup cutover, schema
 change or cross-platform durability claim. Architecture skill: no change.
+
+Controller readiness for 3.5: plan07 refines accepted real providers into one
+private serial DiskBackend implementation. Main retained decisions after source
+audits: real native flock before mutable reads; initial metadata sequence2;
+no read-miss region creation; 256-default bounded LRU; retain prior commits on
+later failures; close phases retain lease; backup streams all canonical source
+files with matching identity and no post-publication cancellation. Ownership,
+exact signatures, dependency order, real-I/O red cases, derived consumer scan,
+integration and rollback are explicit. No new shared boundary consumed by
+parallel tasks is introduced; DiskBackend remains the accepted port.
+Delegate one isolated Sol implementer because this real-I/O lifecycle needs a
+long independent failure/test trace. Worker owns only packet files; main owns
+all core/drop work, planning and integration. Windows proof remains open.
