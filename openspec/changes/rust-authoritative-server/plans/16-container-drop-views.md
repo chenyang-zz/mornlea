@@ -8,7 +8,9 @@ container/view state trace; no other task may edit these files concurrently.
 Editable S/src/rules/containers.rs; S/src/core/state.rs only viewer ownership;
 S/src/core/container_store.rs only explicit patch dirty semantics;
 S/src/rules/crafting.rs only pure close preview extraction; and
-S/tests/server_replay/containers.rs, crafting.rs only related close assertions.
+S/tests/server_replay/containers.rs, crafting.rs only related close assertions;
+S/tests/server_contract/world_outputs.rs only the existing ordered-container
+patch/equal-payload/MAX-revision test, revised to explicit durable-touch semantics.
 S denotes packages/engine/crates/mornlea_server. All contracts, registries,
 other providers, Go source, guides and planning/status files are read-only.
 Do not widen wire ContainerRef beyond its accepted Overworld constraint.
@@ -96,7 +98,10 @@ after full preimage/payload checks even if slots compare equal, for Chest and
 Furnace. Ordinary container commit always includes its Container effect after
 successful move calculation; do not omit an equal after record. A dirty MAX
 revision refuses atomically through the existing check. Furnace provider already
-stages only actual advancement, so no-op furnaces remain clean. No new effect,
+stages only actual advancement, so no-op furnaces remain clean. The older
+world_outputs test treating an explicit equal Container patch as clean is
+superseded: revision8 becomes9; MAX returns StaleObservation with complete
+snapshot unchanged. Preserve its ordered two-patch rehearsal assertions. No new effect,
 wire/save version or broad dirty policy change. Compound copies guarantee that
 failed later drops discard this touch as well.
 

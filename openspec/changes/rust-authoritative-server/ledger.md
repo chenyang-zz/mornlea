@@ -990,3 +990,13 @@ contract,163 replay), clippy/fmt, strict OpenSpec and diff checks pass. Clippy
 identified one needless test-only generic borrow, corrected without behavior
 change. Callable doubles prove this contract only, not either consumer.
 Architecture skill:no change.
+
+
+Plan16 worker correctly reported an older world_outputs contract test expecting
+equal container patches to remain clean. Main rules that plan16's source-backed
+explicit touch semantics supersede that assertion: equal slots at revision8
+advance to9; MAX refuses with complete snapshot unchanged. Ownership expands
+only to that named test; ordered two-patch rehearsal assertions remain. Idle
+furnaces still avoid emitting any patch. This is a material shared semantic
+revision, so all container/furnace/full-server evidence must be rerun before
+acceptance; previous consumer evidence is not reused unchanged.
