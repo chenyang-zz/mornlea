@@ -39,7 +39,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6c Implement atomic workbench crafting.
 - [x] 2.6d Implement tick-driven furnaces.
 - [ ] 2.6e Implement farming tools, bone meal and atomic buckets.
-- [ ] 2.7a Implement hostile lifecycle and targeting.
+- [x] 2.7a Implement hostile lifecycle and targeting.
 - [ ] 2.7b Implement projectiles and hit validation.
 - [ ] 2.7c Implement one-time hostile death and combat outcomes.
 - [x] 2.8a Implement passive lifecycle.

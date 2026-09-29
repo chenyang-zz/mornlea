@@ -186,6 +186,14 @@ against this file.
   grass-to-dirt through the transaction with the frozen sampler salts.
   Death stages the terminal record with no loot (drops are a later node);
   flee arming belongs to the combat nodes.
+- `src/rules/hostile_actors.rs` owns the hostile lifecycle on the motion
+  and burn-distant phases: global 64 with one night-window candidate per
+  tick anchored by session-order rotation (never uuid order — the target
+  tie alone uses uuid bytes), the frozen hash/radius/axis chain with the
+  low-byte<13 admission gate and the separate ≤7 block-light BFS, local
+  walker/hurler caps, and 600-tick distant removal staged as a terminal
+  record (set removal is the serial reducer's; the read view's linear
+  block scan is a reducer-node throughput concern).
 - `src/rules/mining.rs` owns continuous mining progression on the
   `MiningStep` phase: key-unchanged increments to saturation, key change
   restarts at 1, completions through the 1.6 transaction exactly once, human
