@@ -1000,3 +1000,13 @@ only to that named test; ordered two-patch rehearsal assertions remain. Idle
 furnaces still avoid emitting any patch. This is a material shared semantic
 revision, so all container/furnace/full-server evidence must be rerun before
 acceptance; previous consumer evidence is not reused unchanged.
+
+
+Combat ray audit exposed old interaction walkers that stop on every non-air
+cell, unlike source fluid/open-door passthrough. Projectile classification is
+already correct. Main lands that predicate as a shared read-only contract
+before asking the container worker or combat implementer to consume it; later
+serial migration owns mutation/workbench/sleep rays. Bucket water targeting
+stays operation-specific. This reconciles implementation with source rather
+than accepting behavior from existing air-only fixtures. Architecture skill:no
+change until the shared consumers are integrated and verified.
