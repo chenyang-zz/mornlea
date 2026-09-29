@@ -928,3 +928,16 @@ oracles, worker make rust, pinned clippy/fmt pass; main integrated server353
 tests (2 unit,16 parity,79 persistence,102 contract,154 replay) pass. This
 accepts the provider and mutation ledger, not actual reducer scheduling.
 Architecture skill:no change.
+
+
+Controller source audit for plan16 found two authority defects (first move could
+bind a different container; closed overlays resurrect committed leases) plus
+close's overbroad whole-grid repack veto. Exact Go source also touches the viewed
+container chunk for successful inventory-region-only moves/drops; the packet
+requires this durable barrier rather than silently retaining equal revisions.
+Reach is intentionally checked at publication after moves in Go, so main rejects
+a proposed per-move reach check as a gameplay drift. One isolated Sol worker
+will own containers, viewer map, explicit container patch semantics and pure
+craft-close preview together; these are tightly coupled and no other active
+worker owns those files. Main retains plan, guides, acceptance and integration.
+Architecture skill:no change.

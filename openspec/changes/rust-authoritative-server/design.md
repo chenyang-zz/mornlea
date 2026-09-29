@@ -137,3 +137,11 @@ The [world output contract](plans/10-world-output-contract.md) reconciles fixed
 container slots and complete mining/system transactions. Internal chunk dimension
 remains separate from the Overworld-only v45 container wire reference. Exact
 integer source cells own block-generated loot; float centers are observations.
+
+The [container view/drop packet](plans/16-container-drop-views.md) replaces
+history-based first-move binding with the actual Ready ray-hit reference and
+seeds one complete tick viewer set, so close cannot fall back to a stale lease.
+A container write is an explicit durable touch even when an inventory-region
+transfer leaves its slots equal, matching the Go revision barrier. Reach
+invalidates views during publication after transfers; reducer scheduling and
+workbench anchor ownership remain explicit follow-ups.
