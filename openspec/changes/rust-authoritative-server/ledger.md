@@ -1381,3 +1381,15 @@ test commit, test-file rollback); production never launches Python. One
 isolated implementer owns agent_process.rs, process.rs, integration.rs plus
 registration. Go/Python regression pre-gates required first.
 Architecture skill: no change.
+
+
+Python agent integration accepted from 75b9aa1a (isolated worker, tests-only
++1288/-2) with provider fix a7e6ff63. The worker correctly stopped on a real
+3.6b defect proven by raw exchange (tool success missing the JSON-RPC result
+wrapper the error path and siblings carry; the real SDK rejects the bare
+shape); main fixed the one format string plus a success-shape regression test
+after confirming no test pinned the old bytes. Re-run went 4/4 with real
+gateway/planner/MCP, digest/ID asserts, ordered shutdown, and same-lease
+retention; pre-gates and pytest shutdown green. Independent review approved
+both commits with no findings. Production Rust launches no Python.
+Architecture skill: no change.
