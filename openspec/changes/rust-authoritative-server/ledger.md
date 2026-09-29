@@ -1234,3 +1234,19 @@ packet needed; one isolated implementer owns host.rs, memory.rs and the two
 new contract test topics. Production Rust must not import, embed, shell out
 to, or FFI the Python service.
 Architecture skill: no change.
+
+
+Agent task and memory ownership accepted from d87bcf96 plus review follow-up
+09c35550 (isolated worker, 4 files +3792/-4). Bounded dispatch with
+register-before-request, cancel-then-CancelRun failure paths, fenced outcome
+install, dialogue/memory bounds with capped retries. REDs named before the
+body; GREEN agent_host5/agent_memory4, full server466, fmt, packet clippy,
+and Go planner/memory oracles pass. Independent review approved after fixes:
+a test string embedding a node ID is reworded, the plan registration horizon
+gets its own named constant, and the task-runner emission site gets its
+ownership comment. Rulings: the wall-clock CancelRun budget stands (off-tick
+documented path, packet budget honored; deterministic-clock refactor
+deferred, no behavior impact); host planner tables stand (they mirror the
+planner-side Go functions with citations, matching Go's own dual-impl
+convention pinned by sync tests, not the execution-side registries).
+Architecture skill: no change.
