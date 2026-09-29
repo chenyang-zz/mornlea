@@ -949,3 +949,186 @@ fn fresh_skip_neutral_move_and_burn() {
     };
     assert_eq!(body.health, 19, "night deals no burn damage");
 }
+
+// -----------------------------------------------------------------------
+// Hurler distance bands (`advanceHurlerBand` in
+// `packages/server/server/hostile_manager.go`): beyond 14 blocks the hurler
+// approaches through the path machinery, 6..=14 holds position with no path,
+// below 6 retreats along the straight target-minus-hostile line without
+// pathfinding. Walkers keep the 1.8 attack stop. These cases assert
+// positions only, never intents.
+// -----------------------------------------------------------------------
+
+/// Flat 33x9x33 walk volume around the scene: stone below y=40, air above.
+fn preload_band_world(context: &mut TickContext<'_>) {
+    for x in 84..=116 {
+        for z in 84..=116 {
+            for y in 36..=44 {
+                observe(
+                    context,
+                    mornlea_domain::BlockPos::new(x, y, z),
+                    if y < 40 { STONE } else { AIR },
+                );
+            }
+        }
+    }
+}
+
+fn hurler_position(context: &TickContext<'_>, id: u64) -> [f32; 3] {
+    let ActorBody::Hostile(body) = &find_hostile(context, id).body else {
+        panic!("hostile body");
+    };
+    body.position
+}
+
+fn hurler_runtime_path(context: &TickContext<'_>, id: u64) -> bool {
+    context
+        .read()
+        .runtime(ActorKey::Hostile(
+            mornlea_domain::HostileId::try_new(id).expect("hostile id"),
+        ))
+        .is_some_and(|runtime| runtime.path.is_some())
+}
+
+/// Sixteen blocks out, the hurler dispatches a path and steps toward the
+/// target on the same tick.
+#[test]
+fn hurler_far_approaches_along_path() {
+    let mut state = authority();
+    let anchor = anchor_session(&mut state);
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    preload_band_world(&mut context);
+    stage_actors(
+        &mut context,
+        &[
+            player_actor(anchor, 1, [116.5, 40.0, 100.5]),
+            hostile_actor(11, [100.5, 40.0, 100.5], HURLER),
+        ],
+    );
+    provider::run(&mut context, motion_call()).expect("approach tick");
+    assert!(
+        hurler_runtime_path(&context, 11),
+        "the approach band dispatches a path"
+    );
+    let moved = hurler_position(&context, 11);
+    assert!(moved[0] > 100.5, "the hurler stepped toward the +x target");
+    assert!((moved[2] - 100.5).abs() < 1e-4, "no z drift");
+}
+
+/// Ten blocks out, the hurler holds: no path and no displacement.
+#[test]
+fn hurler_mid_band_holds() {
+    let mut state = authority();
+    let anchor = anchor_session(&mut state);
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    preload_band_world(&mut context);
+    stage_actors(
+        &mut context,
+        &[
+            player_actor(anchor, 1, [110.5, 40.0, 100.5]),
+            hostile_actor(11, [100.5, 40.0, 100.5], HURLER),
+        ],
+    );
+    provider::run(&mut context, motion_call()).expect("hold tick");
+    assert!(
+        !hurler_runtime_path(&context, 11),
+        "the hold band dispatches no path"
+    );
+    assert_eq!(
+        hurler_position(&context, 11),
+        [100.5, 40.0, 100.5],
+        "the hold band keeps position"
+    );
+}
+
+/// Band edges hold: exactly 14 dispatches no path, exactly 6 does not move.
+#[test]
+fn hurler_band_edges_hold() {
+    let mut state = authority();
+    let anchor = anchor_session(&mut state);
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    preload_band_world(&mut context);
+    stage_actors(
+        &mut context,
+        &[
+            player_actor(anchor, 1, [114.5, 40.0, 100.5]),
+            hostile_actor(11, [100.5, 40.0, 100.5], HURLER),
+        ],
+    );
+    provider::run(&mut context, motion_call()).expect("edge tick");
+    assert!(
+        !hurler_runtime_path(&context, 11),
+        "exactly 14 blocks holds, never approaches"
+    );
+
+    let mut state = authority();
+    let anchor = anchor_session(&mut state);
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    preload_band_world(&mut context);
+    stage_actors(
+        &mut context,
+        &[
+            player_actor(anchor, 1, [106.5, 40.0, 100.5]),
+            hostile_actor(11, [100.5, 40.0, 100.5], HURLER),
+        ],
+    );
+    provider::run(&mut context, motion_call()).expect("edge tick");
+    assert_eq!(
+        hurler_position(&context, 11),
+        [100.5, 40.0, 100.5],
+        "exactly 6 blocks holds, never retreats"
+    );
+}
+
+/// Three blocks out, the hurler backs away along the straight hostile-minus
+/// target line with no pathfinding: +x away, z unchanged.
+#[test]
+fn hurler_close_retreats_straight_line() {
+    let mut state = authority();
+    let anchor = anchor_session(&mut state);
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    preload_band_world(&mut context);
+    stage_actors(
+        &mut context,
+        &[
+            player_actor(anchor, 1, [100.5, 40.0, 100.5]),
+            hostile_actor(11, [103.5, 40.0, 100.5], HURLER),
+        ],
+    );
+    provider::run(&mut context, motion_call()).expect("retreat tick");
+    assert!(
+        !hurler_runtime_path(&context, 11),
+        "the retreat band uses no pathfinding"
+    );
+    let moved = hurler_position(&context, 11);
+    assert!(moved[0] > 103.5, "the hurler backed away from the target");
+    assert!((moved[2] - 100.5).abs() < 1e-4, "retreat holds the line");
+}
+
+/// Walkers keep the 1.8 attack stop: in range they hold with no path.
+#[test]
+fn walker_attack_stop_unchanged() {
+    let mut state = authority();
+    let anchor = anchor_session(&mut state);
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    preload_band_world(&mut context);
+    stage_actors(
+        &mut context,
+        &[
+            player_actor(anchor, 1, [100.5, 40.0, 100.5]),
+            hostile_actor(11, [102.0, 40.0, 100.5], NIGHTWALKER),
+        ],
+    );
+    provider::run(&mut context, motion_call()).expect("walker tick");
+    assert_eq!(
+        hurler_position(&context, 11),
+        [102.0, 40.0, 100.5],
+        "walkers still stop inside 1.8 blocks"
+    );
+}

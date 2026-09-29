@@ -131,6 +131,14 @@ const REPATH_PERIOD_TICKS: u64 = 20;
 /// Movement stop boundary at the target (`HostileAttackRange` in
 /// `packages/server/sim/contract/contract.go`).
 const ATTACK_RANGE: f32 = 1.8;
+/// Hurler distance bands (`hostileRangedApproachDistance` 14 and
+/// `hostileRangedRetreatDistance` 6 in
+/// `packages/server/server/hostile_manager.go`): beyond 14 the hurler
+/// approaches through the shared path machinery, 6..=14 holds position with
+/// no path, and below 6 retreats along the straight target-minus-hostile
+/// line without pathfinding. Both edges hold.
+const HURLER_APPROACH_DISTANCE_SQ: f32 = 14.0 * 14.0;
+const HURLER_RETREAT_DISTANCE_SQ: f32 = 6.0 * 6.0;
 /// Waypoint arrival threshold (`waypointArrivalRadiusSquared` in
 /// `packages/server/server/companion_manager.go`, shared with companions).
 const WAYPOINT_ARRIVAL_RADIUS_SQ: f32 = 0.35 * 0.35;
@@ -849,12 +857,24 @@ fn advance_movement(
     // retries next tick; losing the target clears the pair and keeps the
     // durable next-replan tick fresh.
     let mut generation_changed = false;
-    // The attack boundary ruling comes before any path dispatch: inside the
-    // boundary the body holds position and only the target facts are
-    // written (`dispatchSnapshots` range skip after `PlanHostileChase`).
-    let within_attack = matches!(target.as_ref(), Some(fact)
-        if horizontal_distance_sq(entry.body.position, fact.position)
-            <= ATTACK_RANGE * ATTACK_RANGE);
+    // The stop ruling comes before any path dispatch: inside the boundary
+    // the body holds position and only the target facts are written
+    // (`dispatchSnapshots` range skip after `PlanHostileChase`). Walkers
+    // stop at the 1.8 attack range; hurlers follow the kind-branched bands
+    // (`advanceHurlerBand`), where hold and retreat both skip pathfinding.
+    let hurler_retreat = entry.kind() == HURLER
+        && matches!(target.as_ref(), Some(fact)
+            if horizontal_distance_sq(entry.body.position, fact.position)
+                < HURLER_RETREAT_DISTANCE_SQ);
+    let within_attack = if entry.kind() == HURLER {
+        matches!(target.as_ref(), Some(fact)
+            if horizontal_distance_sq(entry.body.position, fact.position)
+                <= HURLER_APPROACH_DISTANCE_SQ)
+    } else {
+        matches!(target.as_ref(), Some(fact)
+            if horizontal_distance_sq(entry.body.position, fact.position)
+                <= ATTACK_RANGE * ATTACK_RANGE)
+    };
     match target.as_ref() {
         Some(fact) => {
             let raw_goal = block_pos_of(fact.position)?;
@@ -897,16 +917,41 @@ fn advance_movement(
     }
 
     // Movement input: inside the attack boundary the body holds position
-    // (`advanceRunners` stop rule); with a live path it walks toward the
-    // first waypoint not yet reached; otherwise it advances neutrally on
-    // its own yaw (`applyHostileActions` neutral reset).
+    // (`advanceRunners` stop rule); a retreating hurler steps straight away
+    // from the target without pathfinding; with a live path the body walks
+    // toward the first waypoint not yet reached; otherwise it advances
+    // neutrally on its own yaw (`applyHostileActions` neutral reset).
     let mut move_input = MovementInput {
         move_x: 0,
         move_z: 0,
         jump: false,
         yaw: entry.body.yaw,
     };
-    if entry.body.has_target && !within_attack {
+    if hurler_retreat {
+        // Straight-line retreat along the hostile-minus-target horizontal
+        // line (`advanceHurlerBand` retreat band): the world-axis intent
+        // folds into a facing plus a forward step, exactly like the
+        // waypoint conversion below. A coincident target has no retreat
+        // direction, so the body holds.
+        if let Some(fact) = target.as_ref() {
+            let dx = entry.body.position[0] - fact.position[0];
+            let dz = entry.body.position[2] - fact.position[2];
+            let length = f64::from(dx * dx + dz * dz).sqrt() as f32;
+            if length != 0.0 {
+                // The world-axis intent folds into a facing plus a forward
+                // step (`applyHostileActions` folds `MoveX`/`MoveZ` through
+                // `normalizeYaw(atan2(-x, -z))` with a forward stride).
+                let move_x = dx / length;
+                let move_z = dz / length;
+                move_input = MovementInput {
+                    move_x: 0,
+                    move_z: 1,
+                    jump: false,
+                    yaw: normalize_yaw(f64::from(-move_x).atan2(f64::from(-move_z)) as f32),
+                };
+            }
+        }
+    } else if entry.body.has_target && !within_attack {
         let mut path = entry.path.take();
         if let Some(path) = path.as_mut() {
             if consume_arrived(path, entry.body.position) {
@@ -1163,11 +1208,11 @@ fn consume_arrived(path: &mut PathState, position: [f32; 3]) -> bool {
 // ---------------------------------------------------------------------------
 
 /// The online player facts one decision consumes.
-struct PlayerFact {
-    session: SessionKey,
-    id: [u8; 16],
-    position: [f32; 3],
-    dimension: Dimension,
+pub(crate) struct PlayerFact {
+    pub(crate) session: SessionKey,
+    pub(crate) id: [u8; 16],
+    pub(crate) position: [f32; 3],
+    pub(crate) dimension: Dimension,
 }
 
 fn active_players(view: &AuthorityReadView<'_>) -> Result<Vec<PlayerFact>, ServerError> {
@@ -1198,7 +1243,7 @@ fn active_players(view: &AuthorityReadView<'_>) -> Result<Vec<PlayerFact>, Serve
     Ok(players)
 }
 
-fn nearest_target(
+pub(crate) fn nearest_target(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
     position: [f32; 3],

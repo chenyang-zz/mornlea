@@ -25,6 +25,8 @@ mod fluids;
 mod full_corpus;
 #[path = "server_replay/furnaces.rs"]
 mod furnaces;
+#[path = "server_replay/hostile_actions.rs"]
+mod hostile_actions;
 #[path = "server_replay/hostile_actors.rs"]
 mod hostile_actors;
 #[path = "server_replay/hostile_outcomes.rs"]

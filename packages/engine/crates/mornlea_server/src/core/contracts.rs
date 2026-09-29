@@ -1698,6 +1698,7 @@ pub enum RulePhase {
     PlayerMotion,
     PlayerPostPhysics,
     CompanionMotion,
+    HostileActions,
     HostileMotion,
     Combat,
     HostileBurnDistant,
