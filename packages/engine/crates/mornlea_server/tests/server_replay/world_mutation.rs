@@ -854,11 +854,17 @@ fn stale_missing_protected_duplicate_refused() {
         ],
     );
     let resolved = resolve_place(actor, &south_intent(), &context.read()).expect("resolved place");
-    let advance = BlockWrite::try_new(observation(target, AIR), AIR).expect("revision advance");
-    context
-        .transaction()
-        .try_system(SystemRule::Support, vec![advance])
-        .expect("unrelated write");
+    for block in [STONE, AIR] {
+        let current = context
+            .read()
+            .observation(Dimension::OVERWORLD, target)
+            .expect("target");
+        let advance = BlockWrite::try_new(current, block).expect("revision advance");
+        context
+            .transaction()
+            .try_system(SystemRule::Support, vec![advance])
+            .expect("unrelated write");
+    }
     let before = probe(&context, &cells, &[actor]);
     let refused = context.transaction().try_place(resolved);
     assert_eq!(refused, Err(RuleReject::StaleObservation));

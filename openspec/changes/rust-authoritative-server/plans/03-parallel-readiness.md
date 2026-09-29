@@ -49,7 +49,8 @@ Every local ID below is in this change's `tasks.md`. External `F1-final` means `
 | `2.3` | `1.2,1.6,2.1a` | isolated provider; exact packet files only | Implement bounded fluid rescan and update scheduling. |
 | `2.4a` | `2.3` | isolated provider; exact packet files only | Implement bounded farmland moisture. |
 | `2.4b` | `2.4a,2.5a,2.8a` | isolated provider; exact packet files only | Implement actor trample and snow footprints. |
-| `2.4d` | `2.4b,2.1b` | isolated provider; exact packet files only | Implement deterministic crop, dry farmland, tree, grass and snow random rules. |
+| `2.4d0` | `1.2,1.6` | controller; serial shared files | Complete indexed Ready world reads, height cache and compact replay snapshots. |
+| `2.4d` | `2.4b,2.1b,2.4d0` | isolated provider; exact packet files only | Implement deterministic crop, dry farmland, tree, grass and snow random rules. |
 | `2.4c` | `2.4d,2.1b` | isolated provider; exact packet files only | Implement ordered block-support sweeps. |
 | `2.5a` | `1.3,2.1a` | isolated provider; exact packet files only | Implement authoritative player control and movement. |
 | `2.5b` | `2.5a` | isolated provider; exact packet files only | Implement survival transitions and correction observations. |

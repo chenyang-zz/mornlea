@@ -425,11 +425,17 @@ fn two_chunk_door_atomic() {
     let before = probe(&context, &cells, &[actor], &[], &drop_chunks);
 
     let resolved = resolve_place(actor, &intent, &context.read()).expect("resolved bed place");
-    let unrelated = BlockWrite::try_new(observation(head, AIR), AIR).expect("revision advance");
-    context
-        .transaction()
-        .try_system(SystemRule::Support, vec![unrelated])
-        .expect("unrelated write");
+    for block in [STONE, AIR] {
+        let current = context
+            .read()
+            .observation(Dimension::OVERWORLD, head)
+            .expect("head");
+        let unrelated = BlockWrite::try_new(current, block).expect("revision advance");
+        context
+            .transaction()
+            .try_system(SystemRule::Support, vec![unrelated])
+            .expect("unrelated write");
+    }
     let refused = context.transaction().try_place(resolved);
     assert_eq!(refused, Err(RuleReject::StaleObservation));
 
@@ -437,7 +443,7 @@ fn two_chunk_door_atomic() {
     // Both footprint cells stay air; only the unrelated revision advance on
     // the head cell separates the probes, and nothing else moved.
     let mut expected = before.clone();
-    expected.cells[3].1 = Some(observation_at(head, AIR, 1, 2));
+    expected.cells[3].1 = Some(observation_at(head, AIR, 1, 3));
     assert_eq!(after, expected);
 
     // Clean leg: the same placement commits both cells exactly once.
@@ -843,12 +849,17 @@ fn stale_generation_and_revision_refused() {
 
     // Revision leg against the refreshed generation.
     let resolved = resolve_place(actor, &south_intent(), &context.read()).expect("resolved place");
-    let advance =
-        BlockWrite::try_new(observation_at(target, AIR, 2, 1), AIR).expect("revision advance");
-    context
-        .transaction()
-        .try_system(SystemRule::Support, vec![advance])
-        .expect("unrelated write");
+    for block in [STONE, AIR] {
+        let current = context
+            .read()
+            .observation(Dimension::OVERWORLD, target)
+            .expect("target");
+        let advance = BlockWrite::try_new(current, block).expect("revision advance");
+        context
+            .transaction()
+            .try_system(SystemRule::Support, vec![advance])
+            .expect("unrelated write");
+    }
     let refused = context.transaction().try_place(resolved);
     assert_eq!(refused, Err(RuleReject::StaleObservation));
     let observed = context
@@ -856,7 +867,7 @@ fn stale_generation_and_revision_refused() {
         .observation(Dimension::OVERWORLD, target)
         .expect("target cell");
     assert_eq!(observed.block, AIR);
-    assert_eq!(observed.revision, 2);
+    assert_eq!(observed.revision, 3);
     assert_eq!(
         context.read().inventory(actor).expect("inventory").slots[0].count,
         2

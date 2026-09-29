@@ -1522,6 +1522,12 @@ impl RuleTunables {
     pub fn physics(self) -> PhysicsTuning {
         self.physics
     }
+    pub fn random_attempts(self) -> u8 {
+        self.random_attempts
+    }
+    pub fn crop_growth_percent(self) -> u8 {
+        self.crop_growth_percent
+    }
     pub fn interaction_reach(self) -> f32 {
         self.interaction_reach
     }

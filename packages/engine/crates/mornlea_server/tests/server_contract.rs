@@ -28,3 +28,5 @@ mod session;
 mod shutdown;
 #[path = "server_contract/tick.rs"]
 mod tick;
+#[path = "server_contract/world_read.rs"]
+mod world_read;

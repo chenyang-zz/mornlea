@@ -129,3 +129,9 @@ replace a canonical file. Metadata's process-local sequence is acknowledged
 only after the complete replacement succeeds. Already durable identical
 revision returns its current revision without unnecessary replacement; a prior
 post-rename failure must retry the durability barrier before claiming success.
+
+Controller clarifications: standalone lower/equal-conflicting revision maps to
+`InvalidInput { field: "revision" }`; corrupt/future loads retain their Storage
+class. Region storage keys whose dimension cannot map to the domain Dimension
+are refused before save with `InvalidInput { field: "dimension" }`; open may
+still validate storage-supported keys, but cannot fabricate a domain SaveKey.

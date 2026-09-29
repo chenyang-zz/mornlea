@@ -17,6 +17,7 @@ use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, 
 use mornlea_storage::{Metadata, PlayerLocation, PlayerSave, StoredPlayer};
 
 use super::contracts::*;
+use super::world::ReadyChunk;
 
 const COMPANION_INBOX: usize = 4;
 
@@ -1186,6 +1187,7 @@ pub struct AuthorityReadView<'a> {
     interactions: &'a [AuthorityInteraction],
     inventories: &'a BTreeMap<ActorKey, InventoryRecord>,
     blocks: &'a BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
+    ready: &'a BTreeMap<ChunkKey, ReadyChunk>,
     actors: &'a [ActorRecord],
     runtimes: &'a BTreeMap<ActorKey, ActorRuntime>,
     mining: &'a BTreeMap<ActorKey, MiningProgress>,
@@ -1200,6 +1202,19 @@ pub struct AuthorityReadView<'a> {
 }
 
 impl<'a> AuthorityReadView<'a> {
+    /// Sparse fixture cells alone do not establish a Ready chunk.
+    pub fn ready_chunk(&self, key: ChunkKey) -> bool {
+        self.ready.contains_key(&key)
+    }
+    /// The source height map counts every non-air cell, including transparent blocks.
+    pub fn highest_non_air(&self, dimension: Dimension, x: i32, z: i32) -> Option<i32> {
+        self.ready
+            .get(&block_key(
+                dimension,
+                mornlea_domain::BlockPos::new(x, 0, z),
+            ))
+            .map(|chunk| chunk.height(x, z))
+    }
     pub fn tick(&self) -> u64 {
         self.tick
     }
@@ -1224,24 +1239,31 @@ impl<'a> AuthorityReadView<'a> {
         self.inventories.get(&key)
     }
     pub fn block(&self, dimension: Dimension, pos: mornlea_domain::BlockPos) -> Option<u16> {
-        self.blocks
-            .iter()
-            .find(|((key, block_pos), _)| key.dimension == dimension && *block_pos == pos)
-            .map(|(_, observed)| observed.block)
+        self.observation(dimension, pos)
+            .map(|observed| observed.block)
     }
-    /// Same lookup as [`Self::block`] but returning the copied observation a
-    /// resolver needs to build `BlockWrite`s: the cell's generation, revision
-    /// and block together, so a resolved transaction carries the exact basis
-    /// it was certified against. `block()` stays unchanged.
+    /// Exact chunk/cell indexing observes this tick's writes before the compact
+    /// immutable base. Missing data remains unavailable rather than inferred air.
     pub fn observation(
         &self,
         dimension: Dimension,
         pos: mornlea_domain::BlockPos,
     ) -> Option<BlockObservation> {
-        self.blocks
-            .iter()
-            .find(|((key, block_pos), _)| key.dimension == dimension && *block_pos == pos)
-            .map(|(_, observed)| *observed)
+        if !(-64..320).contains(&pos.y()) {
+            return None;
+        }
+        let key = block_key(dimension, pos);
+        if let Some(observed) = self.blocks.get(&(key, pos)) {
+            return Some(*observed);
+        }
+        let chunk = self.ready.get(&key)?;
+        Some(BlockObservation {
+            key,
+            generation: chunk.generation,
+            revision: chunk.revision,
+            pos,
+            block: chunk.block(pos)?,
+        })
     }
     /// Fixture-backed container lookup by exact reference. Real container
     /// records, generation validation and viewer leases belong to the
@@ -1310,6 +1332,7 @@ pub struct TickContext<'a> {
     authority: &'a mut AuthorityState,
     inventories: BTreeMap<ActorKey, InventoryRecord>,
     blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
+    ready: BTreeMap<ChunkKey, ReadyChunk>,
     containers: BTreeMap<ContainerRef, ContainerRecord>,
     /// Staged viewer leases by session. The container provider is the single
     /// writer through the viewer staging arm; the serial reducer commits the
@@ -1363,6 +1386,11 @@ pub enum ActionKind {
 }
 
 impl<'a> TickContext<'a> {
+    /// Installs already validated compact data; preparation belongs off the tick.
+    pub fn preload_ready_chunk(&mut self, chunk: ReadyChunk) {
+        self.blocks.retain(|(key, _), _| *key != chunk.key);
+        self.ready.insert(chunk.key, chunk);
+    }
     pub fn harness(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
         Self::from_parts(authority, budget)
     }
@@ -1374,6 +1402,12 @@ impl<'a> TickContext<'a> {
     ) -> Self {
         let mut context = Self::from_parts(authority, budget);
         context.world = Some(initial.world);
+        for (key, generation, revision, chunk) in &initial.chunks {
+            context.preload_ready_chunk(
+                ReadyChunk::try_new(*key, *generation, *revision, chunk.clone())
+                    .expect("fixture chunks must satisfy the storage contract"),
+            );
+        }
         context.actors = initial.actors.clone();
         context.projectiles = initial.projectiles.clone();
         context.runtimes.extend(
@@ -1399,6 +1433,7 @@ impl<'a> TickContext<'a> {
             authority,
             inventories: BTreeMap::new(),
             blocks: BTreeMap::new(),
+            ready: BTreeMap::new(),
             containers: BTreeMap::new(),
             viewers: BTreeMap::new(),
             drops: BTreeMap::new(),
@@ -1433,7 +1468,13 @@ impl<'a> TickContext<'a> {
         self.inventories.insert(actor, record);
     }
 
+    /// Seeds a sparse-only fixture. Complete Ready fixtures use their compact
+    /// chunk input so cell setup cannot bypass the derived height cache.
     pub fn preload_block(&mut self, observed: BlockObservation) {
+        assert!(
+            !self.ready.contains_key(&observed.key),
+            "sparse fixture cells cannot override Ready chunks"
+        );
         self.blocks.insert((observed.key, observed.pos), observed);
     }
 
@@ -1485,6 +1526,7 @@ impl<'a> TickContext<'a> {
             interactions: &self.interactions,
             inventories: &self.inventories,
             blocks: &self.blocks,
+            ready: &self.ready,
             actors: &self.actors,
             runtimes: &self.runtimes,
             mining: &self.mining,
@@ -1604,7 +1646,17 @@ impl<'a> TickContext<'a> {
         FixtureState {
             runtime: self.runtimes.values().cloned().collect(),
             actors: self.actors.clone(),
-            chunks: Vec::new(),
+            chunks: self
+                .ready
+                .values()
+                .map(|chunk| {
+                    chunk.snapshot(
+                        self.blocks
+                            .values()
+                            .filter(|observed| observed.key == chunk.key),
+                    )
+                })
+                .collect(),
             inventories: self
                 .inventories
                 .iter()
@@ -1777,7 +1829,20 @@ impl<'a> TickContext<'a> {
             return Err(RuleReject::ResourceFull(Resource::RuleEffects));
         }
         for write in writes {
-            match self.blocks.get(&(write.observed.key, write.observed.pos)) {
+            if write.observed.key != block_key(write.observed.key.dimension, write.observed.pos)
+                || (write.replacement != write.observed.block
+                    && (write.observed.revision == u64::MAX
+                        || self
+                            .ready
+                            .get(&write.observed.key)
+                            .is_some_and(|chunk| chunk.revision == u64::MAX)))
+            {
+                return Err(RuleReject::StaleObservation);
+            }
+            match self
+                .read()
+                .observation(write.observed.key.dimension, write.observed.pos)
+            {
                 Some(current)
                     if current.generation == write.observed.generation
                         && current.revision == write.observed.revision
@@ -1794,6 +1859,7 @@ impl<'a> TickContext<'a> {
                 let inventories = self.inventories.clone();
                 let world = self.world;
                 let blocks = self.blocks.clone();
+                let ready = self.ready.clone();
                 let containers = self.containers.clone();
                 let viewers = self.viewers.clone();
                 let projectiles = self.projectiles.clone();
@@ -1815,6 +1881,7 @@ impl<'a> TickContext<'a> {
                         self.inventories = inventories;
                         self.world = world;
                         self.blocks = blocks;
+                        self.ready = ready;
                         self.containers = containers;
                         self.viewers = viewers;
                         self.projectiles = projectiles;
@@ -1908,11 +1975,47 @@ impl<'a> TickContext<'a> {
 
     fn apply_writes(&mut self, writes: &[BlockWrite]) {
         for write in writes {
+            if write.replacement == write.observed.block {
+                continue;
+            }
             let mut observed = write.observed;
             observed.block = write.replacement;
             observed.revision = observed.revision.saturating_add(1);
             self.blocks.insert((observed.key, observed.pos), observed);
+            let Some(chunk) = self.ready.get(&observed.key) else {
+                continue;
+            };
+            let pos = observed.pos;
+            let current = chunk.height(pos.x(), pos.z());
+            let next = if observed.block != 0 && pos.y() > current {
+                pos.y()
+            } else if observed.block == 0 && pos.y() == current {
+                (-64..pos.y())
+                    .rev()
+                    .find(|y| {
+                        self.read()
+                            .block(
+                                observed.key.dimension,
+                                mornlea_domain::BlockPos::new(pos.x(), *y, pos.z()),
+                            )
+                            .is_some_and(|block| block != 0)
+                    })
+                    .unwrap_or(-65)
+            } else {
+                current
+            };
+            self.ready
+                .get_mut(&observed.key)
+                .expect("Ready ownership cannot change during a write")
+                .set_height(pos.x(), pos.z(), next);
         }
+    }
+}
+
+fn block_key(dimension: Dimension, position: mornlea_domain::BlockPos) -> ChunkKey {
+    ChunkKey {
+        dimension,
+        pos: mornlea_domain::ChunkPos::new(position.x() >> 4, position.z() >> 4),
     }
 }
 
@@ -1980,6 +2083,7 @@ impl<'ctx, 'auth> MutationTxn<'ctx, 'auth> {
         let changed = txn
             .writes
             .iter()
+            .filter(|write| write.replacement != write.observed.block)
             .map(|write| {
                 let mut observed = write.observed;
                 observed.block = write.replacement;

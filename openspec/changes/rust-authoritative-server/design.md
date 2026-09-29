@@ -108,3 +108,14 @@ writes to integration tests; ordinary constructors always use native I/O.
 Native fallible close is confined to two platform adapters. The exact landing,
 provider signatures and retry semantics are in
 [the persistence continuation packet](plans/05-persistence-io-contract.md).
+
+## Indexed Ready world observations
+
+Rule and snapshot consumers share checked compact Ready bases and exact keyed
+overlay reads. Missing cells are not inferred as air; sky uses the source's
+highest non-air column including transparent blocks. Base validation and height
+construction happen off the tick, while bounded writes update heights before
+the next provider reads them. Replay snapshots preserve base content and
+increment each changed chunk once, separately from per-cell staging CAS.
+[The Ready world packet](plans/06-world-read-and-random.md) owns the accepted
+contract and random-rule refinement. Actual reducer integration remains open.

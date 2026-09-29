@@ -377,11 +377,17 @@ fn capacity_and_second_write_fault() {
         .read()
         .observation(Dimension::OVERWORLD, crop)
         .expect("crop");
-    let bump = BlockWrite::try_new(stale_crop, WHEAT_MATURE).expect("revision advance");
-    fault
-        .transaction()
-        .try_system(SystemRule::Support, vec![bump])
-        .expect("unrelated write");
+    for block in [0, WHEAT_MATURE] {
+        let current = fault
+            .read()
+            .observation(Dimension::OVERWORLD, crop)
+            .expect("crop");
+        let bump = BlockWrite::try_new(current, block).expect("revision advance");
+        fault
+            .transaction()
+            .try_system(SystemRule::Support, vec![bump])
+            .expect("unrelated write");
+    }
     let outcome = provider::commit_trample(&mut fault, ground, Some(stale_crop));
     assert_eq!(outcome, provider::TrampleCommit::GroundOnly);
     assert_eq!(fault.read().block(Dimension::OVERWORLD, foot), Some(DIRT));

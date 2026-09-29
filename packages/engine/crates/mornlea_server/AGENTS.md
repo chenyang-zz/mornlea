@@ -21,6 +21,14 @@ consume its cancellation and error contracts before joining the real backend.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
+- `src/core/world.rs` validates compact Ready chunk bases and derives non-air
+  heights off the tick. Read views use exact chunk/cell indexing and observe
+  sparse writes first; missing chunks never become air. Height changes are
+  immediate, including transparent blocks. Replay snapshots preserve compact
+  unchanged sections and advance each changed chunk's durable revision once;
+  per-cell CAS counters remain tick-local. Actual chunk acquisition and commit
+  ownership belongs to the serial reducer.
+
 - `ServerLimits`, `TickBudget`, and `StoreLimits` reject an over-ceiling
   constructor before they reserve command storage. `AuthorityState` keeps
   world, sessions, queues, tick, and publication private to `src/core/state.rs`.

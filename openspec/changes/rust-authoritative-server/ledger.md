@@ -661,3 +661,40 @@ does not qualify Windows runtime behavior. Only already-locked native dependency
 versions were added directly. Node3.4c0 accepted by the scoped contract commit;
 region and standalone providers consume its exact SHA. Store tests inherit the
 crate guide; the new store guide owns its real independent I/O lifecycle.
+
+Dispatch: isolated Sol region_io and atomic_files workers consume4eaae498 in
+reused w27b/w36b checkouts. Each owns only its provider and matching test file;
+long real-filesystem/crash traces justify isolation. Main retains shared
+contracts, planning, integration and independent acceptance. Atomic revision
+conflict maps to InvalidInput(field="revision"); codec classes remain Storage.
+
+The random frontier audit verified that HighestOpaque means highest non-air,
+including transparent blocks, and Go advances durable revision once at final
+chunk mutation commit. Main selected compact checked Ready bases plus indexed
+sparse overlays over expanded world maps or caller-invented sky facts. Plan06
+defines the serial prerequisite2.4d0 and random provider refinement. This shared
+read seam also serves later snapshot and real reducer consumers; no provider
+may assume its callable acceptance until the contract commit passes.
+
+Ready read contract acceptance: seven initial behavioral RED cases failed on
+missing Ready reads/fixture load/validation. GREEN now has10 focused cases,
+including independently reviewed no-op revision and sparse/Ready policy fixes.
+Two additional RED cases exposed those review findings before correction.
+Full server crate passes201 tests (16 parity,18 persistence,68 contract,99
+replay); crate fmt/clippy with warnings denied and strict change validation pass.
+Go world Height and realm Mutation oracles pass. Four older stale fixtures in
+mutation/world_mutation/crops tests used equal-value writes to force a revision;
+they now use real A→B→A changes, retaining all stale/refusal assertions. This
+source-correct adjustment has complete crate regression coverage. Independent
+Sol review accepts the final read contract; the serial reducer remains open.
+Architecture skill: no change; the new local seam is documented in the crate
+and its full runtime ownership is not accepted yet.
+
+Persistence review remains open: region duplicate maximum normalization,
+failed-compaction reopen cache invalidation and fallible directory close need
+correction; atomic metadata sequence tracking and players-parent durability
+need correction. Both isolated owners received concrete source-backed fixes and
+RED/GREEN obligations. Windows directory opening/sync is not qualified by the
+Darwin runs; directory handles need backup semantics and FlushFileBuffers needs
+write access per Microsoft documentation. Do not add a success no-op or claim
+cross-platform durability. Platform acceptance remains an explicit gate.
