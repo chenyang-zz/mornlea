@@ -4,6 +4,7 @@ pub mod companion_ingress;
 mod container_store;
 pub mod contracts;
 mod drop_store;
+pub mod interaction;
 pub mod mailbox;
 pub mod mutation;
 pub mod publication;

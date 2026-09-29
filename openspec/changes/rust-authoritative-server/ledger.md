@@ -1010,3 +1010,14 @@ serial migration owns mutation/workbench/sleep rays. Bucket water targeting
 stays operation-specific. This reconciles implementation with source rather
 than accepting behavior from existing air-only fixtures. Architecture skill:no
 change until the shared consumers are integrated and verified.
+
+
+Shared interaction classifier accepted after two behavioral REDs and3/3 GREEN.
+The existing projectile predicate moved unchanged, preserving its distinct
+unavailable-original-cell policy. Independent Sol review compared exact Go
+source, approved, and reran3 contract plus24 projectile cases. Full pinned
+server380 tests (2 unit,16 parity,79 persistence,120 contract,163 replay),
+clippy/fmt and matching Go core/entity Raycast/InteractionTarget oracles pass.
+Actual Go matches include MiningRaycastLooksThroughFluid and
+OpenContainerRaycastLooksThroughFluid; consumer migration remains mandatory.
+Architecture skill:no change until those providers are integrated.

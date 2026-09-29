@@ -7,6 +7,7 @@
 //! Ready subscription squares and hostile ranged decisions come from the
 //! serial reducer, never from a client or from this provider's own state.
 
+use crate::core::interaction::target_block;
 use mornlea_domain::{
     BlockPos, ChunkPos, CombatHit, CombatTarget, Dimension, Event, EventRecipient, FiniteVec3,
     MotionState, MotionStateParts, ProjectileId, ProjectileKind, RejectReason, RoutedEvent,
@@ -436,25 +437,6 @@ fn ray_capacity() -> ServerError {
         limit: MAX_RAY_CELLS,
         observed: MAX_RAY_CELLS + 1,
     }
-}
-
-fn target_block(
-    view: &AuthorityReadView<'_>,
-    dimension: Dimension,
-    pos: BlockPos,
-    block: u16,
-) -> bool {
-    if block == 0 || (27..=34).contains(&block) {
-        return false;
-    }
-    if block == 70 {
-        let lower = view.block(
-            dimension,
-            BlockPos::new(pos.x(), pos.y().saturating_sub(1), pos.z()),
-        );
-        return !matches!(lower, Some(id) if (62..=69).contains(&id) && !id.is_multiple_of(2));
-    }
-    !(62..=69).contains(&block) || block.is_multiple_of(2)
 }
 
 /// The earliest current AABB along the segment wins; target-kind and stable

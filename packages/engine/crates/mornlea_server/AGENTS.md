@@ -415,3 +415,10 @@ before allocation and orders its owned copy by hostile ID. Saved chase UUIDs
 never authorize attacks. The producer owns pre-physics selection and earliest
 valid action handling; combat owns current identity, cooldown and post-motion
 range validation. Contract examples do not accept those production providers.
+
+`src/core/interaction.rs` owns world-aware interaction target classification.
+Air and fluids pass through; open lower doors pass through, and an upper door
+uses its same-dimension lower form with missing/nonlower fallback closed. Target
+classification grants no collision, support or harvest permission. Callers
+retain their own original-cell readiness/error policy, including projectile
+flight's distinct handling. Interaction consumers must reuse this classifier.

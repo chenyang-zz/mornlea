@@ -42,3 +42,6 @@ mod harvest;
 
 #[path = "server_contract/combat_input.rs"]
 mod combat_input;
+
+#[path = "server_contract/interaction.rs"]
+mod interaction;
