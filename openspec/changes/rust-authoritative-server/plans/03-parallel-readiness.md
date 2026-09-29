@@ -60,7 +60,8 @@ Every local ID below is in this change's `tasks.md`. External `F1-final` means `
 | `2.6d` | `2.6b` | isolated provider; exact packet files only | Implement tick-driven furnaces. |
 | `2.6e` | `1.6,2.1b,2.6a,2.4a` | isolated provider; exact packet files only | Implement farming tools, bone meal and atomic buckets. |
 | `2.7a` | `1.2,2.1a` | isolated provider; exact packet files only | Implement hostile lifecycle and targeting. |
-| `2.7b` | `2.7a,2.6a` | isolated provider; exact packet files only | Implement projectiles and hit validation. |
+| `2.7b0` | `1.2` | controller-owned shared contract; see refined packet | Complete projectile read, compare-and-replace staging and replay initialization. |
+| `2.7b` | `2.7a,2.6a,2.7b0` | isolated provider; exact packet files only | Implement projectiles and hit validation. |
 | `2.7c` | `2.7b,2.5a,2.6a,2.8a` | isolated provider; exact packet files only | Implement one-time hostile death and combat outcomes. |
 | `2.8a` | `1.2,1.6,2.1a` | isolated provider; exact packet files only | Implement passive lifecycle. |
 | `2.8b` | `2.6a,2.7c,2.8a` | isolated provider; exact packet files only | Implement item drops and pickup. |

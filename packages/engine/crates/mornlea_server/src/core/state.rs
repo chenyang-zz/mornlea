@@ -2,7 +2,7 @@
 //!
 //! Sibling modules do not read these fields. They call the ports below.
 //! Staging a compound effect checks every component against the pre-effect
-//! overlay, counting projectile inserts in that compound, and applies the
+//! overlay, simulating ordered projectile edits on a bounded scratch set, and applies the
 //! whole effect only after that check succeeds. A later rejection restores
 //! the overlay. Publication encodes control packets and routed events through
 //! the existing protocol conversion before it appends any frame.
@@ -1195,6 +1195,8 @@ pub struct AuthorityReadView<'a> {
     viewers: &'a BTreeMap<SessionKey, ViewLease>,
     committed_viewers: &'a BTreeMap<SessionKey, ViewLease>,
     drops: &'a BTreeMap<ChunkKey, Vec<DropRecord>>,
+    projectiles: &'a [ProjectileRecord],
+    damage_intents: &'a [DamageIntent],
 }
 
 impl<'a> AuthorityReadView<'a> {
@@ -1265,6 +1267,14 @@ impl<'a> AuthorityReadView<'a> {
     pub fn drops(&self, key: ChunkKey) -> &[DropRecord] {
         self.drops.get(&key).map(Vec::as_slice).unwrap_or(&[])
     }
+    /// Immutable staged projectile records; providers cannot bypass compare-and-replace.
+    pub fn projectiles(&self) -> &'a [ProjectileRecord] {
+        self.projectiles
+    }
+    /// Ordered hit intents retained until the damage settlement phase.
+    pub fn damage_intents(&self) -> &'a [DamageIntent] {
+        self.damage_intents
+    }
     pub fn actors(&self) -> &'a [ActorRecord] {
         self.actors
     }
@@ -1325,6 +1335,7 @@ pub struct TickContext<'a> {
     spent_snapshot_bytes: usize,
     events: Vec<RoutedEvent>,
     projectiles: Vec<ProjectileRecord>,
+    damage_intents: Vec<DamageIntent>,
     deferred: Vec<(RulePhase, CommandEnvelope)>,
     charges: Vec<(ActorKey, ActionKind)>,
     /// Pre-motion actor poses, snapshotted once at construction from the
@@ -1363,6 +1374,14 @@ impl<'a> TickContext<'a> {
         let mut context = Self::from_parts(authority, budget);
         context.world = Some(initial.world);
         context.actors = initial.actors.clone();
+        context.projectiles = initial.projectiles.clone();
+        context.runtimes.extend(
+            initial
+                .runtime
+                .iter()
+                .cloned()
+                .map(|record| (record.key, record)),
+        );
         // The fixture's initial actors are the pre-motion poses, so the
         // snapshot taken here is pre-step by the same construction rule.
         for actor in &context.actors {
@@ -1401,6 +1420,7 @@ impl<'a> TickContext<'a> {
             spent_snapshot_bytes: 0,
             events: Vec::new(),
             projectiles: Vec::new(),
+            damage_intents: Vec::new(),
             deferred: Vec::new(),
             charges: Vec::new(),
             pre_step: BTreeMap::new(),
@@ -1472,6 +1492,8 @@ impl<'a> TickContext<'a> {
             viewers: &self.viewers,
             committed_viewers: &self.authority.views,
             drops: &self.drops,
+            projectiles: &self.projectiles,
+            damage_intents: &self.damage_intents,
         }
     }
 
@@ -1550,8 +1572,14 @@ impl<'a> TickContext<'a> {
     }
 
     pub fn stage(&mut self, effect: RuleEffect) -> Result<(), RuleReject> {
-        let mut pending_projectiles = 0usize;
-        self.validate_effect(&effect, false, &mut pending_projectiles)?;
+        let mut pending_projectiles = None;
+        let mut pending_damage = 0;
+        self.validate_effect(
+            &effect,
+            false,
+            &mut pending_projectiles,
+            &mut pending_damage,
+        )?;
         self.apply_effect(effect)
     }
 
@@ -1572,7 +1600,7 @@ impl<'a> TickContext<'a> {
     /// The hash input is these logical fields, not the process layout.
     pub fn snapshot_state(&self, fallback_world: WorldState) -> FixtureState {
         FixtureState {
-            runtime: Vec::new(),
+            runtime: self.runtimes.values().cloned().collect(),
             actors: self.actors.clone(),
             chunks: Vec::new(),
             inventories: self
@@ -1643,7 +1671,8 @@ impl<'a> TickContext<'a> {
         &self,
         effect: &RuleEffect,
         nested: bool,
-        pending_projectiles: &mut usize,
+        pending_projectiles: &mut Option<Vec<ProjectileRecord>>,
+        pending_damage: &mut usize,
     ) -> Result<(), RuleReject> {
         match effect {
             RuleEffect::Compound(parts) => {
@@ -1651,7 +1680,7 @@ impl<'a> TickContext<'a> {
                     return Err(RuleReject::ResourceFull(Resource::RuleEffects));
                 }
                 for part in parts {
-                    self.validate_effect(part, true, pending_projectiles)?;
+                    self.validate_effect(part, true, pending_projectiles, pending_damage)?;
                 }
                 Ok(())
             }
@@ -1691,13 +1720,18 @@ impl<'a> TickContext<'a> {
                 }
                 self.validate_writes(&txn.writes)
             }
-            RuleEffect::Projectile { after: Some(_), .. } => {
-                let occupied = self.projectiles.len().saturating_add(*pending_projectiles);
-                if occupied >= MAX_PROJECTILE_RECORDS {
+            RuleEffect::Damage(_) => {
+                if self.damage_intents.len().saturating_add(*pending_damage) >= EFFECT_BUDGET {
                     return Err(RuleReject::ResourceFull(Resource::RuleEffects));
                 }
-                *pending_projectiles = pending_projectiles.saturating_add(1);
+                *pending_damage += 1;
                 Ok(())
+            }
+            RuleEffect::Projectile { before, after } => {
+                // Only projectile effects allocate this bounded preview. Ordered
+                // validation permits eviction before insertion without publishing it.
+                let records = pending_projectiles.get_or_insert_with(|| self.projectiles.clone());
+                apply_projectile(records, before.as_ref(), after.as_ref())
             }
             _ => Ok(()),
         }
@@ -1728,6 +1762,7 @@ impl<'a> TickContext<'a> {
                 let containers = self.containers.clone();
                 let viewers = self.viewers.clone();
                 let projectiles = self.projectiles.clone();
+                let damage_len = self.damage_intents.len();
                 let environment = self.environment.clone();
                 // Defensive enforcement of the seam rule that a rejected
                 // atomic effect leaves all components unchanged: actor
@@ -1748,6 +1783,7 @@ impl<'a> TickContext<'a> {
                         self.containers = containers;
                         self.viewers = viewers;
                         self.projectiles = projectiles;
+                        self.damage_intents.truncate(damage_len);
                         self.environment = environment;
                         self.actors = actors;
                         self.runtimes = runtimes;
@@ -1817,14 +1853,15 @@ impl<'a> TickContext<'a> {
                 }
                 Ok(())
             }
-            RuleEffect::Projectile { after, .. } => {
-                if let Some(projectile) = after {
-                    if self.projectiles.len() >= MAX_PROJECTILE_RECORDS {
-                        return Err(RuleReject::ResourceFull(Resource::RuleEffects));
-                    }
-                    self.projectiles.push(projectile);
+            RuleEffect::Damage(intent) => {
+                if self.damage_intents.len() >= EFFECT_BUDGET {
+                    return Err(RuleReject::ResourceFull(Resource::RuleEffects));
                 }
+                self.damage_intents.push(intent);
                 Ok(())
+            }
+            RuleEffect::Projectile { before, after } => {
+                apply_projectile(&mut self.projectiles, before.as_ref(), after.as_ref())
             }
             RuleEffect::Environment(environment) => {
                 self.environment = Some(environment);
@@ -1964,4 +2001,42 @@ pub fn resolve_companion_mine(
     _view: &AuthorityReadView<'_>,
 ) -> Result<ResolvedMining, RuleReject> {
     Err(RuleReject::StaleObservation)
+}
+
+/// Applies one checked identity-preserving edit to either a preview or the overlay.
+/// Exact preimages reject late hits and repeated removals before any state changes.
+fn apply_projectile(
+    records: &mut Vec<ProjectileRecord>,
+    before: Option<&ProjectileRecord>,
+    after: Option<&ProjectileRecord>,
+) -> Result<(), RuleReject> {
+    match (before, after) {
+        (None, None) => Err(RuleReject::Wire(RejectReason::InvalidInput)),
+        (None, Some(next)) => {
+            if records.iter().any(|record| record.id == next.id) {
+                return Err(RuleReject::StaleObservation);
+            }
+            if records.len() >= MAX_PROJECTILE_RECORDS {
+                return Err(RuleReject::ResourceFull(Resource::RuleEffects));
+            }
+            records.push(next.clone());
+            Ok(())
+        }
+        (Some(previous), next) => {
+            if next.is_some_and(|record| record.id != previous.id) {
+                return Err(RuleReject::Wire(RejectReason::InvalidInput));
+            }
+            let index = records
+                .iter()
+                .position(|record| record == previous)
+                .ok_or(RuleReject::StaleObservation)?;
+            match next {
+                Some(record) => records[index] = record.clone(),
+                None => {
+                    records.remove(index);
+                }
+            }
+            Ok(())
+        }
+    }
 }

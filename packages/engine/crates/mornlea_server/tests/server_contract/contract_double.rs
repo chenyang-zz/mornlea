@@ -1034,3 +1034,262 @@ fn chunk_result(raw: u64) -> ChunkResult {
         }),
     }
 }
+
+fn projectile_world() -> mornlea_domain::WorldState {
+    mornlea_domain::WorldState::try_new(mornlea_domain::WorldStateParts {
+        day_phase_offset: 0,
+        world_time_ticks: 0,
+        weather: mornlea_domain::Weather::Clear,
+        season: mornlea_domain::Season::Spring,
+        season_progress: 0,
+        temperature: 0,
+    })
+    .unwrap()
+}
+
+#[test]
+fn projectile_update_remove_and_stale() {
+    let mut endpoint = server();
+    let actor = ActorKey::Player(
+        endpoint
+            .admit(login(19, "Projectile"), TransportKind::Memory)
+            .unwrap(),
+    );
+    let mut ctx = TickContext::harness(&mut endpoint.authority, TickBudget::full());
+    let original = projectile(1, actor);
+    ctx.stage(insert_projectile(original.clone())).unwrap();
+    let mut moved = original.clone();
+    moved.age = 1;
+    moved.position = FiniteVec3::try_new([0.0, 64.0, 1.0]).unwrap();
+    ctx.stage(RuleEffect::Projectile {
+        before: Some(original.clone()),
+        after: Some(moved.clone()),
+    })
+    .unwrap();
+    assert_eq!(
+        ctx.snapshot_state(projectile_world()).projectiles,
+        vec![moved.clone()]
+    );
+    assert_eq!(
+        ctx.stage(RuleEffect::Projectile {
+            before: Some(original),
+            after: None
+        }),
+        Err(RuleReject::StaleObservation)
+    );
+    assert_eq!(
+        ctx.snapshot_state(projectile_world()).projectiles,
+        vec![moved.clone()]
+    );
+    ctx.stage(RuleEffect::Projectile {
+        before: Some(moved),
+        after: None,
+    })
+    .unwrap();
+    assert_eq!(ctx.projectile_len(), 0);
+}
+
+#[test]
+fn projectile_compound_capacity_and_rollback() {
+    let mut endpoint = server();
+    let actor = ActorKey::Player(
+        endpoint
+            .admit(login(19, "Projectile"), TransportKind::Memory)
+            .unwrap(),
+    );
+    let mut ctx = TickContext::harness(&mut endpoint.authority, TickBudget::full());
+    let inventory = InventoryRecord::empty();
+    ctx.preload_inventory(actor, inventory);
+    for id in 1..=128 {
+        ctx.stage(insert_projectile(projectile(id, actor))).unwrap();
+    }
+    let old = projectile(1, actor);
+    let mut moved = old.clone();
+    moved.age = 1;
+    ctx.stage(RuleEffect::Projectile {
+        before: Some(old),
+        after: Some(moved.clone()),
+    })
+    .unwrap();
+    ctx.stage(RuleEffect::Compound(vec![
+        RuleEffect::Projectile {
+            before: Some(moved),
+            after: None,
+        },
+        insert_projectile(projectile(129, actor)),
+    ]))
+    .unwrap();
+    let before = ctx.snapshot_state(projectile_world()).projectiles;
+    assert_eq!(
+        before.iter().map(|p| p.id.get()).collect::<Vec<_>>(),
+        (2..=129).collect::<Vec<_>>()
+    );
+    let result = ctx.stage(RuleEffect::Compound(vec![
+        RuleEffect::Inventory(
+            InventoryPatch::try_new(actor, inventory, inventory.with_selected(slot(1))).unwrap(),
+        ),
+        RuleEffect::Projectile {
+            before: Some(projectile(2, actor)),
+            after: None,
+        },
+        insert_projectile(projectile(3, actor)),
+    ]));
+    assert_eq!(result, Err(RuleReject::StaleObservation));
+    assert_eq!(ctx.snapshot_state(projectile_world()).projectiles, before);
+    assert_eq!(ctx.read().inventory(actor), Some(&inventory));
+    assert_eq!(
+        ctx.stage(RuleEffect::Compound(vec![
+            insert_projectile(projectile(130, actor)),
+            RuleEffect::Projectile {
+                before: Some(projectile(2, actor)),
+                after: None
+            },
+        ])),
+        Err(RuleReject::ResourceFull(Resource::RuleEffects))
+    );
+    assert_eq!(ctx.snapshot_state(projectile_world()).projectiles, before);
+}
+
+#[test]
+fn projectile_fixture_initialization() {
+    let mut endpoint = server();
+    let actor = ActorKey::Player(
+        endpoint
+            .admit(login(19, "Projectile"), TransportKind::Memory)
+            .unwrap(),
+    );
+    let runtime = ActorRuntime {
+        key: actor,
+        controls: None,
+        has_view: true,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 300,
+        peak_y: 64.0,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: Some(BowProgress {
+            slot: slot(0),
+            ticks: 19,
+        }),
+        path: None,
+        aux: ActorAux::Player { respawn: None },
+    };
+    let mut initial = TickContext::harness(&mut endpoint.authority, TickBudget::full())
+        .snapshot_state(projectile_world());
+    initial.projectiles.push(projectile(1, actor));
+    initial.runtime.push(runtime.clone());
+    let ctx = TickContext::from_fixture(&mut endpoint.authority, &initial, TickBudget::full());
+    assert_eq!(
+        ctx.snapshot_state(projectile_world()).projectiles,
+        initial.projectiles
+    );
+    assert_eq!(ctx.read().runtime(actor), Some(&runtime));
+    assert_eq!(
+        ctx.snapshot_state(projectile_world()).runtime,
+        initial.runtime
+    );
+    assert_eq!(ctx.read().projectiles(), initial.projectiles);
+}
+
+#[test]
+fn projectile_invalid_shapes_and_identity() {
+    let mut endpoint = server();
+    let actor = ActorKey::Player(
+        endpoint
+            .admit(login(19, "Projectile"), TransportKind::Memory)
+            .unwrap(),
+    );
+    let mut ctx = TickContext::harness(&mut endpoint.authority, TickBudget::full());
+    let original = projectile(1, actor);
+    assert_eq!(
+        ctx.stage(RuleEffect::Projectile {
+            before: None,
+            after: None
+        }),
+        Err(RuleReject::Wire(RejectReason::InvalidInput))
+    );
+    assert_eq!(
+        ctx.stage(RuleEffect::Projectile {
+            before: Some(original.clone()),
+            after: None
+        }),
+        Err(RuleReject::StaleObservation)
+    );
+    ctx.stage(insert_projectile(original.clone())).unwrap();
+    assert_eq!(
+        ctx.stage(insert_projectile(original.clone())),
+        Err(RuleReject::StaleObservation)
+    );
+    assert_eq!(
+        ctx.stage(RuleEffect::Projectile {
+            before: Some(original.clone()),
+            after: Some(projectile(2, actor))
+        }),
+        Err(RuleReject::Wire(RejectReason::InvalidInput))
+    );
+    assert_eq!(
+        ctx.snapshot_state(projectile_world()).projectiles,
+        vec![original]
+    );
+}
+
+#[test]
+fn projectile_damage_staging_is_bounded_and_atomic() {
+    let mut endpoint = server();
+    let actor = ActorKey::Player(
+        endpoint
+            .admit(login(19, "Damage"), TransportKind::Memory)
+            .unwrap(),
+    );
+    let mut ctx = TickContext::harness(&mut endpoint.authority, TickBudget::full());
+    let original = projectile(1, actor);
+    ctx.stage(insert_projectile(original.clone())).unwrap();
+    let hit = DamageIntent {
+        source: actor,
+        target: actor,
+        dimension: Dimension::OVERWORLD,
+        amount: 2,
+        cause: DamageCause::Projectile,
+        projectile: Some(original.id),
+        tick: 0,
+    };
+    ctx.stage(RuleEffect::Damage(hit)).unwrap();
+    assert_eq!(ctx.read().damage_intents(), &[hit]);
+    for _ in 1..4095 {
+        ctx.stage(RuleEffect::Damage(hit)).unwrap();
+    }
+    assert_eq!(
+        ctx.stage(RuleEffect::Compound(vec![
+            RuleEffect::Projectile {
+                before: Some(original.clone()),
+                after: None
+            },
+            RuleEffect::Damage(hit),
+            RuleEffect::Damage(hit),
+        ])),
+        Err(RuleReject::ResourceFull(Resource::RuleEffects))
+    );
+    assert_eq!(ctx.read().damage_intents().len(), 4095);
+    assert_eq!(ctx.read().projectiles(), std::slice::from_ref(&original));
+    ctx.stage(RuleEffect::Compound(vec![
+        RuleEffect::Projectile {
+            before: Some(original),
+            after: None,
+        },
+        RuleEffect::Damage(hit),
+    ]))
+    .unwrap();
+    assert_eq!(ctx.read().damage_intents().len(), 4096);
+    assert!(ctx.read().projectiles().is_empty());
+    assert_eq!(
+        ctx.stage(RuleEffect::Damage(hit)),
+        Err(RuleReject::ResourceFull(Resource::RuleEffects))
+    );
+}

@@ -65,3 +65,15 @@ Persistence uses existing MCGR/MCGB bank commits and standalone atomic replaceme
 Agent HTTP remains schema v1 with no source_tick/attempt fields; private u64 attempt/source_tick distinguish callbacks from game world time. HTTP/lease, frozen snapshot/MCP, task/dialogue/memory and real-process gate have separate nodes. Test-only process owners launch the real Python gateway with deterministic model fixtures; production never launches or embeds Python. Shutdown exposes once-only phases and a failure report, retaining frozen Agent/world ownership on retry. Release is not given a fabricated idempotent receipt.
 
 Opt-in activation and rollback execute stop/wait/verify-or-restore/start against selected real binaries and disposable worlds. Dry-run remains inspection only. Parallel packet/file/DAG updates preserve accepted F3 S2 alias and all F2 checkboxes remain pending.
+
+
+## Projectile contract completion
+
+Continuation discovery found that the declared projectile before/after effect
+only appended records, and fixture initialization discarded projectiles and actor
+runtime. Node 2.7b0 completes the accepted declaration before provider work:
+immutable reads, exact-record compare-and-replace/removal, bounded ordered
+compound preflight, and fixture continuity. A provider-private projectile store
+was rejected because it would create a second owner and bypass the tick overlay.
+The refined packet defines error precedence and tests; 2.7b consumes its accepted
+commit, while 3.1 retains real reducer ownership.

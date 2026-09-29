@@ -246,3 +246,77 @@ For restore policy, require quiescent lock and same-parent paths. Stage named ve
 1.1b additionally owns `packages/server/server/persistence/migration_actor_capacity_oracle_test.go`, `TestMigrationActorCapacityReplay`, using real package-local player/companion/hostile/passive persistence owners and gated test stores. The actor owners live in package `persistence`; a `server` package test cannot read their unexported tickets without a production accessor, so this file stays in `persistence`. Sample raw snapshot allocation tickets immediately at selection/enqueue/held/completion/retry transfer, include metadata in the world-owner observer, and export the same immutable sample schema. This package does not import runtime internals; it combines host-owned actor lanes with previously collected runtime/world samples by the controller's recorded schedule boundary ID. Supported cases include all8 players plus standalone aggregate families and final metadata, reporting per-family count/logical bound/encoded-equivalent length and total retained snapshots. Run `go test ./packages/server/server/persistence -run '^TestMigrationActorCapacityReplay$' -count=1 -v`. All three exports/source-hash/case-set equality are required before1.1c; actor/metadata not-applicable is explicit, not silently omitted. This remains an offline migration oracle with no production Go changes.
 
 Node1.6 owns the real `try_system` transaction as well as actor resolution. Fluid2.3 and passive2.8a therefore require its accepted SHA before system-write provider tests; companion2.9b requires actual2.1c mining progression for its complete mining/retry cases. These dependencies are explicit in03; they do not alter the first independent environment2.2/inventory2.6a/store-mailbox3.4a wave.
+
+### Node 2.7b0: Executable projectile staging contract
+
+Baseline `4bfe8105`; accepted original S1 repair `10023cfc`. The controller owns
+`packages/engine/crates/mornlea_server/src/core/state.rs`, its crate `AGENTS.md`,
+and `tests/server_contract/contract_double.rs`. Read-only: `core/contracts.rs`,
+the existing `FixtureState`, `ProjectileRecord`, `ActorRuntime`, and `RuleEffect`
+declarations. No wire/save change or new authority owner.
+
+Expose `AuthorityReadView::projectiles(&self) -> &[ProjectileRecord]`. Initialize
+projectiles and keyed actor runtimes from `FixtureState` in `from_fixture`; these
+are fixture-only records and do not add a production load path. Complete the
+existing `RuleEffect::Projectile { before, after }` semantics: an absent `before`
+inserts a previously absent ID subject to the 128-record cap; an exact `before`
+replaces or removes its resident record. Replacement keeps the ID. Missing or
+stale `before` and duplicate insertion return `StaleObservation`; both values
+absent or an ID-changing replacement return `Wire(InvalidInput)`. Rejection
+preserves all state. Validate projectile components against a bounded scratch
+copy in compound order so remove-then-insert at capacity succeeds, but
+insert-then-remove at capacity refuses. Validate every component before applying
+any. Lazily allocate this scratch only for a projectile effect, not unrelated
+staging calls. Non-projectile validation remains unchanged.
+
+First add behavioral contract cases using existing `snapshot_state` access:
+`projectile_update_remove_and_stale`, `projectile_compound_capacity_and_rollback`,
+`projectile_fixture_initialization`, `projectile_invalid_shapes_and_identity`.
+Pin resident update count one, stale compare zero effects, removal count zero,
+full-cap update, full-cap evict+insert IDs 2..129, failed later duplicate rolling
+back an earlier inventory change/removal, initial bow/projectile preservation,
+and unchanged projectile identity. Baseline must fail assertions rather than
+imports. Add the immutable read getter assertions after the getter lands.
+
+Run nonempty discovery and execution with `rustup run 1.97.1 cargo test
+--manifest-path packages/engine/Cargo.toml -p mornlea_server --locked --test
+server_contract projectile`, then the full server crate, crate fmt/clippy,
+strict change validation and `git diff --check`. No Go source, derived corpus
+pins or wire/save versions change. The controller reviews and commits
+`fix(server): complete projectile staging contract` before the projectile
+provider consumes its accepted SHA. Rollback the contract commit only after
+invalidating dependent provider acceptance; actual collision/bow behavior stays
+in 2.7b and actual tick integration in 3.1.
+
+
+The same contract repair retains ordered `DamageIntent` effects in the tick
+context, exposed by `AuthorityReadView::damage_intents() -> &[DamageIntent]`.
+Capacity is 4096, counting every component of a compound before publication;
+refusal preserves projectiles, inventory and the prior intent list. This only
+records hits; combat owns authoritative damage/death settlement. Fixture
+snapshot output preserves actor runtimes for next-step replay continuity.
+`projectile_damage_staging_is_bounded_and_atomic` pins 4095/4096/4097 and atomic
+projectile-removal plus hit retention.
+
+Projectile provider input refinement: `ProjectileScope { dimension: Dimension,
+center: ChunkPos, radius: u64 }` represents one Ready session subscription square.
+`advance(ctx: &mut TickContext<'_>, scopes: &[ProjectileScope]) -> Result<PhaseReport,
+ServerError>` rejects more than eight scopes or radius above `i64::MAX` before
+mutation, then compares coordinate differences in i64 without enumerating the
+square. Go's configured radius has no finite gameplay ceiling; a u8 radius
+would incorrectly narrow compatibility. Unsubscribed post-step chunks remove
+the projectile even if loaded, while unloaded cells inside a subscribed square
+are not block hits. `run(ctx, call)` owns BowDraw and batch-shape validation;
+3.1 supplies actual Ready scopes then invokes the batch body, following the
+accepted furnace precedent. Tests must exercise empty scope, dimension mismatch,
+ine-scope refusal, and large radius without overflow.
+
+`spawn(ctx: &mut TickContext<'_>, record: ProjectileRecord) -> Result<(), RuleReject>`
+consumes authoritative resolved facts; validate before minimum-ID eviction.
+`derive_spawn_id(ctx: &TickContext<'_>, kind: ProjectileKind, dimension: Dimension,
+owner: ActorKey, position: FiniteVec3) -> Result<ProjectileId, RuleReject>` uses the
+Go spawn hash and at most 64 nonzero/unique probes. Bow and the later hostile
+ranged caller share this function. The serial reducer/hostile combat integration
+owns ranged target/cooldown decisions before calling spawn; it must not omit the
+ranged call when integrating the provider. No client supplies an authoritative
+projectile record or subscription scope.

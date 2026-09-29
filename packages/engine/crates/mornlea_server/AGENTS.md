@@ -17,10 +17,16 @@ against this file.
   constructor before they reserve command storage. `AuthorityState` keeps
   world, sessions, queues, tick, and publication private to `src/core/state.rs`.
 - `TickContext::stage` validates every component of a compound effect before
-  it applies any component, counting projectile inserts already accepted in
+  it applies any component, previewing ordered projectile insert/replace/remove operations in
   that compound. `contract_double::compound_rejects_partial` and
   `contract_double::compound_projectile_insert_is_atomic` require a
   second-component failure to leave every earlier component absent.
+- Projectile effects compare exact preimages, preserve IDs on replacement and
+  enforce the 128-record cap in compound order. `read().projectiles()` exposes
+  an immutable overlay. Damage effects retain at most 4096 ordered intents;
+  compound refusal preserves both lanes. Fixture initialization and snapshots
+  preserve actor runtime and projectiles across replay steps. Damage settlement
+  and real reducer persistence remain separate provider responsibilities.
 - `AuthorityState::publish` encodes `TickPublication` events with
   `ServerPacket::try_from(Event)` and encodes every control packet through
   `ProtocolCodec::encode_server_into` before appending. A conversion or

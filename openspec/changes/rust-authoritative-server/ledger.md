@@ -419,3 +419,43 @@ Tenth node of the sixth three-worker wave to close (isolated worktree off `bd225
 Ratified split: no sleep read lane exists on `AuthorityReadView` (verified field-by-field), so `run` shape-gates with zero work while `enter`/`settle` take reducer-carried inputs — the accepted furnace/acquisition family precedent; the serial reducer owns wiring and must prune respawned/disconnected sessions on the non-transition path (the reviewer's integration note). The at-bound bed-replace pin is honest with the reviewer's caveat that session-key churn can exceed eight retained rows under the never-remove policy (bounded either way). Behavioral red was the unresolved-provider compile failure; green in the worktree and after the serial cherry-pick at `7a4bd4db` (full crate 146 passed, exit 0; clippy/fmt/Go sleep oracle/`git diff --check` in the worker report).
 
 Deferred minors: `enter` stages the respawn anchor before the capacity check, overstating the documented refusal invariant on a churn-only path; the command-payload refusal arm of `run` is untested (symmetric code). Architecture skill: no change.
+
+
+## Continuation routing and projectile contract repair, 2026-09-29
+
+Start `4bfe8105` on `cursor/rust-authoritative-server-98e6`, clean existing
+`/Users/chen/work/mornlea-f2-server`. Read-only isolated GPT-6 Sol discovery
+verified 33/51 completed nodes and clean unused provider worktrees; no orphan
+implementation was adopted. Reuse w27b for projectile provider 2.7b and w36b
+for tools provider 2.6e (its existing branch name is retained). Each fresh Sol
+worker owns its two packet files only; source investigation stays isolated,
+shared contracts and integration stay with the controller. Tool work does not
+consume the changed projectile boundary.
+
+Ruling: add independently verifiable 2.7b0 before 2.7b. Existing effect declarations
+are retained, but their append-only implementation cannot express movement or
+expiry and fixture setup loses runtime/projectiles. The controller completes
+these contracts before releasing the provider. No external behavior/version
+change, parallel online authority or fallback is introduced. Readiness and
+refined packets are reconciled; initial shared acceptance `10023cfc` is not
+claimed to cover this newly repaired behavior. Derived-consumer inventory:
+no modified Rust/contract test source is pinned in runtime-migration provenance;
+crate guide and OpenSpec artifacts are controller-owned. Architecture skill:
+no change; the existing one-owner and contract-first rules cover this repair.
+
+
+Contract validation: `cargo test --test server_contract projectile` first executed
+four new failures (duplicate update, cap update refused, lost fixture records,
+empty edit accepted), then an additional two failures for lost damage intents
+and runtime snapshot loss. After repair the six projectile contract cases pass;
+full `rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml
+-p mornlea_server --locked` passes 151 tests, zero failures. `cargo fmt` and
+`cargo clippy -p mornlea_server --all-targets --locked -- -D warnings` pass;
+`make rust`, strict change validation, and `git diff --check` pass. No Go source
+changed. This is contract evidence only, not projectile or damage-provider
+acceptance. The existing combat/death node still owns hit settlement.
+
+Independent GPT-6 Sol contract review: approved, no actionable findings. The
+review checked CAS identity, ordered preview/apply, damage capacity/rollback,
+fixture continuity, and derived consumers. Node 2.7b0 accepted at the scoped
+commit containing this record; provider dispatch records its resulting SHA.
