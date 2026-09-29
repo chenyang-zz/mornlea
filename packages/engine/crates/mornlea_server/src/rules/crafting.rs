@@ -621,7 +621,7 @@ const RECIPES: [RecipePattern; 25] = [
 /// Effective grid edge length for one crafting size: a personal grid is 2x2
 /// and a bench 3x3 (`CraftingGridSizePersonal` / `CraftingGridSizeWorkbench`
 /// in `packages/server/sim/entity/crafting.go`).
-fn grid_extent(size: CraftingSize) -> u8 {
+pub(crate) fn grid_extent(size: CraftingSize) -> u8 {
     match size {
         CraftingSize::Personal => 2,
         CraftingSize::Workbench => 3,
@@ -808,7 +808,7 @@ fn consume_grid(
 /// Reads one unified view slot: grid `0..8` direct, pack `9..44` offset by
 /// the grid length (`craftingViewSlot` in
 /// `packages/server/sim/entity/crafting.go`).
-fn view_slot(record: &InventoryRecord, slot: usize) -> ItemStack {
+pub(crate) fn view_slot(record: &InventoryRecord, slot: usize) -> ItemStack {
     if slot < CRAFTING_GRID_SLOTS {
         record.crafting[slot]
     } else {
@@ -819,7 +819,7 @@ fn view_slot(record: &InventoryRecord, slot: usize) -> ItemStack {
 /// Writes one unified view slot (`setCraftingViewSlot` in
 /// `packages/server/sim/entity/crafting.go`); the caller keeps the grid cell
 /// inside the effective size.
-fn set_view_slot(record: &mut InventoryRecord, slot: usize, stack: ItemStack) {
+pub(crate) fn set_view_slot(record: &mut InventoryRecord, slot: usize, stack: ItemStack) {
     if slot < CRAFTING_GRID_SLOTS {
         record.crafting[slot] = stack;
     } else {

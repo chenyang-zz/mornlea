@@ -637,3 +637,425 @@ fn four_phase_pack_credit_prefers_hotbar_then_backpack() {
         assert!(ctx.events().is_empty());
     }
 }
+
+fn drop_command(
+    session: SessionKey,
+    sequence: u64,
+    command: mornlea_domain::Command,
+) -> mornlea_domain::CommandEnvelope {
+    mornlea_domain::CommandEnvelope::try_new(mornlea_domain::CommandEnvelopeParts {
+        tick: 0,
+        session: session.get(),
+        sequence,
+        arrival_index: sequence,
+        command,
+    })
+    .unwrap()
+}
+fn drop_context(
+    authority: &mut AuthorityState,
+    session: SessionKey,
+    inventory: InventoryRecord,
+) -> TickContext<'_> {
+    let mut ctx = TickContext::harness(authority, TickBudget::full());
+    ctx.stage(RuleEffect::Environment(environment(
+        RuleTunables::source_defaults(),
+    )))
+    .unwrap();
+    ctx.stage(RuleEffect::Actor(player(
+        session,
+        [0.5, 64.0, 0.5],
+        ActorLifecycle::Active,
+    )))
+    .unwrap();
+    ctx.preload_inventory(ActorKey::Player(session), inventory);
+    ctx.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 1, chunk()).unwrap());
+    ctx
+}
+fn panel(view: mornlea_domain::StackView, slot: u8) -> mornlea_domain::Command {
+    mornlea_domain::Command::DropStack(mornlea_domain::StackSource::try_new(view, slot).unwrap())
+}
+
+#[test]
+fn selected_drop_reads_current_slot_and_preserves_remainder_and_delay_order() {
+    let session = session(1);
+    let actor = ActorKey::Player(session);
+    let mut inventory = InventoryRecord::empty();
+    inventory.selected = mornlea_domain::HotbarSlot::new(3).unwrap();
+    inventory.slots[3] = stack(1, 2);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = drop_context(&mut authority, session, inventory);
+    let command = drop_command(session, 1, mornlea_domain::Command::DropSelectedItem);
+    assert_eq!(
+        provider::settle_command(&mut ctx, &command)
+            .unwrap()
+            .applied,
+        1
+    );
+    assert_eq!(ctx.read().inventory(actor).unwrap().slots[3], stack(1, 1));
+    assert_eq!(ctx.read().drops(key())[0].stack, stack(1, 1));
+    assert_eq!(ctx.read().drops(key())[0].pickup_delay, 40);
+    provider::advance(&mut ctx, &[key()]).unwrap();
+    assert_eq!(
+        (
+            ctx.read().drops(key())[0].age,
+            ctx.read().drops(key())[0].pickup_delay
+        ),
+        (1, 39)
+    );
+    provider::settle_command(
+        &mut ctx,
+        &drop_command(session, 2, mornlea_domain::Command::DropSelectedItem),
+    )
+    .unwrap();
+    assert_eq!(
+        ctx.read().inventory(actor).unwrap().slots[3],
+        ItemStack::default()
+    );
+    let before = ctx.snapshot_state(world());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &command),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::InvalidSlot
+        ))
+    );
+    assert_eq!(ctx.snapshot_state(world()), before);
+}
+
+#[test]
+fn durable_selected_drop_preserves_item_identity() {
+    let session = session(1);
+    let mut inventory = InventoryRecord::empty();
+    let tool = ItemStack {
+        item: 10,
+        count: 1,
+        durability: 17,
+    };
+    inventory.slots[0] = tool;
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = drop_context(&mut authority, session, inventory);
+    provider::run(
+        &mut ctx,
+        RuleCall {
+            phase: RulePhase::Interaction,
+            actor: None,
+            command: Some(&drop_command(
+                session,
+                1,
+                mornlea_domain::Command::DropSelectedItem,
+            )),
+            internal: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(ctx.read().drops(key())[0].stack, tool);
+    assert_eq!(
+        ctx.read()
+            .inventory(ActorKey::Player(session))
+            .unwrap()
+            .slots[0],
+        ItemStack::default()
+    );
+}
+
+#[test]
+fn panel_views_remove_whole_authoritative_stack_with_dynamic_grid_bounds() {
+    use mornlea_domain::{CraftingSize, StackView};
+    for (view, slot, size, valid) in [
+        (StackView::Inventory, 35, CraftingSize::Personal, true),
+        (StackView::Crafting, 3, CraftingSize::Personal, true),
+        (StackView::Crafting, 4, CraftingSize::Personal, false),
+        (StackView::Crafting, 8, CraftingSize::Workbench, true),
+        (StackView::Crafting, 44, CraftingSize::Personal, true),
+    ] {
+        let session = session(1);
+        let mut inventory = InventoryRecord::empty();
+        inventory.crafting_size = size;
+        match view {
+            StackView::Inventory => inventory.slots[slot as usize] = stack(1, 19),
+            _ => {
+                if slot < 9 {
+                    inventory.crafting[slot as usize] = stack(1, 19);
+                } else {
+                    inventory.slots[(slot - 9) as usize] = stack(1, 19);
+                }
+            }
+        }
+        let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+        let mut ctx = drop_context(&mut authority, session, inventory);
+        let before = ctx.snapshot_state(world());
+        let command = drop_command(session, 1, panel(view, slot));
+        let result = provider::settle_command(&mut ctx, &command);
+        if valid {
+            result.unwrap();
+            assert_eq!(ctx.read().drops(key())[0].stack, stack(1, 19));
+            assert!(provider::settle_command(&mut ctx, &command).is_err());
+        } else {
+            assert_eq!(
+                result,
+                Err(mornlea_server::contracts::RuleReject::Wire(
+                    mornlea_domain::RejectReason::InvalidSlot
+                ))
+            );
+            assert_eq!(ctx.snapshot_state(world()), before);
+        }
+    }
+}
+
+#[test]
+fn drop_refusals_preserve_inventory_slots_and_durable_revision() {
+    use mornlea_domain::RejectReason;
+    use mornlea_server::contracts::RuleReject;
+    for case in 0..5 {
+        let session = session(1);
+        let mut inventory = InventoryRecord::empty();
+        inventory.slots[0] = stack(1, 5);
+        let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+        let mut ctx = drop_context(&mut authority, session, inventory);
+        let expected = match case {
+            0 => {
+                ctx.stage(RuleEffect::Actor(player(
+                    session,
+                    [0.5, 64.0, 0.5],
+                    ActorLifecycle::Respawning,
+                )))
+                .unwrap();
+                RuleReject::Wire(RejectReason::PlayerNotReady)
+            }
+            1 => {
+                ctx.stage(RuleEffect::Actor(player(
+                    session,
+                    [32.5, 64.0, 0.5],
+                    ActorLifecycle::Active,
+                )))
+                .unwrap();
+                RuleReject::Wire(RejectReason::ChunkNotReady)
+            }
+            2 => {
+                ctx.stage(RuleEffect::Actor(player(
+                    session,
+                    [0.5, 320.0, 0.5],
+                    ActorLifecycle::Active,
+                )))
+                .unwrap();
+                RuleReject::Wire(RejectReason::ChunkNotReady)
+            }
+            3 => {
+                let mut data = chunk();
+                for slot in &mut data.drops {
+                    *slot = mornlea_storage::DropSlot {
+                        generation: 1,
+                        active: true,
+                        stack: stack(2, 64),
+                        block_index: 0,
+                        ..Default::default()
+                    };
+                }
+                ctx.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 1, data).unwrap());
+                RuleReject::Wire(RejectReason::DropCapacity)
+            }
+            _ => {
+                ctx.preload_ready_chunk(ReadyChunk::try_new(key(), 1, u64::MAX, chunk()).unwrap());
+                RuleReject::StaleObservation
+            }
+        };
+        let before = ctx.snapshot_state(world());
+        assert_eq!(
+            provider::settle_command(
+                &mut ctx,
+                &drop_command(session, 1, mornlea_domain::Command::DropSelectedItem)
+            ),
+            Err(expected)
+        );
+        assert_eq!(ctx.snapshot_state(world()), before);
+    }
+}
+
+#[test]
+fn panel_debit_needs_no_repack_capacity_and_full_slots_can_merge() {
+    let session = session(1);
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots.fill(stack(1, 64));
+    inventory.crafting[0] = stack(2, 64);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = drop_context(&mut authority, session, inventory);
+    let target = mornlea_domain::BlockPos::new(0, 64, 0);
+    let mut data = chunk();
+    for (index, slot) in data.drops.iter_mut().enumerate() {
+        *slot = mornlea_storage::DropSlot {
+            active: true,
+            generation: 1,
+            stack: stack(
+                if index == 0 { 2 } else { 3 },
+                if index == 0 { 1 } else { 64 },
+            ),
+            block_index: mornlea_domain::chunk_block_index(target),
+            ..Default::default()
+        };
+    }
+    ctx.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 1, data).unwrap());
+    // A full incoming stack would need another slot; the complete source remains on refusal.
+    let before = ctx.snapshot_state(world());
+    assert!(
+        provider::settle_command(
+            &mut ctx,
+            &drop_command(session, 1, panel(mornlea_domain::StackView::Crafting, 0))
+        )
+        .is_err()
+    );
+    assert_eq!(ctx.snapshot_state(world()), before);
+    inventory.crafting[0].count = 63;
+    ctx.preload_inventory(ActorKey::Player(session), inventory);
+    provider::settle_command(
+        &mut ctx,
+        &drop_command(session, 2, panel(mornlea_domain::StackView::Crafting, 0)),
+    )
+    .unwrap();
+    assert_eq!(ctx.read().drops(key()).len(), 32);
+    assert_eq!(ctx.read().drops(key())[0].stack, stack(2, 64));
+    assert_eq!(
+        ctx.read()
+            .inventory(ActorKey::Player(session))
+            .unwrap()
+            .crafting[0],
+        ItemStack::default()
+    );
+}
+
+#[test]
+fn negative_feet_and_depths_use_authoritative_floor() {
+    let session = session(1);
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(1, 1);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = drop_context(&mut authority, session, inventory);
+    let mut actor = player(session, [-0.01, 64.9, -16.01], ActorLifecycle::Active);
+    actor.dimension = Dimension::DEPTHS;
+    if let ActorBody::Player(body) = &mut actor.body {
+        body.current.dimension = 1;
+    }
+    ctx.stage(RuleEffect::Actor(actor)).unwrap();
+    let owner = ChunkKey {
+        dimension: Dimension::DEPTHS,
+        pos: ChunkPos::new(-1, -2),
+    };
+    ctx.preload_ready_chunk(ReadyChunk::try_new(owner, 1, 1, chunk()).unwrap());
+    provider::settle_command(
+        &mut ctx,
+        &drop_command(session, 1, mornlea_domain::Command::DropSelectedItem),
+    )
+    .unwrap();
+    assert!(ctx.read().drops(key()).is_empty());
+    assert_eq!(
+        ctx.read().drops(owner)[0].position.get(),
+        [-0.5, 64.5, -16.5]
+    );
+}
+
+#[test]
+fn earlier_inventory_move_and_grid_shrink_change_drop_source() {
+    use mornlea_domain::{Command, CraftingSize, InventoryMove, StackView};
+    let session = session(1);
+    let actor = ActorKey::Player(session);
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(1, 7);
+    inventory.crafting_size = CraftingSize::Workbench;
+    inventory.crafting[8] = stack(2, 3);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = drop_context(&mut authority, session, inventory);
+    let queued_q = drop_command(session, 2, Command::DropSelectedItem);
+    let queued_grid = drop_command(session, 3, panel(StackView::Crafting, 8));
+    mornlea_server::rules::inventory::run(
+        &mut ctx,
+        RuleCall {
+            phase: RulePhase::PlayerCommand,
+            actor: None,
+            command: Some(&drop_command(
+                session,
+                1,
+                Command::MoveInventory(InventoryMove::try_new(0, 1).unwrap()),
+            )),
+            internal: None,
+        },
+    )
+    .unwrap();
+    let before = ctx.snapshot_state(world());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &queued_q),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::InvalidSlot
+        ))
+    );
+    assert_eq!(ctx.snapshot_state(world()), before);
+    let current = *ctx.read().inventory(actor).unwrap();
+    let mut shrunk = current;
+    shrunk.crafting_size = CraftingSize::Personal;
+    ctx.stage(RuleEffect::Inventory(
+        mornlea_server::contracts::InventoryPatch::try_new(actor, current, shrunk).unwrap(),
+    ))
+    .unwrap();
+    let before = ctx.snapshot_state(world());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &queued_grid),
+        Err(mornlea_server::contracts::RuleReject::Wire(
+            mornlea_domain::RejectReason::InvalidSlot
+        ))
+    );
+    assert_eq!(ctx.snapshot_state(world()), before);
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn invalid_drop_calls_and_extreme_feet_are_state_preserving() {
+    use mornlea_domain::{Command, RejectReason};
+    use mornlea_server::contracts::RuleReject;
+    let session = session(1);
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(1, 1);
+    let mut authority = AuthorityState::try_new(limits(), 0).unwrap();
+    let mut ctx = drop_context(&mut authority, session, inventory);
+    let before = ctx.snapshot_state(world());
+    assert_eq!(
+        provider::settle_command(&mut ctx, &drop_command(session, 1, Command::EquipArmor)),
+        Err(RuleReject::Wire(RejectReason::InvalidInput))
+    );
+    let q = drop_command(session, 1, Command::DropSelectedItem);
+    for (phase, actor, command) in [
+        (RulePhase::DropStep, None, Some(&q)),
+        (RulePhase::Interaction, None, None),
+        (
+            RulePhase::Interaction,
+            Some(ActorKey::Player(session)),
+            Some(&q),
+        ),
+    ] {
+        assert!(
+            provider::run(
+                &mut ctx,
+                RuleCall {
+                    phase,
+                    actor,
+                    command,
+                    internal: None
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(ctx.snapshot_state(world()), before);
+    }
+    for x in [i32::MAX as f32, f32::MAX, -f32::MAX] {
+        ctx.stage(RuleEffect::Actor(player(
+            session,
+            [x, 64.0, 0.5],
+            ActorLifecycle::Active,
+        )))
+        .unwrap();
+        let before = ctx.snapshot_state(world());
+        assert_eq!(
+            provider::settle_command(&mut ctx, &q),
+            Err(RuleReject::Wire(RejectReason::ChunkNotReady))
+        );
+        assert_eq!(ctx.snapshot_state(world()), before);
+    }
+    assert!(ctx.events().is_empty());
+}

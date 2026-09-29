@@ -1,36 +1,41 @@
-//! Active Ready drop aging and atomic pickup settlement.
+//! Checked player drop commands, Ready drop aging and atomic pickup settlement.
 //!
 //! The reducer owns the bounded active-interest set and item producers. This
-//! provider only ages stored slots and transfers their existing quantity into
-//! active player inventories through the accepted staging contract.
+//! provider debits authoritative player stacks and transfers existing world
+//! quantities into active inventories through the accepted staging contract.
 
 use crate::core::contracts::{
-    ActorKey, ActorLifecycle, ChunkKey, InventoryPatch, PhaseReport, Resource, RuleCall,
-    RuleEffect, RulePhase, ServerError, SessionKey,
+    ActorKey, ActorLifecycle, ChunkKey, DropBatch, DropSource, InventoryPatch, PhaseReport,
+    Resource, RuleCall, RuleEffect, RulePhase, RuleReject, ServerError, SessionKey,
 };
 use crate::core::state::TickContext;
-use crate::rules::crafting::{add_stack, can_repack};
-use mornlea_domain::Dimension;
+use crate::rules::crafting::{add_stack, can_repack, grid_extent, set_view_slot, view_slot};
+use mornlea_domain::{ChunkPos, Command, CommandEnvelope, Dimension, RejectReason, StackView};
+use mornlea_storage::ItemStack;
 
 const MAX_ACTIVE_KEYS: usize = 200;
 const MAX_ACTIVE_PLAYERS: usize = 8;
 
 /// The batch call validates its shape; the reducer passes active Ready keys
 /// separately because the frozen call record has no interest-set field.
-pub fn run(_ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
-    if call.phase != RulePhase::DropStep
-        || call.actor.is_some()
-        || call.command.is_some()
-        || call.internal.is_some()
-    {
+pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
+    if call.actor.is_some() || call.internal.is_some() {
         return Err(ServerError::InvalidInput { field: "phase" });
     }
-    Ok(PhaseReport {
-        examined: 0,
-        applied: 0,
-        carried: 0,
-        rejected: 0,
-    })
+    match (call.phase, call.command) {
+        (RulePhase::Interaction, Some(command)) => {
+            settle_command(ctx, command).map_err(|_| ServerError::InvalidInput {
+                field: "drop_command",
+            })
+        }
+        (RulePhase::DropStep, None) => Ok(PhaseReport {
+            examined: 0,
+            applied: 0,
+            carried: 0,
+            rejected: 0,
+        }),
+        _ => Err(ServerError::InvalidInput { field: "phase" }),
+    }
 }
 
 /// Advance each initially active physical slot once. Counter changes are
@@ -172,4 +177,125 @@ pub fn advance(ctx: &mut TickContext<'_>, active: &[ChunkKey]) -> Result<PhaseRe
         }
     }
     Ok(report)
+}
+
+/// Prepare one foot-position output without debiting its source. Container
+/// settlement reuses this check, then atomically stages its own source debit.
+pub(crate) fn prepare_player_drop(
+    ctx: &TickContext<'_>,
+    session: SessionKey,
+    sequence: u64,
+    stack: ItemStack,
+) -> Result<DropBatch, RuleReject> {
+    let view = ctx.read();
+    let actor = view
+        .actor(ActorKey::Player(session))
+        .filter(|actor| actor.lifecycle == ActorLifecycle::Active)
+        .ok_or(RuleReject::Wire(RejectReason::PlayerNotReady))?;
+    let origin = actor.motion.position();
+    // Check in f64 before narrowing: the f32 representation of i32::MAX
+    // rounds outside the integer range and must never saturate into a chunk.
+    let feet = origin.get().map(|value| f64::from(value).floor());
+    if feet
+        .iter()
+        .any(|value| *value < f64::from(i32::MIN) || *value > f64::from(i32::MAX))
+        || !(-64.0..320.0).contains(&feet[1])
+    {
+        return Err(RuleReject::Wire(RejectReason::ChunkNotReady));
+    }
+    let key = ChunkKey {
+        dimension: actor.dimension,
+        pos: ChunkPos::new((feet[0] as i32) >> 4, (feet[2] as i32) >> 4),
+    };
+    if !view.ready_chunk(key) {
+        return Err(RuleReject::Wire(RejectReason::ChunkNotReady));
+    }
+    let environment = view
+        .environment()
+        .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    let batch = DropBatch::try_new(
+        DropSource::Panel { session, sequence },
+        actor.dimension,
+        origin,
+        vec![stack],
+        environment.tunables.player_drop_pickup_delay_ticks(),
+    )?;
+    view.check_drop_batch(&batch)?;
+    Ok(batch)
+}
+
+/// Settle one admitted player's selected or inline panel drop. The current
+/// source is read at settlement, so preceding commands cannot mint stale items.
+pub fn settle_command(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+) -> Result<PhaseReport, RuleReject> {
+    let session = SessionKey::from_raw(envelope.session())
+        .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    let actor = ActorKey::Player(session);
+    let view = ctx.read();
+    if !view
+        .actor(actor)
+        .is_some_and(|record| record.lifecycle == ActorLifecycle::Active)
+    {
+        return Err(RuleReject::Wire(RejectReason::PlayerNotReady));
+    }
+    let before = *view
+        .inventory(actor)
+        .ok_or(RuleReject::Wire(RejectReason::PlayerNotReady))?;
+    let mut after = before;
+    let source = match envelope.command() {
+        Command::DropSelectedItem => {
+            let slot = usize::from(before.selected.get());
+            let mut source = before.slots[slot];
+            if source.count == 0 {
+                return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+            }
+            after.slots[slot].count -= 1;
+            if after.slots[slot].count == 0 {
+                after.slots[slot] = ItemStack::default();
+            }
+            source.count = 1;
+            source
+        }
+        Command::DropStack(source) => {
+            let slot = usize::from(source.slot());
+            match source.view() {
+                StackView::Inventory => {
+                    let stack = before.slots[slot];
+                    after.slots[slot] = ItemStack::default();
+                    stack
+                }
+                StackView::Crafting => {
+                    let extent = usize::from(grid_extent(before.crafting_size));
+                    if slot < 9 && slot >= extent * extent {
+                        return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+                    }
+                    let stack = view_slot(&before, slot);
+                    set_view_slot(&mut after, slot, ItemStack::default());
+                    stack
+                }
+                StackView::Container(_) => {
+                    return Err(RuleReject::Wire(RejectReason::InvalidInput));
+                }
+            }
+        }
+        _ => return Err(RuleReject::Wire(RejectReason::InvalidInput)),
+    };
+    if source.count == 0 {
+        return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+    }
+    let batch = prepare_player_drop(ctx, session, envelope.sequence(), source)?;
+    // A debit frees capacity; repacking crafting inputs would add a credit-only
+    // veto absent from the source command contract.
+    ctx.stage(RuleEffect::Compound(vec![
+        RuleEffect::Inventory(InventoryPatch::try_new(actor, before, after)?),
+        RuleEffect::Drops(batch),
+    ]))?;
+    Ok(PhaseReport {
+        examined: 1,
+        applied: 1,
+        carried: 0,
+        rejected: 0,
+    })
 }

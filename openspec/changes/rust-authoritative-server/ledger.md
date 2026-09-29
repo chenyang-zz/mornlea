@@ -903,3 +903,16 @@ state completion before a panel drop can use them; do not accept that behavior
 from an existing move double. Main implements this coupled drops/crafting-helper
 node directly; three isolated traces own support/environment/mining. No file
 ownership overlap. Architecture skill:no change.
+
+
+Selected/inline panel drops implemented by the controller against plan15. Six
+behavioral REDs became GREEN; eight new replay cases cover Q remainder and
+durability, dynamic grid bounds, full-slot merging, complete refusal snapshots,
+negative feet/Depths, extreme f32 coordinates, shape refusal and an actual
+preceding inventory move. The shared checked foot helper retains precise
+RuleReject; source debit and drop output stage together, without a repack veto.
+Pinned full server335 tests (1 unit,16 parity,79 persistence,102 contract,137
+replay), clippy, fmt and Go entity/runtime DropCommand/DropStack/Pickup/Drop pass.
+Independent Sol review approved and reran20/20 focused drop cases. Container
+consumer and real reducer phase ordering remain unaccepted. Architecture
+skill:no change.

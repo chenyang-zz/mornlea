@@ -382,7 +382,12 @@ expire before pickup, then credit in session order within the source f32 radius.
 Whole inventory/drop compare-and-replace settlement preserves crafting repack
 capacity. Counter-only changes retain source non-dirty semantics. The reducer
 owns active interest, producer ordering and publication; this provider does not
-accept those integrations by itself.
+accept those integrations by itself. Checked Q and inventory/crafting panel
+commands read the current authoritative source and atomically debit it with a
+foot-position output. The crate-visible foot preparation helper checks Active
+lifecycle, bounded coordinates, Ready ownership and exact merge capacity before
+any source change; container settlement reuses it. Command providers retain typed
+refusals for the later reducer, and never trust client quantities or positions.
 
 `src/rules/harvest.rs` owns allocation-free source harvest dice. Crop yield
 streams include completion tick; short-grass seeds and extra leaf saplings omit
