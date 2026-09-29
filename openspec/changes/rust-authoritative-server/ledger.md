@@ -977,3 +977,16 @@ examples. Main also corrects plan04's erroneous radius2 death cutoff using
 Go death.go112-130 and records world_time loot hashing. Existing lifecycle
 providers and compile-only contracts remain distinct from full integration.
 Architecture skill:no change.
+
+
+Hostile melee input boundary landed by main: three inert-constructor behavioral
+REDs and a separate duplicate-acceptance RED, then4/4 GREEN. An initial file
+insertion script missed its exact marker; the zero-match filter from that
+attempt is not counted as RED evidence. The final constructor validates all
+capacity/duplicate conditions before copying and sorts only owned values.
+Independent fresh Sol review approved exact types/tick/capacity/value flow and
+reran4/4. Main full pinned server377 tests (2 unit,16 parity,79 persistence,117
+contract,163 replay), clippy/fmt, strict OpenSpec and diff checks pass. Clippy
+identified one needless test-only generic borrow, corrected without behavior
+change. Callable doubles prove this contract only, not either consumer.
+Architecture skill:no change.

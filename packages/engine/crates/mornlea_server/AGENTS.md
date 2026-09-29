@@ -408,3 +408,10 @@ restores it. Each removal sees current world writes, and item-producing
 removals atomically stage their exact outputs. Unavailable support observations
 follow each source predicate; paired bed removal refuses an unavailable
 counterpart. The reducer invokes this provider after ordinary world writes.
+
+`HostileMeleeBatch` is a bounded immutable tick-local input contract. It retains
+exact hostile IDs and process-local target sessions, validates unique attackers
+before allocation and orders its owned copy by hostile ID. Saved chase UUIDs
+never authorize attacks. The producer owns pre-physics selection and earliest
+valid action handling; combat owns current identity, cooldown and post-motion
+range validation. Contract examples do not accept those production providers.

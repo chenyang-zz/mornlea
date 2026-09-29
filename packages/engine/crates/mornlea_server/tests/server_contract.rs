@@ -39,3 +39,6 @@ mod world_outputs;
 
 #[path = "server_contract/harvest.rs"]
 mod harvest;
+
+#[path = "server_contract/combat_input.rs"]
+mod combat_input;

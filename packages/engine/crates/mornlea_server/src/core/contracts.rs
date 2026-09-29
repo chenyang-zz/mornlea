@@ -1032,6 +1032,72 @@ pub struct MiningProgress {
     pub last_tick: u64,
 }
 
+/// A tick-local internal melee choice. Saved chase UUIDs cannot substitute
+/// for this exact process-local target session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HostileMeleeAttack {
+    attacker: HostileId,
+    target: SessionKey,
+}
+
+impl HostileMeleeAttack {
+    pub fn new(attacker: HostileId, target: SessionKey) -> Self {
+        Self { attacker, target }
+    }
+    pub fn attacker(self) -> HostileId {
+        self.attacker
+    }
+    pub fn target(self) -> SessionKey {
+        self.target
+    }
+}
+
+/// Immutable choices for one authority tick, bounded by the hostile population.
+/// The producer resolves duplicate actions before construction; combat still
+/// owns live identity, kind, dimension, cooldown and post-motion range checks.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostileMeleeBatch {
+    tick: u64,
+    entries: Vec<HostileMeleeAttack>,
+}
+
+impl HostileMeleeBatch {
+    pub fn try_new(tick: u64, entries: &[HostileMeleeAttack]) -> Result<Self, ServerError> {
+        const LIMIT: usize = 64;
+        if entries.len() > LIMIT {
+            return Err(ServerError::Capacity {
+                resource: Resource::RuleEffects,
+                limit: LIMIT,
+                observed: entries.len(),
+            });
+        }
+        // The fixed population bound keeps this validation allocation-free;
+        // rejected duplicate policies cannot leave a partially owned batch.
+        for (index, entry) in entries.iter().enumerate() {
+            if entries[..index]
+                .iter()
+                .any(|prior| prior.attacker == entry.attacker)
+            {
+                return Err(ServerError::InvalidInput {
+                    field: "hostile_melee",
+                });
+            }
+        }
+        let mut owned = entries.to_vec();
+        owned.sort_unstable_by_key(|entry| entry.attacker());
+        Ok(Self {
+            tick,
+            entries: owned,
+        })
+    }
+    pub fn tick(&self) -> u64 {
+        self.tick
+    }
+    pub fn entries(&self) -> &[HostileMeleeAttack] {
+        &self.entries
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DamageCause {
     Melee,
