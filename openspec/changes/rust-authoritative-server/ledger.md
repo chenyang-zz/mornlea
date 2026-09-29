@@ -1112,3 +1112,21 @@ eye/LOS duplication with the in-flight melee consumer is recorded for main's
 constraint from Go chase-before-step and cooldown-1 shot timing. No contract or
 provider acceptance follows from this packet alone.
 Architecture skill: no change.
+
+
+Frozen hostile action production accepted from 35c8383d plus comment follow-up
+ebb8706c (isolated worker, 7 packet files +1770/-16). Read-only planning from
+the pre-step overlay admits walker melee entries in hostile-ID order every
+in-range tick without touching cooldowns, hurler bands reconcile inside the
+accepted motion path, and shots gate on pre-step cooldown 0 with clear LOS,
+Go-exact spread keyed by seed/world_time/ID, and spawn-port settlement with
+40-cooldown on success only. REDs named before the body; GREEN replay
+hostile_actions19/hostile_actors10, contract combat_input4, projectiles24,
+full server suites, fmt, and Go sim/server/sampler oracles pass. Independent
+review approved all seven dimensions with one comment-only nit (fixed).
+Ruling: review twice reported 14 workspace clippy errors in untouched
+mornlea_engine, but main reproduced packet, workspace, and clean-rebuild
+workspace clippy green four times on this SHA, so the finding is
+non-reproducible and non-load-bearing; any real engine lint drift stays
+covered by closeout gate 4.2.
+Architecture skill: no change.

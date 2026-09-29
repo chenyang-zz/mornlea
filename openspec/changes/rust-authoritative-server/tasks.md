@@ -46,7 +46,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6e0 Add bounded tick-local mining suppression and action receipt preflight.
 - [x] 2.6e Implement farming tools, bone meal and atomic buckets.
 - [x] 2.7a Implement hostile lifecycle and motion provider.
-- [ ] 2.7a1 Complete frozen pre-physics hostile targeting, melee and ranged action production ([packet](plans/21-hostile-action-production.md)).
+- [x] 2.7a1 Complete frozen pre-physics hostile targeting, melee and ranged action production ([packet](plans/21-hostile-action-production.md)).
 - [x] 2.7b0 Complete projectile read, compare-and-replace staging and replay initialization contracts.
 - [x] 2.7b Implement projectiles and hit validation.
 - [x] 2.7c0 Land frozen hostile melee input contract ([packet](plans/17-combat-input-contract.md)).
