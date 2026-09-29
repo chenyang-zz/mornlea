@@ -1370,3 +1370,14 @@ Independent full review plus scoped re-review both approved. Remaining
 recorded follow-ups (actor/world seeding for endpoint ticks, subscriber
 despawn projection) block 3.7/3.8, not this node.
 Architecture skill: no change.
+
+
+Main routes node 3.6d directly at the normative refined packet
+(plans/04-refined-nodes.md Node3.6d, lines 119-125): the four real-process
+integration tests with explicit Python fixture, FD3 listener, stdin contract,
+readiness gates, and required commands are all controller-frozen there, using
+actual 3.6a/b/c providers plus 2.9b/3.1 authority. Tests-only node (scoped
+test commit, test-file rollback); production never launches Python. One
+isolated implementer owns agent_process.rs, process.rs, integration.rs plus
+registration. Go/Python regression pre-gates required first.
+Architecture skill: no change.
