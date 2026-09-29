@@ -51,6 +51,8 @@ mod random_blocks;
 mod sleep;
 #[path = "server_replay/supports.rs"]
 mod supports;
+#[path = "server_replay/tick_state.rs"]
+mod tick_state;
 #[path = "server_replay/tools.rs"]
 mod tools;
 #[path = "server_replay/world_acquisition.rs"]
