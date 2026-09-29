@@ -1626,6 +1626,9 @@ impl RuleTunables {
     pub fn exhaustion_threshold_milli(self) -> u16 {
         self.exhaustion_threshold
     }
+    pub fn fluid_delay(self) -> u64 {
+        self.fluid_delay
+    }
     pub fn drop_pickup_delay_ticks(self) -> u8 {
         self.drop_pickup_delay_ticks
     }

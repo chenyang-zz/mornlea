@@ -50,13 +50,6 @@ const PROJECTILE_SCOPE_RADIUS: u64 = 2;
 /// Scope ceiling mirroring the eight-player structural bound.
 const MAX_SCOPES: usize = 8;
 
-/// Fluid requeue delay in ticks. The tunables own this value as the private
-/// `fluid_delay` field with no contract accessor, genuinely unreadable from
-/// this module while the contract stays frozen, so the reducer mirrors the
-/// source default the provider tests pin at every rescan and update call.
-/// Widening the accessor is contract-owner work.
-const FLUID_FLOW_DELAY: u64 = 5;
-
 /// Six face neighbors in kernel slot order, mirroring the source fluid
 /// neighbor table (`fluidNeighbors` in `packages/server/fluid/queue.go`).
 const SIX_NEIGHBORS: [(i32, i32, i32); 6] = [
@@ -386,17 +379,19 @@ fn dispatch_rows(
     for observed in context.changed_blocks() {
         scope.insert(observed.key);
     }
+    let fluid_delay = context
+        .read()
+        .environment()
+        .ok_or(ServerError::Internal {
+            invariant: "tick environment snapshot",
+        })?
+        .tunables
+        .fluid_delay();
     let mut rescan_schedule = fluids::FluidSchedule::new();
-    fluids::rescan(
-        &mut rescan_schedule,
-        context,
-        &scope,
-        tick,
-        FLUID_FLOW_DELAY,
-    )?;
+    fluids::rescan(&mut rescan_schedule, context, &scope, tick, fluid_delay)?;
     fluids::run(context, batch_call(RulePhase::FluidUpdate))?;
     let mut fluid_schedule = derive_fluid_schedule(context, tick);
-    fluids::update(&mut fluid_schedule, context, tick, FLUID_FLOW_DELAY)?;
+    fluids::update(&mut fluid_schedule, context, tick, fluid_delay)?;
     farmland::run(context, batch_call(RulePhase::Farmland))?;
     let mut farmland_schedule = derive_farmland_schedule(context, tick);
     farmland::advance(&mut farmland_schedule, context, &scope, tick)?;
