@@ -208,11 +208,17 @@ pub fn enter(
         return Err(REFUSAL);
     };
     // The respawn anchor lands on the runtime lane the survival death path
-    // carries forward, replacing any previous anchor for the session.
+    // carries forward, replacing any previous anchor for the session. The
+    // workbench anchor is untouched here: Go sleep never clears it, so the
+    // lifecycle keeps revalidating a benched sleeper.
     let mut runtime = entry_runtime(&ctx.read(), actor)?;
+    let bench = match runtime.aux {
+        ActorAux::Player { workbench, .. } => workbench,
+        _ => None,
+    };
     runtime.aux = ActorAux::Player {
         respawn: Some((dimension, foot)),
-        workbench: None,
+        workbench: bench,
     };
     ctx.stage(RuleEffect::Runtime(runtime))
         .map_err(|_| ServerError::Internal {

@@ -841,6 +841,85 @@ fn night_entry_records_foot_respawn_from_either_half() {
     );
 }
 
+/// Night entry preserves a staged workbench anchor while recording respawn:
+/// Go sleep never clears the bench position, so the lifecycle keeps
+/// revalidating a benched sleeper instead of silently disarming.
+#[test]
+fn night_entry_preserves_staged_workbench_anchor() {
+    let one = mint_sessions(1)[0];
+    let foot = BlockPos::new(3, 1, 5);
+    let bench = BlockPos::new(0, 63, 0);
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment(
+            SETTLE_WORLD_TIME,
+            0,
+            WINTER_SOLSTICE_SEASON_OFFSET,
+        )))
+        .expect("environment");
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            one,
+            [3.5, 1.0, 9.5],
+            0.0,
+            0.0,
+        )))
+        .expect("actor");
+    stage_corridor(
+        &mut context,
+        3,
+        &[(3, 1, 5, BED_FOOT_SOUTH), (3, 1, 6, BED_HEAD_SOUTH)],
+    );
+    context
+        .stage(RuleEffect::Runtime(ActorRuntime {
+            key: mornlea_server::contracts::ActorKey::Player(one),
+            controls: None,
+            has_view: false,
+            reset: false,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 0,
+            oxygen: 300,
+            peak_y: 1.0,
+            exhaustion_milli: 0,
+            saturation_milli: 5_000,
+            since_damage_ticks: 0,
+            drown_ticks: 0,
+            starvation_ticks: 0,
+            eating: None,
+            bow: None,
+            path: None,
+            aux: ActorAux::Player {
+                respawn: None,
+                workbench: Some(bench),
+            },
+        }))
+        .expect("runtime");
+    let carried = SleepState::try_new(Vec::new(), u64::from(EXPECTED_MORNING_OFFSET), None)
+        .expect("carried record");
+    let eye = [3.5, 1.0 + 1.62, 9.5];
+    let (yaw, pitch) = look_at_point(eye, [3.5, 1.5, 5.5]);
+    provider::enter(
+        &mut context,
+        &carried,
+        &bed_interaction(one, yaw, pitch, 10),
+    )
+    .expect("night entry");
+    let staged = context
+        .read()
+        .runtime(mornlea_server::contracts::ActorKey::Player(one))
+        .expect("runtime");
+    assert_eq!(
+        staged.aux,
+        ActorAux::Player {
+            respawn: Some((Dimension::OVERWORLD, foot)),
+            workbench: Some(bench),
+        },
+        "sleep records respawn without clearing the workbench anchor"
+    );
+}
+
 /// Sneak refusal, day refusal and a miss all leave the record untouched
 /// (`TestBedSneakRefusesSleep`, `TestBedInteractOutsideNightWindowRejected`
 /// with its sentinel respawn row).

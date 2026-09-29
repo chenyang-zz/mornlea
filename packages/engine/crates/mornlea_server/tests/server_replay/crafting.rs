@@ -2458,24 +2458,8 @@ fn bench_anchor_is_save_blind() {
     );
     assert_eq!(loaded.health, save.health);
     assert_eq!(loaded.respawn_present, save.respawn_present);
-    // The save carries no anchor lane, so the runtime rebuilt from the
-    // loaded save starts anchorless even though the live anchor is set.
-    let rebuilt = ActorAux::Player {
-        respawn: None,
-        workbench: None,
-    };
-    assert_eq!(
-        rebuilt,
-        ActorAux::Player {
-            respawn: None,
-            workbench: None,
-        },
-        "a fresh runtime from the loaded save carries no anchor"
-    );
-    let rebuilt_anchor = match rebuilt {
-        ActorAux::Player { workbench, .. } => workbench,
-        _ => panic!("player aux stays a player aux"),
-    };
+    // The save carries no anchor lane by construction (`PlayerSave` has no
+    // such field and no code writes live runtime back into a save), so the
+    // live anchor lives in the overlay only.
     assert_eq!(anchor_of(&context, actor), Some(bench));
-    assert_eq!(rebuilt_anchor, None, "the set anchor does not survive load");
 }
