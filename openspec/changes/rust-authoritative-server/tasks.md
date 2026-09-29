@@ -49,7 +49,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.7b0 Complete projectile read, compare-and-replace staging and replay initialization contracts.
 - [x] 2.7b Implement projectiles and hit validation.
 - [x] 2.7c0 Land frozen hostile melee input contract ([packet](plans/17-combat-input-contract.md)).
-- [ ] 2.7c1 Implement bounded melee snapshot and settlement.
+- [ ] 2.7c1 Implement bounded melee snapshot and settlement ([packet](plans/19-melee-settlement.md)).
 - [ ] 2.7c2 Complete player, hostile and passive death outputs and reset.
 - [ ] 2.7c Implement one-time hostile death and combat outcomes.
 - [x] 2.8a Implement passive lifecycle.

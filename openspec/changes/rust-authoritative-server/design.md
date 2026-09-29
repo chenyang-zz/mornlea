@@ -152,3 +152,11 @@ Source audit requires pre-player-physics action facts and post-motion combat
 validation, hurler-specific ranged strategy, and all-Ready death spill order.
 Earlier provider tests do not accept these missing integrations. Workbench
 anchor lifetime and container mutual exclusion also remain an explicit node.
+
+
+The [melee provider packet](plans/19-melee-settlement.md) freezes bounded combat
+actors and intents before cooldown mutation, preserves live identity checks and
+mutual lethal hits, and returns actual damaged player sessions separately from
+attacker-directed hit receipts. Death and cross-phase runtime merging remain
+explicit integration work. The existing exhaustion calculation becomes one
+pure configured-threshold helper shared by survival and melee.

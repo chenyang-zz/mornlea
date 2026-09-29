@@ -1021,3 +1021,15 @@ clippy/fmt and matching Go core/entity Raycast/InteractionTarget oracles pass.
 Actual Go matches include MiningRaycastLooksThroughFluid and
 OpenContainerRaycastLooksThroughFluid; consumer migration remains mandatory.
 Architecture skill:no change until those providers are integrated.
+
+
+Main qualified plan19 with the loaded brainstorming/writing-plans workflow.
+Opaque consumed frames separate source snapshot atomicity from live settlement;
+a single monolithic mutation pass would lose overflow-before-cooldown and
+mutual lethal behavior, while a public forgeable intent surface is unnecessary.
+One isolated Sol implementer owns the multi-file combat trace; main retains
+contract/algorithm decisions and integration. Exact file ownership, accepted
+dependencies, red cases, limits, exclusions and rollback are frozen in packet.
+Source review found the survival helper hardcodes a configured threshold; the
+limited extraction fixes both consumers with a custom-threshold regression.
+Architecture skill:no change before real consumer acceptance.
