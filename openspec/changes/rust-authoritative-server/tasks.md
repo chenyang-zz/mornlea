@@ -39,7 +39,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6c Implement atomic workbench crafting.
 - [x] 2.6d Implement tick-driven furnaces.
 - [x] 2.6e0 Add bounded tick-local mining suppression and action receipt preflight.
-- [ ] 2.6e Implement farming tools, bone meal and atomic buckets.
+- [x] 2.6e Implement farming tools, bone meal and atomic buckets.
 - [x] 2.7a Implement hostile lifecycle and targeting.
 - [x] 2.7b0 Complete projectile read, compare-and-replace staging and replay initialization contracts.
 - [ ] 2.7b Implement projectiles and hit validation.

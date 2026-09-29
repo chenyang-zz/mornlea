@@ -528,3 +528,34 @@ now explicit serial integration blockers; neither can be inferred from the
 current provider doubles. DDA exhaustion must follow actual cell visits so an
 early wall or unknown cell is not incorrectly refused. Architecture skill: no
 change; these are feature semantics and pending integration findings.
+
+
+## Task 2.6e tools and buckets, 2026-09-29
+
+An isolated GPT-6 Sol implementer consumed accepted contract `a151c206` in the
+reused w36b checkout and edited only the provider and its replay module. The
+controller copied that reviewed two-file diff onto `de049f71`; no branch-wide
+merge or unrelated work was included. The provider resolves authority rays,
+settles dry farmland plus hoe durability, increments one eligible crop stage
+with one bone-meal debit, and atomically swaps bucket contents with the water
+cell. Only successful buckets suppress mining and emit the existing placement
+sequence; only successful till adds its exhaustion receipt. Full receipt and
+suppression lanes refuse before mutation.
+
+Behavioral RED/GREEN covers last-point broken hoes, crops/mature/sapling, source
+versus flowing water, refused mutation conservation, capacity preflight and
+missing readiness/tool inputs. A deliberate omission of the bucket receipt
+failed the suppression assertion. Independent Sol review found an ambiguous
+actor-plus-command shape; the added mismatched-actor regression failed before
+the guard and passes afterward with world, inventory, events, prior receipts
+and suppression unchanged. Review approved the final two files. Zero-durability
+intact tools are invalid under both item contracts, so refusal is intentional.
+
+Integrated validation: all eight tool cases and the full server crate pass
+(16 transport,13 persistence,58 contract,75 replay: 162 total), plus crate
+clippy with warnings denied, workspace fmt, strict change validation and diff
+checks. The source-bound Go `Till|BoneMeal|Bucket` oracle and `make rust` passed
+in the provider worktree. No protocol/save/ABI version changes. Provider
+acceptance does not close serial command dispatch or retired-session filtering.
+Architecture skill: no change; existing transaction and receipt ownership rules
+cover the verified behavior.

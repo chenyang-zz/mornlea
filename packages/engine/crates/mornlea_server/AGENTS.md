@@ -85,6 +85,12 @@ against this file.
   (fall damage bypasses). Item conservation is the invariant and a refused
   settlement stages nothing; sequence gating and actor-lifecycle checks stay
   with the ordering/admission layer, mirroring Go's layering.
+- `src/rules/tools.rs` owns authority-ray hoe, bone meal and bucket commands.
+  Soil/crop/water writes and selected-item debit use the same atomic placement
+  transaction. Receipt and tick-local mining-suppression capacity are checked
+  before mutation; only successful buckets publish PlacementSuccess. Command
+  calls carry no separate actor key. Ready-session retirement filtering belongs
+  to the serial reducer and is not provided by an Active actor record alone.
 - `src/rules/environment.rs` owns the end-of-tick environment provider: it
   advances world time exactly once per tick (saturating, never wrapping),
   keeps sleep as a `day_phase_offset` display change only, and rolls weather
