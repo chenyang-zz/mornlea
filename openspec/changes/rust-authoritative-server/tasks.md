@@ -41,7 +41,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6a Implement inventory authority and item conservation.
 - [x] 2.6b Implement containers and generation/view validation.
 - [x] 2.6c Implement atomic workbench crafting.
-- [ ] 2.6c1 Complete workbench anchor lifecycle and source container-view replacement ([packet](plans/22-workbench-anchor-lifecycle.md)).
+- [x] 2.6c1 Complete workbench anchor lifecycle and source container-view replacement ([packet](plans/22-workbench-anchor-lifecycle.md)).
 - [x] 2.6d Implement tick-driven furnaces.
 - [x] 2.6e0 Add bounded tick-local mining suppression and action receipt preflight.
 - [x] 2.6e Implement farming tools, bone meal and atomic buckets.

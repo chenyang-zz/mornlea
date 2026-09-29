@@ -1157,3 +1157,19 @@ runtime. Containers source stays read-only; its test file allows mechanical
 init only. Cost if wrong: a missed literal fails compilation loudly at the
 worker's first build, caught before any behavior gate.
 Architecture skill: no change.
+
+
+Workbench anchor lifecycle accepted from c3cc433c plus review follow-up
+ee6c3e55 (isolated worker, 13 packet files +1106/-53). Opens stage an atomic
+Compound of size, anchor and lease-clear with re-anchor overwrite; the
+lifecycle revalidates Active benches for block, chunk and reach with lossless
+repack-impossible preservation; stale-anchor crafting stays legal; container
+open preserves bench by absence. REDs named before the body; GREEN crafting
+15, containers 20, full server441, fmt, packet clippy, and Go
+Workbench/Crafting/Tunables oracles pass. Independent review approved with
+two nits, both fixed by main: sleep entry preserves the anchor instead of
+disarming revalidation (Go sleep.go never touches workbench, pinned by a new
+sleep replay test), and the save-blind tail now asserts through the live
+overlay instead of a literal self-comparison. Save-blindness holds because no
+code writes live runtime back into a save.
+Architecture skill: no change.
