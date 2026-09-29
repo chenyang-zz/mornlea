@@ -1422,3 +1422,15 @@ dirty-marking, and projection keep explicit owners (3.8, 3.8, 3.7,
 follow-up). Credit to the stopped worker: the evidence made this design
 possible.
 Architecture skill: no change.
+
+
+Production tick state accepted from 0156671f plus tests 5be696cc (isolated
+worker, 6 files). Resident maps mirror the overlay with clone-out/replace
+commit; login seeds exact Go-default actors (every non-obvious value cited,
+zero invented defaults); committed mobs persist without disk seeding;
+chunk acquisition unchanged. REDs pinned absence first; GREEN tick_state8,
+full non-env574, fmt, packet clippy pass (agent_process needs the Python
+interpreter fixture only). Independent review approved with non-blocking
+observations only (environment re-derivation and saturation-hint convergence
+both documented by design). Ticks now remember; 3.7 adapter runs proceed.
+Architecture skill: no change.
