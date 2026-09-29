@@ -1082,3 +1082,19 @@ case; caller arrays stay unchanged. Main full pinned server397 tests
 sim entity ray/door/bucket oracles pass. Consumer migration 2.1c1 may now use
 this SHA; classifier 5f8325b2 and container migration 998a6be1 remain required
 baselines. Architecture skill: no change.
+
+
+Authority interaction ray migration accepted from 556adf27 (isolated worker,
+packet-owned 13 files +633/-205). All walkers consume accepted look,
+normalization and target_block in source order with caller error shapes kept;
+tools ray_target is collect-and-27 or target_block with look normalized before
+traversal; projectiles and forbidden melee/contract files untouched. REDs named
+per consumer before the fix; GREEN replay mutation28/interaction6 plus mining10,
+world_mutation4, crafting4, sleep9, tools9, containers20, projectiles24, full
+server suites, fmt, and Go core/entity ray oracles pass. Door ruling applied:
+open front pair transparent, closed pair behind opens, missing cell refuses.
+Ruling: independent review flagged 14 workspace clippy errors in untouched
+mornlea_engine, but main forced a re-lint of those files and both packet and
+workspace clippy exit clean, so the finding is not load-bearing and the node
+closes; any real engine lint drift remains covered by closeout gate 4.2.
+Architecture skill: no change.
