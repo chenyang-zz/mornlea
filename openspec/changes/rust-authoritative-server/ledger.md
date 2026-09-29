@@ -1406,3 +1406,19 @@ Despawn/drop projection stays a follow-up blocking 3.8, not 3.7a; save
 cadence, install feed, and transport doubles keep their owners. 3.7 proper
 routes at the 01 slice and follows 3.7a.
 Architecture skill: no change.
+
+
+Ruling rescoping 3.7a (plan28 rewritten): the dispatched worker correctly
+stopped the original premise with four-sided evidence — per-tick
+re-derivation was never the architecture, and the 1:1 mapping claim was
+false (unreachable bodies, non-copy fields, underdetermined chunks). The
+real gap is production tick state: AuthorityState holds no residents and
+every overlay map except viewers/schedules/sleep drops at tick end. New
+scope: resident maps with clone-out/replace-back commit, tick-start
+seeding, and login→actor staging with a fully Go-cited default table
+(RegisterPlayer literal, hunger triple, crafting rule, slots order from the
+unified-length rule). Mob disk seeding, chunk acquisition streaming,
+dirty-marking, and projection keep explicit owners (3.8, 3.8, 3.7,
+follow-up). Credit to the stopped worker: the evidence made this design
+possible.
+Architecture skill: no change.
