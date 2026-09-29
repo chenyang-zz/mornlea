@@ -63,7 +63,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.8b4a Implement selected-item and inventory/crafting panel drops ([packet](plans/15-player-drop-commands.md)).
 - [x] 2.8b4b Complete container view binding and panel drop settlement ([packet](plans/16-container-drop-views.md)).
 - [x] 2.8b4 Implement selected-item and panel drop commands.
-- [ ] 2.8b Complete drop commands and all producer integration.
+- [ ] 2.8b Complete drop commands and all producer integration ([packet](plans/26-drop-producer-integration.md)).
 - [x] 2.8c Implement sleeping and time transition.
 - [x] 2.9a Implement sessionless companion candidate provenance and admission.
 - [x] 2.9b Revalidate and execute companion actions through the shared mutation pipeline ([packet](plans/23-companion-action-execution.md)).

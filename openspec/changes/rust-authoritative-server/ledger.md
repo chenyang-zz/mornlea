@@ -1315,3 +1315,14 @@ despawns. Focused 59/59 and full gates green per worker; main re-verified the
 focused topic. No reviewer cycle per the packet's recorded proportionality
 ruling. This unblocks 2.8b (deps 2.6a, 2.7c, 2.8a now all closed).
 Architecture skill: no change.
+
+
+Main qualified plan26 with the loaded brainstorming/writing-plans workflow
+for node 2.8b. A read-only scout mapped all 24 Go producers and every
+consumer to accepted Rust counterparts and proved mob pickup absent on both
+sides, so the node closes at provider level with sequencing proofs
+(death-staged loot aging into delay-gated atomic pickup, expiry precedence,
+conservation). Production tick wiring is 3.1's explicitly assigned scope,
+not a 2.8b gap. One isolated worker owns only the drops replay topic;
+provider defects stop-and-report. Review depth is proportional (tests-only).
+Architecture skill: no change.
