@@ -101,8 +101,6 @@ const REGEN_EXHAUSTION_MILLI: u16 = 6_000;
 const STARVATION_INTERVAL_TICKS: u32 = 80;
 /// Drown damage interval (`Tunables.DrownDamageIntervalTicks` default).
 const DROWN_INTERVAL_TICKS: u32 = 20;
-/// Exhaustion threshold (`Tunables.ExhaustionThresholdMilli` default).
-const EXHAUSTION_THRESHOLD_MILLI: u16 = 4_000;
 /// Exhaustion charged per successful mining completion
 /// (`exhaustionMiningMilli`).
 const MINING_EXHAUSTION_MILLI: u16 = 5;
@@ -234,9 +232,14 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
         return settle_death(ctx, &record, &runtime);
     }
     match call.phase {
-        RulePhase::PlayerRegenStarvation => {
-            regen_starvation(ctx, session, &record, &runtime, difficulty)
-        }
+        RulePhase::PlayerRegenStarvation => regen_starvation(
+            ctx,
+            session,
+            &record,
+            &runtime,
+            difficulty,
+            environment.tunables.exhaustion_threshold_milli(),
+        ),
         RulePhase::PlayerPrePhysicsOxygen => oxygen(
             ctx,
             session,
@@ -244,7 +247,13 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
             &runtime,
             environment.tunables.eye_height(),
         ),
-        RulePhase::PlayerPostPhysics => post_physics(ctx, session, &record, &runtime),
+        RulePhase::PlayerPostPhysics => post_physics(
+            ctx,
+            session,
+            &record,
+            &runtime,
+            environment.tunables.exhaustion_threshold_milli(),
+        ),
         _ => Err(ServerError::InvalidInput { field: "phase" }),
     }
 }
@@ -427,20 +436,38 @@ fn charge_milli(kind: ActionKind) -> u16 {
 /// resource per crossed threshold — full saturation points first, then a
 /// partial remainder cleared alone, then hunger. The loop (not a single step)
 /// is load-bearing because one regen charge crosses twice.
-fn settle_exhaustion(work: &mut SurvivalWork, milli: u16) {
-    let threshold = u32::from(EXHAUSTION_THRESHOLD_MILLI.max(1));
-    let mut total = u32::from(work.exhaustion_milli) + u32::from(milli);
+pub(crate) fn exhausted_state(
+    hunger: u8,
+    saturation: u16,
+    exhaustion: u16,
+    milli: u16,
+    threshold: u16,
+) -> (u8, u16, u16) {
+    let threshold = u32::from(threshold.max(1));
+    let mut hunger = hunger;
+    let mut saturation = saturation;
+    let mut total = u32::from(exhaustion) + u32::from(milli);
     while total >= threshold {
         total -= threshold;
-        if work.saturation_milli >= SATURATION_MILLI_PER_POINT {
-            work.saturation_milli -= SATURATION_MILLI_PER_POINT;
-        } else if work.saturation_milli > 0 {
-            work.saturation_milli = 0;
-        } else if work.hunger > 0 {
-            work.hunger -= 1;
+        if saturation >= SATURATION_MILLI_PER_POINT {
+            saturation -= SATURATION_MILLI_PER_POINT;
+        } else if saturation > 0 {
+            saturation = 0;
+        } else {
+            hunger = hunger.saturating_sub(1);
         }
     }
-    work.exhaustion_milli = total as u16;
+    (hunger, saturation, total as u16)
+}
+
+fn settle_exhaustion(work: &mut SurvivalWork, milli: u16, threshold: u16) {
+    (work.hunger, work.saturation_milli, work.exhaustion_milli) = exhausted_state(
+        work.hunger,
+        work.saturation_milli,
+        work.exhaustion_milli,
+        milli,
+        threshold,
+    );
 }
 
 /// Writes the settled lanes back to the staged actor, body and runtime
@@ -608,6 +635,7 @@ fn regen_starvation(
     record: &ActorRecord,
     runtime: &ActorRuntime,
     difficulty: Difficulty,
+    exhaustion_threshold: u16,
 ) -> Result<PhaseReport, ServerError> {
     let mut work = load_work(record, runtime);
     if work.health < MAX_HEALTH {
@@ -621,7 +649,7 @@ fn regen_starvation(
             && (work.since_damage_ticks - REGEN_DELAY_TICKS).is_multiple_of(REGEN_INTERVAL_TICKS)
         {
             work.health += 1;
-            settle_exhaustion(&mut work, REGEN_EXHAUSTION_MILLI);
+            settle_exhaustion(&mut work, REGEN_EXHAUSTION_MILLI, exhaustion_threshold);
             if difficulty == Difficulty::Peaceful {
                 work.hunger = MAX_HUNGER;
                 work.saturation_milli = FULL_SATURATION_MILLI;
@@ -731,6 +759,7 @@ fn post_physics(
     session: SessionKey,
     record: &ActorRecord,
     runtime: &ActorRuntime,
+    exhaustion_threshold: u16,
 ) -> Result<PhaseReport, ServerError> {
     let position = record.motion.position().get();
     if !runtime.peak_y.is_finite() {
@@ -746,7 +775,7 @@ fn post_physics(
     // is immaterial: the loop result depends only on the summed charges, never
     // their sequence.
     for kind in take_own_charges(ctx, record.key)? {
-        settle_exhaustion(&mut work, charge_milli(kind));
+        settle_exhaustion(&mut work, charge_milli(kind), exhaustion_threshold);
     }
     // Motion charges read the pre-step snapshot the context took at
     // construction: without it (a context built empty) no charge fires, so a
@@ -762,6 +791,7 @@ fn post_physics(
             settle_exhaustion(
                 &mut work,
                 swim_exhaustion_milli(pre_position, post_position),
+                exhaustion_threshold,
             );
         }
         if let Some(control) = held {
@@ -770,7 +800,7 @@ fn post_physics(
             // airborne. Airborne holds and probe-tolerance steps charge nothing,
             // exactly like the reference takeoff rule.
             if movement.jump && pre.on_ground() && !pre_fluid && !record.motion.on_ground() {
-                settle_exhaustion(&mut work, JUMP_EXHAUSTION_MILLI);
+                settle_exhaustion(&mut work, JUMP_EXHAUSTION_MILLI, exhaustion_threshold);
             }
             // Sprint actual: suppressed sprint with forward intent on dry
             // pre-step ground. The suppression above already applied the
@@ -779,7 +809,7 @@ fn post_physics(
                 .map(|suppressed| suppressed.actions().sprinting)
                 .unwrap_or(false);
             if sprinting && movement.move_z > 0 && pre.on_ground() && !pre_fluid {
-                settle_exhaustion(&mut work, SPRINT_EXHAUSTION_MILLI);
+                settle_exhaustion(&mut work, SPRINT_EXHAUSTION_MILLI, exhaustion_threshold);
             }
         }
     }

@@ -1623,6 +1623,9 @@ impl RuleTunables {
     pub fn eye_height(self) -> f32 {
         self.eye_height
     }
+    pub fn exhaustion_threshold_milli(self) -> u16 {
+        self.exhaustion_threshold
+    }
     pub fn drop_pickup_delay_ticks(self) -> u8 {
         self.drop_pickup_delay_ticks
     }

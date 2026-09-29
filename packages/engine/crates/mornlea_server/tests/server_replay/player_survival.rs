@@ -710,6 +710,65 @@ fn exhaustion_crosses_twice() {
     assert!(context.events().is_empty());
 }
 
+#[test]
+fn configured_exhaustion_threshold_changes_regen_settlement() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = survival_scene(&mut context, session, [0.5, 1.0, 0.5], 19, 300, 20, 0);
+    let defaults = RuleTunables::source_defaults();
+    let tunables = RuleTunables::try_new(
+        defaults.physics(),
+        100,
+        40,
+        20,
+        80,
+        18,
+        2_000,
+        32,
+        1_600,
+        200,
+        5,
+        3,
+        50,
+        6.0,
+        1.62,
+        10,
+        40,
+        6_000,
+        1.25,
+    )
+    .unwrap();
+    context
+        .stage(RuleEffect::Environment(EnvironmentState {
+            tunables,
+            ..environment_with(0)
+        }))
+        .unwrap();
+    stage_runtime(
+        &mut context,
+        actor,
+        300,
+        1.0,
+        3_999,
+        500,
+        139,
+        0,
+        0,
+        None,
+        None,
+        None,
+    );
+    provider::run(&mut context, regen_call(actor)).unwrap();
+    let record = context.read().actor(actor).unwrap();
+    let runtime = context.read().runtime(actor).unwrap();
+    assert_eq!(record.survival.hunger(), 17);
+    assert_eq!(runtime.saturation_milli, 0);
+    assert_eq!(runtime.exhaustion_milli, 1_999);
+}
+
 /// Fall curve from `applyFallDamage`: height 3 deals no damage, height 4 deals
 /// 1 through the shared damage entry, clearing eating and resetting the peak.
 /// Motion charges settle against the pre-step snapshot on the same pass: a
@@ -1344,4 +1403,75 @@ fn exhaustion_charge_receipts_settle() {
         Vec::new(),
         "death drops pending receipts"
     );
+}
+
+/// Zero exhaustion threshold from `exhausted_state`: a configured threshold
+/// of zero settles exactly like a threshold of one, so the regen charge
+/// drains the same lanes to the same remainder while every other runtime
+/// lane reads back identical.
+#[test]
+fn zero_exhaustion_threshold_pins_to_one_in_regen() {
+    let mut snapshots = Vec::new();
+    for threshold in [0u16, 1] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = survival_scene(&mut context, session, [0.5, 1.0, 0.5], 19, 300, 20, 0);
+        let defaults = RuleTunables::source_defaults();
+        let tunables = RuleTunables::try_new(
+            defaults.physics(),
+            100,
+            40,
+            20,
+            80,
+            18,
+            threshold,
+            32,
+            1_600,
+            200,
+            5,
+            3,
+            50,
+            6.0,
+            1.62,
+            10,
+            40,
+            6_000,
+            1.25,
+        )
+        .unwrap();
+        context
+            .stage(RuleEffect::Environment(EnvironmentState {
+                tunables,
+                ..environment_with(0)
+            }))
+            .unwrap();
+        stage_runtime(
+            &mut context,
+            actor,
+            300,
+            1.0,
+            3_999,
+            500,
+            139,
+            0,
+            0,
+            None,
+            None,
+            None,
+        );
+        provider::run(&mut context, regen_call(actor)).unwrap();
+        let record = context.read().actor(actor).unwrap().clone();
+        let runtime = context.read().runtime(actor).unwrap().clone();
+        assert_eq!(record.survival.health(), 20, "threshold {threshold}");
+        assert_eq!(record.survival.hunger(), 0, "threshold {threshold}");
+        assert_eq!(runtime.saturation_milli, 0, "threshold {threshold}");
+        assert_eq!(runtime.exhaustion_milli, 0, "threshold {threshold}");
+        assert_eq!(runtime.since_damage_ticks, 140, "threshold {threshold}");
+        assert!(context.events().is_empty(), "threshold {threshold}");
+        snapshots.push((record, runtime));
+    }
+    assert_eq!(snapshots[0], snapshots[1], "zero pins to one");
 }
