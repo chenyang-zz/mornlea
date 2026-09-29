@@ -1209,3 +1209,16 @@ request/response DTOs) plus existing schema/golden fixtures. No new packet
 needed; one isolated implementer owns snapshot.rs, mcp.rs and the two new
 contract test topics. 3.6c consumes this node; 3.6d gates the real Python SDK.
 Architecture skill: no change.
+
+
+Frozen snapshot registry and MCP accepted from a4d0a6eb (isolated worker, 4
+files +6260/-4; one early attempt died on infrastructure with no output and
+was re-dispatched clean). Registry capacity/expiry/digest-outside-lock with
+recheck, Go-exact digest incl. f32 spellings and byte bounds, stateless MCP
+with six schema-identical tools and exact outer validation matrix. REDs named
+before the body; GREEN agent_snapshot6/agent_mcp4, full server457, fmt,
+packet clippy, and Go shared/server snapshot/MCP oracles pass. Independent
+review approved all dimensions; two observations accepted as-is (loopback-only
+entropy honestly documented; one doc comment quoting a spec-mandated exact
+wire literal). 3.6c may now consume this SHA.
+Architecture skill: no change.
