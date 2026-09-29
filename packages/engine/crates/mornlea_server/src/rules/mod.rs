@@ -10,6 +10,7 @@ pub mod environment;
 pub mod farmland;
 pub mod fluids;
 pub mod furnaces;
+pub mod harvest;
 pub mod hostile_actors;
 pub mod hostile_outcomes;
 pub mod inventory;

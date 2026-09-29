@@ -861,3 +861,13 @@ mining are independently reviewed consumers of the same wheat boundary. Use
 source KAT scalars including dimensions outside supported world admission;
 these pure hashes grant no authority. Support worker remains sole state.rs
 owner and consumes9c3ab40e, so these controller files are disjoint.
+
+
+Shared harvest boundary accepted after5 behavioral REDs; literal frozen Go
+crop/grass/leaf KATs, poison hit, integer extremes and two callable DropBatch
+consumer examples pass. Independent fresh Sol review verified exact salts,
+wrapping fold order, unsigned coordinate casts and tick omission, with no
+finding. Pinned full server327 tests (1 unit,16 parity,79 persistence,102
+contract,129 replay), clippy/fmt and Go Sampler crop/entity KAT pass. Consumer
+examples are contract-only evidence, not environmental/mining acceptance.
+Architecture skill: no change. Main retains registry/integration ownership.

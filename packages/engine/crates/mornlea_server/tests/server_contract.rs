@@ -36,3 +36,6 @@ mod drop_store;
 
 #[path = "server_contract/world_outputs.rs"]
 mod world_outputs;
+
+#[path = "server_contract/harvest.rs"]
+mod harvest;

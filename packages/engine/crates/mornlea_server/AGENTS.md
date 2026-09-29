@@ -383,3 +383,9 @@ Whole inventory/drop compare-and-replace settlement preserves crafting repack
 capacity. Counter-only changes retain source non-dirty semantics. The reducer
 owns active interest, producer ordering and publication; this provider does not
 accept those integrations by itself.
+
+`src/rules/harvest.rs` owns allocation-free source harvest dice. Crop yield
+streams include completion tick; short-grass seeds and extra leaf saplings omit
+tick entirely so a retry cannot reroll them. The scalar dimension is pure hash
+input, not a world-admission surface. Mining and environmental consumers own
+which output stacks are permitted and must settle them with their block writes.

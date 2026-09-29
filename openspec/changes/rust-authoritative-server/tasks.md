@@ -49,7 +49,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.8b0 Complete bounded drop staging, identity and snapshot contracts.
 - [x] 2.8b1 Implement bounded drop lifetime and atomic pickup.
 - [x] 2.8b2 Complete fixed container ownership and atomic world outputs.
-- [ ] 2.8b3a Land shared deterministic harvest samplers ([contract packet](plans/12-harvest-contract.md)).
+- [x] 2.8b3a Land shared deterministic harvest samplers ([contract packet](plans/12-harvest-contract.md)).
 - [ ] 2.8b3b Complete flooded-plant and trample drop outputs.
 - [ ] 2.8b3c Complete human mining harvest and no-drop branches.
 - [ ] 2.8b4 Implement selected-item and panel drop commands.
