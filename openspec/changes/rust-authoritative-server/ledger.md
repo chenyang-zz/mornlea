@@ -1337,3 +1337,18 @@ Focused 29/29 and full gates green per worker; main re-verified the focused
 topic. No reviewer cycle per the packet's recorded proportionality ruling.
 All section-2 providers are now closed; 3.1 owns production composition.
 Architecture skill: no change.
+
+
+Main qualified plan27 with the loaded brainstorming/writing-plans workflow
+for node 3.1 after four evidence rounds. Single serial node (slicing the
+one tick would manufacture seams): step.rs reducer with the full 11-row
+table, mailbox drain/sort/budget/carry, retired filtering at dispatch via
+session phase, victim union into an explicit settle param with the wire
+inference deleted, HostileActions-first combat batch flow, sequence-merged
+deferred Interaction routing, reducer-owned sleep record/sleepers with a
+committed Sleep arm, per-dimension counter attribution plus spent readers,
+and a bounds proof through existing caps instead of new indexes. Save
+cadence, agent install, and despawn projection stay with their accepted
+owners as recorded pointers. One isolated implementer owns step.rs, narrow
+state/sleep/projectile edits, and the two order/mailbox test topics.
+Architecture skill: no change.

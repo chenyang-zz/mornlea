@@ -70,7 +70,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 
 ## 3. Adapters and serial integration
 
-- [ ] 3.1 Integrate the one authoritative tick reducer after all rule providers, including the refined packet's retired-session filtering, explicit damage-victim routing and indexed observation gates.
+- [ ] 3.1 Integrate the one authoritative tick reducer after all rule providers, including the refined packet's retired-session filtering, explicit damage-victim routing and indexed observation gates ([packet](plans/27-authoritative-tick-reducer.md)).
 - [x] 3.2 Land the common protocol/login/validation transport path.
 - [x] 3.3a Implement the Memory adapter over common admission.
 - [x] 3.3b Implement the TCP adapter over common admission.
