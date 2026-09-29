@@ -507,3 +507,24 @@ checks pass. Earlier repository audit at `a151c206` passed in 103.988s. The new
 regression executes real loopback sockets with a bounded pre-send peek and an
 exact delayed request/body assertion; the original acquire limit case also
 passes. This resolves the recorded 503 test-peer race without production changes.
+
+
+Projectile provider refinement: the worker proposed a 512-cell DDA bound but
+classified exhaustion as no hit. Controller rejected that outcome before
+acceptance: traversal exhaustion is an explicit capacity error retaining the
+current projectile, not permission to tunnel. The packet now defines the exact
+cap, unchanged-current-record failure, completed-at-limit behavior, and ordered
+batch boundary; normal emitted speed constants fit. This implements the existing
+bounded-work/hard-overflow requirement without a new wire reason.
+
+
+Projectile review changed the impact ownership ruling before acceptance: source
+settles health/armor/knockback immediately inside the ID-ordered flight loop;
+queued-only hits violate same-tick dead-target exclusion. The controller
+specified immediate per-hit compound settlement, reuse of the accepted armor
+helper, no duplicate damage intent, and later death/reset ownership in the
+refined packet. Sleep victim routing and retired-session command filtering are
+now explicit serial integration blockers; neither can be inferred from the
+current provider doubles. DDA exhaustion must follow actual cell visits so an
+early wall or unknown cell is not incorrectly refused. Architecture skill: no
+change; these are feature semantics and pending integration findings.

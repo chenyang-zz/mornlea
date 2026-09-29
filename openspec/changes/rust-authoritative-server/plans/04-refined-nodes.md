@@ -292,8 +292,8 @@ in 2.7b and actual tick integration in 3.1.
 The same contract repair retains ordered `DamageIntent` effects in the tick
 context, exposed by `AuthorityReadView::damage_intents() -> &[DamageIntent]`.
 Capacity is 4096, counting every component of a compound before publication;
-refusal preserves projectiles, inventory and the prior intent list. This only
-records hits; combat owns authoritative damage/death settlement. Fixture
+refusal preserves projectiles, inventory and the prior intent list. This lane records unsettled damage; projectile flight must not enqueue its
+already-settled impacts. Melee/combat owns its own damage and later death settlement. Fixture
 snapshot output preserves actor runtimes for next-step replay continuity.
 `projectile_damage_staging_is_bounded_and_atomic` pins 4095/4096/4097 and atomic
 projectile-removal plus hit retention.
@@ -309,7 +309,7 @@ the projectile even if loaded, while unloaded cells inside a subscribed square
 are not block hits. `run(ctx, call)` owns BowDraw and batch-shape validation;
 3.1 supplies actual Ready scopes then invokes the batch body, following the
 accepted furnace precedent. Tests must exercise empty scope, dimension mismatch,
-ine-scope refusal, and large radius without overflow.
+nine-scope refusal, and large radius without overflow.
 
 `spawn(ctx: &mut TickContext<'_>, record: ProjectileRecord) -> Result<(), RuleReject>`
 consumes authoritative resolved facts; validate before minimum-ID eviction.
@@ -361,3 +361,81 @@ server_contract action_receipt filter; run the full server crate, fmt/clippy,
 Go entity Bucket oracle, strict OpenSpec and diff checks before committing
 `fix(server): preserve atomic action receipt boundaries`. The tools worker
 consumes this accepted SHA; controller owns integration and rollback.
+
+
+Projectile traversal bound: the provider visits at most 512 DDA cells per
+projectile (at most 65536 for the 128-record resident cap). If the numerical
+cursor still has traversal remaining, return
+`ServerError::Capacity { resource: RuleEffects, limit: 512, observed: 513 }`.
+Keep that projectile unchanged and emit no hit/removal for it. Earlier ordered
+records may already be settled; the phase is not a whole-batch transaction.
+Exactly-at-limit completed rays succeed. Unknown world cells are separately
+handled by the Go no-confirmed-block-hit rule. Source-produced speeds 16/22/30
+m/s with dt 0.05 are far below this defensive bound. An adversarial finite
+velocity regression must prove an explicit capacity error, not silent tunneling.
+
+
+Projectile impact refinement (controller ruling before provider acceptance):
+Go settles each impact immediately inside the ascending-ID flight loop. A
+queued-only `DamageIntent` changes the next projectile's candidate set and is
+not compatible. Keep the public `advance`/`spawn` signatures. Add a private
+impact builder in the projectile provider that reads the current overlay and
+returns one compound: projectile removal, updated actor, and (for players)
+whole-record inventory patch plus runtime, or (for passives) updated runtime.
+Build all records and the optional event before staging. Do not enqueue a
+`DamageIntent` for this already-settled impact; later combat must not apply it
+again. Death, drops, despawn and respawn remain later phase responsibilities.
+
+The exact impact algorithm is:
+- Clone the live target and preserve lifecycle, dimension, pose, look and all
+  unrelated fields. Compute horizontal impulse from the gravity-adjusted
+  projectile velocity using Go f32 `Normalize()*0.35`; a zero horizontal vector
+  contributes zero. Add to actor motion velocity; retain its position/grounded
+  state. Mirror health and velocity into hostile/passive bodies; player body
+  mirrors health and worn armor while the inventory overlay remains authority.
+- Player targets require their current inventory and runtime; absence is
+  `InvalidInput { field: "projectile_target" }` before removal or mutation.
+  Freeze points with `inventory::armor_points`, call accepted
+  `inventory::settle_damage(DamageCause::Projectile, raw, points, armor)`, and
+  saturating-subtract effective damage from health. Update the survival record
+  preserving oxygen/hunger/saturation and recomputing worn armor points. Set
+  `since_damage_ticks=0`, `eating=None`, `bow=None`; keep all other runtime
+  lanes. No inventory ammunition changes occur at impact.
+- Hostiles saturating-subtract raw damage from health. Passives do the same,
+  require a matching Passive runtime before staging, set `flee_ticks=60`,
+  `flee_from=Some(projectile.position)` (pre-step position), `graze_ticks=0`,
+  and preserve `graze_at` and every other lane. Missing/mismatched runtime
+  returns the same pre-mutation target error. Update both SurvivalState and
+  body health; no lifecycle reset or cooldown is invented.
+- After a successful compound, an Arrow emits the existing owner-session
+  `CombatHit` with raw damage and actual target kind. Shards emit none. Tick
+  zero remains event-silent like accepted survival replay because the frozen
+  event contract requires nonzero ticks. Validate the event before staging;
+  real source damage is 2/5/3, and public spawn rejects raw damage outside
+  1..=20 plus nonzero birth age before eviction. Opening-fixture records that
+  cannot construct a valid required event fail before mutation.
+
+Behavioral RED/GREEN must cover: two ordered lethal arrows skip the now-dead
+first victim and let the second hit a farther live actor; armor reduction and
+one-point wear per hit using the latest inventory for the next projectile;
+player regen/eating/bow interruption with unrelated lanes unchanged; passive
+flee origin/duration and grazing cancellation; Arrow raw owner confirmation
+versus Shard silence; missing required runtime/inventory leaves projectile and
+all state untouched. Existing collision tests assert settled health and zero
+queued intents rather than mere receipt count. Run the projectile replay filter,
+full server crate, fmt/clippy and the Go projectile/bow/combat oracle.
+
+Serial integration obligations discovered in this review: before projectile
+advance capture at most eight player health values, then capture actual health
+decreases immediately afterward (before death/reset). These victim identities
+must remove sleepers. The current sleep provider infers victims from wire
+`CombatHit` recipients, which is ambiguous when an Arrow owner's target is a
+player; before reducer acceptance, replace that inference with a typed explicit
+victim input covering all damage providers. Do not invent victim CombatHit
+messages or let an attacker confirmation wake the attacker. Also filter retired
+sessions before command provider dispatch: queued commands cannot execute just
+because their actor record still has Active lifecycle. Current `apply_sequence`
+checks only sequence/key, so session retirement alone is not that filter.
+World observation lookup currently scans the overlay; the actual reducer must
+supply indexed lookup or charge that work before claiming a bounded hot path.
+These are explicit integration gates, not accepted runtime behavior.

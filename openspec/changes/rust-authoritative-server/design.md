@@ -77,3 +77,21 @@ compound preflight, and fixture continuity. A provider-private projectile store
 was rejected because it would create a second owner and bypass the tick overlay.
 The refined packet defines error precedence and tests; 2.7b consumes its accepted
 commit, while 3.1 retains real reducer ownership.
+
+
+## Ordered projectile impact settlement
+
+Projectile flight settles each hit in the current actor/inventory/runtime
+overlay before scanning the next projectile. Deferring raw damage until the
+later combat/death phase was rejected because the next projectile must skip a
+target killed by the preceding projectile. Each hit stages removal and all
+target changes atomically, reuses the accepted armor helper, and emits only
+the existing owner confirmation. It does not also queue a damage intent.
+Death/reset/drop ownership remains later in the fixed tick order. The exact
+algorithm and red/green cases are in the refined projectile packet.
+
+The serial reducer must pass actual damaged player identities to sleeping
+settlement; a wire CombatHit recipient can be an attacker and is not a victim
+identity. It must also discard commands from sessions retired after admission
+but before execution. Both remain integration gates until their real consumers
+are implemented and tested. No wire/save schema changes follow this decision.
