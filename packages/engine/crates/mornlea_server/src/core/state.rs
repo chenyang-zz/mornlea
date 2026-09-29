@@ -20,6 +20,8 @@ use super::container_store::ContainerState;
 use super::contracts::*;
 use super::drop_store::{self, DropState};
 use super::world::ReadyChunk;
+use crate::rules::farmland::FarmlandSchedule;
+use crate::rules::fluids::FluidSchedule;
 
 const COMPANION_INBOX: usize = 4;
 
@@ -71,6 +73,13 @@ pub struct AuthorityState {
     /// the overlay-commit leg that writes this store; providers only stage
     /// viewer overlays on the tick context.
     views: BTreeMap<SessionKey, ViewLease>,
+    /// Carried fluid update and rescan schedule. The serial reducer takes
+    /// this value for its world row and returns it after, so future-due
+    /// requeues and unstarted sections resume next tick with their original
+    /// dues and cursors.
+    fluid_schedule: FluidSchedule,
+    /// Carried farmland candidate and rescan schedule, owned the same way.
+    farmland_schedule: FarmlandSchedule,
 }
 
 impl AuthorityState {
@@ -131,6 +140,8 @@ impl AuthorityState {
             },
             final_consumed: false,
             views: BTreeMap::new(),
+            fluid_schedule: FluidSchedule::new(),
+            farmland_schedule: FarmlandSchedule::new(),
         })
     }
 
@@ -138,6 +149,29 @@ impl AuthorityState {
     /// The reducer owns this commit and retired-session pruning.
     pub fn commit_viewers(&mut self, overlay: BTreeMap<SessionKey, ViewLease>) {
         self.views = overlay;
+    }
+
+    /// Carried fluid schedule for inspection and seeding. The reducer takes
+    /// exclusive ownership for its world row with a replace below.
+    pub fn fluid_schedule(&self) -> &FluidSchedule {
+        &self.fluid_schedule
+    }
+
+    /// Exclusive carried fluid schedule. The reducer replaces it out before
+    /// constructing the tick context and writes the worked value back after
+    /// the context drops, so no borrowed schedule ever outlives the tick.
+    pub fn fluid_schedule_mut(&mut self) -> &mut FluidSchedule {
+        &mut self.fluid_schedule
+    }
+
+    /// Carried farmland schedule for inspection and seeding.
+    pub fn farmland_schedule(&self) -> &FarmlandSchedule {
+        &self.farmland_schedule
+    }
+
+    /// Exclusive carried farmland schedule, owned like the fluid one.
+    pub fn farmland_schedule_mut(&mut self) -> &mut FarmlandSchedule {
+        &mut self.farmland_schedule
     }
 
     pub fn phase(&self) -> ServerPhase {
@@ -233,8 +267,13 @@ impl AuthorityState {
             work.farmland_checks(),
             work.farmland_block_reads(),
         )?;
+        // Providers execute with the pre-bump tick: the reducer reads the
+        // current counter as the executing tick, and the bump lands only
+        // after it returns, so staged event ticks name the tick the
+        // publication carries.
+        let publication = super::step::reduce_tick(self, work);
         self.next_tick = self.next_tick.saturating_add(1);
-        Ok(super::step::reduce_tick(self, work))
+        Ok(publication)
     }
 
     pub fn close_session(

@@ -76,17 +76,18 @@ fn is_farmland(block: u16) -> bool {
     (35..=36).contains(&block)
 }
 
-/// Builds the tick-local fluid update queue from staged block writes,
-/// mirroring the source unified enqueue facade (`EnqueueBlockWrite` in
+/// Feeds the carried fluid update queue from staged block writes, mirroring
+/// the source unified enqueue facade (`EnqueueBlockWrite` in
 /// `packages/server/sim/realm/environment.go`): every changed cell plus its
 /// six neighbors queues due now, so the update phase below evaluates this
-/// tick's dirt. Due now rather than now plus the flow delay because the
-/// schedule is tick-local: requeues the update stages at now plus the flow
-/// delay are future-due and belong to the cross-tick delay queues, which
-/// stay a recorded follow-up while the reducer holds no schedule across
-/// ticks.
-pub fn derive_fluid_schedule(context: &TickContext<'_>, tick: u64) -> fluids::FluidSchedule {
-    let mut schedule = fluids::FluidSchedule::new();
+/// tick's dirt alongside the carried queue. Due now rather than now plus the
+/// flow delay because only carried dues survive the tick: requeues the update
+/// stages at now plus the flow delay wait out their ticks on the authority.
+pub fn feed_fluid_schedule(
+    schedule: &mut fluids::FluidSchedule,
+    context: &TickContext<'_>,
+    tick: u64,
+) {
     for observed in context.changed_blocks() {
         schedule.enqueue_fluid(observed.key, observed.pos, tick);
         for (dx, dy, dz) in SIX_NEIGHBORS {
@@ -107,21 +108,20 @@ pub fn derive_fluid_schedule(context: &TickContext<'_>, tick: u64) -> fluids::Fl
             );
         }
     }
-    schedule
 }
 
-/// Builds the tick-local farmland candidate queue from staged block writes,
+/// Feeds the carried farmland candidate queue from staged block writes,
 /// following the moisture half of the same source facade: a fresh farmland
 /// cell queues one candidate, a fluid cell wakes its hydration window, both
 /// due now. The facade keys both arms on the (old, new) pair, but the staged
 /// overlay carries only the new value, so the arms fire on the new value
 /// instead. Over-enqueueing is safe: inspection is exact and every charge
 /// stays inside the frozen budgets.
-pub fn derive_farmland_schedule(
+pub fn feed_farmland_schedule(
+    schedule: &mut farmland::FarmlandSchedule,
     context: &TickContext<'_>,
     tick: u64,
-) -> farmland::FarmlandSchedule {
-    let mut schedule = farmland::FarmlandSchedule::new();
+) {
     for observed in context.changed_blocks() {
         if is_farmland(observed.block) {
             schedule.enqueue_candidate(observed.key, observed.pos, tick);
@@ -130,25 +130,39 @@ pub fn derive_farmland_schedule(
             schedule.enqueue_candidate_window(observed.key, observed.pos, tick);
         }
     }
-    schedule
 }
 
 /// Reduces one claimed tick into its owned publication.
 ///
-/// The endpoint already validated the phase and budget shape and bumped the
-/// tick counter, so the tick in progress is the claimed predecessor of the
-/// counter. A direct call without the endpoint claim repeats tick zero; the
-/// production path always goes through the endpoint delegation.
+/// The endpoint already validated the phase and budget shape; it bumps the
+/// tick counter after this returns, so the executing tick is the current
+/// counter. A direct call without the endpoint claim repeats the current
+/// tick; the production path always goes through the endpoint delegation.
 pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublication {
-    let tick = state.next_tick().saturating_sub(1);
+    let tick = state.next_tick();
     let drained = drain_mailbox(state, tick, budget.commands());
     let companions = state.drain_companions(COMPANION_FEED);
+    // The carried schedules leave authority ownership for the tick: the
+    // context holds the only mutable authority borrow during dispatch, so
+    // they travel as locals and return after the context drops.
+    let mut fluid_schedule =
+        std::mem::replace(state.fluid_schedule_mut(), fluids::FluidSchedule::new());
+    let mut farmland_schedule = std::mem::replace(
+        state.farmland_schedule_mut(),
+        farmland::FarmlandSchedule::new(),
+    );
     let mut context = TickContext::for_tick(state, budget);
     context.freeze_environment(tick);
     for action in companions {
         context.push_companion_action(action);
     }
-    let _ = dispatch_rows(&mut context, tick, &drained.dispatched);
+    let _ = dispatch_rows(
+        &mut context,
+        tick,
+        &drained.dispatched,
+        &mut fluid_schedule,
+        &mut farmland_schedule,
+    );
     let overlay = context.viewer_leases();
     let events = context.events().to_vec();
     let counters = TickCounters {
@@ -166,6 +180,8 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
         stale: drained.stale,
     };
     drop(context);
+    *state.fluid_schedule_mut() = fluid_schedule;
+    *state.farmland_schedule_mut() = farmland_schedule;
     let mut overlay = overlay;
     overlay.retain(
         |key, _| matches!(state.session(*key), Some(facts) if facts.phase == SessionPhase::Active),
@@ -174,6 +190,8 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
     let publication = TickPublication {
         tick,
         events,
+        // Control stays empty: handshake replies are transport-owned and
+        // never synthesized by the tick.
         control: Vec::new(),
         counters,
     };
@@ -255,12 +273,15 @@ fn drain_mailbox(state: &mut AuthorityState, tick: u64, command_budget: usize) -
 }
 
 /// Runs every dispatch row in the frozen order. The first error stops later
-/// rows; the caller still commits and publishes.
+/// rows; the caller still commits and publishes. The carried schedules
+/// arrive as locals because the context owns the authority borrow.
 #[allow(clippy::too_many_lines)]
 fn dispatch_rows(
     context: &mut TickContext<'_>,
     tick: u64,
     dispatched: &[CommandEnvelope],
+    fluid_schedule: &mut fluids::FluidSchedule,
+    farmland_schedule: &mut farmland::FarmlandSchedule,
 ) -> Result<(), ServerError> {
     for envelope in dispatched {
         admit_command(context, envelope)?;
@@ -372,9 +393,8 @@ fn dispatch_rows(
     let furnace_interest = furnace_interest(context, &active_keys);
     furnaces::advance(context, &furnace_interest)?;
     fluids::run(context, batch_call(RulePhase::FluidRescan))?;
-    // Rescan starts empty: section cursors resume cross-tick state the
-    // reducer does not hold yet, and mutations never open sections (the
-    // boundary loader owns that). The scope still filters.
+    // Rescan reads the carried cursors: sections the scope dropped leave,
+    // unstarted ones carry with their cursors for the next tick.
     let mut scope: BTreeSet<ChunkKey> = active_keys.iter().copied().collect();
     for observed in context.changed_blocks() {
         scope.insert(observed.key);
@@ -387,14 +407,13 @@ fn dispatch_rows(
         })?
         .tunables
         .fluid_delay();
-    let mut rescan_schedule = fluids::FluidSchedule::new();
-    fluids::rescan(&mut rescan_schedule, context, &scope, tick, fluid_delay)?;
+    fluids::rescan(fluid_schedule, context, &scope, tick, fluid_delay)?;
     fluids::run(context, batch_call(RulePhase::FluidUpdate))?;
-    let mut fluid_schedule = derive_fluid_schedule(context, tick);
-    fluids::update(&mut fluid_schedule, context, tick, fluid_delay)?;
+    feed_fluid_schedule(fluid_schedule, context, tick);
+    fluids::update(fluid_schedule, context, tick, fluid_delay)?;
     farmland::run(context, batch_call(RulePhase::Farmland))?;
-    let mut farmland_schedule = derive_farmland_schedule(context, tick);
-    farmland::advance(&mut farmland_schedule, context, &scope, tick)?;
+    feed_farmland_schedule(farmland_schedule, context, tick);
+    farmland::advance(farmland_schedule, context, &scope, tick)?;
     crops::run(context, batch_call(RulePhase::Trample))?;
     // Footprints stay fresh: the batch collects landing edges from the
     // staged players every call and never carries, so changed blocks are

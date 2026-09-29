@@ -124,3 +124,86 @@ fn advance_tick_delegation_keeps_validations_and_drains() {
         "the endpoint still owns the tick bump"
     );
 }
+
+/// Providers execute with the pre-bump tick: the first publication carries
+/// tick zero onto the wire (pose and damage events name the same tick the
+/// publication carries), and the counter bumps only after the reducer
+/// returns. The mailbox flows at the same tick in both advances.
+#[test]
+fn advance_tick_publishes_pre_bump_tick() {
+    let mut state = authority();
+    let key = state
+        .admit(login(24, "Tick"), TransportKind::Memory)
+        .unwrap();
+    state.submit(key, sequenced(1)).unwrap();
+    let first = state.advance_tick(full()).unwrap();
+    assert_eq!(first.tick, 0);
+    assert_eq!(first.counters.executed_tick, 0);
+    assert_eq!(first.counters.commands, 1);
+    assert_eq!(state.next_tick(), 1);
+    let second = state.advance_tick(full()).unwrap();
+    assert_eq!(second.tick, 1);
+    assert_eq!(second.counters.executed_tick, 1);
+    assert_eq!(state.next_tick(), 2);
+}
+
+/// Cross-tick schedule carry: work queued due in the future waits out its
+/// tick on the authority and fires when its due tick executes. The fluid
+/// item and the farmland candidate below are seeded directly into the
+/// carried schedules; nothing is due on the first tick, and both settle on
+/// the second, charging exactly one unit of their own budget each.
+#[test]
+fn future_dues_fire_next_tick() {
+    use mornlea_domain::{BlockPos, ChunkPos, Dimension};
+    use mornlea_server::contracts::ChunkKey;
+
+    let mut state = authority();
+    let key = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    state
+        .fluid_schedule_mut()
+        .enqueue_fluid(key, BlockPos::new(0, 64, 0), 1);
+    state
+        .farmland_schedule_mut()
+        .enqueue_candidate(key, BlockPos::new(0, 64, 0), 1);
+    let first = state.advance_tick(full()).unwrap();
+    assert_eq!(first.tick, 0);
+    assert!(
+        first.counters.fluid_by_dimension.is_empty(),
+        "nothing is due on the first tick"
+    );
+    assert_eq!(first.counters.farmland_checks, 0);
+    assert_eq!(
+        state.fluid_schedule().pending_fluid(Dimension::OVERWORLD),
+        1,
+        "the future item waits on the authority"
+    );
+    assert_eq!(
+        state
+            .farmland_schedule()
+            .pending_candidates(Dimension::OVERWORLD),
+        1
+    );
+    let second = state.advance_tick(full()).unwrap();
+    assert_eq!(second.tick, 1);
+    assert_eq!(
+        second.counters.fluid_by_dimension,
+        vec![(Dimension::OVERWORLD, 1)],
+        "the fluid item fires on its due tick"
+    );
+    assert_eq!(second.counters.farmland_checks, 1);
+    assert_eq!(second.counters.farmland_reads, 0);
+    assert_eq!(
+        state.fluid_schedule().pending_fluid(Dimension::OVERWORLD),
+        0,
+        "a fired item never runs twice"
+    );
+    assert_eq!(
+        state
+            .farmland_schedule()
+            .pending_candidates(Dimension::OVERWORLD),
+        0
+    );
+}

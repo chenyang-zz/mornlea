@@ -626,7 +626,8 @@ fn place_reaches_fluid_and_support_same_tick() {
     );
     // Dirty-driven fluid queue: each changed cell plus its six neighbors,
     // sharing no cell here, all due now.
-    let mut fluid = step::derive_fluid_schedule(&context, 0);
+    let mut fluid = fluids::FluidSchedule::new();
+    step::feed_fluid_schedule(&mut fluid, &context, 0);
     assert_eq!(
         fluid.pending_fluid(Dimension::OVERWORLD),
         14,
@@ -634,7 +635,8 @@ fn place_reaches_fluid_and_support_same_tick() {
     );
     // Only the fresh farmland fires a moisture arm; plain dirt queues
     // nothing, matching the source facade's two arms.
-    let mut farm = step::derive_farmland_schedule(&context, 0);
+    let mut farm = farmland::FarmlandSchedule::new();
+    step::feed_farmland_schedule(&mut farm, &context, 0);
     assert_eq!(farm.pending_candidates(Dimension::OVERWORLD), 1);
     let scope: BTreeSet<ChunkKey> = changed.iter().map(|cell| cell.key).collect();
     let update = fluids::update(&mut fluid, &mut context, 0, 5).expect("fluid update");
