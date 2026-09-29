@@ -1069,3 +1069,16 @@ floor makes raw6/points15 effective2, and raw2/points2 effective1. Packet now
 uses those source results and raw2/points0 as provider no-reduction/no-wear
 case; raw1/points2 is the accepted helper lower-bound case. No contract or
 implementation formula change is authorized or needed.
+
+
+Source look and ray normalization helpers accepted from 24a42ee7. Main landed
+public look_direction with source f64 trig then f32 cast before component
+multiplication, and normalized_direction with f64 hypot chain, f32 inverse,
+and refusal of nonfinite or sub-1e-6 inputs. Three behavioral tests carry
+independently generated Go Float32bits vectors plus the tiny-boundary refusal
+case; caller arrays stay unchanged. Main full pinned server397 tests
+(2 unit,16 parity,79 persistence,123 contract,177 replay), clippy all-targets
+-D warnings, fmt, and matching Go shared core Raycast/InteractionTarget plus
+sim entity ray/door/bucket oracles pass. Consumer migration 2.1c1 may now use
+this SHA; classifier 5f8325b2 and container migration 998a6be1 remain required
+baselines. Architecture skill: no change.
