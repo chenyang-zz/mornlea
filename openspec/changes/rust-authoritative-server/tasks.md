@@ -44,7 +44,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 2.7c Implement one-time hostile death and combat outcomes.
 - [x] 2.8a Implement passive lifecycle.
 - [ ] 2.8b Implement item drops and pickup.
-- [ ] 2.8c Implement sleeping and time transition.
+- [x] 2.8c Implement sleeping and time transition.
 - [x] 2.9a Implement sessionless companion candidate provenance and admission.
 - [ ] 2.9b Revalidate and execute companion actions through the shared mutation pipeline.
 

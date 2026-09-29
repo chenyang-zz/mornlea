@@ -194,6 +194,15 @@ against this file.
   ordered two-commit stage — never a two-write transaction. Snow reduces
   one tier per landing before random sampling; drop minting belongs to the
   drop node.
+- `src/rules/sleep.rs` owns sleep settlement on its batch phase: authority
+  bed-ray entry with the Go refusal order, the exact seasonal morning
+  transition (`EffectiveMorningOffset` with `DayArcTicks`/`YearPhaseAt`
+  mirrored branch-for-branch; the absolute clock never moves), the wake
+  matrix (move/jump/actual damage wake; look and sprint alone never),
+  disconnect eligibility, and bed-record retention (clearing proven-missing
+  rows is the respawn path's). Sleep state is reducer-carried — the
+  furnace-precedent split; the reducer prunes respawned/disconnected
+  sessions on the non-transition path.
 - `src/rules/hostile_actors.rs` owns the hostile lifecycle on the motion
   and burn-distant phases: global 64 with one night-window candidate per
   tick anchored by session-order rotation (never uuid order — the target
