@@ -2142,7 +2142,10 @@ fn sneaking_open_preserves_previous_exact_lease() {
         eating: None,
         bow: None,
         path: None,
-        aux: ActorAux::Player { respawn: None },
+        aux: ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
     }))
     .unwrap();
     assert_eq!(

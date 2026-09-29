@@ -35,21 +35,24 @@
 //!   refusal reason this provider collapses into its single error shape.
 //! - `packages/server/sim/entity/container.go` (`openContainer`): the bench
 //!   arm of the authoritative open ray. The bench is an ordinary block, not
-//!   a container: a settled open only widens that player's grid, and the
-//!   Go row that ends an existing container view is left to the reducer
-//!   composition, which owns the viewer overlay commit leg.
+//!   a container: a settled open widens that player's grid, anchors the hit
+//!   block on the runtime lane and ends any container lease in one atomic
+//!   staging, and the lifecycle pass revalidates the anchor every tick.
 //!
 //! Staging is a whole-record inventory patch, so output insertion, every
 //! input debit and the grid side of a settlement are one atomic staging: a
 //! refused rehearsal stages nothing and the whole view is unchanged.
-use mornlea_domain::{Command, CommandEnvelope, CraftingSize, Dimension, LookAngles};
+use mornlea_domain::{
+    BlockPos, ChunkPos, Command, CommandEnvelope, CraftingSize, Dimension, LookAngles,
+};
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
 use mornlea_storage::ItemStack;
 
 use crate::contracts::{
-    ActorKey, ActorLifecycle, BlockObservation, InventoryPatch, InventoryRecord, PhaseReport,
-    RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
+    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRuntime, BlockObservation, ChunkKey,
+    InventoryPatch, InventoryRecord, PhaseReport, RuleCall, RuleEffect, RulePhase, ServerError,
+    SessionKey,
 };
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::state::{AuthorityReadView, TickContext};
@@ -1118,13 +1121,14 @@ fn advance(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport
             _ => rejected += 1,
         }
     }
-    // Sessions whose grid is still bench-sized but whose actor record lapsed
-    // close here, the Active arm of `advanceWorkbenchLifecycle`
-    // (`packages/server/sim/entity/crafting.go`), in ascending actor key
-    // order like the Go session sort. The chunk, block and reach arm of the
-    // Go anchor check stays with the publication path, the same split the
-    // container provider records for live viewers: the accepted inventory
-    // record carries no bench anchor to revalidate against.
+    // Every bench-size session revalidates here, the full
+    // `advanceWorkbenchLifecycle` row (`packages/server/sim/entity/crafting.go`),
+    // in ascending actor key order like the Go session sort. Lapsed records
+    // close exactly as before; Active actors run the staged anchor against
+    // the chunk, block and reach gates. A bench with no staged anchor keeps
+    // the lapsed-only behavior: there is nothing to invalidate. A close the
+    // grid cannot repack keeps the bench open with `rejected` counted and
+    // nothing staged, which is the no-loss property the Go close guards.
     let mut bench: Vec<ActorKey> = ctx
         .read()
         .actors()
@@ -1141,12 +1145,48 @@ fn advance(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport
     bench.sort();
     for actor in bench {
         examined += 1;
-        // An Active bench stays open; only a lapsed actor record closes.
-        if ctx
-            .read()
-            .actor(actor)
-            .is_some_and(|record| record.lifecycle == ActorLifecycle::Active)
-        {
+        let basis = ctx.read().actor(actor).cloned();
+        let Some(record) = basis.filter(|record| record.lifecycle == ActorLifecycle::Active) else {
+            if close_bench(ctx, actor) {
+                applied += 1;
+            } else {
+                rejected += 1;
+            }
+            continue;
+        };
+        let anchored = match ctx.read().runtime(actor) {
+            Some(runtime) => match &runtime.aux {
+                ActorAux::Player { workbench, .. } => *workbench,
+                _ => None,
+            },
+            None => None,
+        };
+        let Some(anchor) = anchored else {
+            continue;
+        };
+        let Some(environment) = ctx.read().environment().cloned() else {
+            // Without tunables the reach check cannot run, so the bench
+            // fails closed exactly like a failed block lookup.
+            if close_bench(ctx, actor) {
+                applied += 1;
+            } else {
+                rejected += 1;
+            }
+            continue;
+        };
+        let position = record.motion.position().get();
+        let eye = [
+            position[0],
+            position[1] + environment.tunables.eye_height(),
+            position[2],
+        ];
+        if anchor_valid(
+            &ctx.read(),
+            record.dimension,
+            eye,
+            environment.tunables.interaction_reach(),
+            anchor,
+        ) {
             continue;
         }
         if close_bench(ctx, actor) {
@@ -1165,9 +1205,10 @@ fn advance(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport
 
 /// The outcome of one settled bench open.
 enum OpenOutcome {
-    /// The grid widened.
+    /// The grid, anchor or lease staging changed the view.
     Applied,
-    /// The grid already holds the bench size, so the open is idempotent.
+    /// The grid already holds the bench size over the same anchor with no
+    /// lease to end, so the re-open stages nothing.
     Carried,
     /// The ray hit nothing the bench arm owns.
     Refused,
@@ -1176,11 +1217,13 @@ enum OpenOutcome {
 /// Settles one deferred bench open through the authoritative ray, the
 /// `openContainer` workbench arm (`packages/server/sim/entity/container.go`):
 /// the same eye position, reach and loaded-cell walk the container opens
-/// use, but only a workbench hit widens the grid. A furnace, chest, other
+/// use, but only a workbench hit settles. The hit stages one atomic
+/// compound: the widened grid, the anchor naming the hit block on the
+/// runtime lane, and the cleared container lease. A furnace, chest, other
 /// block, miss or uncertifiable cell refuses without effect and stays the
-/// container provider's or nobody's hit. The Go row that ends an existing
-/// container view on a bench open is left to the reducer composition that
-/// owns the viewer overlay commit leg.
+/// container provider's or nobody's hit. Re-opening an already bench-sized
+/// grid re-anchors to the new hit and clears the lease again without
+/// touching the grid or size.
 fn settle_bench_open(
     ctx: &mut TickContext<'_>,
     envelope: &CommandEnvelope,
@@ -1227,15 +1270,121 @@ fn settle_bench_open(
     if hit.observed.block != WORKBENCH_BLOCK {
         return OpenOutcome::Refused;
     }
-    if before.crafting_size == CraftingSize::Workbench {
-        return OpenOutcome::Carried;
-    }
     let mut after = before;
     after.crafting_size = CraftingSize::Workbench;
-    match stage_patch(ctx, actor, before, after) {
+    let mut runtime = match anchor_base(&ctx.read(), actor) {
+        Some(runtime) => runtime,
+        None => return OpenOutcome::Refused,
+    };
+    match &mut runtime.aux {
+        ActorAux::Player { workbench, .. } => *workbench = Some(hit.observed.pos),
+        _ => return OpenOutcome::Refused,
+    }
+    let mut effects = Vec::with_capacity(3);
+    if after != before {
+        let patch = match InventoryPatch::try_new(actor, before, after) {
+            Ok(patch) => patch,
+            Err(_) => return OpenOutcome::Refused,
+        };
+        effects.push(RuleEffect::Inventory(patch));
+    }
+    let anchor_settled = match ctx.read().runtime(actor) {
+        Some(staged) => match &staged.aux {
+            ActorAux::Player { workbench, .. } => *workbench == Some(hit.observed.pos),
+            _ => false,
+        },
+        None => false,
+    };
+    if !anchor_settled {
+        effects.push(RuleEffect::Runtime(runtime));
+    }
+    if ctx.read().viewer(session).is_some() {
+        effects.push(RuleEffect::Viewer {
+            session,
+            view: None,
+        });
+    }
+    if effects.is_empty() {
+        return OpenOutcome::Carried;
+    }
+    match ctx.stage(RuleEffect::Compound(effects)) {
         Ok(()) => OpenOutcome::Applied,
         Err(_) => OpenOutcome::Refused,
     }
+}
+
+/// Neutral runtime base for the anchor lane: the staged record wins, and a
+/// missing record synthesizes neutral transients from the actor itself, the
+/// same fallback the sleep entry and the survival merge use instead of
+/// refusing a normal sequencing.
+fn anchor_base(view: &AuthorityReadView<'_>, actor: ActorKey) -> Option<ActorRuntime> {
+    if let Some(staged) = view.runtime(actor) {
+        return Some(staged.clone());
+    }
+    let record = view.actor(actor)?;
+    let ActorBody::Player(save) = &record.body else {
+        return None;
+    };
+    Some(ActorRuntime {
+        key: record.key,
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: record.survival.oxygen(),
+        peak_y: record.motion.position().get()[1],
+        exhaustion_milli: u32::from(save.exhaustion_milli),
+        saturation_milli: u32::from(save.saturation_milli),
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
+    })
+}
+
+/// Reports whether the staged anchor still holds, the `workbenchAnchorValid`
+/// row (`packages/server/sim/entity/crafting.go`): the anchor chunk is
+/// Ready, the anchor cell still holds a workbench, and the eyes stay within
+/// `interaction_reach` of the block center. The lookup runs in the actor's
+/// current dimension, so a dimension move closes unless the same coordinates
+/// hold a workbench there too. A missing observation closes rather than
+/// vetoing the check, matching the interaction missing-cell philosophy.
+fn anchor_valid(
+    view: &AuthorityReadView<'_>,
+    dimension: Dimension,
+    eye: [f32; 3],
+    reach: f32,
+    anchor: BlockPos,
+) -> bool {
+    let key = ChunkKey {
+        dimension,
+        pos: ChunkPos::new(anchor.x() >> 4, anchor.z() >> 4),
+    };
+    if !view.ready_chunk(key) {
+        return false;
+    }
+    let Some(observed) = view.observation(dimension, anchor) else {
+        return false;
+    };
+    if observed.block != WORKBENCH_BLOCK {
+        return false;
+    }
+    let center = [
+        anchor.x() as f32 + 0.5,
+        anchor.y() as f32 + 0.5,
+        anchor.z() as f32 + 0.5,
+    ];
+    let squared =
+        (center[0] - eye[0]).powi(2) + (center[1] - eye[1]).powi(2) + (center[2] - eye[2]).powi(2);
+    squared <= reach * reach
 }
 
 /// Closes one bench-size grid: the extended cells `4..8` reclaim into the
@@ -1244,7 +1393,7 @@ fn settle_bench_open(
 /// (`packages/server/sim/entity/crafting.go`). A cell that cannot fully
 /// credit refuses the close with the whole view unchanged, which is the
 /// accepted post-repack invalidation gate in reverse: the close never
-/// strands grid content.
+/// strands grid content, and the caller keeps the bench open on a refusal.
 fn close_bench(ctx: &mut TickContext<'_>, actor: ActorKey) -> bool {
     let Some(before) = ctx.read().inventory(actor).copied() else {
         return false;

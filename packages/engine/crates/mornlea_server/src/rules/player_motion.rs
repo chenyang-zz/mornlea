@@ -381,7 +381,10 @@ fn run_motion(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
         eating: None,
         bow: None,
         path: None,
-        aux: ActorAux::Player { respawn: None },
+        aux: ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
     }))
     .map_err(|_| ServerError::Internal {
         invariant: "player motion staging",

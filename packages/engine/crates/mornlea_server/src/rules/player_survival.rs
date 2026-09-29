@@ -284,6 +284,7 @@ fn merged_runtime(
         path: None,
         aux: ActorAux::Player {
             respawn: bed_record(save),
+            workbench: None,
         },
     })
 }

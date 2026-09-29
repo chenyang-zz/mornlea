@@ -1179,7 +1179,10 @@ fn projectile_fixture_initialization() {
             ticks: 19,
         }),
         path: None,
-        aux: ActorAux::Player { respawn: None },
+        aux: ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
     };
     let mut initial = TickContext::harness(&mut endpoint.authority, TickBudget::full())
         .snapshot_state(projectile_world());

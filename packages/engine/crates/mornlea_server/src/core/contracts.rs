@@ -1444,6 +1444,12 @@ pub struct PathState {
 pub enum ActorAux {
     Player {
         respawn: Option<(Dimension, BlockPos)>,
+        /// Transient workbench anchor: the hit block of the latest settled
+        /// bench open, meaningful only while `crafting_size` is Workbench.
+        /// The anchor is a runtime overlay staged beside the neutral fields,
+        /// never serialized, and stale values stay inert because every read
+        /// gates on the bench size first.
+        workbench: Option<BlockPos>,
     },
     Companion {
         generation: u64,

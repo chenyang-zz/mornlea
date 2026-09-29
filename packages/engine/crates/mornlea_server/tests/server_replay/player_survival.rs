@@ -212,7 +212,10 @@ fn stage_runtime(
             eating,
             bow: None,
             path: None,
-            aux: ActorAux::Player { respawn },
+            aux: ActorAux::Player {
+                respawn,
+                workbench: None,
+            },
         }))
         .expect("runtime");
 }
@@ -1110,7 +1113,8 @@ fn oxygen_fall_respawn_and_correction() {
     assert_eq!(
         runtime.aux,
         ActorAux::Player {
-            respawn: Some((Dimension::OVERWORLD, bed))
+            respawn: Some((Dimension::OVERWORLD, bed)),
+            workbench: None,
         },
         "respawn keeps the unverified bed record"
     );

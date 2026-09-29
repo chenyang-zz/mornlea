@@ -212,6 +212,7 @@ pub fn enter(
     let mut runtime = entry_runtime(&ctx.read(), actor)?;
     runtime.aux = ActorAux::Player {
         respawn: Some((dimension, foot)),
+        workbench: None,
     };
     ctx.stage(RuleEffect::Runtime(runtime))
         .map_err(|_| ServerError::Internal {
@@ -409,7 +410,10 @@ fn entry_runtime(
         eating: None,
         bow: None,
         path: None,
-        aux: ActorAux::Player { respawn: None },
+        aux: ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
     })
 }
 

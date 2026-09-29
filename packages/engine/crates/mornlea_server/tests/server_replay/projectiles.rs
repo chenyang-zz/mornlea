@@ -354,7 +354,10 @@ fn bow_runtime(actor: ActorKey, primary: bool, ticks: Option<u16>) -> ActorRunti
             ticks,
         }),
         path: None,
-        aux: ActorAux::Player { respawn: None },
+        aux: ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
     }
 }
 

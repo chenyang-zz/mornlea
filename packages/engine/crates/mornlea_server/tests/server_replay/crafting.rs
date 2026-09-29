@@ -16,21 +16,29 @@ use std::f32::consts::FRAC_PI_2;
 
 use super::*;
 use mornlea_domain::{
-    BlockPos, ChunkPos, Command, CommandEnvelope, CommandEnvelopeParts, CraftingMove, CraftingSize,
-    Dimension, FiniteVec3, LookAngles, MotionState, MotionStateParts, PlayerId, SurvivalState,
-    SurvivalStateParts,
+    BlockPos, ChunkPos, Command, CommandEnvelope, CommandEnvelopeParts, ContainerKind,
+    ContainerRef, CraftingMove, CraftingSize, Dimension, FiniteVec3, LookAngles, MotionState,
+    MotionStateParts, PlayerId, SurvivalState, SurvivalStateParts, chunk_block_index,
 };
 use mornlea_protocol::{LoginStart, admit_login};
 use mornlea_server::contracts::{
-    ActorBody, ActorLifecycle, ActorRecord, BlockObservation, ChunkKey, EnvironmentState,
-    InventoryRecord, RuleEffect, RulePhase, RuleTunables, SessionKey, TransportKind,
+    ActorAux, ActorBody, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation, ChunkKey,
+    EnvironmentState, InventoryRecord, RuleEffect, RulePhase, RuleTunables, SessionKey,
+    TransportKind, ViewLease,
 };
+use mornlea_server::core::world::ReadyChunk;
+use mornlea_server::rules::containers;
 use mornlea_server::rules::crafting as provider;
-use mornlea_storage::{ItemStack, PlayerLocation, PlayerSave};
+use mornlea_storage::{
+    ChestSlot, Chunk, ContainerSnapshot, ItemStack, PlayerLocation, PlayerSave, StorageKind,
+    decode_player, encode_player,
+};
 
 // Stable block numbers, mirrored from the frozen const block in
 // `packages/shared/core/block.go`.
 const AIR: u16 = 0; // `core.AirID`
+const GRASS_BLOCK: u16 = 2; // `core.GrassID`
+const CHEST_BLOCK: u16 = 11; // `core.ChestID`
 const WORKBENCH_BLOCK: u16 = 45; // `core.WorkbenchID`
 
 // Stable item numbers, mirrored from the frozen const block in
@@ -1041,9 +1049,14 @@ fn capacity_close_repack() {
         inventory.slots[index] = stack(ITEM_DIRT, 2);
     }
     let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
-    context.preload_block(observation(BlockPos::new(0, 65, 0), AIR));
-    context.preload_block(observation(BlockPos::new(0, 64, 0), AIR));
-    context.preload_block(observation(BlockPos::new(0, 63, 0), WORKBENCH_BLOCK));
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), WORKBENCH_BLOCK),
+        ],
+    ));
     let open_look = LookAngles::try_new(0.0, -FRAC_PI_2).expect("look down");
     assert!(
         admit(
@@ -1563,9 +1576,14 @@ fn bench_open_passes_transparent_cells() {
             InventoryRecord::empty(),
             ActorLifecycle::Active,
         );
-        context.preload_block(observation(BlockPos::new(0, 65, 0), AIR));
-        context.preload_block(observation(BlockPos::new(0, 64, 0), corridor));
-        context.preload_block(observation(BlockPos::new(0, 63, 0), WORKBENCH_BLOCK));
+        context.preload_ready_chunk(ready_chunk(
+            overworld_key(BlockPos::new(0, 63, 0)),
+            &[
+                (BlockPos::new(0, 65, 0), AIR),
+                (BlockPos::new(0, 64, 0), corridor),
+                (BlockPos::new(0, 63, 0), WORKBENCH_BLOCK),
+            ],
+        ));
         let open_look = LookAngles::try_new(0.0, -FRAC_PI_2).expect("look down");
         assert!(
             admit(
@@ -1614,4 +1632,850 @@ fn bench_open_passes_transparent_cells() {
         CraftingSize::Personal,
         "a closed door above the bench is the hit, not the bench"
     );
+}
+
+/// Builds one Ready chunk base holding exactly the given cells, everything
+/// else air. The lifecycle revalidates the anchor against Ready state only,
+/// so sparse `preload_block` cells open a bench but never keep it open.
+fn ready_chunk(key: ChunkKey, cells: &[(BlockPos, u16)]) -> ReadyChunk {
+    let mut chunk = Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    };
+    for (pos, block) in cells {
+        let index = chunk_block_index(*pos) as usize;
+        let section = &mut chunk.sections[index / 4096];
+        if section.kind != StorageKind::Direct {
+            *section = ContainerSnapshot {
+                kind: StorageKind::Direct,
+                bits: 15,
+                single: 0,
+                palette: vec![],
+                packed: vec![0; 1024],
+            };
+        }
+        let cell = index % 4096;
+        section.packed[cell / 4] |= u64::from(*block) << ((cell % 4) * 15);
+    }
+    ReadyChunk::try_new(key, 1, 1, chunk).expect("ready chunk")
+}
+
+/// The downward bench-open intent the envelope carries: look only, never a
+/// target block.
+fn open_down(session: SessionKey, sequence: u64) -> CommandEnvelope {
+    envelope(
+        session,
+        sequence,
+        Command::OpenContainer(LookAngles::try_new(0.0, -FRAC_PI_2).expect("look down")),
+    )
+}
+
+/// Mints two distinct session identities on one authority. Each
+/// `player_session` call admits on its own throwaway authority, so two calls
+/// would collide on the same process-local key instead.
+fn session_pair(first: u8, second: u8) -> (SessionKey, SessionKey) {
+    use mornlea_server::contracts::ServerLimits;
+    let mint_limits = ServerLimits::try_new(8, 1, 1, 1, 1, 1).expect("mint limits");
+    let mut mint = AuthorityState::try_new(mint_limits, 0).expect("authority");
+    let mut keys = [None, None];
+    for (index, tag) in [first, second].into_iter().enumerate() {
+        let mut bytes = [0u8; 16];
+        bytes[0] = tag.max(1);
+        bytes[6] = 0x40;
+        bytes[8] = 0x80;
+        let id = PlayerId::try_from_bytes(bytes).expect("player id");
+        let start = LoginStart::new(id, "Tester", 8).expect("login start");
+        let inbound =
+            LoginStart::decode_inbound(&start.encode().expect("encoded")).expect("inbound");
+        let login = admit_login(inbound).expect("admitted");
+        keys[index] = Some(mint.admit(login, TransportKind::Memory).expect("session"));
+    }
+    (keys[0].expect("first"), keys[1].expect("second"))
+}
+
+/// Reads the staged workbench anchor for the actor, if any.
+fn anchor_of(context: &TickContext<'_>, actor: ActorKey) -> Option<BlockPos> {
+    match context.read().runtime(actor).map(|runtime| &runtime.aux) {
+        Some(ActorAux::Player { workbench, .. }) => *workbench,
+        _ => None,
+    }
+}
+
+/// Stages one viewer lease for the session, standing in for an established
+/// container view the bench open must end.
+fn stage_lease(context: &mut TickContext<'_>, session: SessionKey) {
+    let reference = ContainerRef::try_new(ChunkPos::new(0, -1), ContainerKind::Chest, 0, 1)
+        .expect("lease reference");
+    context
+        .stage(RuleEffect::Viewer {
+            session,
+            view: Some(ViewLease::new(session, reference)),
+        })
+        .expect("lease");
+}
+
+/// Moves one whole stack through the crafting view, the legal command path
+/// for filling grid cells.
+fn move_view(context: &mut TickContext<'_>, session: SessionKey, sequence: u64, from: u8, to: u8) {
+    assert!(
+        admit(
+            context,
+            &envelope(
+                session,
+                sequence,
+                Command::MoveCrafting(CraftingMove::try_new(from, to).expect("view move")),
+            )
+        )
+        .is_ok(),
+        "view move {from} to {to} settles"
+    );
+}
+
+/// Opens the bench below the scene player through a Ready chunk, fills the
+/// personal cell with planks and the extended cells with dirt pairs, and
+/// leaves the bench open. Mirrors the stocked setup of
+/// `TestCraftingWalkAwayClosesWorkbenchAndRepacks` in
+/// `packages/server/sim/runtime/crafting_test.go`.
+fn stocked_bench(
+    context: &mut TickContext<'_>,
+    session: SessionKey,
+    actor: ActorKey,
+) -> InventoryRecord {
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), WORKBENCH_BLOCK),
+        ],
+    ));
+    assert!(admit(context, &open_down(session, 1)).is_ok());
+    let report = drain(context).expect("drain settles the deferred open");
+    assert_eq!(report.applied, 1, "the bench open widens the grid");
+    assert_eq!(
+        inventory_of(context, actor).crafting_size,
+        CraftingSize::Workbench,
+    );
+    move_view(context, session, 2, 9, 0);
+    for offset in 0..5u8 {
+        move_view(
+            context,
+            session,
+            3 + u64::from(offset),
+            10 + offset,
+            4 + offset,
+        );
+    }
+    inventory_of(context, actor)
+}
+
+#[test]
+fn bench_open_stages_anchor_size_and_clears_lease() {
+    // The settled open is one atomic staging: the grid widens, the anchor
+    // names the hit block, and any container lease ends, mirroring the
+    // `openContainer` workbench arm in
+    // `packages/server/sim/entity/container.go`.
+    let session = player_session(60, "anchor-open");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(ITEM_OAK_PLANKS, 4);
+    let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), WORKBENCH_BLOCK),
+        ],
+    ));
+    stage_lease(&mut context, session);
+    assert!(admit(&mut context, &open_down(session, 1)).is_ok());
+    let report = drain(&mut context).expect("drain settles the deferred open");
+    assert_eq!(
+        report.examined, 2,
+        "one open plus one bench session examined"
+    );
+    assert_eq!(report.applied, 1);
+    assert_eq!(report.carried, 0);
+    assert_eq!(report.rejected, 0);
+    assert_eq!(
+        inventory_of(&context, actor).crafting_size,
+        CraftingSize::Workbench,
+        "the settled open widens the grid"
+    );
+    assert_eq!(
+        anchor_of(&context, actor),
+        Some(BlockPos::new(0, 63, 0)),
+        "the anchor names the hit block"
+    );
+    assert_eq!(
+        context.read().viewer(session),
+        None,
+        "the bench open ends the container lease"
+    );
+}
+
+#[test]
+fn bench_reopen_reanchors_with_grid_intact() {
+    // Re-opening while bench-sized is never an idempotent skip: the anchor
+    // moves to the new hit, the lease clears again, and the grid and size
+    // stay untouched.
+    let session = player_session(61, "re-anchor");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(ITEM_OAK_PLANKS, 4);
+    inventory.slots[1] = stack(ITEM_DIRT, 2);
+    let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), WORKBENCH_BLOCK),
+            (BlockPos::new(10, 65, 0), AIR),
+            (BlockPos::new(10, 64, 0), AIR),
+            (BlockPos::new(10, 63, 0), WORKBENCH_BLOCK),
+        ],
+    ));
+    assert!(admit(&mut context, &open_down(session, 1)).is_ok());
+    drain(&mut context).expect("first open anchors the lower bench");
+    assert_eq!(anchor_of(&context, actor), Some(BlockPos::new(0, 63, 0)),);
+    move_view(&mut context, session, 2, 9, 0);
+    move_view(&mut context, session, 3, 10, 4);
+    stage_lease(&mut context, session);
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            [10.5, 64.0, 0.5],
+            0.0,
+            0.0,
+            ActorLifecycle::Active,
+        )))
+        .expect("moved actor");
+    assert!(admit(&mut context, &open_down(session, 4)).is_ok());
+    let report = drain(&mut context).expect("drain re-settles both opens");
+    assert_eq!(report.examined, 3, "two opens plus one bench session");
+    assert_eq!(report.applied, 1, "only the first replayed open stages");
+    assert_eq!(report.carried, 1, "the second open finds nothing to change");
+    assert_eq!(report.rejected, 0);
+    let after = inventory_of(&context, actor);
+    assert_eq!(after.crafting_size, CraftingSize::Workbench);
+    assert_eq!(
+        after.crafting[0],
+        stack(ITEM_OAK_PLANKS, 4),
+        "re-anchor keeps the personal cell"
+    );
+    assert_eq!(
+        after.crafting[4],
+        stack(ITEM_DIRT, 2),
+        "re-anchor keeps the extended cell"
+    );
+    assert_eq!(
+        anchor_of(&context, actor),
+        Some(BlockPos::new(10, 63, 0)),
+        "re-open moves the anchor to the new hit"
+    );
+    assert_eq!(
+        context.read().viewer(session),
+        None,
+        "re-open ends the container lease again"
+    );
+}
+
+#[test]
+fn bench_walk_away_closes_and_repacks() {
+    // The walk-away row of `TestCraftingWalkAwayClosesWorkbenchAndRepacks`:
+    // eyes beyond `interaction_reach` from the anchor center close the bench
+    // and reclaim the extended cells, keeping the personal cell.
+    let session = player_session(62, "walk-away");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(ITEM_OAK_PLANKS, 4);
+    for index in 1..6 {
+        inventory.slots[index] = stack(ITEM_DIRT, 2);
+    }
+    let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
+    stocked_bench(&mut context, session, actor);
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            [10.5, 64.0, 10.5],
+            0.0,
+            0.0,
+            ActorLifecycle::Active,
+        )))
+        .expect("walked actor");
+    let report = drain(&mut context).expect("drain revalidates the anchor");
+    assert_eq!(
+        report.examined, 2,
+        "the replayed open plus the bench session"
+    );
+    assert_eq!(report.applied, 1, "the walk-away closes the bench");
+    assert_eq!(report.carried, 0);
+    assert_eq!(report.rejected, 1, "the replayed open refuses from afar");
+    let closed = inventory_of(&context, actor);
+    assert_eq!(closed.crafting_size, CraftingSize::Personal);
+    assert_eq!(
+        closed.crafting[0],
+        stack(ITEM_OAK_PLANKS, 4),
+        "the personal cell stays"
+    );
+    for cell in 4..9 {
+        assert_eq!(
+            closed.crafting[cell],
+            ItemStack::default(),
+            "extended cell {cell} reclaims"
+        );
+    }
+    let mut total = 0u32;
+    for held in closed.slots {
+        if held.item == ITEM_DIRT {
+            total += u32::from(held.count);
+        }
+    }
+    assert_eq!(total, 10, "all ten dirt return to the pack");
+}
+
+#[test]
+fn bench_mined_same_tick_closes() {
+    // The mined row of `TestCraftingWorkbenchMinedClosesSameTick`: the anchor
+    // block turning to air in the same tick closes the bench on the next
+    // lifecycle pass and reclaims the grid, mirroring the Go sequencing of
+    // mining settlement before the lifecycle.
+    let session = player_session(63, "mined");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(ITEM_OAK_PLANKS, 4);
+    for index in 1..6 {
+        inventory.slots[index] = stack(ITEM_DIRT, 2);
+    }
+    let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
+    stocked_bench(&mut context, session, actor);
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), AIR),
+        ],
+    ));
+    let report = drain(&mut context).expect("drain revalidates the anchor");
+    assert_eq!(
+        report.examined, 2,
+        "the replayed open plus the bench session"
+    );
+    assert_eq!(report.applied, 1, "the mined bench closes");
+    assert_eq!(report.carried, 0);
+    assert_eq!(
+        report.rejected, 1,
+        "the replayed open misses the mined bench"
+    );
+    let closed = inventory_of(&context, actor);
+    assert_eq!(closed.crafting_size, CraftingSize::Personal);
+    assert_eq!(
+        closed.crafting[0],
+        stack(ITEM_OAK_PLANKS, 4),
+        "the personal cell stays"
+    );
+    for cell in 4..9 {
+        assert_eq!(
+            closed.crafting[cell],
+            ItemStack::default(),
+            "extended cell {cell} reclaims same tick"
+        );
+    }
+    let mut total = 0u32;
+    for held in closed.slots {
+        if held.item == ITEM_DIRT {
+            total += u32::from(held.count);
+        }
+    }
+    assert_eq!(total, 10, "all ten dirt return to the pack");
+}
+
+#[test]
+fn bench_wrong_block_closes() {
+    // A replaced anchor block that is no workbench closes the bench exactly
+    // like a mined one: the block gate, not the replacement kind, decides.
+    let session = player_session(64, "replaced");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(ITEM_OAK_PLANKS, 4);
+    for index in 1..6 {
+        inventory.slots[index] = stack(ITEM_DIRT, 2);
+    }
+    let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
+    stocked_bench(&mut context, session, actor);
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), GRASS_BLOCK),
+        ],
+    ));
+    let report = drain(&mut context).expect("drain revalidates the anchor");
+    assert_eq!(report.applied, 1, "the replaced bench closes");
+    assert_eq!(
+        report.rejected, 1,
+        "the replayed open refuses the new block"
+    );
+    let closed = inventory_of(&context, actor);
+    assert_eq!(closed.crafting_size, CraftingSize::Personal);
+    assert_eq!(closed.crafting[0], stack(ITEM_OAK_PLANKS, 4));
+    for cell in 4..9 {
+        assert_eq!(
+            closed.crafting[cell],
+            ItemStack::default(),
+            "extended cell {cell} reclaims"
+        );
+    }
+}
+
+#[test]
+fn bench_not_ready_chunk_closes() {
+    // Sparse cells settle the open ray but never establish a Ready chunk, so
+    // the lifecycle closes the bench in the same drain: a missing
+    // observation closes rather than vetoing the check.
+    let session = player_session(65, "sparse");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let actor = scene(
+        &mut context,
+        session,
+        InventoryRecord::empty(),
+        ActorLifecycle::Active,
+    );
+    context.preload_block(observation(BlockPos::new(0, 65, 0), AIR));
+    context.preload_block(observation(BlockPos::new(0, 64, 0), AIR));
+    context.preload_block(observation(BlockPos::new(0, 63, 0), WORKBENCH_BLOCK));
+    assert!(admit(&mut context, &open_down(session, 1)).is_ok());
+    let report = drain(&mut context).expect("drain settles the open and the bench");
+    assert_eq!(
+        report.examined, 2,
+        "one open plus one bench session examined"
+    );
+    assert_eq!(
+        report.applied, 2,
+        "the open settles, then the anchor check closes"
+    );
+    assert_eq!(report.carried, 0);
+    assert_eq!(report.rejected, 0);
+    assert_eq!(
+        inventory_of(&context, actor).crafting_size,
+        CraftingSize::Personal,
+        "a not-Ready anchor never holds the bench open"
+    );
+}
+
+#[test]
+fn bench_dimension_move_closes() {
+    // The anchor carries no dimension, so the lookup runs in the actor's
+    // current dimension: a moved actor closes unless the same coordinates
+    // hold a workbench there too.
+    let session = player_session(66, "dimension");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(ITEM_OAK_PLANKS, 4);
+    for index in 1..6 {
+        inventory.slots[index] = stack(ITEM_DIRT, 2);
+    }
+    let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
+    stocked_bench(&mut context, session, actor);
+    context
+        .stage(RuleEffect::Actor(
+            ActorRecord::try_new(
+                ActorKey::Player(session),
+                ActorLifecycle::Active,
+                Dimension::DEPTHS,
+                MotionState::new(MotionStateParts {
+                    position: FiniteVec3::try_new([0.5, 64.0, 0.5]).expect("position"),
+                    velocity: FiniteVec3::try_new([0.0, 0.0, 0.0]).expect("velocity"),
+                    on_ground: true,
+                }),
+                LookAngles::try_new(0.0, 0.0).expect("look"),
+                SurvivalState::try_new(SurvivalStateParts {
+                    health: 20,
+                    oxygen: 300,
+                    hunger: 20,
+                    saturation_zero: false,
+                    armor_points: 0,
+                })
+                .expect("survival"),
+                ActorBody::Player(player_body([0.5, 64.0, 0.5])),
+            )
+            .expect("moved actor"),
+        ))
+        .expect("dimension move");
+    let report = drain(&mut context).expect("drain revalidates the anchor");
+    assert_eq!(report.applied, 1, "the dimension move closes the bench");
+    assert_eq!(
+        report.rejected, 1,
+        "the replayed open refuses off-overworld"
+    );
+    let closed = inventory_of(&context, actor);
+    assert_eq!(closed.crafting_size, CraftingSize::Personal);
+    assert_eq!(closed.crafting[0], stack(ITEM_OAK_PLANKS, 4));
+    for cell in 4..9 {
+        assert_eq!(
+            closed.crafting[cell],
+            ItemStack::default(),
+            "extended cell {cell} reclaims"
+        );
+    }
+}
+
+#[test]
+fn bench_repack_impossible_keeps_anchor_and_sibling_closes() {
+    // The no-loss ruling for a close that cannot repack: the stuck bench
+    // keeps its grid, size and anchor with `rejected` counted and nothing
+    // staged, while the repackable sibling in the same pass still closes.
+    let (stuck_session, sibling_session) = session_pair(67, 68);
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut stuck_inventory = InventoryRecord::empty();
+    stuck_inventory.crafting_size = CraftingSize::Workbench;
+    for index in 0..36 {
+        stuck_inventory.slots[index] = stack(ITEM_STONE, 64);
+    }
+    for cell in 4..9 {
+        stuck_inventory.crafting[cell] = stack(ITEM_OAK_LOG, 64);
+    }
+    let stuck = scene(
+        &mut context,
+        stuck_session,
+        stuck_inventory,
+        ActorLifecycle::Active,
+    );
+    context.preload_block(observation(BlockPos::new(0, 63, 0), WORKBENCH_BLOCK));
+    context
+        .stage(RuleEffect::Runtime(ActorRuntime {
+            key: stuck,
+            controls: None,
+            has_view: false,
+            reset: false,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 0,
+            oxygen: 300,
+            peak_y: 64.0,
+            exhaustion_milli: 0,
+            saturation_milli: 5_000,
+            since_damage_ticks: 0,
+            drown_ticks: 0,
+            starvation_ticks: 0,
+            eating: None,
+            bow: None,
+            path: None,
+            aux: ActorAux::Player {
+                respawn: None,
+                workbench: Some(BlockPos::new(0, 63, 0)),
+            },
+        }))
+        .expect("stuck runtime");
+    let mut sibling_inventory = InventoryRecord::empty();
+    sibling_inventory.crafting_size = CraftingSize::Workbench;
+    sibling_inventory.crafting[4] = stack(ITEM_DIRT, 2);
+    let sibling = scene(
+        &mut context,
+        sibling_session,
+        sibling_inventory,
+        ActorLifecycle::Dead,
+    );
+    let report = drain(&mut context).expect("drain closes what it can");
+    assert_eq!(report.examined, 2, "both bench sessions examined");
+    assert_eq!(report.applied, 1, "the repackable sibling closes");
+    assert_eq!(report.carried, 0);
+    assert_eq!(
+        report.rejected, 1,
+        "the stuck bench stays open without loss"
+    );
+    let kept = inventory_of(&context, stuck);
+    assert_eq!(kept.crafting_size, CraftingSize::Workbench);
+    for cell in 4..9 {
+        assert_eq!(
+            kept.crafting[cell],
+            stack(ITEM_OAK_LOG, 64),
+            "stuck cell {cell} keeps its stack"
+        );
+    }
+    assert_eq!(
+        anchor_of(&context, stuck),
+        Some(BlockPos::new(0, 63, 0)),
+        "the refused close keeps the anchor"
+    );
+    let closed = inventory_of(&context, sibling);
+    assert_eq!(closed.crafting_size, CraftingSize::Personal);
+    assert_eq!(
+        closed.crafting[4],
+        ItemStack::default(),
+        "the sibling reclaims its extended cell"
+    );
+}
+
+#[test]
+fn stale_anchor_crafting_works_until_close() {
+    // Moves and takes gate on the size-derived slot extent only: with the
+    // anchor block already gone, settlements still succeed until the
+    // lifecycle pass closes the bench.
+    let session = player_session(69, "stale");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(ITEM_OAK_LOG, 1);
+    inventory.slots[1] = stack(ITEM_DIRT, 2);
+    inventory.slots[2] = stack(ITEM_DIRT, 2);
+    let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), WORKBENCH_BLOCK),
+        ],
+    ));
+    assert!(admit(&mut context, &open_down(session, 1)).is_ok());
+    drain(&mut context).expect("open anchors the bench");
+    move_view(&mut context, session, 2, 9, 0);
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), AIR),
+        ],
+    ));
+    assert!(
+        admit(
+            &mut context,
+            &envelope(session, 3, Command::TakeCraftingOutput)
+        )
+        .is_ok(),
+        "a take settles with a stale anchor"
+    );
+    assert_eq!(
+        inventory_of(&context, actor).slots[0],
+        stack(ITEM_OAK_PLANKS, 4),
+        "the stale take credits the log recipe output"
+    );
+    move_view(&mut context, session, 4, 10, 4);
+    assert_eq!(
+        inventory_of(&context, actor).crafting[4],
+        stack(ITEM_DIRT, 2),
+        "a grid move lands with a stale anchor"
+    );
+    let report = drain(&mut context).expect("drain closes the stale bench");
+    assert_eq!(report.applied, 1, "the stale bench closes on revalidation");
+    assert_eq!(
+        inventory_of(&context, actor).crafting_size,
+        CraftingSize::Personal,
+    );
+}
+
+#[test]
+fn chest_open_preserves_bench() {
+    // Preservation by absence: the container open stages no crafting state,
+    // so the bench size and anchor survive a chest open. The chest scene
+    // mirrors the container replay `viewer_scene` geometry with a Ready
+    // chunk carrying the fixed chest slot.
+    let session = player_session(70, "preserve");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(ITEM_OAK_PLANKS, 4);
+    let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), WORKBENCH_BLOCK),
+        ],
+    ));
+    let chest_pos = BlockPos::new(0, 65, -1);
+    let mut chest = Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    };
+    let chest_index = chunk_block_index(chest_pos) as usize;
+    chest.sections[chest_index / 4096] = ContainerSnapshot {
+        kind: StorageKind::Direct,
+        bits: 15,
+        single: 0,
+        palette: vec![],
+        packed: vec![0; 1024],
+    };
+    chest.sections[chest_index / 4096].packed[(chest_index % 4096) / 4] |= u64::from(CHEST_BLOCK);
+    chest.chests[0] = ChestSlot {
+        active: true,
+        generation: 1,
+        block_index: chest_index as u32,
+        items: [ItemStack::default(); 27],
+    };
+    context.preload_ready_chunk(
+        ReadyChunk::try_new(
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, -1),
+            },
+            1,
+            1,
+            chest,
+        )
+        .expect("ready chest chunk"),
+    );
+    assert!(admit(&mut context, &open_down(session, 1)).is_ok());
+    drain(&mut context).expect("open anchors the bench");
+    assert_eq!(anchor_of(&context, actor), Some(BlockPos::new(0, 63, 0)),);
+    let chest_look = LookAngles::try_new(0.0, 0.0).expect("look");
+    let chest_open = envelope(session, 2, Command::OpenContainer(chest_look));
+    assert!(
+        provider::run(
+            &mut context,
+            RuleCall {
+                phase: RulePhase::PlayerCommand,
+                actor: None,
+                command: Some(&chest_open),
+                internal: None,
+            },
+        )
+        .is_ok(),
+        "the crafting provider defers the chest open"
+    );
+    assert!(
+        containers::run(
+            &mut context,
+            RuleCall {
+                phase: RulePhase::PlayerCommand,
+                actor: None,
+                command: Some(&chest_open),
+                internal: None,
+            },
+        )
+        .is_ok(),
+        "the container provider defers the chest open"
+    );
+    let crafting_report = drain(&mut context).expect("crafting refuses the chest open");
+    assert_eq!(
+        crafting_report.rejected, 1,
+        "the chest hit is not the bench arm's"
+    );
+    let container_report = containers::run(
+        &mut context,
+        RuleCall {
+            phase: RulePhase::ContainerMove,
+            actor: None,
+            command: None,
+            internal: None,
+        },
+    )
+    .expect("container settles the chest open");
+    assert_eq!(
+        container_report.applied, 1,
+        "the chest open stages its lease"
+    );
+    let lease = ContainerRef::try_new(ChunkPos::new(0, -1), ContainerKind::Chest, 0, 1)
+        .expect("chest reference");
+    assert_eq!(
+        context.read().viewer(session),
+        Some(ViewLease::new(session, lease)),
+        "the chest lease stages"
+    );
+    assert_eq!(
+        inventory_of(&context, actor).crafting_size,
+        CraftingSize::Workbench,
+        "the chest open keeps the bench size"
+    );
+    assert_eq!(
+        anchor_of(&context, actor),
+        Some(BlockPos::new(0, 63, 0)),
+        "the chest open keeps the anchor"
+    );
+}
+
+#[test]
+fn bench_anchor_is_save_blind() {
+    // The anchor is a runtime overlay only: the player save codec never reads
+    // `ActorRuntime`, so a set anchor cannot survive a save roundtrip while
+    // the grid-carrying inventory passes through unchanged.
+    let session = player_session(71, "save-blind");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(ITEM_OAK_PLANKS, 4);
+    inventory.slots[1] = stack(ITEM_DIRT, 2);
+    let actor = scene(&mut context, session, inventory, ActorLifecycle::Active);
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), WORKBENCH_BLOCK),
+        ],
+    ));
+    assert!(admit(&mut context, &open_down(session, 1)).is_ok());
+    drain(&mut context).expect("open anchors the bench");
+    move_view(&mut context, session, 2, 10, 4);
+    let bench = BlockPos::new(0, 63, 0);
+    assert_eq!(anchor_of(&context, actor), Some(bench), "live anchor set");
+    let record = context.read().actor(actor).expect("actor").clone();
+    let ActorBody::Player(save) = record.body.clone() else {
+        panic!("player keeps a player body");
+    };
+    let bytes = encode_player(&save).expect("save encodes");
+    let loaded = decode_player(save.player_id, &bytes).expect("save decodes");
+    assert_eq!(
+        loaded.inventory, save.inventory,
+        "the roundtrip keeps the grid-carrying inventory"
+    );
+    assert_eq!(loaded.health, save.health);
+    assert_eq!(loaded.respawn_present, save.respawn_present);
+    // The save carries no anchor lane, so the runtime rebuilt from the
+    // loaded save starts anchorless even though the live anchor is set.
+    let rebuilt = ActorAux::Player {
+        respawn: None,
+        workbench: None,
+    };
+    assert_eq!(
+        rebuilt,
+        ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
+        "a fresh runtime from the loaded save carries no anchor"
+    );
+    let rebuilt_anchor = match rebuilt {
+        ActorAux::Player { workbench, .. } => workbench,
+        _ => panic!("player aux stays a player aux"),
+    };
+    assert_eq!(anchor_of(&context, actor), Some(bench));
+    assert_eq!(rebuilt_anchor, None, "the set anchor does not survive load");
 }

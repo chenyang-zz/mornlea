@@ -250,7 +250,10 @@ fn human_runtime(key: ActorKey, held: PlayerControl, bow: bool) -> ActorRuntime 
             ticks: 7,
         }),
         path: None,
-        aux: ActorAux::Player { respawn: None },
+        aux: ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
     }
 }
 

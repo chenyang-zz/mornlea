@@ -183,7 +183,10 @@ fn hold_runtime(actor: ActorKey, saturation_milli: u32, held: bool) -> ActorRunt
         eating: None,
         bow: None,
         path: None,
-        aux: ActorAux::Player { respawn: None },
+        aux: ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
     }
 }
 

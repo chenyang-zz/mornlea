@@ -243,7 +243,10 @@ fn stage_controls(
             eating: None,
             bow: None,
             path: None,
-            aux: ActorAux::Player { respawn: None },
+            aux: ActorAux::Player {
+                respawn: None,
+                workbench: None,
+            },
         }))
         .expect("runtime");
 }
@@ -790,6 +793,7 @@ fn night_entry_records_foot_respawn_from_either_half() {
             staged.aux,
             ActorAux::Player {
                 respawn: Some((Dimension::OVERWORLD, foot)),
+                workbench: None,
             },
             "the runtime respawn anchor the survival death path reads names the foot cell"
         );
@@ -899,7 +903,10 @@ fn sneak_day_and_miss_refusals_keep_record() {
         .expect("runtime");
     assert_eq!(
         staged.aux,
-        ActorAux::Player { respawn: None },
+        ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
         "no anchor on refusal"
     );
     assert!(context.events().is_empty());
