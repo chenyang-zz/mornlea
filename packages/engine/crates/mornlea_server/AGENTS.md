@@ -140,6 +140,13 @@ against this file.
   and damage-event emission that the sleep node consumes for wake. The
   serial reducer must construct contexts from pre-motion authority so the
   pre-step snapshot holds.
+- `src/rules/fluids.rs` owns boundary rescans before updates over the F1
+  `NativeFluidEval` kernel: snapshot the 7-neighborhood before writing,
+  strongest-merge with sorted writes, one `try_system` commit per batch,
+  requeue at now+5 under the frozen due order, 512 per sorted dimension,
+  and the section-aware 65536/4096/4095 rescan ceilings. The provider
+  carries work in a caller-owned `FluidSchedule`; the serial reducer owns
+  tick wiring.
 - `src/rules/mining.rs` owns continuous mining progression on the
   `MiningStep` phase: key-unchanged increments to saturation, key change
   restarts at 1, completions through the 1.6 transaction exactly once, human
