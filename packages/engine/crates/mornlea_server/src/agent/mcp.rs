@@ -2642,7 +2642,7 @@ fn call_tool(
             escape_into(&mut text, &canonical);
             let text = String::from_utf8(text).map_err(|_| OuterError::unavailable(502))?;
             let body = format!(
-                "{{\"content\":[{{\"text\":{text},\"type\":\"text\"}}],\"id\":{id_raw},\"jsonrpc\":\"2.0\",\"structuredContent\":{canonical}}}"
+                "{{\"id\":{id_raw},\"jsonrpc\":\"2.0\",\"result\":{{\"content\":[{{\"text\":{text},\"type\":\"text\"}}],\"structuredContent\":{canonical}}}}}"
             );
             commit(inner, lease, stream, 200, body.as_bytes())
         }

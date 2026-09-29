@@ -1213,6 +1213,14 @@ fn schema_tools_protocol_matrix() {
             &tool_call_body(31, "get_planning_context", "{}"),
         );
         assert_eq!(response.status, 200, "valid origin: {}", response.status);
+        if origin.is_none() {
+            let value: serde_json::Value =
+                serde_json::from_slice(&response.body).expect("success call json");
+            let result = value.get("result").expect("success result wrapper");
+            assert!(result.get("isError").is_none(), "success omits isError");
+            assert_eq!(result["content"].as_array().expect("content").len(), 1);
+            assert!(result.get("structuredContent").is_some(), "success content");
+        }
     }
     assert_eq!(counting.calls.load(Ordering::SeqCst), 2);
 
