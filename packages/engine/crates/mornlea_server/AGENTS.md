@@ -394,3 +394,11 @@ streams include completion tick; short-grass seeds and extra leaf saplings omit
 tick entirely so a retry cannot reroll them. The scalar dimension is pure hash
 input, not a world-admission surface. Mining and environmental consumers own
 which output stacks are permitted and must settle them with their block writes.
+
+`src/rules/supports.rs` owns four ordered pass-entry snapshots of actual
+successful block changes: short grass, saplings, torches, then beds. Preloads
+and no-op writes never enter the private changed ledger; compound rollback
+restores it. Each removal sees current world writes, and item-producing
+removals atomically stage their exact outputs. Unavailable support observations
+follow each source predicate; paired bed removal refuses an unavailable
+counterpart. The reducer invokes this provider after ordinary world writes.

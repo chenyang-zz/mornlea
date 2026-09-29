@@ -916,3 +916,15 @@ replay), clippy, fmt and Go entity/runtime DropCommand/DropStack/Pickup/Drop pas
 Independent Sol review approved and reran20/20 focused drop cases. Container
 consumer and real reducer phase ordering remain unaccepted. Architecture
 skill:no change.
+
+
+Support provider accepted from83f2bdc4 plus rollback regression b49ab0d5.
+Independent Sol source review approved the four snapshots, support predicates,
+wrapped coordinates and bed/drop atomicity, and requested explicit compound
+rollback provenance proof. The added internal unit test failed when only the
+changed-ledger restoration was temporarily removed, then passed with the
+production rollback restored. Seventeen support replay cases, Go support
+oracles, worker make rust, pinned clippy/fmt pass; main integrated server353
+tests (2 unit,16 parity,79 persistence,102 contract,154 replay) pass. This
+accepts the provider and mutation ledger, not actual reducer scheduling.
+Architecture skill:no change.
