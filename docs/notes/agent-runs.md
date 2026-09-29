@@ -70,3 +70,19 @@
   4. 无对应 backlog 行但已合入 `main` 的控制会话 change（grass-spread PR #181、inventory-drag-drop PR #182、weather/seasonal/snow、graze-lure、water-avoidance、menu-vista、section-mesh、held-items、godot-pilot P8–P14）是否追溯补履历行，待用户裁决（本轮维持第三轮先例：不补）。
   5. 遗留未动项：疑似重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、被取代的 `A-03-tiered-swords-combat` worktree、torch proposal 延期章节占位符、F-04 仍无本机 worktree 可核对（`lan-server.md` 陈旧被 4 个归档 setup ruling 点名）。
   6. 上轮待澄清（回血计时冻结、旧区块注水迁移、水下呼吸/附魔、漏斗、创造/旁观模式、主菜单重入装配、水中冲刺、鞘翅）继续挂起，本轮新增见上文「未落行」。
+
+## 2026-09-29（规划者第五轮）
+
+- **读取输入**：`docs/feature-backlog.md`、`docs/notes/agent-runs.md`（上轮 2026-09-27 第四轮；其后用户以 `9c7cd42b` 修正第四轮推送结果记录）、`docs/notes/progress.md`、根 `AGENTS.md`、`openspec/config.yaml`、Discussion #71（`gh` token 仍失效且未认证 API 撞共享限流 403，改经公开网页旧 URL `channing771/mornlea` 读取：正文仍为落后镜像、共 68 条评论、最后一条 2026-09-13（B-35 完成）——**上轮以来无新评论、无正文更新**；2026-09-02..13 评论已逐条对账，全部为已反映在表的状态变更）、`origin/main`（fetch 后头 `9c7cd42b`，上轮以来仅该用户修正提交、无功能合入）、`git branch -a`/`git worktree list` 与 14 个 worktree 的头 SHA 与脏状态、归档横扫（当前检出 `dev` 相对 `origin/main` 多 5 个归档 change：`2026-09-24-rust-storage-safety-repairs`、`2026-09-25-interface-first-parallel-development`、`2026-09-25-rust-storage-codec-closure`、`2026-09-25-target-runtime-interface-architecture`、`2026-09-27-rust-native-numerical-closure`——其中后四个为上轮扫 `main` 时不可见的补充横扫对象；逐一读 proposal/design 非目标与遗留节）。
+- **变更行**：**无新增行**——五个 dev-only 归档的 Non-Goals 均为架构过渡/治理范围声明（无新玩法、无独立玩法缺口），讨论零新评论。校对（备注级、状态均不变）：`A-03`（被取代旧实现的本地 worktree `.worktrees/A-03-tiered-swords-combat` 已确认移除，分支仍在本地与远端）、`B-36`（复核 `codex/b36-axes-shovels` 头未推进仍 `2a745374`、最后提交 2026-09-15，worktree 仍脏含本表 → 连续第二轮维持排队不晋升）、`E-01`/`E-02`/`E-03`（补控制会话 Rust 迁移在途证据：`dev` 领先 `origin/main` 249 提交；活动 change `rust-authoritative-server`（51 节点待实现）、`rust-client-core`、`rust-runtime-foundation-acceptance` 与七个 `godot-*`；`cursor/rust-authoritative-server-98e6` 与 `f2/provider-*` 分支当日活跃；F1 运行时/域事件/region/协议收口已在 `main`，存储两收口与数值族契约仅在 `dev`）。无待标完成行（上轮以来 `origin/main` 无功能合入）；晋升检查：串行队首 B-36 前序已完成、版本槽空闲，但 worktree 证据不一致，按规则不晋升。
+- **未落行（判定）**：MC 覆盖核对新增三条**待澄清**（讨论通道不可用，暂记于此，恢复后补挂评论）——①经验与等级系统（唯一出处是 `archive/2026-08-29-client-ui-vanilla-alignment/design.md` 非目标对「经验条」的否定式提及，机制本体无设计出处，需经验机制整体裁决）；②矿车与铁轨（MC 基础交通/物流机制，无仓库内出处）；③村民与交易（MC 中后期机制，无仓库内出处，可能超出「首夜生存+自给家园」边界）。其余 MC 基础面复核后均已有行或维持上轮判定。
+- **提交**：`c99e91da`（docs: reconcile backlog evidence 2026-09-29）+ 本运行记录提交；两笔均在基于 `origin/main`（`9c7cd42b`）的临时 detached worktree `/tmp/mornlea-planner-r5` 制作（沿第四轮先例，不触碰 `dev` 工作区与其 249 个在途提交）。
+- **推送**：两笔快进提交以 SSH URL `ssh://git@github.com/chenyang-zz/mornlea.git HEAD:main` 推送（HTTPS 凭据不可用沿既有先例）；推送结果以 `origin/main` 实际头为准，失败则终止不重放不强推、下轮补记。
+- **讨论同步**：**未执行**——`gh` token 失效（连续第五轮）且未认证 REST/GraphQL 撞共享限流，正文 `--update` 与状态变更评论（本轮 5 条校对 + 3 条待澄清）均发不出；正文镜像已落后四轮，dry-run 现值为已认领 1、排队 26、设计候选 37、已完成 56、已取消 4、就绪 0，待凭据恢复后一次性补发。
+- **留给下一轮 / 用户**：
+  1. `gh` 凭据连续第五轮不可用（`gh auth status` 报 `chenyang-zz` token invalid）；Discussion 镜像与评论积压待恢复后补发。
+  2. `dev` 分支（头 `365a0339`）领先 `origin/main` 249 提交，是 Rust 权威服务端/Godot 目标架构在途线（当日 `f2/provider-*` 与 `cursor/rust-authoritative-server-98e6` 仍活跃提交）；五个归档 change、`docs/interface-first-parallel-development.md` 与 `docs/runtime-interface-architecture.md` 仅存在于 `dev`，合入节奏与追溯属控制会话/用户裁决，规划者未触碰。
+  3. 无 backlog 行但已在 `main` 的控制会话 change 新增两条：first-person hands（含 `feat/first-person-hands` 归档与后续 PR #177 improve-first-person-held-items）与 `remove-mining-hud-bar`；连同上轮清单是否追溯补履历行待用户裁决（维持不补先例）。
+  4. `codex/b36-axes-shovels` 未认领在途分支与脏 worktree（改动含本表）仍待控制会话裁决。
+  5. 遗留未动项更新：重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat` 仍在；`archive/2026-08-28-placeable-torches/proposal.md` 延期与放弃节仍为占位符；F-04 仍无本机 worktree 可核对；上轮遗留的 `A-03-tiered-swords-combat` worktree 已消失（本轮已核实并在 A-03 行更新备注）；`mornlea-f2-w25c` 的 worktree 注册指向已删除目录（`git worktree prune` 属用户裁决）；`f2/provider-2-6c` worktree 有两个未提交文件（crafting.rs 面，当日活跃线，未触碰）。
+  6. 待澄清累计清单（历轮挂起 + 本轮新增三项）：回血计时冻结、旧区块注水迁移、水下呼吸装备/附魔、漏斗、创造/旁观模式、主菜单重入装配、水中冲刺、鞘翅、`-connect` 远程加载屏、伙伴用弓/投射物、钓鱼/闪电/附魔/多材质护甲/护甲修复、数字键快速放入、加载中途取消、经验与等级系统、矿车与铁轨、村民与交易。
