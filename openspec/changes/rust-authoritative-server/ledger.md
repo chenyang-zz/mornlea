@@ -780,3 +780,13 @@ crafting helpers become crate-visible only for this consumer. Isolate a Sol
 worker for the multi-tick source/restart trace; main owns subsequent producer
 contracts and integration. No new shared boundary across parallel consumers;
 the accepted0ea40207 drop seam is unchanged. Original broad2.8b stays open.
+
+Controller source reconciliation for2.8b2: Go simulation uses dimensioned fixed
+container slots while v45 validFurnaceRef/validChestRef explicitly rejects any
+non-Overworld wire reference. Preserve both facts; do not broaden F1/wire to
+solve internal ownership. Plan10 keeps per-ChunkKey fixed slots and dimensioned
+internal effects, with existing wire view confined to0. It also replaces ignored
+BlockTxn drop/container fields and false occupancy-only drop preflight, retaining
+Go slot allocation/generation and source integer cell identity. Main owns this
+tightly coupled core landing and exact Ready/sparse distinction; support/combat
+workers cannot consume prospective interfaces until its tested commit lands.

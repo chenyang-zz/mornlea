@@ -132,3 +132,8 @@ the verified Go dirty-selection behavior; this migration adds no save guarantee.
 The [drop lifecycle packet](plans/09-drop-lifecycle.md) consumes accepted slots
 independently of loot producers. The reducer retains the radius2 active-interest
 union and publication ownership; command and producer acceptance stays separate.
+
+The [world output contract](plans/10-world-output-contract.md) reconciles fixed
+container slots and complete mining/system transactions. Internal chunk dimension
+remains separate from the Overworld-only v45 container wire reference. Exact
+integer source cells own block-generated loot; float centers are observations.

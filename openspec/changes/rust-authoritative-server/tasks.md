@@ -48,6 +48,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.8a Implement passive lifecycle.
 - [x] 2.8b0 Complete bounded drop staging, identity and snapshot contracts.
 - [ ] 2.8b1 Implement bounded drop lifetime and atomic pickup.
+- [ ] 2.8b2 Complete fixed container ownership and atomic world outputs.
 - [ ] 2.8b Complete drop commands and all producer integration.
 - [x] 2.8c Implement sleeping and time transition.
 - [x] 2.9a Implement sessionless companion candidate provenance and admission.
