@@ -1266,3 +1266,17 @@ a documented walker-kind constant. No behavior changed after the review.
 Ruling: the settle-player-cooldown Active gate and ray-error-to-InvalidInput
 mapping stand as unreachable-with-validated-inputs refinements.
 Architecture skill: no change.
+
+
+Main qualified plan24 with the loaded brainstorming/writing-plans workflow
+for node 2.7c2. HostilePlayerDeaths runner co-locates hostile then player
+deaths per Go tick order; player repack/drops/reset assemble from the new
+crafting helper, accepted drop rehearsal/commit ports, and survival reset
+values without calling across providers. Repack-impossible maps losslessly
+with automatic retry like the Go panic invariant. Loot tables and hurler
+rolls are deterministic with Go KATs; ring walk and whole-batch first-fit
+reuse accepted drop capacity checks. Spawn-anchor sourcing carries one
+bounded escalation; restore remap, subscription-dirty, and passive ID-set
+projection stay owner-gated for session lifecycle and 3.1. Node 2.7c owns
+the same-tick Combat-to-death integration proofs above this provider.
+Architecture skill: no change.
