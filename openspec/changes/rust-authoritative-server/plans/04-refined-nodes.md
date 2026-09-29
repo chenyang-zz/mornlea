@@ -363,9 +363,14 @@ Go entity Bucket oracle, strict OpenSpec and diff checks before committing
 consumes this accepted SHA; controller owns integration and rollback.
 
 
-Projectile traversal bound: the provider visits at most 512 DDA cells per
-projectile (at most 65536 for the 128-record resident cap). If the numerical
-cursor still has traversal remaining, return
+Projectile traversal bound: the provider observes at most 512 world cells per
+projectile (at most 65536 for the 128-record resident cap). The native DDA
+reports completion lazily when a batch ends exactly at 64 records. After eight
+batches, permit one bounded numerical lookahead batch without observing or
+handling any of its cells: empty plus done means completion; any returned
+record means traversal remains. This is at most 576 numerical records per
+projectile, 73728 per resident set; it does not change the accepted F1 kernel.
+If traversal remains, return
 `ServerError::Capacity { resource: RuleEffects, limit: 512, observed: 513 }`.
 Keep that projectile unchanged and emit no hit/removal for it. Earlier ordered
 records may already be settled; the phase is not a whole-batch transaction.

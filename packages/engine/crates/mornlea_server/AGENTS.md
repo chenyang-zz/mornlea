@@ -5,7 +5,7 @@ session admission, tick staging, save ownership, and the agent host boundary.
 OpenSpec behavior for this crate lives in
 `openspec/changes/rust-authoritative-server/`. The crate is a windowless rlib.
 Production dependencies are the F1 crates `mornlea_domain`,
-`mornlea_protocol`, and `mornlea_storage`, plus `mornlea_engine` solely for
+`mornlea_protocol`, and `mornlea_storage`, plus `mornlea_engine` for checked numerical kernels and
 `PhysicsTuning`. It does not own GPU rendering, Godot presentation, or the
 Python Agent process. Workspace membership is `packages/engine/Cargo.toml`.
 No dependency-direction test guards this crate yet; review the manifest
@@ -91,6 +91,14 @@ against this file.
   before mutation; only successful buckets publish PlacementSuccess. Command
   calls carry no separate actor key. Ready-session retirement filtering belongs
   to the serial reducer and is not provided by an Active actor record alone.
+- `src/rules/projectiles.rs` owns bow draw, resolved projectile birth and
+  ID-ordered flight. Each impact atomically removes the projectile and settles
+  target health, armor, runtime interruption and knockback before the next
+  projectile selects a target. Settled impacts never enter the pending damage
+  lane. Spawn evicts the minimum ID only after validation; world observation
+  is capped at 512 cells plus one numerical-only completion probe. The reducer
+  supplies Ready subscription squares and owns hostile ranged spawn decisions,
+  sleep victim routing, later death/reset and persistence.
 - `src/rules/environment.rs` owns the end-of-tick environment provider: it
   advances world time exactly once per tick (saturating, never wrapping),
   keeps sleep as a `day_phase_offset` display change only, and rolls weather

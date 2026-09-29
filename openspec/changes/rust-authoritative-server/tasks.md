@@ -42,7 +42,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6e Implement farming tools, bone meal and atomic buckets.
 - [x] 2.7a Implement hostile lifecycle and targeting.
 - [x] 2.7b0 Complete projectile read, compare-and-replace staging and replay initialization contracts.
-- [ ] 2.7b Implement projectiles and hit validation.
+- [x] 2.7b Implement projectiles and hit validation.
 - [ ] 2.7c Implement one-time hostile death and combat outcomes.
 - [x] 2.8a Implement passive lifecycle.
 - [ ] 2.8b Implement item drops and pickup.
@@ -52,7 +52,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 
 ## 3. Adapters and serial integration
 
-- [ ] 3.1 Integrate the one authoritative tick reducer after all rule providers.
+- [ ] 3.1 Integrate the one authoritative tick reducer after all rule providers, including the refined packet's retired-session filtering, explicit damage-victim routing and indexed observation gates.
 - [x] 3.2 Land the common protocol/login/validation transport path.
 - [x] 3.3a Implement the Memory adapter over common admission.
 - [x] 3.3b Implement the TCP adapter over common admission.

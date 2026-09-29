@@ -559,3 +559,62 @@ in the provider worktree. No protocol/save/ABI version changes. Provider
 acceptance does not close serial command dispatch or retired-session filtering.
 Architecture skill: no change; existing transaction and receipt ownership rules
 cover the verified behavior.
+
+
+The exact-512-cell regression exposed lazy completion in the accepted native
+DDA: its full eighth batch is not marked done until the next request. Controller
+ruling keeps the kernel read-only and permits one bounded numerical lookahead
+with no world observations; empty/done succeeds, any returned record refuses.
+The corrected bound is 512 world observations plus at most 64 numerical-only
+lookahead records per projectile. Endpoint-coordinate inference was rejected
+because floating-point/tie behavior would duplicate the numerical algorithm.
+
+
+## Task 2.7b projectile flight and bow draw, 2026-09-29
+
+The isolated GPT-6 Sol implementer consumed `611536fb` (its cherry-pick identity
+`3d7fd6d9`) and owned only projectile provider/replay files. The controller
+integrated the reviewed frozen diff onto `8e08f218`, retaining the shared action
+contract and HTTP test repair. Birth validates before minimum-ID eviction at
+128; gravity precedes movement; age, Ready subscription union, nearest segment
+hit and deterministic entity ties match the Go source. Bow draw and release
+retain threshold, interruption, ammunition/durability and exceptional debit
+ordering. Pinned spawn hash and trigonometric bit patterns bind these choices
+to the source. No online transport or hostile ranged orchestration is claimed
+by this provider acceptance.
+
+Each hit now settles current health/armor/knockback and player/passive runtime
+with projectile removal as one compound before the next projectile chooses a
+target. It never queues a second damage application. Arrow confirmation carries
+raw damage to its owner; Shards are silent. Missing required target lanes or an
+invalid event refuse before mutation. Later death/drop/reset and sleep victim
+routing remain the serial owners described in the refined packet.
+
+Behavioral RED included seven no-op provider assertions, the lethal first-hit
+target remaining at health five, premature refusal of an early wall on a long
+ray, aged birth evicting at capacity, and a complete 512-cell ray incorrectly
+refused. GREEN has 24 source-bound projectile cases covering those defects,
+armor wear against the latest inventory, interruption without unrelated lane
+loss, passive flee origin/grazing, owner event routing, vertical knockback,
+missing-lane/event atomic refusal, exact 512/513 traversal and finite squared-
+length overflow. Independent Sol review approved the final two-file diff and
+all 24 cases, including the final added invalid-event/vertical-Shard assertions.
+
+Integrated validation: `make rust-check` passes all 2074 Rust workspace tests,
+workspace fmt and workspace clippy with warnings denied. Its server slice is
+186 tests (16 transport,13 persistence,58 contract,99 replay), zero failures.
+`make dev-check` passed at `8e08f218` before this two-file Rust integration,
+including all six Go vets/short suites, audit and the then-current full Rust
+workspace; the final Rust gate revalidates the affected workspace after the
+provider integration. The worker's `make rust` and Go
+`go test ./packages/server/sim/entity -run 'Projectile|Arrow|Bow|Combat' -count=1`
+passed. Strict all-OpenSpec validation passes 128 items; diff checks and the
+worker comment/task-identifier audit pass. The older isolated full suite's
+intermittent Agent HTTP failure is absent after the independently verified main
+HTTP fixture repair. No protocol, save or ABI versions changed.
+
+Round status: both selected original provider nodes and their two prerequisite
+contract repairs are accepted, with 37/53 checkboxes closed. Full F2 integration,
+remaining providers and final acceptance gates stay open. Architecture skill:
+no change; verified feature semantics belong in their local guide and packet,
+while unresolved runtime integration findings are not promoted as facts.
