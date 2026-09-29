@@ -1211,8 +1211,7 @@ impl<'a> AuthorityReadView<'a> {
     /// World spawn anchor for death reset teleport when the actor carries no
     /// bed respawn. `None` only on corrupt metadata, which providers refuse.
     pub fn spawn_anchor(&self) -> Option<(Dimension, mornlea_domain::ChunkPos)> {
-        let dimension =
-            Dimension::new(u8::try_from(self.metadata.spawn_dimension).ok()?).ok()?;
+        let dimension = Dimension::new(u8::try_from(self.metadata.spawn_dimension).ok()?).ok()?;
         Some((
             dimension,
             mornlea_domain::ChunkPos::new(
