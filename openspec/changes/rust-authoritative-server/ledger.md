@@ -1198,3 +1198,14 @@ ingress3, full server223+127+79+16+2, fmt, packet clippy, and Go
 entity/runtime companion oracles pass. Independent review approved all eight
 dimensions with no findings.
 Architecture skill: no change.
+
+
+Main routes node 3.6b directly at the normative refined packet
+(plans/04-refined-nodes.md Node3.6b, lines 101-109): exact files, registry
+capacity and byte bounds, dense terrain layout, digest canonicalization, MCP
+method matrix, named tests, Go oracles and rollback are all controller-frozen
+there, consuming only accepted 1.2 ports (SnapshotPort, Clock, Agent
+request/response DTOs) plus existing schema/golden fixtures. No new packet
+needed; one isolated implementer owns snapshot.rs, mcp.rs and the two new
+contract test topics. 3.6c consumes this node; 3.6d gates the real Python SDK.
+Architecture skill: no change.
