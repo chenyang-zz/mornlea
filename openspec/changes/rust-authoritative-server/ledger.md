@@ -1250,3 +1250,19 @@ deferred, no behavior impact); host planner tables stand (they mirror the
 planner-side Go functions with citations, matching Go's own dual-impl
 convention pinned by sync tests, not the execution-side registries).
 Architecture skill: no change.
+
+
+Bounded melee settlement accepted from f1ac1b5b (adopted 8h-stale orphan from
+the melee worktree plus main reconciliations and a coverage-fill worker).
+Adoption: orphan patch applied cleanly; private look math replaced by the
+accepted interaction helpers (bit-order equivalent; nonfinite refusal maps to
+combat_actor InvalidInput); two orphan clippy lints fixed behavior-preserving;
+one stale aux literal completed mechanically. RED evidence is inherited and
+stated as unverifiable retroactively; compensation is main's line-by-line
+contract verification, full gates, Go oracles (82 pass), and independent
+review. Review approved the implementation but mandated the plan19 test
+matrix; a follow-up worker added 32 tests (39+8 topics, full server510) plus
+a documented walker-kind constant. No behavior changed after the review.
+Ruling: the settle-player-cooldown Active gate and ray-error-to-InvalidInput
+mapping stand as unreachable-with-validated-inputs refinements.
+Architecture skill: no change.
