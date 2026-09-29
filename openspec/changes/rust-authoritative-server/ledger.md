@@ -760,3 +760,15 @@ and tick-local counters; the existing producer no-ops remain explicitly outside
 this contract acceptance until consumer wiring. Architecture skill: no change;
 the source-specific drop seam belongs in the crate guide and is not a new global
 architectural decision. No protocol/save version change or gameplay expansion.
+
+Random provider accepted from82e57c67 plus test-onlyafe7482a. Independent Sol
+source review verified the SplitMix sampler, climate rounding, branch order,
+latest overlay heights, bounded NativeTree transaction and checked coordinates;
+no provider defect. Its three coverage gaps now have full snapshot evidence:
+repeatability; two distinct Ready chunks in permuted/duplicated active lists;
+complete unavailable-neighbor tree refusal with successful all-Ready control.
+Worker RED/GREEN,17 focused random cases plus climate unit, make rust and exact
+Go Sampler/realm oracles pass. Main integration full server passes261 tests
+(1 unit,16 parity,46 persistence,82 contract,116 replay), with clippy/fmt and
+strict validation. Actual reducer scheduling remains3.1. Architecture skill:
+no change; source-specific rules stay with the provider guide.

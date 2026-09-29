@@ -351,3 +351,11 @@ rustup run 1.97.1 cargo metadata --manifest-path packages/engine/Cargo.toml --no
 rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked -- --list
 rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked contract_double
 ```
+
+`src/rules/random_blocks.rs` owns deterministic section sampling and ordered
+crop, dry farmland, tree, grass and snow updates. Its active set is sorted and
+deduplicated, includes Ready chunks only, and validates complete coordinate
+spans before mutation. Each sample sees current writes and heights; NativeTree
+preflights the whole bounded footprint before one transaction. Start-of-tick
+climate remains fixed while sequential block observations advance. The serial
+reducer owns interest selection and placement of this phase in the tick.
