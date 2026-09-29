@@ -737,3 +737,26 @@ parallel tasks is introduced; DiskBackend remains the accepted port.
 Delegate one isolated Sol implementer because this real-I/O lifecycle needs a
 long independent failure/test trace. Worker owns only packet files; main owns
 all core/drop work, planning and integration. Windows proof remains open.
+
+Controller drop ruling: source max batch36 and physical slots32 are separate.
+Plan08 adds a serial compile-ready prerequisite before independently reviewed
+producers consume it. Main implements because state/Ready snapshot ownership is
+tightly coupled to the accepted controller-owned read contract. Independent
+source discovery verified inactive generation preservation, same-cell merging,
+ordered failure atomicity and age-only non-dirty behavior. Keep the latter Go
+semantics explicitly; a dirty birth's snapshot can include aging but a previously
+durable clean chunk is not rewritten solely for age/delay. No gameplay/schema
+expansion. Exact API, cap, algorithms, tests and ownership are fixed in plan08.
+
+Drop contract accepted after 7 initial behavioral REDs and targeted RED for
+lossy-center restoration, inactive-generation resurrection and int32 coordinate
+wrapping. Fourteen focused contract cases now pass; independent Sol review found
+and verified the inactive-generation and source center corrections, with no
+remaining implementation finding. Added explicit public-stack mutation, mixed
+effect refusal, ID forgery and no-op snapshot assertions close its test gaps.
+Complete server suite and crate clippy/fmt pass; Go shared/world Drop oracle and
+strict change validation pass. Drop slot snapshots now preserve inactive identity
+and tick-local counters; the existing producer no-ops remain explicitly outside
+this contract acceptance until consumer wiring. Architecture skill: no change;
+the source-specific drop seam belongs in the crate guide and is not a new global
+architectural decision. No protocol/save version change or gameplay expansion.

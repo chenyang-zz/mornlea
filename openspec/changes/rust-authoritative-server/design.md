@@ -123,3 +123,8 @@ contract and random-rule refinement. Actual reducer integration remains open.
 The [exclusive backend packet](plans/07-disk-backend.md) fixes world-lock order,
 metadata sequence initialization, bounded region ownership, partial durable
 acknowledgments, and source-compatible named backups for the real disk join.
+
+The [drop ownership contract](plans/08-drop-contract.md) fixes 36 input stacks,
+32 persistent slots, ordered atomic staging and tick revision semantics before
+any drop-producing or pickup provider is accepted. Counter-only aging retains
+the verified Go dirty-selection behavior; this migration adds no save guarantee.

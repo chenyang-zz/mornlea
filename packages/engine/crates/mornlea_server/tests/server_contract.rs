@@ -30,3 +30,6 @@ mod shutdown;
 mod tick;
 #[path = "server_contract/world_read.rs"]
 mod world_read;
+
+#[path = "server_contract/drop_store.rs"]
+mod drop_store;

@@ -26,8 +26,22 @@ consume its cancellation and error contracts before joining the real backend.
   sparse writes first; missing chunks never become air. Height changes are
   immediate, including transparent blocks. Replay snapshots preserve compact
   unchanged sections and advance each changed chunk's durable revision once;
-  per-cell CAS counters remain tick-local. Actual chunk acquisition and commit
+  per-cell CAS counters remain tick-local. Drop slot mutations share that one
+  durable increment; counter-only age/delay changes preserve the source dirty
+  selection behavior. Actual chunk acquisition and commit
   ownership belongs to the serial reducer.
+
+- `src/core/drop_store.rs` owns the 32 persistent drop slots per chunk, including
+  inactive generations, and their slot-ordered active view. Batches accept at
+  most 36 inputs and rehearse merge/split/capacity on one fixed copy. Ordered
+  compound effects retain only affected chunk copies and publish them after
+  all other arms succeed. Drop patches compare full preimages, preserve identity
+  and permit only same-item count reductions or removal plus counter changes.
+  Fixture replay treats compact slots as the identity source; float centers are
+  observations and never reconstruct an already loaded slot. Full-range stored
+  chunk coordinates follow source int32 wrapping then float32 center rounding.
+  Providers preflight with read().check_drop_batch and must revalidate at commit.
+  Mining/container/trample/death/pickup integration remains with its producer.
 
 - `ServerLimits`, `TickBudget`, and `StoreLimits` reject an over-ceiling
   constructor before they reserve command storage. `AuthorityState` keeps

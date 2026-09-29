@@ -44,7 +44,7 @@ const MAX_OWNED_ENCODED_BYTES: usize = 4_194_304;
 const MAX_SAVE_JOBS: usize = 4;
 const DEFAULT_SAVE_CHUNKS: usize = 8;
 const DEFAULT_SAVE_BYTES: usize = 4_194_304;
-const MAX_DROP_STACKS: usize = 32;
+const MAX_DROP_STACKS: usize = 36;
 const MAX_PROJECTILES: usize = 128;
 const MAX_SLEEP_BEDS: usize = 8;
 const MAX_DROP_LIFETIME: u32 = 120_000;
@@ -1048,6 +1048,10 @@ pub struct DamageIntent {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DropSource {
+    System {
+        rule: SystemRule,
+        tick: u64,
+    },
     Mining {
         actor: ActorKey,
         target: BlockPos,

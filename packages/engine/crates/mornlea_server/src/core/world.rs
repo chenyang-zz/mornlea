@@ -85,11 +85,16 @@ impl ReadyChunk {
         self.heights[((z & 15) * 16 + (x & 15)) as usize] = y as i16;
     }
 
+    pub(crate) fn drop_slots(&self) -> &[mornlea_storage::DropSlot] {
+        &self.base.drops
+    }
+
     /// Materializes only explicit replay/save snapshots. A changed chunk gets
     /// one durable revision; per-cell overlay CAS counters are never persisted.
     pub(crate) fn snapshot<'a>(
         &self,
         writes: impl Iterator<Item = &'a BlockObservation>,
+        drops: Option<&super::drop_store::DropState>,
     ) -> (ChunkKey, u64, u64, Chunk) {
         let mut chunk = (*self.base).clone();
         let mut converted = BTreeSet::new();
@@ -115,7 +120,10 @@ impl ReadyChunk {
             let word = &mut chunk.sections[section_index].packed[cell / 4];
             *word = (*word & !(0x7fffu64 << shift)) | (u64::from(write.block) << shift);
         }
-        let revision = if converted.is_empty() {
+        if let Some(drops) = drops {
+            chunk.drops = drops.slots.to_vec();
+        }
+        let revision = if converted.is_empty() && !drops.is_some_and(|state| state.dirty) {
             self.revision
         } else {
             self.revision

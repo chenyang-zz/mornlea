@@ -46,6 +46,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.7b Implement projectiles and hit validation.
 - [ ] 2.7c Implement one-time hostile death and combat outcomes.
 - [x] 2.8a Implement passive lifecycle.
+- [x] 2.8b0 Complete bounded drop staging, identity and snapshot contracts.
 - [ ] 2.8b Implement item drops and pickup.
 - [x] 2.8c Implement sleeping and time transition.
 - [x] 2.9a Implement sessionless companion candidate provenance and admission.

@@ -17,6 +17,7 @@ use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, 
 use mornlea_storage::{Metadata, PlayerLocation, PlayerSave, StoredPlayer};
 
 use super::contracts::*;
+use super::drop_store::{self, DropState};
 use super::world::ReadyChunk;
 
 const COMPANION_INBOX: usize = 4;
@@ -1196,7 +1197,7 @@ pub struct AuthorityReadView<'a> {
     containers: &'a BTreeMap<ContainerRef, ContainerRecord>,
     viewers: &'a BTreeMap<SessionKey, ViewLease>,
     committed_viewers: &'a BTreeMap<SessionKey, ViewLease>,
-    drops: &'a BTreeMap<ChunkKey, Vec<DropRecord>>,
+    drops: &'a BTreeMap<ChunkKey, DropState>,
     projectiles: &'a [ProjectileRecord],
     damage_intents: &'a [DamageIntent],
 }
@@ -1283,11 +1284,30 @@ impl<'a> AuthorityReadView<'a> {
             .copied()
             .or_else(|| self.committed_viewers.get(&session).copied())
     }
-    /// Fixture-backed drop-slot occupancy of one chunk; each staged record
-    /// occupies one of the fixed per-chunk drop slots. Drop identity
-    /// allocation, aging and pickup stay with the drop provider.
+    /// Immutable active slots in physical slot order. Fixed inactive generations
+    /// stay private to the owner and survive empty active observations.
     pub fn drops(&self, key: ChunkKey) -> &[DropRecord] {
-        self.drops.get(&key).map(Vec::as_slice).unwrap_or(&[])
+        self.drops.get(&key).map(DropState::records).unwrap_or(&[])
+    }
+    /// Rehearse the entire output on one fixed slot copy; commit must recheck it.
+    pub fn check_drop_batch(&self, batch: &DropBatch) -> Result<(), RuleReject> {
+        drop_store::validate_batch(batch)?;
+        let (key, _) = drop_store::location(batch.dimension, batch.origin)?;
+        let mut next = self
+            .drops
+            .get(&key)
+            .ok_or(RuleReject::StaleObservation)?
+            .clone();
+        next.insert(key, batch)?;
+        if next.dirty
+            && self
+                .ready
+                .get(&key)
+                .is_some_and(|chunk| chunk.revision == u64::MAX)
+        {
+            return Err(RuleReject::StaleObservation);
+        }
+        Ok(())
     }
     /// Immutable staged projectile records; providers cannot bypass compare-and-replace.
     pub fn projectiles(&self) -> &'a [ProjectileRecord] {
@@ -1338,7 +1358,7 @@ pub struct TickContext<'a> {
     /// writer through the viewer staging arm; the serial reducer commits the
     /// net overlay into the authority store at overlay commit.
     viewers: BTreeMap<SessionKey, ViewLease>,
-    drops: BTreeMap<ChunkKey, Vec<DropRecord>>,
+    drops: BTreeMap<ChunkKey, DropState>,
     world: Option<WorldState>,
     commands: Vec<CommandEnvelope>,
     companions: Vec<CompanionActionEnvelope>,
@@ -1389,6 +1409,16 @@ impl<'a> TickContext<'a> {
     /// Installs already validated compact data; preparation belongs off the tick.
     pub fn preload_ready_chunk(&mut self, chunk: ReadyChunk) {
         self.blocks.retain(|(key, _), _| *key != chunk.key);
+        self.drops.insert(
+            chunk.key,
+            DropState::new(
+                chunk.key,
+                chunk
+                    .drop_slots()
+                    .try_into()
+                    .expect("Ready chunks own exactly 32 drop slots"),
+            ),
+        );
         self.ready.insert(chunk.key, chunk);
     }
     pub fn harness(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
@@ -1407,6 +1437,9 @@ impl<'a> TickContext<'a> {
                 ReadyChunk::try_new(*key, *generation, *revision, chunk.clone())
                     .expect("fixture chunks must satisfy the storage contract"),
             );
+        }
+        for record in &initial.drops {
+            context.preload_drop(record.clone());
         }
         context.actors = initial.actors.clone();
         context.projectiles = initial.projectiles.clone();
@@ -1475,6 +1508,9 @@ impl<'a> TickContext<'a> {
             !self.ready.contains_key(&observed.key),
             "sparse fixture cells cannot override Ready chunks"
         );
+        self.drops
+            .entry(observed.key)
+            .or_insert_with(|| DropState::new(observed.key, [Default::default(); 32]));
         self.blocks.insert((observed.key, observed.pos), observed);
     }
 
@@ -1499,7 +1535,11 @@ impl<'a> TickContext<'a> {
                 dimension,
                 pos: record.id.chunk(),
             };
-            self.drops.entry(key).or_default().push(record);
+            self.drops
+                .entry(key)
+                .or_insert_with(|| DropState::new(key, [Default::default(); 32]))
+                .seed(key, record)
+                .expect("fixture drop must have a unique valid slot");
         }
     }
 
@@ -1618,13 +1658,18 @@ impl<'a> TickContext<'a> {
     pub fn stage(&mut self, effect: RuleEffect) -> Result<(), RuleReject> {
         let mut pending_projectiles = None;
         let mut pending_damage = 0;
+        let mut pending_drops = BTreeMap::new();
         self.validate_effect(
             &effect,
             false,
             &mut pending_projectiles,
             &mut pending_damage,
+            &mut pending_drops,
         )?;
-        self.apply_effect(effect)
+        self.apply_effect(effect)?;
+        // Publish only the affected fixed slot copies after every other arm succeeds.
+        self.drops.extend(pending_drops);
+        Ok(())
     }
 
     pub fn projectile_len(&self) -> usize {
@@ -1654,6 +1699,7 @@ impl<'a> TickContext<'a> {
                         self.blocks
                             .values()
                             .filter(|observed| observed.key == chunk.key),
+                        self.drops.get(&chunk.key),
                     )
                 })
                 .collect(),
@@ -1670,7 +1716,11 @@ impl<'a> TickContext<'a> {
                 pending_offset: None,
             },
             projectiles: self.projectiles.clone(),
-            drops: Vec::new(),
+            drops: self
+                .drops
+                .values()
+                .flat_map(|state| state.records().iter().cloned())
+                .collect(),
             world: self.world.unwrap_or(fallback_world),
         }
     }
@@ -1760,6 +1810,7 @@ impl<'a> TickContext<'a> {
         nested: bool,
         pending_projectiles: &mut Option<Vec<ProjectileRecord>>,
         pending_damage: &mut usize,
+        pending_drops: &mut BTreeMap<ChunkKey, DropState>,
     ) -> Result<(), RuleReject> {
         match effect {
             RuleEffect::Compound(parts) => {
@@ -1767,7 +1818,13 @@ impl<'a> TickContext<'a> {
                     return Err(RuleReject::ResourceFull(Resource::RuleEffects));
                 }
                 for part in parts {
-                    self.validate_effect(part, true, pending_projectiles, pending_damage)?;
+                    self.validate_effect(
+                        part,
+                        true,
+                        pending_projectiles,
+                        pending_damage,
+                        pending_drops,
+                    )?;
                 }
                 Ok(())
             }
@@ -1807,6 +1864,19 @@ impl<'a> TickContext<'a> {
                 }
                 self.validate_writes(&txn.writes)
             }
+            RuleEffect::Drops(batch) => {
+                drop_store::validate_batch(batch)?;
+                let (key, _) = drop_store::location(batch.dimension, batch.origin)?;
+                let next = pending_drop_state(pending_drops, self.drops.get(&key), key)?;
+                next.insert(key, batch)?;
+                self.check_drop_revision(key, next)
+            }
+            RuleEffect::DropPatch { before, after } => {
+                let key = drop_store::drop_key(before)?;
+                let next = pending_drop_state(pending_drops, self.drops.get(&key), key)?;
+                next.patch(key, before, after.as_ref())?;
+                self.check_drop_revision(key, next)
+            }
             RuleEffect::Damage(_) => {
                 if self.damage_intents.len().saturating_add(*pending_damage) >= EFFECT_BUDGET {
                     return Err(RuleReject::ResourceFull(Resource::RuleEffects));
@@ -1821,6 +1891,19 @@ impl<'a> TickContext<'a> {
                 apply_projectile(records, before.as_ref(), after.as_ref())
             }
             _ => Ok(()),
+        }
+    }
+
+    fn check_drop_revision(&self, key: ChunkKey, next: &DropState) -> Result<(), RuleReject> {
+        if next.dirty
+            && self
+                .ready
+                .get(&key)
+                .is_some_and(|chunk| chunk.revision == u64::MAX)
+        {
+            Err(RuleReject::StaleObservation)
+        } else {
+            Ok(())
         }
     }
 
@@ -1871,8 +1954,8 @@ impl<'a> TickContext<'a> {
                 // so they join the rollback snapshot, and container records
                 // and viewer leases join it with their own staging arms. No
                 // public path reaches this restore today because `stage`
-                // validates every component before applying any. Drops have
-                // no effect arm that writes them and stay out.
+                // validates every component before applying any. Drop copies
+                // publish only after this entire operation succeeds.
                 let actors = self.actors.clone();
                 let runtimes = self.runtimes.clone();
                 let mining = self.mining.clone();
@@ -2008,6 +2091,19 @@ impl<'a> TickContext<'a> {
                 .get_mut(&observed.key)
                 .expect("Ready ownership cannot change during a write")
                 .set_height(pos.x(), pos.z(), next);
+        }
+    }
+}
+
+fn pending_drop_state<'a>(
+    pending: &'a mut BTreeMap<ChunkKey, DropState>,
+    current: Option<&DropState>,
+    key: ChunkKey,
+) -> Result<&'a mut DropState, RuleReject> {
+    match pending.entry(key) {
+        std::collections::btree_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            Ok(entry.insert(current.ok_or(RuleReject::StaleObservation)?.clone()))
         }
     }
 }
