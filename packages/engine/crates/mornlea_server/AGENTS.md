@@ -171,6 +171,13 @@ against this file.
   or refuses. The command-close grid-size drop belongs to the container
   provider's `CloseContainer`; the bench-anchor recheck arm waits for a
   contract surface that can express the anchor.
+- `src/rules/farmland.rs` owns bounded moisture checks on the `Farmland`
+  phase: one check per candidate, the 162-read neighborhood reservation
+  before any scan, events staged before rescan work, x-fastest/z/y cursor
+  order, and the shared 65536/65536 budgets with original-due retention on
+  deferral. The cadence is event-driven (enqueue due = current tick) — no
+  periodic re-check exists in the Go source; the dry-revert roll belongs to
+  the random-rules node.
 - `src/rules/mining.rs` owns continuous mining progression on the
   `MiningStep` phase: key-unchanged increments to saturation, key change
   restarts at 1, completions through the 1.6 transaction exactly once, human

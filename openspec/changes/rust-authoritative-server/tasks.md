@@ -27,7 +27,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.1c Implement continuous mining progress, tool reset and atomic completion.
 - [x] 2.2 Implement time, season, weather and environment transition replay.
 - [x] 2.3 Implement bounded fluid rescan and update scheduling.
-- [ ] 2.4a Implement bounded farmland moisture.
+- [x] 2.4a Implement bounded farmland moisture.
 - [ ] 2.4b Implement actor trample and snow footprints.
 - [ ] 2.4d Implement deterministic crop, dry farmland, tree, grass and snow random rules.
 - [ ] 2.4c Implement ordered block-support sweeps.
