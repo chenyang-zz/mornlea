@@ -53,9 +53,12 @@ use mornlea_domain::{
 };
 use mornlea_protocol::{LoginStart, admit_login};
 use mornlea_server::contracts::*;
+use mornlea_server::core::world::ReadyChunk;
 use mornlea_server::rules::passives as provider;
 use mornlea_server::state::{AuthorityState, TickContext};
-use mornlea_storage::{ItemStack, PassiveMob, PlayerLocation, PlayerSave};
+use mornlea_storage::{
+    Chunk, ContainerSnapshot, ItemStack, PassiveMob, PlayerLocation, PlayerSave, StorageKind,
+};
 
 // Stable block numbers, mirrored from the frozen const block in
 // `packages/shared/core/block.go`: `AirID` 0, `DirtID` 3, `GrassID` 4.
@@ -954,5 +957,201 @@ fn resident_32_33_and_restore_transient() {
         (body.id, body.health),
         (restored, 20),
         "the save body keeps only persisted facts"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Passive death loot (`dropPassiveLoot`, `packages/server/sim/entity/passive.go`).
+// ---------------------------------------------------------------------
+
+/// Raw beef (`core.ItemRawBeef`, `packages/shared/core/item.go`): the fixed
+/// passive death batch.
+const ITEM_RAW_BEEF: u16 = 53;
+
+fn empty_chunk_data() -> Chunk {
+    Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![],
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    }
+}
+
+fn preload_empty(context: &mut TickContext<'_>, x: i32, z: i32) {
+    context.preload_ready_chunk(
+        ReadyChunk::try_new(
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(x, z),
+            },
+            1,
+            1,
+            empty_chunk_data(),
+        )
+        .expect("ready chunk"),
+    );
+}
+
+fn drop_stacks(context: &TickContext<'_>, key: ChunkKey) -> Vec<ItemStack> {
+    context
+        .read()
+        .drops(key)
+        .iter()
+        .map(|record| record.stack)
+        .collect()
+}
+
+/// Fills every physical drop slot of one ready chunk with single stones at
+/// distinct cells, so later rehearsals refuse with exhausted capacity.
+fn fill_chunk(context: &mut TickContext<'_>, key: ChunkKey) {
+    let tick = context.read().tick();
+    for cell in 0..32 {
+        let batch = DropBatch::try_new(
+            DropSource::Death {
+                actor: passive_key(1),
+                tick,
+            },
+            key.dimension,
+            FiniteVec3::try_new([
+                (key.pos.x() * 16 + (cell % 8)) as f32 + 0.5,
+                70.5,
+                (key.pos.z() * 16 + (cell / 8)) as f32 + 0.5,
+            ])
+            .expect("cell center"),
+            vec![ItemStack {
+                item: 1,
+                count: 1,
+                durability: 0,
+            }],
+            5,
+        )
+        .expect("fill batch");
+        context.stage(RuleEffect::Drops(batch)).expect("fill stage");
+    }
+    assert_eq!(drop_stacks(context, key).len(), 32, "the chunk must fill");
+}
+
+fn dying_cow(context: &mut TickContext<'_>, id: u64, position: [f32; 3]) {
+    context
+        .stage(RuleEffect::Actor(passive_actor(
+            id,
+            position,
+            0.0,
+            0,
+            ActorLifecycle::Active,
+        )))
+        .expect("dying cow");
+    // The newborn skip flag freezes movement without integrating, and the id
+    // misses the graze roll, so the cow reaches death settlement unmoved.
+    context
+        .stage(RuleEffect::Runtime(passive_runtime(
+            id,
+            passive_aux(BlockPos::new(0, 1, 0), 0, None, true),
+        )))
+        .expect("dying runtime");
+}
+
+#[test]
+fn passive_death_stages_beef_and_dead_atomically() {
+    // A zero-health cow drops exactly one raw beef at its death chunk beside
+    // the terminal record: never a looted-but-present or removed-but-unlooted
+    // actor (`settlePassiveDeaths`).
+    let id = first_non_hit_id(0, 0, 31);
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment(1)))
+        .expect("environment");
+    preload_empty(&mut context, 0, 0);
+    dying_cow(&mut context, id, [0.5, 1.0, 0.5]);
+    let call = passive_call();
+    let report = provider::run(&mut context, call).expect("death advance");
+    let view = context.read();
+    let record = view.actor(passive_key(id)).expect("dead cow");
+    assert_eq!(record.lifecycle, ActorLifecycle::Dead);
+    assert_eq!(record.survival.health(), 0);
+    assert_eq!(
+        drop_stacks(
+            &context,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        ),
+        vec![ItemStack {
+            item: ITEM_RAW_BEEF,
+            count: 1,
+            durability: 0,
+        }]
+    );
+    assert_eq!(report.rejected, 0, "the death refuses nothing");
+    assert!(context.events().is_empty());
+}
+
+#[test]
+fn passive_all_chunks_full_omits_loot_but_completes_death() {
+    // No ready chunk with room omits the beef deterministically while the
+    // death still completes.
+    let id = first_non_hit_id(0, 0, 31);
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment(1)))
+        .expect("environment");
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    preload_empty(&mut context, 0, 0);
+    fill_chunk(&mut context, home);
+    dying_cow(&mut context, id, [0.5, 1.0, 0.5]);
+    let call = passive_call();
+    let report = provider::run(&mut context, call).expect("death advance");
+    let view = context.read();
+    assert_eq!(
+        view.actor(passive_key(id)).expect("dead cow").lifecycle,
+        ActorLifecycle::Dead
+    );
+    assert_eq!(drop_stacks(&context, home).len(), 32);
+    assert_eq!(report.rejected, 0, "the omission is not a rejection");
+}
+
+#[test]
+fn passive_below_min_death_stays_lootless() {
+    // A death below the world floor has no valid drop column: the removal
+    // stays lootless exactly like the movement fall-out path.
+    let id = first_non_hit_id(0, 0, 31);
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment(1)))
+        .expect("environment");
+    preload_empty(&mut context, 0, 0);
+    dying_cow(&mut context, id, [0.5, -100.0, 0.5]);
+    let call = passive_call();
+    provider::run(&mut context, call).expect("death advance");
+    let view = context.read();
+    assert_eq!(
+        view.actor(passive_key(id)).expect("dead cow").lifecycle,
+        ActorLifecycle::Dead
+    );
+    assert!(
+        drop_stacks(
+            &context,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        )
+        .is_empty()
     );
 }

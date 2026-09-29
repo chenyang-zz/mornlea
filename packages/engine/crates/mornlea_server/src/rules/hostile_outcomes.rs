@@ -10,15 +10,16 @@ use mornlea_domain::{
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
-use mornlea_storage::ItemStack;
+use mornlea_storage::{ItemStack, PlayerLocation};
 
 use crate::core::contracts::{
-    ActorAux, ActorBody, ActorKey, ActorLifecycle, DamageCause, HostileMeleeBatch, InventoryPatch,
-    PhaseReport, Resource, RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
+    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ChunkKey, DamageCause, DropBatch,
+    DropSource, EnvironmentState, HostileMeleeBatch, InventoryPatch, PhaseReport, Resource,
+    RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
 };
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::core::state::{AuthorityReadView, TickContext};
-use crate::rules::{inventory, player_survival};
+use crate::rules::{crafting, inventory, player_survival};
 
 const MAX_ACTORS: usize = 104;
 const MAX_INTENTS: usize = 72;
@@ -74,17 +75,28 @@ pub struct CombatOutcome {
 }
 
 pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
-    if call.phase != RulePhase::Combat
-        || call.actor.is_some()
-        || call.command.is_some()
-        || call.internal.is_some()
-    {
-        return Err(ServerError::InvalidInput {
+    match call.phase {
+        RulePhase::Combat => {
+            if call.actor.is_some() || call.command.is_some() || call.internal.is_some() {
+                return Err(ServerError::InvalidInput {
+                    field: "combat_call",
+                });
+            }
+            let empty = HostileMeleeBatch::try_new(ctx.read().tick(), &[])?;
+            Ok(advance(ctx, &empty)?.report)
+        }
+        RulePhase::HostilePlayerDeaths => {
+            if call.actor.is_some() || call.command.is_some() || call.internal.is_some() {
+                return Err(ServerError::InvalidInput {
+                    field: "combat_call",
+                });
+            }
+            settle_deaths(ctx)
+        }
+        _ => Err(ServerError::InvalidInput {
             field: "combat_call",
-        });
+        }),
     }
-    let empty = HostileMeleeBatch::try_new(ctx.read().tick(), &[])?;
-    Ok(advance(ctx, &empty)?.report)
 }
 
 pub fn advance(
@@ -842,40 +854,441 @@ fn knockback(from: [f32; 3], to: [f32; 3], yaw: f32) -> [f32; 3] {
     [delta[0] / length * 0.35, 0.0, delta[1] / length * 0.35]
 }
 
+// ---------------------------------------------------------------------
+// Hostile and player death outputs and reset (`settleHostileDeaths`,
+// `settleDeaths`, `beginReset`).
+// ---------------------------------------------------------------------
+
+/// Empty stack item (`core.ItemNone`, `packages/shared/core/item.go`): death
+/// drops skip it exactly like the source slot scan.
+const ITEM_NONE: u16 = 0;
+
+/// Full health (`core.MaxHealth`, `packages/shared/core/health.go`).
+const MAX_HEALTH: u8 = 20;
+/// Fixed respawn hunger (`core.MaxHunger`, `packages/shared/core/hunger.go`).
+const MAX_HUNGER: u8 = 20;
+/// Full oxygen (`core.MaxOxygenTicks`, `packages/shared/core/health.go`).
+const MAX_OXYGEN: u16 = 300;
+/// Fixed new/respawn saturation (`core.InitialSaturationMilli`,
+/// `packages/shared/core/hunger.go`).
+const INITIAL_SATURATION_MILLI: u16 = 5_000;
+/// Anchor respawn height (`core.MaxY + 1`, `packages/shared/core/pos.go`):
+/// the anchor column stands above the buildable span, so the reset pose
+/// always falls back into the world instead of inside a block.
+const ANCHOR_RESPAWN_Y: f32 = 321.0;
+
+/// One actor's settlement shape. A refused stage leaves nothing behind by
+/// construction (the context validates a `Compound` before applying it), so
+/// a skipped actor retries automatically on the next tick.
+enum Settlement {
+    Settled,
+    Skipped,
+    /// The death settled but the teleport lane refused: the report counts the
+    /// actor both settled and rejected, so the partial settlement stays
+    /// visible.
+    Partial,
+}
+
+/// Settles zero-health hostiles in hostile-ID ascending order, then zero-health
+/// players in session order (`tick.go`): one-time gates admit only
+/// still-`Active` records, so already-`Dead` hostiles and already-reset
+/// `Respawning` players are never double-settled.
+fn settle_deaths(ctx: &mut TickContext<'_>) -> Result<PhaseReport, ServerError> {
+    let mut dying_hostiles = Vec::new();
+    let mut dying_players = Vec::new();
+    for actor in ctx.read().actors() {
+        if actor.survival.health() != 0 || actor.lifecycle != ActorLifecycle::Active {
+            continue;
+        }
+        match actor.key {
+            ActorKey::Hostile(_) => dying_hostiles.push(actor.key),
+            ActorKey::Player(_) => dying_players.push(actor.key),
+            _ => {}
+        }
+    }
+    dying_hostiles.sort_unstable();
+    dying_players.sort_unstable();
+    let mut report = PhaseReport {
+        examined: 0,
+        applied: 0,
+        carried: 0,
+        rejected: 0,
+    };
+    if dying_hostiles.is_empty() && dying_players.is_empty() {
+        return Ok(report);
+    }
+    let environment = ctx
+        .read()
+        .environment()
+        .cloned()
+        .ok_or(ServerError::Internal {
+            invariant: "death environment",
+        })?;
+    for key in dying_hostiles {
+        report.examined += 1;
+        match settle_hostile_death(ctx, &environment, key)? {
+            Settlement::Settled => report.applied += 1,
+            Settlement::Skipped => report.rejected += 1,
+            Settlement::Partial => {
+                report.applied += 1;
+                report.rejected += 1;
+            }
+        }
+    }
+    for key in dying_players {
+        report.examined += 1;
+        match settle_player_death(ctx, &environment, key)? {
+            Settlement::Settled => report.applied += 1,
+            Settlement::Skipped => report.rejected += 1,
+            Settlement::Partial => {
+                report.applied += 1;
+                report.rejected += 1;
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// Settles one hostile death with its deterministic loot in the same
+/// `Compound` (`settleHostileDeaths` with `dropHostileLoot`): an empty batch
+/// skips the rehearsal, an all-full ring omits the loot, and the `Dead` record
+/// still stages either way.
+fn settle_hostile_death(
+    ctx: &mut TickContext<'_>,
+    environment: &EnvironmentState,
+    key: ActorKey,
+) -> Result<Settlement, ServerError> {
+    const REFUSAL: ServerError = ServerError::Internal {
+        invariant: "death hostile staging",
+    };
+    let Some(record) = ctx.read().actor(key).cloned() else {
+        return Ok(Settlement::Skipped);
+    };
+    if record.lifecycle != ActorLifecycle::Active || record.survival.health() != 0 {
+        return Ok(Settlement::Skipped);
+    }
+    let ActorBody::Hostile(body) = &record.body else {
+        return Err(REFUSAL);
+    };
+    let batch = hostile_loot_batch(body.kind, environment.seed, environment.world_time, body.id);
+    let mut dead_body = body.clone();
+    dead_body.health = 0;
+    let dead = ActorRecord::try_new(
+        key,
+        ActorLifecycle::Dead,
+        record.dimension,
+        record.motion,
+        record.look,
+        record.survival,
+        ActorBody::Hostile(dead_body),
+    )
+    .map_err(|_| REFUSAL)?;
+    let mut parts = vec![RuleEffect::Actor(dead)];
+    if !batch.is_empty()
+        && let Some(drops) = rehearse_loot(
+            ctx,
+            key,
+            record.dimension,
+            record.motion.position().get(),
+            batch,
+            environment.tunables.drop_pickup_delay_ticks(),
+        )
+    {
+        parts.push(RuleEffect::Drops(drops));
+    }
+    match ctx.stage(RuleEffect::Compound(parts)) {
+        Ok(()) => Ok(Settlement::Settled),
+        Err(_) => Ok(Settlement::Skipped),
+    }
+}
+
+/// Settles one player death in a single `Compound` (`settleDeath` with
+/// `beginReset`): repack-first, per-slot ring drops with clear-on-success,
+/// full stat reset and anchor teleport. Repack-impossible preserves everything
+/// for the next tick; unplaceable slots stay with the player; corrupt spawn
+/// metadata refuses the teleport lane only.
+fn settle_player_death(
+    ctx: &mut TickContext<'_>,
+    environment: &EnvironmentState,
+    key: ActorKey,
+) -> Result<Settlement, ServerError> {
+    const REFUSAL: ServerError = ServerError::Internal {
+        invariant: "death player staging",
+    };
+    let Some(record) = ctx.read().actor(key).cloned() else {
+        return Ok(Settlement::Skipped);
+    };
+    if record.lifecycle != ActorLifecycle::Active || record.survival.health() != 0 {
+        return Ok(Settlement::Skipped);
+    }
+    let ActorBody::Player(save) = record.body.clone() else {
+        return Err(REFUSAL);
+    };
+    let view = ctx.read();
+    let before = view.inventory(key).copied().ok_or(REFUSAL)?;
+    let runtime = view.runtime(key).cloned().ok_or(REFUSAL)?;
+    let tick = view.tick();
+    let player_delay = environment.tunables.player_drop_pickup_delay_ticks();
+    let Some(repacked) = crafting::repack_all(before) else {
+        return Ok(Settlement::Skipped);
+    };
+    let mut after = repacked;
+    let mut drops = Vec::new();
+    if let Some(block) = death_block(record.motion.position().get()) {
+        let candidates = death_candidates(&view, record.dimension, block);
+        for index in 0..after.slots.len() {
+            drop_player_stack(
+                &view,
+                key,
+                tick,
+                record.dimension,
+                block,
+                &candidates,
+                &mut after.slots[index],
+                player_delay,
+                &mut drops,
+            );
+        }
+        for index in 0..after.armor.len() {
+            drop_player_stack(
+                &view,
+                key,
+                tick,
+                record.dimension,
+                block,
+                &candidates,
+                &mut after.armor[index],
+                player_delay,
+                &mut drops,
+            );
+        }
+    }
+    let teleport = teleport_target(&view, &save);
+    // Death discards pending exhaustion receipts with the hunger reset,
+    // mirroring `resetHunger` zeroing the exhaustion lanes; every other
+    // actor's receipts re-note untouched.
+    for (charged, kind) in ctx.take_charges() {
+        if charged == key {
+            continue;
+        }
+        ctx.note_charge(charged, kind).map_err(|_| REFUSAL)?;
+    }
+    let (dimension, motion) = match teleport {
+        Some((dimension, position)) => (
+            dimension,
+            MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new(position).map_err(|_| REFUSAL)?,
+                velocity: FiniteVec3::try_new([0.0; 3]).map_err(|_| REFUSAL)?,
+                on_ground: false,
+            }),
+        ),
+        // A refused teleport keeps the pose: the reset still settles below.
+        None => (record.dimension, record.motion),
+    };
+    let survival = SurvivalState::try_new(SurvivalStateParts {
+        health: MAX_HEALTH,
+        oxygen: MAX_OXYGEN,
+        hunger: MAX_HUNGER,
+        saturation_zero: false,
+        armor_points: inventory::armor_points(&after.armor),
+    })
+    .map_err(|_| REFUSAL)?;
+    let mut body = save;
+    body.health = MAX_HEALTH;
+    body.hunger = MAX_HUNGER;
+    body.saturation_milli = INITIAL_SATURATION_MILLI;
+    body.exhaustion_milli = 0;
+    body.armor = after.armor;
+    body.current = PlayerLocation {
+        dimension: i32::from(dimension.get()),
+        position: motion.position().get(),
+    };
+    let settled = ActorRecord::try_new(
+        key,
+        ActorLifecycle::Respawning,
+        dimension,
+        motion,
+        record.look,
+        survival,
+        ActorBody::Player(body),
+    )
+    .map_err(|_| REFUSAL)?;
+    let mut settled_runtime = runtime;
+    settled_runtime.oxygen = MAX_OXYGEN;
+    settled_runtime.peak_y = motion.position().get()[1];
+    settled_runtime.exhaustion_milli = 0;
+    settled_runtime.saturation_milli = u32::from(INITIAL_SATURATION_MILLI);
+    settled_runtime.since_damage_ticks = 0;
+    settled_runtime.drown_ticks = 0;
+    settled_runtime.starvation_ticks = 0;
+    settled_runtime.attack_cooldown = 0;
+    settled_runtime.hurt_cooldown = 0;
+    settled_runtime.eating = None;
+    settled_runtime.bow = None;
+    let patch = InventoryPatch::try_new(key, before, after).map_err(|_| REFUSAL)?;
+    let mut parts = vec![
+        RuleEffect::Actor(settled),
+        RuleEffect::Inventory(patch),
+        RuleEffect::Runtime(settled_runtime),
+    ];
+    parts.extend(drops);
+    match ctx.stage(RuleEffect::Compound(parts)) {
+        Ok(()) => Ok(if teleport.is_none() {
+            Settlement::Partial
+        } else {
+            Settlement::Settled
+        }),
+        Err(_) => Ok(Settlement::Skipped),
+    }
+}
+
+/// Ready-chunk candidates of one death dimension in ring order: the death
+/// chunk first, then outward rings with column order breaking ties inside one
+/// ring (`deathDropChunks`). The set is bounded by the ready set, so the walk
+/// never touches an unloaded chunk.
+fn death_candidates(
+    view: &AuthorityReadView<'_>,
+    dimension: Dimension,
+    block: BlockPos,
+) -> Vec<ChunkKey> {
+    let center = ChunkPos::new(block.x() >> 4, block.z() >> 4);
+    let mut candidates: Vec<ChunkKey> = view
+        .ready_chunk_keys()
+        .into_iter()
+        .filter(|key| key.dimension == dimension)
+        .collect();
+    candidates.sort_by_key(|key| ring_order_key(center, key.pos));
+    candidates
+}
+
+/// First-fit rehearsal of one whole batch over the ring candidates
+/// (`dropHostileLoot`): per-chunk `check_drop_batch` rehearsal, the first
+/// success takes the whole batch, all-full yields `None` with the death still
+/// completing. The batch is drawn once per kill and never re-rolled on a
+/// refused placement.
+fn rehearse_loot(
+    ctx: &TickContext<'_>,
+    actor: ActorKey,
+    dimension: Dimension,
+    position: [f32; 3],
+    stacks: Vec<ItemStack>,
+    pickup_delay: u8,
+) -> Option<DropBatch> {
+    let block = death_block(position)?;
+    let view = ctx.read();
+    let tick = view.tick();
+    for key in death_candidates(&view, dimension, block) {
+        let origin = death_origin(block, key.pos)?;
+        let Ok(batch) = DropBatch::try_new(
+            DropSource::Death { actor, tick },
+            dimension,
+            origin,
+            stacks.clone(),
+            pickup_delay,
+        ) else {
+            continue;
+        };
+        if view.check_drop_batch(&batch).is_ok() {
+            return Some(batch);
+        }
+    }
+    None
+}
+
+/// One player slot through the same ring discipline (`placeDeathDrops`):
+/// each slot rehearses independently, first success commits and clears the
+/// slot, armor keeps its durability form, and unplaceable slots stay with the
+/// player through respawn.
+#[allow(clippy::too_many_arguments)]
+fn drop_player_stack(
+    view: &AuthorityReadView<'_>,
+    actor: ActorKey,
+    tick: u64,
+    dimension: Dimension,
+    block: BlockPos,
+    candidates: &[ChunkKey],
+    stack: &mut ItemStack,
+    pickup_delay: u8,
+    drops: &mut Vec<RuleEffect>,
+) {
+    if stack.item == ITEM_NONE {
+        return;
+    }
+    for key in candidates {
+        let Some(origin) = death_origin(block, key.pos) else {
+            continue;
+        };
+        let Ok(batch) = DropBatch::try_new(
+            DropSource::Death { actor, tick },
+            dimension,
+            origin,
+            vec![*stack],
+            pickup_delay,
+        ) else {
+            // An unbatchable stack never places; it stays with the player.
+            return;
+        };
+        if view.check_drop_batch(&batch).is_ok() {
+            drops.push(RuleEffect::Drops(batch));
+            *stack = ItemStack::default();
+            return;
+        }
+    }
+}
+
+/// Teleport target (`beginReset` with the bed-respawn preference): the live
+/// body respawn position wins when present and well-formed, else the world
+/// spawn anchor column at `MaxY + 1` with zeroed velocity. `None` only on
+/// corrupt metadata, which refuses the teleport lane alone.
+fn teleport_target(
+    view: &AuthorityReadView<'_>,
+    save: &mornlea_storage::PlayerSave,
+) -> Option<(Dimension, [f32; 3])> {
+    if save.respawn_present
+        && let (Ok(dimension), Ok(position)) = (
+            Dimension::new(u8::try_from(save.respawn_dimension).ok()?),
+            FiniteVec3::try_new(save.respawn_position),
+        )
+    {
+        return Some((dimension, position.get()));
+    }
+    let (dimension, anchor) = view.spawn_anchor()?;
+    Some((
+        dimension,
+        [
+            anchor.x() as f32 * 16.0 + 0.5,
+            ANCHOR_RESPAWN_Y,
+            anchor.z() as f32 * 16.0 + 0.5,
+        ],
+    ))
+}
+
 /// Bone-thrower kind. Only the Go `HostileKindBoneThrower` (`1` in
 /// `packages/shared/network/protocol/message_hostile.go`) hurls bones and
 /// drops the deterministic pair below; every other kind drops walker flesh.
-#[allow(dead_code)]
 const HURLER_KIND: u8 = 1;
 
 /// Rotten flesh (`core.ItemRottenFlesh`,
 /// `packages/shared/core/item.go`): the walker death batch.
-#[allow(dead_code)]
 const ITEM_ROTTEN_FLESH: u16 = 45;
 
 /// Bow (`core.ItemBow`): the hurler bow drop.
-#[allow(dead_code)]
 const ITEM_BOW: u16 = 62;
 
 /// Bone (`core.ItemBone`): the hurler bone drop.
-#[allow(dead_code)]
 const ITEM_BONE: u16 = 64;
 
 /// Bow durability maximum (`core.ItemMaxDurability`,
 /// `packages/shared/core/item.go`): the dropped bow is the intact form.
-#[allow(dead_code)]
 const BOW_DURABILITY_MAX: u16 = 120;
 
 /// Hurler drop salt (`HostileHurlerDropSalt`,
 /// `packages/server/updates/sampler.go`).
-#[allow(dead_code)]
 const HURLER_DROP_SALT: u64 = 0x4855_524C_4452_4F50;
 
 /// `Sampler.SplitMix64` (`packages/server/updates/sampler.go`), the shared
 /// integer hash primitive of every random face. Each provider keeps its own
-/// copy beside the chain that consumes it. Not yet consumed by any staged
-/// settlement; the allow marks the landing until the death node runs.
-#[allow(dead_code)]
+/// copy beside the chain that consumes it.
 fn splitmix64(x: u64) -> u64 {
     let mut x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -887,9 +1300,6 @@ fn splitmix64(x: u64) -> u64 {
 /// (`HostileHurlerDropRolls`, `packages/server/updates/sampler.go`): bones
 /// `0..2` from `hash % 3`, then the bow `1/8` from the next chain value. The
 /// pair is drawn once per kill and never re-rolled on a refused placement.
-/// Not yet consumed by any staged settlement; the allow marks the landing
-/// until the death node runs.
-#[allow(dead_code)]
 fn hurler_rolls(seed: i64, world_time: u64, id: u64) -> (u8, bool) {
     let mut hash = splitmix64(seed as u64 ^ HURLER_DROP_SALT);
     hash = splitmix64(hash ^ world_time);
@@ -903,8 +1313,6 @@ fn hurler_rolls(seed: i64, world_time: u64, id: u64) -> (u8, bool) {
 /// One hostile death batch (`hostileDeathBatch`,
 /// `packages/server/sim/entity/hostile.go`): walkers one rotten flesh, hurlers
 /// the deterministic bone/bow pair with an empty batch when both rolls miss.
-/// Not yet staged; the allow marks the landing until the death node runs.
-#[allow(dead_code)]
 fn hostile_loot_batch(kind: u8, seed: i64, world_time: u64, id: u64) -> Vec<ItemStack> {
     if kind != HURLER_KIND {
         return vec![ItemStack {
@@ -935,10 +1343,7 @@ fn hostile_loot_batch(kind: u8, seed: i64, world_time: u64, id: u64) -> Vec<Item
 /// Sort key placing nearer rings first with (`x`, `z`) breaking ties inside
 /// one ring (`deathDropChunks` over `sortChunkKeys`,
 /// `packages/server/sim/entity/death.go`): one dimension at a time, so the
-/// ring plus the column order is the whole established order. Not yet
-/// consumed by any staged walk; the allow marks the landing until the death
-/// node runs.
-#[allow(dead_code)]
+/// ring plus the column order is the whole established order.
 fn ring_order_key(center: ChunkPos, pos: ChunkPos) -> (i64, i32, i32) {
     let dx = i64::from(pos.x()) - i64::from(center.x());
     let dz = i64::from(pos.z()) - i64::from(center.z());
@@ -947,9 +1352,7 @@ fn ring_order_key(center: ChunkPos, pos: ChunkPos) -> (i64, i32, i32) {
 
 /// Nearest column of a death block inside one candidate chunk
 /// (`clampBlockToChunk`, `packages/server/sim/entity/death.go`): overflow
-/// lands on the side facing the death point. Not yet consumed by any staged
-/// walk; the allow marks the landing until the death node runs.
-#[allow(dead_code)]
+/// lands on the side facing the death point.
 fn clamp_block_to_chunk(block: BlockPos, chunk: ChunkPos) -> BlockPos {
     let min_x = chunk.x().wrapping_shl(4);
     let min_z = chunk.z().wrapping_shl(4);
@@ -963,9 +1366,7 @@ fn clamp_block_to_chunk(block: BlockPos, chunk: ChunkPos) -> BlockPos {
 /// Foot block of a death pose (`blockPosOf`,
 /// `packages/server/sim/entity/hostile.go`): each component floors in float64
 /// before narrowing, so an out-of-span pose refuses instead of saturating
-/// silently through the cast. Not yet consumed by any staged walk; the allow
-/// marks the landing until the death node runs.
-#[allow(dead_code)]
+/// silently through the cast.
 fn death_block(position: [f32; 3]) -> Option<BlockPos> {
     let mut block = [0i32; 3];
     for (index, value) in position.iter().enumerate() {
@@ -980,9 +1381,7 @@ fn death_block(position: [f32; 3]) -> Option<BlockPos> {
 
 /// Rehearsal origin steering one placement at the clamped column: the block
 /// center floors back onto the intended chunk cell through the shared drop
-/// location rule. Not yet consumed by any staged walk; the allow marks the
-/// landing until the death node runs.
-#[allow(dead_code)]
+/// location rule.
 fn death_origin(block: BlockPos, chunk: ChunkPos) -> Option<FiniteVec3> {
     let clamped = clamp_block_to_chunk(block, chunk);
     FiniteVec3::try_new([

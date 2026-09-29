@@ -2,18 +2,24 @@
 
 use super::*;
 use mornlea_domain::{
-    BlockPos, ChunkPos, Dimension, Event, EventRecipient, FiniteVec3, HeldActions, HostileId,
-    HotbarSlot, LookAngles, MotionState, MotionStateParts, Movement, PassiveId, PlayerControl,
-    PlayerControlParts, SurvivalState, SurvivalStateParts, Weather,
+    BlockPos, ChunkPos, CraftingSize, Dimension, Event, EventRecipient, FiniteVec3, HeldActions,
+    HostileId, HotbarSlot, LookAngles, MotionState, MotionStateParts, Movement, PassiveId,
+    PlayerControl, PlayerControlParts, SurvivalState, SurvivalStateParts, Weather,
 };
 use mornlea_protocol::{LoginStart, admit_login};
 use mornlea_server::contracts::{
-    ActorAux, ActorBody, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation, BowProgress,
-    ChunkKey, DamageCause, EatingProgress, EnvironmentState, HostileMeleeAttack, HostileMeleeBatch,
-    InventoryRecord, RuleEffect, RuleTunables, ServerError, SessionKey, TransportKind,
+    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation,
+    BowProgress, ChunkKey, DamageCause, DropBatch, DropSource, EatingProgress, EnvironmentState,
+    HostileMeleeAttack, HostileMeleeBatch, InventoryRecord, RuleCall, RuleEffect, RulePhase,
+    RuleTunables, ServerError, SessionKey, TransportKind,
 };
+use mornlea_server::core::world::ReadyChunk;
 use mornlea_server::rules::hostile_outcomes as provider;
-use mornlea_storage::{HostileMob, ItemStack, PassiveMob, PlayerLocation, PlayerSave};
+use mornlea_server::rules::player_survival as survival_provider;
+use mornlea_storage::{
+    Chunk, ContainerSnapshot, HostileMob, ItemStack, PassiveMob, PlayerLocation, PlayerSave,
+    StorageKind,
+};
 
 fn authority() -> AuthorityState {
     let mut state = AuthorityState::try_new(
@@ -2288,4 +2294,751 @@ fn zero_exhaustion_threshold_pins_to_one_in_combat() {
         snapshots.push((record, runtime));
     }
     assert_eq!(snapshots[0], snapshots[1], "zero pins to one");
+}
+
+// ---------------------------------------------------------------------
+// Hostile and player death outputs and reset (`settleHostileDeaths`,
+// `settleDeaths`, `packages/server/sim/entity/hostile.go` and `death.go`).
+// ---------------------------------------------------------------------
+
+fn death_call() -> RuleCall<'static> {
+    RuleCall {
+        phase: RulePhase::HostilePlayerDeaths,
+        actor: None,
+        command: None,
+        internal: None,
+    }
+}
+
+fn empty_chunk_data() -> Chunk {
+    Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![],
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    }
+}
+
+fn preload_empty(ctx: &mut TickContext<'_>, dimension: Dimension, x: i32, z: i32) {
+    ctx.preload_ready_chunk(
+        ReadyChunk::try_new(
+            ChunkKey {
+                dimension,
+                pos: ChunkPos::new(x, z),
+            },
+            1,
+            1,
+            empty_chunk_data(),
+        )
+        .unwrap(),
+    );
+}
+
+fn dead_hostile(id: u64, kind: u8, position: [f32; 3]) -> ActorRecord {
+    let mut record = hostile(id, position);
+    record.survival = survival(0);
+    let ActorBody::Hostile(body) = &mut record.body else {
+        unreachable!()
+    };
+    body.health = 0;
+    body.kind = kind;
+    record
+}
+
+fn stage_dead_hostile(ctx: &mut TickContext<'_>, id: u64, kind: u8, position: [f32; 3]) {
+    let key = ActorKey::Hostile(HostileId::try_new(id).unwrap());
+    ctx.stage(RuleEffect::Actor(dead_hostile(id, kind, position)))
+        .unwrap();
+    ctx.stage(RuleEffect::Runtime(hostile_runtime(key)))
+        .unwrap();
+}
+
+fn environment_with(ctx: &mut TickContext<'_>, seed: i64, world_time: u64) {
+    ctx.stage(RuleEffect::Environment(EnvironmentState {
+        seed,
+        next_tick: 1,
+        world_time,
+        day_phase_offset: 0,
+        season_offset: 0,
+        weather: Weather::Clear,
+        weather_remaining: 0,
+        difficulty: 1,
+        tunables: RuleTunables::source_defaults(),
+    }))
+    .unwrap();
+}
+
+fn drop_stacks(ctx: &TickContext<'_>, key: ChunkKey) -> Vec<ItemStack> {
+    ctx.read()
+        .drops(key)
+        .iter()
+        .map(|record| record.stack)
+        .collect()
+}
+
+/// Fills every physical drop slot of one ready chunk with single stones at
+/// distinct cells, so later rehearsals refuse with exhausted capacity while
+/// earlier fixtures stay observable.
+fn fill_chunk(ctx: &mut TickContext<'_>, key: ChunkKey) {
+    let tick = ctx.read().tick();
+    for cell in 0..32 {
+        let batch = DropBatch::try_new(
+            DropSource::Death {
+                actor: ActorKey::Hostile(HostileId::try_new(1).unwrap()),
+                tick,
+            },
+            key.dimension,
+            FiniteVec3::try_new([
+                (key.pos.x() * 16 + (cell % 8)) as f32 + 0.5,
+                70.5,
+                (key.pos.z() * 16 + (cell / 8)) as f32 + 0.5,
+            ])
+            .unwrap(),
+            vec![ItemStack {
+                item: 1,
+                count: 1,
+                durability: 0,
+            }],
+            5,
+        )
+        .unwrap();
+        ctx.stage(RuleEffect::Drops(batch)).unwrap();
+    }
+    assert_eq!(drop_stacks(ctx, key).len(), 32, "the chunk must fill");
+}
+
+fn stack(item: u16, count: u8, durability: u16) -> ItemStack {
+    ItemStack {
+        item,
+        count,
+        durability,
+    }
+}
+
+fn sorted_stacks(mut stacks: Vec<ItemStack>) -> Vec<ItemStack> {
+    stacks.sort_by_key(|stack| (stack.item, stack.count, stack.durability));
+    stacks
+}
+
+#[test]
+fn death_call_shape_refusals() {
+    // Any shape beyond the bare batch call refuses before effects: a foreign
+    // phase and a populated actor lane both report the combat call field.
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    stage_player(&mut ctx, victim, 1, [1.5, 1.0, 0.5], false);
+    let before = ctx.read().actor(ActorKey::Player(victim)).unwrap().clone();
+    let Err(error) = provider::run(
+        &mut ctx,
+        RuleCall {
+            phase: RulePhase::PassiveStepDeaths,
+            actor: None,
+            command: None,
+            internal: None,
+        },
+    ) else {
+        panic!("a foreign phase must refuse");
+    };
+    assert!(matches!(
+        error,
+        ServerError::InvalidInput {
+            field: "combat_call"
+        }
+    ));
+    let Err(error) = provider::run(
+        &mut ctx,
+        RuleCall {
+            phase: RulePhase::HostilePlayerDeaths,
+            actor: Some(ActorKey::Player(victim)),
+            command: None,
+            internal: None,
+        },
+    ) else {
+        panic!("a populated actor lane must refuse");
+    };
+    assert!(matches!(
+        error,
+        ServerError::InvalidInput {
+            field: "combat_call"
+        }
+    ));
+    assert_eq!(ctx.read().actor(ActorKey::Player(victim)).unwrap(), &before);
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn walker_death_drops_single_flesh_and_marks_dead() {
+    // A zero-health walker drops one rotten flesh at its death chunk and
+    // leaves `Active` in the same settlement (`settleHostileDeaths`).
+    let mut state = authority();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    stage_dead_hostile(&mut ctx, 5, 0, [0.5, 1.0, 0.5]);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        report,
+        mornlea_server::contracts::PhaseReport {
+            examined: 1,
+            applied: 1,
+            carried: 0,
+            rejected: 0,
+        }
+    );
+    let key = ActorKey::Hostile(HostileId::try_new(5).unwrap());
+    let record = ctx.read().actor(key).unwrap();
+    assert_eq!(record.lifecycle, ActorLifecycle::Dead);
+    assert_eq!(record.survival.health(), 0);
+    assert_eq!(
+        drop_stacks(
+            &ctx,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        ),
+        vec![stack(45, 1, 0)]
+    );
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn hurler_death_matches_go_known_answer_pair() {
+    // The hurler batch replays the frozen known answer bit-for-bit: seed `0`,
+    // time `4000`, id `21` drops two bones plus a full-durability bow, drawn
+    // once per kill and never re-rolled (`hostileDeathBatch`).
+    let mut state = authority();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment_with(&mut ctx, 0, 4000);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    stage_dead_hostile(&mut ctx, 21, 1, [0.5, 1.0, 0.5]);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(report.applied, 1);
+    assert_eq!(
+        drop_stacks(
+            &ctx,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        ),
+        vec![stack(64, 2, 0), stack(62, 1, 120)]
+    );
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Hostile(HostileId::try_new(21).unwrap()))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Dead
+    );
+}
+
+#[test]
+fn hurler_empty_batch_skips_drops_but_marks_dead() {
+    // Both hurler rolls missing stages no loot at all, and the death still
+    // completes (`dropHostileLoot` early return).
+    let mut state = authority();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment_with(&mut ctx, 42, 4000);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    stage_dead_hostile(&mut ctx, 0xdead_beef_cafe_babe, 1, [0.5, 1.0, 0.5]);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (1, 1, 0)
+    );
+    assert!(
+        drop_stacks(
+            &ctx,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Hostile(
+                HostileId::try_new(0xdead_beef_cafe_babe).unwrap()
+            ))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Dead
+    );
+}
+
+#[test]
+fn walker_ring_spills_to_neighbor_when_death_chunk_full() {
+    // A full death chunk refuses the rehearsal, so the first-fit walk spills
+    // the whole batch onto the nearest ready ring neighbor at its clamped
+    // column (`deathDropChunks` ring order).
+    let mut state = authority();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    let neighbor = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(1, 0),
+    };
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 1, 0);
+    fill_chunk(&mut ctx, home);
+    stage_dead_hostile(&mut ctx, 5, 0, [15.5, 1.0, 0.5]);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (1, 1, 0)
+    );
+    assert_eq!(drop_stacks(&ctx, home).len(), 32);
+    assert_eq!(drop_stacks(&ctx, neighbor), vec![stack(45, 1, 0)]);
+    let landed = ctx.read().drops(neighbor)[0].position.get();
+    assert_eq!(landed, [16.5, 1.5, 0.5]);
+}
+
+#[test]
+fn walker_all_chunks_full_omits_loot_but_completes_death() {
+    // No ready chunk with room omits the loot deterministically while the
+    // death still completes; the omission is not a rejection.
+    let mut state = authority();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    fill_chunk(&mut ctx, home);
+    stage_dead_hostile(&mut ctx, 5, 0, [0.5, 1.0, 0.5]);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (1, 1, 0)
+    );
+    assert_eq!(drop_stacks(&ctx, home).len(), 32);
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Hostile(HostileId::try_new(5).unwrap()))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Dead
+    );
+}
+
+#[test]
+fn lower_hostile_id_loot_lands_first() {
+    // Hostile deaths settle in hostile-ID ascending order, so the walker's
+    // flesh occupies the first physical slot ahead of the hurler pair.
+    let mut state = authority();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment_with(&mut ctx, 0, 4000);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    stage_dead_hostile(&mut ctx, 21, 1, [0.5, 1.0, 0.5]);
+    stage_dead_hostile(&mut ctx, 3, 0, [0.5, 1.0, 0.5]);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!((report.examined, report.applied), (2, 2));
+    assert_eq!(
+        drop_stacks(
+            &ctx,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        ),
+        vec![stack(45, 1, 0), stack(64, 2, 0), stack(62, 1, 120)]
+    );
+}
+
+#[test]
+fn walker_invalid_pose_marks_dead_without_loot() {
+    // An out-of-span death pose refuses the block walk, so the death completes
+    // lootless instead of saturating into a chunk.
+    let mut state = authority();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    stage_dead_hostile(&mut ctx, 5, 0, [1e20, 1.0, 0.5]);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (1, 1, 0)
+    );
+    assert!(
+        drop_stacks(
+            &ctx,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Hostile(HostileId::try_new(5).unwrap()))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Dead
+    );
+}
+
+#[test]
+fn dead_hostile_record_is_not_resettled() {
+    // A `Dead` record is terminal: the runner sees no candidate and stages
+    // nothing.
+    let mut state = authority();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    let key = ActorKey::Hostile(HostileId::try_new(5).unwrap());
+    let mut record = dead_hostile(5, 0, [0.5, 1.0, 0.5]);
+    record.lifecycle = ActorLifecycle::Dead;
+    ctx.stage(RuleEffect::Actor(record.clone())).unwrap();
+    ctx.stage(RuleEffect::Runtime(hostile_runtime(key)))
+        .unwrap();
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (0, 0, 0)
+    );
+    assert_eq!(ctx.read().actor(key).unwrap(), &record);
+    assert!(
+        drop_stacks(
+            &ctx,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn player_death_repacks_drops_resets_and_teleports_to_anchor() {
+    // One death settles repack-first, per-slot ring drops with clear-on-
+    // success, full stat reset and anchor teleport in a single settlement
+    // (`settleDeath` plus `beginReset`).
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    let key = ActorKey::Player(victim);
+    let mut record = player(victim, 1, [0.5, 1.0, 0.5]);
+    record.survival = survival(0);
+    let ActorBody::Player(body) = &mut record.body else {
+        unreachable!()
+    };
+    body.health = 0;
+    ctx.stage(RuleEffect::Actor(record)).unwrap();
+    ctx.stage(RuleEffect::Runtime(runtime(key, false))).unwrap();
+    let mut before = InventoryRecord::empty();
+    before.crafting_size = CraftingSize::Workbench;
+    before.slots[0] = stack(1, 10, 0);
+    before.slots[5] = stack(35, 3, 0);
+    before.armor[1] = stack(58, 1, 2);
+    before.crafting[0] = stack(35, 10, 0);
+    ctx.preload_inventory(key, before);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        report,
+        mornlea_server::contracts::PhaseReport {
+            examined: 1,
+            applied: 1,
+            carried: 0,
+            rejected: 0,
+        }
+    );
+    // The grid recovered into the pack before the drop walk, and every placed
+    // slot cleared: wheat from the grid merged with the pack wheat.
+    let after = ctx.read().inventory(key).unwrap();
+    assert_eq!(after.crafting_size, CraftingSize::Personal);
+    assert_eq!(after.crafting, [ItemStack::default(); 9]);
+    assert!(after.slots.iter().all(|slot| *slot == ItemStack::default()));
+    assert!(after.armor.iter().all(|slot| *slot == ItemStack::default()));
+    assert_eq!(
+        sorted_stacks(drop_stacks(
+            &ctx,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        )),
+        sorted_stacks(vec![stack(1, 10, 0), stack(35, 13, 0), stack(58, 1, 2)])
+    );
+    // Full stat reset with the bed record preserved and no events.
+    let settled = ctx.read().actor(key).unwrap();
+    assert_eq!(settled.lifecycle, ActorLifecycle::Respawning);
+    assert_eq!(settled.survival.health(), 20);
+    assert_eq!(settled.survival.hunger(), 20);
+    assert_eq!(settled.motion.position().get(), [0.5, 321.0, 0.5]);
+    assert_eq!(settled.motion.velocity().get(), [0.0; 3]);
+    assert_eq!(settled.dimension, Dimension::OVERWORLD);
+    let ActorBody::Player(save) = &settled.body else {
+        unreachable!()
+    };
+    assert_eq!(
+        (
+            save.health,
+            save.hunger,
+            save.saturation_milli,
+            save.exhaustion_milli
+        ),
+        (20, 20, 5_000, 0)
+    );
+    assert_eq!(
+        save.current,
+        PlayerLocation {
+            dimension: 0,
+            position: [0.5, 321.0, 0.5],
+        }
+    );
+    assert!(!save.respawn_present);
+    let settled_runtime = ctx.read().runtime(key).unwrap();
+    assert_eq!(
+        (
+            settled_runtime.oxygen,
+            settled_runtime.exhaustion_milli,
+            settled_runtime.saturation_milli,
+            settled_runtime.since_damage_ticks,
+            settled_runtime.drown_ticks,
+            settled_runtime.starvation_ticks,
+            settled_runtime.attack_cooldown,
+            settled_runtime.hurt_cooldown,
+        ),
+        (300, 0, 5_000, 0, 0, 0, 0, 0)
+    );
+    assert_eq!(settled_runtime.eating, None);
+    assert_eq!(settled_runtime.bow, None);
+    assert_eq!(settled_runtime.peak_y, 321.0);
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn player_repack_impossible_preserves_everything_for_retry() {
+    // A pack with no room anywhere refuses the whole recovery: nothing
+    // settles for that actor, the gate still matches next tick.
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    let key = ActorKey::Player(victim);
+    let mut record = player(victim, 1, [0.5, 1.0, 0.5]);
+    record.survival = survival(0);
+    let ActorBody::Player(body) = &mut record.body else {
+        unreachable!()
+    };
+    body.health = 0;
+    ctx.stage(RuleEffect::Actor(record)).unwrap();
+    ctx.stage(RuleEffect::Runtime(runtime(key, false))).unwrap();
+    let mut before = InventoryRecord::empty();
+    before.slots = [stack(1, 64, 0); 36];
+    before.crafting_size = CraftingSize::Workbench;
+    before.crafting[0] = stack(1, 1, 0);
+    ctx.preload_inventory(key, before);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (1, 0, 1)
+    );
+    assert_eq!(ctx.read().inventory(key).unwrap(), &before);
+    let settled = ctx.read().actor(key).unwrap();
+    assert_eq!(settled.lifecycle, ActorLifecycle::Active);
+    assert_eq!(settled.survival.health(), 0);
+    assert!(
+        drop_stacks(
+            &ctx,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        )
+        .is_empty()
+    );
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn player_unplaceable_slots_stay_for_respawn() {
+    // Slots no ready chunk can take stay with the player: the death still
+    // completes and nothing is destroyed.
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    fill_chunk(&mut ctx, home);
+    let key = ActorKey::Player(victim);
+    let mut record = player(victim, 1, [0.5, 1.0, 0.5]);
+    record.survival = survival(0);
+    let ActorBody::Player(body) = &mut record.body else {
+        unreachable!()
+    };
+    body.health = 0;
+    ctx.stage(RuleEffect::Actor(record)).unwrap();
+    ctx.stage(RuleEffect::Runtime(runtime(key, false))).unwrap();
+    let mut before = InventoryRecord::empty();
+    before.slots = [stack(1, 64, 0); 36];
+    before.crafting_size = CraftingSize::Workbench;
+    ctx.preload_inventory(key, before);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (1, 1, 0)
+    );
+    let after = ctx.read().inventory(key).unwrap();
+    assert_eq!(after.slots, before.slots);
+    assert_eq!(after.armor, before.armor);
+    assert_eq!(after.crafting_size, CraftingSize::Personal);
+    assert_eq!(drop_stacks(&ctx, home).len(), 32);
+    let settled = ctx.read().actor(key).unwrap();
+    assert_eq!(settled.lifecycle, ActorLifecycle::Respawning);
+    assert_eq!(settled.survival.health(), 20);
+}
+
+#[test]
+fn player_teleport_prefers_live_respawn_position() {
+    // A live bed respawn wins over the world anchor: the reset lands exactly
+    // on the recorded position and dimension.
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    let key = ActorKey::Player(victim);
+    let mut record = player(victim, 1, [0.5, 1.0, 0.5]);
+    record.survival = survival(0);
+    let ActorBody::Player(body) = &mut record.body else {
+        unreachable!()
+    };
+    body.health = 0;
+    body.respawn_present = true;
+    body.respawn_position = [100.5, 70.0, -200.5];
+    body.respawn_dimension = 0;
+    ctx.stage(RuleEffect::Actor(record)).unwrap();
+    ctx.stage(RuleEffect::Runtime(runtime(key, false))).unwrap();
+    ctx.preload_inventory(key, InventoryRecord::empty());
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (1, 1, 0)
+    );
+    let settled = ctx.read().actor(key).unwrap();
+    assert_eq!(settled.lifecycle, ActorLifecycle::Respawning);
+    assert_eq!(settled.motion.position().get(), [100.5, 70.0, -200.5]);
+    assert_eq!(settled.motion.velocity().get(), [0.0; 3]);
+    assert_eq!(settled.dimension, Dimension::OVERWORLD);
+    let ActorBody::Player(save) = &settled.body else {
+        unreachable!()
+    };
+    assert!(save.respawn_present);
+    assert_eq!(save.respawn_position, [100.5, 70.0, -200.5]);
+}
+
+#[test]
+fn player_double_settle_noop_across_survival_provider() {
+    // The runner flips the lifecycle exactly once: the survival provider then
+    // refuses the already-reset record instead of settling again.
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    let key = ActorKey::Player(victim);
+    let mut record = player(victim, 1, [0.5, 1.0, 0.5]);
+    record.survival = survival(0);
+    let ActorBody::Player(body) = &mut record.body else {
+        unreachable!()
+    };
+    body.health = 0;
+    ctx.stage(RuleEffect::Actor(record)).unwrap();
+    ctx.stage(RuleEffect::Runtime(runtime(key, false))).unwrap();
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = stack(1, 5, 0);
+    ctx.preload_inventory(key, inventory);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!((report.examined, report.applied), (1, 1));
+    let drops = drop_stacks(
+        &ctx,
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        },
+    );
+    assert_eq!(drops, vec![stack(1, 5, 0)]);
+    let Err(error) = survival_provider::run(
+        &mut ctx,
+        RuleCall {
+            phase: RulePhase::PlayerPostPhysics,
+            actor: Some(key),
+            command: None,
+            internal: None,
+        },
+    ) else {
+        panic!("the survival provider must refuse the reset record");
+    };
+    assert!(matches!(
+        error,
+        ServerError::InvalidInput { field: "actor" }
+    ));
+    let settled = ctx.read().actor(key).unwrap();
+    assert_eq!(settled.lifecycle, ActorLifecycle::Respawning);
+    assert_eq!(settled.survival.health(), 20);
+    assert_eq!(
+        drop_stacks(
+            &ctx,
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            }
+        ),
+        drops
+    );
+}
+
+#[test]
+fn respawning_player_is_not_a_death_candidate() {
+    // An already-reset record is skipped silently: no candidate, no staging.
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    let key = ActorKey::Player(victim);
+    let mut record = player(victim, 1, [0.5, 1.0, 0.5]);
+    record.lifecycle = ActorLifecycle::Respawning;
+    record.survival = survival(0);
+    let ActorBody::Player(body) = &mut record.body else {
+        unreachable!()
+    };
+    body.health = 0;
+    ctx.stage(RuleEffect::Actor(record.clone())).unwrap();
+    ctx.stage(RuleEffect::Runtime(runtime(key, false))).unwrap();
+    ctx.preload_inventory(key, InventoryRecord::empty());
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (0, 0, 0)
+    );
+    assert_eq!(ctx.read().actor(key).unwrap(), &record);
 }

@@ -49,27 +49,26 @@
 //! Deliberate boundaries. Graze settlement commits through the accepted
 //! system-transaction entry under [`SystemRule::PassiveGraze`]; the overlay's
 //! observation-backed reads stand in for the whole-chunk readiness gate the
-//! serial reducer owns together with chunk acquisition. Death drops belong to
-//! the drop node: this provider terminates the lifecycle exactly once and
-//! stages no loot, so the frozen no-late-resurrection discipline holds without
-//! touching the drop lane. Damage entry, flee triggering and melee belong to
-//! the combat nodes; this provider consumes the flee lane the aux carries.
+//! serial reducer owns together with chunk acquisition. Death settlement owns
+//! the fixed beef loot beside the terminal record; fall-out removal stays
+//! lootless. Damage entry, flee triggering and melee belong to the combat
+//! nodes; this provider consumes the flee lane the aux carries.
 
 use mornlea_domain::{
-    BlockPos, Dimension, FiniteVec3, LookAngles, MotionState, MotionStateParts, SurvivalState,
-    SurvivalStateParts,
+    BlockPos, ChunkPos, Dimension, FiniteVec3, LookAngles, MotionState, MotionStateParts,
+    SurvivalState, SurvivalStateParts,
 };
 use mornlea_engine::native::contracts::collision::{Aabb, CollisionCell, CollisionGrid};
 use mornlea_engine::native::contracts::physics::{
     PhysicsControls, PhysicsOp, PhysicsRequest, PhysicsState, PhysicsTuning, SweepBounds,
 };
 use mornlea_engine::native::physics::NativePhysics;
-use mornlea_storage::PassiveMob;
+use mornlea_storage::{ItemStack, PassiveMob};
 
 use crate::core::contracts::{
-    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BlockWrite,
-    EnvironmentState, PhaseReport, RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
-    SystemRule,
+    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BlockWrite, ChunkKey,
+    DropBatch, DropSource, EnvironmentState, PhaseReport, RuleCall, RuleEffect, RulePhase,
+    ServerError, SessionKey, SystemRule,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
 
@@ -117,6 +116,9 @@ const SPAWN_MIN_RADIUS: i64 = 24;
 const SPAWN_REHASH_BUDGET: u64 = 64;
 /// Full health (`core.MaxHealth`, `packages/shared/core/health.go`).
 const MAX_HEALTH: u8 = 20;
+/// Raw beef (`core.ItemRawBeef`, `packages/shared/core/item.go`): the fixed
+/// passive death batch (`dropPassiveLoot`, `passive.go`).
+const ITEM_RAW_BEEF: u16 = 53;
 
 // -- World constants mirrored from the frozen Go tables.
 
@@ -1158,9 +1160,12 @@ fn advance_graze(
 // Death settlement (`settlePassiveDeaths`, `passive.go`)
 // ---------------------------------------------------------------------
 
-/// Terminates every resident whose health reached zero. The lifecycle is
+/// Terminates every resident whose health reached zero alongside its fixed
+/// loot (`settlePassiveDeaths` with `dropPassiveLoot`). The lifecycle is
 /// terminal: a dead record is excluded from every later pass, so a removed
-/// cow can never resurrect late. Drop placement belongs to the drop node.
+/// cow can never resurrect late. The loot stages in the same `Compound` as
+/// the `Dead` record; an all-full ring or an unlocatable death stays lootless
+/// with the death still completing, exactly like the movement fall-out path.
 fn settle_deaths(ctx: &mut TickContext<'_>, report: &mut PhaseReport) -> Result<(), ServerError> {
     for key in resident_keys(ctx) {
         let Some(record) = ctx.read().actor(key).cloned() else {
@@ -1169,14 +1174,144 @@ fn settle_deaths(ctx: &mut TickContext<'_>, report: &mut PhaseReport) -> Result<
         if record.survival.health() != 0 {
             continue;
         }
-        stage_dead(ctx, &record)?;
+        settle_dead_with_loot(ctx, &record)?;
         report.applied += 1;
     }
     Ok(())
 }
 
+/// Stages one terminal record with its fixed beef batch. The first ready ring
+/// chunk whose rehearsal succeeds takes the batch beside the `Dead` staging;
+/// lootless deaths reuse the plain termination below, so fall-out
+/// (`advancePassiveMovement` removal threshold) and death settlement share one
+/// terminal shape.
+fn settle_dead_with_loot(
+    ctx: &mut TickContext<'_>,
+    record: &ActorRecord,
+) -> Result<(), ServerError> {
+    if let Some(batch) = rehearse_beef(ctx, record) {
+        let dead = dead_record(record)?;
+        ctx.stage(RuleEffect::Compound(vec![
+            RuleEffect::Actor(dead),
+            RuleEffect::Drops(batch),
+        ]))
+        .map_err(|_| ServerError::Internal {
+            invariant: "passive death staging",
+        })?;
+        return Ok(());
+    }
+    stage_dead(ctx, record)
+}
+
+/// First-fit rehearsal of the fixed beef batch over the death-dimension ready
+/// chunks in ring order (`dropPassiveLoot` over `deathDropChunks`): the death
+/// chunk first, then outward rings. `None` skips the rehearsal (invalid pose)
+/// or omits the loot (below-floor column, all-full ring) with the death still
+/// completing.
+fn rehearse_beef(ctx: &TickContext<'_>, record: &ActorRecord) -> Option<DropBatch> {
+    let view = ctx.read();
+    let delay = view
+        .environment()
+        .map(|environment| environment.tunables.drop_pickup_delay_ticks())?;
+    let tick = view.tick();
+    let block = death_block(record.motion.position().get())?;
+    let center = ChunkPos::new(block.x() >> 4, block.z() >> 4);
+    let mut candidates: Vec<ChunkKey> = view
+        .ready_chunk_keys()
+        .into_iter()
+        .filter(|key| key.dimension == record.dimension)
+        .collect();
+    candidates.sort_by_key(|key| ring_order_key(center, key.pos));
+    for key in candidates {
+        let origin = death_origin(block, key.pos)?;
+        let Ok(batch) = DropBatch::try_new(
+            DropSource::Death {
+                actor: record.key,
+                tick,
+            },
+            record.dimension,
+            origin,
+            vec![ItemStack {
+                item: ITEM_RAW_BEEF,
+                count: 1,
+                durability: 0,
+            }],
+            delay,
+        ) else {
+            continue;
+        };
+        if view.check_drop_batch(&batch).is_ok() {
+            return Some(batch);
+        }
+    }
+    None
+}
+
+/// Foot block of a death pose (`blockPosOf`,
+/// `packages/server/sim/entity/hostile.go`): each component floors in float64
+/// before narrowing, so an out-of-span pose refuses instead of saturating
+/// silently through the cast. Mirrors the hostile death rule one dimension at
+/// a time.
+fn death_block(position: [f32; 3]) -> Option<BlockPos> {
+    let mut block = [0i32; 3];
+    for (index, value) in position.iter().enumerate() {
+        let floored = f64::from(*value).floor();
+        if !floored.is_finite() || floored < f64::from(i32::MIN) || floored > f64::from(i32::MAX) {
+            return None;
+        }
+        block[index] = floored as i32;
+    }
+    Some(BlockPos::new(block[0], block[1], block[2]))
+}
+
+/// Sort key placing nearer rings first with (`x`, `z`) breaking ties inside
+/// one ring (`deathDropChunks` over `sortChunkKeys`,
+/// `packages/server/sim/entity/death.go`). Mirrors the hostile death rule.
+fn ring_order_key(center: ChunkPos, pos: ChunkPos) -> (i64, i32, i32) {
+    let dx = i64::from(pos.x()) - i64::from(center.x());
+    let dz = i64::from(pos.z()) - i64::from(center.z());
+    (dx.abs().max(dz.abs()), pos.x(), pos.z())
+}
+
+/// Nearest column of a death block inside one candidate chunk
+/// (`clampBlockToChunk`, `packages/server/sim/entity/death.go`): overflow
+/// lands on the side facing the death point. Mirrors the hostile death rule.
+fn clamp_block_to_chunk(block: BlockPos, chunk: ChunkPos) -> BlockPos {
+    let min_x = chunk.x().wrapping_shl(4);
+    let min_z = chunk.z().wrapping_shl(4);
+    BlockPos::new(
+        block.x().clamp(min_x, min_x + 15),
+        block.y(),
+        block.z().clamp(min_z, min_z + 15),
+    )
+}
+
+/// Rehearsal origin steering one placement at the clamped column: the block
+/// center floors back onto the intended chunk cell through the shared drop
+/// location rule. Mirrors the hostile death rule.
+fn death_origin(block: BlockPos, chunk: ChunkPos) -> Option<FiniteVec3> {
+    let clamped = clamp_block_to_chunk(block, chunk);
+    FiniteVec3::try_new([
+        clamped.x() as f32 + 0.5,
+        clamped.y() as f32 + 0.5,
+        clamped.z() as f32 + 0.5,
+    ])
+    .ok()
+}
+
 /// Stages the terminal record for one resident.
 fn stage_dead(ctx: &mut TickContext<'_>, record: &ActorRecord) -> Result<(), ServerError> {
+    let dead = dead_record(record)?;
+    ctx.stage(RuleEffect::Actor(dead))
+        .map_err(|_| ServerError::Internal {
+            invariant: "passive lifecycle staging",
+        })?;
+    Ok(())
+}
+
+/// Builds the terminal record for one resident without staging it, so the
+/// loot path can share the exact termination the lootless paths stage.
+fn dead_record(record: &ActorRecord) -> Result<ActorRecord, ServerError> {
     let mut body = match &record.body {
         ActorBody::Passive(body) => body.clone(),
         _ => {
@@ -1186,7 +1321,7 @@ fn stage_dead(ctx: &mut TickContext<'_>, record: &ActorRecord) -> Result<(), Ser
         }
     };
     body.health = 0;
-    let dead = ActorRecord::try_new(
+    ActorRecord::try_new(
         record.key,
         ActorLifecycle::Dead,
         record.dimension,
@@ -1197,12 +1332,7 @@ fn stage_dead(ctx: &mut TickContext<'_>, record: &ActorRecord) -> Result<(), Ser
     )
     .map_err(|_| ServerError::Internal {
         invariant: "passive lifecycle staging",
-    })?;
-    ctx.stage(RuleEffect::Actor(dead))
-        .map_err(|_| ServerError::Internal {
-            invariant: "passive lifecycle staging",
-        })?;
-    Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------
