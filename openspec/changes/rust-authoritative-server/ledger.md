@@ -954,3 +954,15 @@ pass; a separate server Door/Bed filter had no matching tests and is not counted
 as evidence. Main integrated pinned server367 tests (2 unit,16 parity,79 persistence,113
 contract,157 replay), clippy/fmt, strict OpenSpec and diff checks pass. No
 gameplay, schema or protocol expansion. Architecture skill:no change.
+
+
+Environmental outputs accepted from bc727b00 plus d09d3d52. Independent Sol
+review approved per-cell fluid settlement, exact plant yields, retry due order
+and trample's ground-only exceptional failure. Its coverage suggestion became
+a real airborne-to-grounded missing-environment test: removing the early guard
+produced RED; restoring it preserved the landing until environment arrived,
+then exactly one settlement occurred. Focused crops4/fluid7, worker make rust
+and matching Go oracle cases pass. Main pinned integrated server373 tests
+(2 unit,16 parity,79 persistence,113 contract,163 replay), clippy/fmt, strict
+OpenSpec and diff checks pass. Actual reducer scheduling remains unaccepted.
+Architecture skill:no change.

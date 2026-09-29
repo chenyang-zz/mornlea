@@ -206,11 +206,13 @@ consume its cancellation and error contracts before joining the real backend.
   pre-step snapshot holds.
 - `src/rules/fluids.rs` owns boundary rescans before updates over the F1
   `NativeFluidEval` kernel: snapshot the 7-neighborhood before writing,
-  strongest-merge with sorted writes, one `try_system` commit per batch,
+  strongest-merge with sorted writes, then one transaction per target,
   requeue at now+5 under the frozen due order, 512 per sorted dimension,
   and the section-aware 65536/4096/4095 rescan ceilings. The provider
   carries work in a caller-owned `FluidSchedule`; the serial reducer owns
-  tick wiring.
+  tick wiring. Plant replacement atomically publishes source-compatible
+  outputs; a drop-capacity refusal leaves that plant and retries its
+  neighborhood without discarding independent successful water writes.
 - `src/rules/eating.rs` owns atomic eating on the `Eating` phase: hold 32
   with the start counting 1 and `(slot, item)` continuity, interrupt
   precedence structural over settlement, and the one-compound settlement
