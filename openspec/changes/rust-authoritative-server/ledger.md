@@ -1280,3 +1280,17 @@ bounded escalation; restore remap, subscription-dirty, and passive ID-set
 projection stay owner-gated for session lifecycle and 3.1. Node 2.7c owns
 the same-tick Combat-to-death integration proofs above this provider.
 Architecture skill: no change.
+
+
+Death outputs and reset accepted from f5853fa3 (pure helpers) plus f2ef4cc9
+(settlement driver), with main-owned read-only ports 9be40ef8 and fmt fix
+e58c70f4. The worker correctly stopped twice with evidence (no ready-chunk
+enumeration; no world-spawn accessor); main landed both as additive
+read-only view accessors rather than redesigning storage, then re-dispatched
+against the unblocked packet. Ring-order first-fit drops, deterministic loot
+without re-roll, lossless repack failure with automatic retry, anchor
+teleport with bed preference, and cross-provider one-time gates all hold.
+REDs named before bodies; GREEN hostile_outcomes54/passives5/drops23/
+survival9, full server539, fmt, packet clippy, and Go Hostile/Death/Drop/
+Pickup oracles pass. Independent review approved with no findings.
+Architecture skill: no change.
