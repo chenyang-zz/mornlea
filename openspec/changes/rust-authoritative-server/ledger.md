@@ -871,3 +871,16 @@ finding. Pinned full server327 tests (1 unit,16 parity,79 persistence,102
 contract,129 replay), clippy/fmt and Go Sampler crop/entity KAT pass. Consumer
 examples are contract-only evidence, not environmental/mining acceptance.
 Architecture skill: no change. Main retains registry/integration ownership.
+
+
+Environmental/mining packets consume accepted sampler f087d018 and atomic
+world output9c3ab40e. Main source reconciliation found two additional mining
+omissions: single-cell door/bed removal and crop predicate37..61 accidentally
+classifying workbench45 as crop. Plan14 includes exact structural anchors,
+harvestability and source table correction, with companion credit/wear completed
+in the same owned resolver. Plan13 preserves Go's ground-only trample failure
+while making second crop+drop atomic, and per-cell fluid capacity retry. They
+own disjoint files and receive isolated Sol implementers because each requires
+its own multi-file source/replay trace; shared sampler is already tested and
+accepted, and core/state remains reserved to the support worker. Main owns
+future serial adapters and all integration/rollback. Architecture skill:no change.
