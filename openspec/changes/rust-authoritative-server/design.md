@@ -145,3 +145,10 @@ A container write is an explicit durable touch even when an inventory-region
 transfer leaves its slots equal, matching the Go revision barrier. Reach
 invalidates views during publication after transfers; reducer scheduling and
 workbench anchor ownership remain explicit follow-ups.
+
+The [combat input contract](plans/17-combat-input-contract.md) freezes typed
+hostile melee choices before independent action/settlement implementations.
+Source audit requires pre-player-physics action facts and post-motion combat
+validation, hurler-specific ranged strategy, and all-Ready death spill order.
+Earlier provider tests do not accept these missing integrations. Workbench
+anchor lifetime and container mutual exclusion also remain an explicit node.

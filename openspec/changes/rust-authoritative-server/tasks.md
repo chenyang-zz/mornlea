@@ -38,12 +38,17 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6a Implement inventory authority and item conservation.
 - [x] 2.6b Implement containers and generation/view validation.
 - [x] 2.6c Implement atomic workbench crafting.
+- [ ] 2.6c1 Complete workbench anchor lifecycle and container-view mutual exclusion.
 - [x] 2.6d Implement tick-driven furnaces.
 - [x] 2.6e0 Add bounded tick-local mining suppression and action receipt preflight.
 - [x] 2.6e Implement farming tools, bone meal and atomic buckets.
-- [x] 2.7a Implement hostile lifecycle and targeting.
+- [x] 2.7a Implement hostile lifecycle and motion provider.
+- [ ] 2.7a1 Complete frozen pre-physics hostile targeting, melee and ranged action production.
 - [x] 2.7b0 Complete projectile read, compare-and-replace staging and replay initialization contracts.
 - [x] 2.7b Implement projectiles and hit validation.
+- [ ] 2.7c0 Land frozen hostile melee input contract ([packet](plans/17-combat-input-contract.md)).
+- [ ] 2.7c1 Implement bounded melee snapshot and settlement.
+- [ ] 2.7c2 Complete player, hostile and passive death outputs and reset.
 - [ ] 2.7c Implement one-time hostile death and combat outcomes.
 - [x] 2.8a Implement passive lifecycle.
 - [x] 2.8b0 Complete bounded drop staging, identity and snapshot contracts.

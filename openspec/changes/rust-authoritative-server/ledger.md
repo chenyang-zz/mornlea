@@ -966,3 +966,14 @@ and matching Go oracle cases pass. Main pinned integrated server373 tests
 (2 unit,16 parity,79 persistence,113 contract,163 replay), clippy/fmt, strict
 OpenSpec and diff checks pass. Actual reducer scheduling remains unaccepted.
 Architecture skill:no change.
+
+
+An isolated read-only Sol audit verified hostile attack production separately
+from already-audited combat settlement. Main records the timing/target/strategy
+gaps in plan17 and splits the incomplete outcomes milestone into actual nodes.
+No source action is inferred from persistent chase UUID. Before two consumers,
+main lands a bounded immutable tick/attacker/session contract with callable
+examples. Main also corrects plan04's erroneous radius2 death cutoff using
+Go death.go112-130 and records world_time loot hashing. Existing lifecycle
+providers and compile-only contracts remain distinct from full integration.
+Architecture skill:no change.
