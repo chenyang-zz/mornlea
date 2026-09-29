@@ -1194,12 +1194,32 @@ pub struct AuthorityReadView<'a> {
     drops: &'a BTreeMap<ChunkKey, DropState>,
     projectiles: &'a [ProjectileRecord],
     damage_intents: &'a [DamageIntent],
+    metadata: &'a mornlea_storage::Metadata,
 }
 
 impl<'a> AuthorityReadView<'a> {
     /// Sparse fixture cells alone do not establish a Ready chunk.
     pub fn ready_chunk(&self, key: ChunkKey) -> bool {
         self.ready.contains_key(&key)
+    }
+    /// Ready-chunk keys in deterministic key order for ring-ordered scans
+    /// such as death drops. The set is bounded by chunk-result caps, so
+    /// collecting it never scans the world.
+    pub fn ready_chunk_keys(&self) -> Vec<ChunkKey> {
+        self.ready.keys().copied().collect()
+    }
+    /// World spawn anchor for death reset teleport when the actor carries no
+    /// bed respawn. `None` only on corrupt metadata, which providers refuse.
+    pub fn spawn_anchor(&self) -> Option<(Dimension, mornlea_domain::ChunkPos)> {
+        let dimension =
+            Dimension::new(u8::try_from(self.metadata.spawn_dimension).ok()?).ok()?;
+        Some((
+            dimension,
+            mornlea_domain::ChunkPos::new(
+                self.metadata.spawn_anchor.x,
+                self.metadata.spawn_anchor.z,
+            ),
+        ))
     }
     /// The source height map counts every non-air cell, including transparent blocks.
     pub fn highest_non_air(&self, dimension: Dimension, x: i32, z: i32) -> Option<i32> {
@@ -1639,6 +1659,7 @@ impl<'a> TickContext<'a> {
             drops: &self.drops,
             projectiles: &self.projectiles,
             damage_intents: &self.damage_intents,
+            metadata: &self.authority.metadata,
         }
     }
 
