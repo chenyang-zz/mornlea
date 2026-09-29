@@ -3042,3 +3042,480 @@ fn respawning_player_is_not_a_death_candidate() {
     );
     assert_eq!(ctx.read().actor(key).unwrap(), &record);
 }
+
+// ---------------------------------------------------------------------
+// Combat-to-death integration: `Combat` then `HostilePlayerDeaths` in one
+// tick (`settleHostileDeaths`, plus `settleDeath` with `beginReset` for the
+// mutual case).
+// ---------------------------------------------------------------------
+
+#[test]
+fn lethal_player_hit_settles_hostile_death_once() {
+    // The death phase stages nothing before combat kills: the negative pins
+    // the order, then one killing intent settles loot plus `Dead` exactly
+    // once across a repeated death phase.
+    let mut state = authority();
+    let attacker = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    stage_player(&mut ctx, attacker, 1, [0.5, 1.0, 0.5], true);
+    let victim = ActorKey::Hostile(HostileId::try_new(7).unwrap());
+    let mut doomed = hostile(7, [0.5, 1.0, -1.0]);
+    doomed.survival = survival(2);
+    let ActorBody::Hostile(body) = &mut doomed.body else {
+        unreachable!()
+    };
+    body.health = 2;
+    ctx.stage(RuleEffect::Actor(doomed)).unwrap();
+    ctx.stage(RuleEffect::Runtime(hostile_runtime(victim)))
+        .unwrap();
+    air_ray(&mut ctx, None);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, -1),
+    };
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, -1);
+
+    // Death before combat stages nothing: nobody sits at zero health yet.
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (0, 0, 0)
+    );
+    let record = ctx.read().actor(victim).unwrap();
+    assert_eq!(record.survival.health(), 2);
+    assert_eq!(record.lifecycle, ActorLifecycle::Active);
+    assert!(drop_stacks(&ctx, home).is_empty());
+    assert!(ctx.events().is_empty());
+
+    // One bare-fist hit (`2` damage) lands the killing blow without settling
+    // the death itself.
+    let batch = HostileMeleeBatch::try_new(ctx.read().tick(), &[]).unwrap();
+    let outcome = provider::advance(&mut ctx, &batch).unwrap();
+    assert_eq!(outcome.report.applied, 1);
+    assert!(outcome.damaged_players.is_empty());
+    let record = ctx.read().actor(victim).unwrap();
+    assert_eq!(record.survival.health(), 0);
+    assert_eq!(record.lifecycle, ActorLifecycle::Active);
+    assert_eq!(ctx.events().len(), 1);
+
+    // The same-tick death phase settles loot plus `Dead` without new events.
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (1, 1, 0)
+    );
+    let record = ctx.read().actor(victim).unwrap();
+    assert_eq!(record.lifecycle, ActorLifecycle::Dead);
+    assert_eq!(record.survival.health(), 0);
+    assert_eq!(drop_stacks(&ctx, home), vec![stack(45, 1, 0)]);
+    assert_eq!(ctx.events().len(), 1);
+
+    // A repeated death phase settles nothing further: no second loot and no
+    // duplicate removal.
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        ctx.read().actor(victim).unwrap().lifecycle,
+        ActorLifecycle::Dead
+    );
+    assert_eq!(drop_stacks(&ctx, home), vec![stack(45, 1, 0)]);
+    assert_eq!(ctx.events().len(), 1);
+}
+
+#[test]
+fn mutual_lethal_hostile_and_player_both_settle() {
+    // Simultaneous hostile-plus-player killing intents settle both deaths in
+    // one death phase, each with its own loot staged.
+    let mut state = authority();
+    let player_key = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    stage_player(&mut ctx, player_key, 1, [0.5, 1.0, 0.5], true);
+    let hostile_id = HostileId::try_new(7).unwrap();
+    let hostile_key = ActorKey::Hostile(hostile_id);
+    let mut doomed = hostile(7, [0.5, 1.0, -1.0]);
+    doomed.survival = survival(2);
+    let ActorBody::Hostile(body) = &mut doomed.body else {
+        unreachable!()
+    };
+    body.health = 2;
+    ctx.stage(RuleEffect::Actor(doomed)).unwrap();
+    ctx.stage(RuleEffect::Runtime(hostile_runtime(hostile_key)))
+        .unwrap();
+    // Lower the attacker to exactly one hostile hit (`3` damage).
+    let mut frail = ctx
+        .read()
+        .actor(ActorKey::Player(player_key))
+        .unwrap()
+        .clone();
+    frail.survival = survival(3);
+    let ActorBody::Player(body) = &mut frail.body else {
+        unreachable!()
+    };
+    body.health = 3;
+    ctx.stage(RuleEffect::Actor(frail)).unwrap();
+    air_ray(&mut ctx, None);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, -1);
+    let player_chunk = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    let hostile_chunk = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, -1),
+    };
+
+    // Death before combat stages nothing for either side.
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Player(player_key))
+            .unwrap()
+            .survival
+            .health(),
+        3
+    );
+    assert_eq!(ctx.read().actor(hostile_key).unwrap().survival.health(), 2);
+    assert!(ctx.events().is_empty());
+
+    // Both intents land: the hostile hit kills the player while the bare-fist
+    // reply kills the hostile.
+    let batch = HostileMeleeBatch::try_new(
+        ctx.read().tick(),
+        &[HostileMeleeAttack::new(hostile_id, player_key)],
+    )
+    .unwrap();
+    let outcome = provider::advance(&mut ctx, &batch).unwrap();
+    assert_eq!(outcome.report.applied, 2);
+    assert_eq!(outcome.damaged_players, vec![player_key]);
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Player(player_key))
+            .unwrap()
+            .survival
+            .health(),
+        0
+    );
+    assert_eq!(ctx.read().actor(hostile_key).unwrap().survival.health(), 0);
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Player(player_key))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Active
+    );
+    assert_eq!(
+        ctx.read().actor(hostile_key).unwrap().lifecycle,
+        ActorLifecycle::Active
+    );
+    assert_eq!(ctx.events().len(), 1);
+
+    // One death phase settles both: `Dead` plus flesh for the hostile,
+    // `Respawning` with an empty drop chunk for the looted-nothing player.
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (2, 2, 0)
+    );
+    assert_eq!(
+        ctx.read().actor(hostile_key).unwrap().lifecycle,
+        ActorLifecycle::Dead
+    );
+    let settled = ctx.read().actor(ActorKey::Player(player_key)).unwrap();
+    assert_eq!(settled.lifecycle, ActorLifecycle::Respawning);
+    assert_eq!(settled.survival.health(), 20);
+    assert_eq!(drop_stacks(&ctx, hostile_chunk), vec![stack(45, 1, 0)]);
+    assert!(drop_stacks(&ctx, player_chunk).is_empty());
+    // No death or despawn events are fabricated: the only event stays the
+    // attacker-only `CombatHit`.
+    assert_eq!(ctx.events().len(), 1);
+    assert_eq!(
+        ctx.events()[0].recipient(),
+        EventRecipient::Session(player_key.get())
+    );
+    assert!(matches!(ctx.events()[0].event(), Event::CombatHit(_)));
+}
+
+#[test]
+fn stale_batches_refuse_without_effects() {
+    // A batch minted for another tick refuses before any cooldown, loot,
+    // health or event edit.
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    let attacker = HostileId::try_new(7).unwrap();
+    ctx.stage(RuleEffect::Actor(hostile(7, [0.5, 1.0, 0.5])))
+        .unwrap();
+    ctx.stage(RuleEffect::Runtime(hostile_runtime(ActorKey::Hostile(
+        attacker,
+    ))))
+    .unwrap();
+    stage_player(&mut ctx, victim, 1, [1.5, 1.0, 0.5], false);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, 0);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    let batch =
+        HostileMeleeBatch::try_new(0, &[HostileMeleeAttack::new(attacker, victim)]).unwrap();
+    let Err(error) = provider::advance(&mut ctx, &batch) else {
+        panic!("a stale batch tick must refuse");
+    };
+    assert!(matches!(
+        error,
+        ServerError::InvalidInput {
+            field: "combat_tick"
+        }
+    ));
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Player(victim))
+            .unwrap()
+            .survival
+            .health(),
+        20
+    );
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Hostile(attacker))
+            .unwrap()
+            .survival
+            .health(),
+        20
+    );
+    assert!(drop_stacks(&ctx, home).is_empty());
+    assert!(ctx.events().is_empty());
+
+    // A batch naming a removed (`Dead`) actor settles nothing: the kill below
+    // stages loot plus `Dead`, and the late batch leaves loot, health and
+    // events exactly as the settlement left them.
+    let mut state = authority();
+    let hunter = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    stage_player(&mut ctx, hunter, 1, [0.5, 1.0, 0.5], true);
+    let removed = ActorKey::Hostile(HostileId::try_new(7).unwrap());
+    let mut doomed = hostile(7, [0.5, 1.0, -1.0]);
+    doomed.survival = survival(2);
+    let ActorBody::Hostile(body) = &mut doomed.body else {
+        unreachable!()
+    };
+    body.health = 2;
+    ctx.stage(RuleEffect::Actor(doomed)).unwrap();
+    ctx.stage(RuleEffect::Runtime(hostile_runtime(removed)))
+        .unwrap();
+    air_ray(&mut ctx, None);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, -1);
+    let grave = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, -1),
+    };
+    let batch = HostileMeleeBatch::try_new(ctx.read().tick(), &[]).unwrap();
+    let outcome = provider::advance(&mut ctx, &batch).unwrap();
+    assert_eq!(outcome.report.applied, 1);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!((report.examined, report.applied), (1, 1));
+    let late = HostileMeleeBatch::try_new(
+        ctx.read().tick(),
+        &[HostileMeleeAttack::new(
+            HostileId::try_new(7).unwrap(),
+            hunter,
+        )],
+    )
+    .unwrap();
+    let outcome = provider::advance(&mut ctx, &late).unwrap();
+    assert_eq!(outcome.report.applied, 0);
+    assert!(outcome.damaged_players.is_empty());
+    assert_eq!(
+        ctx.read().actor(removed).unwrap().lifecycle,
+        ActorLifecycle::Dead
+    );
+    assert_eq!(ctx.read().actor(removed).unwrap().survival.health(), 0);
+    assert_eq!(
+        ctx.read()
+            .actor(ActorKey::Player(hunter))
+            .unwrap()
+            .survival
+            .health(),
+        20
+    );
+    assert_eq!(drop_stacks(&ctx, grave), vec![stack(45, 1, 0)]);
+    assert_eq!(ctx.events().len(), 1);
+
+    // A reordered identity refuses: swapping the hostile mob id after the
+    // freeze rejects the hit with no damage, loot or event.
+    let mut state = authority();
+    let striker = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    stage_player(&mut ctx, striker, 1, [0.5, 1.0, 0.5], true);
+    let target = ActorKey::Hostile(HostileId::try_new(7).unwrap());
+    ctx.stage(RuleEffect::Actor(hostile(7, [0.5, 1.0, -1.0])))
+        .unwrap();
+    ctx.stage(RuleEffect::Runtime(hostile_runtime(target)))
+        .unwrap();
+    air_ray(&mut ctx, None);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, -1);
+    let field = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, -1),
+    };
+    let batch = HostileMeleeBatch::try_new(ctx.read().tick(), &[]).unwrap();
+    let frame = provider::freeze(&ctx, &batch).unwrap();
+    let mut renamed = ctx.read().actor(target).unwrap().clone();
+    let ActorBody::Hostile(body) = &mut renamed.body else {
+        unreachable!()
+    };
+    body.id = 8;
+    ctx.stage(RuleEffect::Actor(renamed)).unwrap();
+    let outcome = provider::settle_frame(&mut ctx, frame).unwrap();
+    assert_eq!(outcome.report.applied, 0);
+    assert_eq!(outcome.report.rejected, 1);
+    assert_eq!(ctx.read().actor(target).unwrap().survival.health(), 20);
+    assert!(drop_stacks(&ctx, field).is_empty());
+    assert!(ctx.events().is_empty());
+}
+
+#[test]
+fn death_phase_follows_combat_phase_with_passives_untouched() {
+    // The death phase visibly follows the combat phase in-fixture: kills land
+    // only after combat staged them, and passive advancement is untouched.
+    let mut state = authority();
+    let attacker = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    stage_player(&mut ctx, attacker, 1, [0.5, 1.0, 0.5], true);
+    let victim = ActorKey::Hostile(HostileId::try_new(7).unwrap());
+    let mut doomed = hostile(7, [0.5, 1.0, -1.0]);
+    doomed.survival = survival(2);
+    let ActorBody::Hostile(body) = &mut doomed.body else {
+        unreachable!()
+    };
+    body.health = 2;
+    ctx.stage(RuleEffect::Actor(doomed)).unwrap();
+    ctx.stage(RuleEffect::Runtime(hostile_runtime(victim)))
+        .unwrap();
+    let stray = ActorKey::Passive(PassiveId::try_new(11).unwrap());
+    ctx.stage(RuleEffect::Actor(passive(11, [8.5, 1.0, 0.5])))
+        .unwrap();
+    ctx.stage(RuleEffect::Runtime(passive_runtime(stray)))
+        .unwrap();
+    air_ray(&mut ctx, None);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, -1);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, -1),
+    };
+    let before_body = ctx.read().actor(stray).unwrap().clone();
+    let before_runtime = ctx.read().runtime(stray).unwrap().clone();
+
+    // Death before combat stages nothing: the kill has not been staged yet.
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (0, 0, 0)
+    );
+    let record = ctx.read().actor(victim).unwrap();
+    assert_eq!(record.survival.health(), 2);
+    assert_eq!(record.lifecycle, ActorLifecycle::Active);
+    assert!(drop_stacks(&ctx, home).is_empty());
+
+    // Combat through the phase dispatcher stages the kill but leaves the
+    // record `Active`: settlement belongs to the death phase.
+    let report = provider::run(
+        &mut ctx,
+        RuleCall {
+            phase: RulePhase::Combat,
+            actor: None,
+            command: None,
+            internal: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(report.applied, 1);
+    let record = ctx.read().actor(victim).unwrap();
+    assert_eq!(record.survival.health(), 0);
+    assert_eq!(record.lifecycle, ActorLifecycle::Active);
+    assert!(drop_stacks(&ctx, home).is_empty());
+
+    // The death phase visibly follows: it settles the staged kill with loot
+    // plus `Dead`.
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!(
+        (report.examined, report.applied, report.rejected),
+        (1, 1, 0)
+    );
+    assert_eq!(
+        ctx.read().actor(victim).unwrap().lifecycle,
+        ActorLifecycle::Dead
+    );
+    assert_eq!(drop_stacks(&ctx, home), vec![stack(45, 1, 0)]);
+
+    // The stray passive never advanced: combat and death left it identical.
+    assert_eq!(ctx.read().actor(stray).unwrap(), &before_body);
+    assert_eq!(ctx.read().runtime(stray).unwrap(), &before_runtime);
+}
+
+#[test]
+fn combat_hit_events_precede_death_staging() {
+    // Attacker-only `CombatHit` events precede death staging, and the death
+    // providers fabricate no death or despawn events.
+    let mut state = authority();
+    let attacker = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    stage_player(&mut ctx, attacker, 1, [0.5, 1.0, 0.5], true);
+    let victim = ActorKey::Hostile(HostileId::try_new(7).unwrap());
+    let mut doomed = hostile(7, [0.5, 1.0, -1.0]);
+    doomed.survival = survival(2);
+    let ActorBody::Hostile(body) = &mut doomed.body else {
+        unreachable!()
+    };
+    body.health = 2;
+    ctx.stage(RuleEffect::Actor(doomed)).unwrap();
+    ctx.stage(RuleEffect::Runtime(hostile_runtime(victim)))
+        .unwrap();
+    air_ray(&mut ctx, None);
+    preload_empty(&mut ctx, Dimension::OVERWORLD, 0, -1);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, -1),
+    };
+    assert!(ctx.events().is_empty());
+
+    // The hit lands first with exactly one attacker-only `CombatHit`.
+    let batch = HostileMeleeBatch::try_new(ctx.read().tick(), &[]).unwrap();
+    let outcome = provider::advance(&mut ctx, &batch).unwrap();
+    assert_eq!(outcome.report.applied, 1);
+    assert_eq!(ctx.events().len(), 1);
+    assert_eq!(
+        ctx.events()[0].recipient(),
+        EventRecipient::Session(attacker.get())
+    );
+    assert!(matches!(ctx.events()[0].event(), Event::CombatHit(_)));
+
+    // Death staging settles loot plus `Dead` while the event lane stays
+    // exactly as combat left it.
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!((report.examined, report.applied), (1, 1));
+    assert_eq!(
+        ctx.read().actor(victim).unwrap().lifecycle,
+        ActorLifecycle::Dead
+    );
+    assert_eq!(drop_stacks(&ctx, home), vec![stack(45, 1, 0)]);
+    assert_eq!(ctx.events().len(), 1);
+    for staged in ctx.events() {
+        assert_eq!(staged.recipient(), EventRecipient::Session(attacker.get()));
+        assert!(matches!(staged.event(), Event::CombatHit(_)));
+    }
+}
