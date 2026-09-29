@@ -75,8 +75,9 @@ Every local ID below is in this change's `tasks.md`. External `F1-final` means `
 | `3.3b` | `3.2` | isolated provider; exact packet files only | Implement the TCP adapter over common admission. |
 | `3.4a` | `1.2` | isolated provider; exact packet files only | Implement bounded durable store mailbox. |
 | `3.4b` | `3.4a` | isolated provider; exact packet files only | Implement autosave, retry, backpressure and flush scheduling. |
-| `3.4c` | `1.2` | isolated provider; exact packet files only | Implement real region commit, crash boundaries and compaction. |
-| `3.4d` | `1.2` | isolated provider; exact packet files only | Implement standalone atomic file persistence. |
+| `3.4c0` | `3.4a,3.4b` | controller; shared I/O contract | Complete decoded loads, partial outcomes and fault/cancellation seam. |
+| `3.4c` | `1.2,3.4c0` | isolated provider; exact packet files only | Implement real region commit, crash boundaries and compaction. |
+| `3.4d` | `1.2,3.4c0` | isolated provider; exact packet files only | Implement standalone atomic file persistence. |
 | `3.5` | `3.4b,3.4c,3.4d` | isolated provider; exact packet files only | Implement exclusive world lease, recovery and named-backup rollback. |
 | `3.6a` | `1.2` | isolated provider; exact packet files only | Implement Agent HTTP wire and lease provider. |
 | `3.6b` | `1.2` | isolated provider; exact packet files only | Implement frozen snapshot registry and MCP provider. |

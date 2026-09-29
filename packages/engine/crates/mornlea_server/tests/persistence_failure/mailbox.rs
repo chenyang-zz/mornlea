@@ -376,7 +376,10 @@ impl DiskBackend for BackendDouble {
         }
     }
 
-    fn load(&mut self, _key: SaveKey) -> Result<SaveValue, ServerError> {
+    fn load(
+        &mut self,
+        _key: SaveKey,
+    ) -> Result<mornlea_server::contracts::LoadedValue, ServerError> {
         Err(unused())
     }
 

@@ -58,6 +58,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.3b Implement the TCP adapter over common admission.
 - [x] 3.4a Implement bounded durable store mailbox.
 - [x] 3.4b Implement autosave, retry, backpressure and flush scheduling.
+- [x] 3.4c0 Complete decoded-load, partial-commit and cancellable persistence I/O contracts.
 - [ ] 3.4c Implement real region commit, crash boundaries and compaction.
 - [ ] 3.4d Implement standalone atomic file persistence.
 - [ ] 3.5 Implement exclusive world lease, recovery and named-backup rollback.

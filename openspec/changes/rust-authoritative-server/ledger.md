@@ -618,3 +618,46 @@ contract repairs are accepted, with 37/53 checkboxes closed. Full F2 integration
 remaining providers and final acceptance gates stay open. Architecture skill:
 no change; verified feature semantics belong in their local guide and packet,
 while unresolved runtime integration findings are not promoted as facts.
+
+
+## Continue to complete F2, 2026-09-29
+
+User explicitly requested continuous execution through all remaining tasks.
+Baseline4cedf529 is clean with37/53 closed. Reused three existing worktrees;
+prior worker diffs were byte-identical to accepted main, preserved as scoped
+local checkpoints before switching their clean checkouts to current baseline.
+Fresh isolated GPT-6 Sol audits inspected random blocks, persistence and MCP;
+main retains all architectural decisions. Missing provider interfaces are
+corrected before dispatch, not delegated as design work. No new checkout or
+user-owned change was removed.
+
+Ruling: decoded load flags, partial durable results and operation cancellation
+need a shared contract completion before region/atomic providers. The controller
+used Superpowers brainstorming/writing-plans and selected a typed decoded union,
+separate committed/error outcome and narrow native I/O fault boundary. Discarding
+migration flags, fabricating numeric codec versions and Result-only partial
+commit were rejected. Plan05 specifies exact algorithms/tests; source fact audit
+confirmed the existing central types and two affected test doubles. New node
+3.4c0 is a prerequisite for both real providers; completion doubles cannot
+accept filesystem durability. Architecture skill: no change.
+
+
+Persistence source review found that the Go owner keeps an old cached bank after
+a failed bank write/sync and tests reopen before recovery; same-owner retry is
+not covered there. Rust will invalidate that view, reread banks before reuse and
+require a successful sync before acknowledging an uncertain revision. This
+implements the approved no-data-loss/failure contract rather than copying an
+unsafe retry gap. No schema/wire change or read-time rewrite is introduced.
+
+
+Shared persistence contract validation: four behavioral RED assertions exposed
+ignored cancellation, empty successful writes, accepted zero progress and merged
+future/corrupt classes. All five focused cases now pass; full server crate
+passes191 tests and crate clippy/fmt, strict change validation and diff checks
+pass. Independent Sol review found one consumer-double fixture using the wrong
+load key; corrected to the matching valid player UUID and revalidated. Final
+review has no remaining finding. Native close executes on Darwin; this evidence
+does not qualify Windows runtime behavior. Only already-locked native dependency
+versions were added directly. Node3.4c0 accepted by the scoped contract commit;
+region and standalone providers consume its exact SHA. Store tests inherit the
+crate guide; the new store guide owns its real independent I/O lifecycle.

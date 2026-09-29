@@ -2,6 +2,7 @@
 
 pub mod atomic_file;
 pub mod disk;
+pub mod io;
 pub mod lease;
 pub mod mailbox;
 pub mod recovery;

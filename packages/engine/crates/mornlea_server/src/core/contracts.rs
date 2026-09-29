@@ -16,8 +16,9 @@ use mornlea_domain::{
 use mornlea_engine::native::contracts::PhysicsTuning;
 use mornlea_protocol::{AdmittedLogin, PlayIntent, ServerPacket};
 use mornlea_storage::{
-    Chunk, ChunkSave, CompanionBody, CompanionSave, HostileMob, HostileMobsSave, ItemStack,
-    Metadata, PassiveMob, PassiveMobsSave, PlayerSave, StoredCompanionTask, StoredPlayer,
+    Chunk, ChunkSave, CompanionBody, CompanionSave, HostileMob, HostileMobs, HostileMobsSave,
+    ItemStack, Metadata, PassiveMob, PassiveMobs, PassiveMobsSave, PlayerSave, StoredCompanionTask,
+    StoredCompanions, StoredPlayer,
 };
 
 const MAX_PLAYERS: u8 = 8;
@@ -265,6 +266,14 @@ impl AgentErrorCode {
     }
 }
 
+/// Stable codec failure classes; descriptive codec text is not a wire version.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StorageFailure {
+    Corrupt,
+    FutureVersion,
+    OutputTooSmall,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServerError {
     InvalidInput {
@@ -293,6 +302,10 @@ pub enum ServerError {
     Io {
         operation: Operation,
         kind: std::io::ErrorKind,
+    },
+    Storage {
+        family: &'static str,
+        kind: StorageFailure,
     },
     Agent {
         code: AgentErrorCode,
@@ -1962,9 +1975,29 @@ pub trait StoreHandle {
 
 pub trait DiskBackend {
     fn write(&mut self, ticket: SaveTicket, request: SaveRequest) -> SaveCompletion;
-    fn load(&mut self, key: SaveKey) -> Result<SaveValue, ServerError>;
+    fn load(&mut self, key: SaveKey) -> Result<LoadedValue, ServerError>;
     fn sync(&mut self) -> Result<(), ServerError>;
     fn close(&mut self) -> Result<(), ServerError>;
+}
+
+/// Decoded storage facts retain migration/recovery information until the
+/// authority decides when a normalized value can be saved.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum LoadedValue {
+    Chunk(RecoveredChunk),
+    Player(StoredPlayer),
+    Companions(StoredCompanions),
+    Hostiles(HostileMobs),
+    Passives(PassiveMobs),
+    Metadata(Metadata),
+}
+
+/// A later failure must not erase revisions that are already durable.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DiskWriteOutcome {
+    pub committed: Vec<(SaveKey, u64)>,
+    pub error: Option<ServerError>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

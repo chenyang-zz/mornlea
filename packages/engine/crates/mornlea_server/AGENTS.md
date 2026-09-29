@@ -6,10 +6,18 @@ OpenSpec behavior for this crate lives in
 `openspec/changes/rust-authoritative-server/`. The crate is a windowless rlib.
 Production dependencies are the F1 crates `mornlea_domain`,
 `mornlea_protocol`, and `mornlea_storage`, plus `mornlea_engine` for checked numerical kernels and
-`PhysicsTuning`. It does not own GPU rendering, Godot presentation, or the
+`PhysicsTuning`. Native descriptor close uses target-scoped `libc` on Unix and
+`windows-sys` on Windows; all other unsafe code remains denied. It does not own
+GPU rendering, Godot presentation, or the
 Python Agent process. Workspace membership is `packages/engine/Cargo.toml`.
 No dependency-direction test guards this crate yet; review the manifest
 against this file.
+
+## Persistence boundary
+
+`src/store/AGENTS.md` owns disk worker I/O, decoded loads, durable acknowledgment
+and the narrowly confined native-close adapters. Region and standalone providers
+consume its cancellation and error contracts before joining the real backend.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 

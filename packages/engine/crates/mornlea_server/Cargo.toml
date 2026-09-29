@@ -15,3 +15,9 @@ mornlea_storage = { path = "../mornlea_storage" }
 
 [dev-dependencies]
 sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation"] }

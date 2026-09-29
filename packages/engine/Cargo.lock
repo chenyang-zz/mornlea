@@ -994,11 +994,13 @@ dependencies = [
 name = "mornlea_server"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mornlea_domain",
  "mornlea_engine",
  "mornlea_protocol",
  "mornlea_storage",
  "sha2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

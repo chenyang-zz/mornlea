@@ -95,3 +95,16 @@ settlement; a wire CombatHit recipient can be an attacker and is not a victim
 identity. It must also discard commands from sessions retired after admission
 but before execution. Both remain integration gates until their real consumers
 are implemented and tested. No wire/save schema changes follow this decision.
+
+
+## Persistence provider continuation contracts
+
+Decoded loads preserve F1 migration facts in LoadedValue rather than converting
+to SaveValue. Region commit reports committed keys and an error independently,
+matching per-key S3 acknowledgment. A per-request cancellation token is checked
+before durable publication, with no cancellation after publication begins. A
+shared narrow I/O hook exposes actual failure/crash boundaries and partial/zero
+writes to integration tests; ordinary constructors always use native I/O.
+Native fallible close is confined to two platform adapters. The exact landing,
+provider signatures and retry semantics are in
+[the persistence continuation packet](plans/05-persistence-io-contract.md).

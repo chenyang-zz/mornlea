@@ -12,3 +12,6 @@ mod recovery;
 mod region_io;
 #[path = "persistence_failure/scheduler.rs"]
 mod scheduler;
+
+#[path = "persistence_failure/io.rs"]
+mod io;
