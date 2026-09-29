@@ -1061,3 +1061,11 @@ now says source replacement. Source Open executes inline in PlayerCommand, not
 the previously noted Interaction phase; reducer scheduling must follow that
 verified sequence. No already accepted provider claimed scheduling acceptance.
 Architecture skill:no change.
+
+
+Melee implementer flagged incorrect arithmetic in plan19 acceptance literals.
+Main verified Go armor.go and accepted inventory::reduced_damage: integer
+floor makes raw6/points15 effective2, and raw2/points2 effective1. Packet now
+uses those source results and raw2/points0 as provider no-reduction/no-wear
+case; raw1/points2 is the accepted helper lower-bound case. No contract or
+implementation formula change is authorized or needed.

@@ -156,8 +156,9 @@ for a phase that already ran. No unrelated survival timing/death refactor.
    lifecycle; each stale hit leaves all hit effects absent. Durability-only
    change uses latest durability. Two facing health2 players both reach0 and
    receive cooldown10; no death/removal or duplicate damage lane entry here.
-6. Pin armor raw6 vs full15 points => effective3, each intact armor wears1;
-   raw2 at points2 effective2 => no wear. Sword1=>broken, non-sword no wear;
+6. Pin armor raw6 vs full15 points => effective2, each intact armor wears1;
+   raw2 at points0 effective2 => no wear; the accepted helper
+   lower-bound case raw1 at points2 effective1 also does not wear. Sword1=>broken, non-sword no wear;
    knockback and passive60-flee/graze reset; victim eating/bow interruption;
    attacker-only CombatHit and exact damaged_players victim routing. Two
    attackers to one victim cause one hit/exhaustion/sword wear. Bucket mining
