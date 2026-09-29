@@ -59,7 +59,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 3.4c Implement real region commit, crash boundaries and compaction.
 - [ ] 3.4d Implement standalone atomic file persistence.
 - [ ] 3.5 Implement exclusive world lease, recovery and named-backup rollback.
-- [ ] 3.6a Implement Agent HTTP wire and lease provider.
+- [x] 3.6a Implement Agent HTTP wire and lease provider.
 - [ ] 3.6b Implement frozen snapshot registry and MCP provider.
 - [ ] 3.6c Implement Agent task, dialogue and memory ownership.
 - [ ] 3.6d Execute Rust integration with the actual Python Agent and MCP.

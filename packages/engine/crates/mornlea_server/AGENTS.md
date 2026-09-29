@@ -236,6 +236,15 @@ against this file.
   reported without clearing newer in-flight work. `poll_tick` performs no
   I/O; the real disk backend is a later node and this module's tests drive
   an explicitly named backend double.
+- `src/agent/http.rs` and `src/agent/lease.rs` own the Agent HTTP wire and
+  the lease machine: loopback-literal endpoints with closed-schema
+  validation and the exact body/response/header byte budgets, the frozen
+  Absent→Active→Frozen→Closed lease graph with checked control revisions
+  (a late outcome never revives a fence; heartbeats preserve it), and the
+  Go-parity MCP gate requiring an explicit nonzero port. Request-id
+  minting is test-seeded SplitMix64 — production crypto-grade parity is a
+  host-node question, and the frozen `AgentRequest` union carries no
+  Live/Ready probes yet.
 - Topic modules under `src/rules/`, `src/transport/`, `src/store/` and
   `src/agent/` that are not named above stay registered and empty of
   behavior. Later nodes own them. This crate does not implement the tick
