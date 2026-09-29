@@ -44,3 +44,11 @@ only a successful durability barrier permits revision acknowledgment. The
 provider reports per-key commits separately from later errors. Compaction and
 same-owner retries retain the exclusive owner and use fallible file/directory
 close. Cross-region aggregation and the world lease belong to the disk backend.
+
+`atomic_file.rs` owns the five standalone save families under an existing world
+root. It preserves codec migration facts on load, serializes revision checks
+and real replacement, and acknowledges only after temp/file/parent durability
+and fallible close. Metadata's sequence is process-local: an uncertain published
+candidate still prevents a stale overwrite, but cannot be acknowledged before
+its retry barrier. The world owner creates and leases the root; this provider
+establishes players and makes that directory entry durable before returning.

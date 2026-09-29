@@ -711,3 +711,16 @@ Worker make rust and both packet Go region/chunk oracles pass. No codec or
 schema changes. Darwin filesystem behavior is the executed platform; the global
 Windows directory durability gate remains open at closeout, and real backend
 aggregation/lease acceptance remains3.5. Architecture skill: no change.
+
+Standalone provider accepted from6ac2aab8 +fbf938f1. Independent review verified
+metadata published-candidate ordering across failed rename barriers and root
+sync/close after players creation, with retry of an existing directory. Eleven
+real-file cases cover all five families, migration flags, short/zero writes,
+close and Before/After hooks, future/corrupt preservation, cancellation and
+metadata sequence. Behavioral RED was recorded before each corrective change.
+Main complete server suite passes229 (16 parity,46 persistence,68 contract,99
+replay); crate clippy/fmt and diff checks pass. Worker make rust, exact Go storage
+oracle and strict change validation pass. Final independent re-review has no
+provider blocker apart from the separately retained Windows directory gate.
+Actual root lease/backend aggregation is still3.5; no startup cutover, schema
+change or cross-platform durability claim. Architecture skill: no change.

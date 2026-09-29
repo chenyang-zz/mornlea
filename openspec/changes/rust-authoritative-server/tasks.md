@@ -61,7 +61,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.4b Implement autosave, retry, backpressure and flush scheduling.
 - [x] 3.4c0 Complete decoded-load, partial-commit and cancellable persistence I/O contracts.
 - [x] 3.4c Implement real region commit, crash boundaries and compaction.
-- [ ] 3.4d Implement standalone atomic file persistence.
+- [x] 3.4d Implement standalone atomic file persistence.
 - [ ] 3.5 Implement exclusive world lease, recovery and named-backup rollback.
 - [x] 3.6a Implement Agent HTTP wire and lease provider.
 - [ ] 3.6b Implement frozen snapshot registry and MCP provider.

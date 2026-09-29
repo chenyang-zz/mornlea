@@ -135,3 +135,13 @@ Controller clarifications: standalone lower/equal-conflicting revision maps to
 class. Region storage keys whose dimension cannot map to the domain Dimension
 are refused before save with `InvalidInput { field: "dimension" }`; open may
 still validate storage-supported keys, but cannot fabricate a domain SaveKey.
+
+Standalone review completion: root already exists and belongs to the world
+owner. Open establishes players and always syncs/fallibly closes root before
+returning, including retry when a prior failed open already made players.
+Metadata retains a process-local latest physically published candidate
+(sequence, canonical bytes, acknowledged flag), installed immediately after
+rename and before its After hook. Lower sequence/equal conflicting content
+refuses; equal identical retry finishes durability before ack. Pre-rename
+failure retains the preceding candidate; post-rename failure retains the new
+candidate without acknowledgment. No sequence enters metadata format6.
