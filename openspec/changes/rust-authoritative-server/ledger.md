@@ -1033,3 +1033,16 @@ dependencies, red cases, limits, exclusions and rollback are frozen in packet.
 Source review found the survival helper hardcodes a configured threshold; the
 limited extraction fixes both consumers with a custom-threshold regression.
 Architecture skill:no change before real consumer acceptance.
+
+
+Container node integrated from worker d182735f as80ba816f. Main serially consumed
+accepted interaction classifier5f8325b2; the real Ready water27 regression
+first failed NoTarget and now passes water27/28/34, open lower/upper and closed
+door control. An initial test used a nonexistent ViewLease field; that compile
+error is not behavioral RED. Independent fresh Sol review found no actionable
+defect and reran container/crafting/drop/furnace/world-output coverage. Main
+full pinned server394 tests (2 unit,16 parity,79 persistence,120 contract,177
+replay), clippy all-targets -D warnings, fmt/diff pass. Worker make rust and
+matching source Go tests pass; source inputs unchanged. Guide now distinguishes
+provider view ownership from later publication reach and workbench lifetime.
+Actual reducer scheduling remains open. Architecture skill:no change.

@@ -2325,3 +2325,80 @@ fn transfer_uses_live_lease_without_per_command_reach_veto() {
         stack(ITEM_DIRT, 2)
     );
 }
+
+#[test]
+fn ready_container_ray_passes_fluids_and_open_door_halves() {
+    use mornlea_domain::chunk_block_index;
+    use mornlea_server::core::world::ReadyChunk;
+    use mornlea_storage::{ChestSlot, Chunk, ContainerSnapshot, StorageKind};
+
+    for obstruction in [27, 28, 34, 63, 70, 62] {
+        let session = player_session(96, "ray-target");
+        let target = BlockPos::new(0, 65, -3);
+        let key = overworld_key(target);
+        let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+        let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+        viewer_scene(&mut ctx, session, (target, CHEST_BLOCK), &[]);
+        ctx.stage(RuleEffect::Actor(player_actor(
+            session,
+            [0.5, 64.0, -0.5],
+            0.0,
+            0.0,
+        )))
+        .unwrap();
+        let mut chunk = Chunk {
+            sections: vec![
+                ContainerSnapshot {
+                    kind: StorageKind::Single,
+                    bits: 0,
+                    single: 0,
+                    palette: vec![],
+                    packed: vec![],
+                };
+                24
+            ],
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        };
+        for (pos, block) in [
+            (target, CHEST_BLOCK),
+            (BlockPos::new(0, 65, -2), obstruction),
+            (BlockPos::new(0, 64, -2), 63),
+        ] {
+            let index = chunk_block_index(pos) as usize;
+            let section = &mut chunk.sections[index / 4096];
+            if section.kind == StorageKind::Single {
+                *section = ContainerSnapshot {
+                    kind: StorageKind::Direct,
+                    bits: 15,
+                    single: 0,
+                    palette: vec![],
+                    packed: vec![0; 1024],
+                };
+            }
+            section.packed[(index % 4096) / 4] |= u64::from(block) << ((index % 4) * 15);
+        }
+        chunk.chests[7] = ChestSlot {
+            active: true,
+            generation: 9,
+            block_index: chunk_block_index(target),
+            ..Default::default()
+        };
+        ctx.preload_ready_chunk(ReadyChunk::try_new(key, 1, 1, chunk).unwrap());
+        let result = provider::settle_command(&mut ctx, &envelope(session, 1, open_command()));
+        if obstruction == 62 {
+            assert!(result.is_err(), "a closed door still blocks the container");
+            assert!(ctx.read().viewer(session).is_none());
+        } else {
+            assert!(
+                result.is_ok(),
+                "transparent interaction block {obstruction}: {result:?}"
+            );
+            assert_eq!(
+                ctx.read().viewer(session).unwrap().reference(),
+                chest_ref(7, 9)
+            );
+        }
+    }
+}

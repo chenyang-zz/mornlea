@@ -10,8 +10,8 @@
 //!
 //! - `packages/server/sim/entity/container.go` (`openContainer`): the open
 //!   ray classifies the hit block, furnace and chest opens establish the
-//!   single viewed container, and the workbench arm only widens the crafting
-//!   grid without touching any container reference.
+//!   single viewed container. Workbench anchor and view mutual exclusion
+//!   belong to the crafting lifecycle integration.
 //! - `packages/server/sim/entity/container.go` (`applyContainerMove`) and
 //!   `packages/server/sim/entity/furnace.go` (`moveFurnaceStack`,
 //!   `moveFurnaceStackAmount`, `setFurnaceViewSlot`): view and exact reference
@@ -49,6 +49,7 @@ use crate::contracts::{
     InventoryPatch, InventoryRecord, PhaseReport, RuleCall, RuleEffect, RulePhase, RuleReject,
     ServerError, SessionKey, ViewLease,
 };
+use crate::core::interaction::target_block;
 use crate::rules::{crafting, drops};
 use crate::state::{AuthorityReadView, TickContext};
 
@@ -89,10 +90,6 @@ const ITEM_COAL: u16 = 5;
 /// Furnace stack ceiling (`core.MaxStackCount`,
 /// `packages/shared/core/item.go`).
 const MAX_STACK_COUNT: u8 = 64;
-
-/// Air cell the open ray walks through (`core.AirID`,
-/// `packages/shared/core/block.go`).
-const AIR: u16 = 0;
 
 /// Furnace block (`core.FurnaceID`).
 const FURNACE_BLOCK: u16 = 9;
@@ -1395,7 +1392,7 @@ fn look_direction(yaw: f32, pitch: f32) -> [f32; 3] {
     [-yaw.sin() * cos_pitch, pitch.sin(), -yaw.cos() * cos_pitch]
 }
 
-/// One classified ray hit: the full observation of the first non-air cell.
+/// One classified ray hit: the full observation of the first interaction target.
 struct RayHit {
     observed: BlockObservation,
 }
@@ -1408,8 +1405,8 @@ enum RayFailure {
 /// Walks the numerical ray kernel batch by batch and classifies every
 /// traversed cell against the authority view, the same walk the accepted
 /// resolvers perform: an unobserved cell refuses because the authority cannot
-/// certify geometry it has not observed, observed air continues the walk, and
-/// any other block is the hit. No hit within reach reports empty.
+/// certify geometry it has not observed. Fluids and open doors pass through
+/// under the shared interaction classifier. No hit within reach reports empty.
 fn cast_ray(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
@@ -1442,7 +1439,7 @@ fn cast_ray(
             let cell = BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
             match view.observation(dimension, cell) {
                 None => return Err(RayFailure::Unavailable),
-                Some(observed) if observed.block == AIR => {}
+                Some(observed) if !target_block(view, dimension, cell, observed.block) => {}
                 Some(observed) => return Ok(Some(RayHit { observed })),
             }
         }

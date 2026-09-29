@@ -292,13 +292,17 @@ consume its cancellation and error contracts before joining the real backend.
   clear atomically, while companions retain the source single-cell door
   asymmetry. Companion output credit precedes selected-slot wear, including
   newly credited durable tools. Workbench is excluded from crop predicates.
-- `src/rules/containers.rs` owns container views on `ContainerMove` plus
-  open/close admission: generation/dimension/range-validated leases with
-  output 38 never a destination, furnace input-then-fuel priority, repack
-  preview before commit, and close invalidating only after successful
-  repack. Container commits stage `RuleEffect::Container` and view leases
-  stage `RuleEffect::Viewer` through context overlays (both rollback-safe);
-  the overlay-to-authority commit leg belongs to the serial reducer.
+- `src/rules/containers.rs` owns exact Ready container opens, close previews,
+  transfers and whole-stack panel drops through `settle_command`. Open binds
+  the actual fixed slot/generation immediately; transfers require that live
+  lease. The context seeds one complete viewer set and never falls back to a
+  closed committed lease. Close reclaims only extended workbench cells before
+  clearing the view. Output slot 38 is a legal drop source, never a transfer
+  destination. Inventory, container and drop writes settle in one compound;
+  every successful explicit container patch durably touches its chunk even
+  when its slots remain equal. Reach invalidation belongs to publication after
+  transfers. The serial reducer owns net viewer commit, retirement pruning and
+  real phase scheduling; workbench anchor mutual exclusion remains separate.
 - `src/store/scheduler.rs` owns save scheduling over the accepted mailbox:
   completions before due retries before urgent before cadence autosave (latched
   until dirty and in-flight clear), saturating-tick backoff 20…1200 with
