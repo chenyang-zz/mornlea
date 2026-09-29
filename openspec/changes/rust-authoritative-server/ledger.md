@@ -1393,3 +1393,16 @@ gateway/planner/MCP, digest/ID asserts, ordered shutdown, and same-lease
 retention; pre-gates and pytest shutdown green. Independent review approved
 both commits with no findings. Production Rust launches no Python.
 Architecture skill: no change.
+
+
+Main qualified plan28 with the loaded brainstorming/writing-plans workflow,
+adding node 3.7a ahead of 3.7. A read-only scout proved adapter ticks run
+empty (session bodies write-only, chunk results never drained, no actor
+seeding, no despawn/drop projection). 3.7a adds production assembly only:
+1:1 save-to-actor mapping with neutral runtime defaults, chunk drain into
+Ready, ordered before row 1 — no invented defaults (any gap stops the
+node), acceptance by overlay asserts, counters explicitly deferred to 4.1.
+Despawn/drop projection stays a follow-up blocking 3.8, not 3.7a; save
+cadence, install feed, and transport doubles keep their owners. 3.7 proper
+routes at the 01 slice and follows 3.7a.
+Architecture skill: no change.
