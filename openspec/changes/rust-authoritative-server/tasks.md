@@ -51,7 +51,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.8b2 Complete fixed container ownership and atomic world outputs.
 - [x] 2.8b3a Land shared deterministic harvest samplers ([contract packet](plans/12-harvest-contract.md)).
 - [ ] 2.8b3b Complete flooded-plant and trample drop outputs ([packet](plans/13-environment-outputs.md)).
-- [ ] 2.8b3c Complete human mining harvest and no-drop branches ([packet](plans/14-mining-outputs.md)).
+- [x] 2.8b3c Complete human mining harvest and no-drop branches ([packet](plans/14-mining-outputs.md)).
 - [x] 2.8b4a Implement selected-item and inventory/crafting panel drops ([packet](plans/15-player-drop-commands.md)).
 - [ ] 2.8b4b Complete container view binding and panel drop settlement ([packet](plans/16-container-drop-views.md)).
 - [ ] 2.8b4 Implement selected-item and panel drop commands.

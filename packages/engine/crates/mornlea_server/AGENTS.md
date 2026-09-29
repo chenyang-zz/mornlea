@@ -284,8 +284,11 @@ consume its cancellation and error contracts before joining the real backend.
   restarts at 1, completions through the 1.6 transaction exactly once, human
   failure clearing vs companion-full retaining saturated progress, the
   human-only snow clear without drop capacity, and bow-draw suppression.
-  Grass saturates but its seed roll belongs to the random-rules node;
-  companion settlement wear belongs to a 1.6 follow-up.
+  Harvest outputs use the shared deterministic samplers at completion; an
+  empty output list imposes no drop-capacity gate. Human door/bed footprints
+  clear atomically, while companions retain the source single-cell door
+  asymmetry. Companion output credit precedes selected-slot wear, including
+  newly credited durable tools. Workbench is excluded from crop predicates.
 - `src/rules/containers.rs` owns container views on `ContainerMove` plus
   open/close admission: generation/dimension/range-validated leases with
   output 38 never a destination, furnace input-then-fuel priority, repack

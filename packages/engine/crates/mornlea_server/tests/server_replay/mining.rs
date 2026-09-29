@@ -1126,8 +1126,8 @@ fn containers_and_paired_blocks_atomic() {
 /// `packages/server/sim/entity/mining.go`): durability one becomes the
 /// registered broken form, while crop with an intact hoe, saplings of any
 /// held item and intact swords never wear. Snow clears with no drops and no
-/// capacity gate; wild grass saturates without completing until the
-/// random-rules node owns the seed roll.
+/// capacity gate; wild grass completes in one tick and only a successful
+/// position-stable seed roll requires output capacity.
 #[test]
 fn last_durability_and_exemptions() {
     // Durability one becomes the registered broken form on completion.

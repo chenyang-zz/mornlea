@@ -940,8 +940,8 @@ pub fn resolve_place(
 /// settlement transaction: the block's drop stack, the mined container's
 /// captured contents, the human output capacity preflight and the selected
 /// tool's wear. Released primary and a ray over observed air resolve to
-/// `Ok(None)` — nothing to settle. Snow layers take the clear-only pre-branch
-/// below and settle with no drops and no capacity gate.
+/// `Ok(None)` — nothing to settle. Snow has an empty output batch and clears
+/// without a drop-capacity gate; other outputs follow the harvest rules.
 pub fn resolve_mine(
     actor: ActorKey,
     control: &PlayerControl,

@@ -941,3 +941,16 @@ will own containers, viewer map, explicit container patch semantics and pure
 craft-close preview together; these are tightly coupled and no other active
 worker owns those files. Main retains plan, guides, acceptance and integration.
 Architecture skill:no change.
+
+
+Mining outputs accepted from isolated c3684ff8 after independent Sol review;
+main corrected three obsolete grass/snow ownership comments identified by
+review. Wrong-tool/full-slot and upper-door behavioral REDs became GREEN.
+Twenty-four mutation and nine mining replay cases cover deterministic crops,
+grass/leaves/poison, structural anchors, captured contents, tool wear and
+companion credit-before-wear (including a newly credited tool). Worker full341
+tests, pinned clippy/fmt/make rust and exact Go mining/Bed/Door entity oracles
+pass; a separate server Door/Bed filter had no matching tests and is not counted
+as evidence. Main integrated pinned server367 tests (2 unit,16 parity,79 persistence,113
+contract,157 replay), clippy/fmt, strict OpenSpec and diff checks pass. No
+gameplay, schema or protocol expansion. Architecture skill:no change.
