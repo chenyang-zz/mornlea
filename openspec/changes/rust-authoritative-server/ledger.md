@@ -1305,3 +1305,13 @@ publication are explicitly owned by 2.8b, 3.7, and publication/3.1, and the
 worker pins none of them. Review depth is proportional (tests-only, zero
 source): main verification plus full gates, no separate reviewer cycle.
 Architecture skill: no change.
+
+
+Combat outcome integration accepted from 3b3da81a (isolated worker, tests-only
++477/-0). Five same-tick proofs pass with no behavior fixes: lethal-once,
+mutual-lethal completeness, stale-batch silence, combat-before-death order
+with passives untouched, and hit-before-death event order without fabricated
+despawns. Focused 59/59 and full gates green per worker; main re-verified the
+focused topic. No reviewer cycle per the packet's recorded proportionality
+ruling. This unblocks 2.8b (deps 2.6a, 2.7c, 2.8a now all closed).
+Architecture skill: no change.
