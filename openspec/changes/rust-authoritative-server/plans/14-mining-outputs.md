@@ -68,11 +68,18 @@ Empty output uses drops=None (do not feed an empty checked batch). All changed
 observations and captured containers remain in one accepted mutation. Companion
 restrictions remain crop/farmland/torch/grass/snow/fluid refusal. Companion tool
 wear is a known deferred seam: complete it now by first calculating credit on
-inventory copy, then wearing the ORIGINAL selected tool slot with the same
-exemption predicate before one patch. Source credit uses first-fit inventory;
-never wear a newly credited item if original selected slot was empty. If credit
-fails, no wear. Source Go companion_mining.go and consumeMiningToolDurability
-are the oracle; report conflicts before choosing a different policy.
+inventory copy, then wearing the selected tool slot with the same
+exemption predicate before one patch. Source credit uses its accepted AddStack
+order. More precisely, Go entity/mining.go:485,512,590 credits first and then
+wears the selected slot in that credited copy; preserve this even if a formerly
+empty selected slot received a durable container item. If credit fails, no wear.
+Do not introduce a protective exception absent from Go. The companion's body
+output also respects the original selected-tool harvestability; wrong-tool
+ordinary blocks clear with no credit, container contents still transfer. Bed
+mining clears both halves with one inventory credit, matching Go:460-490. Door
+companion mining remains the source's generic single-cell branch; do not widen
+it to the separate human structural branch. Report conflicts with these exact
+source policies before choosing another rule.
 
 ## Concrete RED and validation
 
@@ -82,7 +89,8 @@ shortgrass hit/miss/stable retry with full capacity and one-tick provider comple
 last-durability exemption; leaf hit/miss and second-output capacity rollback;
 all immature crops and mature wheat/potato(+poison)/carrot source counts; no extra
 companion sapling roll; companion crop/grass refusal and no world drop; companion
-credit+wear and sapling exemption. Add workbench15-tick and companion mining
+credit+wear, newly credited selected tool source behavior, wrong-tool body
+suppression, atomic bed pair and sapling exemption. Add workbench15-tick and companion mining
 regression to catch the current45 crop misclassification.
 
 Structural tests hit upper door and either bed half, prove exactly two changes

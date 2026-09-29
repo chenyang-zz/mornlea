@@ -884,3 +884,12 @@ own disjoint files and receive isolated Sol implementers because each requires
 its own multi-file source/replay trace; shared sampler is already tested and
 accepted, and core/state remains reserved to the support worker. Main owns
 future serial adapters and all integration/rollback. Architecture skill:no change.
+
+
+Before dispatch, source verification corrected plan14's initial companion wear
+assumption: Go credits the container output, then wears the selected slot in
+that resulting copy, including a newly credited durable tool. Preserve this
+source behavior, with a regression, rather than inventing original-slot-only
+protection. All companion code is in entity/mining.go (no companion_mining.go
+source file exists). Its bed branch clears both halves, whereas its door branch
+is generic single-cell; preserve that asymmetry and original harvestability.
