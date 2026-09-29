@@ -1173,3 +1173,16 @@ sleep replay test), and the save-blind tail now asserts through the live
 overlay instead of a literal self-comparison. Save-blindness holds because no
 code writes live runtime back into a save.
 Architecture skill: no change.
+
+
+Main qualified plan23 with the loaded brainstorming/writing-plans workflow
+for node 2.9b. Three-phase provider reads arrival-ordered view envelopes:
+Intent validates payload/liveness with first-valid-per-ID selection,
+Motion steps through the shared physics exit with neutral yaw retention,
+Placement settles ID-byte-ordered through the shared transaction with
+first-commit-wins. Provenance stays ingress-owned (no provider-visible gate
+exists; the combined test proves the boundary), mining stays with the
+accepted run_companion consumer, and queue/drain mechanics stay with
+reducer/endpoint. One isolated implementer owns companions.rs plus its replay
+topic; resolvers, kernel, ingress and mining are read-only.
+Architecture skill: no change.
