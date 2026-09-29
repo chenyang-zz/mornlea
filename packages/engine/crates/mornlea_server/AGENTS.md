@@ -178,6 +178,14 @@ against this file.
   deferral. The cadence is event-driven (enqueue due = current tick) — no
   periodic re-check exists in the Go source; the dry-revert roll belongs to
   the random-rules node.
+- `src/rules/passives.rs` owns the passive lifecycle on the
+  `PassiveStepDeaths` phase: global 32 with one daytime candidate per tick
+  anchored by session-order rotation, local 6-in-48 on grass, the exact
+  priority chain (swim/shore/flee/graze/tempt/idle/wander), temptation at
+  8-inclusive stopping at 2.5, and grazing as a 20-tick event settling
+  grass-to-dirt through the transaction with the frozen sampler salts.
+  Death stages the terminal record with no loot (drops are a later node);
+  flee arming belongs to the combat nodes.
 - `src/rules/mining.rs` owns continuous mining progression on the
   `MiningStep` phase: key-unchanged increments to saturation, key change
   restarts at 1, completions through the 1.6 transaction exactly once, human
