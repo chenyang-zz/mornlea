@@ -1352,3 +1352,21 @@ cadence, agent install, and despawn projection stay with their accepted
 owners as recorded pointers. One isolated implementer owns step.rs, narrow
 state/sleep/projectile edits, and the two order/mailbox test topics.
 Architecture skill: no change.
+
+
+Authoritative tick reducer accepted from 2e9e2c5b + 4a8a6247 + 708e133e +
+9cbcb482 + 00838947 plus main follow-up 2c9ea46b (isolated worker, full
+11-row dispatch, mailbox/retired/reports, victim routing with inference
+deleted, sleep orchestration, commit/publish, bounds proof). Review forced
+three fix rounds, all verified: bed entry corrected to collect-at-row-1 /
+execute-at-row-7 two-phase per fresh Go reading (withdrawing the earlier
+inline claim; no 04 deviation remains), fluid/farm schedules derived from
+changed blocks with cross-tick carry in state (replacing empty schedules),
+production tick off-by-one fixed to bump-after (pinned through advance_tick),
+and fluid delay read from tunables via a main-added getter (grant amendment
+recorded here). REDs named before bodies; GREEN phase_order10/tick12, full
+server566, fmt, packet clippy, and Go step-sequence oracles pass.
+Independent full review plus scoped re-review both approved. Remaining
+recorded follow-ups (actor/world seeding for endpoint ticks, subscriber
+despawn projection) block 3.7/3.8, not this node.
+Architecture skill: no change.
