@@ -849,3 +849,15 @@ until integration. It does not introduce a new global cell truncation or claim
 actual reducer interest limits. Bed source clears the coordinate pair even when
 the loaded counterpart form differs; preserve that source behavior rather than
 inventing stricter gameplay. Architecture skill: no change.
+
+
+Controller reconciled remaining drop outputs against Go: human wrong-tool
+completion clears a block without its body drop (container contents still
+transfer); short grass/leaf rolls omit tick; crop mining has wheat/potato/carrot
+branches. Environmental flooding/trample only use the wheat multi-output branch,
+not human mature potato/carrot yields. Split2.8b into bounded output/command
+nodes. Main first lands pure harvest sampler functions because environment and
+mining are independently reviewed consumers of the same wheat boundary. Use
+source KAT scalars including dimensions outside supported world admission;
+these pure hashes grant no authority. Support worker remains sole state.rs
+owner and consumes9c3ab40e, so these controller files are disjoint.

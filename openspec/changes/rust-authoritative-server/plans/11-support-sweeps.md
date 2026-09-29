@@ -58,7 +58,7 @@ against world [-64,320) rather than reading an invalid block index.
   ShortGrass84 and current support Ready and not Grass4, write Air with
   try_system(Support). Never reserve/mint drops, including full32 slots.
 - Sapling89: exactly above; keep if support unreadable or Dirt3/Grass4. Otherwise
-  one ItemSapling57 with delay tunables.drop_pickup_delay, origin canonical cell
+  one ItemSapling57 with delay tunables.drop_pickup_delay_ticks(), origin canonical cell
   center, source System{Support,current tick,target:plant}. Use one
   try_system_with_drops for Air plus batch; refusal keeps both unchanged.
 - Torch71..75: for each entry inspect neighbors in +X,-X,+Y,-Y,+Z,-Z order.
