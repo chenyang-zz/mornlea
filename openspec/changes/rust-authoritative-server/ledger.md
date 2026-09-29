@@ -1294,3 +1294,14 @@ REDs named before bodies; GREEN hostile_outcomes54/passives5/drops23/
 survival9, full server539, fmt, packet clippy, and Go Hostile/Death/Drop/
 Pickup oracles pass. Independent review approved with no findings.
 Architecture skill: no change.
+
+
+Main qualified plan25 with the loaded brainstorming/writing-plans workflow
+for node 2.7c. With melee and death providers both accepted, this node is
+same-tick sequencing proofs only: lethal-once, simultaneous mutual lethal,
+stale-batch silence, combat-before-death order, and hit-before-death event
+order. Pickup integration, restart parity, and subscriber despawn
+publication are explicitly owned by 2.8b, 3.7, and publication/3.1, and the
+worker pins none of them. Review depth is proportional (tests-only, zero
+source): main verification plus full gates, no separate reviewer cycle.
+Architecture skill: no change.

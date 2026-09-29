@@ -52,7 +52,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.7c0 Land frozen hostile melee input contract ([packet](plans/17-combat-input-contract.md)).
 - [x] 2.7c1 Implement bounded melee snapshot and settlement ([packet](plans/19-melee-settlement.md)).
 - [x] 2.7c2 Complete player, hostile and passive death outputs and reset ([packet](plans/24-death-outputs-reset.md)).
-- [ ] 2.7c Implement one-time hostile death and combat outcomes.
+- [ ] 2.7c Implement one-time hostile death and combat outcomes ([packet](plans/25-combat-outcome-integration.md)).
 - [x] 2.8a Implement passive lifecycle.
 - [x] 2.8b0 Complete bounded drop staging, identity and snapshot contracts.
 - [x] 2.8b1 Implement bounded drop lifetime and atomic pickup.
