@@ -772,3 +772,11 @@ Go Sampler/realm oracles pass. Main integration full server passes261 tests
 (1 unit,16 parity,46 persistence,82 contract,116 replay), with clippy/fmt and
 strict validation. Actual reducer scheduling remains3.1. Architecture skill:
 no change; source-specific rules stay with the provider guide.
+
+Ready packet2.8b1: controller freezes <=200 Ready interest keys, <=8 sorted
+Active players, exact uint32 aging/expiry order, f32 distance, four-phase credit
+and crafting repack veto, with atomic inventory/drop CAS. Existing accepted
+crafting helpers become crate-visible only for this consumer. Isolate a Sol
+worker for the multi-tick source/restart trace; main owns subsequent producer
+contracts and integration. No new shared boundary across parallel consumers;
+the accepted0ea40207 drop seam is unchanged. Original broad2.8b stays open.

@@ -128,3 +128,7 @@ The [drop ownership contract](plans/08-drop-contract.md) fixes 36 input stacks,
 32 persistent slots, ordered atomic staging and tick revision semantics before
 any drop-producing or pickup provider is accepted. Counter-only aging retains
 the verified Go dirty-selection behavior; this migration adds no save guarantee.
+
+The [drop lifecycle packet](plans/09-drop-lifecycle.md) consumes accepted slots
+independently of loot producers. The reducer retains the radius2 active-interest
+union and publication ownership; command and producer acceptance stays separate.
