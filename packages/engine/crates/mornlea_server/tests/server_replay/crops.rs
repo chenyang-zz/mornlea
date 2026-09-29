@@ -32,13 +32,16 @@ use mornlea_domain::{
 };
 use mornlea_protocol::{LoginStart, admit_login};
 use mornlea_server::contracts::{
-    ActorBody, ActorKey, ActorLifecycle, ActorRecord, BlockObservation, BlockWrite, ChunkKey,
-    DropRecord, FixtureState, PhaseReport, RuleCall, RuleEffect, RulePhase, ServerLimits,
-    SessionKey, SleepState, SystemRule, TickBudget, TransportKind, WorkState,
+    ActorBody, ActorKey, ActorLifecycle, ActorRecord, BlockWrite, ChunkKey, DropRecord,
+    EnvironmentState, FixtureState, PhaseReport, RuleCall, RuleEffect, RulePhase, RuleTunables,
+    ServerLimits, SessionKey, SleepState, SystemRule, TickBudget, TransportKind, WorkState,
 };
+use mornlea_server::core::world::ReadyChunk;
 use mornlea_server::rules::crops as provider;
 use mornlea_server::state::{AuthorityState, TickContext};
-use mornlea_storage::{ItemStack, PlayerLocation, PlayerSave};
+use mornlea_storage::{
+    Chunk, ContainerSnapshot, ItemStack, PlayerLocation, PlayerSave, StorageKind,
+};
 
 // Stable block numbers, mirrored from the frozen const block in
 // `packages/shared/core/block.go`: `AirID` 0, `DirtID` 3, `FarmlandDryID` 35,
@@ -141,6 +144,59 @@ fn world() -> WorldState {
     .expect("world")
 }
 
+fn environment() -> EnvironmentState {
+    EnvironmentState {
+        seed: 7,
+        next_tick: 0,
+        world_time: 0,
+        day_phase_offset: 0,
+        season_offset: 0,
+        weather: Weather::Clear,
+        weather_remaining: 0,
+        difficulty: 0,
+        tunables: RuleTunables::source_defaults(),
+    }
+}
+
+fn ready_chunk(cells: &[(BlockPos, u16)]) -> ReadyChunk {
+    let mut sections = vec![
+        ContainerSnapshot {
+            kind: StorageKind::Single,
+            bits: 0,
+            single: 0,
+            palette: vec![],
+            packed: vec![],
+        };
+        24
+    ];
+    for (pos, block) in cells {
+        let section = ((pos.y() + 64) / 16) as usize;
+        if sections[section].kind == StorageKind::Single {
+            sections[section] = ContainerSnapshot {
+                kind: StorageKind::Direct,
+                bits: 15,
+                single: 0,
+                palette: vec![],
+                packed: vec![0; 1024],
+            };
+        }
+        let index = (((pos.y() + 64) % 16) * 256 + (pos.z() & 15) * 16 + (pos.x() & 15)) as usize;
+        sections[section].packed[index / 4] |= u64::from(*block) << ((index % 4) * 15);
+    }
+    ReadyChunk::try_new(
+        chunk_key(cells[0].0),
+        1,
+        1,
+        Chunk {
+            sections,
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        },
+    )
+    .expect("ready chunk")
+}
+
 /// Builds a context whose pre-step poses are airborne and whose staged
 /// post-motion poses are landed at `position`: the landing edge
 /// `noteTrampleLanding` collects on. The fixture actors are the pre-step
@@ -182,10 +238,9 @@ fn landing_context<'a>(
             .expect("landed actor");
     }
     context
-}
-
-fn observation(pos: BlockPos, block: u16) -> BlockObservation {
-    BlockObservation::try_new(chunk_key(pos), 1, 1, pos, block).expect("block observation")
+        .stage(RuleEffect::Environment(environment()))
+        .expect("environment");
+    context
 }
 
 fn chunk_key(pos: BlockPos) -> ChunkKey {
@@ -243,9 +298,11 @@ fn dual_landing_once() {
             true,
         )))
         .expect("third actor");
-    context.preload_block(observation(foot, FARMLAND_WET));
-    context.preload_block(observation(crop, WHEAT_MATURE));
-    context.preload_block(observation(bare, FARMLAND_DRY));
+    context.preload_ready_chunk(ready_chunk(&[
+        (foot, FARMLAND_WET),
+        (crop, WHEAT_MATURE),
+        (bare, FARMLAND_DRY),
+    ]));
 
     // The batch entry stages nothing for its own shapes and rejects foreign
     // shapes without effect, the shared batch-entry refusal.
@@ -305,7 +362,30 @@ fn dual_landing_once() {
     assert_eq!(context.read().block(Dimension::OVERWORLD, crop), Some(AIR));
     // Bare farmland reverts without any drop side effect.
     assert_eq!(context.read().block(Dimension::OVERWORLD, bare), Some(DIRT));
-    assert_eq!(context.read().drops(chunk_key(foot)).len(), 0);
+    assert_eq!(context.read().drops(chunk_key(foot)).len(), 2);
+    // The Go crop sampler gives wheat 1, seeds 1 for seed 7/tick 0/cell (0,1,0).
+    let output: Vec<_> = context
+        .read()
+        .drops(chunk_key(foot))
+        .iter()
+        .map(|drop| (drop.stack.item, drop.stack.count))
+        .collect();
+    assert_eq!(output, vec![(35, 1), (34, 1)]);
+    let snapshot = context.snapshot_state(world());
+    assert_eq!(
+        snapshot
+            .chunks
+            .iter()
+            .find(|(key, _, _, _)| *key == chunk_key(foot))
+            .unwrap()
+            .2,
+        2
+    );
+    let mut reloaded_authority = self::authority();
+    let reloaded =
+        TickContext::from_fixture(&mut reloaded_authority, &snapshot, TickBudget::full());
+    assert_eq!(reloaded.read().block(Dimension::OVERWORLD, crop), Some(AIR));
+    assert_eq!(reloaded.read().drops(chunk_key(crop)).len(), 2);
     // Nothing is carried: every collected candidate settles or passes in the
     // same call and the pending buffer empties.
     assert_eq!(schedule.trample_pending(), 0);
@@ -327,8 +407,7 @@ fn capacity_and_second_write_fault() {
     let foot = BlockPos::new(0, 0, 0);
     let crop = BlockPos::new(0, 1, 0);
     let mut context = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5]);
-    context.preload_block(observation(foot, FARMLAND_DRY));
-    context.preload_block(observation(crop, WHEAT_MATURE));
+    context.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_DRY), (crop, WHEAT_MATURE)]));
     for slot in 0..(DROPS_PER_CHUNK - 1) as u8 {
         context.preload_drop(occupied_drop(foot, slot));
     }
@@ -367,8 +446,10 @@ fn capacity_and_second_write_fault() {
     )
     .expect("authority");
     let mut fault = TickContext::harness(&mut fault_authority, TickBudget::full());
-    fault.preload_block(observation(foot, FARMLAND_DRY));
-    fault.preload_block(observation(crop, WHEAT_MATURE));
+    fault
+        .stage(RuleEffect::Environment(environment()))
+        .expect("environment");
+    fault.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_DRY), (crop, WHEAT_MATURE)]));
     let ground = fault
         .read()
         .observation(Dimension::OVERWORLD, foot)
@@ -396,4 +477,111 @@ fn capacity_and_second_write_fault() {
         Some(WHEAT_MATURE)
     );
     assert_eq!(fault.read().drops(chunk_key(foot)).len(), 0);
+}
+
+#[test]
+fn environmental_crop_outputs_and_missing_environment() {
+    for (block, expected) in [
+        (37, vec![(34, 1)]),
+        (46, vec![(40, 1)]),
+        (53, vec![(40, 1)]),
+        (54, vec![(41, 1)]),
+        (61, vec![(41, 1)]),
+    ] {
+        let mut authority = authority();
+        let session = authority
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let foot = BlockPos::new(0, 0, 0);
+        let crop = BlockPos::new(0, 1, 0);
+        let mut ctx = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5]);
+        ctx.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_WET), (crop, block)]));
+        let report =
+            provider::settle_tramples(&mut provider::FootprintSchedule::new(), &mut ctx).unwrap();
+        assert_eq!(report.applied, 1);
+        assert_eq!(ctx.read().block(Dimension::OVERWORLD, crop), Some(AIR));
+        let drops: Vec<_> = ctx
+            .read()
+            .drops(chunk_key(crop))
+            .iter()
+            .map(|drop| (drop.stack.item, drop.stack.count))
+            .collect();
+        assert_eq!(drops, expected, "block {block}");
+        assert!(
+            ctx.read()
+                .drops(chunk_key(crop))
+                .iter()
+                .all(|drop| drop.pickup_delay == 10)
+        );
+    }
+
+    let mut check_authority = authority();
+    let session = check_authority
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let foot = BlockPos::new(0, 0, 0);
+    let crop = BlockPos::new(0, 1, 0);
+    let mut ctx = landing_context(&mut check_authority, &[session], [0.5, 1.0, 0.5]);
+    ctx.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_DRY), (crop, 37)]));
+    assert_eq!(ctx.read().drops(chunk_key(crop)).len(), 0);
+    // A new context without a staged environment must preserve the pending landing.
+    let mut authority = authority();
+    let mut missing = TickContext::harness(&mut authority, TickBudget::full());
+    missing.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_DRY), (crop, 37)]));
+    let mut schedule = provider::FootprintSchedule::new();
+    assert_eq!(
+        provider::settle_tramples(&mut schedule, &mut missing),
+        Err(mornlea_server::contracts::ServerError::InvalidInput {
+            field: "environment"
+        })
+    );
+    assert_eq!(
+        missing.read().block(Dimension::OVERWORLD, foot),
+        Some(FARMLAND_DRY)
+    );
+}
+
+#[test]
+fn full_slots_merge_at_crop_cell_and_stale_ground_refuses() {
+    let mut authority = authority();
+    let session = authority
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let foot = BlockPos::new(0, 0, 0);
+    let crop = BlockPos::new(0, 1, 0);
+    let mut ctx = landing_context(&mut authority, &[session], [0.5, 1.0, 0.5]);
+    ctx.preload_ready_chunk(ready_chunk(&[(foot, FARMLAND_WET), (crop, WHEAT_MATURE)]));
+    for slot in 0..32 {
+        let mut drop = occupied_drop(foot, slot);
+        if slot < 2 {
+            drop.position = FiniteVec3::try_new([0.5, 1.5, 0.5]).unwrap();
+            drop.stack.item = if slot == 0 { 35 } else { 34 };
+            drop.stack.count = 60;
+        }
+        ctx.preload_drop(drop);
+    }
+    let stale_ground = ctx.read().observation(Dimension::OVERWORLD, foot).unwrap();
+    let crop_observation = ctx.read().observation(Dimension::OVERWORLD, crop).unwrap();
+    let report =
+        provider::settle_tramples(&mut provider::FootprintSchedule::new(), &mut ctx).unwrap();
+    assert_eq!(report.applied, 1);
+    assert_eq!(ctx.read().drops(chunk_key(crop)).len(), 32);
+    let drops = ctx.read();
+    assert!(
+        drops
+            .drops(chunk_key(crop))
+            .iter()
+            .any(|drop| drop.stack.item == 35 && drop.stack.count > 60)
+    );
+    assert!(
+        drops
+            .drops(chunk_key(crop))
+            .iter()
+            .any(|drop| drop.stack.item == 34 && drop.stack.count > 60)
+    );
+    assert_eq!(
+        provider::commit_trample(&mut ctx, stale_ground, Some(crop_observation)),
+        provider::TrampleCommit::Refused
+    );
+    assert_eq!(ctx.read().block(Dimension::OVERWORLD, foot), Some(DIRT));
 }

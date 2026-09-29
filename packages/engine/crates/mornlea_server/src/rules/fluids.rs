@@ -36,19 +36,19 @@
 //! a section only below the target and permits the final section to overshoot
 //! by at most 4095 cells. A refused charge never fails the tick: the unstarted
 //! item or section carries with its original due tick or cursor, so carried
-//! work is never lost and never double-processed. Commits go through the
-//! accepted system-transaction entry under [`SystemRule::Fluid`] with no
-//! inventory and no borrowed identity.
+//! work is never lost and never double-processed. Per-target commits use the
+//! accepted system transaction, with a complete drop batch for displaced plants.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mornlea_domain::{BlockPos, ChunkPos, Dimension};
+use mornlea_domain::{BlockPos, ChunkPos, Dimension, FiniteVec3, RejectReason};
 use mornlea_engine::native::contracts::fluid::{FluidEvalOp, FluidWrites, NeighborSlot};
 use mornlea_engine::native::fluid_eval::NativeFluidEval;
 
+use super::crops::environment_plant_outputs;
 use crate::core::contracts::{
-    BlockObservation, BlockWrite, ChunkKey, PhaseReport, RescanWork, RuleCall, RulePhase,
-    ServerError, SystemRule, WorkKind,
+    BlockObservation, BlockWrite, ChunkKey, DropBatch, DropSource, PhaseReport, RescanWork,
+    RuleCall, RulePhase, RuleReject, ServerError, SystemRule, WorkKind,
 };
 use crate::core::state::TickContext;
 
@@ -491,7 +491,7 @@ fn checked_add_pos(pos: BlockPos, dx: i32, dy: i32, dz: i32) -> Option<BlockPos>
 
 /// Bounded update: selects the due items of each sorted dimension, evaluates
 /// their tick-start snapshots through the engine kernel, merges overlapping
-/// outputs strongest-first, commits once in sorted order, and requeues.
+/// outputs strongest-first, settles each target in sorted order, and requeues.
 ///
 /// Selection pops at most the frozen per-dimension ceiling can charge: each
 /// popped item charges one [`WorkKind::FluidUpdates`] unit, stale skips
@@ -507,6 +507,13 @@ pub fn update(
     delay: u64,
 ) -> Result<PhaseReport, ServerError> {
     const REFUSAL: ServerError = ServerError::InvalidInput { field: "fluid" };
+    // The environment is a tick-wide authority input. Refusing before the
+    // first pop preserves the caller-owned schedule for a later valid tick.
+    let Some(environment) = ctx.read().environment().cloned() else {
+        return Err(ServerError::InvalidInput {
+            field: "environment",
+        });
+    };
     let mut report = PhaseReport {
         examined: 0,
         applied: 0,
@@ -576,31 +583,72 @@ pub fn update(
                 }
             }
         }
-        // Commit only cells whose value actually changes, mirroring Go's
-        // value-change gate that keeps no-op writes out of dirty tracking and
-        // broadcast. The single sorted transaction keeps the commit atomic.
-        let mut writes: Vec<BlockWrite> = Vec::new();
+        // Each target is one source SetBlock decision. A plant capacity retry
+        // cannot discard an independent water write from the same evaluation.
+        let mut changed: Vec<(ChunkKey, BlockPos)> = Vec::new();
+        let mut retries: Vec<(ChunkKey, BlockPos)> = Vec::new();
         for (observed, block) in merged.values() {
             if observed.block == *block {
                 continue;
             }
-            writes.push(BlockWrite::try_new(*observed, *block).map_err(|_| REFUSAL)?);
-        }
-        let changed: Vec<(ChunkKey, BlockPos)> = writes
-            .iter()
-            .map(|write| (write.observed.key, write.observed.pos))
-            .collect();
-        if !writes.is_empty() {
-            ctx.transaction()
-                .try_system(SystemRule::Fluid, writes)
+            let write = BlockWrite::try_new(*observed, *block).map_err(|_| REFUSAL)?;
+            if let Some(stacks) = environment_plant_outputs(
+                environment.seed,
+                now,
+                dimension,
+                observed.pos,
+                observed.block,
+            ) {
+                let pos = observed.pos;
+                let drops = DropBatch::try_new(
+                    DropSource::System {
+                        rule: SystemRule::Fluid,
+                        tick: ctx.read().tick(),
+                        target: pos,
+                    },
+                    dimension,
+                    FiniteVec3::try_new([
+                        pos.x() as f32 + 0.5,
+                        pos.y() as f32 + 0.5,
+                        pos.z() as f32 + 0.5,
+                    ])
+                    .map_err(|_| REFUSAL)?,
+                    stacks,
+                    environment.tunables.drop_pickup_delay_ticks(),
+                )
                 .map_err(|_| REFUSAL)?;
+                match ctx.read().check_drop_batch(&drops) {
+                    Ok(()) => {}
+                    Err(RuleReject::Wire(RejectReason::DropCapacity)) => {
+                        retries.push((observed.key, pos));
+                        continue;
+                    }
+                    Err(_) => return Err(REFUSAL),
+                }
+                match ctx
+                    .transaction()
+                    .try_system_with_drops(SystemRule::Fluid, vec![write], drops)
+                {
+                    Ok(_) => {}
+                    Err(RuleReject::Wire(RejectReason::DropCapacity)) => {
+                        retries.push((observed.key, pos));
+                        continue;
+                    }
+                    Err(_) => return Err(REFUSAL),
+                }
+            } else {
+                ctx.transaction()
+                    .try_system(SystemRule::Fluid, vec![write])
+                    .map_err(|_| REFUSAL)?;
+            }
+            changed.push((observed.key, observed.pos));
         }
         report.applied += changed.len();
         // Each changed cell plus its six neighbors requeues at `now + delay`,
         // with earliest-due dedup folding overlaps, mirroring Go's requeue of
         // the changed set after commit.
         let due = now.saturating_add(delay);
-        for (key, pos) in changed {
+        for (key, pos) in changed.into_iter().chain(retries) {
             schedule.enqueue_fluid(key, pos, due);
             for (dx, dy, dz) in SIX_NEIGHBORS {
                 let Some(neighbor) = checked_add_pos(pos, dx, dy, dz) else {

@@ -60,19 +60,19 @@
 //! order, and both precede random sampling, so a cell this provider reverts
 //! is no longer farmland when the sampler visits it.
 //!
-//! Boundary: drop minting belongs to the drop node. This provider computes
-//! the would-be stack count and enforces the per-chunk capacity preflight
-//! (the frozen full-capacity row), but stages no [`crate::core::contracts::RuleEffect::Drops`]
-//! and mints no records — the passive-lifecycle provider's terminal records
-//! follow the same no-loot discipline.
+//! Environmental plant removal owns its exact output policy. The accepted
+//! world transaction settles the crop write and output batch together; the
+//! preceding ground write remains independently committed on a crop fault.
 
 use std::collections::BTreeMap;
 
-use mornlea_domain::{BlockPos, ChunkPos, Dimension};
+use mornlea_domain::{BlockPos, Dimension, FiniteVec3};
+use mornlea_storage::ItemStack;
 
+use super::harvest;
 use crate::core::contracts::{
-    ActorKey, ActorLifecycle, BlockObservation, BlockWrite, ChunkKey, PhaseReport, RuleCall,
-    RulePhase, ServerError, SystemRule,
+    ActorKey, ActorLifecycle, BlockObservation, BlockWrite, DropBatch, DropSource, PhaseReport,
+    RuleCall, RulePhase, ServerError, SystemRule,
 };
 use crate::core::state::TickContext;
 
@@ -88,8 +88,7 @@ const FARMLAND_DRY: u16 = 35;
 /// Wet farmland (`core.FarmlandWetID`).
 const FARMLAND_WET: u16 = 36;
 
-/// Mature wheat (`core.WheatStage7ID`), the only crop whose trample yields
-/// two stacks (wheat plus seeds, `CropYieldRolls`).
+/// Mature wheat (`core.WheatStage7ID`).
 const WHEAT_MATURE: u16 = 44;
 
 /// First snow-layer form (`core.SnowLayer1BlockID`).
@@ -110,11 +109,6 @@ const HALF_WIDTH: f32 = 0.3;
 /// Horizontal travel that triggers one footprint sample
 /// (`snowFootprintStride`, `packages/server/sim/entity/snow_footprint.go`).
 const SNOW_STRIDE: f32 = 0.6;
-
-/// Fixed drop slots one chunk holds (`core.DropsPerChunk`,
-/// `packages/shared/core/drop.go`), the same budget the human mining
-/// preflight enforces in `crate::core::mutation`.
-const DROPS_PER_CHUNK: usize = 32;
 
 /// Reports whether a block number is dry or wet farmland (`core.IsFarmland`,
 /// `packages/shared/core/farming.go`).
@@ -139,10 +133,57 @@ fn snow_layer_tier(block: u16) -> Option<u8> {
     }
 }
 
-/// Chunk column of a world position (`core.BlockPos.Chunk`,
-/// `packages/shared/core/pos.go`; the arithmetic shift floors negatives).
-fn chunk_of(pos: BlockPos) -> ChunkPos {
-    ChunkPos::new(pos.x() >> 4, pos.z() >> 4)
+/// The flood and footprint branches use one source-compatible plant policy.
+/// Human mining has different mature root yields and is deliberately separate.
+pub(crate) fn environment_plant_outputs(
+    seed: i64,
+    tick: u64,
+    dimension: Dimension,
+    pos: BlockPos,
+    block: u16,
+) -> Option<Vec<ItemStack>> {
+    let stack = |item, count| ItemStack {
+        item,
+        count,
+        durability: 0,
+    };
+    Some(match block {
+        37..=43 => vec![stack(34, 1)],
+        WHEAT_MATURE => {
+            let (wheat, seeds) = harvest::wheat(seed, tick, dimension.get().into(), pos);
+            vec![stack(35, wheat), stack(34, seeds)]
+        }
+        46..=53 => vec![stack(40, 1)],
+        54..=61 => vec![stack(41, 1)],
+        89 => vec![stack(57, 1)],
+        _ => return None,
+    })
+}
+
+fn plant_drop_batch(
+    ctx: &TickContext<'_>,
+    observed: BlockObservation,
+    stacks: Vec<ItemStack>,
+) -> Option<DropBatch> {
+    let delay = ctx.read().environment()?.tunables.drop_pickup_delay_ticks();
+    let pos = observed.pos;
+    DropBatch::try_new(
+        DropSource::System {
+            rule: SystemRule::Footprint,
+            tick: ctx.read().tick(),
+            target: pos,
+        },
+        observed.key.dimension,
+        FiniteVec3::try_new([
+            pos.x() as f32 + 0.5,
+            pos.y() as f32 + 0.5,
+            pos.z() as f32 + 0.5,
+        ])
+        .ok()?,
+        stacks,
+        delay,
+    )
+    .ok()
 }
 
 /// One collected footprint candidate cell. Collection records geometry only
@@ -211,7 +252,7 @@ impl FootprintSchedule {
 /// three-way shape of the Go `commitTrample` bool plus its ground-first
 /// side effect:
 ///
-/// - `Complete`: both writes landed; the drop lane may proceed.
+/// - `Complete`: both writes and the prepared crop output landed.
 /// - `GroundOnly`: the ground revert landed but the crop write was refused —
 ///   the frozen second-write fault row. Ground→dirt stands; the crop and the
 ///   drop stay uncommitted; nothing surfaces to the caller (Go returns
@@ -268,6 +309,11 @@ pub fn settle_tramples(
     schedule: &mut FootprintSchedule,
     ctx: &mut TickContext<'_>,
 ) -> Result<PhaseReport, ServerError> {
+    if ctx.read().environment().is_none() {
+        return Err(ServerError::InvalidInput {
+            field: "environment",
+        });
+    }
     collect_trample_landings(schedule, ctx);
     let cells = std::mem::take(&mut schedule.trample_pending);
     let mut applied = 0usize;
@@ -435,26 +481,6 @@ fn settle_trample_cell(ctx: &mut TickContext<'_>, cell: &FootprintCell) -> bool 
         // conversion itself MUST NOT mint a drop.
         return commit_trample(ctx, ground, None) == TrampleCommit::Complete;
     };
-    // Every crop number carries a registered drop in the frozen
-    // `core.BlockDrop` table (`packages/shared/core/item.go`: wheat seeds or
-    // wheat, potato, carrot), so the Go `!ok` guard has no reachable arm
-    // here. The mature wheat batch is two stacks (`CropYieldRolls`: one
-    // wheat, one seeds); every other crop is one.
-    let stacks = if crop.block == WHEAT_MATURE {
-        2usize
-    } else {
-        1usize
-    };
-    let key = ChunkKey {
-        dimension: cell.dimension,
-        pos: chunk_of(crop_pos),
-    };
-    // Capacity preflight before any write (`PrepareDropBatch`): a full drop
-    // budget abandons the whole cell silently — no revert, no crop removal,
-    // no partial drop.
-    if ctx.read().drops(key).len() + stacks > DROPS_PER_CHUNK {
-        return false;
-    }
     commit_trample(ctx, ground, Some(crop)) != TrampleCommit::Refused
 }
 
@@ -479,9 +505,8 @@ fn settle_snow_cell(ctx: &mut TickContext<'_>, cell: &FootprintCell) -> bool {
 }
 
 /// Commits one trample candidate's block writes as an ordered stage, the
-/// exact `commitTrample` shape (two sequential single-write commits plus the
-/// drop gate): the ground revert first through the accepted transaction, then
-/// the crop removal, and only `Complete` lets the caller's drop lane proceed.
+/// exact `commitTrample` shape: the ground revert commits first, then the crop
+/// removal and prepared output settle in one bounded transaction.
 ///
 /// The crop-bearing path deliberately does not use one all-or-nothing
 /// two-write transaction: the frozen second-write fault row requires that a
@@ -502,6 +527,29 @@ pub fn commit_trample(
     ground: BlockObservation,
     crop: Option<BlockObservation>,
 ) -> TrampleCommit {
+    let crop_batch = if let Some(crop) = crop {
+        let Some(environment) = ctx.read().environment() else {
+            return TrampleCommit::Refused;
+        };
+        let Some(stacks) = environment_plant_outputs(
+            environment.seed,
+            ctx.read().tick(),
+            crop.key.dimension,
+            crop.pos,
+            crop.block,
+        ) else {
+            return TrampleCommit::Refused;
+        };
+        let Some(batch) = plant_drop_batch(ctx, crop, stacks) else {
+            return TrampleCommit::Refused;
+        };
+        if ctx.read().check_drop_batch(&batch).is_err() {
+            return TrampleCommit::Refused;
+        }
+        Some(batch)
+    } else {
+        None
+    };
     let Ok(ground_write) = BlockWrite::try_new(ground, DIRT) else {
         return TrampleCommit::Refused;
     };
@@ -520,7 +568,11 @@ pub fn commit_trample(
     };
     if ctx
         .transaction()
-        .try_system(SystemRule::Footprint, vec![crop_write])
+        .try_system_with_drops(
+            SystemRule::Footprint,
+            vec![crop_write],
+            crop_batch.expect("crop batch preflighted"),
+        )
         .is_err()
     {
         // The exceptional second-write fault row: ground→dirt stands, the

@@ -25,13 +25,17 @@
 
 use std::collections::BTreeSet;
 
-use mornlea_domain::{BlockPos, ChunkPos, Dimension};
-use mornlea_server::contracts::{
-    BlockObservation, ChunkKey, PhaseReport, RescanWork, RuleCall, RulePhase, ServerLimits,
-    TickBudget,
+use mornlea_domain::{
+    BlockPos, ChunkPos, Dimension, DropId, FiniteVec3, Season, Weather, WorldState, WorldStateParts,
 };
+use mornlea_server::contracts::{
+    BlockObservation, ChunkKey, DropRecord, EnvironmentState, PhaseReport, RescanWork, RuleCall,
+    RuleEffect, RulePhase, RuleTunables, ServerLimits, TickBudget,
+};
+use mornlea_server::core::world::ReadyChunk;
 use mornlea_server::rules::fluids::{self as provider, FluidSchedule};
 use mornlea_server::state::{AuthorityState, TickContext};
+use mornlea_storage::{Chunk, ContainerSnapshot, ItemStack, StorageKind};
 
 // Stable block numbers, mirrored from the frozen const block in
 // `packages/shared/core/block.go`.
@@ -47,6 +51,91 @@ fn authority() -> AuthorityState {
         7,
     )
     .expect("authority")
+}
+
+fn stage_environment(ctx: &mut TickContext<'_>) {
+    ctx.stage(RuleEffect::Environment(EnvironmentState {
+        seed: 7,
+        next_tick: 0,
+        world_time: 0,
+        day_phase_offset: 0,
+        season_offset: 0,
+        weather: mornlea_domain::Weather::Clear,
+        weather_remaining: 0,
+        difficulty: 0,
+        tunables: RuleTunables::source_defaults(),
+    }))
+    .expect("environment");
+}
+
+fn ready_chunk(dimension: Dimension, cells: &[(BlockPos, u16)]) -> ReadyChunk {
+    let mut sections = vec![
+        ContainerSnapshot {
+            kind: StorageKind::Single,
+            bits: 0,
+            single: 0,
+            palette: vec![],
+            packed: vec![],
+        };
+        24
+    ];
+    for (pos, block) in cells {
+        let section = ((pos.y() + 64) / 16) as usize;
+        if sections[section].kind == StorageKind::Single {
+            sections[section] = ContainerSnapshot {
+                kind: StorageKind::Direct,
+                bits: 15,
+                single: 0,
+                palette: vec![],
+                packed: vec![0; 1024],
+            };
+        }
+        let index = (((pos.y() + 64) % 16) * 256 + (pos.z() & 15) * 16 + (pos.x() & 15)) as usize;
+        sections[section].packed[index / 4] |= u64::from(*block) << ((index % 4) * 15);
+    }
+    ReadyChunk::try_new(
+        chunk_key(dimension, cells[0].0),
+        1,
+        1,
+        Chunk {
+            sections,
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        },
+    )
+    .expect("ready chunk")
+}
+
+fn occupied_drop(slot: u8, pos: BlockPos, item: u16, count: u8) -> DropRecord {
+    DropRecord {
+        id: DropId::try_new(0, ChunkPos::new(0, 0), slot, 1).unwrap(),
+        position: FiniteVec3::try_new([
+            pos.x() as f32 + 0.5,
+            pos.y() as f32 + 0.5,
+            pos.z() as f32 + 0.5,
+        ])
+        .unwrap(),
+        stack: ItemStack {
+            item,
+            count,
+            durability: 0,
+        },
+        pickup_delay: 0,
+        age: 0,
+    }
+}
+
+fn world() -> WorldState {
+    WorldState::try_new(WorldStateParts {
+        day_phase_offset: 0,
+        world_time_ticks: 0,
+        weather: Weather::Clear,
+        season: Season::Spring,
+        season_progress: 0,
+        temperature: 0,
+    })
+    .unwrap()
 }
 
 fn chunk_key(dimension: Dimension, pos: BlockPos) -> ChunkKey {
@@ -71,6 +160,232 @@ fn zero_report() -> PhaseReport {
     }
 }
 
+#[test]
+fn flood_wheat_outputs_and_requires_environment_before_pop() {
+    let source = BlockPos::new(0, 10, 0);
+    let crop = BlockPos::new(1, 10, 0);
+    let floor_a = BlockPos::new(0, 9, 0);
+    let floor_b = BlockPos::new(1, 9, 0);
+    let dimension = Dimension::OVERWORLD;
+    let mut authority = authority();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    ctx.preload_ready_chunk(ready_chunk(
+        dimension,
+        &[
+            (source, SOURCE),
+            (crop, 37),
+            (floor_a, STONE),
+            (floor_b, STONE),
+        ],
+    ));
+    let mut schedule = FluidSchedule::new();
+    schedule.enqueue_fluid(chunk_key(dimension, source), source, 0);
+    assert_eq!(
+        provider::update(&mut schedule, &mut ctx, 0, 5),
+        Err(mornlea_server::contracts::ServerError::InvalidInput {
+            field: "environment"
+        })
+    );
+    assert_eq!(schedule.fluid_due(dimension, source), Some(0));
+    assert_eq!(ctx.read().block(dimension, crop), Some(37));
+    stage_environment(&mut ctx);
+    let report = provider::update(&mut schedule, &mut ctx, 0, 5).expect("flood");
+    assert_eq!(report.applied, 2);
+    assert_eq!(ctx.read().block(dimension, crop), Some(LEVEL_1));
+    let view = ctx.read();
+    let drops = view.drops(chunk_key(dimension, crop));
+    assert_eq!(drops.len(), 1);
+    assert_eq!(
+        (
+            drops[0].stack.item,
+            drops[0].stack.count,
+            drops[0].pickup_delay
+        ),
+        (34, 1, 10)
+    );
+}
+
+#[test]
+fn plant_capacity_retry_preserves_independent_water() {
+    let source = BlockPos::new(0, 10, 0);
+    let crop = BlockPos::new(1, 10, 0);
+    let independent = BlockPos::new(10, 10, 0);
+    let independent_air = BlockPos::new(11, 10, 0);
+    let dimension = Dimension::OVERWORLD;
+    let mut authority = authority();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    stage_environment(&mut ctx);
+    ctx.preload_ready_chunk(ready_chunk(
+        dimension,
+        &[
+            (source, SOURCE),
+            (crop, 44),
+            (BlockPos::new(0, 9, 0), STONE),
+            (BlockPos::new(1, 9, 0), STONE),
+            (independent, SOURCE),
+            (independent_air, AIR),
+            (BlockPos::new(10, 9, 0), STONE),
+            (BlockPos::new(11, 9, 0), STONE),
+        ],
+    ));
+    for slot in 0..31 {
+        ctx.preload_drop(occupied_drop(slot, crop, 5, 64));
+    }
+    let mut schedule = FluidSchedule::new();
+    schedule.enqueue_fluid(chunk_key(dimension, source), source, 0);
+    schedule.enqueue_fluid(chunk_key(dimension, independent), independent, 0);
+    let report = provider::update(&mut schedule, &mut ctx, 0, 5).unwrap();
+    assert!(report.applied >= 1);
+    assert_eq!(ctx.read().block(dimension, crop), Some(44));
+    assert_eq!(ctx.read().block(dimension, independent_air), Some(LEVEL_1));
+    assert_eq!(schedule.fluid_due(dimension, crop), Some(5));
+    assert_eq!(ctx.read().drops(chunk_key(dimension, crop)).len(), 31);
+
+    for slot in [0, 1] {
+        let before = ctx.read().drops(chunk_key(dimension, crop))[slot].clone();
+        ctx.stage(RuleEffect::DropPatch {
+            before,
+            after: None,
+        })
+        .unwrap();
+    }
+    provider::update(&mut schedule, &mut ctx, 5, 5).unwrap();
+    assert_eq!(ctx.read().block(dimension, crop), Some(LEVEL_1));
+    let view = ctx.read();
+    let drops = view.drops(chunk_key(dimension, crop));
+    // Go CropYieldRolls(7,5,Overworld,(1,10,0)) returns (2,1).
+    assert!(
+        drops
+            .iter()
+            .any(|drop| drop.stack.item == 35 && drop.stack.count == 2)
+    );
+    assert!(
+        drops
+            .iter()
+            .any(|drop| drop.stack.item == 34 && drop.stack.count == 1)
+    );
+}
+
+#[test]
+fn full_slots_merge_seed_and_wild_grass_has_no_output() {
+    let source = BlockPos::new(0, 10, 0);
+    let wheat = BlockPos::new(1, 10, 0);
+    let grass_source = BlockPos::new(5, 10, 0);
+    let grass = BlockPos::new(6, 10, 0);
+    let dimension = Dimension::OVERWORLD;
+    let mut authority = authority();
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    stage_environment(&mut ctx);
+    ctx.preload_ready_chunk(ready_chunk(
+        dimension,
+        &[
+            (source, SOURCE),
+            (wheat, 37),
+            (grass_source, SOURCE),
+            (grass, 84),
+            (BlockPos::new(0, 9, 0), STONE),
+            (BlockPos::new(1, 9, 0), STONE),
+            (BlockPos::new(5, 9, 0), STONE),
+            (BlockPos::new(6, 9, 0), STONE),
+        ],
+    ));
+    for slot in 0..32 {
+        let mut drop = occupied_drop(slot, wheat, 5, 64);
+        if slot == 0 {
+            drop.stack.item = 34;
+            drop.stack.count = 60;
+        }
+        ctx.preload_drop(drop);
+    }
+    let mut schedule = FluidSchedule::new();
+    schedule.enqueue_fluid(chunk_key(dimension, source), source, 0);
+    schedule.enqueue_fluid(chunk_key(dimension, grass_source), grass_source, 0);
+    provider::update(&mut schedule, &mut ctx, 0, 5).unwrap();
+    assert_eq!(ctx.read().block(dimension, wheat), Some(LEVEL_1));
+    assert_eq!(ctx.read().block(dimension, grass), Some(LEVEL_1));
+    let view = ctx.read();
+    assert_eq!(view.drops(chunk_key(dimension, wheat)).len(), 32);
+    assert!(
+        view.drops(chunk_key(dimension, wheat))
+            .iter()
+            .any(|drop| drop.stack.item == 34 && drop.stack.count == 61)
+    );
+}
+
+#[test]
+fn boundary_flood_plant_policy_in_both_dimensions() {
+    let source = BlockPos::new(15, 10, 0);
+    let plant = BlockPos::new(16, 10, 0);
+    for dimension in [Dimension::OVERWORLD, Dimension::DEPTHS] {
+        for (block, expected) in [
+            (37, vec![(34, 1)]),
+            (
+                44,
+                if dimension == Dimension::OVERWORLD {
+                    vec![(35, 2), (34, 2)]
+                } else {
+                    vec![(35, 1), (34, 2)]
+                },
+            ),
+            (46, vec![(40, 1)]),
+            (53, vec![(40, 1)]),
+            (54, vec![(41, 1)]),
+            (61, vec![(41, 1)]),
+            (89, vec![(57, 1)]),
+        ] {
+            let mut authority = authority();
+            let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+            stage_environment(&mut ctx);
+            ctx.preload_ready_chunk(ready_chunk(
+                dimension,
+                &[(source, SOURCE), (BlockPos::new(15, 9, 0), STONE)],
+            ));
+            ctx.preload_ready_chunk(ready_chunk(
+                dimension,
+                &[(plant, block), (BlockPos::new(16, 9, 0), STONE)],
+            ));
+            let mut schedule = FluidSchedule::new();
+            schedule.enqueue_fluid(chunk_key(dimension, source), source, 0);
+            provider::update(&mut schedule, &mut ctx, 0, 5).unwrap();
+            assert_eq!(
+                ctx.read().block(dimension, plant),
+                Some(LEVEL_1),
+                "dimension {:?} block {block}",
+                dimension
+            );
+            let output: Vec<_> = ctx
+                .read()
+                .drops(chunk_key(dimension, plant))
+                .iter()
+                .map(|drop| (drop.stack.item, drop.stack.count))
+                .collect();
+            assert_eq!(output, expected, "dimension {:?} block {block}", dimension);
+            assert!(
+                ctx.read()
+                    .drops(chunk_key(dimension, plant))
+                    .iter()
+                    .all(|drop| drop.pickup_delay == 10)
+            );
+            if dimension == Dimension::DEPTHS && block == 89 {
+                let snapshot = ctx.snapshot_state(world());
+                let mut reloaded_authority = self::authority();
+                let reloaded = TickContext::from_fixture(
+                    &mut reloaded_authority,
+                    &snapshot,
+                    TickBudget::full(),
+                );
+                assert_eq!(reloaded.read().block(dimension, plant), Some(LEVEL_1));
+                assert_eq!(
+                    reloaded.read().drops(chunk_key(dimension, plant))[0]
+                        .stack
+                        .item,
+                    57
+                );
+            }
+        }
+    }
+}
+
 /// Budget and carry across two sorted dimensions: 513 due items per dimension
 /// against the frozen 512-updates-per-dimension ceiling leaves exactly one
 /// carry per dimension, and every changed cell requeues with its six neighbors
@@ -79,6 +394,7 @@ fn zero_report() -> PhaseReport {
 fn two_dimensions_513() {
     let mut authority = authority();
     let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    stage_environment(&mut ctx);
     // The batch entry owns no queue port, so even a well-shaped fluid call
     // reports zero without effect; a foreign phase refuses the same way.
     for phase in [RulePhase::FluidRescan, RulePhase::FluidUpdate] {
@@ -163,6 +479,7 @@ fn rescan_section_overshoot() {
     let mut authority = authority();
     let budget = TickBudget::try_new(4096, 512, 4097, 65536, 65536).expect("budget");
     let mut ctx = TickContext::harness(&mut authority, budget);
+    stage_environment(&mut ctx);
     let mut schedule = FluidSchedule::new();
     // Three in-scope sections with one observed source each, plus a pending
     // section whose chunk leaves the active scope before the scan.
@@ -294,6 +611,7 @@ fn strongest_snapshot_merge() {
 
     let mut authority_main = authority();
     let mut ctx = TickContext::harness(&mut authority_main, TickBudget::full());
+    stage_environment(&mut ctx);
     let mut schedule = FluidSchedule::new();
     layout(&mut schedule, &mut ctx, &queued);
     let report = provider::update(&mut schedule, &mut ctx, 0, 5).expect("update");
@@ -336,6 +654,7 @@ fn strongest_snapshot_merge() {
     // depend on processing order.
     let mut authority_reversed = authority();
     let mut ctx_reversed = TickContext::harness(&mut authority_reversed, TickBudget::full());
+    stage_environment(&mut ctx_reversed);
     let mut schedule_reversed = FluidSchedule::new();
     let mut reversed = queued;
     reversed.reverse();
@@ -360,6 +679,7 @@ fn strongest_snapshot_merge() {
     let mut authority_tight = authority();
     let budget = TickBudget::try_new(4096, 5, 65536, 65536, 65536).expect("budget");
     let mut ctx_tight = TickContext::harness(&mut authority_tight, budget);
+    stage_environment(&mut ctx_tight);
     let mut schedule_tight = FluidSchedule::new();
     layout(&mut schedule_tight, &mut ctx_tight, &queued);
     let tight = provider::update(&mut schedule_tight, &mut ctx_tight, 0, 5).expect("update");
