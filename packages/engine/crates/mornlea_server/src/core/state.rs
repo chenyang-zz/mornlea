@@ -233,17 +233,8 @@ impl AuthorityState {
             work.farmland_checks(),
             work.farmland_block_reads(),
         )?;
-        let tick = self.next_tick;
         self.next_tick = self.next_tick.saturating_add(1);
-        Ok(TickPublication {
-            tick,
-            events: Vec::new(),
-            control: Vec::new(),
-            counters: TickCounters {
-                executed_tick: tick,
-                ..TickCounters::default()
-            },
-        })
+        Ok(super::step::reduce_tick(self, work))
     }
 
     pub fn close_session(
@@ -1478,6 +1469,14 @@ impl<'a> TickContext<'a> {
         self.ready.insert(chunk.key, chunk);
     }
     pub fn harness(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
+        Self::from_parts(authority, budget)
+    }
+
+    /// Production tick context. The serial reducer owns the only call; the
+    /// frozen tick inputs (mailbox batch, companion feed, environment
+    /// snapshot) arrive through the narrow ports below, never through this
+    /// constructor.
+    pub(crate) fn for_tick(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
         Self::from_parts(authority, budget)
     }
 
