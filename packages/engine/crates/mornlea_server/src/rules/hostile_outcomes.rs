@@ -5,8 +5,8 @@
 //! then validates live identity and stages each successful hit atomically.
 
 use mornlea_domain::{
-    BlockPos, CombatHit, CombatTarget, Dimension, Event, EventRecipient, FiniteVec3, MotionState,
-    MotionStateParts, RoutedEvent, SurvivalState, SurvivalStateParts,
+    BlockPos, ChunkPos, CombatHit, CombatTarget, Dimension, Event, EventRecipient, FiniteVec3,
+    MotionState, MotionStateParts, RoutedEvent, SurvivalState, SurvivalStateParts,
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
@@ -842,6 +842,157 @@ fn knockback(from: [f32; 3], to: [f32; 3], yaw: f32) -> [f32; 3] {
     [delta[0] / length * 0.35, 0.0, delta[1] / length * 0.35]
 }
 
+/// Bone-thrower kind. Only the Go `HostileKindBoneThrower` (`1` in
+/// `packages/shared/network/protocol/message_hostile.go`) hurls bones and
+/// drops the deterministic pair below; every other kind drops walker flesh.
+#[allow(dead_code)]
+const HURLER_KIND: u8 = 1;
+
+/// Rotten flesh (`core.ItemRottenFlesh`,
+/// `packages/shared/core/item.go`): the walker death batch.
+#[allow(dead_code)]
+const ITEM_ROTTEN_FLESH: u16 = 45;
+
+/// Bow (`core.ItemBow`): the hurler bow drop.
+#[allow(dead_code)]
+const ITEM_BOW: u16 = 62;
+
+/// Bone (`core.ItemBone`): the hurler bone drop.
+#[allow(dead_code)]
+const ITEM_BONE: u16 = 64;
+
+/// Bow durability maximum (`core.ItemMaxDurability`,
+/// `packages/shared/core/item.go`): the dropped bow is the intact form.
+#[allow(dead_code)]
+const BOW_DURABILITY_MAX: u16 = 120;
+
+/// Hurler drop salt (`HostileHurlerDropSalt`,
+/// `packages/server/updates/sampler.go`).
+#[allow(dead_code)]
+const HURLER_DROP_SALT: u64 = 0x4855_524C_4452_4F50;
+
+/// `Sampler.SplitMix64` (`packages/server/updates/sampler.go`), the shared
+/// integer hash primitive of every random face. Each provider keeps its own
+/// copy beside the chain that consumes it. Not yet consumed by any staged
+/// settlement; the allow marks the landing until the death node runs.
+#[allow(dead_code)]
+fn splitmix64(x: u64) -> u64 {
+    let mut x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+/// One hurler kill roll over (`seed`, `world_time`, `id`)
+/// (`HostileHurlerDropRolls`, `packages/server/updates/sampler.go`): bones
+/// `0..2` from `hash % 3`, then the bow `1/8` from the next chain value. The
+/// pair is drawn once per kill and never re-rolled on a refused placement.
+/// Not yet consumed by any staged settlement; the allow marks the landing
+/// until the death node runs.
+#[allow(dead_code)]
+fn hurler_rolls(seed: i64, world_time: u64, id: u64) -> (u8, bool) {
+    let mut hash = splitmix64(seed as u64 ^ HURLER_DROP_SALT);
+    hash = splitmix64(hash ^ world_time);
+    hash = splitmix64(hash ^ id);
+    (
+        u8::try_from(hash % 3).expect("modulo three fits"),
+        splitmix64(hash) & 7 == 0,
+    )
+}
+
+/// One hostile death batch (`hostileDeathBatch`,
+/// `packages/server/sim/entity/hostile.go`): walkers one rotten flesh, hurlers
+/// the deterministic bone/bow pair with an empty batch when both rolls miss.
+/// Not yet staged; the allow marks the landing until the death node runs.
+#[allow(dead_code)]
+fn hostile_loot_batch(kind: u8, seed: i64, world_time: u64, id: u64) -> Vec<ItemStack> {
+    if kind != HURLER_KIND {
+        return vec![ItemStack {
+            item: ITEM_ROTTEN_FLESH,
+            count: 1,
+            durability: 0,
+        }];
+    }
+    let (bones, bow) = hurler_rolls(seed, world_time, id);
+    let mut batch = Vec::with_capacity(2);
+    if bones > 0 {
+        batch.push(ItemStack {
+            item: ITEM_BONE,
+            count: bones,
+            durability: 0,
+        });
+    }
+    if bow {
+        batch.push(ItemStack {
+            item: ITEM_BOW,
+            count: 1,
+            durability: BOW_DURABILITY_MAX,
+        });
+    }
+    batch
+}
+
+/// Sort key placing nearer rings first with (`x`, `z`) breaking ties inside
+/// one ring (`deathDropChunks` over `sortChunkKeys`,
+/// `packages/server/sim/entity/death.go`): one dimension at a time, so the
+/// ring plus the column order is the whole established order. Not yet
+/// consumed by any staged walk; the allow marks the landing until the death
+/// node runs.
+#[allow(dead_code)]
+fn ring_order_key(center: ChunkPos, pos: ChunkPos) -> (i64, i32, i32) {
+    let dx = i64::from(pos.x()) - i64::from(center.x());
+    let dz = i64::from(pos.z()) - i64::from(center.z());
+    (dx.abs().max(dz.abs()), pos.x(), pos.z())
+}
+
+/// Nearest column of a death block inside one candidate chunk
+/// (`clampBlockToChunk`, `packages/server/sim/entity/death.go`): overflow
+/// lands on the side facing the death point. Not yet consumed by any staged
+/// walk; the allow marks the landing until the death node runs.
+#[allow(dead_code)]
+fn clamp_block_to_chunk(block: BlockPos, chunk: ChunkPos) -> BlockPos {
+    let min_x = chunk.x().wrapping_shl(4);
+    let min_z = chunk.z().wrapping_shl(4);
+    BlockPos::new(
+        block.x().clamp(min_x, min_x + 15),
+        block.y(),
+        block.z().clamp(min_z, min_z + 15),
+    )
+}
+
+/// Foot block of a death pose (`blockPosOf`,
+/// `packages/server/sim/entity/hostile.go`): each component floors in float64
+/// before narrowing, so an out-of-span pose refuses instead of saturating
+/// silently through the cast. Not yet consumed by any staged walk; the allow
+/// marks the landing until the death node runs.
+#[allow(dead_code)]
+fn death_block(position: [f32; 3]) -> Option<BlockPos> {
+    let mut block = [0i32; 3];
+    for (index, value) in position.iter().enumerate() {
+        let floored = f64::from(*value).floor();
+        if !floored.is_finite() || floored < f64::from(i32::MIN) || floored > f64::from(i32::MAX) {
+            return None;
+        }
+        block[index] = floored as i32;
+    }
+    Some(BlockPos::new(block[0], block[1], block[2]))
+}
+
+/// Rehearsal origin steering one placement at the clamped column: the block
+/// center floors back onto the intended chunk cell through the shared drop
+/// location rule. Not yet consumed by any staged walk; the allow marks the
+/// landing until the death node runs.
+#[allow(dead_code)]
+fn death_origin(block: BlockPos, chunk: ChunkPos) -> Option<FiniteVec3> {
+    let clamped = clamp_block_to_chunk(block, chunk);
+    FiniteVec3::try_new([
+        clamped.x() as f32 + 0.5,
+        clamped.y() as f32 + 0.5,
+        clamped.z() as f32 + 0.5,
+    ])
+    .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1062,6 +1213,128 @@ mod tests {
         );
         assert!(ctx.events().is_empty());
         assert!(!ctx.mining_suppressed(ActorKey::Player(victim)));
+    }
+
+    /// Deterministic hurler rolls stay pinned to the Go known answers: the
+    /// same (`seed`, `world_time`, `id`) replays bone count and bow hit
+    /// bit-for-bit, so a refused drop never re-rolls the kill.
+    #[test]
+    fn hurler_rolls_match_go_known_answers() {
+        assert_eq!(hurler_rolls(0, 4000, 21), (2, true));
+        assert_eq!(hurler_rolls(42, 4000, 0xdead_beef_cafe_babe), (0, false));
+        assert_eq!(hurler_rolls(-7, 987_654_321, 7777), (0, false));
+    }
+
+    /// A hurler whose two rolls both miss stages no loot at all: the death
+    /// still completes, only the drop rehearsal is skipped.
+    #[test]
+    fn hurler_batch_empty_when_both_rolls_miss() {
+        assert!(hostile_loot_batch(1, 42, 4000, 0xdead_beef_cafe_babe).is_empty());
+    }
+
+    /// A hitting hurler carries bones plus a full-durability bow: a zero
+    /// durability bow is not a legal slot value, so the drop mints the
+    /// registry maximum.
+    #[test]
+    fn hurler_batch_carries_full_durability_bow() {
+        assert_eq!(
+            hostile_loot_batch(1, 0, 4000, 21),
+            vec![
+                ItemStack {
+                    item: 64,
+                    count: 2,
+                    durability: 0,
+                },
+                ItemStack {
+                    item: 62,
+                    count: 1,
+                    durability: 120,
+                },
+            ]
+        );
+    }
+
+    /// Walkers always drop one rotten flesh, and any unrecognized kind keeps
+    /// the walker batch exactly like the source fallback.
+    #[test]
+    fn walker_batch_is_single_flesh() {
+        let flesh = vec![ItemStack {
+            item: 45,
+            count: 1,
+            durability: 0,
+        }];
+        assert_eq!(hostile_loot_batch(0, 0, 4000, 21), flesh);
+        assert_eq!(hostile_loot_batch(7, 0, 4000, 21), flesh);
+    }
+
+    /// Ring keys order by Chebyshev ring first, then column: the first-fit
+    /// walk meets the death chunk before its neighbors and scans one ring
+    /// completely before reaching further.
+    #[test]
+    fn ring_key_orders_by_ring_then_column() {
+        use mornlea_domain::ChunkPos;
+        let center = ChunkPos::new(0, 0);
+        let mut positions = [
+            ChunkPos::new(2, 0),
+            ChunkPos::new(1, 1),
+            ChunkPos::new(0, 0),
+            ChunkPos::new(0, 1),
+            ChunkPos::new(1, 0),
+        ];
+        positions.sort_by_key(|pos| ring_order_key(center, *pos));
+        assert_eq!(
+            positions,
+            [
+                ChunkPos::new(0, 0),
+                ChunkPos::new(0, 1),
+                ChunkPos::new(1, 0),
+                ChunkPos::new(1, 1),
+                ChunkPos::new(2, 0),
+            ]
+        );
+        assert_eq!(
+            ring_order_key(ChunkPos::new(-1, -1), ChunkPos::new(1, 2)),
+            (3, 1, 2)
+        );
+    }
+
+    /// Clamping pins an out-of-chunk death block to the nearest column of
+    /// the candidate chunk and leaves an inside column untouched.
+    #[test]
+    fn clamp_pins_to_nearest_column() {
+        use mornlea_domain::{BlockPos, ChunkPos};
+        assert_eq!(
+            clamp_block_to_chunk(BlockPos::new(100, 70, -200), ChunkPos::new(0, 0)),
+            BlockPos::new(15, 70, 0)
+        );
+        assert_eq!(
+            clamp_block_to_chunk(BlockPos::new(5, 70, 7), ChunkPos::new(0, 0)),
+            BlockPos::new(5, 70, 7)
+        );
+        assert_eq!(
+            clamp_block_to_chunk(BlockPos::new(0, 70, 0), ChunkPos::new(-1, -1)),
+            BlockPos::new(-1, 70, -1)
+        );
+    }
+
+    /// The rehearsal origin is the clamped block center, so the drop store
+    /// floors it back onto the intended chunk cell.
+    #[test]
+    fn death_origin_targets_clamped_center() {
+        use mornlea_domain::{BlockPos, ChunkPos};
+        assert_eq!(
+            death_origin(BlockPos::new(100, 70, -200), ChunkPos::new(0, 0)),
+            Some(FiniteVec3::try_new([15.5, 70.5, 0.5]).expect("small center"))
+        );
+    }
+
+    /// The death block floors the pose inside the int32 span and refuses an
+    /// out-of-range pose instead of saturating silently.
+    #[test]
+    fn death_block_floors_pose_and_refuses_overflow() {
+        use mornlea_domain::BlockPos;
+        assert_eq!(death_block([0.5, 1.0, 0.5]), Some(BlockPos::new(0, 1, 0)));
+        assert_eq!(death_block([1e20, 1.0, 0.0]), None);
     }
 
     /// Lowered intent ceiling refuses a valid attack before any commit: the

@@ -1434,6 +1434,39 @@ pub(crate) fn closed_inventory(before: InventoryRecord) -> Option<InventoryRecor
     Some(after)
 }
 
+/// Recovers all nine grid cells into the pack and returns the grid to the
+/// personal size (`repackCraftingAll` in
+/// `packages/server/sim/entity/crafting.go`). The rehearsal runs first
+/// through the shared repack invariant, then the credit loop replays the
+/// same cell order through the pickup order; any leftover refuses the whole
+/// recovery with no partial credit, so the caller keeps every cell. The
+/// death settlement consumes this helper before its per-slot drop walk. Not
+/// yet staged by any provider; the allow marks the landing until the death
+/// node stages its first compound.
+#[allow(dead_code)]
+pub(crate) fn repack_all(before: InventoryRecord) -> Option<InventoryRecord> {
+    if !can_repack(&before.slots, &before.crafting) {
+        return None;
+    }
+    let mut slots = before.slots;
+    for cell in 0..CRAFTING_GRID_SLOTS {
+        let held = before.crafting[cell];
+        if held.item == ITEM_NONE {
+            continue;
+        }
+        let (next, leftover) = add_stack(&slots, held);
+        if leftover.count != 0 {
+            return None;
+        }
+        slots = next;
+    }
+    let mut after = before;
+    after.slots = slots;
+    after.crafting = [ItemStack::default(); CRAFTING_GRID_SLOTS];
+    after.crafting_size = CraftingSize::Personal;
+    Some(after)
+}
+
 struct RayHit {
     observed: BlockObservation,
 }
@@ -1472,5 +1505,62 @@ fn cast_ray(
         if batch.is_done() {
             return Ok(None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mornlea_domain::CraftingSize;
+
+    fn stack(item: u16, count: u8) -> ItemStack {
+        ItemStack {
+            item,
+            count,
+            durability: 0,
+        }
+    }
+
+    /// Full-grid recovery credits every cell in slot order and returns the
+    /// grid to the personal size, so death settlement can drop the credited
+    /// pack through the ordinary per-slot discipline.
+    #[test]
+    fn repack_all_credits_nine_cells_and_restores_personal() {
+        let mut before = InventoryRecord::empty();
+        before.crafting_size = CraftingSize::Workbench;
+        before.slots[0] = stack(35, 60);
+        before.crafting[0] = stack(35, 10);
+        before.crafting[4] = stack(37, 5);
+        before.crafting[8] = stack(35, 1);
+        let after = repack_all(before).expect("roomy pack must absorb the grid");
+        assert_eq!(after.crafting_size, CraftingSize::Personal);
+        assert_eq!(after.crafting, [ItemStack::default(); CRAFTING_GRID_SLOTS]);
+        assert_eq!(after.slots[0], stack(35, 64));
+        assert_eq!(after.slots[1], stack(35, 7));
+        assert_eq!(after.slots[2], stack(37, 5));
+    }
+
+    /// A pack with no room anywhere refuses the whole recovery instead of
+    /// crediting part of the grid: the caller keeps every cell and retries
+    /// on a later tick.
+    #[test]
+    fn repack_all_refuses_whole_when_pack_is_full() {
+        let mut before = InventoryRecord::empty();
+        before.crafting_size = CraftingSize::Workbench;
+        before.slots = [stack(1, 64); INVENTORY_SLOTS];
+        before.crafting[3] = stack(1, 1);
+        assert!(repack_all(before).is_none());
+    }
+
+    /// An empty grid always repacks: only the size returns to personal while
+    /// the pack passes through untouched.
+    #[test]
+    fn repack_all_empty_grid_only_resets_size() {
+        let mut before = InventoryRecord::empty();
+        before.crafting_size = CraftingSize::Workbench;
+        before.slots[9] = stack(35, 3);
+        let after = repack_all(before).expect("empty grid always repacks");
+        assert_eq!(after.crafting_size, CraftingSize::Personal);
+        assert_eq!(after.slots[9], stack(35, 3));
     }
 }
