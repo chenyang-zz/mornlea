@@ -37,7 +37,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6a Implement inventory authority and item conservation.
 - [x] 2.6b Implement containers and generation/view validation.
 - [ ] 2.6c Implement atomic workbench crafting.
-- [ ] 2.6d Implement tick-driven furnaces.
+- [x] 2.6d Implement tick-driven furnaces.
 - [ ] 2.6e Implement farming tools, bone meal and atomic buckets.
 - [ ] 2.7a Implement hostile lifecycle and targeting.
 - [ ] 2.7b Implement projectiles and hit validation.

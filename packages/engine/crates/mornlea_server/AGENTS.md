@@ -153,6 +153,15 @@ against this file.
   (inventory, hunger, saturation with the frozen food table, progress
   reset). Progress is transient only; the eating-ticks constant mirrors the
   frozen tunables value (no getter exists on that field).
+- `src/rules/furnaces.rs` owns tick-driven furnace advancement on the
+  `FurnaceStep` phase: sorted-unique interest advancing each furnace at
+  most once, pause-without-waste on invalid input or full output, ignition
+  at burn 0 (coal, 1600, same-tick −1/+1) and the 200-tick completion,
+  smelt rows through the single domain table, and exact restart from
+  stored values with no wall clock. Interest reaches the provider as an
+  explicit slice through the same batch-entry/body split as chunk
+  acquisition; the serial reducer owns the interest set and viewer
+  publication.
 - `src/rules/mining.rs` owns continuous mining progression on the
   `MiningStep` phase: key-unchanged increments to saturation, key change
   restarts at 1, completions through the 1.6 transaction exactly once, human
