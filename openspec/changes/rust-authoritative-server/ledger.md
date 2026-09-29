@@ -1326,3 +1326,14 @@ conservation). Production tick wiring is 3.1's explicitly assigned scope,
 not a 2.8b gap. One isolated worker owns only the drops replay topic;
 provider defects stop-and-report. Review depth is proportional (tests-only).
 Architecture skill: no change.
+
+
+Drop producer integration accepted from f2de983c (isolated worker, tests-only
++420/-0). Six proofs pass with no behavior fixes: death-staged loot aging
+with countdown, delay-39 untouchable then atomic pickup at 40, partial
+remainder conservation, expiry-before-pickup precedence, full-pack
+preservation, and the mining-10/death-40 delay pin as read-only evidence.
+Focused 29/29 and full gates green per worker; main re-verified the focused
+topic. No reviewer cycle per the packet's recorded proportionality ruling.
+All section-2 providers are now closed; 3.1 owns production composition.
+Architecture skill: no change.
