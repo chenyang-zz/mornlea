@@ -1130,3 +1130,17 @@ workspace clippy green four times on this SHA, so the finding is
 non-reproducible and non-load-bearing; any real engine lint drift stays
 covered by closeout gate 4.2.
 Architecture skill: no change.
+
+
+Main qualified plan22 with the loaded brainstorming/writing-plans workflow
+for node 2.6c1. Anchor is transient overlay in ActorAux::Player, inert unless
+size is Workbench, never serialized and never explicitly cleared; re-open
+overwrites anchor and clears the lease instead of the current idempotent skip.
+Go panic on repack failure maps to lossless preservation with rejected
+counted, since the panic's load-bearing property is no-loss; operator
+surfacing stays with reducer observability. Stale-anchor crafting stays legal
+until the lifecycle closes. Death/disconnect repack-first hooks remain owned
+by 2.7c2 and session lifecycle as recorded constraints. One isolated
+implementer owns crafting.rs plus the single aux field; containers.rs needs
+no edit.
+Architecture skill: no change.
