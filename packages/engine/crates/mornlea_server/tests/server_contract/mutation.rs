@@ -734,12 +734,9 @@ fn human_drop_companion_credit() {
         .inventory(companion_key)
         .expect("credited inventory");
     let mut expected = InventoryRecord::empty();
-    expected.slots[0] = ItemStack {
-        item: ITEM_CHEST,
-        count: 1,
-        durability: 0,
-    };
-    for slot in 1..=CHEST_SLOTS {
+    // An empty selected hand cannot harvest the chest body; its contents
+    // still transfer in fixed slot order.
+    for slot in 0..CHEST_SLOTS {
         expected.slots[slot] = ItemStack {
             item: ITEM_STONE,
             count: 64,
@@ -979,6 +976,538 @@ fn fixture_case(
     context.preload_block(observation(BlockPos::new(0, 65, 1), target_block));
     context.preload_block(observation(BlockPos::new(0, 65, 2), hit_block));
     case(&mut context, session);
+}
+
+#[test]
+fn wrong_tool_clears_without_body_or_drop_capacity() {
+    for block in [12, 10] {
+        fixture_case(AIR, AIR, block, ItemStack::default(), |context, session| {
+            let actor = ActorKey::Player(session);
+            let target = BlockPos::new(0, 65, 2);
+            for slot in 0..32 {
+                context.preload_drop(occupied_drop(slot));
+            }
+            let resolved = resolve_mine(
+                actor,
+                &primary_control(std::f32::consts::PI, 0.0),
+                &context.read(),
+            )
+            .expect("wrong tool still resolves")
+            .expect("target exists");
+            let outcome = context.transaction().try_mine(resolved).expect("clear");
+            assert_eq!(outcome.changed.len(), 1);
+            assert_eq!(outcome.drops_created, 0);
+            assert_eq!(
+                context
+                    .read()
+                    .observation(Dimension::OVERWORLD, target)
+                    .unwrap()
+                    .block,
+                AIR
+            );
+            assert_eq!(context.read().drops(overworld_key(target)).len(), 32);
+        });
+    }
+}
+
+#[test]
+fn upper_door_mining_clears_pair_and_anchors_lower_drop() {
+    fixture_case(AIR, AIR, 70, ItemStack::default(), |context, session| {
+        let actor = ActorKey::Player(session);
+        let upper = BlockPos::new(0, 65, 2);
+        let lower = BlockPos::new(0, 64, 2);
+        context.preload_block(observation(lower, 62));
+        let resolved = resolve_mine(
+            actor,
+            &primary_control(std::f32::consts::PI, 0.0),
+            &context.read(),
+        )
+        .expect("door resolve")
+        .expect("door target");
+        let outcome = context
+            .transaction()
+            .try_mine(resolved)
+            .expect("door clear");
+        assert_eq!(outcome.changed.len(), 2);
+        assert_eq!(outcome.drops_created, 1);
+        assert_eq!(
+            context
+                .read()
+                .observation(Dimension::OVERWORLD, upper)
+                .unwrap()
+                .block,
+            AIR
+        );
+        assert_eq!(
+            context
+                .read()
+                .observation(Dimension::OVERWORLD, lower)
+                .unwrap()
+                .block,
+            AIR
+        );
+        let view = context.read();
+        let drops = view.drops(overworld_key(lower));
+        assert_eq!(drops[0].stack.item, 43);
+        assert_eq!(drops[0].position.get(), [0.5, 64.5, 2.5]);
+    });
+}
+
+#[test]
+fn source_harvest_outputs_settle_in_fixed_order() {
+    let target = BlockPos::new(0, 65, 2);
+    // Expected stacks are literal outputs from the Go sampler at tick zero.
+    for (block, seed, expected) in [
+        (37, 7, vec![(34, 1)]),
+        (43, 7, vec![(34, 1)]),
+        (46, 7, vec![(40, 1)]),
+        (52, 7, vec![(40, 1)]),
+        (54, 7, vec![(41, 1)]),
+        (60, 7, vec![(41, 1)]),
+        (44, 7, vec![(35, 2), (34, 2)]),
+        (53, 7, vec![(40, 1)]),
+        (53, 14, vec![(40, 1), (42, 1)]),
+        (61, 7, vec![(41, 1)]),
+        (19, 7, vec![(22, 1)]),
+        (19, 11, vec![(22, 1), (57, 1)]),
+        (84, 4, vec![(34, 1)]),
+        (84, 7, vec![]),
+    ] {
+        fixture_case(AIR, AIR, block, ItemStack::default(), |context, session| {
+            let mut env = environment();
+            env.seed = seed;
+            context.stage(RuleEffect::Environment(env)).expect("seed");
+            let actor = ActorKey::Player(session);
+            let resolved = resolve_mine(
+                actor,
+                &primary_control(std::f32::consts::PI, 0.0),
+                &context.read(),
+            )
+            .expect("resolve")
+            .expect("target");
+            let outcome = context.transaction().try_mine(resolved).expect("mine");
+            assert_eq!(outcome.changed.len(), 1, "block {block}");
+            let view = context.read();
+            let actual: Vec<_> = view
+                .drops(overworld_key(target))
+                .iter()
+                .map(|drop| (drop.stack.item, drop.stack.count))
+                .collect();
+            assert_eq!(actual, expected, "block {block}, seed {seed}");
+        });
+    }
+}
+
+#[test]
+fn grass_miss_ignores_full_capacity_but_hit_retries_stably() {
+    let target = BlockPos::new(0, 65, 2);
+    for (seed, hit) in [(7, false), (4, true)] {
+        fixture_case(AIR, AIR, 84, ItemStack::default(), |context, session| {
+            let mut env = environment();
+            env.seed = seed;
+            context.stage(RuleEffect::Environment(env)).unwrap();
+            for slot in 0..32 {
+                context.preload_drop(occupied_drop(slot));
+            }
+            let actor = ActorKey::Player(session);
+            let before = probe(context, &[target], &[actor], &[], &[overworld_key(target)]);
+            let resolve = || {
+                resolve_mine(
+                    actor,
+                    &primary_control(std::f32::consts::PI, 0.0),
+                    &context.read(),
+                )
+            };
+            if hit {
+                assert_eq!(resolve(), Err(RuleReject::Wire(RejectReason::DropCapacity)));
+                assert_eq!(resolve(), Err(RuleReject::Wire(RejectReason::DropCapacity)));
+                assert_eq!(
+                    probe(context, &[target], &[actor], &[], &[overworld_key(target)]),
+                    before
+                );
+            } else {
+                let resolved = resolve().unwrap().unwrap();
+                let outcome = context.transaction().try_mine(resolved).unwrap();
+                assert_eq!(outcome.drops_created, 0);
+                assert_eq!(
+                    context
+                        .read()
+                        .observation(Dimension::OVERWORLD, target)
+                        .unwrap()
+                        .block,
+                    AIR
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn leaf_second_output_capacity_refuses_whole_mine() {
+    let target = BlockPos::new(0, 65, 2);
+    fixture_case(AIR, AIR, 19, ItemStack::default(), |context, session| {
+        let mut env = environment();
+        env.seed = 11;
+        context.stage(RuleEffect::Environment(env)).unwrap();
+        for slot in 0..31 {
+            context.preload_drop(occupied_drop(slot));
+        }
+        let actor = ActorKey::Player(session);
+        let before = probe(context, &[target], &[actor], &[], &[overworld_key(target)]);
+        assert_eq!(
+            resolve_mine(
+                actor,
+                &primary_control(std::f32::consts::PI, 0.0),
+                &context.read()
+            ),
+            Err(RuleReject::Wire(RejectReason::DropCapacity))
+        );
+        assert_eq!(
+            probe(context, &[target], &[actor], &[], &[overworld_key(target)]),
+            before
+        );
+    });
+}
+
+#[test]
+fn companion_credits_container_then_wears_newly_selected_tool() {
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let id = companion_id();
+    let actor = ActorKey::Companion(id);
+    let target = BlockPos::new(0, 65, 2);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    context
+        .stage(RuleEffect::Actor(companion_actor(id, [0.5, 64.0, 0.5])))
+        .unwrap();
+    context.preload_inventory(actor, InventoryRecord::empty());
+    context.preload_block(observation(BlockPos::new(0, 65, 0), AIR));
+    context.preload_block(observation(BlockPos::new(0, 65, 1), AIR));
+    context.preload_block(observation(target, CHEST));
+    let mut contents = [ItemStack::default(); CHEST_SLOTS];
+    contents[0] = ItemStack {
+        item: ITEM_PICKAXE,
+        count: 1,
+        durability: 10,
+    };
+    context.preload_container(ContainerRecord {
+        reference: chest_reference(),
+        revision: 1,
+        slots: ContainerSlots::Chest(contents),
+    });
+    let resolved = resolve_companion_mine(id, target, &context.read()).unwrap();
+    let outcome = context.transaction().try_mine(resolved).unwrap();
+    assert_eq!(outcome.changed.len(), 1);
+    assert_eq!(outcome.drops_created, 0);
+    let after = context.read().inventory(actor).unwrap().slots;
+    assert_eq!(
+        after[0],
+        ItemStack {
+            item: ITEM_PICKAXE,
+            count: 1,
+            durability: 9
+        }
+    );
+    assert!(after.iter().all(|stack| stack.item != ITEM_CHEST));
+}
+
+#[test]
+fn cross_chunk_bed_head_requires_current_foot_and_anchors_hit_drop() {
+    let foot = BlockPos::new(15, 65, 2);
+    let head = BlockPos::new(16, 65, 2);
+    let mut state = authority();
+    let session = state
+        .admit(admitted(72, "bed-mine"), TransportKind::Memory)
+        .unwrap();
+    let actor = ActorKey::Player(session);
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            [16.5, 64.0, 0.5],
+            std::f32::consts::PI,
+            0.0,
+        )))
+        .unwrap();
+    context.preload_inventory(actor, hotbar_inventory(0, ITEM_PICKAXE, 1, 50));
+    context.preload_block(observation(BlockPos::new(16, 65, 0), AIR));
+    context.preload_block(observation(BlockPos::new(16, 65, 1), AIR));
+    context.preload_block(observation(head, BED_HEAD_EAST));
+    let control = primary_control(std::f32::consts::PI, 0.0);
+    let missing = probe(&context, &[head], &[actor], &[], &[overworld_key(head)]);
+    assert_eq!(
+        resolve_mine(actor, &control, &context.read()),
+        Err(RuleReject::Wire(RejectReason::ChunkNotReady))
+    );
+    assert_eq!(
+        probe(&context, &[head], &[actor], &[], &[overworld_key(head)]),
+        missing
+    );
+
+    context.preload_block(observation(foot, BED_FOOT_EAST));
+    let stale = resolve_mine(actor, &control, &context.read())
+        .unwrap()
+        .unwrap();
+    for block in [AIR, BED_FOOT_EAST] {
+        let current = context
+            .read()
+            .observation(Dimension::OVERWORLD, foot)
+            .unwrap();
+        context
+            .transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(current, block).unwrap()],
+            )
+            .unwrap();
+    }
+    let before = probe(
+        &context,
+        &[foot, head],
+        &[actor],
+        &[],
+        &[overworld_key(foot), overworld_key(head)],
+    );
+    assert_eq!(
+        context.transaction().try_mine(stale),
+        Err(RuleReject::StaleObservation)
+    );
+    assert_eq!(
+        probe(
+            &context,
+            &[foot, head],
+            &[actor],
+            &[],
+            &[overworld_key(foot), overworld_key(head)]
+        ),
+        before
+    );
+
+    let resolved = resolve_mine(actor, &control, &context.read())
+        .unwrap()
+        .unwrap();
+    let outcome = context.transaction().try_mine(resolved).unwrap();
+    assert_eq!(outcome.changed.len(), 2);
+    assert_eq!(outcome.drops_created, 1);
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, foot)
+            .unwrap()
+            .block,
+        AIR
+    );
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, head)
+            .unwrap()
+            .block,
+        AIR
+    );
+    let view = context.read();
+    let drops = view.drops(overworld_key(head));
+    assert_eq!(drops[0].stack.item, ITEM_BED);
+    assert_eq!(drops[0].position.get(), [16.5, 65.5, 2.5]);
+    assert_eq!(view.inventory(actor).unwrap().slots[0].durability, 49);
+}
+
+#[test]
+fn companion_bed_clears_pair_with_one_credit_and_one_wear() {
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let id = companion_id();
+    let actor = ActorKey::Companion(id);
+    let foot = BlockPos::new(0, 65, 2);
+    let head = BlockPos::new(1, 65, 2);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    context
+        .stage(RuleEffect::Actor(companion_actor(id, [0.5, 64.0, 0.5])))
+        .unwrap();
+    context.preload_inventory(actor, hotbar_inventory(0, ITEM_PICKAXE, 1, 12));
+    context.preload_block(observation(BlockPos::new(0, 65, 0), AIR));
+    context.preload_block(observation(BlockPos::new(0, 65, 1), AIR));
+    context.preload_block(observation(foot, BED_FOOT_EAST));
+    context.preload_block(observation(head, BED_HEAD_EAST));
+    let resolved = resolve_companion_mine(id, foot, &context.read()).unwrap();
+    let outcome = context.transaction().try_mine(resolved).unwrap();
+    assert_eq!(outcome.changed.len(), 2);
+    assert_eq!(outcome.drops_created, 0);
+    let view = context.read();
+    assert_eq!(
+        view.observation(Dimension::OVERWORLD, foot).unwrap().block,
+        AIR
+    );
+    assert_eq!(
+        view.observation(Dimension::OVERWORLD, head).unwrap().block,
+        AIR
+    );
+    let slots = view.inventory(actor).unwrap().slots;
+    assert_eq!(slots[0].durability, 11);
+    assert_eq!(
+        slots
+            .iter()
+            .filter(|stack| stack.item == ITEM_BED)
+            .map(|stack| stack.count)
+            .sum::<u8>(),
+        1
+    );
+    assert!(view.drops(overworld_key(foot)).is_empty());
+}
+
+#[test]
+fn companion_door_keeps_source_single_cell_branch() {
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let id = companion_id();
+    let actor = ActorKey::Companion(id);
+    let lower = BlockPos::new(0, 65, 2);
+    let upper = BlockPos::new(0, 66, 2);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    context
+        .stage(RuleEffect::Actor(companion_actor(id, [0.5, 64.0, 0.5])))
+        .unwrap();
+    context.preload_inventory(actor, InventoryRecord::empty());
+    context.preload_block(observation(BlockPos::new(0, 65, 0), AIR));
+    context.preload_block(observation(BlockPos::new(0, 65, 1), AIR));
+    context.preload_block(observation(lower, 62));
+    context.preload_block(observation(upper, 70));
+    let resolved = resolve_companion_mine(id, lower, &context.read()).unwrap();
+    let outcome = context.transaction().try_mine(resolved).unwrap();
+    assert_eq!(outcome.changed.len(), 1);
+    let view = context.read();
+    assert_eq!(
+        view.observation(Dimension::OVERWORLD, lower).unwrap().block,
+        AIR
+    );
+    assert_eq!(
+        view.observation(Dimension::OVERWORLD, upper).unwrap().block,
+        70
+    );
+    assert_eq!(view.inventory(actor).unwrap().slots[0].item, 43);
+}
+
+#[test]
+fn door_at_world_ceiling_refuses_unavailable_upper_without_wear() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(73, "ceiling"), TransportKind::Memory)
+        .unwrap();
+    let actor = ActorKey::Player(session);
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            [0.5, 317.0, 0.5],
+            std::f32::consts::PI,
+            0.2,
+        )))
+        .unwrap();
+    context.preload_inventory(actor, hotbar_inventory(0, ITEM_PICKAXE, 1, 20));
+    for pos in [
+        BlockPos::new(0, 318, 0),
+        BlockPos::new(0, 318, 1),
+        BlockPos::new(0, 318, 2),
+    ] {
+        context.preload_block(observation(pos, AIR));
+    }
+    let target = BlockPos::new(0, 319, 2);
+    context.preload_block(observation(target, 62));
+    let before = probe(&context, &[target], &[actor], &[], &[overworld_key(target)]);
+    assert_eq!(
+        resolve_mine(
+            actor,
+            &primary_control(std::f32::consts::PI, 0.2),
+            &context.read()
+        ),
+        Err(RuleReject::Wire(RejectReason::ChunkNotReady))
+    );
+    assert_eq!(
+        probe(&context, &[target], &[actor], &[], &[overworld_key(target)]),
+        before
+    );
+}
+
+#[test]
+fn wrong_tool_chest_contents_are_atomic_without_body() {
+    for full in [false, true] {
+        fixture_case(AIR, AIR, CHEST, ItemStack::default(), |context, session| {
+            let actor = ActorKey::Player(session);
+            let target = BlockPos::new(0, 65, 2);
+            let mut contents = [ItemStack::default(); CHEST_SLOTS];
+            contents[0] = ItemStack {
+                item: ITEM_DIRT,
+                count: 1,
+                durability: 0,
+            };
+            contents[1] = ItemStack {
+                item: ITEM_STONE,
+                count: 1,
+                durability: 0,
+            };
+            context.preload_container(ContainerRecord {
+                reference: chest_reference(),
+                revision: 1,
+                slots: ContainerSlots::Chest(contents),
+            });
+            if full {
+                for slot in 0..31 {
+                    context.preload_drop(occupied_drop(slot));
+                }
+            }
+            let before = probe(
+                context,
+                &[target],
+                &[actor],
+                &[chest_reference()],
+                &[overworld_key(target)],
+            );
+            let resolved = resolve_mine(
+                actor,
+                &primary_control(std::f32::consts::PI, 0.0),
+                &context.read(),
+            );
+            if full {
+                assert_eq!(resolved, Err(RuleReject::Wire(RejectReason::DropCapacity)));
+                assert_eq!(
+                    probe(
+                        context,
+                        &[target],
+                        &[actor],
+                        &[chest_reference()],
+                        &[overworld_key(target)]
+                    ),
+                    before
+                );
+            } else {
+                let outcome = context
+                    .transaction()
+                    .try_mine(resolved.unwrap().unwrap())
+                    .unwrap();
+                assert_eq!(outcome.drops_created, 2);
+                let view = context.read();
+                let actual: Vec<_> = view
+                    .drops(overworld_key(target))
+                    .iter()
+                    .map(|drop| drop.stack.item)
+                    .collect();
+                assert_eq!(actual, vec![ITEM_DIRT, ITEM_STONE]);
+                assert!(view.container(chest_reference()).is_none());
+            }
+        });
+    }
 }
 
 #[test]
@@ -1482,7 +2011,7 @@ fn companion_mines_loaded_container_once_and_rebirth_advances_retained_generatio
             .filter(|s| s.item == ITEM_CHEST)
             .map(|s| u32::from(s.count))
             .sum::<u32>(),
-        1
+        0
     );
     assert_eq!(
         inventory

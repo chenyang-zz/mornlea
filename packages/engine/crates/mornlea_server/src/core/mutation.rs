@@ -28,6 +28,7 @@ use super::contracts::{
     InventoryRecord, MutationProducer, ResolvedMining, ResolvedPlacement, RuleReject,
 };
 use super::state::AuthorityReadView;
+use crate::rules::harvest;
 
 /// Hotbar length inside the unified 36-slot inventory (`core.HotbarSlots`).
 const HOTBAR_SLOTS: usize = 9;
@@ -61,25 +62,25 @@ const ITEM_TORCH: u16 = 44; // `core.ItemTorch`
 
 /// Reports whether a block number is one of the eight fluid forms
 /// (`core.IsFluid`, `packages/shared/core/fluid.go`).
-fn is_fluid(block: u16) -> bool {
+pub(crate) fn is_fluid(block: u16) -> bool {
     (27..=34).contains(&block)
 }
 
 /// Reports whether a block number is dry or wet farmland (`core.IsFarmland`,
 /// `packages/shared/core/farming.go`).
-fn is_farmland(block: u16) -> bool {
+pub(crate) fn is_farmland(block: u16) -> bool {
     (35..=36).contains(&block)
 }
 
 /// Reports whether a block number is any crop stage — wheat, potato or
 /// carrot (`core.IsCrop`, `packages/shared/core/farming.go`).
-fn is_crop(block: u16) -> bool {
+pub(crate) fn is_crop(block: u16) -> bool {
     (37..=44).contains(&block) || (46..=53).contains(&block) || (54..=61).contains(&block)
 }
 
 /// Reports whether a block number is the wild short grass
 /// (`core.IsWildGrass`, `packages/shared/core/farming.go`).
-fn is_wild_grass(block: u16) -> bool {
+pub(crate) fn is_wild_grass(block: u16) -> bool {
     block == 84 // `core.ShortGrassID`
 }
 
@@ -106,13 +107,89 @@ fn is_bed(block: u16) -> bool {
 
 /// Reports whether a block number is a torch form (`core.IsTorch`,
 /// `packages/shared/core/block_properties.go`).
-fn is_torch(block: u16) -> bool {
+pub(crate) fn is_torch(block: u16) -> bool {
     (TORCH_STANDING..=TORCH_WALL_NEG_Z).contains(&block)
 }
 
 /// Reports whether a block number is a snow layer (`core.IsSnowLayer`).
-fn is_snow_layer(block: u16) -> bool {
+pub(crate) fn is_snow_layer(block: u16) -> bool {
     (85..=88).contains(&block)
+}
+
+/// Stone pick (`core.ItemStonePickaxe`).
+const ITEM_STONE_PICKAXE: u16 = 10;
+
+/// Iron pick (`core.ItemIronPickaxe`).
+const ITEM_IRON_PICKAXE: u16 = 11;
+
+/// Spent stone pick (`core.ItemBrokenStonePickaxe`).
+const ITEM_BROKEN_STONE_PICKAXE: u16 = 12;
+
+/// Spent iron pick (`core.ItemBrokenIronPickaxe`).
+const ITEM_BROKEN_IRON_PICKAXE: u16 = 13;
+
+/// Soil-group and related blocks at 5 ticks (`miningRule`,
+/// `packages/server/sim/entity/mining.go`): dirt, grass, sand, gravel,
+/// leaves, glass, wool, clay and snow block.
+const FIVE_TICK_BLOCKS: [u16; 9] = [3, 4, 15, 16, 19, 20, 22, 24, 25];
+
+/// Wooden blocks at 15 ticks: log, planks and workbench.
+const WOOD_BLOCKS: [u16; 3] = [17, 18, 45];
+
+/// Stone-tier blocks whose tool row is 30/15/8: stone, cobblestone, smooth
+/// stone, brick, roof tile and mossy cobblestone.
+const STONE_TIER: [u16; 6] = [2, 13, 14, 21, 23, 26];
+
+/// Stonebrick-tier blocks whose tool row is 30-failed/15/8: stonebrick,
+/// furnace, chest, light block, coal ore and iron ore.
+const STONEBRICK_TIER: [u16; 6] = [6, 9, 11, 12, 7, 8];
+
+/// Iron block (`core.IronBlockID`): stone pick 20 failed, iron pick 10.
+const IRON_BLOCK: u16 = 10;
+
+/// Required ticks and harvestability of one block under one held item, the
+/// exact `miningRule` table (`packages/server/sim/entity/mining.go`). The zero
+/// sentinel means unmineable and always pairs with `false`; the native ray
+/// never decides mineability, so this table is the only gate.
+pub(crate) fn mining_rule(block: u16, held: u16) -> (u16, bool) {
+    if is_door(block) || is_bed(block) {
+        return (15, true);
+    }
+    if is_crop(block) || is_wild_grass(block) || is_sapling(block) {
+        return (1, true);
+    }
+    if is_snow_layer(block) {
+        return (1, false);
+    }
+    if is_farmland(block) || FIVE_TICK_BLOCKS.contains(&block) {
+        return (5, true);
+    }
+    if WOOD_BLOCKS.contains(&block) {
+        return (15, true);
+    }
+    if STONE_TIER.contains(&block) {
+        return match held {
+            ITEM_NONE | ITEM_BROKEN_STONE_PICKAXE | ITEM_BROKEN_IRON_PICKAXE => (30, true),
+            ITEM_STONE_PICKAXE => (15, true),
+            ITEM_IRON_PICKAXE => (8, true),
+            _ => (30, false),
+        };
+    }
+    if STONEBRICK_TIER.contains(&block) {
+        return match held {
+            ITEM_STONE_PICKAXE => (15, true),
+            ITEM_IRON_PICKAXE => (8, true),
+            _ => (30, false),
+        };
+    }
+    if block == IRON_BLOCK {
+        return match held {
+            ITEM_STONE_PICKAXE => (20, false),
+            ITEM_IRON_PICKAXE => (10, true),
+            _ => (40, false),
+        };
+    }
+    (0, false)
 }
 
 /// Item-to-block placement mapping, the exact `core.ItemPlacement` table
@@ -155,9 +232,9 @@ fn item_placement(item: u16) -> Option<u16> {
 }
 
 /// Block-to-item drop mapping, the exact `core.BlockDrop` table
-/// (`packages/shared/core/item.go`). A block with no entry is not minable:
-/// the completed-mining settlement refuses it as `ProtectedBlock`
-/// (`packages/server/sim/entity/mining.go`).
+/// (`packages/shared/core/item.go`). The mining-rule table owns mineability;
+/// short grass and snow use special no-body output paths, while protected
+/// blocks have no progression (`packages/server/sim/entity/mining.go`).
 fn block_drop(block: u16) -> Option<u16> {
     match block {
         2 => Some(1),        // StoneID -> ItemStone
@@ -596,7 +673,7 @@ fn credit_batch(inventory: &InventoryRecord, stacks: &[ItemStack]) -> Option<Inv
     Some(after)
 }
 
-/// Wears the selected hotbar tool by one on a completed human mine, the
+/// Wears the selected hotbar tool by one on a completed mine, the
 /// single Go predicate `consumeMiningToolDurability` ->
 /// `consumeToolDurability` -> `consumeToolDurabilityAt`
 /// (`packages/server/sim/entity/mining.go`). The exemptions come first and
@@ -680,6 +757,72 @@ fn container_stacks(record: &ContainerRecord) -> Vec<ItemStack> {
         .copied()
         .filter(|stack| stack.item != ITEM_NONE && stack.count > 0)
         .collect()
+}
+
+fn output_stack(item: u16, count: u8) -> ItemStack {
+    ItemStack {
+        item,
+        count,
+        durability: 0,
+    }
+}
+
+/// Prefetches both structural cells before output rehearsal. Coordinates are
+/// checked before arithmetic and against the source world height, so an
+/// unavailable partner can never turn a paired clear into a single clear.
+fn mining_writes(
+    view: &AuthorityReadView<'_>,
+    dimension: Dimension,
+    struck: BlockObservation,
+    companion: bool,
+) -> Result<(Vec<BlockWrite>, BlockPos), RuleReject> {
+    let target = struck.pos;
+    let mut positions = Vec::with_capacity(2);
+    let mut anchor = target;
+    if is_bed(struck.block) {
+        let facing = ((struck.block - BED_FOOT_SOUTH) % 4) as u8;
+        let (dx, dz) = bed_head_offset(facing);
+        let head = struck.block >= BED_FOOT_SOUTH + 4;
+        let other = BlockPos::new(
+            target
+                .x()
+                .checked_add(if head { -dx } else { dx })
+                .ok_or(RuleReject::StaleObservation)?,
+            target.y(),
+            target
+                .z()
+                .checked_add(if head { -dz } else { dz })
+                .ok_or(RuleReject::StaleObservation)?,
+        );
+        positions.push(if head { other } else { target });
+        positions.push(if head { target } else { other });
+    } else if is_door(struck.block) && !companion {
+        let upper = struck.block == DOOR_UPPER;
+        let other_y = target
+            .y()
+            .checked_add(if upper { -1 } else { 1 })
+            .ok_or(RuleReject::StaleObservation)?;
+        let other = BlockPos::new(target.x(), other_y, target.z());
+        anchor = if upper { other } else { target };
+        positions.push(anchor);
+        positions.push(if upper { target } else { other });
+    } else {
+        positions.push(target);
+    }
+    let mut writes = Vec::with_capacity(positions.len());
+    for pos in positions {
+        if !(-64..320).contains(&pos.y()) {
+            return Err(RuleReject::Wire(RejectReason::ChunkNotReady));
+        }
+        let observed = if pos == target {
+            struck
+        } else {
+            view.observation(dimension, pos)
+                .ok_or(RuleReject::Wire(RejectReason::ChunkNotReady))?
+        };
+        writes.push(BlockWrite::try_new(observed, AIR)?);
+    }
+    Ok((writes, anchor))
 }
 
 /// Resolves one human placement intent into a complete transaction.
@@ -822,39 +965,14 @@ pub fn resolve_mine(
         return Ok(None);
     };
     let observed = hit.observed;
-    // Snow layers clear with no drops and no output-capacity gate, the exact
-    // snow branch (`packages/server/sim/entity/mining.go`): any held state
-    // clears the layer in one tick without calling the drop preflight. The
-    // wear path is the same selected-tool settlement below, so a durable held
-    // tool still wears once. This branch is human-only: companion mining
-    // proposals keep refusing snow layers through the companion mineable
-    // registry, whose explicit snow refusal is unchanged.
-    if is_snow_layer(observed.block) {
-        let inventory = *view.inventory(actor).ok_or(RuleReject::StaleObservation)?;
-        let patch = wear_selected_tool(&inventory, observed.block).map(|after| {
-            InventoryPatch::try_new(actor, inventory, after).expect("wear keeps the actor key")
-        });
-        let txn = BlockTxn {
-            producer: MutationProducer::Actor(actor),
-            tick: view.tick(),
-            writes: vec![BlockWrite::try_new(observed, AIR)?],
-            inventory: patch,
-            containers: Vec::new(),
-            drops: None,
-            mining: None,
-        };
-        return Ok(Some(ResolvedMining { txn }));
+    let inventory = *view.inventory(actor).ok_or(RuleReject::StaleObservation)?;
+    let held = inventory.slots[usize::from(inventory.selected.get())];
+    let (required, harvestable) = mining_rule(observed.block, held.item);
+    if required == 0 {
+        return Err(RuleReject::Wire(RejectReason::ProtectedBlock));
     }
-    let drop_item =
-        block_drop(observed.block).ok_or(RuleReject::Wire(RejectReason::ProtectedBlock))?;
-
-    // Container capture routes the full contents through the same output
-    // preflight; nothing is minted or lost.
-    let mut stacks = vec![ItemStack {
-        item: drop_item,
-        count: 1,
-        durability: 0,
-    }];
+    let (writes, anchor) = mining_writes(view, basis.dimension, observed, false)?;
+    let mut stacks = Vec::new();
     let mut containers = Vec::new();
     if observed.block == CHEST_BLOCK || observed.block == FURNACE_BLOCK {
         let record = capture_container(
@@ -864,43 +982,94 @@ pub fn resolve_mine(
             observed.block,
             RuleReject::Wire(RejectReason::ChunkNotReady),
         )?;
+        if harvestable {
+            stacks.push(output_stack(
+                block_drop(observed.block).expect("registered container"),
+                1,
+            ));
+        }
         stacks.extend(container_stacks(&record));
         containers.push(CapturedContainer {
             key: chunk_key(basis.dimension, observed.pos),
             record,
         });
+    } else if is_door(observed.block) {
+        if harvestable {
+            stacks.push(output_stack(43, 1));
+        }
+    } else if is_bed(observed.block) {
+        if harvestable {
+            stacks.push(output_stack(46, 1));
+        }
+    } else if is_wild_grass(observed.block) {
+        let seed = view.environment().ok_or(RuleReject::StaleObservation)?.seed;
+        if harvest::short_grass(seed, u32::from(basis.dimension.get()), observed.pos) {
+            stacks.push(output_stack(34, 1));
+        }
+    } else if is_snow_layer(observed.block) {
+        // Snow has no item representation, but a durable selected tool still wears.
+    } else if harvestable {
+        let item =
+            block_drop(observed.block).ok_or(RuleReject::Wire(RejectReason::ProtectedBlock))?;
+        let seed = view.environment().ok_or(RuleReject::StaleObservation)?.seed;
+        let dimension = u32::from(basis.dimension.get());
+        match observed.block {
+            44 => {
+                let (wheat, seeds) = harvest::wheat(seed, view.tick(), dimension, observed.pos);
+                stacks.push(output_stack(item, wheat));
+                stacks.push(output_stack(34, seeds));
+            }
+            53 => {
+                stacks.push(output_stack(
+                    item,
+                    harvest::potato(seed, view.tick(), dimension, observed.pos),
+                ));
+                if harvest::poison_potato(seed, view.tick(), dimension, observed.pos) {
+                    stacks.push(output_stack(42, 1));
+                }
+            }
+            61 => stacks.push(output_stack(
+                item,
+                harvest::carrot(seed, view.tick(), dimension, observed.pos),
+            )),
+            19 => {
+                stacks.push(output_stack(item, 1));
+                if harvest::leaf_sapling(seed, dimension, observed.pos) {
+                    stacks.push(output_stack(57, 1));
+                }
+            }
+            _ => stacks.push(output_stack(item, 1)),
+        }
     }
-
-    // Preflight order is frozen: the item/tool basis comes before the output
-    // capacity, so a missing inventory record answers `StaleObservation`
-    // even when the drop capacity is also full, and the tool wear derives
-    // from the same basis the transaction will validate against.
-    let inventory = *view.inventory(actor).ok_or(RuleReject::StaleObservation)?;
     let patch = wear_selected_tool(&inventory, observed.block).map(|after| {
         InventoryPatch::try_new(actor, inventory, after).expect("wear keeps the actor key")
     });
-
-    // Rehearse exact merge/split and retained-generation capacity before any write.
-    let drops = DropBatch::try_new(
-        DropSource::Mining {
-            actor,
-            target: observed.pos,
-            tick: view.tick(),
-        },
-        basis.dimension,
-        block_center(observed.pos),
-        stacks,
-        basis.drop_pickup_delay,
-    )?;
-    view.check_drop_batch(&drops)?;
-
+    // An empty result never reserves a drop slot. For nonempty output the
+    // checked batch and captured world cells revalidate together at commit.
+    let drops = if stacks.is_empty() {
+        None
+    } else {
+        let batch = DropBatch::try_new(
+            DropSource::Mining {
+                actor,
+                target: anchor,
+                tick: view.tick(),
+            },
+            basis.dimension,
+            block_center(anchor),
+            stacks,
+            basis.drop_pickup_delay,
+        )?;
+        view.check_drop_batch(&batch)?;
+        Some(batch)
+    };
     let txn = BlockTxn {
         producer: MutationProducer::Actor(actor),
         tick: view.tick(),
-        writes: vec![BlockWrite::try_new(observed, AIR)?],
+        writes,
         inventory: patch,
         containers,
-        drops: Some(drops),
+        drops,
         mining: None,
     };
     Ok(Some(ResolvedMining { txn }))
@@ -977,16 +1146,22 @@ pub fn resolve_companion_mine(
     if !companion_mineable_block(hit.observed.block) {
         return Err(RuleReject::StaleObservation);
     }
-    let drop_item =
-        block_drop(hit.observed.block).ok_or(RuleReject::Wire(RejectReason::ProtectedBlock))?;
     let observed = hit.observed;
-
-    let mut stacks = vec![ItemStack {
-        item: drop_item,
-        count: 1,
-        durability: 0,
-    }];
+    let inventory = *view.inventory(key).ok_or(RuleReject::StaleObservation)?;
+    let held = inventory.slots[usize::from(inventory.selected.get())];
+    let (required, harvestable) = mining_rule(observed.block, held.item);
+    if required == 0 {
+        return Err(RuleReject::Wire(RejectReason::ProtectedBlock));
+    }
+    let (writes, _) = mining_writes(view, basis.dimension, observed, true)?;
+    let mut stacks = Vec::new();
     let mut containers = Vec::new();
+    if harvestable {
+        stacks.push(output_stack(
+            block_drop(observed.block).ok_or(RuleReject::Wire(RejectReason::ProtectedBlock))?,
+            1,
+        ));
+    }
     if observed.block == CHEST_BLOCK || observed.block == FURNACE_BLOCK {
         let record = capture_container(
             view,
@@ -1001,15 +1176,22 @@ pub fn resolve_companion_mine(
             record,
         });
     }
-    let inventory = *view.inventory(key).ok_or(RuleReject::StaleObservation)?;
-    let after =
+    // Source AddStack settles the output first, then the selected slot wears
+    // in that credited copy. An empty selected slot may thus receive a tool
+    // from a container and wear it during this same accepted mine.
+    let credited =
         credit_batch(&inventory, &stacks).ok_or(RuleReject::Wire(RejectReason::HotbarFull))?;
-
+    let after = wear_selected_tool(&credited, observed.block).unwrap_or(credited);
+    let patch = if after == inventory {
+        None
+    } else {
+        Some(InventoryPatch::try_new(key, inventory, after)?)
+    };
     let txn = BlockTxn {
         producer: MutationProducer::Actor(key),
         tick: view.tick(),
-        writes: vec![BlockWrite::try_new(observed, AIR)?],
-        inventory: Some(InventoryPatch::try_new(key, inventory, after)?),
+        writes,
+        inventory: patch,
         containers,
         drops: None,
         mining: None,

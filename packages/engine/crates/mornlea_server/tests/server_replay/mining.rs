@@ -23,10 +23,8 @@
 //! - Snow layers clear with no drops and no capacity gate (the Go snow branch);
 //!   the human-only clear-only settlement is the authorized narrow addition to
 //!   the accepted resolver. Companion snow mining stays refusing.
-//! - Wild grass has no Rust sampler kernel yet: progress runs to saturation and
-//!   is retained there without completing. The position-stable seed roll and
-//!   grass completion belong to the random-rules node; no case here pins grass
-//!   completion.
+//! - Short grass completes in one tick through the position-stable seed roll;
+//!   its output may be empty and it never wears the selected tool.
 //! - Active bow draw suppresses mining resolution (combat precedence), read
 //!   through the landed motion-owned runtime lane.
 //!
@@ -427,6 +425,174 @@ fn tool(item: u16, durability: u16) -> ItemStack {
     }
 }
 
+#[test]
+fn workbench_uses_wood_ticks_and_companion_can_mine_it() {
+    let target = BlockPos::new(0, 65, 1);
+    let mut state = authority();
+    let session = state
+        .admit(admitted(21, "bench"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = south_scene(&mut context, session, ItemStack::default(), &[(target, 45)]);
+    let call = mine_call(actor);
+    for elapsed in 1..15 {
+        provider::run(&mut context, call).unwrap();
+        let progress = context.read().mining(actor).unwrap();
+        assert_eq!((progress.elapsed, progress.required), (elapsed, 15));
+    }
+    provider::run(&mut context, call).unwrap();
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, target)
+            .unwrap()
+            .block,
+        AIR
+    );
+    assert_eq!(context.read().mining(actor), None);
+
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let id = companion_id();
+    let target = BlockPos::new(2, 65, 2);
+    let actor = companion_scene(
+        &mut context,
+        id,
+        target,
+        InventoryRecord::empty(),
+        &[(target, 45)],
+    );
+    let call = mine_call(actor);
+    for _ in 0..15 {
+        provider::run(&mut context, call).unwrap();
+    }
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, target)
+            .unwrap()
+            .block,
+        AIR
+    );
+    assert!(
+        context
+            .read()
+            .inventory(actor)
+            .unwrap()
+            .slots
+            .iter()
+            .any(|stack| stack.item == 38 && stack.count == 1)
+    );
+}
+
+#[test]
+fn companion_rejects_plants_and_keeps_leaves_body_only() {
+    for block in [WHEAT_STAGE0, SHORT_GRASS] {
+        let mut state = authority();
+        let mut context = harness_context(&mut state);
+        let id = companion_id();
+        let target = BlockPos::new(2, 65, 2);
+        let actor = companion_scene(
+            &mut context,
+            id,
+            target,
+            InventoryRecord::empty(),
+            &[(target, block)],
+        );
+        provider::run(&mut context, mine_call(actor)).unwrap();
+        assert_eq!(
+            context
+                .read()
+                .observation(Dimension::OVERWORLD, target)
+                .unwrap()
+                .block,
+            block
+        );
+        assert_eq!(context.read().mining(actor), None);
+        assert!(context.read().drops(overworld_key(target)).is_empty());
+    }
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let id = companion_id();
+    let target = BlockPos::new(2, 65, 2);
+    let actor = companion_scene(
+        &mut context,
+        id,
+        target,
+        InventoryRecord::empty(),
+        &[(target, 19)],
+    );
+    let mut env = environment();
+    env.seed = 11;
+    context.stage(RuleEffect::Environment(env)).unwrap();
+    for _ in 0..5 {
+        provider::run(&mut context, mine_call(actor)).unwrap();
+    }
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, target)
+            .unwrap()
+            .block,
+        AIR
+    );
+    let slots = context.read().inventory(actor).unwrap().slots;
+    assert_eq!(slots.iter().filter(|stack| stack.item == 22).count(), 1);
+    assert!(slots.iter().all(|stack| stack.item != 57));
+    assert!(context.read().drops(overworld_key(target)).is_empty());
+}
+
+#[test]
+fn companion_wrong_tool_body_is_suppressed_and_sapling_spares_tool() {
+    let target = BlockPos::new(2, 65, 2);
+    let id = companion_id();
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let actor = companion_scene(
+        &mut context,
+        id,
+        target,
+        InventoryRecord::empty(),
+        &[(target, 12)],
+    );
+    for _ in 0..30 {
+        provider::run(&mut context, mine_call(actor)).unwrap();
+    }
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, target)
+            .unwrap()
+            .block,
+        AIR
+    );
+    assert!(
+        context
+            .read()
+            .inventory(actor)
+            .unwrap()
+            .slots
+            .iter()
+            .all(|stack| stack.item == 0)
+    );
+    assert!(context.read().drops(overworld_key(target)).is_empty());
+
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let mut inventory = InventoryRecord::empty();
+    inventory.slots[0] = tool(ITEM_STONE_PICKAXE, 18);
+    let actor = companion_scene(&mut context, id, target, inventory, &[(target, SAPLING)]);
+    provider::run(&mut context, mine_call(actor)).unwrap();
+    let slots = context.read().inventory(actor).unwrap().slots;
+    assert_eq!(slots[0], tool(ITEM_STONE_PICKAXE, 18));
+    assert!(
+        slots
+            .iter()
+            .any(|stack| stack.item == 57 && stack.count == 1)
+    );
+    assert!(context.read().drops(overworld_key(target)).is_empty());
+}
+
 /// The frozen progress key rule (`stepMiningProgress` in
 /// `packages/server/sim/entity/mining.go`): an unchanged target/block/tool key
 /// increments once per tick, a changed key restarts at 1, and wrong shapes
@@ -820,13 +986,11 @@ fn containers_and_paired_blocks_atomic() {
         AIR
     );
     let after = context.read().inventory(actor).expect("inventory").slots;
-    // The accepted companion resolver credits the batch without wearing the
-    // selected tool: companion wear is not in the accepted settlement and is pinned
-    // here as unchanged until its owning node lands it.
+    // Credit precedes one selected-slot wear in the accepted companion mine.
     assert_eq!(
         after[0],
-        tool(ITEM_STONE_PICKAXE, 100),
-        "companion tool wear stays resolver-owned"
+        tool(ITEM_STONE_PICKAXE, 99),
+        "companion tool wears once"
     );
     assert_eq!(
         after[1],
@@ -855,9 +1019,7 @@ fn containers_and_paired_blocks_atomic() {
     );
     assert_eq!(context.read().mining(actor), None);
 
-    // Human door mining settles the hit half through the same atomic entry:
-    // the hit cell clears with wear while the partner half keeps its observed
-    // single form (the accepted resolver footprint).
+    // Human door mining clears both observed halves in one settlement.
     let target = BlockPos::new(0, 65, 1);
     let upper = BlockPos::new(0, 66, 1);
     let mut state = authority();
@@ -890,8 +1052,8 @@ fn containers_and_paired_blocks_atomic() {
             .observation(Dimension::OVERWORLD, upper)
             .expect("partner")
             .block,
-        DOOR_UPPER,
-        "partner half keeps its observed form"
+        AIR,
+        "partner half clears atomically"
     );
     assert_eq!(
         context.read().inventory(actor).expect("inventory").slots[0],
@@ -1126,8 +1288,7 @@ fn last_durability_and_exemptions() {
     );
     assert_eq!(context.read().mining(actor), None);
 
-    // Wild grass runs to saturation and is retained there without completing:
-    // the seed roll belongs to the random-rules node.
+    // Short grass completes in one tick and never wears the selected tool.
     let mut state = authority();
     let session = state
         .admit(admitted(6, "Fay"), TransportKind::Memory)
@@ -1140,28 +1301,22 @@ fn last_durability_and_exemptions() {
         &[(target, SHORT_GRASS)],
     );
     let call = mine_call(actor);
-    provider::run(&mut context, call).expect("grass saturates in one tick");
-    let kept = context
-        .read()
-        .mining(actor)
-        .expect("saturated grass is retained");
-    assert_eq!((kept.elapsed, kept.required), (1, 1));
-    provider::run(&mut context, call).expect("grass never completes here");
+    provider::run(&mut context, call).expect("grass completes in one tick");
     assert_eq!(
         context
             .read()
             .observation(Dimension::OVERWORLD, target)
             .expect("cell")
             .block,
-        SHORT_GRASS,
-        "grass keeps its block until the seed roll lands"
+        AIR,
+        "grass clears on completion"
     );
     assert_eq!(
         context.read().inventory(actor).expect("inventory").slots[0],
         tool(ITEM_STONE_PICKAXE, 90),
-        "retained grass never wears"
+        "grass never wears"
     );
-    assert_eq!(context.read().mining(actor).expect("retained").elapsed, 1);
+    assert_eq!(context.read().mining(actor), None);
 
     // Unlisted blocks never progress: bedrock clears any attempt immediately.
     let mut state = authority();

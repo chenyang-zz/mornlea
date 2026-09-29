@@ -35,10 +35,8 @@
 //! Deliberate boundaries. The per-tick ray walk below only tracks the progress
 //! key; every completion re-resolves through the accepted authority resolvers and
 //! commits exactly once through `MutationTxn::try_mine`, so the walk can never
-//! settle a block, mint a drop or wear a tool. Wild grass progress runs to
-//! saturation and is retained there without completing: the position-stable
-//! seed roll has no Rust kernel yet and belongs to the random-rules node, which
-//! also owns grass completion. Snow layers settle through the human-only
+//! settle a block, mint a drop or wear a tool. Short grass completes through
+//! the resolver's position-stable seed roll in one tick. Snow layers settle through the human-only
 //! clear-only branch of the accepted resolver; companion snow mining stays
 //! refusing. Combat precedence is an active bow draw read through the landed
 //! runtime lane; the full suppression matrix belongs to the combat and reducer
@@ -55,189 +53,14 @@ use crate::core::contracts::{
     ActorKey, ActorLifecycle, BlockObservation, CompanionAction, MiningProgress, PhaseReport,
     RuleCall, RuleEffect, RulePhase, RuleReject, ServerError,
 };
-use crate::core::mutation::{resolve_companion_mine, resolve_mine};
+use crate::core::mutation::{
+    is_crop, is_farmland, is_fluid, is_snow_layer, is_torch, is_wild_grass, mining_rule,
+    resolve_companion_mine, resolve_mine,
+};
 use crate::core::state::{AuthorityReadView, TickContext};
 
-/// Air cell the ray walks through (`core.AirID`,
-/// `packages/shared/core/block.go`).
+/// Air cell the ray walks through (`core.AirID`, `packages/shared/core/block.go`).
 const AIR: u16 = 0;
-
-/// Empty held item (`core.ItemNone`, `packages/shared/core/item.go`).
-const ITEM_NONE: u16 = 0;
-
-/// Stone pick (`core.ItemStonePickaxe`).
-const ITEM_STONE_PICKAXE: u16 = 10;
-
-/// Iron pick (`core.ItemIronPickaxe`).
-const ITEM_IRON_PICKAXE: u16 = 11;
-
-/// Spent stone pick (`core.ItemBrokenStonePickaxe`).
-const ITEM_BROKEN_STONE_PICKAXE: u16 = 12;
-
-/// Spent iron pick (`core.ItemBrokenIronPickaxe`).
-const ITEM_BROKEN_IRON_PICKAXE: u16 = 13;
-
-/// First door form through the single upper form (`core.IsDoor`,
-/// `packages/shared/core/block.go`).
-const DOOR_FIRST: u16 = 62;
-
-/// Last door form (`core.DoorUpper`).
-const DOOR_LAST: u16 = 70;
-
-/// First bed form through the last (`core.IsBed`, `packages/shared/core/bed.go`).
-const BED_FIRST: u16 = 76;
-
-/// Last bed form.
-const BED_LAST: u16 = 83;
-
-/// Dry and wet farmland (`core.IsFarmland`, `packages/shared/core/farming.go`).
-const FARMLAND_FIRST: u16 = 35;
-
-/// Last farmland form.
-const FARMLAND_LAST: u16 = 36;
-
-/// First wheat stage through the last carrot stage (`core.IsCrop`,
-/// `packages/shared/core/farming.go`).
-const CROP_FIRST: u16 = 37;
-
-/// Last crop stage. Potato (46..=53) and carrot (54..=61) sit inside the span.
-const CROP_LAST: u16 = 61;
-
-/// Wild short grass (`core.ShortGrassID`).
-const WILD_GRASS: u16 = 84;
-
-/// First snow layer through the last (`core.IsSnowLayer`).
-const SNOW_FIRST: u16 = 85;
-
-/// Last snow layer form.
-const SNOW_LAST: u16 = 88;
-
-/// Sapling (`core.SaplingID`).
-const SAPLING: u16 = 89;
-
-/// First fluid form through the last (`core.IsFluid`,
-/// `packages/shared/core/fluid.go`).
-const FLUID_FIRST: u16 = 27;
-
-/// Last fluid form.
-const FLUID_LAST: u16 = 34;
-
-/// First torch form through the last (`core.IsTorch`,
-/// `packages/shared/core/block_properties.go`).
-const TORCH_FIRST: u16 = 71;
-
-/// Last torch form.
-const TORCH_LAST: u16 = 75;
-
-/// Soil-group and related blocks at 5 ticks (`miningRule`,
-/// `packages/server/sim/entity/mining.go`): dirt, grass, sand, gravel,
-/// leaves, glass, wool, clay and snow block.
-const FIVE_TICK_BLOCKS: [u16; 9] = [3, 4, 15, 16, 19, 20, 22, 24, 25];
-
-/// Wooden blocks at 15 ticks: log, planks and workbench.
-const WOOD_BLOCKS: [u16; 3] = [17, 18, 45];
-
-/// Stone-tier blocks whose tool row is 30/15/8: stone, cobblestone, smooth
-/// stone, brick, roof tile and mossy cobblestone.
-const STONE_TIER: [u16; 6] = [2, 13, 14, 21, 23, 26];
-
-/// Stonebrick-tier blocks whose tool row is 30-failed/15/8: stonebrick,
-/// furnace, chest, light block, coal ore and iron ore.
-const STONEBRICK_TIER: [u16; 6] = [6, 9, 11, 12, 7, 8];
-
-/// Iron block (`core.IronBlockID`): stone pick 20 failed, iron pick 10.
-const IRON_BLOCK: u16 = 10;
-
-/// Reports whether a block number is any door half (`core.IsDoor`).
-fn is_door(block: u16) -> bool {
-    (DOOR_FIRST..=DOOR_LAST).contains(&block)
-}
-
-/// Reports whether a block number is any bed form (`core.IsBed`).
-fn is_bed(block: u16) -> bool {
-    (BED_FIRST..=BED_LAST).contains(&block)
-}
-
-/// Reports whether a block number is any crop stage (`core.IsCrop`).
-fn is_crop(block: u16) -> bool {
-    (CROP_FIRST..=CROP_LAST).contains(&block)
-}
-
-/// Reports whether a block number is dry or wet farmland (`core.IsFarmland`).
-fn is_farmland(block: u16) -> bool {
-    (FARMLAND_FIRST..=FARMLAND_LAST).contains(&block)
-}
-
-/// Reports whether a block number is the wild short grass
-/// (`core.IsWildGrass`).
-fn is_wild_grass(block: u16) -> bool {
-    block == WILD_GRASS
-}
-
-/// Reports whether a block number is the sapling (`core.IsSapling`).
-fn is_sapling(block: u16) -> bool {
-    block == SAPLING
-}
-
-/// Reports whether a block number is a snow layer (`core.IsSnowLayer`).
-fn is_snow_layer(block: u16) -> bool {
-    (SNOW_FIRST..=SNOW_LAST).contains(&block)
-}
-
-/// Reports whether a block number is any fluid form (`core.IsFluid`).
-fn is_fluid(block: u16) -> bool {
-    (FLUID_FIRST..=FLUID_LAST).contains(&block)
-}
-
-/// Reports whether a block number is any torch form (`core.IsTorch`).
-fn is_torch(block: u16) -> bool {
-    (TORCH_FIRST..=TORCH_LAST).contains(&block)
-}
-
-/// Required ticks and harvestability of one block under one held item, the
-/// exact `miningRule` table (`packages/server/sim/entity/mining.go`). The zero
-/// sentinel means unmineable and always pairs with `false`; the native ray
-/// never decides mineability, so this table is the only gate.
-fn mining_rule(block: u16, held: u16) -> (u16, bool) {
-    if is_door(block) || is_bed(block) {
-        return (15, true);
-    }
-    if is_crop(block) || is_wild_grass(block) || is_sapling(block) {
-        return (1, true);
-    }
-    if is_snow_layer(block) {
-        return (1, false);
-    }
-    if is_farmland(block) || FIVE_TICK_BLOCKS.contains(&block) {
-        return (5, true);
-    }
-    if WOOD_BLOCKS.contains(&block) {
-        return (15, true);
-    }
-    if STONE_TIER.contains(&block) {
-        return match held {
-            ITEM_NONE | ITEM_BROKEN_STONE_PICKAXE | ITEM_BROKEN_IRON_PICKAXE => (30, true),
-            ITEM_STONE_PICKAXE => (15, true),
-            ITEM_IRON_PICKAXE => (8, true),
-            _ => (30, false),
-        };
-    }
-    if STONEBRICK_TIER.contains(&block) {
-        return match held {
-            ITEM_STONE_PICKAXE => (15, true),
-            ITEM_IRON_PICKAXE => (8, true),
-            _ => (30, false),
-        };
-    }
-    if block == IRON_BLOCK {
-        return match held {
-            ITEM_STONE_PICKAXE => (20, false),
-            ITEM_IRON_PICKAXE => (10, true),
-            _ => (40, false),
-        };
-    }
-    (0, false)
-}
 
 /// Unit look direction of a rotation, the exact `LookDirection` formula
 /// (`packages/server/sim/entity/command.go`): yaw zero faces north (`-Z`),
@@ -485,25 +308,6 @@ fn run_human(
     let tick = view.tick();
     if required == 0 {
         return stage_clear(ctx, actor, prior);
-    }
-    // Wild grass has no sampler kernel yet: progress runs to saturation and is
-    // retained there without completing. The seed roll and grass completion
-    // belong to the random-rules node.
-    if is_wild_grass(observed.block) {
-        let (record, _) = advance_progress(
-            actor,
-            basis.dimension,
-            KeyTick {
-                target: observed.pos,
-                block: observed.block,
-                slot,
-                stack,
-                required,
-            },
-            prior.clone(),
-            tick,
-        );
-        return stage_progress(ctx, record, prior);
     }
     let (record, completable) = advance_progress(
         actor,
