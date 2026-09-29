@@ -258,8 +258,9 @@ consume its cancellation and error contracts before joining the real backend.
   the frozen capacity preflight (full capacity keeps the whole cell
   silently), and the one exceptional second-write fault mirroring Go's
   ordered two-commit stage — never a two-write transaction. Snow reduces
-  one tier per landing before random sampling; drop minting belongs to the
-  drop node.
+  one tier per landing before random sampling. Crop removal and its actual
+  output batch commit together after the separate ground write. Environment
+  must exist before collecting or draining landing events.
 - `src/rules/sleep.rs` owns sleep settlement on its batch phase: authority
   bed-ray entry with the Go refusal order, the exact seasonal morning
   transition (`EffectiveMorningOffset` with `DayArcTicks`/`YearPhaseAt`
