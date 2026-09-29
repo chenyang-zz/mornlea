@@ -14,11 +14,12 @@ use mornlea_domain::{
     PlayerId, RejectReason, RoutedEvent, Weather, WorldState,
 };
 use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket};
-use mornlea_storage::{Metadata, PlayerLocation, PlayerSave, StoredPlayer};
+use mornlea_storage::{Chunk, Metadata, PlayerLocation, PlayerSave, StoredPlayer};
 
 use super::container_store::ContainerState;
 use super::contracts::*;
 use super::drop_store::{self, DropState};
+use super::login_seed::{SeededPlayer, seed_player};
 use super::world::ReadyChunk;
 use crate::rules::farmland::FarmlandSchedule;
 use crate::rules::fluids::FluidSchedule;
@@ -42,6 +43,67 @@ struct QueuedCompanion {
     #[allow(dead_code)]
     arrival_index: u64,
     envelope: CompanionActionEnvelope,
+}
+
+/// Resident tick state carried across production ticks.
+///
+/// The serial reducer seeds the tick overlay from these maps at tick start
+/// and commits the worked overlay back with a full replace at tick end, the
+/// same clone-out/replace shape as the viewer commit with no merge logic.
+/// Costs stay inside the existing caps because every map populates through
+/// the same bounded staging the overlay already enforces.
+#[derive(Clone, Default)]
+pub struct ResidentTickState {
+    pub actors: Vec<ActorRecord>,
+    pub runtimes: BTreeMap<ActorKey, ActorRuntime>,
+    pub inventories: BTreeMap<ActorKey, InventoryRecord>,
+    pub mining: BTreeMap<ActorKey, MiningProgress>,
+    pub projectiles: Vec<ProjectileRecord>,
+    pub environment: Option<EnvironmentState>,
+    pub blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
+    ready: BTreeMap<ChunkKey, ReadyChunk>,
+    drops: BTreeMap<ChunkKey, DropState>,
+    containers: BTreeMap<ContainerRef, ContainerRecord>,
+    container_chunks: BTreeMap<ChunkKey, ContainerState>,
+}
+
+impl ResidentTickState {
+    /// Ready chunks as keyed base snapshots in chunk-key order. Overlay
+    /// writes and staged drops stay out: this names the carried chunk
+    /// content, not the tick-local overlay around it.
+    pub fn ready_snapshot(&self) -> Vec<(ChunkKey, u64, u64, Chunk)> {
+        self.ready
+            .values()
+            .map(|chunk| {
+                let (key, generation, revision, base) =
+                    chunk.snapshot(std::iter::empty(), None, None);
+                (key, generation, revision, base)
+            })
+            .collect()
+    }
+
+    /// Carried drops in chunk-key then physical-slot order.
+    pub fn drop_records(&self) -> Vec<DropRecord> {
+        self.drops
+            .values()
+            .flat_map(|state| state.records().iter().cloned())
+            .collect()
+    }
+
+    /// Carried containers from sparse records and Ready-chunk states merged
+    /// by reference. The two sources are disjoint by construction: sparse
+    /// staging refuses keys a Ready chunk already owns.
+    pub fn container_records(&self) -> BTreeMap<ContainerRef, ContainerRecord> {
+        let mut merged: BTreeMap<ContainerRef, ContainerRecord> = self.containers.clone();
+        for (key, state) in &self.container_chunks {
+            for reference in state.references(*key) {
+                if let Some(record) = state.record(*key, reference) {
+                    merged.insert(reference, record);
+                }
+            }
+        }
+        merged
+    }
 }
 
 /// Private world, sessions, queues, tick, and publication owner.
@@ -80,6 +142,8 @@ pub struct AuthorityState {
     fluid_schedule: FluidSchedule,
     /// Carried farmland candidate and rescan schedule, owned the same way.
     farmland_schedule: FarmlandSchedule,
+    /// Resident tick state the reducer seeds and commits each tick.
+    residents: ResidentTickState,
 }
 
 impl AuthorityState {
@@ -142,6 +206,7 @@ impl AuthorityState {
             views: BTreeMap::new(),
             fluid_schedule: FluidSchedule::new(),
             farmland_schedule: FarmlandSchedule::new(),
+            residents: ResidentTickState::default(),
         })
     }
 
@@ -149,6 +214,45 @@ impl AuthorityState {
     /// The reducer owns this commit and retired-session pruning.
     pub fn commit_viewers(&mut self, overlay: BTreeMap<SessionKey, ViewLease>) {
         self.views = overlay;
+    }
+
+    /// Replaces every resident map with the tick's complete net overlay. The
+    /// serial reducer owns the only call; providers only stage the overlay.
+    pub fn commit_residents(&mut self, next: ResidentTickState) {
+        self.residents = next;
+    }
+
+    /// Cloned resident tick state for inspection and replay assertions.
+    pub fn residents(&self) -> ResidentTickState {
+        self.residents.clone()
+    }
+
+    /// Login seeds for Active sessions with a save body and no player actor,
+    /// in ascending session order. Saves are validated at install, so a
+    /// mapping refusal only means in-memory corruption; skipping leaves the
+    /// session for a later tick instead of failing the tick on login staging.
+    pub(crate) fn login_seeds(&self) -> Vec<SeededPlayer> {
+        let mut seeds = Vec::new();
+        for (session, record) in &self.sessions {
+            if record.phase != SessionPhase::Active {
+                continue;
+            }
+            let Some(save) = record.body.as_ref() else {
+                continue;
+            };
+            if self
+                .residents
+                .actors
+                .iter()
+                .any(|actor| actor.key == ActorKey::Player(*session))
+            {
+                continue;
+            }
+            if let Ok(seeded) = seed_player(*session, save) {
+                seeds.push(seeded);
+            }
+        }
+        seeds
     }
 
     /// Carried fluid schedule for inspection and seeding. The reducer takes
@@ -1524,7 +1628,25 @@ impl<'a> TickContext<'a> {
     /// snapshot) arrive through the narrow ports below, never through this
     /// constructor.
     pub(crate) fn for_tick(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
-        Self::from_parts(authority, budget)
+        let mut context = Self::from_parts(authority, budget);
+        // Tick-start seeding clones every resident map into the overlay, so
+        // providers read last tick's committed state. The pre-step snapshot
+        // covers the seeded actors by the same construction rule as fixtures.
+        context.actors = context.authority.residents.actors.clone();
+        context.runtimes = context.authority.residents.runtimes.clone();
+        context.inventories = context.authority.residents.inventories.clone();
+        context.mining = context.authority.residents.mining.clone();
+        context.projectiles = context.authority.residents.projectiles.clone();
+        context.environment = context.authority.residents.environment.clone();
+        context.blocks = context.authority.residents.blocks.clone();
+        context.ready = context.authority.residents.ready.clone();
+        context.drops = context.authority.residents.drops.clone();
+        context.containers = context.authority.residents.containers.clone();
+        context.container_chunks = context.authority.residents.container_chunks.clone();
+        for actor in &context.actors {
+            context.pre_step.insert(actor.key, actor.motion);
+        }
+        context
     }
 
     /// Freezes the tick-start climate snapshot every provider consumes.
@@ -1749,6 +1871,42 @@ impl<'a> TickContext<'a> {
     /// Returns the complete net set for the reducer's full replacement commit.
     pub fn viewer_leases(&self) -> BTreeMap<SessionKey, ViewLease> {
         self.viewers.clone()
+    }
+
+    /// Clones the complete net overlay for the reducer's full-replacement
+    /// resident commit. Login staging lands before this read, so seeded
+    /// actors commit exactly like carried ones.
+    pub fn resident_snapshot(&self) -> ResidentTickState {
+        ResidentTickState {
+            actors: self.actors.clone(),
+            runtimes: self.runtimes.clone(),
+            inventories: self.inventories.clone(),
+            mining: self.mining.clone(),
+            projectiles: self.projectiles.clone(),
+            environment: self.environment.clone(),
+            blocks: self.blocks.clone(),
+            ready: self.ready.clone(),
+            drops: self.drops.clone(),
+            containers: self.containers.clone(),
+            container_chunks: self.container_chunks.clone(),
+        }
+    }
+
+    /// Stages one login seed into the overlay. Latest-wins on a repeated key
+    /// preserves the no-duplicate-actor invariant even against a carried
+    /// record; the scan itself only emits sessions without one.
+    pub fn stage_login(&mut self, seeded: SeededPlayer) {
+        let SeededPlayer { actor, inventory } = seeded;
+        match self
+            .actors
+            .iter()
+            .position(|staged| staged.key == actor.key)
+        {
+            Some(index) => self.actors[index] = actor.clone(),
+            None => self.actors.push(actor.clone()),
+        }
+        self.pre_step.insert(actor.key, actor.motion);
+        self.inventories.insert(actor.key, inventory);
     }
 
     /// Reducer-carried sleep record under settlement.

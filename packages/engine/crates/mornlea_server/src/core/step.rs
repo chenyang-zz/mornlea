@@ -1,16 +1,17 @@
 //! Serial authoritative tick reducer.
 //!
 //! One tick owns one ordered dispatch. The endpoint claims the tick, then
-//! this reducer drains the mailbox, feeds every accepted provider in the
-//! frozen Go order, commits the viewer overlay with retired-session pruning
-//! and publishes exactly once. The replay order suite pins the dispatch call
-//! sequence per function below, so a swapped row fails loudly; keep provider
-//! call sites spelled as plain provider paths.
+//! this reducer drains the mailbox, seeds residents and logins into the
+//! overlay, feeds every accepted provider in the frozen Go order, commits
+//! the viewer and resident overlays with retired-session pruning on the
+//! viewer leg, and publishes exactly once. The replay order suite pins the
+//! dispatch call sequence per function below, so a swapped row fails loudly;
+//! keep provider call sites spelled as plain provider paths.
 //!
 //! The context holds the only mutable authority borrow for the whole
 //! dispatch, so authority writes happen exclusively before construction
-//! (mailbox drain, companion feed) and after the context drops (viewer
-//! commit, publication delivery). A mid-tick viewer commit would be
+//! (mailbox drain, companion feed, login scan) and after the context drops
+//! (viewer and resident commits, publication delivery). A mid-tick viewer commit would be
 //! observationally void: providers read the staged overlay, and the closing
 //! commit replaces the full set. A batch failure stops later rows but never
 //! the tick itself: staged work commits, the publication reports what ran,
@@ -142,6 +143,9 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
     let tick = state.next_tick();
     let drained = drain_mailbox(state, tick, budget.commands());
     let companions = state.drain_companions(COMPANION_FEED);
+    // The login scan runs before the context borrows the authority: Active
+    // sessions with a save body and no player actor seed initial actors.
+    let logins = state.login_seeds();
     // The carried schedules leave authority ownership for the tick: the
     // context holds the only mutable authority borrow during dispatch, so
     // they travel as locals and return after the context drops.
@@ -152,6 +156,11 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
         farmland::FarmlandSchedule::new(),
     );
     let mut context = TickContext::for_tick(state, budget);
+    // Seeded logins land before the first provider row, so this tick's own
+    // dispatch already observes freshly joined players.
+    for seeded in logins {
+        context.stage_login(seeded);
+    }
     context.freeze_environment(tick);
     for action in companions {
         context.push_companion_action(action);
@@ -164,6 +173,7 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
         &mut farmland_schedule,
     );
     let overlay = context.viewer_leases();
+    let residents = context.resident_snapshot();
     let events = context.events().to_vec();
     let counters = TickCounters {
         executed_tick: tick,
@@ -187,6 +197,7 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
         |key, _| matches!(state.session(*key), Some(facts) if facts.phase == SessionPhase::Active),
     );
     state.commit_viewers(overlay);
+    state.commit_residents(residents);
     let publication = TickPublication {
         tick,
         events,
