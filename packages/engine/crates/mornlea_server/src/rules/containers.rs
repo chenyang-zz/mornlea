@@ -49,7 +49,7 @@ use crate::contracts::{
     InventoryPatch, InventoryRecord, PhaseReport, RuleCall, RuleEffect, RulePhase, RuleReject,
     ServerError, SessionKey, ViewLease,
 };
-use crate::core::interaction::target_block;
+use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::rules::{crafting, drops};
 use crate::state::{AuthorityReadView, TickContext};
 
@@ -1384,14 +1384,6 @@ fn actor_basis(view: &AuthorityReadView<'_>, record: &ActorRecord) -> Option<Act
     })
 }
 
-/// Unit look direction of a rotation, the exact `LookDirection` formula
-/// (`packages/server/sim/entity/command.go`): yaw zero faces north (`-Z`),
-/// positive pitch looks up.
-fn look_direction(yaw: f32, pitch: f32) -> [f32; 3] {
-    let cos_pitch = pitch.cos();
-    [-yaw.sin() * cos_pitch, pitch.sin(), -yaw.cos() * cos_pitch]
-}
-
 /// One classified ray hit: the full observation of the first interaction target.
 struct RayHit {
     observed: BlockObservation,
@@ -1414,17 +1406,7 @@ fn cast_ray(
     direction: [f32; 3],
     reach: f32,
 ) -> Result<Option<RayHit>, RayFailure> {
-    let length =
-        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
-            .sqrt();
-    if !length.is_finite() || length < 1e-6 {
-        return Err(RayFailure::Invalid);
-    }
-    let normalized = [
-        direction[0] / length,
-        direction[1] / length,
-        direction[2] / length,
-    ];
+    let normalized = normalized_direction(direction).ok_or(RayFailure::Invalid)?;
     let mut cursor = RayCursor::try_new(Ray {
         origin,
         direction: normalized,

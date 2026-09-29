@@ -1440,3 +1440,80 @@ fn bucket_suppression_is_tick_local() {
     provider::run(&mut context, mine_call(actor)).unwrap();
     assert_eq!(context.read().mining(actor).unwrap().elapsed, 1);
 }
+
+/// Progress pins the solid behind transparent cells: the tracker and the
+/// completion resolver agree through water and open doors, the front cells
+/// stay untouched, and the saturated tick clears the target with one wear
+/// point and one output batch.
+#[test]
+fn progress_pins_target_behind_transparent_cells() {
+    const WATER_SOURCE: u16 = 27; // `core.WaterSourceID`
+    const WATER_FLOWING: u16 = 34; // `core.WaterLevel7ID`
+    const DOOR_LOWER_SOUTH_OPEN: u16 = 63; // `core.DoorLowerSouthOpen`
+    for corridor in [WATER_SOURCE, WATER_FLOWING, DOOR_LOWER_SOUTH_OPEN] {
+        let front = BlockPos::new(0, 65, 1);
+        let target = BlockPos::new(0, 65, 2);
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .expect("session");
+        let mut context = harness_context(&mut state);
+        let actor = south_scene(
+            &mut context,
+            session,
+            tool(ITEM_STONE_PICKAXE, 131),
+            &[(front, corridor), (target, STONE)],
+        );
+        let call = mine_call(actor);
+        for tick in 1..15u32 {
+            provider::run(&mut context, call).expect("progress");
+            let progress = context.read().mining(actor).expect("pinned progress");
+            assert_eq!(
+                progress.target, target,
+                "tick {tick} still tracks the solid behind corridor {corridor}"
+            );
+            assert_eq!(progress.observed_block, STONE);
+        }
+        provider::run(&mut context, call).expect("completion");
+        assert_eq!(context.read().mining(actor), None);
+        let view = context.read();
+        assert_eq!(
+            view.observation(Dimension::OVERWORLD, target)
+                .expect("cell")
+                .block,
+            AIR,
+            "the solid behind corridor {corridor} completes at its required ticks"
+        );
+        let front_after = view
+            .observation(Dimension::OVERWORLD, front)
+            .expect("front cell");
+        assert_eq!(front_after.block, corridor);
+        assert_eq!(front_after.revision, 1);
+        assert_eq!(
+            view.inventory(actor).expect("inventory").slots[0].durability,
+            130,
+            "one wear point for the completed mine"
+        );
+        let drops = view.drops(overworld_key(target));
+        assert_eq!(drops.len(), 1);
+        assert_eq!(drops[0].stack.item, ITEM_STONE);
+    }
+
+    // A corridor the authority never observed clears progress instead of
+    // tracking air: the walk cannot certify the missing geometry.
+    let target = BlockPos::new(0, 65, 2);
+    let mut state = authority();
+    let session = state
+        .admit(admitted(2, "Bo"), TransportKind::Memory)
+        .expect("session");
+    let mut context = harness_context(&mut state);
+    let actor = south_scene(
+        &mut context,
+        session,
+        tool(ITEM_STONE_PICKAXE, 131),
+        &[(target, STONE)],
+    );
+    let report = provider::run(&mut context, mine_call(actor)).expect("unready clears");
+    assert_eq!(report.applied, 0);
+    assert_eq!(context.read().mining(actor), None);
+}

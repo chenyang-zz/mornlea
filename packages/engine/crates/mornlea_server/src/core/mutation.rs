@@ -27,6 +27,7 @@ use super::contracts::{
     ContainerRecord, ContainerSlots, DropBatch, DropSource, EnvironmentState, InventoryPatch,
     InventoryRecord, MutationProducer, ResolvedMining, ResolvedPlacement, RuleReject,
 };
+use super::interaction::{look_direction, normalized_direction, target_block};
 use super::state::AuthorityReadView;
 use crate::rules::harvest;
 
@@ -407,16 +408,8 @@ fn block_center(pos: BlockPos) -> FiniteVec3 {
     .expect("block centers are finite")
 }
 
-/// Unit look direction of a rotation, the exact `LookDirection` formula
-/// (`packages/server/sim/entity/command.go`): yaw zero faces north (`-Z`),
-/// positive pitch looks up.
-fn look_direction(yaw: f32, pitch: f32) -> [f32; 3] {
-    let cos_pitch = pitch.cos();
-    [-yaw.sin() * cos_pitch, pitch.sin(), -yaw.cos() * cos_pitch]
-}
-
-/// One classified ray hit: the full observation of the first non-air cell
-/// and the face the ray entered it through.
+/// One classified ray hit: the full observation of the first target cell and
+/// the face the ray entered it through.
 struct RayHit {
     observed: BlockObservation,
     face: RayFace,
@@ -425,9 +418,10 @@ struct RayHit {
 /// Walks the F1 ray kernel (`NativeRaycast`) batch by batch and classifies
 /// every traversed cell against the view: an unobserved cell reports
 /// `unobserved` (the authority cannot certify geometry it has not observed),
-/// observed air continues the walk, and any other block is the hit. The
-/// origin record is classified like any other cell, so a ray starting inside
-/// a solid cell hits it with the `Origin` face.
+/// cells the shared `target_block` classifier passes over continue the walk,
+/// and the first target cell is the hit. The origin record is classified like
+/// any other cell, so a ray starting inside a solid cell hits it with the
+/// `Origin` face.
 fn cast_interaction_ray(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
@@ -436,17 +430,8 @@ fn cast_interaction_ray(
     reach: f32,
     unobserved: RuleReject,
 ) -> Result<Option<RayHit>, RuleReject> {
-    let length =
-        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
-            .sqrt();
-    if !length.is_finite() || length < 1e-6 {
-        return Err(RuleReject::Wire(RejectReason::InvalidRay));
-    }
-    let normalized = [
-        direction[0] / length,
-        direction[1] / length,
-        direction[2] / length,
-    ];
+    let normalized =
+        normalized_direction(direction).ok_or(RuleReject::Wire(RejectReason::InvalidRay))?;
     let mut cursor = RayCursor::try_new(Ray {
         origin,
         direction: normalized,
@@ -461,7 +446,7 @@ fn cast_interaction_ray(
             let cell = BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
             match view.observation(dimension, cell) {
                 None => return Err(unobserved),
-                Some(observed) if observed.block == AIR => {}
+                Some(observed) if !target_block(view, dimension, cell, observed.block) => {}
                 Some(observed) => {
                     return Ok(Some(RayHit {
                         observed,

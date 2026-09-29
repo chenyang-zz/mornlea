@@ -510,9 +510,10 @@ fn door_pair_and_internal_toggle() {
     );
     assert_eq!(context.events().len(), 0);
 
-    // Toggle back aimed at the upper half: the eye sits one cell higher so the
-    // horizontal ray meets the upper cell first, and the lower half flips open
-    // to closed with its direction preserved.
+    // An upper over an open lower is transparent to the authority sampler, so
+    // no toggle-back case can aim through it: the ray below passes the open
+    // front pair and toggles the closed pair behind, leaving the front pair
+    // untouched.
     let mut state = authority();
     let session = state
         .admit(admitted(4, "Dan"), TransportKind::Memory)
@@ -529,29 +530,86 @@ fn door_pair_and_internal_toggle() {
             0.0,
         )))
         .expect("actor");
-    let high_actor = ActorKey::Player(session);
-    context.preload_inventory(high_actor, InventoryRecord::empty());
-    context.preload_block(observation(BlockPos::new(0, 66, 0), AIR));
-    context.preload_block(observation(upper, DOOR_UPPER));
-    context.preload_block(observation(lower, DOOR_LOWER_NORTH_OPEN));
-    let toggle = door_interaction(session, std::f32::consts::PI, 0.0, 4);
-    provider::run(&mut context, door_call(&toggle)).expect("toggled closed");
+    let seer = ActorKey::Player(session);
+    context.preload_inventory(seer, InventoryRecord::empty());
+    let front_lower = BlockPos::new(0, 65, 1);
+    let front_upper = BlockPos::new(0, 66, 1);
+    let back_lower = BlockPos::new(0, 65, 2);
+    let back_upper = BlockPos::new(0, 66, 2);
+    let corridor = [
+        BlockPos::new(0, 66, 0),
+        front_lower,
+        front_upper,
+        back_lower,
+        back_upper,
+    ];
+    for (pos, block) in [
+        (BlockPos::new(0, 66, 0), AIR),
+        (front_lower, DOOR_LOWER_NORTH_OPEN),
+        (front_upper, DOOR_UPPER),
+        (back_lower, DOOR_LOWER_NORTH_CLOSED),
+        (back_upper, DOOR_UPPER),
+    ] {
+        context.preload_block(observation(pos, block));
+    }
+    let before = probe(&context, &corridor, &[seer]);
+    let toggle = door_interaction(session, std::f32::consts::PI, 0.0, 10);
+    let report = provider::run(&mut context, door_call(&toggle)).expect("behind pair opens");
+    assert_eq!(report.applied, 1);
     assert_eq!(
         context
             .read()
-            .observation(Dimension::OVERWORLD, lower)
-            .expect("lower half")
+            .observation(Dimension::OVERWORLD, back_lower)
+            .expect("back lower")
             .block,
-        DOOR_LOWER_NORTH_CLOSED
+        DOOR_LOWER_NORTH_OPEN,
+        "only the closed pair behind the open pair toggles"
     );
-    assert_eq!(
-        context
-            .read()
-            .observation(Dimension::OVERWORLD, upper)
-            .expect("upper half")
-            .block,
-        DOOR_UPPER
-    );
+    let after = probe(&context, &corridor, &[seer]);
+    for (index, pos) in corridor.iter().enumerate() {
+        if *pos == back_lower {
+            continue;
+        }
+        assert_eq!(
+            after.cells[index], before.cells[index],
+            "front pair, back upper and eye cell stay unchanged at {pos:?}"
+        );
+    }
+    assert_eq!(after.inventories, before.inventories);
+    assert_eq!(after.events, before.events);
+
+    // A missing cell after a transparent pair still refuses: the passed open
+    // pair is never a fallback target.
+    let mut state = authority();
+    let session = state
+        .admit(admitted(11, "Kim"), TransportKind::Memory)
+        .expect("session");
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .expect("environment");
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            [0.5, 65.0, 0.5],
+            std::f32::consts::PI,
+            0.0,
+        )))
+        .expect("actor");
+    let watcher = ActorKey::Player(session);
+    context.preload_inventory(watcher, InventoryRecord::empty());
+    let front = [BlockPos::new(0, 66, 0), front_lower, front_upper];
+    for (pos, block) in [
+        (BlockPos::new(0, 66, 0), AIR),
+        (front_lower, DOOR_LOWER_NORTH_OPEN),
+        (front_upper, DOOR_UPPER),
+    ] {
+        context.preload_block(observation(pos, block));
+    }
+    let before = probe(&context, &front, &[watcher]);
+    let toggle = door_interaction(session, std::f32::consts::PI, 0.0, 12);
+    assert!(provider::run(&mut context, door_call(&toggle)).is_err());
+    assert_eq!(probe(&context, &front, &[watcher]), before);
 
     // Malformed partner: the upper cell holds stone, so the toggle refuses
     // with both cells and the inventory unchanged.

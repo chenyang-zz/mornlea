@@ -19,6 +19,7 @@ use crate::core::contracts::{
     InventoryRecord, MutationProducer, PhaseReport, ResolvedPlacement, RuleCall, RulePhase,
     ServerError, SessionKey, WorkKind,
 };
+use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::core::state::{ActionKind, AuthorityReadView, TickContext};
 
 const AIR: u16 = 0;
@@ -33,9 +34,6 @@ const POTATO_FIRST: u16 = 46;
 const POTATO_LAST: u16 = 53;
 const CARROT_FIRST: u16 = 54;
 const CARROT_LAST: u16 = 61;
-const DOOR_LOWER_FIRST: u16 = 62;
-const DOOR_LOWER_LAST: u16 = 69;
-const DOOR_UPPER: u16 = 70;
 const ITEM_STONE_HOE: u16 = 30;
 const ITEM_IRON_HOE: u16 = 31;
 const ITEM_BROKEN_STONE_HOE: u16 = 32;
@@ -66,17 +64,11 @@ fn is_immature_crop(block: u16) -> bool {
         || (CARROT_FIRST..CARROT_LAST).contains(&block)
 }
 
-fn look_direction(look: LookAngles) -> [f32; 3] {
-    let yaw = look.yaw();
-    let pitch = look.pitch();
-    let cos_pitch = pitch.cos();
-    [-yaw.sin() * cos_pitch, pitch.sin(), -yaw.cos() * cos_pitch]
-}
-
-/// Mirrors `blockRaycastSampler`: fluid and open lower doors are transparent;
-/// an upper door delegates to its lower half and an unready partner blocks.
-/// Collection alone turns a source cell into a hit while flowing water stays
-/// transparent. Every traversed unready cell refuses the whole command.
+/// Collection alone turns a source cell into a hit; every other cell follows
+/// the shared `target_block` classifier, so flowing water and open doors stay
+/// transparent exactly like the sampler the mining oracle pins
+/// (`blockRaycastSampler`, `packages/server/sim/entity/mining.go`). Every
+/// traversed unready cell refuses the whole command.
 fn ray_target(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
@@ -87,26 +79,7 @@ fn ray_target(
     if collect && block == WATER_SOURCE {
         return true;
     }
-    if block == AIR || is_fluid(block) {
-        return false;
-    }
-    if (DOOR_LOWER_FIRST..=DOOR_LOWER_LAST).contains(&block) {
-        return block.is_multiple_of(2);
-    }
-    if block == DOOR_UPPER {
-        let Some(y) = observed.pos.y().checked_sub(1) else {
-            return true;
-        };
-        let lower = view.observation(
-            dimension,
-            BlockPos::new(observed.pos.x(), y, observed.pos.z()),
-        );
-        return !lower.is_some_and(|cell| {
-            (DOOR_LOWER_FIRST..=DOOR_LOWER_LAST).contains(&cell.block)
-                && !cell.block.is_multiple_of(2)
-        });
-    }
-    true
+    target_block(view, dimension, observed.pos, block)
 }
 
 fn cast_ray(
@@ -127,9 +100,11 @@ fn cast_ray(
         position[1] + tunables.eye_height(),
         position[2],
     ];
+    let direction =
+        normalized_direction(look_direction(look.yaw(), look.pitch())).ok_or(REFUSAL)?;
     let mut cursor = RayCursor::try_new(Ray {
         origin,
-        direction: look_direction(look),
+        direction,
         maximum: tunables.interaction_reach(),
     })
     .map_err(|_| REFUSAL)?;
@@ -277,8 +252,11 @@ fn settle(
         Command::PlaceWater(_) => {
             let target = adjacent(hit.observed.pos, hit.face)?;
             let observed = view.observation(dimension, target).ok_or(REFUSAL)?;
+            // The destination takes air or flowing water; a source cell or a
+            // solid keeps its content, so the pour refuses with everything
+            // untouched.
             if observed.block != AIR
-                && !(WATER_SOURCE + 1..=WATER_LEVEL_7).contains(&observed.block)
+                && (!is_fluid(observed.block) || observed.block == WATER_SOURCE)
             {
                 return Err(REFUSAL);
             }

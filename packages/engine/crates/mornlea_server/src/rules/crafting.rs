@@ -51,6 +51,7 @@ use crate::contracts::{
     ActorKey, ActorLifecycle, BlockObservation, InventoryPatch, InventoryRecord, PhaseReport,
     RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
 };
+use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::state::{AuthorityReadView, TickContext};
 
 /// Crafting grid cells (`core.CraftingGridSlots`,
@@ -71,9 +72,6 @@ const INVENTORY_SLOTS: usize = 36;
 
 /// The absent item number (`core.ItemNone`).
 const ITEM_NONE: u16 = 0;
-
-/// Air cell the open ray walks through (`core.AirID`).
-const AIR: u16 = 0;
 
 /// Workbench block (`core.WorkbenchID`).
 const WORKBENCH_BLOCK: u16 = 45;
@@ -1291,17 +1289,11 @@ struct RayHit {
     observed: BlockObservation,
 }
 
-/// The unit look direction for one yaw and pitch, the shared view-surface
-/// row the container provider mirrors from the Go look decomposition.
-fn look_direction(yaw: f32, pitch: f32) -> [f32; 3] {
-    let cos_pitch = pitch.cos();
-    [-yaw.sin() * cos_pitch, pitch.sin(), -yaw.cos() * cos_pitch]
-}
-
 /// Walks the authoritative ray through the certified observations up to the
-/// reach and reports the first non-air cell; an unobserved cell refuses the
-/// whole walk. The shared open-surface row the container provider mirrors
-/// from the Go loaded-chunk walk.
+/// reach and reports the first target cell; an unobserved cell refuses the
+/// whole walk. Cells the shared `target_block` classifier passes over continue
+/// the walk. The shared open-surface row the container provider mirrors from
+/// the Go loaded-chunk walk.
 fn cast_ray(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
@@ -1310,17 +1302,7 @@ fn cast_ray(
     reach: f32,
 ) -> Result<Option<RayHit>, ServerError> {
     const REFUSAL: ServerError = ServerError::InvalidInput { field: "crafting" };
-    let length =
-        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
-            .sqrt();
-    if !length.is_finite() || length < 1e-6 {
-        return Err(REFUSAL);
-    }
-    let normalized = [
-        direction[0] / length,
-        direction[1] / length,
-        direction[2] / length,
-    ];
+    let normalized = normalized_direction(direction).ok_or(REFUSAL)?;
     let mut cursor = RayCursor::try_new(Ray {
         origin,
         direction: normalized,
@@ -1334,7 +1316,7 @@ fn cast_ray(
                 mornlea_domain::BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
             match view.observation(dimension, cell) {
                 None => return Err(REFUSAL),
-                Some(observed) if observed.block == AIR => {}
+                Some(observed) if !target_block(view, dimension, cell, observed.block) => {}
                 Some(observed) => return Ok(Some(RayHit { observed })),
             }
         }

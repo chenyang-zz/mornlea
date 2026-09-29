@@ -2044,3 +2044,161 @@ fn companion_mines_loaded_container_once_and_rebirth_advances_retained_generatio
     assert_eq!(reborn.reference.generation(), 8);
     assert_eq!(ctx.snapshot_state(world()).chunks[0].2, 9);
 }
+
+/// The shared interaction classifier passes fluids and open doors: a mine ray
+/// through source water, flowing water or an open lower door selects the solid
+/// cell behind, and the front cell keeps its form and revision.
+#[test]
+fn mine_ray_passes_fluids_and_open_doors_to_solid_behind() {
+    const WATER_SOURCE: u16 = 27; // `core.WaterSourceID`
+    const WATER_FLOWING: u16 = 34; // `core.WaterLevel7ID`
+    const DOOR_LOWER_SOUTH_OPEN: u16 = 63; // `core.DoorLowerSouthOpen`
+    for corridor in [WATER_SOURCE, WATER_FLOWING, DOOR_LOWER_SOUTH_OPEN] {
+        fixture_case(
+            AIR,
+            corridor,
+            STONE,
+            ItemStack::default(),
+            |context, session| {
+                let actor = ActorKey::Player(session);
+                let target = BlockPos::new(0, 65, 2);
+                let front = BlockPos::new(0, 65, 1);
+                let resolved = resolve_mine(
+                    actor,
+                    &primary_control(std::f32::consts::PI, 0.0),
+                    &context.read(),
+                )
+                .expect("transparent corridor resolves")
+                .expect("the solid behind is the target");
+                let outcome = context.transaction().try_mine(resolved).expect("clear");
+                assert_eq!(outcome.changed.len(), 1);
+                assert_eq!(outcome.changed[0].pos, target);
+                let view = context.read();
+                assert_eq!(
+                    view.observation(Dimension::OVERWORLD, target)
+                        .unwrap()
+                        .block,
+                    AIR
+                );
+                let front_after = view.observation(Dimension::OVERWORLD, front).unwrap();
+                assert_eq!(front_after.block, corridor);
+                assert_eq!(front_after.revision, 1);
+            },
+        );
+    }
+}
+
+/// A closed lower door stays solid to the mine ray: the resolver clears the
+/// door pair and never touches the stone behind it.
+#[test]
+fn mine_ray_stops_at_closed_door() {
+    const DOOR_LOWER_SOUTH_CLOSED: u16 = 62; // `core.DoorLowerSouthClosed`
+    const DOOR_UPPER: u16 = 70; // `core.DoorUpper`
+    const ITEM_DOOR: u16 = 43; // `core.ItemDoor`
+    fixture_case(
+        AIR,
+        DOOR_LOWER_SOUTH_CLOSED,
+        STONE,
+        ItemStack::default(),
+        |context, session| {
+            let actor = ActorKey::Player(session);
+            context.preload_block(observation(BlockPos::new(0, 66, 1), DOOR_UPPER));
+            let resolved = resolve_mine(
+                actor,
+                &primary_control(std::f32::consts::PI, 0.0),
+                &context.read(),
+            )
+            .expect("closed door resolves")
+            .expect("the door is the target");
+            let outcome = context.transaction().try_mine(resolved).expect("clear");
+            assert_eq!(outcome.changed.len(), 2);
+            let view = context.read();
+            assert_eq!(
+                view.observation(Dimension::OVERWORLD, BlockPos::new(0, 65, 2))
+                    .unwrap()
+                    .block,
+                STONE,
+                "the solid behind a closed door is untouched"
+            );
+            let drops = view.drops(overworld_key(BlockPos::new(0, 65, 1)));
+            assert_eq!(drops.len(), 1);
+            assert_eq!(drops[0].stack.item, ITEM_DOOR);
+        },
+    );
+}
+
+/// A place ray also walks through transparent cells, but the destination rule
+/// still applies: water or an open door cell cannot host the new block, so the
+/// refusal names the occupied destination rather than a missed target.
+#[test]
+fn place_ray_passes_transparent_cells_but_destination_refuses() {
+    const WATER_SOURCE: u16 = 27; // `core.WaterSourceID`
+    const WATER_FLOWING: u16 = 34; // `core.WaterLevel7ID`
+    const DOOR_LOWER_SOUTH_OPEN: u16 = 63; // `core.DoorLowerSouthOpen`
+    for corridor in [WATER_SOURCE, WATER_FLOWING, DOOR_LOWER_SOUTH_OPEN] {
+        fixture_case(
+            AIR,
+            corridor,
+            STONE,
+            ItemStack {
+                item: ITEM_DIRT,
+                count: 3,
+                durability: 0,
+            },
+            |context, session| {
+                let actor = ActorKey::Player(session);
+                let cells = [
+                    BlockPos::new(0, 65, 0),
+                    BlockPos::new(0, 65, 1),
+                    BlockPos::new(0, 65, 2),
+                ];
+                let before = probe(context, &cells, &[actor], &[], &[]);
+                let refused = resolve_place(actor, &south_intent(), &context.read());
+                assert_eq!(refused, Err(RuleReject::Wire(RejectReason::Occupied)));
+                assert_eq!(probe(context, &cells, &[actor], &[], &[]), before);
+            },
+        );
+    }
+}
+
+/// A closed lower door is the place ray's hit: the face-adjacent eye-side cell
+/// takes the new block while the door and the stone behind keep their state.
+#[test]
+fn place_ray_stops_at_closed_door() {
+    const DOOR_LOWER_SOUTH_CLOSED: u16 = 62; // `core.DoorLowerSouthClosed`
+    fixture_case(
+        AIR,
+        DOOR_LOWER_SOUTH_CLOSED,
+        STONE,
+        ItemStack {
+            item: ITEM_DIRT,
+            count: 3,
+            durability: 0,
+        },
+        |context, session| {
+            let actor = ActorKey::Player(session);
+            let resolved =
+                resolve_place(actor, &south_intent(), &context.read()).expect("door is the hit");
+            let outcome = context
+                .transaction()
+                .try_place(resolved)
+                .expect("eye-side placement commits");
+            assert_eq!(outcome.changed.len(), 1);
+            assert_eq!(outcome.changed[0].pos, BlockPos::new(0, 65, 0));
+            assert_eq!(outcome.changed[0].block, DIRT);
+            let view = context.read();
+            assert_eq!(
+                view.observation(Dimension::OVERWORLD, BlockPos::new(0, 65, 1))
+                    .unwrap()
+                    .block,
+                DOOR_LOWER_SOUTH_CLOSED
+            );
+            assert_eq!(
+                view.observation(Dimension::OVERWORLD, BlockPos::new(0, 65, 2))
+                    .unwrap()
+                    .block,
+                STONE
+            );
+        },
+    );
+}

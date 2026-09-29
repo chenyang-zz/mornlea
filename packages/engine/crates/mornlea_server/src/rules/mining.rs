@@ -53,23 +53,12 @@ use crate::core::contracts::{
     ActorKey, ActorLifecycle, BlockObservation, CompanionAction, MiningProgress, PhaseReport,
     RuleCall, RuleEffect, RulePhase, RuleReject, ServerError,
 };
+use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::core::mutation::{
     is_crop, is_farmland, is_fluid, is_snow_layer, is_torch, is_wild_grass, mining_rule,
     resolve_companion_mine, resolve_mine,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
-
-/// Air cell the ray walks through (`core.AirID`, `packages/shared/core/block.go`).
-const AIR: u16 = 0;
-
-/// Unit look direction of a rotation, the exact `LookDirection` formula
-/// (`packages/server/sim/entity/command.go`): yaw zero faces north (`-Z`),
-/// positive pitch looks up. The accepted resolvers own the settlement ray;
-/// this copy only tracks the progress key.
-fn look_direction(yaw: f32, pitch: f32) -> [f32; 3] {
-    let cos_pitch = pitch.cos();
-    [-yaw.sin() * cos_pitch, pitch.sin(), -yaw.cos() * cos_pitch]
-}
 
 /// Outcome of the lightweight progress-tracking ray walk: the first observed
 /// non-air cell, no hit within reach, or an unready basis the authority cannot
@@ -82,8 +71,9 @@ enum TargetOutcome {
 
 /// Walks the numerical ray kernel batch by batch and classifies every
 /// traversed cell against the authority view, the same walk the accepted
-/// resolvers perform: an unobserved cell is unready, observed air continues,
-/// and any other block is the hit. No hit within reach is empty.
+/// resolvers perform: an unobserved cell is unready, cells the shared
+/// `target_block` classifier passes over continue, and the first target cell
+/// is the hit. No hit within reach is empty.
 fn walk_target(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
@@ -91,17 +81,10 @@ fn walk_target(
     direction: [f32; 3],
     reach: f32,
 ) -> TargetOutcome {
-    let length =
-        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
-            .sqrt();
-    if !length.is_finite() || length < 1e-6 {
-        return TargetOutcome::Unready;
-    }
-    let normalized = [
-        direction[0] / length,
-        direction[1] / length,
-        direction[2] / length,
-    ];
+    let normalized = match normalized_direction(direction) {
+        Some(normalized) => normalized,
+        None => return TargetOutcome::Unready,
+    };
     let mut cursor = match RayCursor::try_new(Ray {
         origin,
         direction: normalized,
@@ -119,7 +102,7 @@ fn walk_target(
             let cell = BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
             match view.observation(dimension, cell) {
                 None => return TargetOutcome::Unready,
-                Some(observed) if observed.block == AIR => {}
+                Some(observed) if !target_block(view, dimension, cell, observed.block) => {}
                 Some(observed) => return TargetOutcome::Hit(observed),
             }
         }

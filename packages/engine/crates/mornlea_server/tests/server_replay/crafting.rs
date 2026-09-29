@@ -1543,3 +1543,75 @@ fn view_grid0_inventory9_boundary() {
         CraftingSize::Personal
     );
 }
+
+/// A bench open shares the interaction classifier: the downward ray passes
+/// water and open doors to the bench below, while a closed door is the hit
+/// and refuses with the grid still personal.
+#[test]
+fn bench_open_passes_transparent_cells() {
+    const WATER_SOURCE: u16 = 27; // `core.WaterSourceID`
+    const WATER_FLOWING: u16 = 34; // `core.WaterLevel7ID`
+    const DOOR_LOWER_SOUTH_OPEN: u16 = 63; // `core.DoorLowerSouthOpen`
+    const DOOR_LOWER_SOUTH_CLOSED: u16 = 62; // `core.DoorLowerSouthClosed`
+    for corridor in [WATER_SOURCE, WATER_FLOWING, DOOR_LOWER_SOUTH_OPEN] {
+        let session = player_session(40, "bench-ray");
+        let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+        let mut context = TickContext::harness(&mut state, TickBudget::full());
+        let actor = scene(
+            &mut context,
+            session,
+            InventoryRecord::empty(),
+            ActorLifecycle::Active,
+        );
+        context.preload_block(observation(BlockPos::new(0, 65, 0), AIR));
+        context.preload_block(observation(BlockPos::new(0, 64, 0), corridor));
+        context.preload_block(observation(BlockPos::new(0, 63, 0), WORKBENCH_BLOCK));
+        let open_look = LookAngles::try_new(0.0, -FRAC_PI_2).expect("look down");
+        assert!(
+            admit(
+                &mut context,
+                &envelope(session, 1, Command::OpenContainer(open_look))
+            )
+            .is_ok()
+        );
+        let report = drain(&mut context).expect("drain settles the deferred open");
+        assert_eq!(report.applied, 1, "transparent corridor {corridor}");
+        assert_eq!(
+            inventory_of(&context, actor).crafting_size,
+            CraftingSize::Workbench,
+            "the bench below corridor {corridor} widens the grid"
+        );
+    }
+
+    let session = player_session(41, "bench-door");
+    let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let actor = scene(
+        &mut context,
+        session,
+        InventoryRecord::empty(),
+        ActorLifecycle::Active,
+    );
+    context.preload_block(observation(BlockPos::new(0, 65, 0), AIR));
+    context.preload_block(observation(
+        BlockPos::new(0, 64, 0),
+        DOOR_LOWER_SOUTH_CLOSED,
+    ));
+    context.preload_block(observation(BlockPos::new(0, 63, 0), WORKBENCH_BLOCK));
+    let open_look = LookAngles::try_new(0.0, -FRAC_PI_2).expect("look down");
+    assert!(
+        admit(
+            &mut context,
+            &envelope(session, 1, Command::OpenContainer(open_look))
+        )
+        .is_ok()
+    );
+    let report = drain(&mut context).expect("drain reports the refused open");
+    assert_eq!(report.applied, 0);
+    assert_eq!(report.rejected, 1);
+    assert_eq!(
+        inventory_of(&context, actor).crafting_size,
+        CraftingSize::Personal,
+        "a closed door above the bench is the hit, not the bench"
+    );
+}

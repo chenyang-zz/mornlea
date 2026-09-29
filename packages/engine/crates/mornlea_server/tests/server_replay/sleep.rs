@@ -1221,3 +1221,98 @@ fn entry_shape_gate_reports_zero_work_and_refuses_foreign_shapes() {
         Err(ServerError::InvalidInput { field: "phase" })
     );
 }
+
+/// Night entry shares the interaction classifier: the bed ray passes water
+/// and open doors to the foot below, while a closed door is the hit and
+/// settles as the silent non-bed no-op with the record untouched.
+#[test]
+fn night_entry_passes_transparent_cells() {
+    const WATER_SOURCE: u16 = 27; // `core.WaterSourceID`
+    const WATER_FLOWING: u16 = 34; // `core.WaterLevel7ID`
+    const DOOR_LOWER_SOUTH_OPEN: u16 = 63; // `core.DoorLowerSouthOpen`
+    const DOOR_LOWER_SOUTH_CLOSED: u16 = 62; // `core.DoorLowerSouthClosed`
+    let foot = BlockPos::new(3, 1, 5);
+    let eye = [3.5, 1.0 + 1.62, 9.5];
+    for corridor in [WATER_SOURCE, WATER_FLOWING, DOOR_LOWER_SOUTH_OPEN] {
+        let one = mint_sessions(1)[0];
+        let mut state = authority();
+        let mut context = harness_context(&mut state);
+        context
+            .stage(RuleEffect::Environment(environment(
+                SETTLE_WORLD_TIME,
+                0,
+                WINTER_SOLSTICE_SEASON_OFFSET,
+            )))
+            .expect("environment");
+        context
+            .stage(RuleEffect::Actor(player_actor(
+                one,
+                [3.5, 1.0, 9.5],
+                0.0,
+                0.0,
+            )))
+            .expect("actor");
+        stage_corridor(
+            &mut context,
+            3,
+            &[
+                (3, 1, 7, corridor),
+                (3, 1, 5, BED_FOOT_SOUTH),
+                (3, 1, 6, BED_HEAD_SOUTH),
+            ],
+        );
+        let carried = SleepState::try_new(Vec::new(), u64::from(EXPECTED_MORNING_OFFSET), None)
+            .expect("carried record");
+        let (yaw, pitch) = look_at_point(eye, [3.5, 1.5, 5.5]);
+        let outcome = provider::enter(
+            &mut context,
+            &carried,
+            &bed_interaction(one, yaw, pitch, 10),
+        )
+        .expect("entry through a transparent cell");
+        assert_eq!(
+            outcome.1.beds,
+            vec![(one, Dimension::OVERWORLD, foot)],
+            "corridor {corridor} stays transparent to the bed ray"
+        );
+    }
+
+    let one = mint_sessions(1)[0];
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment(
+            SETTLE_WORLD_TIME,
+            0,
+            WINTER_SOLSTICE_SEASON_OFFSET,
+        )))
+        .expect("environment");
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            one,
+            [3.5, 1.0, 9.5],
+            0.0,
+            0.0,
+        )))
+        .expect("actor");
+    stage_corridor(
+        &mut context,
+        3,
+        &[
+            (3, 1, 7, DOOR_LOWER_SOUTH_CLOSED),
+            (3, 1, 5, BED_FOOT_SOUTH),
+            (3, 1, 6, BED_HEAD_SOUTH),
+        ],
+    );
+    let carried = SleepState::try_new(Vec::new(), u64::from(EXPECTED_MORNING_OFFSET), None)
+        .expect("carried record");
+    let (yaw, pitch) = look_at_point(eye, [3.5, 1.5, 5.5]);
+    let outcome = provider::enter(
+        &mut context,
+        &carried,
+        &bed_interaction(one, yaw, pitch, 11),
+    )
+    .expect("a closed door is the silent non-bed hit");
+    assert_eq!(outcome.0.applied, 0);
+    assert!(outcome.1.beds.is_empty());
+}

@@ -572,3 +572,100 @@ fn foreign_actor_call_refuses_without_effect() {
     assert_eq!(context.take_charges(), vec![(player, ActionKind::Mining)]);
     assert!(!context.mining_suppressed(player));
 }
+
+/// Tool rays share the interaction classifier: hoe and bone meal pass water
+/// and open doors to the soil or crop behind, collection reaches a source
+/// behind an open door, and a closed door blocks the hoe with everything
+/// untouched.
+#[test]
+fn tool_rays_pass_transparent_cells_and_stop_at_closed_doors() {
+    const DOOR_LOWER_SOUTH_OPEN: u16 = 63; // `core.DoorLowerSouthOpen`
+    const DOOR_LOWER_SOUTH_CLOSED: u16 = 62; // `core.DoorLowerSouthClosed`
+    let target = BlockPos::new(0, 65, 2);
+    let adjacent = BlockPos::new(0, 65, 1);
+    let above = BlockPos::new(0, 66, 2);
+    for corridor in [WATER_SOURCE, WATER_FLOWING, DOOR_LOWER_SOUTH_OPEN] {
+        let mut state = authority();
+        let session = state.admit(admitted(), TransportKind::Memory).unwrap();
+        let mut context = TickContext::harness(&mut state, TickBudget::full());
+        let _player = scene(
+            &mut context,
+            session,
+            stack(STONE_HOE, 1, 2),
+            &[
+                (BlockPos::new(0, 65, 0), AIR),
+                (adjacent, corridor),
+                (target, DIRT),
+                (above, AIR),
+            ],
+        );
+        let intent = command(session, 20, Command::TillSoil(look()));
+        assert_eq!(
+            provider::run(&mut context, call(&intent)).unwrap().applied,
+            1,
+            "hoe tills through corridor {corridor}"
+        );
+        assert_eq!(cell(&context, target).block, FARMLAND_DRY);
+        assert_eq!(cell(&context, adjacent).block, corridor);
+    }
+
+    let mut state = authority();
+    let session = state.admit(admitted(), TransportKind::Memory).unwrap();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let _player = scene(
+        &mut context,
+        session,
+        stack(BONE_MEAL, 2, 0),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (adjacent, WATER_SOURCE),
+            (target, WHEAT_STAGE_3),
+        ],
+    );
+    let intent = command(session, 21, Command::BoneMeal(look()));
+    assert_eq!(
+        provider::run(&mut context, call(&intent)).unwrap().applied,
+        1
+    );
+    assert_eq!(cell(&context, target).block, WHEAT_STAGE_3 + 1);
+
+    let mut state = authority();
+    let session = state.admit(admitted(), TransportKind::Memory).unwrap();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let player = scene(
+        &mut context,
+        session,
+        stack(EMPTY_BUCKET, 1, 0),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (adjacent, DOOR_LOWER_SOUTH_OPEN),
+            (target, WATER_SOURCE),
+        ],
+    );
+    let intent = command(session, 22, Command::CollectWater(look()));
+    assert_eq!(
+        provider::run(&mut context, call(&intent)).unwrap().applied,
+        1
+    );
+    assert_eq!(cell(&context, target).block, AIR);
+    assert_eq!(held(&context, player), stack(WATER_BUCKET, 1, 0));
+
+    let mut state = authority();
+    let session = state.admit(admitted(), TransportKind::Memory).unwrap();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let player = scene(
+        &mut context,
+        session,
+        stack(STONE_HOE, 1, 2),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (adjacent, DOOR_LOWER_SOUTH_CLOSED),
+            (target, DIRT),
+            (above, AIR),
+        ],
+    );
+    let before = probe(&context, player, &[adjacent, target]);
+    let intent = command(session, 23, Command::TillSoil(look()));
+    assert!(provider::run(&mut context, call(&intent)).is_err());
+    assert_eq!(probe(&context, player, &[adjacent, target]), before);
+}

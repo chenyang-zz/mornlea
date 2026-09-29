@@ -56,11 +56,9 @@ use crate::core::contracts::{
     BlockObservation, InteractionKind, PhaseReport, RuleCall, RuleEffect, RulePhase, ServerError,
     SessionKey, SleepState,
 };
+use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::core::state::{AuthorityReadView, TickContext};
 
-/// Air cell the ray walks through (`core.AirID`,
-/// `packages/shared/core/block.go`).
-const AIR: u16 = 0;
 /// First bed-foot form, south (`core.BedFootSouthID`); the eight bed forms
 /// run foot south/west/north/east then head south/west/north/east.
 const BED_FOOT_SOUTH: u16 = 76;
@@ -415,19 +413,12 @@ fn entry_runtime(
     })
 }
 
-/// Unit look direction of a rotation, the exact `LookDirection` formula
-/// (`packages/server/sim/entity/command.go`): yaw zero faces north (`-Z`),
-/// positive pitch looks up.
-fn look_direction(yaw: f32, pitch: f32) -> [f32; 3] {
-    let cos_pitch = pitch.cos();
-    [-yaw.sin() * cos_pitch, pitch.sin(), -yaw.cos() * cos_pitch]
-}
-
 /// Walks the numerical ray kernel batch by batch and returns the full
-/// observation of the first non-air cell, the same walk the accepted
+/// observation of the first target cell, the same walk the accepted
 /// placement geometry performs: an unobserved cell refuses because the
-/// authority cannot certify geometry it has not observed, observed air
-/// continues the walk, and no hit within reach reports `None`.
+/// authority cannot certify geometry it has not observed, cells the shared
+/// `target_block` classifier passes over continue the walk, and no hit within
+/// reach reports `None`.
 fn cast_ray(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
@@ -438,17 +429,7 @@ fn cast_ray(
     const REFUSAL: ServerError = ServerError::InvalidInput {
         field: "interaction",
     };
-    let length =
-        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
-            .sqrt();
-    if !length.is_finite() || length < 1e-6 {
-        return Err(REFUSAL);
-    }
-    let normalized = [
-        direction[0] / length,
-        direction[1] / length,
-        direction[2] / length,
-    ];
+    let normalized = normalized_direction(direction).ok_or(REFUSAL)?;
     let mut cursor = RayCursor::try_new(Ray {
         origin,
         direction: normalized,
@@ -461,7 +442,7 @@ fn cast_ray(
             let cell = BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
             match view.observation(dimension, cell) {
                 None => return Err(REFUSAL),
-                Some(observed) if observed.block == AIR => {}
+                Some(observed) if !target_block(view, dimension, cell, observed.block) => {}
                 Some(observed) => return Ok(Some(observed)),
             }
         }
