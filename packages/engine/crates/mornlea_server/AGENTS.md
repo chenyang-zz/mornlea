@@ -162,6 +162,15 @@ against this file.
   explicit slice through the same batch-entry/body split as chunk
   acquisition; the serial reducer owns the interest set and viewer
   publication.
+- `src/rules/crafting.rs` owns workbench crafting on the lifecycle phase
+  plus `MoveCrafting`/`TakeCraftingOutput` admission: the exact 25-recipe
+  frozen table (sealed in the capability inventory), trim-preserving-holes
+  matching with mirror only per flag, nonzero-durability never an
+  ingredient, and one whole-record patch per settlement — take refuses
+  before staging on full output or failed repack rehearsal, close repacks
+  or refuses. The command-close grid-size drop belongs to the container
+  provider's `CloseContainer`; the bench-anchor recheck arm waits for a
+  contract surface that can express the anchor.
 - `src/rules/mining.rs` owns continuous mining progression on the
   `MiningStep` phase: key-unchanged increments to saturation, key change
   restarts at 1, completions through the 1.6 transaction exactly once, human
