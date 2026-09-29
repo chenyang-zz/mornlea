@@ -31,7 +31,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.4b Implement actor trample and snow footprints.
 - [x] 2.4d0 Complete indexed Ready world reads, height cache and compact replay snapshots.
 - [x] 2.4d Implement deterministic crop, dry farmland, tree, grass and snow random rules.
-- [ ] 2.4c Implement ordered block-support sweeps.
+- [ ] 2.4c Implement ordered block-support sweeps ([exact packet](plans/11-support-sweeps.md)).
 - [x] 2.5a Implement authoritative player control and movement.
 - [x] 2.5b Implement survival transitions and correction observations.
 - [x] 2.5c Implement atomic eating inventory and hunger settlement.

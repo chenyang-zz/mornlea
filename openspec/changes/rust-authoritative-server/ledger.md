@@ -839,3 +839,13 @@ has executed on Darwin only; Windows qualification remains the full platform
 stage gate, and is not claimed by this provider acceptance. No default startup
 change, protocol/save schema change or real user-world access. Architecture
 skill: no change; the accepted retry/lease details remain in store/AGENTS.md.
+
+
+Ready support packet2.4c consumes9c3ab40e. Source audit separated genuine
+same-tick mutation provenance from sparse fixture observations; plan11 fixes one
+private changed-position port and four pass-entry snapshots. Main delegates this
+multi-file source/order trace in isolation, reserving state.rs from other work
+until integration. It does not introduce a new global cell truncation or claim
+actual reducer interest limits. Bed source clears the coordinate pair even when
+the loaded counterpart form differs; preserve that source behavior rather than
+inventing stricter gameplay. Architecture skill: no change.
