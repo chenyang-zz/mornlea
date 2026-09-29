@@ -518,8 +518,9 @@ fn horizontal_distance_sq(from: [f32; 3], to: [f32; 3]) -> f32 {
     dx * dx + dz * dz
 }
 
-/// Checked floor into i32; positions outside the int32 domain cannot name a
-/// cell and refuse (`collisionCheckedFloor`).
+/// Checked floor into i32 (`collisionCheckedFloor`); nonfinite or
+/// out-of-domain input saturates to `0` because callers only pass bounded
+/// world positions that never reach this arm.
 fn floor_to_i32(value: f32) -> i32 {
     let floored = f64::from(value).floor();
     if !floored.is_finite() || !((i32::MIN as f64)..=(i32::MAX as f64)).contains(&floored) {
