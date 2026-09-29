@@ -832,7 +832,7 @@ fn set_view_slot(record: &mut InventoryRecord, slot: usize, stack: ItemStack) {
 /// backpack merge, backpack empty, each in ascending slot order. An
 /// empty-slot landing inherits the source durability, and the unabsorbed
 /// remainder keeps the source form.
-fn add_stack(
+pub(crate) fn add_stack(
     slots: &[ItemStack; INVENTORY_SLOTS],
     source: ItemStack,
 ) -> ([ItemStack; INVENTORY_SLOTS], ItemStack) {
@@ -884,7 +884,7 @@ fn add_stack(
 /// Bench repack invariant, the exact `canRepackCrafting` row
 /// (`packages/server/sim/entity/crafting.go`): every nonempty grid cell must
 /// still credit fully into the pack through the pickup order.
-fn can_repack(slots: &[ItemStack; 36], grid: &[ItemStack; CRAFTING_GRID_SLOTS]) -> bool {
+pub(crate) fn can_repack(slots: &[ItemStack; 36], grid: &[ItemStack; CRAFTING_GRID_SLOTS]) -> bool {
     let mut staged = *slots;
     for stack in grid.iter() {
         if stack.item == ITEM_NONE {

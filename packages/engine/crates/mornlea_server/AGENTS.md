@@ -372,3 +372,12 @@ spans before mutation. Each sample sees current writes and heights; NativeTree
 preflights the whole bounded footprint before one transaction. Start-of-tick
 climate remains fixed while sequential block observations advance. The serial
 reducer owns interest selection and placement of this phase in the tick.
+
+`src/rules/drops.rs` owns bounded lifetime and pickup over a caller-provided
+Ready interest set: sort/deduplicate at most200 input keys, validate at most8
+Active players before mutation, increment wrapping age and decrement delay,
+expire before pickup, then credit in session order within the source f32 radius.
+Whole inventory/drop compare-and-replace settlement preserves crafting repack
+capacity. Counter-only changes retain source non-dirty semantics. The reducer
+owns active interest, producer ordering and publication; this provider does not
+accept those integrations by itself.

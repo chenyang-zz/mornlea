@@ -810,3 +810,16 @@ lints in unchanged engine code; rerunning the repository's pinned toolchain
 passed without changing unrelated code. Architecture skill: no change. No
 wire/save version change. Provider/reducer integration remains with its named
 nodes; approval of this contract is not their acceptance.
+
+
+Drop lifetime/pickup provider accepted from isolated7cd9be0a, consuming the
+unchanged0ea40207 slot contract and integrated after9c3ab40e world outputs.
+Independent Sol source review approved exact uint32 wrapping, expiry-before-
+pickup, same-dimension f32 radius, sorted session credit, four-phase inventory
+credit and crafting repack veto. Its12 focused tests cover real F1 reload,
+40-tick delay, expiry, partial pickup, capacity and exhausted revisions. Counter
+aging may remain on failed transfer; item transfer remains atomic, as specified.
+Worker make rust and Go Drop/Pickup oracle pass. Main full pinned server289
+(1 unit,16 parity,46 persistence,97 contract,129 replay), clippy/fmt and diff
+checks pass. Architecture skill: no change. All producer and actual reducer
+wiring remains explicit and unaccepted under2.8b/3.1.
