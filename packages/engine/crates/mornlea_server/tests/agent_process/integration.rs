@@ -32,7 +32,7 @@ use super::process::{
 /// parallel contention, so concurrent helpers flake each other with fast
 /// 503s. Cross-binary overlap with the single-helper corpus case is
 /// accepted and watched, not synchronized.
-static HELPER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) static HELPER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Plans through the real gateway, planner, and model SDK against the real
 /// snapshot tools, then installs the validated mine step through the task

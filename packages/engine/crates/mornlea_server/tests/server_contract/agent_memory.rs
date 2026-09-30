@@ -714,6 +714,127 @@ fn memory_retirement_refusal_bounds_requests_then_reaps() {
 
 struct EchoMemoryWire;
 
+/// A real lease worker panics on its first commit; later RPCs use the normal
+/// echo wire so semantic retry and join cleanup must both finish.
+struct PanicOnceMemoryWire {
+    panic_commit: std::sync::atomic::AtomicBool,
+    commits: Mutex<Vec<mornlea_server::contracts::CommitRequest>>,
+}
+
+impl mornlea_server::agent::lease::AgentWire for PanicOnceMemoryWire {
+    fn rpc_cancellable(
+        &self,
+        request: AgentRequest,
+        deadline: Deadline,
+        cancellation: &mornlea_server::agent::lease::RpcCancellation,
+    ) -> Result<AgentResponse, ServerError> {
+        if let AgentRequest::Commit(commit) = &request {
+            self.commits.lock().unwrap().push(commit.clone());
+            if self
+                .panic_commit
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                panic!("injected memory commit worker panic");
+            }
+        }
+        mornlea_server::agent::lease::AgentWire::rpc_cancellable(
+            &EchoMemoryWire,
+            request,
+            deadline,
+            cancellation,
+        )
+    }
+
+    fn close(&self) {}
+}
+
+#[test]
+fn finalizer_reaps_panicked_commit_after_semantic_retry() {
+    use mornlea_server::agent::lease::{LeaseConfig, LeaseController};
+    let (start, clock) = StepClock::start();
+    let wire = Arc::new(PanicOnceMemoryWire {
+        panic_commit: std::sync::atomic::AtomicBool::new(true),
+        commits: Mutex::new(Vec::new()),
+    });
+    let mut agent = LeaseController::try_new(
+        LeaseConfig {
+            client_instance_id: leased_for(1).base.client_instance_id,
+            namespace_id: leased_for(1).base.namespace_id,
+        },
+        wire.clone(),
+        clock.clone(),
+    )
+    .unwrap();
+    agent.refresh();
+    agent.freeze(&*clock).unwrap();
+    let mut owner = MemoryOwner::new(
+        Box::new(agent.clone()),
+        clock.clone(),
+        leased_for(1).base.client_instance_id,
+        leased_for(1).base.namespace_id,
+        leased_for(1).lease_id,
+    );
+    owner.set_mirror(companion(), active_mirror(1));
+    let reserved = reservation();
+    owner.reserve(reserved.clone()).unwrap();
+    owner.commit(companion(), request_id(50)).unwrap();
+    let until = Instant::now() + Duration::from_secs(1);
+    let settled = loop {
+        let settled = owner.poll_commits();
+        if !settled.is_empty() {
+            break settled;
+        }
+        assert!(Instant::now() < until, "panicked worker did not settle");
+        std::thread::yield_now();
+    };
+    assert!(matches!(
+        settled.as_slice(),
+        [CommitSettled::Failed {
+            error: ServerError::Internal {
+                invariant: "agent business worker"
+            },
+            ..
+        }]
+    ));
+    assert_eq!(owner.reservation(companion()), Some(&reserved));
+    assert_eq!(agent.retained_requests(), 0);
+    // The first panic join reports its error after removing the actual slot.
+    assert_eq!(owner.pending().outstanding, 2);
+    let deadline = Deadline::at(start + Duration::from_secs(1));
+    owner.begin_attempt(deadline).unwrap();
+    loop {
+        let progress = owner.drain(deadline).unwrap();
+        if progress.outstanding == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "semantic retry settled but cleanup still pending: {progress:?}"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(owner.pending().outstanding, 0);
+    assert_eq!(owner.reservation(companion()), None);
+    let mirror = owner.mirror(companion()).unwrap();
+    assert_eq!((mirror.epoch, mirror.revision), (1, 1));
+    assert_eq!(mirror.operation, Some(reserved.operation));
+    assert_eq!(mirror.summary, reserved.summary);
+    let commits = wire.commits.lock().unwrap();
+    assert_eq!(commits.len(), 2);
+    assert_ne!(
+        commits[0].leased.base.request_id,
+        commits[1].leased.base.request_id
+    );
+    for commit in commits.iter() {
+        assert_eq!(commit.memory_epoch, reserved.memory_epoch);
+        assert_eq!(commit.operation_id, reserved.operation);
+        assert_eq!(commit.base_revision, reserved.base_revision);
+        assert_eq!(commit.summary, reserved.summary);
+    }
+    assert_eq!(agent.retained_requests(), 0);
+    agent.close(Deadline::at(clock.monotonic())).unwrap();
+}
+
 impl mornlea_server::agent::lease::AgentWire for EchoMemoryWire {
     fn rpc_cancellable(
         &self,
