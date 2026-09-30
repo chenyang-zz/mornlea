@@ -384,7 +384,7 @@ fn settle_shot(ctx: &mut TickContext<'_>, shot: &ShotStaging) -> Result<bool, Se
     })?;
     let velocity = FiniteVec3::try_new(shard_velocity(
         environment.seed,
-        environment.world_time,
+        ctx.read().tick(),
         shot.hostile_id,
         shot.aim,
     ))
@@ -457,10 +457,10 @@ fn settle_shot(ctx: &mut TickContext<'_>, shot: &ShotStaging) -> Result<bool, Se
 /// Folds the normalized aim into a shard velocity: yaw/pitch plus the
 /// deterministic spread offsets, pitch clamped, speed rebuilt
 /// (`hostileShardVelocity`).
-fn shard_velocity(seed: i64, world_time: u64, id: u64, aim: [f32; 3]) -> [f32; 3] {
+fn shard_velocity(seed: i64, tick: u64, id: u64, aim: [f32; 3]) -> [f32; 3] {
     let yaw = f64::from(-aim[0]).atan2(f64::from(-aim[2])) as f32;
     let pitch = f64::from(aim[1]).clamp(-1.0, 1.0).asin() as f32;
-    let (yaw_offset, pitch_offset) = shot_spread(seed, world_time, id);
+    let (yaw_offset, pitch_offset) = shot_spread(seed, tick, id);
     let yaw = normalize_yaw(yaw + yaw_offset);
     let pitch = (pitch + pitch_offset).clamp(-QUARTER_PI, QUARTER_PI);
     let direction = look_direction(yaw, pitch);
@@ -471,11 +471,11 @@ fn shard_velocity(seed: i64, world_time: u64, id: u64, aim: [f32; 3]) -> [f32; 3
     ]
 }
 
-/// Deterministic shot spread from seed, world time and hostile ID
+/// Deterministic shot spread from seed, executing tick and hostile ID
 /// (`HostileShotSpread`): two independent uniform offsets within the fixed
 /// bound, no process randomness.
-fn shot_spread(seed: i64, world_time: u64, id: u64) -> (f32, f32) {
-    let hash = splitmix64(splitmix64(splitmix64((seed as u64) ^ SPREAD_SALT) ^ world_time) ^ id);
+fn shot_spread(seed: i64, tick: u64, id: u64) -> (f32, f32) {
+    let hash = splitmix64(splitmix64(splitmix64((seed as u64) ^ SPREAD_SALT) ^ tick) ^ id);
     (spread_offset(hash), spread_offset(splitmix64(hash)))
 }
 

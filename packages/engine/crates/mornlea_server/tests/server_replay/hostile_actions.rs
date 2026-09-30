@@ -372,7 +372,7 @@ fn hurler_shoots_live_target_past_nearest_dead_player() {
     assert_eq!(shots[0].kind, ProjectileKind::Shard);
     assert_eq!(
         shots[0].velocity.get(),
-        shard_velocity_mirror([-10.0, 0.0, 0.0], SEED, NOON, 11)
+        shard_velocity_mirror([-10.0, 0.0, 0.0], SEED, context.read().tick(), 11)
     );
     assert!(
         shots[0].velocity.get()[0] < 0.0,
@@ -427,7 +427,7 @@ fn splitmix64(mut x: u64) -> u64 {
 
 /// `HostileShotSpreadSalt` is ASCII "SHOTSPRD"; the single-axis bound is the
 /// fixed 0.06 rad contract; the quantum keeps f32 precision exact.
-fn spread_mirror(seed: i64, world_time: u64, id: u64) -> (f32, f32) {
+fn spread_mirror(seed: i64, tick: u64, id: u64) -> (f32, f32) {
     const SALT: u64 = 0x5348_4F54_5350_5244;
     const MAX_RADIANS: f32 = 0.06;
     const QUANTUM: f32 = 1_048_576.0;
@@ -435,7 +435,7 @@ fn spread_mirror(seed: i64, world_time: u64, id: u64) -> (f32, f32) {
         let unit = (hash & (1_048_576 - 1)) as f32 / QUANTUM;
         (unit * 2.0 - 1.0) * MAX_RADIANS
     };
-    let hash = splitmix64(splitmix64(splitmix64((seed as u64) ^ SALT) ^ world_time) ^ id);
+    let hash = splitmix64(splitmix64(splitmix64((seed as u64) ^ SALT) ^ tick) ^ id);
     (offset(hash), offset(splitmix64(hash)))
 }
 
@@ -457,11 +457,11 @@ fn normalize_yaw_mirror(yaw: f32) -> f32 {
 
 /// `hostileShardVelocity`: yaw/pitch from the normalized aim, deterministic
 /// spread offsets, pitch clamped to half pi, speed 22.
-fn shard_velocity_mirror(aim: [f32; 3], seed: i64, world_time: u64, id: u64) -> [f32; 3] {
+fn shard_velocity_mirror(aim: [f32; 3], seed: i64, tick: u64, id: u64) -> [f32; 3] {
     let unit = normalize_mirror(aim);
     let yaw = (-unit[0] as f64).atan2(-unit[2] as f64) as f32;
     let pitch = (f64::from(unit[1]).clamp(-1.0, 1.0).asin()) as f32;
-    let (yaw_offset, pitch_offset) = spread_mirror(seed, world_time, id);
+    let (yaw_offset, pitch_offset) = spread_mirror(seed, tick, id);
     let yaw = normalize_yaw_mirror(yaw + yaw_offset);
     let pitch =
         (pitch + pitch_offset).clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
@@ -478,17 +478,103 @@ fn spread_mirror_matches_go_kat_vectors() {
     // Vectors from `TestHostileShotSpreadKAT` in
     // `packages/server/updates/sampler_test.go`; the mirror must reproduce
     // them bit for bit before grounding the velocity scenes.
-    for (seed, world_time, id, yaw, pitch) in [
+    for (seed, tick, id, yaw, pitch) in [
         (0, 1, 1, 0.0020711517, -0.0060293195),
         (42, 13000, 0xdeadbeefcafebabe, -0.049812812, 0.047607422),
         (-7, 987654321, 7777, 0.055351753, -0.058046035),
     ] {
         assert_eq!(
-            spread_mirror(seed, world_time, id),
+            spread_mirror(seed, tick, id),
             (yaw, pitch),
             "spread mirror drifted from the Go KAT"
         );
     }
+    // Executed actual Go `Sampler.HostileShotSpread`, seed 7/id 11, pins
+    // the two execution clocks used by the real provider scenes below.
+    for (tick, yaw_bits, pitch_bits) in [
+        (0, 0x3d5d_7829, 0xbcd8_8947),
+        (13, 0x3d29_ef1e, 0xbbd5_a23d),
+    ] {
+        let (yaw, pitch) = spread_mirror(SEED, tick, 11);
+        assert_eq!(yaw.to_bits(), yaw_bits);
+        assert_eq!(pitch.to_bits(), pitch_bits);
+    }
+}
+
+fn shot_at_clocks(tick: u64, world_time: u64) -> [f32; 3] {
+    let mut state = authority();
+    // Advance the real authority clock while empty, before session admission.
+    for _ in 0..tick {
+        state.advance_tick(TickBudget::full()).expect("empty tick");
+    }
+    let session = admit_session(&mut state, 1, "clock-shot");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    assert_eq!(context.read().tick(), tick);
+    stage_environment(&mut context, world_time);
+    let actors = [
+        player_record(session, 1, Dimension::OVERWORLD, [10.5, 1.0, 0.5], 20),
+        hostile_record(11, [0.5, 1.0, 0.5], HURLER, 20, 0),
+    ];
+    stage_actors(&mut context, &actors);
+    let player_runtime = stage_target_runtime(&mut context, actors[0].key);
+    stage_hostile_runtime(&mut context, 11, 0, false);
+    let mut hostile_runtime = context.read().runtime(actors[1].key).unwrap().clone();
+    hostile_runtime.attack_cooldown = 13;
+    hostile_runtime.hurt_cooldown = 17;
+    hostile_runtime.oxygen = 211;
+    hostile_runtime.peak_y = 77.0;
+    hostile_runtime.exhaustion_milli = 1250;
+    context
+        .stage(RuleEffect::Runtime(hostile_runtime.clone()))
+        .unwrap();
+    observe_corridor(&mut context, 0, 10);
+    let blocks = context.changed_blocks();
+    let events = context.events().to_vec();
+    let snapshot = context.read().environment().cloned();
+    let report = provider::run(&mut context, action_call()).unwrap();
+    assert_eq!(report.applied, 1);
+    assert_eq!(report.rejected, 0);
+    let shots = context.read().projectiles();
+    assert_eq!(shots.len(), 1);
+    let shard = &shots[0];
+    assert_eq!(shard.owner, actors[1].key);
+    assert_eq!(shard.kind, ProjectileKind::Shard);
+    assert_eq!(shard.dimension, Dimension::OVERWORLD);
+    assert_eq!(shard.damage, 3);
+    assert_eq!(shard.age, 0);
+    assert_eq!(shard.position.get(), [0.5, 1.0 + EYE_HEIGHT, 0.5]);
+    let velocity = shard.velocity.get();
+    assert_eq!(
+        velocity,
+        shard_velocity_mirror([10.0, 0.0, 0.0], SEED, tick, 11),
+        "execution tick {tick}, calendar time {world_time}"
+    );
+    let ActorAux::Hostile { shoot_cooldown, .. } = &mut hostile_runtime.aux else {
+        unreachable!();
+    };
+    *shoot_cooldown = 40;
+    assert_eq!(context.read().actors(), actors);
+    assert_eq!(context.read().runtime(actors[0].key), Some(&player_runtime));
+    assert_eq!(
+        context.read().runtime(actors[1].key),
+        Some(&hostile_runtime)
+    );
+    assert_eq!(context.read().environment(), snapshot.as_ref());
+    assert_eq!(context.changed_blocks(), blocks);
+    assert_eq!(context.events(), events);
+    velocity
+}
+
+#[test]
+fn calendar_time_does_not_change_actual_shot_spread() {
+    for tick in [0, 13] {
+        assert_eq!(shot_at_clocks(tick, 0), shot_at_clocks(tick, 1000));
+    }
+}
+
+#[test]
+fn execution_tick_changes_actual_shot_spread() {
+    assert_ne!(shot_at_clocks(0, 0), shot_at_clocks(13, 0));
 }
 
 // -----------------------------------------------------------------------
@@ -803,7 +889,7 @@ fn clear_shot_stages_shard_and_cooldown() {
     assert_eq!(shard.position.get(), [0.5, 1.0 + EYE_HEIGHT, 0.5]);
     // Spread bits: the KAT-pinned mirror drives the exact velocity.
     let aim = [10.0, 0.0, 0.0];
-    let expected = shard_velocity_mirror(aim, SEED, NOON, 11);
+    let expected = shard_velocity_mirror(aim, SEED, context.read().tick(), 11);
     assert_eq!(
         shard.velocity.get(),
         expected,
