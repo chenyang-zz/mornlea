@@ -95,7 +95,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.
 - [x] 3.9c1 Reclaim terminal common transport ownership with bounded diagnostics.
-- [ ] 3.9c2 Reap terminal TCP sockets and bound send work.
+- [x] 3.9c2 Reap terminal TCP sockets and bound send work.
 - [x] 3.9e Repair retained region parent durability barriers.
 - [x] 3.9f Use OS entropy for snapshot bearer capabilities.
 - [x] 3.9g Reconcile Rust backup compatibility identities and English comment audit.

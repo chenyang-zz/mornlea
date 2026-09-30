@@ -48,6 +48,8 @@ const READS_PER_PUMP: usize = 16;
 const FLUSH_FRAME_BUDGET: usize = 64;
 /// Envelope bytes moved per `flush_out` call, matching the core poll budget.
 const FLUSH_BYTE_BUDGET: usize = 1 << 20;
+/// Every write, including interrupted attempts, consumes one unit of work.
+const WRITE_ATTEMPT_BUDGET: usize = 64;
 /// Per-connection queued send frames, mirroring the per-session outbox bound
 /// the authority enforces. A peer that stops reading trips this ceiling
 /// instead of growing the adapter without limit.
@@ -81,33 +83,59 @@ struct TcpConn {
     head: usize,
 }
 
-impl TcpConn {
-    /// Writes queued envelopes in order until the socket blocks or the queue
-    /// empties. Returns the count of fully written core frames so the caller
-    /// can acknowledge exactly those against the core ledger; a partial head
-    /// keeps its offset for the next call.
-    fn drain_queue(&mut self) -> usize {
-        let mut sent_core = 0;
-        while let Some(front) = self.queue.front() {
-            let written = match self.stream.write(&front.bytes()[self.head..]) {
-                Ok(written) => written,
-                Err(_) => break,
-            };
-            // A zero write on a nonblocking stream means no progress is
-            // possible now; stopping avoids a hot spin.
-            if written == 0 {
+/// Completed core frames remain acknowledgeable even if a later write fails.
+struct DrainResult {
+    sent_core: usize,
+    fatal: Option<io::Error>,
+}
+
+/// Keeps one ordered partial head while bounding both socket attempts and bytes.
+/// WouldBlock defers the suffix; fatal errors leave retirement to the owner.
+fn drain_queue(
+    writer: &mut impl Write,
+    queue: &mut VecDeque<Queued>,
+    head: &mut usize,
+) -> DrainResult {
+    let mut sent_core = 0;
+    let mut bytes = 0;
+    let mut fatal = None;
+    for _ in 0..WRITE_ATTEMPT_BUDGET {
+        if bytes == FLUSH_BYTE_BUDGET {
+            break;
+        }
+        let Some(front) = queue.front() else {
+            break;
+        };
+        let end = front.bytes().len().min(*head + FLUSH_BYTE_BUDGET - bytes);
+        let written = match writer.write(&front.bytes()[*head..end]) {
+            Ok(0) => {
+                fatal = Some(io::ErrorKind::WriteZero.into());
                 break;
             }
-            self.head += written;
-            if self.head == front.bytes().len() {
-                if front.is_core() {
-                    sent_core += 1;
-                }
-                self.queue.pop_front();
-                self.head = 0;
+            Ok(written) => written,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                fatal = Some(error);
+                break;
             }
+        };
+        bytes += written;
+        *head += written;
+        if *head == front.bytes().len() {
+            if front.is_core() {
+                sent_core += 1;
+            }
+            queue.pop_front();
+            *head = 0;
         }
-        sent_core
+    }
+    DrainResult { sent_core, fatal }
+}
+
+impl TcpConn {
+    fn drain_queue(&mut self) -> DrainResult {
+        drain_queue(&mut self.stream, &mut self.queue, &mut self.head)
     }
 }
 
@@ -206,8 +234,10 @@ impl TcpTransport {
                 Outcome::Data(bytes) => {
                     let progress = self.core.ingest(id, bytes, false, endpoint, clock);
                     if matches!(progress, ConnectionProgress::Closed { .. }) {
-                        // The socket stays: a closing rejection queued by the
-                        // core must still reach the peer through flush_out.
+                        // Give a queued rejection one bounded send opportunity,
+                        // then release the socket even if the peer cannot read.
+                        let _ = self.flush_out(id, endpoint);
+                        self.drop_stream(id);
                         return progress;
                     }
                     last = progress;
@@ -215,7 +245,9 @@ impl TcpTransport {
                 Outcome::Eof => {
                     // End of stream is terminal evidence: a truncated tail
                     // can never complete, so the core closes it silently.
-                    return self.core.ingest(id, Vec::new(), true, endpoint, clock);
+                    let progress = self.core.ingest(id, Vec::new(), true, endpoint, clock);
+                    self.drop_stream(id);
+                    return progress;
                 }
                 Outcome::Wait => break,
                 Outcome::Reset => {
@@ -257,21 +289,32 @@ impl TcpTransport {
         if conn.queue.len() > MAX_QUEUED_SEND_FRAMES {
             return (0, self.shut_locked(id, CloseReason::SlowReceiver, endpoint));
         }
-        let sent_core = conn.drain_queue();
-        let progress = self.core.ack_sent(id, sent_core, endpoint);
-        (sent_core, progress)
+        let result = conn.drain_queue();
+        // A completed login handoff wins even if a later queued write failed.
+        let mut progress = self.core.ack_sent(id, result.sent_core, endpoint);
+        if result.fatal.is_some() {
+            progress = self.shut_locked(id, CloseReason::PeerGone, endpoint);
+        } else if matches!(progress, ConnectionProgress::Closed { .. }) {
+            self.drop_stream(id);
+        }
+        (result.sent_core, progress)
     }
 
     /// Drives one connection without new bytes: an in-flight login advances
     /// by one load poll and deadline expiry closes the reservation. The
-    /// socket stays so queued answers remain drainable.
+    /// socket gets one bounded rejection flush on closure, then retires.
     pub fn poll(
         &mut self,
         id: ConnectionId,
         endpoint: &mut dyn TransportAuthority,
         clock: &dyn Clock,
     ) -> ConnectionProgress {
-        self.core.poll(id, endpoint, clock)
+        let progress = self.core.poll(id, endpoint, clock);
+        if matches!(progress, ConnectionProgress::Closed { .. }) {
+            let _ = self.flush_out(id, endpoint);
+            self.drop_stream(id);
+        }
+        progress
     }
 
     /// Closes one connection through the ordinary lane and releases its
@@ -351,8 +394,21 @@ impl TcpTransport {
                 "send queue saturated",
             ));
         }
-        conn.drain_queue();
+        let result = conn.drain_queue();
+        let progress = self.core.ack_sent(id, result.sent_core, endpoint);
+        if let Some(error) = result.fatal {
+            self.shut_locked(id, CloseReason::PeerGone, endpoint);
+            return Err(error);
+        }
+        if matches!(progress, ConnectionProgress::Closed { .. }) {
+            self.drop_stream(id);
+        }
         Ok(envelopes)
+    }
+
+    /// Number of sockets still owned by the adapter.
+    pub fn retained_sockets(&self) -> usize {
+        self.streams.len()
     }
 
     /// Retained unconsumed inbound bytes for one connection, mirroring the
@@ -381,10 +437,7 @@ impl TcpTransport {
     ) -> ConnectionProgress {
         self.core.close(id, reason, endpoint);
         self.drop_stream(id);
-        ConnectionProgress::Closed {
-            reason,
-            class: None,
-        }
+        self.core.ack_sent(id, 0, endpoint)
     }
 
     /// Shuts a socket down and forgets it. Shutdown errors are ignored: a
@@ -393,5 +446,133 @@ impl TcpTransport {
         if let Some(conn) = self.streams.remove(&id.get()) {
             let _ = conn.stream.shutdown(Shutdown::Both);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    enum Action {
+        Bytes(usize),
+        Error(io::ErrorKind),
+    }
+    #[derive(Default)]
+    struct Writer {
+        actions: VecDeque<Action>,
+        attempts: usize,
+        written: usize,
+    }
+    impl Write for Writer {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.attempts += 1;
+            match self.actions.pop_front() {
+                Some(Action::Error(kind)) => Err(kind.into()),
+                action => {
+                    let n = match action {
+                        Some(Action::Bytes(n)) => n.min(bytes.len()),
+                        _ => bytes.len(),
+                    };
+                    self.written += n;
+                    Ok(n)
+                }
+            }
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn drain_byte_budget_keeps_partial_head() {
+        let mut writer = Writer::default();
+        let mut queue = VecDeque::from([Queued::Core(vec![7; 2 << 20])]);
+        let mut head = 0;
+        let result = drain_queue(&mut writer, &mut queue, &mut head);
+        assert_eq!(writer.written, 1 << 20);
+        assert_eq!(head, 1 << 20);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(result.sent_core, 0);
+        assert!(result.fatal.is_none());
+        let result = drain_queue(&mut writer, &mut queue, &mut head);
+        assert_eq!(result.sent_core, 1);
+        assert!(queue.is_empty());
+        assert_eq!(head, 0);
+    }
+
+    #[test]
+    fn drain_interrupted_consumes_attempt_budget() {
+        let mut writer = Writer {
+            actions: (0..65)
+                .map(|_| Action::Error(io::ErrorKind::Interrupted))
+                .collect(),
+            ..Default::default()
+        };
+        let mut queue = VecDeque::from([Queued::Core(vec![7])]);
+        let mut head = 0;
+        let result = drain_queue(&mut writer, &mut queue, &mut head);
+        assert_eq!(writer.attempts, 64);
+        assert_eq!(writer.written, 0);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(head, 0);
+        assert!(result.fatal.is_none());
+    }
+
+    #[test]
+    fn drain_broken_pipe_is_fatal() {
+        let mut writer = Writer {
+            actions: VecDeque::from([Action::Error(io::ErrorKind::BrokenPipe)]),
+            ..Default::default()
+        };
+        let mut queue = VecDeque::from([Queued::Core(vec![7])]);
+        let result = drain_queue(&mut writer, &mut queue, &mut 0);
+        assert_eq!(result.fatal.unwrap().kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn drain_zero_write_is_fatal() {
+        let mut writer = Writer {
+            actions: VecDeque::from([Action::Bytes(0)]),
+            ..Default::default()
+        };
+        let mut queue = VecDeque::from([Queued::Core(vec![7])]);
+        let result = drain_queue(&mut writer, &mut queue, &mut 0);
+        assert_eq!(result.fatal.unwrap().kind(), io::ErrorKind::WriteZero);
+    }
+
+    #[test]
+    fn drain_completed_core_survives_later_fatal() {
+        let mut writer = Writer {
+            actions: VecDeque::from([
+                Action::Bytes(1),
+                Action::Bytes(1),
+                Action::Error(io::ErrorKind::BrokenPipe),
+            ]),
+            ..Default::default()
+        };
+        let mut queue = VecDeque::from([
+            Queued::Core(vec![1]),
+            Queued::Outbox(vec![2]),
+            Queued::Core(vec![3]),
+        ]);
+        let result = drain_queue(&mut writer, &mut queue, &mut 0);
+        assert_eq!(result.sent_core, 1);
+        assert_eq!(result.fatal.unwrap().kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(queue.len(), 1);
+    }
+
+    #[test]
+    fn drain_would_block_keeps_partial_head() {
+        let mut writer = Writer {
+            actions: VecDeque::from([Action::Bytes(2), Action::Error(io::ErrorKind::WouldBlock)]),
+            ..Default::default()
+        };
+        let mut queue = VecDeque::from([Queued::Core(vec![1; 4])]);
+        let mut head = 0;
+        let result = drain_queue(&mut writer, &mut queue, &mut head);
+        assert_eq!(result.sent_core, 0);
+        assert!(result.fatal.is_none());
+        assert_eq!(head, 2);
+        assert_eq!(writer.attempts, 2);
     }
 }

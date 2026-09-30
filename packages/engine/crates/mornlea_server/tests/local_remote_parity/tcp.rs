@@ -804,6 +804,89 @@ fn login(
     (id, ticket, client, session)
 }
 
+fn spin_closed(harness: &mut Harness, id: ConnectionId) -> ConnectionProgress {
+    for _ in 0..100_000 {
+        let progress = harness
+            .server
+            .pump_in(id, &mut harness.endpoint, &harness.clock);
+        if matches!(progress, ConnectionProgress::Closed { .. }) {
+            return progress;
+        }
+    }
+    panic!("ingress did not observe terminal evidence");
+}
+
+#[test]
+fn terminal_eof_releases_socket() {
+    let mut harness = Harness::new();
+    let mut client = ClientConn::connect(harness.addr());
+    let id = accept_next(&mut harness);
+    let mut partial = hello_frame(protocol());
+    partial.pop();
+    client.send(&partial);
+    spin_retained(&mut harness, id, partial.len());
+    client.stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let progress = spin_closed(&mut harness, id);
+    assert_eq!(harness.server.retained_sockets(), 0);
+    assert_eq!(harness.server.retained_len(id), Some(0));
+    assert_eq!(
+        harness
+            .server
+            .poll(id, &mut harness.endpoint, &harness.clock),
+        progress
+    );
+    assert!(client.next_frame_opt().is_none());
+}
+
+#[test]
+fn terminal_rejection_flushes_then_releases_socket() {
+    let mut harness = Harness::new();
+    let mut client = ClientConn::connect(harness.addr());
+    let id = accept_next(&mut harness);
+    client.send(&hello_frame(protocol() - 1));
+    let progress = spin_closed(&mut harness, id);
+    assert_eq!(harness.server.retained_sockets(), 0);
+    let expected = mornlea_protocol::HandshakeReject::new(
+        protocol(),
+        mornlea_protocol::HANDSHAKE_VERSION_MISMATCH,
+        "协议版本不匹配",
+    )
+    .unwrap();
+    assert_eq!(
+        client.next_frame(),
+        control_frame(&ServerPacket::HandshakeReject(expected))
+    );
+    assert!(client.next_frame_opt().is_none());
+    assert_eq!(
+        harness
+            .server
+            .poll(id, &mut harness.endpoint, &harness.clock),
+        progress
+    );
+    assert_eq!(harness.endpoint.prepares, 0);
+}
+
+#[test]
+fn terminal_poll_expiry_releases_socket() {
+    let mut harness = Harness::new();
+    let mut client = ClientConn::connect(harness.addr());
+    let id = accept_next(&mut harness);
+    assert_eq!(harness.server.retained_sockets(), 1);
+    harness.clock.advance(Duration::from_secs(5));
+    let progress = harness
+        .server
+        .poll(id, &mut harness.endpoint, &harness.clock);
+    expect_closed(progress);
+    assert_eq!(harness.server.retained_sockets(), 0);
+    assert!(client.next_frame_opt().is_none());
+    assert_eq!(
+        harness
+            .server
+            .poll(id, &mut harness.endpoint, &harness.clock),
+        progress
+    );
+}
+
 #[test]
 fn fragmented_frame_reassembled() {
     let mut harness = Harness::new();
@@ -1061,6 +1144,11 @@ fn slow_receiver_isolated() {
         )
         .expect("outbox drain writes to the live socket");
     assert_eq!(forwarded.len(), 512, "the overflowing frame was dropped");
+    // Each send call has a fixed work budget; the serving loop drains the
+    // accepted queue over bounded calls before reaping the slow receiver.
+    for _ in 0..8 {
+        harness.server.flush_out(slow_id, &mut harness.endpoint);
+    }
 
     // Reaping closes the slow connection with the slow-receiver reason while
     // the healthy connection keeps serving.
