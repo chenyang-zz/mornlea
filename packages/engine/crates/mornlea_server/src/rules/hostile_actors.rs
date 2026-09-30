@@ -529,7 +529,21 @@ fn hostile_burn_distant(ctx: &mut TickContext<'_>) -> Result<PhaseReport, Server
             }
             if entry.burn_cooldown == 0 {
                 entry.burn_cooldown = COOLDOWN_PERIOD_TICKS;
-                entry.body.health = entry.body.health.saturating_sub(1);
+                if entry.body.health > 0 {
+                    entry.body.health -= 1;
+                    // Death and combat consume survival health; the save body
+                    // must mirror that same burn without resetting other stats.
+                    entry.survival = SurvivalState::try_new(SurvivalStateParts {
+                        health: entry.body.health,
+                        oxygen: entry.survival.oxygen(),
+                        hunger: entry.survival.hunger(),
+                        saturation_zero: entry.survival.saturation_zero(),
+                        armor_points: entry.survival.armor_points(),
+                    })
+                    .map_err(|_| ServerError::Internal {
+                        invariant: "hostile staging",
+                    })?;
+                }
             }
         } else {
             // Roofed bodies reset exactly like night (`advanceHostileBurn`

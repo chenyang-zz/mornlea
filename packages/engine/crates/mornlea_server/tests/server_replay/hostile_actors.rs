@@ -1132,3 +1132,172 @@ fn walker_attack_stop_unchanged() {
         "walkers still stop inside 1.8 blocks"
     );
 }
+
+fn burn_health_actor(health: u8) -> ActorRecord {
+    let mut record = hostile_actor_with(
+        21,
+        [2.5, 1.0, 2.5],
+        NIGHTWALKER,
+        1,
+        17,
+        false,
+        StoredPlayerId::from_bytes([0; 16]),
+    );
+    record.survival = SurvivalState::try_new(SurvivalStateParts {
+        health,
+        oxygen: 17,
+        hunger: 3,
+        saturation_zero: true,
+        armor_points: 4,
+    })
+    .expect("survival");
+    let ActorBody::Hostile(body) = &mut record.body else {
+        unreachable!();
+    };
+    body.health = health;
+    record
+}
+
+fn observe_burn_sky(context: &mut TickContext<'_>) {
+    for y in 2..MAX_Y {
+        observe(context, mornlea_domain::BlockPos::new(2, y, 2), AIR);
+    }
+}
+
+#[test]
+fn daylight_burn_updates_authoritative_health_without_resetting_survival() {
+    let mut state = authority();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    stage_actors(&mut context, &[burn_health_actor(20)]);
+    observe_burn_sky(&mut context);
+
+    provider::run(&mut context, burn_call()).expect("exposed burn");
+
+    let actor = find_hostile(&context, 21);
+    assert_eq!(
+        actor.survival,
+        SurvivalState::try_new(SurvivalStateParts {
+            health: 19,
+            oxygen: 17,
+            hunger: 3,
+            saturation_zero: true,
+            armor_points: 4,
+        })
+        .expect("expected survival")
+    );
+    let ActorBody::Hostile(body) = &actor.body else {
+        unreachable!();
+    };
+    assert_eq!(body.health, 19);
+    assert_eq!(body.burn_cooldown, 20);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+}
+
+#[test]
+fn lethal_daylight_burn_reaches_real_death_settlement_once() {
+    for ready_loot in [true, false] {
+        let mut state = authority();
+        let mut context = TickContext::harness(&mut state, TickBudget::full());
+        stage_environment(&mut context, 1000, 0);
+        stage_actors(&mut context, &[burn_health_actor(1)]);
+        let chunk_key = overworld_cell(mornlea_domain::BlockPos::new(2, 1, 2));
+        if ready_loot {
+            // A real Ready chunk supplies both sky observations and physical
+            // loot slots; sparse observations alone cannot accept death loot.
+            context.preload_ready_chunk(
+                mornlea_server::core::world::ReadyChunk::try_new(
+                    chunk_key,
+                    1,
+                    1,
+                    mornlea_storage::Chunk {
+                        sections: vec![
+                            mornlea_storage::ContainerSnapshot {
+                                kind: mornlea_storage::StorageKind::Single,
+                                bits: 0,
+                                single: AIR,
+                                palette: vec![],
+                                packed: vec![],
+                            };
+                            24
+                        ],
+                        drops: vec![Default::default(); 32],
+                        furnaces: vec![Default::default(); 32],
+                        chests: vec![Default::default(); 16],
+                    },
+                )
+                .expect("Ready loot chunk"),
+            );
+        } else {
+            observe_burn_sky(&mut context);
+        }
+
+        provider::run(&mut context, burn_call()).expect("lethal burn");
+        let burned = find_hostile(&context, 21);
+        assert_eq!(burned.survival.health(), 0, "ready loot: {ready_loot}");
+        let ActorBody::Hostile(body) = &burned.body else {
+            unreachable!();
+        };
+        assert_eq!(body.health, 0);
+        assert_eq!(body.distant_ticks, 17, "dying actors skip distant removal");
+        assert_eq!(burned.lifecycle, ActorLifecycle::Active);
+
+        let death_call = RuleCall {
+            phase: RulePhase::HostilePlayerDeaths,
+            actor: None,
+            command: None,
+            internal: None,
+        };
+        let report = mornlea_server::rules::hostile_outcomes::run(&mut context, death_call)
+            .expect("real death settlement");
+        assert_eq!(report.applied, 1);
+        assert_eq!(find_hostile(&context, 21).lifecycle, ActorLifecycle::Dead);
+        let drops = context.read().drops(chunk_key).to_vec();
+        if ready_loot {
+            assert_eq!(drops.len(), 1);
+            assert_eq!(
+                drops[0].stack,
+                ItemStack {
+                    item: 45,
+                    count: 1,
+                    durability: 0,
+                }
+            );
+        } else {
+            assert!(drops.is_empty());
+        }
+        let events = context.events().to_vec();
+        let repeated = mornlea_server::rules::hostile_outcomes::run(&mut context, death_call)
+            .expect("repeated death settlement");
+        assert_eq!(repeated.examined, 0);
+        assert_eq!(repeated.applied, 0);
+        assert_eq!(context.read().drops(chunk_key), drops);
+        assert_eq!(context.events(), events);
+    }
+}
+
+#[test]
+fn night_and_roof_preserve_authoritative_burn_health() {
+    for (world_time, roofed) in [(15000, false), (1000, true)] {
+        let mut state = authority();
+        let mut context = TickContext::harness(&mut state, TickBudget::full());
+        stage_environment(&mut context, world_time, 0);
+        let initial = burn_health_actor(1);
+        stage_actors(&mut context, std::slice::from_ref(&initial));
+        observe_burn_sky(&mut context);
+        if roofed {
+            observe(&mut context, mornlea_domain::BlockPos::new(2, 3, 2), STONE);
+        }
+
+        provider::run(&mut context, burn_call()).expect("protected burn");
+
+        let actor = find_hostile(&context, 21);
+        assert_eq!(actor.survival, initial.survival);
+        let ActorBody::Hostile(body) = &actor.body else {
+            unreachable!();
+        };
+        assert_eq!(body.health, 1);
+        assert_eq!(body.burn_cooldown, 20);
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    }
+}
