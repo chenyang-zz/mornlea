@@ -93,6 +93,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 The [review repair packet](plans/29-review-repairs.md) is the execution authority for bounded corrections discovered during whole-branch review. Provider tests do not close the reopened production integration gate.
 
 - [x] 3.9l1 Make the MCP serve-failure fixture portable across Unix socket layouts.
+- [x] 3.9l2 Bound loopback delivery waits by real deadlines while preserving protocol clocks.
 
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.

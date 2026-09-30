@@ -37,6 +37,7 @@ use mornlea_server::transport::tcp::TcpTransport;
 
 const WORLD_SEED: i64 = 7;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Injected monotonic clock. No case sleeps for protocol behavior; the TCP
 /// peer sockets carry timeouts only so a stuck server fails loudly.
@@ -558,27 +559,35 @@ impl TcpHarness {
     }
 }
 
+/// Kernel delivery waits do not advance the injected protocol clock.
+fn delivery_turn(deadline: Instant) {
+    std::thread::sleep(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(1)),
+    );
+}
+
 fn accept_next(harness: &mut TcpHarness) -> ConnectionId {
-    for _ in 0..100_000 {
+    let deadline = Instant::now() + DELIVERY_TIMEOUT;
+    while Instant::now() < deadline {
         match harness
             .server
             .accept_one(&mut harness.endpoint, &harness.clock)
         {
             Ok(Some(id)) => return id,
-            Ok(None) => continue,
+            Ok(None) => delivery_turn(deadline),
             Err(error) => panic!("accept failed: {error:?}"),
         }
     }
     panic!("listener produced no connection");
 }
 
-/// Spins one connection's ingress until the core has processed at least
-/// `want` frames in total. Loopback delivery needs a scheduling turn after
-/// the peer sends, so a single nonblocking pump may legitimately observe
-/// nothing; the spin is bounded and never sleeps.
+/// Allows delayed loopback delivery while retaining virtual protocol time.
 fn spin_frames(harness: &mut TcpHarness, id: ConnectionId, want: usize) {
     let mut total = 0;
-    for _ in 0..100_000 {
+    let deadline = Instant::now() + DELIVERY_TIMEOUT;
+    while Instant::now() < deadline {
         match harness
             .server
             .pump_in(id, &mut harness.endpoint, &harness.clock)
@@ -589,7 +598,7 @@ fn spin_frames(harness: &mut TcpHarness, id: ConnectionId, want: usize) {
                     return;
                 }
             }
-            ConnectionProgress::AwaitMore => continue,
+            ConnectionProgress::AwaitMore => delivery_turn(deadline),
             closed => panic!("connection closed while waiting for frames: {closed:?}"),
         }
     }

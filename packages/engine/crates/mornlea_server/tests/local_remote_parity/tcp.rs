@@ -2,9 +2,9 @@
 //!
 //! These cases drive the same connection core the Memory adapter uses, but
 //! through real loopback sockets: a nonblocking server side owned by the
-//! adapter and blocking client sockets with generous read timeouts. Time
-//! comes only from the injected step clock; no case sleeps and no socket
-//! uses a wall-clock timeout for protocol behavior. The expected values
+//! adapter and blocking client sockets with generous read timeouts. Protocol
+//! time comes only from the injected step clock; bounded wall-clock waits
+//! allow kernel delivery without advancing protocol deadlines. The expected values
 //! (prelogin ceiling 16, hello 5 s, login 10 s, the reject vocabulary, the
 //! 512-frame slow-receiver retirement, and the exact session numbering) are
 //! the frozen rows the shared core pins, mirrored here through the socket
@@ -46,8 +46,9 @@ fn protocol() -> u32 {
 }
 const WORLD_SEED: i64 = 7;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Injected monotonic clock. No case sleeps; time advances only explicitly.
+/// Injected monotonic clock. Protocol time advances only explicitly.
 struct StepClock {
     now: RefCell<Instant>,
     unix_ms: i64,
@@ -681,17 +682,25 @@ impl Harness {
     }
 }
 
-/// Accepts the next pending loopback connection. The kernel queues the
-/// completed handshake as its own scheduling turn arrives, so the accept
-/// spins boundedly like any other ingress wait and never sleeps.
+/// Gives kernel delivery a scheduling turn without changing protocol time.
+fn delivery_turn(deadline: Instant) {
+    std::thread::sleep(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(1)),
+    );
+}
+
+/// Accepts the next pending loopback connection within a delivery deadline.
 fn accept_next(harness: &mut Harness) -> ConnectionId {
-    for _ in 0..100_000 {
+    let deadline = Instant::now() + DELIVERY_TIMEOUT;
+    while Instant::now() < deadline {
         match harness
             .server
             .accept_one(&mut harness.endpoint, &harness.clock)
         {
             Ok(Some(id)) => return id,
-            Ok(None) => continue,
+            Ok(None) => delivery_turn(deadline),
             Err(error) => panic!("accept failed: {error:?}"),
         }
     }
@@ -706,13 +715,15 @@ fn advanced_frames(progress: ConnectionProgress) -> usize {
     }
 }
 
-/// Spins one connection's ingress until the core has processed at least
-/// `want` frames in total. Loopback delivery needs a scheduling turn after
-/// the peer sends, so a single nonblocking pump may legitimately observe
-/// nothing; the spin is bounded and never sleeps.
-fn spin_frames(harness: &mut Harness, id: ConnectionId, want: usize) -> usize {
+/// Waits for kernel delivery, independently of injected protocol deadlines.
+fn frames_until(
+    harness: &mut Harness,
+    id: ConnectionId,
+    want: usize,
+    deadline: Instant,
+) -> Option<usize> {
     let mut total = 0;
-    for _ in 0..100_000 {
+    while Instant::now() < deadline {
         match harness
             .server
             .pump_in(id, &mut harness.endpoint, &harness.clock)
@@ -720,26 +731,50 @@ fn spin_frames(harness: &mut Harness, id: ConnectionId, want: usize) -> usize {
             ConnectionProgress::Advanced { frames } => {
                 total += frames;
                 if total >= want {
-                    return total;
+                    return Some(total);
                 }
             }
-            ConnectionProgress::AwaitMore => continue,
+            ConnectionProgress::AwaitMore => delivery_turn(deadline),
             closed => panic!("connection closed while waiting for frames: {closed:?}"),
         }
     }
-    panic!("ingress spin exhausted waiting for {want} frames, got {total}");
+    None
+}
+
+fn spin_frames(harness: &mut Harness, id: ConnectionId, want: usize) -> usize {
+    frames_until(harness, id, want, Instant::now() + DELIVERY_TIMEOUT)
+        .unwrap_or_else(|| panic!("delivery timed out waiting for {want} frames"))
+}
+
+#[test]
+fn absent_delivery_expires_without_advancing_protocol_clock() {
+    let mut harness = Harness::new();
+    let _client = ClientConn::connect(harness.addr());
+    let id = accept_next(&mut harness);
+    let protocol_time = harness.clock.monotonic();
+    let began = Instant::now();
+    assert_eq!(
+        frames_until(&mut harness, id, 1, began + Duration::from_millis(20)),
+        None
+    );
+    assert!(began.elapsed() >= Duration::from_millis(20));
+    assert!(began.elapsed() < Duration::from_secs(1));
+    assert_eq!(harness.clock.monotonic(), protocol_time);
+    assert_eq!(harness.server.retained_sockets(), 1);
 }
 
 /// Spins until the retained inbound bytes reach exactly `want`, proving a
 /// partial frame arrived before it could complete.
 fn spin_retained(harness: &mut Harness, id: ConnectionId, want: usize) {
-    for _ in 0..100_000 {
+    let deadline = Instant::now() + DELIVERY_TIMEOUT;
+    while Instant::now() < deadline {
         let _ = harness
             .server
             .pump_in(id, &mut harness.endpoint, &harness.clock);
         if harness.server.retained_len(id) == Some(want) {
             return;
         }
+        delivery_turn(deadline);
     }
     panic!("ingress spin exhausted waiting for {want} retained bytes");
 }
@@ -805,13 +840,15 @@ fn login(
 }
 
 fn spin_closed(harness: &mut Harness, id: ConnectionId) -> ConnectionProgress {
-    for _ in 0..100_000 {
+    let deadline = Instant::now() + DELIVERY_TIMEOUT;
+    while Instant::now() < deadline {
         let progress = harness
             .server
             .pump_in(id, &mut harness.endpoint, &harness.clock);
         if matches!(progress, ConnectionProgress::Closed { .. }) {
             return progress;
         }
+        delivery_turn(deadline);
     }
     panic!("ingress did not observe terminal evidence");
 }
@@ -1034,21 +1071,7 @@ fn peer_reset_recovers() {
     );
     drop(client);
 
-    // Bounded spin, no sleep: the reset is already in flight on loopback.
-    let mut closed = None;
-    for _ in 0..100_000 {
-        match harness
-            .server
-            .pump_in(id, &mut harness.endpoint, &harness.clock)
-        {
-            progress @ ConnectionProgress::Closed { .. } => {
-                closed = Some(progress);
-                break;
-            }
-            ConnectionProgress::Advanced { .. } | ConnectionProgress::AwaitMore => continue,
-        }
-    }
-    let (reason, _class) = expect_closed(closed.expect("reset surfaces promptly on loopback"));
+    let (reason, _class) = expect_closed(spin_closed(&mut harness, id));
     assert_eq!(reason, CloseReason::PeerGone);
 
     // No half-open state survives: the unacknowledged login is cancelled, its
