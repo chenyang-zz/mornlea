@@ -851,6 +851,15 @@ fn near_limit_exceeded(
 // `packages/server/server/hostile_manager.go`).
 // ---------------------------------------------------------------------------
 
+fn within_chase_stop(entry: &HostileEntry, fact: &PlayerFact) -> bool {
+    let boundary = if entry.kind() == HURLER {
+        HURLER_APPROACH_DISTANCE_SQ
+    } else {
+        ATTACK_RANGE * ATTACK_RANGE
+    };
+    horizontal_distance_sq(entry.body.position, fact.position) <= boundary
+}
+
 /// Advances one hostile body by one fixed physics step. The per-tick input
 /// resets to neutral (own yaw only) and only a live chase path converts it
 /// into a forward step toward the first waypoint not yet reached. The working
@@ -860,75 +869,59 @@ fn advance_movement(
     environment: &EnvironmentState,
     entry: &mut HostileEntry,
 ) -> Result<(), ServerError> {
-    let now = ctx.read().tick();
+    let now = environment.world_time;
     let view = ctx.read();
     let tunables = environment.tunables;
-    let target = nearest_target(&view, entry.dimension, entry.body.position)?;
 
-    // Chase bookkeeping (`dispatchSnapshots` / `applyPathOutcome` in
-    // `hostile_manager.go`): a target change invalidates the path and bumps
-    // the generation; repath runs on the 20-tick cadence; a failed search
-    // retries next tick; losing the target clears the pair and keeps the
-    // durable next-replan tick fresh.
-    let mut generation_changed = false;
-    // The stop ruling comes before any path dispatch: inside the boundary
-    // the body holds position and only the target facts are written
-    // (`dispatchSnapshots` range skip after `PlanHostileChase`). Walkers
-    // stop at the 1.8 attack range; hurlers follow the kind-branched bands
-    // (`advanceHurlerBand`), where hold and retreat both skip pathfinding.
-    let hurler_retreat = entry.kind() == HURLER
-        && matches!(target.as_ref(), Some(fact)
-            if horizontal_distance_sq(entry.body.position, fact.position)
-                < HURLER_RETREAT_DISTANCE_SQ);
-    let within_attack = if entry.kind() == HURLER {
-        matches!(target.as_ref(), Some(fact)
-            if horizontal_distance_sq(entry.body.position, fact.position)
-                <= HURLER_APPROACH_DISTANCE_SQ)
-    } else {
-        matches!(target.as_ref(), Some(fact)
-            if horizontal_distance_sq(entry.body.position, fact.position)
-                <= ATTACK_RANGE * ATTACK_RANGE)
-    };
-    match target.as_ref() {
-        Some(fact) => {
-            let raw_goal = block_pos_of(fact.position)?;
-            let stale = match &entry.path {
-                Some(path) => path.target != raw_goal,
-                None => true,
-            };
-            if stale {
-                entry.path = None;
-                generation_changed = true;
-            }
-            let due = match &entry.path {
-                Some(path) => now >= path.next_repath_tick,
-                None => now >= entry.body.next_repath_ticks,
-            };
-            if stale || due {
-                if within_attack {
-                    // In range: no path is built; the facts land and the
-                    // decision is revisited next tick.
-                    entry.body.has_target = true;
-                    entry.body.player_id = PlayerId::from_bytes(fact.id);
+    // Dispatch follows the durable calendar deadline before selecting another
+    // UUID. A resolved goal and the absence of a transient path do not change
+    // the target identity or pull a restored deadline forward.
+    if now >= entry.body.next_repath_ticks {
+        match nearest_target(&view, entry.dimension, entry.body.position)? {
+            Some(fact) => {
+                let changed = !entry.body.has_target || entry.body.player_id.to_bytes() != fact.id;
+                let previous_generation = entry.path.as_ref().map_or(0, |path| path.generation);
+                let generation = if changed {
+                    previous_generation
+                        .checked_add(1)
+                        .ok_or(ServerError::InvalidInput { field: "actor" })?
+                } else {
+                    previous_generation
+                };
+                if changed {
+                    entry.path = None;
+                }
+                entry.body.has_target = true;
+                entry.body.player_id = PlayerId::from_bytes(fact.id);
+                if within_chase_stop(entry, &fact) {
                     entry.body.next_repath_ticks = now.saturating_add(1);
                     entry.dirty = true;
                 } else {
-                    refresh_path(ctx, entry, fact, raw_goal, generation_changed, now)?;
+                    let raw_goal = block_pos_of(fact.position)?;
+                    refresh_path(ctx, entry, &fact, raw_goal, generation, now)?;
                 }
             }
-        }
-        None => {
-            if entry.body.has_target {
-                // The target vanished: clear the pair and reselect next
-                // tick (`dispatchSnapshots` target-lost branch).
+            None if entry.body.has_target => {
                 entry.body.has_target = false;
                 entry.body.player_id = PlayerId::from_bytes([0u8; 16]);
                 entry.path = None;
                 entry.body.next_repath_ticks = now.saturating_add(1);
                 entry.dirty = true;
             }
+            None => {}
         }
     }
+
+    // Between dispatches, live positions update movement bands for the owned
+    // UUID only. A missing owner does not retire the existing path early.
+    let target = owned_target(&view, entry)?;
+    let hurler_retreat = entry.kind() == HURLER
+        && matches!(target.as_ref(), Some(fact)
+            if horizontal_distance_sq(entry.body.position, fact.position)
+                < HURLER_RETREAT_DISTANCE_SQ);
+    let within_attack = target
+        .as_ref()
+        .is_some_and(|fact| within_chase_stop(entry, fact));
 
     // Movement input: inside the attack boundary the body holds position
     // (`advanceRunners` stop rule); a retreating hurler steps straight away
@@ -981,6 +974,12 @@ fn advance_movement(
                 entry.body.next_repath_ticks = now.saturating_add(1);
                 entry.dirty = true;
             }
+        }
+        if path
+            .as_ref()
+            .is_some_and(|path| path.cursor >= path.waypoints.len())
+        {
+            path = None;
         }
         entry.path = path;
     }
@@ -1076,12 +1075,6 @@ fn advance_movement(
         entry.dirty = true;
     }
 
-    // Keep the durable replan tick beside the path so restore resumes the
-    // cadence (`PlanHostileChase` persists `nextRepathTicks`).
-    if let Some(path) = &entry.path {
-        entry.body.next_repath_ticks = path.next_repath_tick;
-    }
-
     Ok(())
 }
 
@@ -1095,7 +1088,7 @@ fn refresh_path(
     entry: &mut HostileEntry,
     fact: &PlayerFact,
     raw_goal: BlockPos,
-    generation_changed: bool,
+    generation: u64,
     now: u64,
 ) -> Result<(), ServerError> {
     let view = ctx.read();
@@ -1123,14 +1116,13 @@ fn refresh_path(
     let mut scratch = PathScratch::try_with_capacity(cells).map_err(|_| ServerError::Internal {
         invariant: "hostile path scratch",
     })?;
-    let previous_generation = entry.path.as_ref().map_or(0, |path| path.generation);
     match NativePathfind.find(&grid, start_cell, goal, &mut scratch) {
         Ok(result) => {
             entry.body.has_target = true;
             entry.body.player_id = PlayerId::from_bytes(fact.id);
             entry.body.next_repath_ticks = now.saturating_add(REPATH_PERIOD_TICKS);
             entry.path = Some(PathState {
-                generation: previous_generation + u64::from(generation_changed),
+                generation,
                 target: BlockPos::new(goal.x, goal.y, goal.z),
                 revisions: result
                     .revisions()
@@ -1258,6 +1250,23 @@ fn active_players(view: &AuthorityReadView<'_>) -> Result<Vec<PlayerFact>, Serve
     // rule and does not depend on this order.
     players.sort_by_key(|player| player.session);
     Ok(players)
+}
+
+/// Resolve only the already selected live UUID for this tick's movement.
+fn owned_target(
+    view: &AuthorityReadView<'_>,
+    entry: &HostileEntry,
+) -> Result<Option<PlayerFact>, ServerError> {
+    if !entry.body.has_target {
+        return Ok(None);
+    }
+    Ok(active_players(view)?.into_iter().find(|candidate| {
+        candidate.dimension == entry.dimension
+            && candidate.id == entry.body.player_id.to_bytes()
+            && view
+                .actor(ActorKey::Player(candidate.session))
+                .is_some_and(|actor| actor.survival.health() != 0)
+    }))
 }
 
 pub(crate) fn nearest_target(

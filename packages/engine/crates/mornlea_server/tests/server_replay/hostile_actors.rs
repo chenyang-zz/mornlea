@@ -725,7 +725,12 @@ fn night_tie_capacity_distance() {
     // (`advanceRunners` current-cell ruling), so the cursor may already sit
     // past the start cell; it must stay inside the path.
     assert!(path.cursor < path.waypoints.len(), "a live path remains");
-    assert_eq!(path.next_repath_tick, 20, "repath cadence is 20 ticks");
+    // Go `applyPathOutcome` schedules on WorldTime, independently of the
+    // executing tick: this scene starts at calendar time 1000.
+    assert_eq!(
+        path.next_repath_tick, 1020,
+        "repath cadence is 20 calendar ticks"
+    );
     assert!(!path.waypoints.is_empty(), "a path was found");
     // The hostile stepped toward the chosen target (+x) on this same tick.
     let moved = find_hostile(&context, 21).motion.position().get();
@@ -1863,12 +1868,12 @@ fn geometry_loaded_edge_windows_preserve_exact_cells() {
         stage_actors(
             &mut ctx,
             &[
-                player_actor(session, 1, [0.5, 40.0, 0.5]),
-                hostile_actor(21, [edge, 40.0, edge], NIGHTWALKER),
+                player_actor(session, 1, [0.5, 40.0, 110.5]),
+                hostile_actor(21, [edge, 40.0, 100.5], NIGHTWALKER),
             ],
         );
         for x in center - 16..=center + 16 {
-            for z in center - 16..=center + 16 {
+            for z in 84..=116 {
                 for y in 36..=44 {
                     observe(
                         &mut ctx,
@@ -1882,7 +1887,8 @@ fn geometry_loaded_edge_windows_preserve_exact_cells() {
         let runtime = ctx.read().runtime(find_hostile(&ctx, 21).key).unwrap();
         let path = runtime.path.as_ref().expect("exact edge chase window");
         let goal = if center < 0 { center + 16 } else { center - 16 };
-        assert_eq!(path.target, mornlea_domain::BlockPos::new(goal, 40, goal));
+        assert_eq!(path.target, mornlea_domain::BlockPos::new(goal, 40, 110));
+        assert!(path.cursor < path.waypoints.len());
     }
 }
 
@@ -1906,4 +1912,457 @@ fn geometry_goal_y_distance_widens_before_subtraction() {
         runtime.path.as_ref().unwrap().target,
         mornlea_domain::BlockPos::new(105, 40, 100)
     );
+}
+
+fn cadence_seed(target: [f32; 3], now: u64, observed: bool) -> (AuthorityState, SessionKey) {
+    let mut state = authority();
+    let session = anchor_session(&mut state);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut ctx, now, 1);
+    stage_actors(
+        &mut ctx,
+        &[
+            player_actor(session, 1, target),
+            hostile_actor(21, [100.5, 40.0, 100.5], NIGHTWALKER),
+        ],
+    );
+    ctx.preload_inventory(
+        ActorKey::Player(session),
+        mornlea_server::contracts::InventoryRecord::empty(),
+    );
+    if observed {
+        preload_band_world(&mut ctx);
+    }
+    let residents = ctx.resident_snapshot();
+    drop(ctx);
+    state.commit_residents(residents);
+    (state, session)
+}
+
+fn cadence_body(state: &AuthorityState) -> HostileMob {
+    state
+        .residents()
+        .actors
+        .iter()
+        .find_map(|actor| match &actor.body {
+            ActorBody::Hostile(body) if body.id == 21 => Some(body.clone()),
+            _ => None,
+        })
+        .expect("carried hostile")
+}
+
+fn cadence_path(state: &AuthorityState) -> Option<mornlea_server::contracts::PathState> {
+    let key = ActorKey::Hostile(mornlea_domain::HostileId::try_new(21).unwrap());
+    state
+        .residents()
+        .runtimes
+        .get(&key)
+        .and_then(|runtime| runtime.path.clone())
+}
+
+fn cadence_tick(state: &mut AuthorityState, expected_time: u64) {
+    let tick = state.next_tick();
+    assert_eq!(
+        state.residents().environment.as_ref().unwrap().world_time,
+        expected_time
+    );
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(publication.counters.executed_tick, tick);
+    assert_eq!(state.next_tick(), tick + 1);
+    assert_eq!(
+        state.residents().environment.as_ref().unwrap().world_time,
+        expected_time + 1,
+        "the real reducer reached end-of-tick environment publication"
+    );
+}
+
+fn cadence_move_player(state: &mut AuthorityState, session: SessionKey, position: [f32; 3]) {
+    let mut residents = state.residents();
+    let actor = residents
+        .actors
+        .iter_mut()
+        .find(|actor| actor.key == ActorKey::Player(session))
+        .unwrap();
+    actor.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new(position).unwrap(),
+        velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+        on_ground: true,
+    });
+    let ActorBody::Player(body) = &mut actor.body else {
+        unreachable!()
+    };
+    body.current.position = position;
+    state.commit_residents(residents);
+}
+
+#[test]
+fn cadence_clamped_and_adjusted_goals_survive_real_carries_until_due() {
+    for target in [[130.5, 40.0, 100.5], [110.5, 43.5, 100.5]] {
+        let (mut state, session) = cadence_seed(target, 1000, true);
+        cadence_tick(&mut state, 1000);
+        let first = cadence_path(&state).expect("successful initial path");
+        let successful_deadline = first.next_repath_tick;
+        assert_ne!(
+            first.target,
+            mornlea_domain::BlockPos::new(target[0] as i32, target[1] as i32, target[2] as i32)
+        );
+        for now in 1001..=1003 {
+            cadence_tick(&mut state, now);
+            let path = cadence_path(&state).unwrap();
+            assert_eq!(
+                (path.generation, path.target, path.next_repath_tick),
+                (first.generation, first.target, successful_deadline)
+            );
+            assert_eq!(cadence_body(&state).next_repath_ticks, successful_deadline);
+        }
+        cadence_move_player(&mut state, session, [112.5, 40.0, 100.5]);
+        for now in 1004..1020 {
+            cadence_tick(&mut state, now);
+            let path = cadence_path(&state).unwrap();
+            assert_eq!(
+                (path.generation, path.target, path.next_repath_tick),
+                (first.generation, first.target, successful_deadline)
+            );
+        }
+        cadence_tick(&mut state, 1020);
+        let due = cadence_path(&state).expect("current goal refreshed when due");
+        assert_eq!(due.target, mornlea_domain::BlockPos::new(112, 40, 100));
+        assert_eq!(due.generation, first.generation);
+        assert_eq!(due.next_repath_tick, 1040);
+        assert_eq!(cadence_body(&state).next_repath_ticks, 1040);
+    }
+}
+
+#[test]
+fn cadence_restored_future_deadline_waits_without_transient_path() {
+    let (mut state, session) = cadence_seed([110.5, 40.0, 100.5], 4095, true);
+    let mut residents = state.residents();
+    let actor = residents
+        .actors
+        .iter_mut()
+        .find(|actor| matches!(actor.key, ActorKey::Hostile(_)))
+        .unwrap();
+    let ActorBody::Hostile(body) = &mut actor.body else {
+        unreachable!()
+    };
+    body.has_target = true;
+    body.player_id = StoredPlayerId::from_bytes(uuid_bytes(1));
+    body.next_repath_ticks = 4096;
+    state.commit_residents(residents);
+    cadence_tick(&mut state, 4095);
+    assert!(cadence_path(&state).is_none());
+    assert_eq!(cadence_body(&state).position, [100.5, 40.0, 100.5]);
+    assert_eq!(cadence_body(&state).next_repath_ticks, 4096);
+    assert_eq!(
+        cadence_body(&state).player_id,
+        StoredPlayerId::from_bytes(uuid_bytes(1))
+    );
+    cadence_tick(&mut state, 4096);
+    assert_eq!(cadence_path(&state).unwrap().next_repath_tick, 4116);
+    assert_eq!(cadence_body(&state).next_repath_ticks, 4116);
+    assert!(
+        state
+            .residents()
+            .actors
+            .iter()
+            .any(|actor| actor.key == ActorKey::Player(session))
+    );
+}
+
+#[test]
+fn cadence_new_nearest_waits_and_changed_uuid_preserves_generation() {
+    let (mut state, _) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+    cadence_tick(&mut state, 1000);
+    let newcomer = admit_session(&mut state, 2, "cadence-new");
+    let mut residents = state.residents();
+    residents
+        .actors
+        .push(player_actor(newcomer, 2, [110.5, 40.0, 100.5]));
+    residents.inventories.insert(
+        ActorKey::Player(newcomer),
+        mornlea_server::contracts::InventoryRecord::empty(),
+    );
+    let key = ActorKey::Hostile(mornlea_domain::HostileId::try_new(21).unwrap());
+    residents
+        .runtimes
+        .get_mut(&key)
+        .unwrap()
+        .path
+        .as_mut()
+        .unwrap()
+        .generation = 7;
+    state.commit_residents(residents);
+    for now in 1001..1020 {
+        cadence_tick(&mut state, now);
+        assert_eq!(
+            cadence_body(&state).player_id,
+            StoredPlayerId::from_bytes(uuid_bytes(1))
+        );
+        assert_eq!(cadence_path(&state).unwrap().generation, 7);
+    }
+    cadence_tick(&mut state, 1020);
+    assert_eq!(
+        cadence_body(&state).player_id,
+        StoredPlayerId::from_bytes(uuid_bytes(2))
+    );
+    assert_eq!(cadence_path(&state).unwrap().generation, 8);
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1040);
+}
+
+#[test]
+fn cadence_target_loss_waits_until_dispatch_and_keeps_existing_movement() {
+    let (mut state, session) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+    cadence_tick(&mut state, 1000);
+    let mut residents = state.residents();
+    residents
+        .actors
+        .iter_mut()
+        .find(|actor| actor.key == ActorKey::Player(session))
+        .unwrap()
+        .lifecycle = ActorLifecycle::Dead;
+    state.commit_residents(residents);
+    let previous_x = cadence_body(&state).position[0];
+    cadence_tick(&mut state, 1001);
+    assert!(cadence_body(&state).position[0] > previous_x);
+    assert_eq!(
+        cadence_body(&state).player_id,
+        StoredPlayerId::from_bytes(uuid_bytes(1))
+    );
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1020);
+    for now in 1002..=1020 {
+        cadence_tick(&mut state, now);
+    }
+    let body = cadence_body(&state);
+    assert!(!body.has_target);
+    assert_eq!(body.player_id, StoredPlayerId::from_bytes([0; 16]));
+    assert_eq!(body.next_repath_ticks, 1021);
+    assert!(cadence_path(&state).is_none());
+}
+
+#[test]
+fn cadence_exhaustion_clears_path_and_retains_next_calendar_tick() {
+    let (mut state, _) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+    cadence_tick(&mut state, 1000);
+    let mut residents = state.residents();
+    let pos = cadence_body(&state).position;
+    let key = ActorKey::Hostile(mornlea_domain::HostileId::try_new(21).unwrap());
+    let path = residents
+        .runtimes
+        .get_mut(&key)
+        .unwrap()
+        .path
+        .as_mut()
+        .unwrap();
+    path.waypoints = vec![mornlea_domain::BlockPos::new(
+        pos[0].floor() as i32,
+        40,
+        pos[2].floor() as i32,
+    )];
+    path.cursor = 0;
+    path.next_repath_tick = 1020;
+    state.commit_residents(residents);
+    cadence_tick(&mut state, 1001);
+    assert!(cadence_path(&state).is_none());
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1002);
+}
+
+#[test]
+fn cadence_uncovered_refresh_retries_next_calendar_tick() {
+    let (mut state, _) = cadence_seed([110.5, 40.0, 100.5], 1000, false);
+    cadence_tick(&mut state, 1000);
+    assert!(cadence_path(&state).is_none());
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1001);
+    cadence_tick(&mut state, 1001);
+    assert!(cadence_path(&state).is_none());
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1002);
+}
+
+#[test]
+fn cadence_success_deadline_uses_frozen_calendar_time() {
+    let (mut state, _) = cadence_seed([110.5, 40.0, 100.5], 1000, true);
+    assert_eq!(state.next_tick(), 0);
+    cadence_tick(&mut state, 1000);
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1020);
+    assert_eq!(cadence_path(&state).unwrap().next_repath_tick, 1020);
+}
+
+#[test]
+fn cadence_hurler_bands_follow_owned_uuid_live_position_between_dispatches() {
+    let (mut state, owned) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+    let mut residents = state.residents();
+    let ActorBody::Hostile(body) = &mut residents
+        .actors
+        .iter_mut()
+        .find(|actor| matches!(actor.key, ActorKey::Hostile(_)))
+        .unwrap()
+        .body
+    else {
+        unreachable!()
+    };
+    body.kind = HURLER;
+    state.commit_residents(residents);
+    cadence_tick(&mut state, 1000);
+    let initial_x = cadence_body(&state).position[0];
+    let newcomer = admit_session(&mut state, 2, "band-new");
+    let mut residents = state.residents();
+    residents
+        .actors
+        .push(player_actor(newcomer, 2, [105.5, 40.0, 100.5]));
+    residents.inventories.insert(
+        ActorKey::Player(newcomer),
+        mornlea_server::contracts::InventoryRecord::empty(),
+    );
+    state.commit_residents(residents);
+    cadence_tick(&mut state, 1001);
+    let approaching = cadence_body(&state);
+    assert!(
+        approaching.position[0] > initial_x,
+        "a nearer retreat-band candidate cannot replace the owned approaching target"
+    );
+    assert_eq!(
+        approaching.player_id,
+        StoredPlayerId::from_bytes(uuid_bytes(1))
+    );
+    let path = cadence_path(&state).unwrap();
+    cadence_move_player(&mut state, owned, [108.5, 40.0, 100.5]);
+    cadence_tick(&mut state, 1002);
+    let holding = cadence_body(&state);
+    assert_eq!(holding.player_id, approaching.player_id);
+    assert_eq!(
+        holding.yaw, approaching.yaw,
+        "the owned player's new hold-band position suppresses retreat steering"
+    );
+    let retained = cadence_path(&state).unwrap();
+    assert_eq!(
+        (
+            retained.generation,
+            retained.target,
+            retained.next_repath_tick
+        ),
+        (path.generation, path.target, path.next_repath_tick)
+    );
+}
+
+#[test]
+fn cadence_failed_search_retries_next_calendar_tick() {
+    let (mut state, _) = cadence_seed([110.5, 40.0, 100.5], 1000, true);
+    let mut residents = state.residents();
+    for observed in residents.blocks.values_mut() {
+        if observed.pos.x() == 105 && observed.pos.y() >= 40 {
+            observed.block = STONE;
+        }
+    }
+    state.commit_residents(residents);
+    cadence_tick(&mut state, 1000);
+    assert!(cadence_path(&state).is_none());
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1001);
+}
+
+fn cadence_changed_identity_context(
+    ctx: &mut TickContext<'_>,
+    first: SessionKey,
+    second: SessionKey,
+    generation: u64,
+) {
+    stage_environment(ctx, 1000, 1);
+    stage_actors(
+        ctx,
+        &[
+            player_actor(first, 1, [130.5, 40.0, 100.5]),
+            hostile_actor(21, [100.5, 40.0, 100.5], NIGHTWALKER),
+        ],
+    );
+    preload_band_world(ctx);
+    provider::run(ctx, motion_call()).unwrap();
+    let key = find_hostile(ctx, 21).key;
+    let mut runtime = ctx.read().runtime(key).unwrap().clone();
+    runtime.path.as_mut().unwrap().generation = generation;
+    ctx.stage(RuleEffect::Runtime(runtime)).unwrap();
+    stage_actors(ctx, &[player_actor(second, 2, [110.5, 40.0, 100.5])]);
+    stage_environment(ctx, 1020, 1);
+}
+
+#[test]
+fn cadence_generation_advances_from_the_existing_path_on_uuid_change() {
+    let mut state = authority();
+    let (first, second) = two_sessions(&mut state);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    cadence_changed_identity_context(&mut ctx, first, second, 7);
+    provider::run(&mut ctx, motion_call()).unwrap();
+    let actor = find_hostile(&ctx, 21);
+    let ActorBody::Hostile(body) = &actor.body else {
+        unreachable!()
+    };
+    assert_eq!(body.player_id, StoredPlayerId::from_bytes(uuid_bytes(2)));
+    assert_eq!(
+        ctx.read()
+            .runtime(actor.key)
+            .unwrap()
+            .path
+            .as_ref()
+            .unwrap()
+            .generation,
+        8
+    );
+}
+
+#[test]
+fn cadence_generation_exhaustion_refuses_without_partial_effects() {
+    let mut state = authority();
+    let (first, second) = two_sessions(&mut state);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    cadence_changed_identity_context(&mut ctx, first, second, u64::MAX);
+    let before = geometry_snapshot(&ctx);
+    let events = ctx.events().to_vec();
+    assert!(matches!(
+        provider::run(&mut ctx, motion_call()),
+        Err(ServerError::InvalidInput { field: "actor" })
+    ));
+    assert_eq!(geometry_snapshot(&ctx), before);
+    assert_eq!(ctx.events(), events);
+}
+
+#[test]
+fn geometry_both_edge_axes_complete_at_the_exhaustion_retry() {
+    for edge in [
+        i32::MIN as f32 + 128.0,
+        f32::from_bits((i32::MAX as f32).to_bits() - 1),
+    ] {
+        let center = edge as i32;
+        let mut state = authority();
+        let session = anchor_session(&mut state);
+        let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+        stage_environment(&mut ctx, 1000, 1);
+        stage_actors(
+            &mut ctx,
+            &[
+                player_actor(session, 1, [0.5, 40.0, 0.5]),
+                hostile_actor(21, [edge, 40.0, edge], NIGHTWALKER),
+            ],
+        );
+        for x in center - 16..=center + 16 {
+            for z in center - 16..=center + 16 {
+                for y in 36..=44 {
+                    observe(
+                        &mut ctx,
+                        mornlea_domain::BlockPos::new(x, y, z),
+                        if y < 40 { STONE } else { AIR },
+                    );
+                }
+            }
+        }
+        // Float32 projects every horizontal cell center in this window to
+        // the same position, so all arrived waypoints clear in this call.
+        provider::run(&mut ctx, motion_call()).expect("representable signed axes");
+        let actor = find_hostile(&ctx, 21);
+        assert!(ctx.read().runtime(actor.key).unwrap().path.is_none());
+        let ActorBody::Hostile(body) = &actor.body else {
+            unreachable!()
+        };
+        assert_eq!(body.position[0], edge);
+        assert_eq!(body.position[2], edge);
+        assert_eq!(body.next_repath_ticks, 1001);
+        assert!(body.has_target);
+        assert_eq!(body.player_id, StoredPlayerId::from_bytes(uuid_bytes(1)));
+    }
 }
