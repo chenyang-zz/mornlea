@@ -1,9 +1,9 @@
 //! Opaque single-threaded authority.
 //!
 //! Sibling modules do not read these fields. They call the ports below.
-//! Staging a compound effect checks every component against the pre-effect
-//! overlay, simulating ordered projectile edits on a bounded scratch set, and applies the
-//! whole effect only after that check succeeds. A later rejection restores
+//! Staging a compound effect rehearses ordered inventory, container, drop and
+//! projectile edits on private scratch state, and applies the whole effect
+//! only after every component validates. A later rejection restores
 //! the overlay. Publication encodes control packets and routed events through
 //! the existing protocol conversion before it appends any frame.
 
@@ -2091,6 +2091,7 @@ impl<'a> TickContext<'a> {
         let mut pending_damage = 0;
         let mut pending_drops = BTreeMap::new();
         let mut pending_containers = BTreeMap::new();
+        let mut pending_inventories = BTreeMap::new();
         self.validate_effect(
             &effect,
             false,
@@ -2098,6 +2099,7 @@ impl<'a> TickContext<'a> {
             &mut pending_damage,
             &mut pending_drops,
             &mut pending_containers,
+            &mut pending_inventories,
         )?;
         self.apply_effect(effect)?;
         // Publish only the affected fixed slot copies after every other arm succeeds.
@@ -2270,6 +2272,9 @@ impl<'a> TickContext<'a> {
         std::mem::take(&mut self.charges)
     }
 
+    // Each effect lane retains its own private rehearsal until the complete
+    // compound validates; keep their ownership explicit at this boundary.
+    #[allow(clippy::too_many_arguments)]
     fn validate_effect(
         &self,
         effect: &RuleEffect,
@@ -2278,6 +2283,7 @@ impl<'a> TickContext<'a> {
         pending_damage: &mut usize,
         pending_drops: &mut BTreeMap<ChunkKey, DropState>,
         pending_containers: &mut BTreeMap<ChunkKey, ContainerState>,
+        pending_inventories: &mut BTreeMap<ActorKey, InventoryRecord>,
     ) -> Result<(), RuleReject> {
         match effect {
             RuleEffect::Compound(parts) => {
@@ -2292,6 +2298,7 @@ impl<'a> TickContext<'a> {
                         pending_damage,
                         pending_drops,
                         pending_containers,
+                        pending_inventories,
                     )?;
                 }
                 Ok(())
@@ -2313,10 +2320,9 @@ impl<'a> TickContext<'a> {
                     Err(RuleReject::Wire(RejectReason::InvalidInput))
                 }
             }
-            RuleEffect::Inventory(patch) => match self.inventories.get(&patch.actor) {
-                Some(current) if current == &patch.before => Ok(()),
-                _ => Err(RuleReject::StaleObservation),
-            },
+            RuleEffect::Inventory(patch) => {
+                self.validate_inventory_patch(patch, pending_inventories)
+            }
             RuleEffect::Container { before, after } => self.validate_container_patch(
                 Dimension::OVERWORLD,
                 before,
@@ -2338,10 +2344,8 @@ impl<'a> TickContext<'a> {
                     return Err(RuleReject::ResourceFull(Resource::RuleEffects));
                 }
                 self.validate_writes(&txn.writes)?;
-                if let Some(patch) = &txn.inventory
-                    && self.inventories.get(&patch.actor) != Some(&patch.before)
-                {
-                    return Err(RuleReject::StaleObservation);
+                if let Some(patch) = &txn.inventory {
+                    self.validate_inventory_patch(patch, pending_inventories)?;
                 }
                 for capture in &txn.containers {
                     let current = if let Some(owner) = pending_containers.get(&capture.key) {
@@ -2401,6 +2405,23 @@ impl<'a> TickContext<'a> {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Inventory preimages compare with the latest accepted arm in this
+    /// rehearsal. Refusal drops the scratch map before any overlay publication.
+    fn validate_inventory_patch(
+        &self,
+        patch: &InventoryPatch,
+        pending: &mut BTreeMap<ActorKey, InventoryRecord>,
+    ) -> Result<(), RuleReject> {
+        let current = pending
+            .get(&patch.actor)
+            .or_else(|| self.inventories.get(&patch.actor));
+        if current != Some(&patch.before) {
+            return Err(RuleReject::StaleObservation);
+        }
+        pending.insert(patch.actor, patch.after);
+        Ok(())
     }
 
     fn check_container_revision(
@@ -2955,5 +2976,138 @@ mod support_changed_rollback_tests {
         assert_eq!(ctx.read().block(Dimension::OVERWORLD, first), Some(0));
         assert_eq!(ctx.read().block(Dimension::OVERWORLD, later), Some(4));
         assert_eq!(ctx.changed_blocks(), before);
+    }
+}
+
+#[cfg(test)]
+mod compound_inventory_tests {
+    use super::*;
+    use crate::core::mutation::resolve_place as resolve_player_placement;
+    use mornlea_domain::{
+        BlockPos, ChunkPos, LookAngles, PlacementIntent, Season, WorldStateParts,
+    };
+    use mornlea_protocol::{LoginStart, admit_login};
+    use mornlea_storage::ItemStack;
+
+    fn world() -> WorldState {
+        WorldState::try_new(WorldStateParts {
+            day_phase_offset: 0,
+            world_time_ticks: 0,
+            weather: Weather::Clear,
+            season: Season::Spring,
+            season_progress: 0,
+            temperature: 0,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn mixed_resolved_placement_and_inventory_chain_is_atomic() {
+        for ordinary_first in [false, true] {
+            for stale in [false, true] {
+                let mut authority = AuthorityState::try_new(
+                    ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+                    7,
+                )
+                .unwrap();
+                let player =
+                    PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1])
+                        .unwrap();
+                let start = LoginStart::new(player, "Compound", 8).unwrap();
+                let inbound = LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
+                let session = authority
+                    .admit(admit_login(inbound).unwrap(), TransportKind::Memory)
+                    .unwrap();
+                let actor = ActorKey::Player(session);
+                let mut save = canonical_player(player, "Compound").unwrap();
+                save.current.position = [0.5, 64.0, 0.5];
+                save.yaw = std::f32::consts::PI;
+                save.inventory.hotbar.slots[0] = ItemStack {
+                    item: 2,
+                    count: 2,
+                    durability: 0,
+                };
+                let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+                ctx.stage_login(seed_player(session, &save).unwrap());
+                ctx.stage(RuleEffect::Environment(EnvironmentState {
+                    seed: 7,
+                    next_tick: 0,
+                    world_time: 0,
+                    day_phase_offset: 0,
+                    season_offset: 0,
+                    weather: Weather::Clear,
+                    weather_remaining: 0,
+                    difficulty: 0,
+                    tunables: RuleTunables::source_defaults(),
+                }))
+                .unwrap();
+                let key = ChunkKey {
+                    dimension: Dimension::OVERWORLD,
+                    pos: ChunkPos::new(0, 0),
+                };
+                for (z, block) in [(0, 0), (1, 0), (2, 2)] {
+                    ctx.preload_block(
+                        BlockObservation::try_new(key, 1, 1, BlockPos::new(0, 65, z), block)
+                            .unwrap(),
+                    );
+                }
+                let before = *ctx.read().inventory(actor).unwrap();
+                let mut middle = before;
+                middle.slots[0].count = 1;
+                let mut after = middle;
+                after.slots[0] = ItemStack::default();
+                // Resolve against the actual inventory basis consumed at this
+                // position in the compound, then restore its initial preimage.
+                if ordinary_first && !stale {
+                    ctx.preload_inventory(actor, middle);
+                }
+                let intent = PlacementIntent::try_new(
+                    LookAngles::try_new(std::f32::consts::PI, 0.0).unwrap(),
+                    0,
+                )
+                .unwrap();
+                let resolved = resolve_player_placement(actor, &intent, &ctx.read()).unwrap();
+                ctx.preload_inventory(actor, before);
+                let block_effect = RuleEffect::Blocks(resolved.into_txn());
+                let inventory_effect = if ordinary_first {
+                    RuleEffect::Inventory(InventoryPatch::try_new(actor, before, middle).unwrap())
+                } else {
+                    RuleEffect::Inventory(
+                        InventoryPatch::try_new(actor, if stale { before } else { middle }, after)
+                            .unwrap(),
+                    )
+                };
+                let effects = if ordinary_first {
+                    vec![inventory_effect, block_effect]
+                } else {
+                    vec![block_effect, inventory_effect]
+                };
+                let snapshot = ctx.snapshot_state(world());
+                let blocks = ctx.blocks.clone();
+                let changed = ctx.changed_blocks();
+                let result = ctx.stage(RuleEffect::Compound(effects));
+                if stale {
+                    assert_eq!(
+                        result,
+                        Err(RuleReject::StaleObservation),
+                        "ordinary_first={ordinary_first}"
+                    );
+                    assert_eq!(ctx.snapshot_state(world()), snapshot);
+                    assert_eq!(ctx.blocks, blocks);
+                    assert_eq!(ctx.changed_blocks(), changed);
+                } else {
+                    result.unwrap();
+                    assert_eq!(ctx.read().inventory(actor), Some(&after));
+                    assert_eq!(
+                        ctx.read()
+                            .block(Dimension::OVERWORLD, BlockPos::new(0, 65, 1)),
+                        Some(3)
+                    );
+                    assert_eq!(ctx.changed_blocks().len(), 1);
+                }
+                assert!(ctx.read().drops(key).is_empty());
+                assert!(ctx.events().is_empty());
+            }
+        }
     }
 }

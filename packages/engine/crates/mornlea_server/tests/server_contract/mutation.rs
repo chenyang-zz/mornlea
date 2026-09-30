@@ -2202,3 +2202,151 @@ fn place_ray_stops_at_closed_door() {
         },
     );
 }
+
+#[test]
+fn compound_inventory_repeated_preimage_refuses_without_effects() {
+    fixture_case(
+        AIR,
+        AIR,
+        STONE,
+        ItemStack {
+            item: ITEM_DIRT,
+            count: 2,
+            durability: 0,
+        },
+        |ctx, session| {
+            let actor = ActorKey::Player(session);
+            let before_inventory = *ctx.read().inventory(actor).unwrap();
+            let mut after = before_inventory;
+            after.slots[0].count = 1;
+            let patch = InventoryPatch::try_new(actor, before_inventory, after).unwrap();
+            let before = ctx.snapshot_state(super::world_outputs::world());
+            let cells = [
+                BlockPos::new(0, 65, 0),
+                BlockPos::new(0, 65, 1),
+                BlockPos::new(0, 65, 2),
+            ];
+            let before_cells = probe(ctx, &cells, &[actor], &[], &[overworld_key(cells[0])]);
+            let mut changed_actor = ctx.read().actor(actor).unwrap().clone();
+            changed_actor.lifecycle = ActorLifecycle::Dead;
+            assert_eq!(
+                ctx.stage(RuleEffect::Compound(vec![
+                    RuleEffect::Actor(changed_actor),
+                    RuleEffect::Inventory(patch.clone()),
+                    RuleEffect::Inventory(patch),
+                ])),
+                Err(RuleReject::StaleObservation)
+            );
+            assert_eq!(ctx.snapshot_state(super::world_outputs::world()), before);
+            assert_eq!(
+                probe(ctx, &cells, &[actor], &[], &[overworld_key(cells[0])]),
+                before_cells
+            );
+        },
+    );
+}
+
+#[test]
+fn compound_inventory_chain_uses_listed_order() {
+    for reversed in [false, true] {
+        fixture_case(
+            AIR,
+            AIR,
+            STONE,
+            ItemStack {
+                item: ITEM_DIRT,
+                count: 2,
+                durability: 0,
+            },
+            |ctx, session| {
+                let actor = ActorKey::Player(session);
+                let before = *ctx.read().inventory(actor).unwrap();
+                let mut middle = before;
+                middle.slots[0].count = 1;
+                let mut after = middle;
+                after.slots[0] = ItemStack::default();
+                let mut effects = vec![
+                    RuleEffect::Inventory(InventoryPatch::try_new(actor, before, middle).unwrap()),
+                    RuleEffect::Inventory(InventoryPatch::try_new(actor, middle, after).unwrap()),
+                ];
+                if reversed {
+                    effects.reverse();
+                }
+                let snapshot = ctx.snapshot_state(super::world_outputs::world());
+                let result = ctx.stage(RuleEffect::Compound(effects));
+                if reversed {
+                    assert_eq!(result, Err(RuleReject::StaleObservation));
+                    assert_eq!(ctx.snapshot_state(super::world_outputs::world()), snapshot);
+                } else {
+                    result.unwrap();
+                    assert_eq!(ctx.read().inventory(actor), Some(&after));
+                }
+            },
+        );
+    }
+}
+
+#[test]
+fn compound_inventory_distinct_actor_chains_do_not_interfere() {
+    let mut state = authority();
+    let first = state
+        .admit(admitted(91, "First"), TransportKind::Memory)
+        .unwrap();
+    let second = state
+        .admit(admitted(92, "Second"), TransportKind::Memory)
+        .unwrap();
+    let actors = [ActorKey::Player(first), ActorKey::Player(second)];
+    let mut ctx = harness_context(&mut state);
+    let before = hotbar_inventory(0, ITEM_DIRT, 2, 0);
+    let mut middle = before;
+    middle.slots[0].count = 1;
+    let after = InventoryRecord::empty();
+    for session in [first, second] {
+        ctx.stage(RuleEffect::Actor(player_actor(
+            session,
+            [0.5, 64.0, 0.5],
+            0.0,
+            0.0,
+        )))
+        .unwrap();
+        ctx.preload_inventory(ActorKey::Player(session), before);
+    }
+    ctx.stage(RuleEffect::Compound(vec![
+        RuleEffect::Inventory(InventoryPatch::try_new(actors[0], before, middle).unwrap()),
+        RuleEffect::Inventory(InventoryPatch::try_new(actors[1], before, middle).unwrap()),
+        RuleEffect::Inventory(InventoryPatch::try_new(actors[0], middle, after).unwrap()),
+        RuleEffect::Inventory(InventoryPatch::try_new(actors[1], middle, after).unwrap()),
+    ]))
+    .unwrap();
+    for actor in actors {
+        assert_eq!(ctx.read().inventory(actor), Some(&after));
+    }
+}
+
+#[test]
+fn single_inventory_effect_retains_compare_and_swap() {
+    fixture_case(
+        AIR,
+        AIR,
+        STONE,
+        ItemStack {
+            item: ITEM_DIRT,
+            count: 2,
+            durability: 0,
+        },
+        |ctx, session| {
+            let actor = ActorKey::Player(session);
+            let before = *ctx.read().inventory(actor).unwrap();
+            let mut after = before;
+            after.slots[0].count = 1;
+            let patch = InventoryPatch::try_new(actor, before, after).unwrap();
+            ctx.stage(RuleEffect::Inventory(patch.clone())).unwrap();
+            let snapshot = ctx.snapshot_state(super::world_outputs::world());
+            assert_eq!(
+                ctx.stage(RuleEffect::Inventory(patch)),
+                Err(RuleReject::StaleObservation)
+            );
+            assert_eq!(ctx.snapshot_state(super::world_outputs::world()), snapshot);
+        },
+    );
+}
