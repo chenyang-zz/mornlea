@@ -1656,3 +1656,9 @@ Placement target collision accepted after cumulative death node against support2
 
 - Fresh read-only entity review verified unchecked spawn/path/light/sweep arithmetic and zero-alias cell conversions; HostileMotion stages earlier actors before a later geometry refusal. Controller freezes checked existing actor refusal and one bounded batch publication in plan30. Path deadline/identity remains a separate serial decision; no new public contract qualifies here.
 - Delegate is an isolated Sol implementer on a separate worktree, exact four provider/replay files only; isolation contains the multi-file geometry trace and prevents shared mutable ownership. Controller owns final review/integration/status and derived-consumer reconciliation.
+
+## Terminal Agent consumer qualification, 2026-09-30
+
+- Read-only consumer audit enumerated six production poll sites. Host repeatedly transfers terminal successes; host and memory terminal branches omit provider cancel retirement; malformed delete repeatedly fences. Controller freezes once-only semantic transfer with separate bounded retirement ownership in plan31.
+- Reconcile the test-only contradictory same-ID terminal response model to the accepted immutable terminal worker contract. Older outcomes cannot touch newer gates; invalid result from the current owned worker must release its own gate rather than await a nonexistent correction.
+- Isolated Sol implementer owns four host/memory consumer/replay files on a separate worktree. Lease/HTTP/shutdown and controller files remain read-only; finalizer scheduling/shared ownership is a later serial node. No new public contract or schema change qualifies.
