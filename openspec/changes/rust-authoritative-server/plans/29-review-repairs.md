@@ -43,7 +43,7 @@ Baseline: controller-recorded repair predecessor. Editable: src/agent/http.rs, s
 
 ## Acceptance blockers outside the bounded fixes
 
-Production endpoint/worker composition, chunk acquisition, durable player/world/entity snapshots, entity and terrain publication, actual Go-versus-Rust replay and rollback verification remain open under 3.7/3.8. Read-only source extraction is in progress; each deliverable must receive exact design and independently verifiable cases before dispatch. No placeholder or limitation may be checked off as complete. Full stage gates and architecture skill promotion are owned by 4.1/4.2.
+Production endpoint/worker composition, chunk acquisition, durable player/world/entity snapshots, entity and terrain publication, actual Go-versus-Rust replay and rollback verification remain open under 3.7/3.8. Initial independent evidence is retained in ../review.md; each deliverable must receive exact design and independently verifiable cases before dispatch. No placeholder or limitation may be checked off as complete. Full stage gates and architecture skill promotion are owned by 4.1/4.2.
 
 ## Region parent durability (3.9e)
 
@@ -81,3 +81,24 @@ Write real raw-loopback cases: drip response header bytes every20ms for400ms und
 Introduce a private RpcIo borrowing the wire and socket with the one caller deadline. Before every read/write attempt check closed and remaining clock duration; rearm socket timeout to min(remaining,20ms). TimedOut/WouldBlock loops recheck the absolute deadline/closed; other I/O errors stay unavailable. Partial writes explicitly advance the bounded outbound slice; zero write refuses. Connect uses remaining deadline and is never retried. Header/body parsing uses RpcIo::read, preserving current byte ceilings/schema/echo checks. Check the deadline and closed flag again before publishing a decoded response. No request-specific cancellation signature or extra worker is invented.
 
 Run server_contract agent_http, actual agent_process with explicit Python interpreter, owned fmt and all-target clippy. Controller scoped commit fix(server): enforce absolute Agent HTTP deadlines. Rollback only these two files; no registry/lease/MCP/store overlap.
+
+
+## Common terminal connection retention (3.9c1)
+
+Baseline3c87d1da. Editable src/transport/common.rs and tests/local_remote_parity/common.rs only. TransportAuthority and TCP/Memory adapters stay read-only. Existing methods keep signatures; new read-only public `retained_connections(&self)->usize` reports the map size for ownership evidence.
+
+Internal diagnostic policy: retain the newest64 terminal connections in closure order. Older handles return the existing unknown_connection terminal diagnostic. Closed connections retain only small queued handshake/control frames and final progress; they release inbound capacity and ProtocolCodec immediately. They never reserve prelogin capacity. Active/prelogin records are never evicted to make terminal room. Queued rejection remains drainable until its terminal diagnostic is evicted. This replaces the unbounded historical replay promise; internal Rust diagnostic retention is not a protocol/save change.
+
+First write regression creating more than128 truncated/malformed peers serially: buffer a bounded incomplete frame, close, require retained_len=Some(0), live map<=64 (plus separately open active/prelogin records), latest poll/ack repeats exact terminal progress, oldest is evicted to existing unknown diagnostic, newest queued rejection still drains. Preserve existing cancellation/send-handoff once-only assertions. Baseline retains inbound bytes and all records. Update existing test that intentionally pinned retained refused prefix to require release instead; no source wire expectations weaken.
+
+Change Connection.codec to Option<ProtocolCodec>; new wraps Some and live queue_packet obtains its mutable Some or stable Internal on invalid lifecycle. record_close releases reservation, replaces inbound with Vec::new (drops capacity), takes codec, records final progress, appends id once to closed_order VecDeque. While closed_order.len()>64 pop oldest and remove only its Closed record. Guard already-closed record against duplicate ledger insertion. Expose retained_connections solely as map count. No deadline, publication or endpoint changes. Run local_remote_parity common, full local_remote_parity, owned fmt/clippy; controller scoped commit fix(server): bound terminal connection retention. Isolated implementer owns these two files and controller integrates/rolls back them together.
+
+## Save completion ownership (3.9i)
+
+Controller direct owner: src/core/state.rs and tests/persistence_failure/integration.rs only. Existing SaveAuthority/SaveCompletion/AckReport signatures stay unchanged; scheduler doubles are read-only references. Baseline3c87d1da plus accepted continuity repair.
+
+Write real AuthorityState regression: select Hostiles1 as jobA, Passives2 as jobB. A submitted/committed only Hostiles1 must ack1/release0/retryempty and retain B inflight; B later independently acks1. Add partial A with unrelated B, same-key newer revision, foreign committed tuple, missing committed without error, metadata ack cannot regress current revision. Baseline drains B and creates duplicated dirty retries. Use existing real-state snapshot helpers, not AuthorityDouble.
+
+Correlate against the owned selected records by submitted key/revision and completion.snapshots exact identities; only those held records may settle. Validate every committed tuple belongs to submitted owned snapshots; malformed membership reports Internal save completion identity and leaves all authority ownership intact. Submitted but uncommitted records transfer into AckReport.retry; remove from in_flight but do not clone into dirty, because the scheduler now owns that returned retry until return_dirty. Add explicit Internal incomplete save completion when omitted commits have no provider error. Preserve unrelated held records. Successful metadata acknowledgment must never overwrite metadata_sequence with an older revision (durable/current revision are distinct; no current revision mutation on ack). Existing Dirty population/urgency/metadata assembly remains a separate integration node.
+
+Run persistence_failure integration, mailbox and scheduler filters, owned fmt/clippy; scoped fix(server): correlate save completion ownership. No ticket-map invention: scheduler already owns tickets and authority owns selected key/revision records. Main integrates and rollback is these two files.
