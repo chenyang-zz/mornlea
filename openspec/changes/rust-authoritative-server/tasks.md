@@ -110,6 +110,16 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [ ] 3.9s1 Keep sleep refusals atomic and check bed partner coordinates.
 - [ ] 3.9s2 Prune disconnected sleep anchors before admitting replacement sessions.
 - [ ] 3.9w1 Enforce source sneak-door gates after target classification.
+- [ ] 3.9q1 Synchronize daylight burn health before hostile death settlement.
+- [ ] 3.9q2 Rehearse cumulative player-death drop capacity across slots.
+- [ ] 3.9q3 Share first-valid companion mining action and retain held intent.
+- [ ] 3.9q4 Correct passive wander angular quantization.
+- [ ] 3.9q5 Detect upper hostile body intersections with fluid.
+- [ ] 3.9q6 Filter dead players before hostile target selection.
+- [ ] 3.9q7 Preserve hostile target identity and successful repath cadence.
+- [ ] 3.9q8 Compare passive birth neighborhoods in chunks.
+- [ ] 3.9q9 Refuse unrepresentable hostile geometry without partial effects.
+- [ ] 3.9q10 Reconcile and apply executing-tick hostile shot spread.
 - [x] 3.9d1 Enforce Agent HTTP absolute deadlines and close cancellation.
 - [ ] 3.9d2 Bound and reclaim Agent business request ownership.
 
