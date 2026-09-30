@@ -1363,3 +1363,366 @@ fn reset_motion_preserves_pose_and_all_sibling_runtime_lanes() {
     );
     assert!(context.events().is_empty());
 }
+
+#[derive(Clone)]
+struct MotionEntryCase {
+    position: [f32; 3],
+    velocity: [f32; 3],
+    on_ground: bool,
+    dimension: Dimension,
+    raw: PlayerControl,
+    single_support: bool,
+    overrides: Vec<(BlockPos, Option<u16>)>,
+    expected_axes: (i8, i8),
+    body_in_fluid: bool,
+    snow_factor: f32,
+    foreign_snow: bool,
+}
+
+impl MotionEntryCase {
+    fn new(raw: PlayerControl) -> Self {
+        Self {
+            position: [0.8, 1.0, 0.5],
+            velocity: [0.0; 3],
+            on_ground: true,
+            dimension: Dimension::OVERWORLD,
+            raw,
+            single_support: true,
+            overrides: Vec::new(),
+            expected_axes: (raw.movement().move_x, raw.movement().move_z),
+            body_in_fluid: false,
+            snow_factor: 1.0,
+            foreign_snow: false,
+        }
+    }
+}
+
+fn edge_control(move_x: i8, move_z: i8, jump: bool, yaw: f32) -> PlayerControl {
+    let ordinary = control(move_x, move_z, jump, yaw, 0.0);
+    PlayerControl::new(PlayerControlParts {
+        movement: ordinary.movement(),
+        look: ordinary.look(),
+        actions: HeldActions {
+            sneaking: true,
+            ..ordinary.actions()
+        },
+    })
+}
+
+/// Expected intent and tuning come from the source helper cases, while the
+/// numerical movement and collision expectation uses the real native entry.
+fn check_motion_entry(case: MotionEntryCase) -> MotionState {
+    use mornlea_engine::native::contracts::collision::{Aabb, CollisionCell, CollisionGrid};
+    use mornlea_engine::native::contracts::physics::{
+        PhysicsControls, PhysicsOp, PhysicsRequest, PhysicsState, SweepBounds,
+    };
+    use mornlea_engine::native::physics::NativePhysics;
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = ActorKey::Player(session);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    let mut record = player_actor(
+        session,
+        case.position,
+        case.velocity,
+        case.on_ground,
+        ActorLifecycle::Active,
+    );
+    record.dimension = case.dimension;
+    let ActorBody::Player(body) = &mut record.body else {
+        unreachable!()
+    };
+    body.current.dimension = i32::from(case.dimension.get());
+    context.stage(RuleEffect::Actor(record)).unwrap();
+    let mut cells = Vec::new();
+    let empty_box = Aabb {
+        minimum: [0.0; 3],
+        maximum: [0.0; 3],
+    };
+    for y in -1..=10 {
+        for x in -4..=6 {
+            for z in -4..=4 {
+                let pos = BlockPos::new(x, y, z);
+                let mut block = Some(if y == 0 && (!case.single_support || (x == 0 && z == 0)) {
+                    GRASS
+                } else {
+                    AIR
+                });
+                if let Some((_, replacement)) =
+                    case.overrides.iter().find(|(point, _)| *point == pos)
+                {
+                    block = *replacement;
+                }
+                if let Some(block) = block {
+                    context.preload_block(
+                        BlockObservation::try_new(
+                            ChunkKey {
+                                dimension: case.dimension,
+                                pos: ChunkPos::new(x.div_euclid(16), z.div_euclid(16)),
+                            },
+                            1,
+                            1,
+                            pos,
+                            block,
+                        )
+                        .unwrap(),
+                    );
+                    let mut boxes = [empty_box; 8];
+                    let used = if block == GRASS || block == STONE || block == 76 {
+                        boxes[0] = Aabb {
+                            minimum: [0.0; 3],
+                            maximum: [1.0, if block == 76 { 0.5625 } else { 1.0 }, 1.0],
+                        };
+                        1
+                    } else {
+                        0
+                    };
+                    cells.push(CollisionCell::try_new(true, boxes, used).unwrap());
+                } else {
+                    cells.push(CollisionCell::default());
+                }
+            }
+        }
+    }
+    if case.foreign_snow {
+        context.preload_block(observation(BlockPos::new(0, 1, 0), 88));
+    }
+    let input = envelope(session, 1, Command::PlayerInput(case.raw));
+    provider::run(&mut context, intake_call(&input)).unwrap();
+    let mut before = context.read().runtime(actor).unwrap().clone();
+    before.has_view = true;
+    before.attack_cooldown = 13;
+    before.hurt_cooldown = 17;
+    before.burn_cooldown = 19;
+    before.oxygen = 211;
+    before.peak_y = 77.0;
+    before.exhaustion_milli = 1_250;
+    before.saturation_milli = 8_500;
+    before.since_damage_ticks = 71;
+    before.drown_ticks = 23;
+    before.starvation_ticks = 31;
+    before.eating = Some(EatingProgress {
+        slot: HotbarSlot::new(2).unwrap(),
+        item: 36,
+        ticks: 11,
+    });
+    before.bow = Some(BowProgress {
+        slot: HotbarSlot::new(3).unwrap(),
+        ticks: 15,
+    });
+    context.stage(RuleEffect::Runtime(before.clone())).unwrap();
+    let snapshot = context.read().environment().unwrap().clone();
+    let mut tuning = snapshot.tunables.physics();
+    tuning.walk_speed *= case.snow_factor;
+    let yaw = case.raw.look().yaw();
+    let expected = NativePhysics
+        .step(&PhysicsRequest {
+            state: PhysicsState {
+                position: case.position,
+                velocity: case.velocity,
+                on_ground: case.on_ground,
+            },
+            controls: PhysicsControls {
+                move_x: case.expected_axes.0,
+                move_z: case.expected_axes.1,
+                jump: case.raw.movement().jump,
+                yaw_sin: f64::from(yaw).sin() as f32,
+                yaw_cos: f64::from(yaw).cos() as f32,
+                body_in_fluid: case.body_in_fluid,
+                sprinting: case.raw.actions().sprinting && !case.raw.actions().sneaking,
+                sneaking: case.raw.actions().sneaking,
+            },
+            tuning,
+            sweep: SweepBounds {
+                minimum: [-2.0; 3],
+                maximum: [2.0; 3],
+            },
+            grid: CollisionGrid::try_new([-4, -1, -4], [11, 12, 9], &cells).unwrap(),
+        })
+        .unwrap()
+        .state;
+    provider::run(&mut context, motion_call(actor)).unwrap();
+    let actual = context.read().actor(actor).unwrap().motion;
+    assert_eq!(
+        actual.position().get().map(f32::to_bits),
+        expected.position.map(f32::to_bits),
+        "position"
+    );
+    assert_eq!(
+        actual.velocity().get().map(f32::to_bits),
+        expected.velocity.map(f32::to_bits),
+        "velocity"
+    );
+    assert_eq!(actual.on_ground(), expected.on_ground);
+    assert_eq!(
+        context.read().runtime(actor),
+        Some(&before),
+        "raw controls and sibling lanes survive local gates"
+    );
+    assert_eq!(
+        context.read().environment(),
+        Some(&snapshot),
+        "snow changes only per-call tuning"
+    );
+    assert!(context.events().is_empty());
+    actual
+}
+
+#[test]
+fn sneak_edge_clamps_only_local_input_at_loaded_cliff() {
+    let mut cliff = MotionEntryCase::new(edge_control(1, 0, false, 0.0));
+    cliff.expected_axes = (0, 0);
+    let actual = check_motion_entry(cliff);
+    assert_eq!(actual.position().get()[0], 0.8);
+}
+
+#[test]
+fn sneak_edge_source_gates_and_support_cases_match_native_entry() {
+    for variant in 0..8 {
+        let mut case = MotionEntryCase::new(edge_control(1, 0, false, 0.0));
+        match variant {
+            0 => case.overrides.push((BlockPos::new(1, 0, 0), Some(GRASS))),
+            1 => case.overrides.push((BlockPos::new(1, 0, 0), None)),
+            2 => case.raw = edge_control(1, 0, true, 0.0),
+            3 => {
+                case.body_in_fluid = true;
+                case.overrides.push((BlockPos::new(0, 1, 0), Some(WATER)));
+            }
+            4 => case.on_ground = false,
+            5 => {
+                case.position[2] = 0.95;
+                case.overrides.push((BlockPos::new(1, 0, 1), Some(GRASS)));
+            }
+            6 => case.overrides.push((BlockPos::new(1, 0, 0), Some(76))),
+            _ => {
+                case.raw = control(1, 0, false, 0.0, 0.0);
+            }
+        }
+        check_motion_entry(case);
+    }
+}
+
+#[test]
+fn sneak_edge_diagonal_clamps_local_intent() {
+    let mut case = MotionEntryCase::new(edge_control(1, 1, false, 0.0));
+    case.position = [0.95, 1.0, 0.05];
+    case.expected_axes = (0, 0);
+    check_motion_entry(case);
+}
+
+#[test]
+fn sneak_edge_rotated_clamps_local_intent() {
+    let mut case = MotionEntryCase::new(edge_control(0, 1, false, -std::f32::consts::FRAC_PI_2));
+    case.expected_axes = (0, 0);
+    check_motion_entry(case);
+}
+
+#[test]
+fn sneak_edge_preserves_external_velocity() {
+    let mut case = MotionEntryCase::new(edge_control(1, 0, false, 0.0));
+    case.velocity = [4.0, 0.0, 0.0];
+    case.expected_axes = (0, 0);
+    let actual = check_motion_entry(case);
+    assert!(
+        actual.velocity().get()[0] > 0.0,
+        "external velocity follows native deceleration instead of cancellation"
+    );
+}
+
+#[test]
+fn snow_tiers_scale_walk_in_same_native_entry() {
+    for block in [85, 86, 87, 88] {
+        let mut case = MotionEntryCase::new(control(0, 1, false, 0.0, 0.0));
+        case.position = [0.5, 1.0, 0.5];
+        case.single_support = false;
+        case.velocity = [0.0, 0.0, -4.3];
+        case.overrides.push((BlockPos::new(0, 1, 0), Some(block)));
+        case.snow_factor = if block >= 87 { 0.7 } else { 1.0 };
+        let expected_speed = 4.3f32 * case.snow_factor;
+        let actual = check_motion_entry(case);
+        assert_eq!(
+            actual.velocity().get()[2].to_bits(),
+            (-expected_speed).to_bits()
+        );
+    }
+}
+
+#[test]
+fn snow_bypass_and_dimension_cases_match_native_entry() {
+    for variant in 0..5 {
+        let mut case = MotionEntryCase::new(control(0, 1, false, 0.0, 0.0));
+        case.position = [0.5, 1.0, 0.5];
+        case.velocity = [0.0, 0.0, -4.3];
+        case.single_support = false;
+        case.overrides.push((BlockPos::new(0, 1, 0), Some(88)));
+        match variant {
+            0 => case.on_ground = false,
+            1 => {
+                case.raw = control(0, 0, false, 0.0, 0.0);
+                case.expected_axes = (0, 0);
+            }
+            2 => case.overrides[0].1 = None,
+            3 => {
+                case.dimension = Dimension::DEPTHS;
+                case.snow_factor = 0.7;
+            }
+            _ => {
+                case.dimension = Dimension::DEPTHS;
+                case.overrides.clear();
+                case.foreign_snow = true;
+            }
+        }
+        check_motion_entry(case);
+    }
+}
+
+#[test]
+fn sneak_snow_coordinate_refusal_precedes_overlay_effects() {
+    for x in [2_147_483_648.0, i32::MIN as f32] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = motion_scene(&mut context, session, [x, 1.0, 0.5], [0.0; 3], true);
+        let input = envelope(
+            session,
+            1,
+            Command::PlayerInput(edge_control(1, 0, false, 0.0)),
+        );
+        provider::run(&mut context, intake_call(&input)).unwrap();
+        let before = context.resident_snapshot();
+        assert_eq!(
+            provider::run(&mut context, motion_call(actor)),
+            Err(ServerError::InvalidInput { field: "actor" })
+        );
+        let after = context.resident_snapshot();
+        assert_eq!(after.actors, before.actors);
+        assert_eq!(after.runtimes, before.runtimes);
+        assert_eq!(after.blocks, before.blocks);
+        assert_eq!(after.environment, before.environment);
+        assert!(context.events().is_empty());
+    }
+}
+
+#[test]
+fn snow_tiers_scale_sprint_in_same_native_entry() {
+    for block in [87, 88] {
+        let mut case = MotionEntryCase::new(sprint_control(false));
+        case.position = [0.5, 1.0, 0.5];
+        case.single_support = false;
+        case.velocity = [0.0, 0.0, -(4.3f32 * 1.3)];
+        case.overrides.push((BlockPos::new(0, 1, 0), Some(block)));
+        case.snow_factor = 0.7;
+        let actual = check_motion_entry(case);
+        assert_eq!(
+            actual.velocity().get()[2].to_bits(),
+            (-((4.3f32 * 0.7) * 1.3)).to_bits()
+        );
+    }
+}

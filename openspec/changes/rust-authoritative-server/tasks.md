@@ -104,7 +104,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9p1 Repair survival damage, fall and boundary semantics.
 - [x] 3.9p2 Stage validated player controls before action providers and interrupt rejected actions.
 - [x] 3.9p3 Preserve held sprint intent, gate effective physics and skip reset movement.
-- [ ] 3.9p4 Restore sneak-edge support probes and thick-snow speed scaling.
+- [x] 3.9p4 Restore sneak-edge support probes and thick-snow speed scaling.
 - [x] 3.9t0 Expose the accepted per-tick survival, eating and furnace tuning snapshot.
 - [x] 3.9t1e Consume configured eating duration at the settlement boundary.
 - [x] 3.9s1 Keep sleep refusals atomic and check bed partner coordinates.

@@ -334,8 +334,8 @@ fn run_motion(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
     // Source gates change the local physics input, never the held record: a
     // packet-free tick can resume sprint after hunger recovers.
     let sprinting = sprinting && record.survival.hunger() >= 6 && !sneaking;
-    let tuning: PhysicsTuning = tunables.physics();
-    let step = HeldStep {
+    let mut tuning: PhysicsTuning = tunables.physics();
+    let mut step = HeldStep {
         move_x,
         move_z,
         jump,
@@ -346,6 +346,34 @@ fn run_motion(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
     };
     let view = ctx.read();
     let (body_in_fluid, _) = submersion_flags(&view, dimension, position, tunables.eye_height())?;
+    if on_ground
+        && !body_in_fluid
+        && step.sneaking
+        && !step.jump
+        && (step.move_x != 0 || step.move_z != 0)
+        && !sneak_edge_holds(&view, dimension, position, step)?
+    {
+        // Only intent is clamped; the native step still settles external
+        // velocity and retains the raw held input for the next tick.
+        step.move_x = 0;
+        step.move_z = 0;
+    }
+    if on_ground && (step.move_x != 0 || step.move_z != 0) {
+        let foot = BlockPos::new(
+            checked_floor(position[0])?,
+            checked_floor(position[1])?,
+            checked_floor(position[2])?,
+        );
+        if view
+            .observation(dimension, foot)
+            .is_some_and(|observation| matches!(observation.block, 87 | 88))
+        {
+            // Raw snow IDs distinguish thick layers from air despite their
+            // identical empty collision shape. Sweep and kernel share this
+            // per-call tuning; the environment snapshot stays immutable.
+            tuning.walk_speed *= 0.7;
+        }
+    }
     let (sweep_min, sweep_max) = sweep_bounds(velocity, on_ground, step, body_in_fluid, tuning);
     let (origin, dimensions) = step_prism(position, sweep_min, sweep_max, tuning.step_height)?;
     let cells = prism_cells(&view, dimension, origin, dimensions)?;
@@ -568,6 +596,37 @@ struct HeldStep {
     sneaking: bool,
     yaw_sin: f32,
     yaw_cos: f32,
+}
+
+/// Source `SneakEdgeHolds`: at most two forward foot queries. An unavailable
+/// cell counts as support, so loading cannot invent an input clamp.
+fn sneak_edge_holds(
+    view: &AuthorityReadView<'_>,
+    dimension: Dimension,
+    position: [f32; 3],
+    step: HeldStep,
+) -> Result<bool, ServerError> {
+    let direction = movement_target(step.move_x, step.move_z, 1.0, step.yaw_sin, step.yaw_cos);
+    if step_vector_length(direction) == 0.0 {
+        return Ok(true);
+    }
+    let probe: [f32; 3] =
+        std::array::from_fn(|axis| position[axis] + direction[axis] * (HALF_WIDTH + 0.05));
+    let side = [-direction[2] * HALF_WIDTH, 0.0, direction[0] * HALF_WIDTH];
+    let foot_y = checked_floor(position[1] - GROUND_PROBE)?;
+    for foot in [
+        [probe[0] + side[0], probe[2] + side[2]],
+        [probe[0] - side[0], probe[2] - side[2]],
+    ] {
+        let pos = BlockPos::new(checked_floor(foot[0])?, foot_y, checked_floor(foot[1])?);
+        let Some(observed) = view.observation(dimension, pos) else {
+            return Ok(true);
+        };
+        if collision_cell(observed.block)?.used() > 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Sweep hull mirror (`stepSweepBounds` in `packages/shared/physics/step.go`):
