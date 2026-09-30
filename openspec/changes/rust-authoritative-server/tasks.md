@@ -130,6 +130,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9d1 Enforce Agent HTTP absolute deadlines and close cancellation.
 - [x] 3.9d2a Accept a clonable request cancellation contract with real HTTP evidence.
 - [x] 3.9d2 Bound and reclaim Agent business request ownership.
+- [ ] 3.9d3 Retain and reap Agent control and business workers through bounded close.
 
 ## 4. Closeout
 

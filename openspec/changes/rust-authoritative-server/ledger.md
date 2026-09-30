@@ -1597,3 +1597,6 @@ Hostile fluid correction accepted afterafb107a0. Reused isolated entity implemen
 
 
 Controller freezes live-target correction after hostile fluidf40b82f1 and placement precedence/water correction after compound74a13c38, reusing the closely related isolated reviewers with disjoint source/test ownership. Main explicitly preserves zero-health spawn anchors and chooses only live chase/action candidates; pure held-item debit rehearsal precedes geometry, with form-specific fluid refusal reasons. These private changes do not expand shared transaction APIs or delegate source-policy choices. Support/collision/read dependency corrections remain serial and unqualified. Architecture skill: no change.
+
+
+Controller freezes Agent control/close ownership after businessafb107a0 with reused isolated owner. Deadline-free freeze signals and retains rather than joins; close shuts shared I/O first, boundedly reaps only finished65-or-fewer owned producers and retains unfinished handles on timeout/retry. Existing frozen-memory admission conflict is explicitly excluded until its own source-qualified policy is accepted. Exact packet carries cooperative/noncooperative actual-thread tests and real Python gates. Architecture skill: no change.
