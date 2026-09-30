@@ -20,7 +20,7 @@ use mornlea_server::contracts::{
 use mornlea_server::core::companion_ingress::{CompanionIngress, CompanionTaskGate};
 
 use super::process::{
-    StepClock, acquire_lease, await_marker, client_id, companion_id, drain_plan_until,
+    StepClock, acquire_lease, await_block_marker, client_id, companion_id, drain_plan_until,
     namespace_id, operation, plan_snapshot, plan_world, poll_request_until, request_id, run_id,
     serve_mcp, spawn_helper, target_pos, wall_deadline_ms,
 };
@@ -69,8 +69,10 @@ fn rust_plan_python_mcp_and_authority() {
     );
     if drained.completed != 1 {
         panic!(
-            "plan outcome missing: report={drained:?} failures={:?}",
-            host.take_failures()
+            "plan outcome missing: report={drained:?} failures={:?} poll={:?} mcp_done={:?}",
+            host.take_failures(),
+            agent.poll(request_id(40)),
+            mcp.wait_done(Duration::from_millis(0)),
         );
     }
     assert_eq!(drained.failed, 0);
@@ -307,7 +309,17 @@ fn block_cancel_deadline_and_shutdown() {
         .dispatch_plan(&mut agent, &mut snapshots, &*clock, dispatch(40, 41, 200))
         .expect("blocking dispatch admits");
     assert_eq!(first.attempt, 1);
-    await_marker(child.marker(), Duration::from_secs(10));
+    await_block_marker(
+        &mut host,
+        &mut agent,
+        &mut snapshots,
+        &mcp,
+        &clock,
+        child.marker(),
+        request_id(40),
+        Duration::from_secs(10),
+        "first block",
+    );
     cancel_run_until(&mut agent, lease_id, 42, 41, Duration::from_secs(10));
     let drained = drain_plan_until(
         &mut host,
@@ -331,7 +343,17 @@ fn block_cancel_deadline_and_shutdown() {
     let second = host
         .dispatch_plan(&mut agent, &mut snapshots, &*clock, dispatch(44, 45, 201))
         .expect("second blocking dispatch admits");
-    await_marker(child.marker(), Duration::from_secs(10));
+    await_block_marker(
+        &mut host,
+        &mut agent,
+        &mut snapshots,
+        &mcp,
+        &clock,
+        child.marker(),
+        request_id(44),
+        Duration::from_secs(10),
+        "second block",
+    );
     let pacer = clock.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1200));
@@ -393,7 +415,14 @@ fn block_cancel_deadline_and_shutdown() {
         &clock,
         Duration::from_secs(20),
     );
-    assert_eq!(drained.completed, 1);
+    assert_eq!(
+        drained.completed,
+        1,
+        "third plan must complete after cleanup, drain report: {drained:?} failures={:?} poll={:?} mcp_done={:?}",
+        host.take_failures(),
+        agent.poll(request_id(48)),
+        mcp.wait_done(Duration::from_millis(0)),
+    );
     let installed = host.install(202, fence, &plan_world(202));
     assert_eq!(installed.installed, 1);
     assert_eq!(installed.envelopes.len(), 1);

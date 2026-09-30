@@ -322,7 +322,24 @@ impl Drop for ChildOwner {
     fn drop(&mut self) {
         if !self.reaped {
             let _ = self.child.kill();
-            let _ = self.child.try_wait();
+            // A panic skips `shutdown`, so report the child state here: a
+            // helper that already exited explains refused business RPCs.
+            match self.child.try_wait() {
+                Ok(Some(status)) => eprintln!("agent child unreaped exit: {status}"),
+                Ok(None) => eprintln!("agent child unreaped: still running"),
+                Err(error) => eprintln!("agent child unreaped wait error: {error}"),
+            }
+            // A panic skips `shutdown`, so drain the helper log here: the
+            // uvicorn request lines name the exact failing leg server-side.
+            if let Some(reader) = self.stderr.take() {
+                let bytes = reader.join().unwrap_or_default();
+                if !bytes.is_empty() {
+                    eprintln!(
+                        "agent child unreaped stderr: {}",
+                        String::from_utf8_lossy(&bytes)
+                    );
+                }
+            }
         }
     }
 }
@@ -658,14 +675,44 @@ pub fn plan_world(tick: u64) -> CurrentWorld {
     }
 }
 
-/// Barrier file the blocking model writes once its call is admitted.
-pub fn await_marker(path: &Path, timeout: Duration) {
+/// Waits for the blocking-model barrier while also watching the dispatched
+/// plan: a helper that settles the run early (a fast rejection rather than
+/// an admitted block) surfaces its report and raw poll at once instead of
+/// burning the whole bound behind a blind barrier wait. A still-pending
+/// plan drains without side effects, so the barrier semantics are unchanged.
+/// The nonblocking serve-loop probe names a dead MCP listener, which would
+/// refuse the helper's planning calls.
+#[allow(clippy::too_many_arguments)]
+pub fn await_block_marker(
+    host: &mut PlanHost,
+    agent: &mut LeaseController,
+    snapshots: &mut SnapshotRegistry,
+    mcp: &McpService,
+    clock: &Arc<StepClock>,
+    marker: &Path,
+    request_id: AgentRequestId,
+    timeout: Duration,
+    what: &str,
+) {
     let deadline = Instant::now() + timeout;
     loop {
-        if path.exists() {
+        if marker.exists() {
             return;
         }
-        assert!(Instant::now() < deadline, "model barrier was never reached");
+        let report = host
+            .drain_outcomes(agent, snapshots, &**clock)
+            .expect("barrier wait polls the dispatched plan");
+        assert!(
+            report.completed == 0 && report.failed == 0,
+            "model barrier missed for {what}: plan settled early report={report:?} failures={:?} poll={:?} mcp_done={:?}",
+            host.take_failures(),
+            agent.poll(request_id),
+            mcp.wait_done(Duration::from_millis(0)),
+        );
+        assert!(
+            Instant::now() < deadline,
+            "model barrier was never reached for {what}"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 }
