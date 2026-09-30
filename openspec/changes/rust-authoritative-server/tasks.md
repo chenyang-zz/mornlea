@@ -122,9 +122,9 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9q4 Correct passive wander angular quantization.
 - [x] 3.9q5 Detect upper hostile body intersections with fluid.
 - [x] 3.9q6 Filter dead players before hostile target selection.
-- [ ] 3.9q7 Preserve hostile target identity and successful repath cadence.
+- [x] 3.9q7 Preserve hostile target identity and successful repath cadence.
 - [x] 3.9q7a Preserve due-first hostile UUID selection and calendar repath cadence ([packet](plans/32-hostile-path-cadence.md)).
-- [ ] 3.9q7b Revalidate covered Ready chunk revisions across committed live ticks ([accepted state prerequisite](plans/35-ready-revision-commit.md); provider acceptance remains open).
+- [x] 3.9q7b Revalidate covered Ready chunk revisions across committed live ticks ([state prerequisite](plans/35-ready-revision-commit.md); [provider packet](plans/36-hostile-ready-revisions.md)).
 - [x] 3.9q8 Compare passive birth neighborhoods in chunks.
 - [x] 3.9q9 Refuse unrepresentable hostile geometry without partial effects.
 - [x] 3.9q10 Reconcile and apply executing-tick hostile shot spread.
