@@ -27,4 +27,6 @@ Node3.9q7 remains open after cadence acceptance. The revision subnode requires a
 
 ## Gates and handoff
 
+Controller geometry-fixture reconciliation: at both X/Z near signed endpoints, float32 projection maps all33 waypoint centers to the same coordinate. Correct path exhaustion therefore clears the formerly retained path immediately. Keep extreme X with ordinary Z100.5 and targetZ110.5 for exact signed-X clamped-goal/nonexhausted inspection. Separately retain both extreme-axis scenes and assert admitted exact horizontal positions, selected UUID, pathNone and calendar1001 retry after exhaustion. Do not impose unchanged Y, since ordinary physics still applies gravity.
+
 Source /workspace/.mornlea-env/env.sh, pinned Rust1.97.1 and own CARGO_TARGET_DIR. Run server_replay hostile_actors, hostile_actions and hostile_outcomes; require nonzero discovery, exact behavioral RED/GREEN. Two owned rustfmt files, server all-target clippy --locked -- -D warnings, diff check and source-comment policy. Enumerate derived consumers; no Go hashed source edits or corpus changes. Scoped fix(server): preserve hostile target and calendar repath cadence commit, exact full diff and evidence. Controller independently reviews and runs focused gates before marking cadence subnode; rollback exact two files only.
