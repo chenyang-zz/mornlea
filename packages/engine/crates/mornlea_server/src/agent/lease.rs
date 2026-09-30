@@ -640,18 +640,21 @@ impl AgentHandle for LeaseController {
     fn cancel(&mut self, id: AgentRequestId, deadline: Deadline) -> Result<(), ServerError> {
         let cancel = {
             let core = self.shared.core.lock().unwrap();
-            core.business
-                .get(&id)
-                .ok_or_else(unavailable)?
-                .cancel
-                .clone()
+            let Some(slot) = core.business.get(&id) else {
+                return Ok(());
+            };
+            slot.cancel.clone()
         };
         cancel.cancel();
         let mut wall_expiry = None;
         loop {
             let retired = {
                 let mut core = self.shared.core.lock().unwrap();
-                let slot = core.business.get(&id).ok_or_else(unavailable)?;
+                // Another shared handle may already have consumed the join.
+                // Proven absence completes retirement, including after a panic.
+                let Some(slot) = core.business.get(&id) else {
+                    return Ok(());
+                };
                 if slot.join.as_ref().is_some_and(|join| join.is_finished()) {
                     core.business.remove(&id)
                 } else {

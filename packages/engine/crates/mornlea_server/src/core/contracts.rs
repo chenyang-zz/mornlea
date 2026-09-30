@@ -2542,6 +2542,8 @@ pub struct FrozenLease {
 pub trait AgentHandle {
     fn submit(&mut self, request: AgentRequest) -> Result<AgentRequestId, ServerError>;
     fn poll(&mut self, id: AgentRequestId) -> AgentPoll;
+    /// Retires local request ownership. Already absent ownership succeeds without
+    /// wire work; a first join error may be reported after ownership is reclaimed.
     fn cancel(&mut self, id: AgentRequestId, deadline: Deadline) -> Result<(), ServerError>;
     fn freeze(&mut self, clock: &dyn Clock) -> Option<FrozenLease>;
     fn release(&mut self, lease: &FrozenLease, deadline: Deadline) -> Result<(), ServerError>;

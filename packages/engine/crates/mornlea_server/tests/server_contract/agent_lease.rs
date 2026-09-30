@@ -682,6 +682,22 @@ fn cloned_controller_shares_frozen_identity_and_idempotent_close() {
 }
 
 #[test]
+fn absent_request_retirement_is_local_and_idempotent_across_clones() {
+    let (start, clock) = StepClock::start();
+    let wire = ScriptedWire::new();
+    let mut agent = controller(&wire, &clock);
+    let mut other = agent.clone();
+    let id = base_identity(20).request_id;
+    assert_eq!(agent.cancel(id, Deadline::at(start)), Ok(()));
+    assert_eq!(other.cancel(id, Deadline::at(start)), Ok(()));
+    assert_eq!(agent.retained_requests(), 0);
+    assert!(wire.rounds().is_empty());
+    agent.close(Deadline::at(start)).unwrap();
+    assert_eq!(other.cancel(id, Deadline::at(start)), Ok(()));
+    assert!(wire.rounds().is_empty());
+}
+
+#[test]
 fn cancel_business_request_reaps_cooperative_worker_and_preserves_other_request() {
     let (start, clock) = StepClock::start();
     let wire = ScriptedWire::new();
@@ -779,7 +795,7 @@ fn cancel_business_timeout_uses_wall_budget_and_retains_owned_worker_for_retry()
     );
     agent.cancel(id, Deadline::at(start)).unwrap();
     assert_eq!(agent.retained_requests(), 0);
-    assert_eq!(agent.cancel(id, Deadline::at(start)), Err(unavailable()));
+    assert_eq!(agent.cancel(id, Deadline::at(start)), Ok(()));
 }
 
 #[test]
@@ -798,7 +814,7 @@ fn panicked_business_worker_reports_internal_and_is_reclaimed() {
     assert_eq!(agent.pending_business_workers(), 0);
     assert_eq!(agent.cancel(id, Deadline::at(start)), Err(error));
     assert_eq!(agent.retained_requests(), 0);
-    assert_eq!(agent.cancel(id, Deadline::at(start)), Err(unavailable()));
+    assert_eq!(agent.cancel(id, Deadline::at(start)), Ok(()));
 }
 
 /// Separate bounded gates permit actual control and business producers to be
