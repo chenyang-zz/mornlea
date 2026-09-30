@@ -30,10 +30,8 @@
 //!   consumption that normalizes an emptied slot back to the zero stack, with
 //!   the defensively checked return value.
 //! - `packages/shared/tuning/tunables.go` (`EatingTicks` default, also pinned
-//!   by `RuleTunables::source_defaults`): the hold length. The frozen
-//!   `RuleTunables` shape has no read port for this lane yet, so the value is
-//!   mirrored beside the survival provider's own tunable mirrors until a
-//!   getter lands.
+//!   by `RuleTunables::source_defaults`): the hold length is read once from
+//!   the staged tick snapshot, with the source's minimum of one tick.
 //! - `packages/server/sim/entity/player.go` (`applyDamage` with the
 //!   `advanceActivePlayers` call site): real health loss clears the lane, and
 //!   a suspension is an open container view or a view not ready. Both halves
@@ -57,13 +55,6 @@ const MAX_HUNGER: u8 = 20;
 
 /// One saturation point in milli units (`core.SaturationMilliPerPoint`).
 const SATURATION_MILLI_PER_POINT: u32 = 1_000;
-
-/// Hold length in ticks (`Tunables.EatingTicks` default,
-/// `packages/shared/tuning/tunables.go`). Mirrored for the same reason the
-/// survival provider mirrors its tunables: the frozen checked snapshot keeps
-/// this lane private, and the sim layer reads a per-tick value that today only
-/// has the source default.
-const EATING_TICKS: u16 = 32;
 
 /// The absent item number (`core.ItemNone`, `packages/shared/core/item.go`).
 const ITEM_NONE: u16 = 0;
@@ -168,6 +159,16 @@ fn settle_actor(
     if hunger >= MAX_HUNGER {
         return stage_progress(ctx, runtime, None);
     }
+    // Interrupts clear without advancing. An eligible hold requires the
+    // same immutable timing snapshot as the other rule providers.
+    let eating_ticks = view
+        .environment()
+        .ok_or(ServerError::Internal {
+            invariant: "eating snapshot",
+        })?
+        .tunables
+        .eating_ticks()
+        .max(1);
     // Progress key: a recorded `(slot, item)` pair continuing from a nonzero
     // count increments by exactly one, and anything else restarts at 1 — the
     // starting tick itself. The nonzero guard is the Go empty-state sentinel.
@@ -179,7 +180,7 @@ fn settle_actor(
         }
         _ => 1,
     };
-    if ticks < EATING_TICKS.max(1) {
+    if ticks < eating_ticks {
         return stage_progress(
             ctx,
             runtime,

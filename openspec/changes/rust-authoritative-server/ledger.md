@@ -1533,3 +1533,6 @@ Tuning access contract accepted afterae84ee53. Controller directly changed contr
 
 
 Controller directly freezes and implements the two-file eating-duration consumer against accepted256fddf8. Exact source max1 fallback and interrupt-before-settlement order remain; eligible advancement needs the staged environment and never silently falls back to32. This work is independent of isolated intake edits and retains serial contract ownership. Survival/furnace consumers await separately frozen tests. Architecture skill: no change.
+
+
+Eating timing accepted after598b5c60 against contract256fddf8. Controller owned two files; three behavioral REDs show8-tick/dynamically shortened holds fail to settle and missing snapshot wrongly advances. GREEN eating7/7, including default32/non-default8/zero→1, release/reset/view precedence and full eligible-refusal preimages; actual Go TestEatingTicksComesFromTunableSnapshot passed, all-target clippy and owned fmt/diff passed. Eligible advancement reads the current immutable duration once; interrupt cleanup needs no snapshot. This proves configured provider settlement, not process readiness or save assembly. Architecture skill: no change.

@@ -209,6 +209,9 @@ fn eating_scene(
     slots: &[(u8, ItemStack)],
     selected: u8,
 ) -> ActorKey {
+    context
+        .stage(RuleEffect::Environment(eating_environment(32)))
+        .expect("eating snapshot");
     let actor = ActorKey::Player(session);
     context
         .stage(RuleEffect::Actor(player_actor(
@@ -226,6 +229,169 @@ fn eating_scene(
         .expect("runtime");
     context.preload_inventory(actor, inventory_with(slots, selected));
     actor
+}
+
+fn eating_environment(ticks: u16) -> EnvironmentState {
+    let defaults = RuleTunables::source_defaults();
+    EnvironmentState {
+        seed: 7,
+        next_tick: 0,
+        world_time: 0,
+        day_phase_offset: 0,
+        season_offset: 0,
+        weather: mornlea_domain::Weather::Clear,
+        weather_remaining: 100,
+        difficulty: 0,
+        tunables: RuleTunables::try_new(
+            defaults.physics(),
+            100,
+            40,
+            20,
+            80,
+            18,
+            4000,
+            ticks,
+            1600,
+            200,
+            5,
+            3,
+            50,
+            6.0,
+            1.62,
+            10,
+            40,
+            6000,
+            1.25,
+        )
+        .unwrap(),
+    }
+}
+
+#[test]
+fn configured_eating_duration_settles_at_exact_tick() {
+    for configured in [8, 32, 0] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = eating_scene(
+            &mut context,
+            session,
+            10,
+            0,
+            &[(0, stack(ITEM_BREAD, 2))],
+            0,
+        );
+        context
+            .stage(RuleEffect::Environment(eating_environment(configured)))
+            .unwrap();
+        for tick in 1..configured.max(1) {
+            provider::run(&mut context, eating_call(actor)).unwrap();
+            assert_eq!(held_progress(&context, actor).unwrap().ticks, tick);
+            assert_eq!(context.read().inventory(actor).unwrap().slots[0].count, 2);
+            assert_eq!(context.read().actor(actor).unwrap().survival.hunger(), 10);
+            assert_eq!(context.read().runtime(actor).unwrap().saturation_milli, 0);
+        }
+        provider::run(&mut context, eating_call(actor)).unwrap();
+        assert_eq!(
+            context.read().inventory(actor).unwrap().slots[0].count,
+            1,
+            "duration {configured}"
+        );
+        assert_eq!(context.read().actor(actor).unwrap().survival.hunger(), 15);
+        assert_eq!(
+            context.read().runtime(actor).unwrap().saturation_milli,
+            6000
+        );
+        assert_eq!(held_progress(&context, actor), None);
+    }
+}
+
+#[test]
+fn eating_duration_changes_and_interrupts_use_current_snapshot() {
+    for interruption in ["none", "release", "reset", "view"] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = eating_scene(
+            &mut context,
+            session,
+            10,
+            0,
+            &[(0, stack(ITEM_BREAD, 2))],
+            0,
+        );
+        for _ in 0..7 {
+            provider::run(&mut context, eating_call(actor)).unwrap();
+        }
+        context
+            .stage(RuleEffect::Environment(eating_environment(8)))
+            .unwrap();
+        match interruption {
+            "release" | "reset" => {
+                let mut runtime = context.read().runtime(actor).unwrap().clone();
+                if interruption == "release" {
+                    runtime.controls = Some(hold_control(false));
+                } else {
+                    runtime.reset = true;
+                }
+                context.stage(RuleEffect::Runtime(runtime)).unwrap();
+            }
+            "view" => {
+                context
+                    .stage(RuleEffect::Viewer {
+                        session,
+                        view: Some(ViewLease::new(session, chest_reference())),
+                    })
+                    .unwrap();
+            }
+            _ => {}
+        }
+        provider::run(&mut context, eating_call(actor)).unwrap();
+        assert_eq!(
+            context.read().inventory(actor).unwrap().slots[0].count,
+            if interruption == "none" { 1 } else { 2 }
+        );
+        assert_eq!(
+            context.read().actor(actor).unwrap().survival.hunger(),
+            if interruption == "none" { 15 } else { 10 }
+        );
+        assert_eq!(held_progress(&context, actor), None);
+    }
+}
+
+#[test]
+fn eligible_eating_without_environment_refuses_before_effects() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = ActorKey::Player(session);
+    context
+        .stage(RuleEffect::Actor(player_actor(session, 10, true)))
+        .unwrap();
+    context
+        .stage(RuleEffect::Runtime(hold_runtime(actor, 0, true)))
+        .unwrap();
+    context.preload_inventory(actor, inventory_with(&[(0, stack(ITEM_BREAD, 2))], 0));
+    let before = context.resident_snapshot();
+    let events = context.events().to_vec();
+    assert_eq!(
+        provider::run(&mut context, eating_call(actor)),
+        Err(ServerError::Internal {
+            invariant: "eating snapshot"
+        })
+    );
+    let after = context.resident_snapshot();
+    assert_eq!(after.actors, before.actors);
+    assert_eq!(after.runtimes, before.runtimes);
+    assert_eq!(after.inventories, before.inventories);
+    assert_eq!(after.projectiles, before.projectiles);
+    assert_eq!(context.events(), events);
 }
 
 fn eating_call(actor: ActorKey) -> RuleCall<'static> {
