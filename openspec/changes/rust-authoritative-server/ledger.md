@@ -1488,3 +1488,6 @@ Player motion runtime repair accepted after a290f5cb. Isolated implementer owned
 
 
 Region parent barrier repair accepted after 2a99e64b. Isolated implementer owned only RegionIo and its real filesystem fault suite; controller inspected publication/reopen/error precedence and independently reran region_io21/21. Four RED cases prohibited acknowledgments after rename-after, directory-sync, directory-close and failed-create/reopen faults; GREEN retains parent uncertainty until fsync and close succeed, including already-known revisions and sync/close. Published rename attempts the parent barrier even on an after-hook failure. Recovery33/33, clippy, focused fmt and diff checks passed. Persistent directory faults now correctly keep close retryable. Architecture skill: no change.
+
+
+Continuity packet refinement before dispatch: retain environment and sleep in residents first. Metadata dirtying is moved to the serial persistence/reducer boundary repair because the current reducer is infallible and completion overwrites metadata_sequence; saturating a revision would allow different bytes under one revision. This preserves the complete requirement as an integration blocker, without silently widening a private continuity task or adding a panic. Baseline d2663098; one isolated implementer owns state.rs and tick_state.rs only. Architecture skill: no change.
