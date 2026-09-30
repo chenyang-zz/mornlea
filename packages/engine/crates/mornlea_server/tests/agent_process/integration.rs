@@ -271,7 +271,7 @@ fn cancel_run_until(
     request_tag: u8,
     run_tag: u8,
     timeout: Duration,
-) {
+) -> bool {
     let cancel = AgentRequest::Cancel(CancelRequest {
         leased: LeasedIdentity {
             base: BaseIdentity {
@@ -284,18 +284,22 @@ fn cancel_run_until(
         run_id: run_id(run_tag),
     });
     let id = agent.submit(cancel).expect("cancel submits");
-    match poll_request_until(agent, id, timeout) {
+    let cancelled = match poll_request_until(agent, id, timeout) {
         AgentPoll::Completed(AgentResponse::Cancel(response)) => {
-            assert!(response.cancelled, "helper cancels the admitted run");
             assert_eq!(response.run_id, run_id(run_tag));
+            response.cancelled
         }
         AgentPoll::Completed(other) => panic!("cancel answered another response: {other:?}"),
         AgentPoll::Failed(error) => panic!("cancel failed: {error:?}"),
         AgentPoll::Pending => panic!("cancel stayed pending after settle"),
-    }
+    };
+    agent
+        .cancel(id, Deadline::at(Instant::now()))
+        .expect("terminal cancel response retires");
+    cancelled
 }
 
-/// Blocks the helper model, cancels and times out the run, then shuts the
+/// Blocks the helper model, cancels its remote and local requests, then shuts the
 /// lease, registry, model service, and wire down with nothing leaked.
 #[test]
 fn block_cancel_deadline_and_shutdown() {
@@ -338,7 +342,10 @@ fn block_cancel_deadline_and_shutdown() {
         Duration::from_secs(10),
         "first block",
     );
-    cancel_run_until(&mut agent, lease_id, 42, 41, Duration::from_secs(10));
+    assert!(
+        cancel_run_until(&mut agent, lease_id, 42, 41, Duration::from_secs(10)),
+        "connected run is cancelled remotely"
+    );
     let drained = drain_plan_until(
         &mut host,
         &mut agent,
@@ -372,23 +379,24 @@ fn block_cancel_deadline_and_shutdown() {
         Duration::from_secs(10),
         "second block",
     );
-    let pacer = clock.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1200));
-        pacer.set(Instant::now() + Duration::from_secs(2));
-    });
-    match agent.cancel(
-        request_id(44),
-        Deadline::after(clock.monotonic(), Duration::from_secs(1)).expect("wait deadline"),
-    ) {
-        Err(ServerError::Timeout { .. }) => {}
-        other => panic!("caller wait never timed out: {other:?}"),
-    }
+    let retained_before = agent.retained_requests();
+    let cancel_started = Instant::now();
+    agent
+        .cancel(
+            request_id(44),
+            Deadline::after(clock.monotonic(), Duration::from_secs(1)).expect("wait deadline"),
+        )
+        .expect("local HTTP producer retires");
+    assert!(cancel_started.elapsed() < Duration::from_millis(200));
+    assert_eq!(agent.pending_business_workers(), 0);
+    assert_eq!(agent.retained_requests(), retained_before - 1);
     assert!(
         host.plan_inflight(companion_id()),
-        "caller timeout alone frees no worker"
+        "local retirement retains the host run until remote cleanup"
     );
-    cancel_run_until(&mut agent, lease_id, 46, 45, Duration::from_secs(10));
+    // HTTP disconnect may have already drained the remote handle. The
+    // idempotent cancel still echoes this run, and the next plan proves capacity.
+    let _ = cancel_run_until(&mut agent, lease_id, 46, 45, Duration::from_secs(10));
     let drained = drain_plan_until(
         &mut host,
         &mut agent,
@@ -399,7 +407,7 @@ fn block_cancel_deadline_and_shutdown() {
     assert_eq!(drained.failed, 1);
     assert!(
         !host.plan_inflight(companion_id()),
-        "timed-out run frees its worker only after cleanup"
+        "locally retired run frees its host ownership only after cleanup"
     );
     assert_eq!(host.take_failures().len(), 1);
     assert_eq!(second.attempt, 2);

@@ -583,3 +583,193 @@ fn freeze_release_retry_and_expiry() {
             .is_err()
     );
 }
+
+fn tagged_plan(tag: u8) -> PlanRequest {
+    let mut request = plan_request(lease_id(4));
+    request.leased.base.request_id = base_identity(tag).request_id;
+    request
+}
+
+#[test]
+fn terminal_business_requests_remain_charged_until_retirement() {
+    let (start, clock) = StepClock::start();
+    let wire = ScriptedWire::new();
+    let mut agent = controller(&wire, &clock);
+    acquire_lease(&agent, lease_id(4));
+    for tag in 20..84 {
+        let request = tagged_plan(tag);
+        wire.push(Ok(plan_response(&request)));
+        let id = agent.submit(AgentRequest::Plan(request.clone())).unwrap();
+        assert!(wait_until(|| !matches!(agent.poll(id), AgentPoll::Pending)));
+        assert_eq!(
+            agent.poll(id),
+            AgentPoll::Completed(plan_response(&request))
+        );
+        assert_eq!(
+            agent.poll(id),
+            AgentPoll::Completed(plan_response(&request))
+        );
+    }
+    assert_eq!(agent.retained_requests(), 64);
+    assert_eq!(agent.pending_business_workers(), 0);
+    assert_eq!(wire.rounds().len(), 64);
+    assert_eq!(
+        agent.submit(AgentRequest::Plan(tagged_plan(20))),
+        Err(ServerError::InvalidInput {
+            field: "agent_request_id"
+        })
+    );
+    assert_eq!(
+        agent.submit(AgentRequest::Plan(tagged_plan(84))),
+        Err(ServerError::Capacity {
+            resource: mornlea_server::contracts::Resource::AgentRuns,
+            limit: 64,
+            observed: 65,
+        })
+    );
+    assert_eq!(wire.rounds().len(), 64, "refusal must not call the wire");
+    agent
+        .cancel(base_identity(20).request_id, Deadline::at(start))
+        .unwrap();
+    assert_eq!(agent.retained_requests(), 63);
+    assert_eq!(
+        agent.poll(base_identity(20).request_id),
+        AgentPoll::Failed(unavailable())
+    );
+    let request = tagged_plan(20);
+    wire.push(Ok(plan_response(&request)));
+    let id = agent.submit(AgentRequest::Plan(request.clone())).unwrap();
+    assert!(wait_until(|| !matches!(agent.poll(id), AgentPoll::Pending)));
+    assert_eq!(
+        agent.poll(id),
+        AgentPoll::Completed(plan_response(&request))
+    );
+    assert_eq!(agent.retained_requests(), 64);
+    assert_eq!(wire.rounds().len(), 65);
+    for tag in 20..84 {
+        agent
+            .cancel(base_identity(tag).request_id, Deadline::at(start))
+            .unwrap();
+    }
+    assert_eq!(agent.retained_requests(), 0);
+}
+
+#[test]
+fn cancel_business_request_reaps_cooperative_worker_and_preserves_other_request() {
+    let (start, clock) = StepClock::start();
+    let wire = ScriptedWire::new();
+    let mut agent = controller(&wire, &clock);
+    acquire_lease(&agent, lease_id(4));
+    let gate = wire.hold();
+    let held = agent.submit(AgentRequest::Plan(tagged_plan(20))).unwrap();
+    assert!(wait_until(|| wire.parked()));
+    let independent = tagged_plan(21);
+    wire.push(Ok(plan_response(&independent)));
+    let independent_id = agent
+        .submit(AgentRequest::Plan(independent.clone()))
+        .unwrap();
+    assert!(wait_until(|| !matches!(
+        agent.poll(independent_id),
+        AgentPoll::Pending
+    )));
+    assert_eq!(
+        agent.poll(independent_id),
+        AgentPoll::Completed(plan_response(&independent))
+    );
+    let before = Instant::now();
+    let result = agent.cancel(held, Deadline::at(start + Duration::from_millis(30)));
+    // Release the bounded fixture even if cancellation failed to reach the wire.
+    drop(gate);
+    assert_eq!(result, Ok(()));
+    assert!(before.elapsed() < Duration::from_millis(200));
+    assert_eq!(agent.retained_requests(), 1);
+    assert_eq!(agent.pending_business_workers(), 0);
+    assert_eq!(agent.poll(held), AgentPoll::Failed(unavailable()));
+    assert_eq!(
+        agent.poll(independent_id),
+        AgentPoll::Completed(plan_response(&independent))
+    );
+    agent.cancel(independent_id, Deadline::at(start)).unwrap();
+}
+
+/// This bounded double deliberately ignores cancellation to exercise retained
+/// ownership when the wire cannot finish within the consumer's caller budget.
+struct NoncooperativeWire {
+    gate: Mutex<mpsc::Receiver<()>>,
+    started: Mutex<mpsc::Sender<()>>,
+}
+
+impl AgentWire for NoncooperativeWire {
+    fn rpc_cancellable(
+        &self,
+        request: AgentRequest,
+        _deadline: Deadline,
+        _cancellation: &RpcCancellation,
+    ) -> Result<AgentResponse, ServerError> {
+        self.started.lock().unwrap().send(()).unwrap();
+        let _ = self.gate.lock().unwrap().recv_timeout(SECOND);
+        let AgentRequest::Plan(request) = request else {
+            panic!("expected business request")
+        };
+        Ok(plan_response(&request))
+    }
+
+    fn close(&self) {}
+}
+
+#[test]
+fn cancel_business_timeout_uses_wall_budget_and_retains_owned_worker_for_retry() {
+    let (start, clock) = StepClock::start();
+    let (gate, receiver) = mpsc::channel();
+    let (started, ready) = mpsc::channel();
+    let wire = Arc::new(NoncooperativeWire {
+        gate: Mutex::new(receiver),
+        started: Mutex::new(started),
+    });
+    let mut agent = LeaseController::try_new(config(), wire, clock.clone()).unwrap();
+    acquire_lease(&agent, lease_id(4));
+    let id = agent.submit(AgentRequest::Plan(tagged_plan(20))).unwrap();
+    ready
+        .recv_timeout(SECOND)
+        .expect("business worker entered wire");
+    assert_eq!(agent.pending_business_workers(), 1);
+    let before = Instant::now();
+    let result = agent.cancel(id, Deadline::at(start + Duration::from_millis(20)));
+    let elapsed = before.elapsed();
+    let retained = agent.retained_requests();
+    let unfinished = agent.pending_business_workers();
+    // Opening the gate before assertions keeps failure cleanup bounded.
+    let _ = gate.send(());
+    assert_eq!(result, Err(timeout_error()));
+    assert!(elapsed < Duration::from_millis(200), "elapsed {elapsed:?}");
+    assert_eq!(retained, 1);
+    assert_eq!(unfinished, 1);
+    assert!(wait_until(|| agent.pending_business_workers() == 0));
+    assert_eq!(
+        agent.poll(id),
+        AgentPoll::Failed(unavailable()),
+        "cancelled success must not publish"
+    );
+    agent.cancel(id, Deadline::at(start)).unwrap();
+    assert_eq!(agent.retained_requests(), 0);
+    assert_eq!(agent.cancel(id, Deadline::at(start)), Err(unavailable()));
+}
+
+#[test]
+fn panicked_business_worker_reports_internal_and_is_reclaimed() {
+    let (start, clock) = StepClock::start();
+    let wire = ScriptedWire::new();
+    let mut agent = controller(&wire, &clock);
+    acquire_lease(&agent, lease_id(4));
+    wire.push_echo(|_| panic!("bounded business producer panic"));
+    let id = agent.submit(AgentRequest::Plan(tagged_plan(20))).unwrap();
+    assert!(wait_until(|| !matches!(agent.poll(id), AgentPoll::Pending)));
+    let error = ServerError::Internal {
+        invariant: "agent business worker",
+    };
+    assert_eq!(agent.poll(id), AgentPoll::Failed(error));
+    assert_eq!(agent.pending_business_workers(), 0);
+    assert_eq!(agent.cancel(id, Deadline::at(start)), Err(error));
+    assert_eq!(agent.retained_requests(), 0);
+    assert_eq!(agent.cancel(id, Deadline::at(start)), Err(unavailable()));
+}

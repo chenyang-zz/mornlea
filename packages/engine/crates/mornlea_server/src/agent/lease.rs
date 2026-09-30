@@ -20,7 +20,7 @@ use crate::contracts::{
     AgentErrorCode, AgentHandle, AgentPoll, AgentRequest, AgentRequestId, AgentResponse,
     BaseIdentity, CancelRequest, ClientInstanceId, Clock, CommitRequest, Deadline, DeleteRequest,
     DialogueRequest, FrozenLease, LeaseId, LeasedIdentity, NamespaceId, Operation, PlanRequest,
-    ReconcileRequest, ServerError,
+    ReconcileRequest, Resource, ServerError,
 };
 
 /// Frozen heartbeat cadence in milliseconds.
@@ -107,10 +107,12 @@ enum BusinessState {
     Done(AgentPoll),
 }
 
-#[derive(Clone)]
+// Admission installs the join before releasing the core lock. Terminal results
+// retain this ownership and capacity until their consumer explicitly retires them.
 struct BusinessSlot {
-    cancel: Arc<AtomicBool>,
+    cancel: RpcCancellation,
     state: Arc<Mutex<BusinessState>>,
+    join: Option<JoinHandle<()>>,
 }
 
 struct WorkerHandle {
@@ -380,6 +382,23 @@ impl LeaseController {
         Some((active.id, active.fence))
     }
 
+    /// Requests remain charged until the consumer retires their owned outcome.
+    pub fn retained_requests(&self) -> usize {
+        self.shared.core.lock().unwrap().business.len()
+    }
+
+    /// Counts unfinished business producers, excluding retained terminal outcomes.
+    pub fn pending_business_workers(&self) -> usize {
+        self.shared
+            .core
+            .lock()
+            .unwrap()
+            .business
+            .values()
+            .filter(|slot| slot.join.as_ref().is_some_and(|join| !join.is_finished()))
+            .count()
+    }
+
     fn mint_request_id(&self) -> AgentRequestId {
         mint_request_id(&self.shared)
     }
@@ -496,48 +515,54 @@ impl AgentHandle for LeaseController {
         }
         let lease_snapshot = active.id;
         let fence_snapshot = active.fence;
-        let slot = BusinessSlot {
-            cancel: Arc::new(AtomicBool::new(false)),
-            state: Arc::new(Mutex::new(BusinessState::Pending)),
-        };
-        core.business.insert(id, slot.clone());
-        drop(core);
-        // One RPC per admission, no automatic retry; completion re-checks
-        // lease currency so a plan parked across a reacquire is refused.
-        let shared = self.shared.clone();
-        std::thread::spawn(move || {
-            let deadline = Deadline::after(
-                shared.clock.monotonic(),
-                crate::agent::http::BUSINESS_RPC_TIMEOUT,
-            )
-            .unwrap_or_else(|_| {
-                Deadline::at(shared.clock.monotonic() + crate::agent::http::BUSINESS_RPC_TIMEOUT)
+        if core.business.len() >= 64 {
+            return Err(ServerError::Capacity {
+                resource: Resource::AgentRuns,
+                limit: 64,
+                observed: 65,
             });
-            let outcome = shared.wire.rpc(request, deadline);
-            let correlated = {
-                let core = shared.core.lock().unwrap();
-                if core.closed {
-                    Err(unavailable())
-                } else {
-                    match core.active.as_ref() {
-                        Some(active)
-                            if active.id == lease_snapshot
+        }
+        let deadline = Deadline::after(now, crate::agent::http::BUSINESS_RPC_TIMEOUT)?;
+        let cancel = RpcCancellation::default();
+        let state = Arc::new(Mutex::new(BusinessState::Pending));
+        let worker_cancel = cancel.clone();
+        let worker_state = state.clone();
+        let shared = self.shared.clone();
+        // One RPC per admission. The correlation lock also prevents the worker
+        // from publishing before its actual join is installed in the owner map.
+        let join = std::thread::Builder::new()
+            .spawn(move || {
+                let outcome = shared
+                    .wire
+                    .rpc_cancellable(request, deadline, &worker_cancel);
+                let poll = {
+                    let core = shared.core.lock().unwrap();
+                    if worker_cancel.is_cancelled() || core.closed {
+                        AgentPoll::Failed(unavailable())
+                    } else {
+                        let correlated = core.active.as_ref().is_some_and(|active| {
+                            active.id == lease_snapshot
                                 && active.fence == fence_snapshot
-                                && active.expires_at > shared.clock.monotonic() =>
-                        {
-                            Ok(())
+                                && active.expires_at > shared.clock.monotonic()
+                        });
+                        match (outcome, correlated) {
+                            (Ok(response), true) => AgentPoll::Completed(response),
+                            (Ok(_), false) => AgentPoll::Failed(unavailable()),
+                            (Err(error), _) => AgentPoll::Failed(error),
                         }
-                        _ => Err(unavailable()),
                     }
-                }
-            };
-            let poll = match (outcome, correlated) {
-                (Ok(response), Ok(())) => AgentPoll::Completed(response),
-                (Ok(_), Err(error)) | (Err(error), _) => AgentPoll::Failed(error),
-            };
-            let mut state = slot.state.lock().unwrap();
-            *state = BusinessState::Done(poll);
-        });
+                };
+                *worker_state.lock().unwrap() = BusinessState::Done(poll);
+            })
+            .map_err(|_| unavailable())?;
+        core.business.insert(
+            id,
+            BusinessSlot {
+                cancel,
+                state,
+                join: Some(join),
+            },
+        );
         Ok(id)
     }
 
@@ -546,28 +571,76 @@ impl AgentHandle for LeaseController {
         let Some(slot) = core.business.get(&id) else {
             return AgentPoll::Failed(unavailable());
         };
+        if slot.join.as_ref().is_some_and(|join| !join.is_finished()) {
+            return AgentPoll::Pending;
+        }
         match &*slot.state.lock().unwrap() {
-            BusinessState::Pending => AgentPoll::Pending,
+            BusinessState::Pending => AgentPoll::Failed(ServerError::Internal {
+                invariant: "agent business worker",
+            }),
             BusinessState::Done(poll) => poll.clone(),
         }
     }
 
     fn cancel(&mut self, id: AgentRequestId, deadline: Deadline) -> Result<(), ServerError> {
-        let slot = {
+        let cancel = {
             let core = self.shared.core.lock().unwrap();
-            core.business.get(&id).cloned().ok_or_else(unavailable)?
+            core.business
+                .get(&id)
+                .ok_or_else(unavailable)?
+                .cancel
+                .clone()
         };
-        slot.cancel.store(true, Ordering::SeqCst);
+        cancel.cancel();
+        let mut wall_expiry = None;
         loop {
-            if matches!(&*slot.state.lock().unwrap(), BusinessState::Done(_)) {
-                return Ok(());
+            let retired = {
+                let mut core = self.shared.core.lock().unwrap();
+                let slot = core.business.get(&id).ok_or_else(unavailable)?;
+                if slot.join.as_ref().is_some_and(|join| join.is_finished()) {
+                    core.business.remove(&id)
+                } else {
+                    None
+                }
+            };
+            if let Some(mut slot) = retired {
+                // Only a finished producer can relinquish its charged slot;
+                // joining outside the core lock consumes its outcome exactly once.
+                return slot
+                    .join
+                    .take()
+                    .ok_or(ServerError::Internal {
+                        invariant: "agent business worker",
+                    })?
+                    .join()
+                    .map_err(|_| ServerError::Internal {
+                        invariant: "agent business worker",
+                    });
             }
-            if self.shared.clock.monotonic() >= deadline.instant() {
+            let now = self.shared.clock.monotonic();
+            let expiry = match wall_expiry {
+                Some(expiry) => expiry,
+                None => {
+                    // A paused controller clock cannot extend caller ownership
+                    // waits. The real clock only bounds this retirement attempt.
+                    let expiry = Instant::now()
+                        .checked_add(deadline.instant().saturating_duration_since(now))
+                        .ok_or(ServerError::InvalidInput { field: "deadline" })?;
+                    wall_expiry = Some(expiry);
+                    expiry
+                }
+            };
+            let wall_now = Instant::now();
+            if deadline.expired(now) || wall_now >= expiry {
                 return Err(ServerError::Timeout {
                     operation: Operation::AgentRpc,
                 });
             }
-            std::thread::sleep(Duration::from_millis(2));
+            std::thread::sleep(
+                Duration::from_millis(2)
+                    .min(deadline.instant().saturating_duration_since(now))
+                    .min(expiry.saturating_duration_since(wall_now)),
+            );
         }
     }
 
@@ -693,7 +766,7 @@ impl AgentHandle for LeaseController {
             core.inflight = None;
             core.frozen = None;
             for slot in core.business.values() {
-                slot.cancel.store(true, Ordering::SeqCst);
+                slot.cancel.cancel();
             }
             core.worker
                 .take()
