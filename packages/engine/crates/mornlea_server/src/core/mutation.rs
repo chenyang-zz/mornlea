@@ -539,6 +539,64 @@ fn require_support(
     }
 }
 
+/// Torch support follows nonempty `physics.BlockCollisionBoxes` in
+/// `packages/shared/physics/types.go`, including glass and partial shapes.
+/// Door/bed full-block support has a different contract and is not reused.
+fn torch_support_has_collision(block: u16) -> bool {
+    registered_block(block)
+        && block != AIR
+        && !is_fluid(block)
+        && !is_plant(block)
+        && !is_torch(block)
+        && !is_snow_layer(block)
+        && block != DOOR_UPPER
+}
+
+/// Placement owns the substrate check; support-loss updates remain separate.
+/// All support offsets are checked before observation so unavailable world
+/// coordinates retain the same refusal as an unavailable support cell.
+fn require_single_cell_support(
+    view: &AuthorityReadView<'_>,
+    dimension: Dimension,
+    target: BlockPos,
+    form: u16,
+) -> Result<(), RuleReject> {
+    let (dx, dy, dz) = if is_crop(form) || is_sapling(form) {
+        (0, -1, 0)
+    } else {
+        match form {
+            TORCH_STANDING => (0, -1, 0),
+            TORCH_WALL_POS_X => (-1, 0, 0),
+            TORCH_WALL_NEG_X => (1, 0, 0),
+            TORCH_WALL_POS_Z => (0, 0, -1),
+            TORCH_WALL_NEG_Z => (0, 0, 1),
+            _ => return Ok(()),
+        }
+    };
+    let unavailable = RuleReject::Wire(RejectReason::ChunkNotReady);
+    let support = BlockPos::new(
+        target.x().checked_add(dx).ok_or(unavailable)?,
+        target.y().checked_add(dy).ok_or(unavailable)?,
+        target.z().checked_add(dz).ok_or(unavailable)?,
+    );
+    let block = view
+        .observation(dimension, support)
+        .ok_or(unavailable)?
+        .block;
+    let supported = if is_crop(form) {
+        is_farmland(block)
+    } else if is_sapling(form) {
+        matches!(block, 3 | 4)
+    } else {
+        torch_support_has_collision(block)
+    };
+    if supported {
+        Ok(())
+    } else {
+        Err(RuleReject::Wire(RejectReason::InvalidBlock))
+    }
+}
+
 /// Consumes one item from the named hotbar slot (`core.Hotbar.Consume`,
 /// `packages/shared/core/item.go`): the slot must hold a positive count and
 /// the emptied slot becomes the canonical empty stack.
@@ -916,6 +974,7 @@ pub fn resolve_place(
         writes.push(BlockWrite::try_new(target_observed, bed_foot_id(facing))?);
         writes.push(BlockWrite::try_new(head_observed, bed_head_id(facing))?);
     } else {
+        require_single_cell_support(view, basis.dimension, target, form)?;
         writes.push(BlockWrite::try_new(target_observed, form)?);
     }
     let txn = BlockTxn {
@@ -1225,4 +1284,75 @@ fn companion_mineable_block(block: u16) -> bool {
         return false;
     }
     block_drop(block).is_some()
+}
+
+#[cfg(test)]
+mod placement_support_tests {
+    use super::*;
+    use crate::contracts::{ServerLimits, TickBudget};
+    use crate::state::{AuthorityState, TickContext};
+
+    fn authority() -> AuthorityState {
+        AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap()
+    }
+
+    // Torch support is its ray hit. Transparent air, fluids and open lower
+    // doors cannot become that hit, so these rows exercise the same private
+    // support helper directly without constructing a resolved transaction.
+    #[test]
+    fn torch_unreachable_transparent_support_rows() {
+        for block in [0, 27, 28, 29, 30, 31, 32, 33, 34, 63, 65, 67, 69] {
+            let mut state = authority();
+            let mut context = TickContext::harness(&mut state, TickBudget::full());
+            let support = BlockPos::new(0, 64, 0);
+            let key = chunk_key(Dimension::OVERWORLD, support);
+            let observed = BlockObservation::try_new(key, 1, 1, support, block).unwrap();
+            context.preload_block(observed);
+            let expected = if matches!(block, 63 | 65 | 67 | 69) {
+                Ok(())
+            } else {
+                Err(RuleReject::Wire(RejectReason::InvalidBlock))
+            };
+            assert_eq!(
+                require_single_cell_support(
+                    &context.read(),
+                    Dimension::OVERWORLD,
+                    BlockPos::new(0, 65, 0),
+                    TORCH_STANDING
+                ),
+                expected
+            );
+            assert_eq!(
+                context.read().observation(Dimension::OVERWORLD, support),
+                Some(observed)
+            );
+            assert!(context.events().is_empty());
+        }
+        assert!(!torch_support_has_collision(u16::MAX));
+    }
+
+    #[test]
+    fn torch_unreachable_missing_or_unrepresentable_support_rows() {
+        let mut state = authority();
+        let context = TickContext::harness(&mut state, TickBudget::full());
+        for (target, form) in [
+            (BlockPos::new(0, 65, 0), TORCH_STANDING),
+            (BlockPos::new(0, -64, 0), TORCH_STANDING),
+            (BlockPos::new(0, i32::MIN, 0), TORCH_STANDING),
+            (BlockPos::new(i32::MIN, 65, 0), TORCH_WALL_POS_X),
+            (BlockPos::new(i32::MAX, 65, 0), TORCH_WALL_NEG_X),
+            (BlockPos::new(0, 65, i32::MIN), TORCH_WALL_POS_Z),
+            (BlockPos::new(0, 65, i32::MAX), TORCH_WALL_NEG_Z),
+        ] {
+            assert_eq!(
+                require_single_cell_support(&context.read(), Dimension::OVERWORLD, target, form),
+                Err(RuleReject::Wire(RejectReason::ChunkNotReady))
+            );
+            assert!(context.events().is_empty());
+        }
+    }
 }

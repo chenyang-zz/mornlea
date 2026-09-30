@@ -2559,3 +2559,283 @@ fn single_inventory_effect_retains_compare_and_swap() {
         },
     );
 }
+
+fn assert_support_place(
+    context: &mut TickContext<'_>,
+    session: SessionKey,
+    intent: &PlacementIntent,
+    target: BlockPos,
+    form: u16,
+    refusal: Option<RejectReason>,
+    cells: &[BlockPos],
+) {
+    let actor = ActorKey::Player(session);
+    let chunks = [overworld_key(target)];
+    let before = probe(context, cells, &[actor], &[chest_reference()], &chunks);
+    let resolved = resolve_place(actor, intent, &context.read());
+    assert_eq!(
+        probe(context, cells, &[actor], &[chest_reference()], &chunks),
+        before
+    );
+    if let Some(reason) = refusal {
+        assert_eq!(resolved, Err(RuleReject::Wire(reason)));
+        return;
+    }
+    let outcome = context
+        .transaction()
+        .try_place(resolved.expect("support permits placement"))
+        .expect("commit");
+    assert_eq!(outcome.changed.len(), 1);
+    assert_eq!(outcome.changed[0].pos, target);
+    assert_eq!(outcome.changed[0].block, form);
+    assert!(outcome.inventory_changed);
+    let mut expected = before;
+    expected.inventories[0].1.as_mut().unwrap().slots[0].count -= 1;
+    let cell = expected
+        .cells
+        .iter_mut()
+        .find(|(pos, _)| *pos == target)
+        .unwrap()
+        .1
+        .as_mut()
+        .unwrap();
+    cell.block = form;
+    cell.revision += 1;
+    assert_eq!(
+        probe(context, cells, &[actor], &[chest_reference()], &chunks),
+        expected
+    );
+}
+
+fn support_geometry(
+    position: [f32; 3],
+    look: LookAngles,
+    item: u16,
+    cells: &[(BlockPos, u16)],
+    case: impl FnOnce(&mut TickContext<'_>, SessionKey, &PlacementIntent),
+) {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let actor = ActorKey::Player(session);
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            position,
+            look.yaw(),
+            look.pitch(),
+        )))
+        .unwrap();
+    context.preload_inventory(actor, hotbar_inventory(0, item, 3, 0));
+    for (pos, block) in cells {
+        context.preload_block(observation(*pos, *block));
+    }
+    let intent = PlacementIntent::try_new(look, 0).unwrap();
+    case(&mut context, session, &intent);
+}
+
+#[test]
+fn crop_side_face_requires_farmland_below_destination() {
+    for (item, form) in [(34, 37), (40, 46), (41, 54)] {
+        for support in [STONE, 35, 36] {
+            fixture_case(
+                AIR,
+                AIR,
+                STONE,
+                ItemStack {
+                    item,
+                    count: 3,
+                    durability: 0,
+                },
+                |ctx, session| {
+                    let below = BlockPos::new(0, 64, 1);
+                    ctx.preload_block(observation(below, support));
+                    assert_support_place(
+                        ctx,
+                        session,
+                        &south_intent(),
+                        BlockPos::new(0, 65, 1),
+                        form,
+                        (support == STONE).then_some(RejectReason::InvalidBlock),
+                        &[
+                            BlockPos::new(0, 65, 0),
+                            BlockPos::new(0, 65, 1),
+                            BlockPos::new(0, 65, 2),
+                            below,
+                        ],
+                    );
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn sapling_side_face_requires_dirt_or_grass_below_destination() {
+    for support in [STONE, 35, 36, DIRT, 4] {
+        fixture_case(
+            AIR,
+            AIR,
+            STONE,
+            ItemStack {
+                item: 57,
+                count: 3,
+                durability: 0,
+            },
+            |ctx, session| {
+                let below = BlockPos::new(0, 64, 1);
+                ctx.preload_block(observation(below, support));
+                assert_support_place(
+                    ctx,
+                    session,
+                    &south_intent(),
+                    BlockPos::new(0, 65, 1),
+                    89,
+                    (!matches!(support, 3 | 4)).then_some(RejectReason::InvalidBlock),
+                    &[
+                        BlockPos::new(0, 65, 0),
+                        BlockPos::new(0, 65, 1),
+                        BlockPos::new(0, 65, 2),
+                        below,
+                    ],
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn plant_missing_support_refuses_without_publication() {
+    for item in [34, 40, 41, 57] {
+        fixture_case(
+            AIR,
+            AIR,
+            STONE,
+            ItemStack {
+                item,
+                count: 3,
+                durability: 0,
+            },
+            |ctx, session| {
+                assert_support_place(
+                    ctx,
+                    session,
+                    &south_intent(),
+                    BlockPos::new(0, 65, 1),
+                    0,
+                    Some(RejectReason::ChunkNotReady),
+                    &[
+                        BlockPos::new(0, 65, 0),
+                        BlockPos::new(0, 65, 1),
+                        BlockPos::new(0, 65, 2),
+                        BlockPos::new(0, 64, 1),
+                    ],
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn torch_standing_rejects_zero_collision_support_and_accepts_source_boxes() {
+    let rejected = [
+        37, 44, 46, 53, 54, 61, 84, 89, 71, 72, 73, 74, 75, 85, 86, 87, 88, 70,
+    ];
+    let accepted = [
+        STONE, 19, 20, 35, 36, 76, 77, 78, 79, 80, 81, 82, 83, 62, 64, 66, 68,
+    ];
+    for (support, refusal) in rejected
+        .into_iter()
+        .map(|block| (block, Some(RejectReason::InvalidBlock)))
+        .chain(accepted.into_iter().map(|block| (block, None)))
+    {
+        let cells = [
+            (BlockPos::new(0, 67, 0), AIR),
+            (BlockPos::new(0, 66, 0), AIR),
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), support),
+        ];
+        support_geometry(
+            [0.5, 66.0, 0.5],
+            LookAngles::try_new(0.0, -std::f32::consts::FRAC_PI_2).unwrap(),
+            44,
+            &cells,
+            |ctx, session, intent| {
+                assert_support_place(
+                    ctx,
+                    session,
+                    intent,
+                    BlockPos::new(0, 65, 0),
+                    71,
+                    refusal,
+                    &cells.map(|(pos, _)| pos),
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn torch_wall_faces_place_on_the_source_hit_support() {
+    for (yaw, step, form) in [
+        (std::f32::consts::FRAC_PI_2, (-1, 0), 72),
+        (-std::f32::consts::FRAC_PI_2, (1, 0), 73),
+        (0.0, (0, -1), 74),
+        (std::f32::consts::PI, (0, 1), 75),
+    ] {
+        let target = BlockPos::new(step.0, 65, step.1);
+        let cells = [
+            (BlockPos::new(0, 65, 0), AIR),
+            (target, AIR),
+            (BlockPos::new(step.0 * 2, 65, step.1 * 2), STONE),
+        ];
+        support_geometry(
+            [0.5, 64.0, 0.5],
+            LookAngles::try_new(yaw, 0.0).unwrap(),
+            44,
+            &cells,
+            |ctx, session, intent| {
+                assert_support_place(
+                    ctx,
+                    session,
+                    intent,
+                    target,
+                    form,
+                    None,
+                    &cells.map(|(pos, _)| pos),
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn torch_bottom_face_still_has_no_placeable_form() {
+    let cells = [
+        (BlockPos::new(0, 65, 0), AIR),
+        (BlockPos::new(0, 66, 0), AIR),
+        (BlockPos::new(0, 67, 0), STONE),
+    ];
+    support_geometry(
+        [0.5, 64.0, 0.5],
+        LookAngles::try_new(0.0, std::f32::consts::FRAC_PI_2).unwrap(),
+        44,
+        &cells,
+        |ctx, session, intent| {
+            assert_support_place(
+                ctx,
+                session,
+                intent,
+                BlockPos::new(0, 66, 0),
+                0,
+                Some(RejectReason::InvalidBlock),
+                &cells.map(|(pos, _)| pos),
+            );
+        },
+    );
+}
