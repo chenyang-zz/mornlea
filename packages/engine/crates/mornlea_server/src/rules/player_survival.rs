@@ -47,10 +47,10 @@
 //!   only for melee and projectile hits; the victim-side observation is the
 //!   new publication surface the sleep transition reads).
 //!
-//! Deliberate boundaries (later nodes own them): tunable read ports for the
-//! survival lanes do not exist on the frozen `RuleTunables` yet, so the
-//! provider mirrors the frozen Go defaults the numeric cases pin and reads
-//! only the eye height live; jump, swim and sprint charges read the pre-step
+//! Timing and hunger gates consume one immutable `RuleTunables` snapshot.
+//! Zero intervals normalize to one at this consumer boundary, matching the
+//! source tuning invariant without changing the checked snapshot shape.
+//! Jump, swim and sprint charges read the pre-step
 //! motion snapshot the context takes at construction (held controls plus
 //! pre-step ground, fluid and displacement — no physics re-derivation);
 //! waking sleepers is consumed by the sleep node via the damage events below,
@@ -67,7 +67,8 @@ use mornlea_domain::{
 
 use crate::core::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BowProgress,
-    EatingProgress, PhaseReport, RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
+    EatingProgress, PhaseReport, RuleCall, RuleEffect, RulePhase, RuleTunables, ServerError,
+    SessionKey,
 };
 use crate::core::state::{ActionKind, AuthorityReadView, TickContext};
 
@@ -88,19 +89,8 @@ const INITIAL_SATURATION_MILLI: u16 = 5_000;
 const FULL_SATURATION_MILLI: u16 = 20_000;
 /// One saturation point in milli units (`core.SaturationMilliPerPoint`).
 const SATURATION_MILLI_PER_POINT: u16 = 1_000;
-/// Regen delay in ticks (`Tunables.RegenDelayTicks` default).
-const REGEN_DELAY_TICKS: u32 = 100;
-/// Regen interval in ticks (`Tunables.RegenIntervalTicks` default).
-const REGEN_INTERVAL_TICKS: u32 = 40;
-/// Non-peaceful regen hunger gate (`Tunables.RegenHungerThreshold` default).
-const REGEN_HUNGER_THRESHOLD: u8 = 18;
 /// Exhaustion charged per healed health (`exhaustionRegenPerHealthMilli`).
 const REGEN_EXHAUSTION_MILLI: u16 = 6_000;
-/// Starvation damage interval (`Tunables.StarvationDamageIntervalTicks`
-/// default).
-const STARVATION_INTERVAL_TICKS: u32 = 80;
-/// Drown damage interval (`Tunables.DrownDamageIntervalTicks` default).
-const DROWN_INTERVAL_TICKS: u32 = 20;
 /// Exhaustion charged per successful mining completion
 /// (`exhaustionMiningMilli`).
 const MINING_EXHAUSTION_MILLI: u16 = 5;
@@ -239,15 +229,11 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
             &record,
             &runtime,
             difficulty,
-            environment.tunables.exhaustion_threshold_milli(),
+            environment.tunables,
         ),
-        RulePhase::PlayerPrePhysicsOxygen => oxygen(
-            ctx,
-            session,
-            &record,
-            &runtime,
-            environment.tunables.eye_height(),
-        ),
+        RulePhase::PlayerPrePhysicsOxygen => {
+            oxygen(ctx, session, &record, &runtime, environment.tunables)
+        }
         RulePhase::PlayerPostPhysics => post_physics(
             ctx,
             session,
@@ -629,28 +615,30 @@ fn settle_death(
 /// Pre-motion regen and starvation mirror (`advanceHealthRegen` with
 /// `regenHungerThreshold` and `restoreFullHunger`, then `advanceStarvation`):
 /// the counter increments below max health before the gate, the heal lands
-/// above delay 100 on the 40-tick rhythm with its 6000 charge shared across
+/// above the configured delay on its interval with a 6000 charge shared across
 /// difficulties, peaceful restores after the charge, and starvation clears
 /// above zero hunger, skips peaceful, freezes non-hard at one health, and
-/// damages every 80 ticks otherwise.
+/// damages on the configured interval otherwise.
 fn regen_starvation(
     ctx: &mut TickContext<'_>,
     session: SessionKey,
     record: &ActorRecord,
     runtime: &ActorRuntime,
     difficulty: Difficulty,
-    exhaustion_threshold: u16,
+    tunables: RuleTunables,
 ) -> Result<PhaseReport, ServerError> {
+    let exhaustion_threshold = tunables.exhaustion_threshold_milli();
     let mut work = load_work(record, runtime);
     if work.health < MAX_HEALTH {
         work.since_damage_ticks = work.since_damage_ticks.wrapping_add(1);
         let threshold = match difficulty {
             Difficulty::Peaceful => 0,
-            Difficulty::Normal | Difficulty::Hard => REGEN_HUNGER_THRESHOLD,
+            Difficulty::Normal | Difficulty::Hard => tunables.regen_hunger_threshold(),
         };
         if work.hunger >= threshold
-            && work.since_damage_ticks > REGEN_DELAY_TICKS
-            && (work.since_damage_ticks - REGEN_DELAY_TICKS).is_multiple_of(REGEN_INTERVAL_TICKS)
+            && work.since_damage_ticks > tunables.regen_delay_ticks()
+            && (work.since_damage_ticks - tunables.regen_delay_ticks())
+                .is_multiple_of(tunables.regen_interval_ticks().max(1))
         {
             work.health += 1;
             settle_exhaustion(&mut work, REGEN_EXHAUSTION_MILLI, exhaustion_threshold);
@@ -669,7 +657,7 @@ fn regen_starvation(
             // Timer frozen by leaving it untouched.
         } else {
             work.starvation_ticks = work.starvation_ticks.wrapping_add(1);
-            if work.starvation_ticks >= STARVATION_INTERVAL_TICKS.max(1) {
+            if work.starvation_ticks >= tunables.starvation_interval_ticks().max(1) {
                 work.starvation_ticks = 0;
                 let dealt = apply_damage(&mut work, 1);
                 emit_damage(ctx, session, dealt)?;
@@ -695,19 +683,19 @@ fn regen_starvation(
 /// Pre-physics eye-submersion mirror (`advanceOxygen` in
 /// `packages/server/sim/entity/oxygen.go`, called with the tick-start eye
 /// flag in `advanceActivePlayers`): dry eyes refill immediately, wet ticks
-/// drain one oxygen, and zero oxygen counts 20 ticks per damage. Held controls
-/// remain raw; hunger and sneak gates belong to the local physics input.
+/// drain one oxygen, and zero oxygen uses the configured damage interval.
+/// Held controls remain raw; hunger and sneak gates belong to local physics.
 fn oxygen(
     ctx: &mut TickContext<'_>,
     session: SessionKey,
     record: &ActorRecord,
     runtime: &ActorRuntime,
-    eye_height: f32,
+    tunables: RuleTunables,
 ) -> Result<PhaseReport, ServerError> {
     let position = record.motion.position().get();
     let eye = BlockPos::new(
         checked_floor(position[0])?,
-        checked_floor(position[1] + eye_height)?,
+        checked_floor(position[1] + tunables.eye_height())?,
         checked_floor(position[2])?,
     );
     let eye_in_fluid = is_fluid_at(&ctx.read(), record.dimension, eye);
@@ -719,7 +707,7 @@ fn oxygen(
         work.oxygen -= 1;
     } else {
         work.drown_ticks = work.drown_ticks.wrapping_add(1);
-        if work.drown_ticks >= DROWN_INTERVAL_TICKS.max(1) {
+        if work.drown_ticks >= tunables.drown_interval_ticks().max(1) {
             work.drown_ticks = 0;
             let dealt = apply_damage(&mut work, 1);
             emit_damage(ctx, session, dealt)?;

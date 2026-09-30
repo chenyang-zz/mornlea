@@ -2043,3 +2043,270 @@ fn jump_debit_does_not_revoke_already_effective_sprint() {
         })
     );
 }
+
+fn configured_survival_tunables(
+    delay: u32,
+    regen: u32,
+    drown: u32,
+    starvation: u32,
+    hunger: u8,
+) -> RuleTunables {
+    let defaults = RuleTunables::source_defaults();
+    RuleTunables::try_new(
+        defaults.physics(),
+        delay,
+        regen,
+        drown,
+        starvation,
+        hunger,
+        4000,
+        32,
+        1600,
+        200,
+        5,
+        3,
+        50,
+        6.0,
+        1.62,
+        10,
+        40,
+        6000,
+        1.25,
+    )
+    .unwrap()
+}
+
+fn set_survival_tunables(context: &mut TickContext<'_>, tunables: RuleTunables) {
+    let mut snapshot = context.read().environment().unwrap().clone();
+    snapshot.tunables = tunables;
+    context.stage(RuleEffect::Environment(snapshot)).unwrap();
+}
+
+#[test]
+fn configured_regen_cadence_and_live_snapshot_apply_without_counter_reset() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = survival_scene(&mut context, session, [0.5, 64.0, 0.5], 10, 300, 12, 0);
+    stage_runtime(
+        &mut context,
+        actor,
+        300,
+        64.0,
+        0,
+        5000,
+        4,
+        0,
+        0,
+        None,
+        None,
+        None,
+    );
+    set_survival_tunables(&mut context, configured_survival_tunables(2, 3, 3, 5, 12));
+    let snapshot = context.read().environment().unwrap().clone();
+    provider::run(&mut context, regen_call(actor)).unwrap();
+    assert_eq!(context.read().actor(actor).unwrap().survival.health(), 11);
+    let runtime = context.read().runtime(actor).unwrap();
+    assert_eq!(
+        (
+            runtime.since_damage_ticks,
+            runtime.saturation_milli,
+            runtime.exhaustion_milli
+        ),
+        (5, 4000, 2000)
+    );
+    assert_eq!(context.read().environment(), Some(&snapshot));
+    set_survival_tunables(&mut context, configured_survival_tunables(2, 2, 3, 5, 12));
+    provider::run(&mut context, regen_call(actor)).unwrap();
+    assert_eq!(context.read().actor(actor).unwrap().survival.health(), 12);
+    let runtime = context.read().runtime(actor).unwrap();
+    assert_eq!(
+        (
+            runtime.since_damage_ticks,
+            runtime.saturation_milli,
+            runtime.exhaustion_milli
+        ),
+        (6, 2000, 0)
+    );
+    assert!(context.events().is_empty());
+}
+
+#[test]
+fn configured_regen_hunger_gate_accumulates_and_peaceful_restores_after_charge() {
+    for peaceful in [false, true] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = survival_scene(
+            &mut context,
+            session,
+            [0.5, 64.0, 0.5],
+            10,
+            300,
+            if peaceful { 0 } else { 11 },
+            u8::from(peaceful),
+        );
+        stage_runtime(
+            &mut context,
+            actor,
+            300,
+            64.0,
+            0,
+            0,
+            4,
+            0,
+            31,
+            None,
+            None,
+            None,
+        );
+        set_survival_tunables(&mut context, configured_survival_tunables(2, 3, 3, 5, 12));
+        provider::run(&mut context, regen_call(actor)).unwrap();
+        let record = context.read().actor(actor).unwrap();
+        let runtime = context.read().runtime(actor).unwrap();
+        assert_eq!(runtime.since_damage_ticks, 5);
+        if peaceful {
+            assert_eq!(
+                (
+                    record.survival.health(),
+                    record.survival.hunger(),
+                    runtime.saturation_milli,
+                    runtime.exhaustion_milli
+                ),
+                (11, 20, 20000, 2000)
+            );
+        } else {
+            assert_eq!(
+                (record.survival.health(), record.survival.hunger()),
+                (10, 11)
+            );
+            set_survival_tunables(&mut context, configured_survival_tunables(2, 2, 3, 5, 11));
+            provider::run(&mut context, regen_call(actor)).unwrap();
+            assert_eq!(context.read().actor(actor).unwrap().survival.health(), 11);
+            assert_eq!(context.read().runtime(actor).unwrap().since_damage_ticks, 6);
+        }
+        assert!(context.events().is_empty());
+    }
+}
+
+#[test]
+fn configured_drown_and_starvation_intervals_damage_at_the_current_boundary() {
+    for (drowning, interval) in [(true, 3u32), (true, 0), (false, 5), (false, 0)] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = survival_scene(
+            &mut context,
+            session,
+            [0.5, 64.0, 0.5],
+            10,
+            0,
+            if drowning { 20 } else { 0 },
+            0,
+        );
+        stage_runtime(
+            &mut context,
+            actor,
+            0,
+            64.0,
+            0,
+            0,
+            22,
+            if drowning { interval.max(1) - 1 } else { 0 },
+            if drowning { 0 } else { interval.max(1) - 1 },
+            Some(EatingProgress {
+                slot: mornlea_domain::HotbarSlot::new(0).unwrap(),
+                item: 36,
+                ticks: 1,
+            }),
+            None,
+            None,
+        );
+        let mut runtime = context.read().runtime(actor).unwrap().clone();
+        runtime.bow = Some(BowProgress {
+            slot: mornlea_domain::HotbarSlot::new(0).unwrap(),
+            ticks: 2,
+        });
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+        set_survival_tunables(
+            &mut context,
+            configured_survival_tunables(
+                100,
+                40,
+                if drowning { interval } else { 3 },
+                if drowning { 5 } else { interval },
+                18,
+            ),
+        );
+        if drowning {
+            context.preload_block(observation(BlockPos::new(0, 65, 0), WATER));
+        }
+        provider::run(
+            &mut context,
+            if drowning {
+                oxygen_call(actor)
+            } else {
+                regen_call(actor)
+            },
+        )
+        .unwrap();
+        assert_eq!(context.read().actor(actor).unwrap().survival.health(), 9);
+        let runtime = context.read().runtime(actor).unwrap();
+        assert_eq!(
+            (
+                runtime.since_damage_ticks,
+                runtime.drown_ticks,
+                runtime.starvation_ticks
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!((runtime.eating, runtime.bow), (None, None));
+        assert_combat_hit(&context, session, 1, 1);
+    }
+}
+
+#[test]
+fn configured_zero_regen_interval_wrap_and_full_health_keep_source_order() {
+    for (health, initial_counter, expected_health, expected_counter) in [
+        (10, 0, 11, 1),
+        (10, u32::MAX, 10, 0),
+        (20, u32::MAX, 20, u32::MAX),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = survival_scene(&mut context, session, [0.5, 64.0, 0.5], health, 300, 20, 0);
+        stage_runtime(
+            &mut context,
+            actor,
+            300,
+            64.0,
+            0,
+            5000,
+            initial_counter,
+            0,
+            0,
+            None,
+            None,
+            None,
+        );
+        set_survival_tunables(&mut context, configured_survival_tunables(0, 0, 3, 5, 18));
+        provider::run(&mut context, regen_call(actor)).unwrap();
+        assert_eq!(
+            context.read().actor(actor).unwrap().survival.health(),
+            expected_health
+        );
+        assert_eq!(
+            context.read().runtime(actor).unwrap().since_damage_ticks,
+            expected_counter
+        );
+    }
+}
