@@ -99,6 +99,10 @@ consume its cancellation and error contracts before joining the real backend.
   saturated 512-frame outbox silently retires only that receiver with
   `CloseReason::SlowReceiver` inside `AuthorityState::publish` — no
   Disconnect frame is appended and publishing never blocks.
+  Outboxes own complete canonical protocol frames, including packet IDs.
+  Memory and TCP transfer the same bytes. TCP checks committed connection
+  ownership and remaining send slots before draining authority ownership;
+  caller-supplied packet identities and post-drain framing are forbidden.
 - `src/core/shutdown.rs` owns the retryable shutdown machine over the frozen
   lifecycle ports: `shutdown` drives the 18-phase resumable sequence — stop
   admission, one final unpublished tick, authority and Agent-lease freeze,
