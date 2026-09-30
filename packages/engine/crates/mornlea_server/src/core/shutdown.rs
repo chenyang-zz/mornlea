@@ -19,6 +19,8 @@
 //! its reducer consumes accepted work through the state ports and no outbox
 //! frame is appended on the shutdown path.
 
+use std::time::{Duration, Instant};
+
 use super::contracts::{
     ActorPersistence, AgentHandle, Clock, Deadline, FinalReducer, McpLifecycle, MemoryFinalizer,
     Operation, SaveKey, ServerError, ServerPhase, ShutdownFailure, ShutdownPhase, ShutdownReport,
@@ -71,6 +73,9 @@ pub fn shutdown(
             continue;
         }
         if deadline.expired(ports.clock.monotonic()) {
+            if *phase == ShutdownPhase::FinalizeMemory {
+                report.outstanding = ports.memory.pending().outstanding;
+            }
             let error = ServerError::Timeout {
                 operation: Operation::Shutdown,
             };
@@ -134,15 +139,7 @@ fn run_phase(
             ports.workers.wait(deadline)
         }
         ShutdownPhase::FinalizeMemory => {
-            ports.memory.begin_attempt(deadline)?;
-            let memory = ports.memory.drain(deadline)?;
-            report.outstanding = memory.outstanding;
-            if memory.outstanding != 0 {
-                return Err(ServerError::Internal {
-                    invariant: "memory finalization left work outstanding",
-                });
-            }
-            Ok(())
+            finalize_memory(ports.memory, ports.clock, deadline, report)
         }
         ShutdownPhase::FlushPlayers => flush_lane(state, ports, deadline, report, Lane::Players),
         ShutdownPhase::FlushCompanions => {
@@ -176,6 +173,57 @@ fn run_phase(
         ShutdownPhase::StoreClose => ports.store.close(deadline),
         ShutdownPhase::CloseWorkers => ports.workers.close(deadline),
         ShutdownPhase::Closed => Ok(()),
+    }
+}
+
+/// Both public shutdown entry points share the same retained-memory barrier.
+/// The caller records the report and resumes at this phase after a failure.
+pub(crate) fn finalize_memory(
+    memory: &mut dyn MemoryFinalizer,
+    clock: &dyn Clock,
+    deadline: Deadline,
+    report: &mut ShutdownReport,
+) -> Result<(), ServerError> {
+    // Retained semantic work and cleanup joins remain visible on every
+    // failure. A fresh phase attempt never replays earlier shutdown phases.
+    report.outstanding = memory.pending().outstanding;
+    let remaining = deadline
+        .instant()
+        .saturating_duration_since(clock.monotonic());
+    let wall_deadline = Instant::now() + remaining.min(Duration::from_secs(30));
+    if let Err(error) = memory.begin_attempt(deadline) {
+        report.outstanding = memory.pending().outstanding;
+        return Err(error);
+    }
+    loop {
+        if deadline.expired(clock.monotonic()) || Instant::now() >= wall_deadline {
+            report.outstanding = memory.pending().outstanding;
+            return Err(ServerError::Timeout {
+                operation: Operation::Shutdown,
+            });
+        }
+        let progress = match memory.drain(deadline) {
+            Ok(memory) => memory,
+            Err(error) => {
+                report.outstanding = memory.pending().outstanding;
+                return Err(error);
+            }
+        };
+        report.outstanding = progress.outstanding.max(memory.pending().outstanding);
+        if deadline.expired(clock.monotonic()) || Instant::now() >= wall_deadline {
+            report.outstanding = memory.pending().outstanding;
+            return Err(ServerError::Timeout {
+                operation: Operation::Shutdown,
+            });
+        }
+        if report.outstanding == 0 {
+            return Ok(());
+        }
+        // The wall bound also applies when an injected clock is fixed.
+        // Small waits let Agent workers finish without an unbounded spin.
+        std::thread::sleep(
+            Duration::from_millis(1).min(wall_deadline.saturating_duration_since(Instant::now())),
+        );
     }
 }
 

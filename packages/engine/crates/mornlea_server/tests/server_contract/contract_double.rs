@@ -69,7 +69,7 @@ impl ServerEndpoint for ContractServer {
         let mut memory = IdleMemory;
         let instant = deadline
             .instant()
-            .checked_sub(Duration::from_nanos(1))
+            .checked_sub(Duration::from_secs(1))
             .unwrap_or_else(|| deadline.instant());
         let clock = SplitClock {
             instant,

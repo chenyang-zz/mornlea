@@ -964,6 +964,9 @@ impl AuthorityState {
                 continue;
             }
             if deadline.expired(io.clock.monotonic()) {
+                if *phase == ShutdownPhase::FinalizeMemory {
+                    report.outstanding = io.memory.pending().outstanding;
+                }
                 return self.fail_shutdown(
                     report,
                     *phase,
@@ -1025,15 +1028,7 @@ impl AuthorityState {
             }
             ShutdownPhase::WaitWorkers => io.workers.wait(deadline),
             ShutdownPhase::FinalizeMemory => {
-                io.memory.begin_attempt(deadline)?;
-                let memory = io.memory.drain(deadline)?;
-                report.outstanding = memory.outstanding;
-                if memory.outstanding != 0 {
-                    return Err(ServerError::Internal {
-                        invariant: "memory finalization",
-                    });
-                }
-                Ok(())
+                super::shutdown::finalize_memory(io.memory, io.clock, deadline, report)
             }
             ShutdownPhase::FlushPlayers => {
                 for (key, record) in &self.sessions {

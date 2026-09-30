@@ -1,6 +1,6 @@
 # Retryable shutdown memory driver
 
-Controller serially owns src/core/shutdown.rs and tests/server_contract/shutdown.rs beneath packages/engine/crates/mornlea_server. Shared contract44800afb is accepted; packet38 MemoryOwner provider is independently isolated and must land before actual provider acceptance. Existing wire/store/worker/final-reducer ports and all other source remain read-only. Controller owns shared integration, status/records, exact two-file rollback and parent3.9d6 acceptance.
+Controller serially owns src/core/shutdown.rs, src/core/state.rs and tests/server_contract/shutdown.rs beneath packages/engine/crates/mornlea_server. Shared contract44800afb is accepted; packet38 MemoryOwner provider is independently isolated and must land before actual provider acceptance. Repository-wide consumer enumeration reaches AuthorityState.drive_shutdown/ShutdownIo as well as core::shutdown::shutdown/ShutdownPorts; both delegate the same crate-private finalize_memory(memory,clock,deadline,report) helper owned by shutdown.rs. The contract-double test clock may be reconciled only if its artificial one-nanosecond remaining budget masks the now-real wall bound. Existing wire/store/worker/final-reducer ports and all other source remain read-only. Controller owns shared integration, status/records, exact owned-file rollback and parent3.9d6 acceptance.
 
 ## Frozen driver algorithm
 
@@ -14,6 +14,7 @@ Controller serially owns src/core/shutdown.rs and tests/server_contract/shutdown
 - Extend the existing memory double with explicit pending count, finite pending-drain sequence and fail-once begin/drain switches; defaults preserve existing tests. Repeated pending reports eventually settle in one phase attempt, then flush/release/close in existing order. Old driver stops after one and fails Internal.
 - Begin/drain Timeout at outstanding3 records three, releases/closes nothing, retains phase/final_tick/lease. Retry drains without second final tick and closes successfully. Old driver loses outstanding count on Err.
 - A fixed injected clock and20ms caller remaining budget with indefinitely Pending work fails Timeout by real wall (<250ms), reports outstanding, no release/flush; later retry succeeds with same final tick. Immediate zero still needs one drain for terminal settlement.
+- An incorrect zero progress report cannot hide the required pending snapshot. A drain that completes after the phase wall/caller deadline keeps release/flush deferred until a fresh attempt; deadline is checked after drain before accepting zero.
 - After MemoryOwner provider integration, drive actual MemoryOwner plus the same actual LeaseController clone through shutdown: a parked/unknown commit times out with semantic identity and joins retained, a fresh retry reconciles and commits or fulfills exact prior operation before release/close; final tick once and actual lease/wire closed only after zero. Use existing scripted AgentWire for deterministic ownership plus actual Python service evidence at its integration boundary; provider/double evidence alone cannot close production startup.
 
 ## Gates

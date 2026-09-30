@@ -26,7 +26,7 @@ use mornlea_server::contracts::{
 };
 use mornlea_server::core::session;
 use mornlea_server::core::shutdown as provider;
-use mornlea_server::state::AuthorityState;
+use mornlea_server::state::{AuthorityState, ShutdownIo};
 
 fn authority() -> AuthorityState {
     AuthorityState::try_new(
@@ -156,19 +156,47 @@ impl WorkerLifecycle for WorkerDouble {
 struct MemoryDouble {
     attempts: usize,
     drains: usize,
+    outstanding: usize,
+    pending_drains: usize,
+    hide_reported_pending: bool,
+    drain_delay: Duration,
+    fail_begin_once: Option<ServerError>,
+    fail_drain_once: Option<ServerError>,
 }
 
 impl MemoryFinalizer for MemoryDouble {
     fn pending(&self) -> MemoryFinalizationReport {
-        MemoryFinalizationReport::default()
+        MemoryFinalizationReport {
+            completed: 0,
+            outstanding: self.outstanding,
+        }
     }
     fn begin_attempt(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
         self.attempts += 1;
+        if let Some(error) = self.fail_begin_once.take() {
+            return Err(error);
+        }
         Ok(())
     }
 
     fn drain(&mut self, _deadline: Deadline) -> Result<MemoryFinalizationReport, ServerError> {
         self.drains += 1;
+        std::thread::sleep(self.drain_delay);
+        if let Some(error) = self.fail_drain_once.take() {
+            return Err(error);
+        }
+        if self.pending_drains > 0 {
+            self.pending_drains -= 1;
+            return Ok(MemoryFinalizationReport {
+                completed: 0,
+                outstanding: if self.hide_reported_pending {
+                    0
+                } else {
+                    self.outstanding
+                },
+            });
+        }
+        self.outstanding = 0;
         Ok(MemoryFinalizationReport {
             completed: 1,
             outstanding: 0,
@@ -369,6 +397,12 @@ impl Harness {
             memory: MemoryDouble {
                 attempts: 0,
                 drains: 0,
+                outstanding: 0,
+                pending_drains: 0,
+                hide_reported_pending: false,
+                drain_delay: Duration::ZERO,
+                fail_begin_once: None,
+                fail_drain_once: None,
             },
             store: StoreDouble {
                 sync_calls: 0,
@@ -413,6 +447,220 @@ impl Harness {
             clock: &self.clock,
         }
     }
+
+    fn drive_state(
+        &mut self,
+        state: &mut AuthorityState,
+        deadline: Deadline,
+    ) -> Result<mornlea_server::contracts::ShutdownReport, mornlea_server::contracts::ShutdownFailure>
+    {
+        let mut snapshots = IdleSnapshots;
+        state.drive_shutdown(
+            deadline,
+            &mut ShutdownIo {
+                reducer: &mut self.reducer,
+                store: &mut self.store,
+                agent: &mut self.agent,
+                snapshots: &mut snapshots,
+                clock: &self.clock,
+                workers: &mut self.workers,
+                persistence: &mut self.actors,
+                mcp: &mut self.mcp,
+                memory: &mut self.memory,
+            },
+        )
+    }
+}
+
+/// This entry point does not invoke planning snapshots during shutdown.
+struct IdleSnapshots;
+impl mornlea_server::contracts::SnapshotPort for IdleSnapshots {
+    fn register(
+        &mut self,
+        _: NamespaceId,
+        _: mornlea_domain::CompanionId,
+        _: u64,
+        _: mornlea_server::contracts::PlanningSnapshot,
+        _: Deadline,
+    ) -> Result<mornlea_server::contracts::SnapshotRegistration, ServerError> {
+        Err(unused())
+    }
+    fn complete(&mut self, _: mornlea_server::contracts::SnapshotId) -> Result<(), ServerError> {
+        Err(unused())
+    }
+    fn cancel(&mut self, _: mornlea_server::contracts::SnapshotId) -> Result<(), ServerError> {
+        Err(unused())
+    }
+    fn close(&mut self) -> Result<(), ServerError> {
+        Err(unused())
+    }
+}
+
+#[test]
+fn memory_state_entry_drains_progress_and_preserves_retry_ownership() {
+    let mut state = authority();
+    let mut harness = Harness::new(Instant::now());
+    harness.memory.outstanding = 3;
+    harness.memory.fail_drain_once = Some(ServerError::Timeout {
+        operation: Operation::Shutdown,
+    });
+    let deadline = harness.deadline;
+    let failure = harness.drive_state(&mut state, deadline).unwrap_err();
+    assert_eq!(failure.report.outstanding, 3);
+    assert_eq!(failure.report.next, ShutdownPhase::FinalizeMemory);
+    assert_eq!(harness.agent.release_calls, 0);
+    harness.memory.pending_drains = 2;
+    harness.drive_state(&mut state, deadline).unwrap();
+    assert_eq!(harness.memory.drains, 4);
+    assert_eq!(harness.reducer.calls, 1);
+}
+
+#[test]
+fn memory_expired_entry_refreshes_pending_without_beginning_another_attempt() {
+    for state_entry in [false, true] {
+        let mut state = authority();
+        let start = Instant::now();
+        let mut harness = Harness::new(start);
+        harness.memory.outstanding = 3;
+        harness.memory.fail_begin_once = Some(ServerError::Timeout {
+            operation: Operation::Shutdown,
+        });
+        let deadline = harness.deadline;
+        if state_entry {
+            harness.drive_state(&mut state, deadline).unwrap_err();
+        } else {
+            provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap_err();
+        }
+        harness.memory.outstanding = 5;
+        let deadline = Deadline::at(start);
+        let failure = if state_entry {
+            harness.drive_state(&mut state, deadline).unwrap_err()
+        } else {
+            provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap_err()
+        };
+        assert_eq!(failure.report.outstanding, 5);
+        assert_eq!(harness.memory.attempts, 1);
+        assert_eq!(harness.memory.drains, 0);
+        assert_eq!(harness.reducer.calls, 1);
+        assert_eq!(harness.agent.release_calls, 0);
+    }
+}
+
+#[test]
+fn memory_pending_progress_drains_until_zero_in_one_attempt() {
+    let mut state = authority();
+    let mut harness = Harness::new(Instant::now());
+    harness.memory.outstanding = 3;
+    harness.memory.pending_drains = 3;
+    let deadline = harness.deadline;
+    let report = provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap();
+    assert_eq!(report.next, ShutdownPhase::Closed);
+    assert_eq!(report.outstanding, 0);
+    assert_eq!(harness.memory.attempts, 1);
+    assert_eq!(harness.memory.drains, 4);
+    assert_eq!(harness.reducer.calls, 1);
+    assert_eq!(harness.agent.release_calls, 1);
+}
+
+#[test]
+fn memory_zero_report_cannot_hide_retained_pending_ownership() {
+    let mut state = authority();
+    let mut harness = Harness::new(Instant::now());
+    harness.memory.outstanding = 3;
+    harness.memory.pending_drains = 3;
+    harness.memory.hide_reported_pending = true;
+    let deadline = harness.deadline;
+    provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap();
+    assert_eq!(harness.memory.drains, 4);
+    assert_eq!(harness.memory.outstanding, 0);
+}
+
+#[test]
+fn memory_completion_after_wall_deadline_defers_release_until_retry() {
+    let mut state = authority();
+    let start = Instant::now();
+    let mut harness = Harness::new(start);
+    harness.memory.outstanding = 1;
+    harness.memory.drain_delay = Duration::from_millis(25);
+    let deadline = Deadline::at(start + Duration::from_millis(5));
+    let failure = provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap_err();
+    assert_eq!(
+        failure.error,
+        ServerError::Timeout {
+            operation: Operation::Shutdown
+        }
+    );
+    assert_eq!(failure.report.next, ShutdownPhase::FinalizeMemory);
+    assert_eq!(harness.agent.release_calls, 0);
+    assert!(harness.actors.flushes.is_empty());
+    harness.memory.drain_delay = Duration::ZERO;
+    let deadline = harness.deadline;
+    provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap();
+    assert_eq!(harness.reducer.calls, 1);
+    assert_eq!(harness.agent.release_calls, 1);
+}
+
+#[test]
+fn memory_begin_and_drain_failures_retain_pending_ownership_for_retry() {
+    for fail_begin in [true, false] {
+        let mut state = authority();
+        let mut harness = Harness::new(Instant::now());
+        harness.memory.outstanding = 3;
+        let error = ServerError::Timeout {
+            operation: Operation::Shutdown,
+        };
+        if fail_begin {
+            harness.memory.fail_begin_once = Some(error);
+        } else {
+            harness.memory.fail_drain_once = Some(error);
+        }
+        let deadline = harness.deadline;
+        let failure = provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap_err();
+        assert_eq!(failure.error, error);
+        assert_eq!(failure.report.outstanding, 3);
+        assert_eq!(failure.report.next, ShutdownPhase::FinalizeMemory);
+        assert_eq!(failure.report.final_tick, Some(0));
+        assert!(failure.report.retryable);
+        assert!(harness.actors.flushes.is_empty());
+        assert_eq!(harness.agent.release_calls, 0);
+        assert_eq!(harness.agent.close_calls, 0);
+        assert_eq!(harness.mcp.close_calls, 0);
+        harness.memory.pending_drains = 2;
+        let resumed = provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap();
+        assert_eq!(resumed.next, ShutdownPhase::Closed);
+        assert_eq!(harness.reducer.calls, 1);
+        assert_eq!(harness.memory.attempts, 2);
+    }
+}
+
+#[test]
+fn memory_fixed_clock_pending_is_bounded_by_wall_deadline_and_resumes() {
+    let mut state = authority();
+    let start = Instant::now();
+    let mut harness = Harness::new(start);
+    harness.memory.outstanding = 2;
+    harness.memory.pending_drains = usize::MAX;
+    let deadline = Deadline::at(start + Duration::from_millis(20));
+    let failure = provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap_err();
+    assert_eq!(
+        failure.error,
+        ServerError::Timeout {
+            operation: Operation::Shutdown
+        }
+    );
+    assert!(start.elapsed() < Duration::from_millis(250));
+    assert_eq!(failure.report.outstanding, 2);
+    assert_eq!(failure.report.next, ShutdownPhase::FinalizeMemory);
+    assert_eq!(harness.memory.attempts, 1);
+    assert!(harness.actors.flushes.is_empty());
+    assert_eq!(harness.agent.release_calls, 0);
+    assert_eq!(harness.agent.close_calls, 0);
+    harness.memory.pending_drains = 0;
+    let deadline = harness.deadline;
+    let report = provider::shutdown(&mut state, &mut harness.ports(), deadline).unwrap();
+    assert_eq!(report.next, ShutdownPhase::Closed);
+    assert_eq!(harness.reducer.calls, 1);
+    assert_eq!(harness.memory.attempts, 2);
 }
 
 #[test]
