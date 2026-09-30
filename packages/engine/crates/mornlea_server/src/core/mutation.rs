@@ -28,8 +28,9 @@ use super::contracts::{
     InventoryRecord, MutationProducer, ResolvedMining, ResolvedPlacement, RuleReject,
 };
 use super::interaction::{look_direction, normalized_direction, target_block};
-use super::state::AuthorityReadView;
+use super::state::{AuthorityReadView, ObservationTrace};
 use crate::rules::harvest;
+use std::cell::RefCell;
 
 /// Hotbar length inside the unified 36-slot inventory (`core.HotbarSlots`).
 const HOTBAR_SLOTS: usize = 9;
@@ -937,6 +938,20 @@ pub fn resolve_place(
     intent: &PlacementIntent,
     view: &AuthorityReadView<'_>,
 ) -> Result<ResolvedPlacement, RuleReject> {
+    let trace = RefCell::new(ObservationTrace::default());
+    let result = resolve_place_inner(actor, intent, &view.with_observation_trace(&trace));
+    let trace = trace.into_inner();
+    trace.check_capacity()?;
+    let mut resolved = result?;
+    resolved.txn.read_basis = Some(view.mutation_basis(actor, &trace)?);
+    Ok(resolved)
+}
+
+fn resolve_place_inner(
+    actor: ActorKey,
+    intent: &PlacementIntent,
+    view: &AuthorityReadView<'_>,
+) -> Result<ResolvedPlacement, RuleReject> {
     let basis = actor_basis(view, actor)?;
     let inventory = *view.inventory(actor).ok_or(RuleReject::StaleObservation)?;
     let slot = usize::from(intent.slot().get());
@@ -1043,6 +1058,7 @@ pub fn resolve_place(
     let txn = BlockTxn {
         producer: MutationProducer::Actor(actor),
         tick: view.tick(),
+        read_basis: None,
         writes,
         inventory: Some(InventoryPatch::try_new(actor, inventory, after)?),
         containers: Vec::new(),
@@ -1059,6 +1075,22 @@ pub fn resolve_place(
 /// `Ok(None)` — nothing to settle. Snow has an empty output batch and clears
 /// without a drop-capacity gate; other outputs follow the harvest rules.
 pub fn resolve_mine(
+    actor: ActorKey,
+    control: &PlayerControl,
+    view: &AuthorityReadView<'_>,
+) -> Result<Option<ResolvedMining>, RuleReject> {
+    let trace = RefCell::new(ObservationTrace::default());
+    let result = resolve_mine_inner(actor, control, &view.with_observation_trace(&trace));
+    let trace = trace.into_inner();
+    trace.check_capacity()?;
+    let mut resolved = result?;
+    if let Some(resolved) = &mut resolved {
+        resolved.txn.read_basis = Some(view.mutation_basis(actor, &trace)?);
+    }
+    Ok(resolved)
+}
+
+fn resolve_mine_inner(
     actor: ActorKey,
     control: &PlayerControl,
     view: &AuthorityReadView<'_>,
@@ -1182,6 +1214,7 @@ pub fn resolve_mine(
     let txn = BlockTxn {
         producer: MutationProducer::Actor(actor),
         tick: view.tick(),
+        read_basis: None,
         writes,
         inventory: patch,
         containers,
@@ -1205,6 +1238,22 @@ pub fn resolve_companion_place(
     block: u16,
     view: &AuthorityReadView<'_>,
 ) -> Result<ResolvedPlacement, RuleReject> {
+    let trace = RefCell::new(ObservationTrace::default());
+    let result =
+        resolve_companion_place_inner(actor, target, block, &view.with_observation_trace(&trace));
+    let trace = trace.into_inner();
+    trace.check_capacity()?;
+    let mut resolved = result?;
+    resolved.txn.read_basis = Some(view.mutation_basis(ActorKey::Companion(actor), &trace)?);
+    Ok(resolved)
+}
+
+fn resolve_companion_place_inner(
+    actor: CompanionId,
+    target: BlockPos,
+    block: u16,
+    view: &AuthorityReadView<'_>,
+) -> Result<ResolvedPlacement, RuleReject> {
     let key = ActorKey::Companion(actor);
     let basis = actor_basis(view, key)?;
     let item =
@@ -1216,6 +1265,7 @@ pub fn resolve_companion_place(
     let txn = BlockTxn {
         producer: MutationProducer::Actor(key),
         tick: view.tick(),
+        read_basis: None,
         writes: vec![BlockWrite::try_new(target_observed, block)?],
         inventory: Some(InventoryPatch::try_new(key, inventory, after)?),
         containers: Vec::new(),
@@ -1233,6 +1283,20 @@ pub fn resolve_companion_place(
 /// batch credits into the companion's inventory instead of staging world
 /// drops, refusing whole when no slot can take it.
 pub fn resolve_companion_mine(
+    actor: CompanionId,
+    target: BlockPos,
+    view: &AuthorityReadView<'_>,
+) -> Result<ResolvedMining, RuleReject> {
+    let trace = RefCell::new(ObservationTrace::default());
+    let result = resolve_companion_mine_inner(actor, target, &view.with_observation_trace(&trace));
+    let trace = trace.into_inner();
+    trace.check_capacity()?;
+    let mut resolved = result?;
+    resolved.txn.read_basis = Some(view.mutation_basis(ActorKey::Companion(actor), &trace)?);
+    Ok(resolved)
+}
+
+fn resolve_companion_mine_inner(
     actor: CompanionId,
     target: BlockPos,
     view: &AuthorityReadView<'_>,
@@ -1306,6 +1370,7 @@ pub fn resolve_companion_mine(
     let txn = BlockTxn {
         producer: MutationProducer::Actor(key),
         tick: view.tick(),
+        read_basis: None,
         writes,
         inventory: patch,
         containers,

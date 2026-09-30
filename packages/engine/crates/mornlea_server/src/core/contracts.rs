@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 
 use mornlea_domain::{
     BlockPos, ChunkPos, CommandEnvelope, CommandText, CompanionId, ContainerRef, CraftingSize,
-    Dimension, DropId, FiniteVec3, HostileId, HotbarSlot, LookAngles, PassiveId, PlayerControl,
-    PlayerId, ProjectileId, ProjectileKind, RejectReason, RoutedEvent, SurvivalState, Weather,
-    WorldState, registered_block,
+    Dimension, DropId, FiniteVec3, HostileId, HotbarSlot, LookAngles, MotionState, PassiveId,
+    PlayerControl, PlayerId, ProjectileId, ProjectileKind, RejectReason, RoutedEvent,
+    SurvivalState, Weather, WorldState, registered_block,
 };
 use mornlea_engine::native::contracts::PhysicsTuning;
 use mornlea_protocol::{AdmittedLogin, PlayIntent, ServerPacket};
@@ -1320,10 +1320,23 @@ pub enum MutationProducer {
     System(SystemRule),
 }
 
+/// Opaque resolver preimages include read-only geometry, not just written cells.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MutationReadBasis {
+    pub actor: ActorKey,
+    pub dimension: Dimension,
+    pub motion: MotionState,
+    pub look: LookAngles,
+    pub seed: i64,
+    pub tunables: RuleTunables,
+    pub cells: Vec<(Dimension, BlockPos, Option<BlockObservation>)>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlockTxn {
     pub(crate) producer: MutationProducer,
     pub(crate) tick: u64,
+    pub(crate) read_basis: Option<MutationReadBasis>,
     pub(crate) writes: Vec<BlockWrite>,
     pub(crate) inventory: Option<InventoryPatch>,
     pub(crate) containers: Vec<CapturedContainer>,
@@ -1336,6 +1349,7 @@ impl BlockTxn {
         Self {
             producer: MutationProducer::System(producer),
             tick,
+            read_basis: None,
             writes,
             inventory: None,
             containers: Vec::new(),

@@ -374,6 +374,378 @@ fn valid_place_debit_and_delta() {
 }
 
 #[test]
+fn resolved_place_rechecks_read_only_ray_cells() {
+    for (cell, replacement) in [
+        (BlockPos::new(0, 65, 2), AIR),
+        (BlockPos::new(0, 65, 0), STONE),
+    ] {
+        fixture_case(
+            AIR,
+            AIR,
+            STONE,
+            ItemStack {
+                item: ITEM_DIRT,
+                count: 3,
+                durability: 0,
+            },
+            |ctx, session| {
+                let actor = ActorKey::Player(session);
+                let resolved = resolve_place(actor, &south_intent(), &ctx.read()).unwrap();
+                let observed = ctx.read().observation(Dimension::OVERWORLD, cell).unwrap();
+                ctx.transaction()
+                    .try_system(
+                        SystemRule::Support,
+                        vec![BlockWrite::try_new(observed, replacement).unwrap()],
+                    )
+                    .unwrap();
+                let cells = [
+                    BlockPos::new(0, 65, 0),
+                    BlockPos::new(0, 65, 1),
+                    BlockPos::new(0, 65, 2),
+                ];
+                let before = probe(ctx, &cells, &[actor], &[], &[]);
+                let snapshot = ctx.snapshot_state(super::world_outputs::world());
+                assert_eq!(
+                    ctx.transaction().try_place(resolved),
+                    Err(RuleReject::StaleObservation)
+                );
+                assert_eq!(probe(ctx, &cells, &[actor], &[], &[]), before);
+                assert_eq!(ctx.snapshot_state(super::world_outputs::world()), snapshot);
+            },
+        );
+    }
+}
+
+#[test]
+fn resolved_place_rechecks_actor_and_environment_basis() {
+    for change in 0..6 {
+        fixture_case(
+            AIR,
+            AIR,
+            STONE,
+            ItemStack {
+                item: ITEM_DIRT,
+                count: 3,
+                durability: 0,
+            },
+            |ctx, session| {
+                let actor = ActorKey::Player(session);
+                let resolved = resolve_place(actor, &south_intent(), &ctx.read()).unwrap();
+                if change < 4 {
+                    let mut record = ctx.read().actor(actor).unwrap().clone();
+                    match change {
+                        0 => record.lifecycle = ActorLifecycle::Dead,
+                        1 => {
+                            record.motion = MotionState::new(MotionStateParts {
+                                position: FiniteVec3::try_new([2.5, 64.0, 0.5]).unwrap(),
+                                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                                on_ground: true,
+                            })
+                        }
+                        2 => record.dimension = Dimension::DEPTHS,
+                        _ => record.look = LookAngles::try_new(0.0, 0.0).unwrap(),
+                    }
+                    ctx.stage(RuleEffect::Actor(record)).unwrap();
+                } else {
+                    let mut changed = ctx.read().environment().unwrap().clone();
+                    if change == 4 {
+                        changed.seed += 1;
+                    } else {
+                        changed.tunables = mutation_tunables(5.0);
+                    }
+                    ctx.stage(RuleEffect::Environment(changed)).unwrap();
+                }
+                let cells = [
+                    BlockPos::new(0, 65, 0),
+                    BlockPos::new(0, 65, 1),
+                    BlockPos::new(0, 65, 2),
+                ];
+                let before = probe(ctx, &cells, &[actor], &[], &[]);
+                let snapshot = ctx.snapshot_state(super::world_outputs::world());
+                assert_eq!(
+                    ctx.transaction().try_place(resolved),
+                    Err(RuleReject::StaleObservation),
+                    "basis change {change}"
+                );
+                assert_eq!(probe(ctx, &cells, &[actor], &[], &[]), before);
+                assert_eq!(ctx.snapshot_state(super::world_outputs::world()), snapshot);
+            },
+        );
+    }
+}
+
+#[test]
+fn resolved_place_rechecks_support_without_written_cell_changes() {
+    fixture_case(
+        AIR,
+        AIR,
+        STONE,
+        ItemStack {
+            item: 43,
+            count: 2,
+            durability: 0,
+        },
+        |ctx, session| {
+            let actor = ActorKey::Player(session);
+            let support = BlockPos::new(0, 64, 1);
+            ctx.preload_block(observation(support, STONE));
+            ctx.preload_block(observation(BlockPos::new(0, 66, 1), AIR));
+            let resolved = resolve_place(actor, &south_intent(), &ctx.read()).unwrap();
+            let observed = ctx
+                .read()
+                .observation(Dimension::OVERWORLD, support)
+                .unwrap();
+            ctx.transaction()
+                .try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(observed, DIRT).unwrap()],
+                )
+                .unwrap();
+            let cells = [support, BlockPos::new(0, 65, 1), BlockPos::new(0, 66, 1)];
+            let before = probe(ctx, &cells, &[actor], &[], &[]);
+            assert_eq!(
+                ctx.transaction().try_place(resolved),
+                Err(RuleReject::StaleObservation)
+            );
+            assert_eq!(probe(ctx, &cells, &[actor], &[], &[]), before);
+        },
+    );
+}
+
+fn mutation_tunables(reach: f32) -> RuleTunables {
+    RuleTunables::try_new(
+        RuleTunables::source_defaults().physics(),
+        100,
+        40,
+        20,
+        80,
+        18,
+        4000,
+        32,
+        1600,
+        200,
+        5,
+        3,
+        50,
+        reach,
+        1.62,
+        10,
+        40,
+        6000,
+        1.25,
+    )
+    .unwrap()
+}
+
+#[test]
+fn resolved_ray_refuses_before_exceeding_observation_bound() {
+    fixture_case(
+        AIR,
+        AIR,
+        AIR,
+        ItemStack {
+            item: ITEM_DIRT,
+            count: 3,
+            durability: 0,
+        },
+        |ctx, session| {
+            let actor = ActorKey::Player(session);
+            let mut configured = environment();
+            configured.tunables = mutation_tunables(1000.0);
+            ctx.stage(RuleEffect::Environment(configured)).unwrap();
+            for z in 3..=520 {
+                ctx.preload_block(observation(
+                    BlockPos::new(0, 65, z),
+                    if z == 520 { STONE } else { AIR },
+                ));
+            }
+            let cells = [BlockPos::new(0, 65, 519), BlockPos::new(0, 65, 520)];
+            let before = probe(ctx, &cells, &[actor], &[], &[]);
+            assert_eq!(
+                resolve_place(actor, &south_intent(), &ctx.read()),
+                Err(RuleReject::ResourceFull(Resource::RuleEffects))
+            );
+            assert_eq!(probe(ctx, &cells, &[actor], &[], &[]), before);
+        },
+    );
+}
+
+#[test]
+fn resolved_mining_rechecks_ray_before_tool_or_credit_settlement() {
+    for companion in [false, true] {
+        fixture_case(
+            AIR,
+            AIR,
+            if companion { STONE } else { 85 },
+            ItemStack {
+                item: ITEM_PICKAXE,
+                count: 1,
+                durability: PICKAXE_DURABILITY,
+            },
+            |ctx, session| {
+                let actor = if companion {
+                    ActorKey::Companion(companion_id())
+                } else {
+                    ActorKey::Player(session)
+                };
+                if companion {
+                    ctx.stage(RuleEffect::Actor(companion_actor(
+                        companion_id(),
+                        [0.5, 64.0, 0.5],
+                    )))
+                    .unwrap();
+                    ctx.preload_inventory(actor, InventoryRecord::empty());
+                }
+                let resolved = if companion {
+                    resolve_companion_mine(companion_id(), BlockPos::new(0, 65, 2), &ctx.read())
+                        .unwrap()
+                } else {
+                    resolve_mine(
+                        actor,
+                        &primary_control(std::f32::consts::PI, 0.0),
+                        &ctx.read(),
+                    )
+                    .unwrap()
+                    .unwrap()
+                };
+                let cell = BlockPos::new(0, 65, 0);
+                let observed = ctx.read().observation(Dimension::OVERWORLD, cell).unwrap();
+                ctx.transaction()
+                    .try_system(
+                        SystemRule::Support,
+                        vec![BlockWrite::try_new(observed, STONE).unwrap()],
+                    )
+                    .unwrap();
+                let cells = [cell, BlockPos::new(0, 65, 2)];
+                let before = probe(ctx, &cells, &[actor], &[], &[]);
+                let snapshot = ctx.snapshot_state(super::world_outputs::world());
+                assert_eq!(
+                    ctx.transaction().try_mine(resolved),
+                    Err(RuleReject::StaleObservation)
+                );
+                assert_eq!(probe(ctx, &cells, &[actor], &[], &[]), before);
+                assert_eq!(ctx.snapshot_state(super::world_outputs::world()), snapshot);
+            },
+        );
+    }
+}
+
+#[test]
+fn resolved_companion_place_rechecks_active_actor() {
+    fixture_case(AIR, AIR, STONE, ItemStack::default(), |ctx, _| {
+        let actor = ActorKey::Companion(companion_id());
+        let mut record = companion_actor(companion_id(), [0.5, 64.0, 0.5]);
+        ctx.stage(RuleEffect::Actor(record.clone())).unwrap();
+        ctx.preload_inventory(actor, hotbar_inventory(0, ITEM_DIRT, 3, 0));
+        let target = BlockPos::new(0, 65, 1);
+        let resolved = resolve_companion_place(companion_id(), target, DIRT, &ctx.read()).unwrap();
+        record.lifecycle = ActorLifecycle::Dead;
+        ctx.stage(RuleEffect::Actor(record)).unwrap();
+        let before = probe(ctx, &[target], &[actor], &[], &[]);
+        assert_eq!(
+            ctx.transaction().try_place(resolved),
+            Err(RuleReject::StaleObservation)
+        );
+        assert_eq!(probe(ctx, &[target], &[actor], &[], &[]), before);
+    });
+}
+
+#[test]
+fn resolved_place_allows_unrelated_terrain_actor_and_runtime_change() {
+    fixture_case(
+        AIR,
+        AIR,
+        STONE,
+        ItemStack {
+            item: ITEM_DIRT,
+            count: 3,
+            durability: 0,
+        },
+        |ctx, session| {
+            let actor = ActorKey::Player(session);
+            let resolved = resolve_place(actor, &south_intent(), &ctx.read()).unwrap();
+            let sibling = companion_actor(companion_id(), [8.5, 64.0, 8.5]);
+            ctx.stage(RuleEffect::Actor(sibling.clone())).unwrap();
+            let runtime = ActorRuntime {
+                key: sibling.key,
+                controls: None,
+                has_view: false,
+                reset: false,
+                attack_cooldown: 7,
+                hurt_cooldown: 3,
+                burn_cooldown: 11,
+                oxygen: 200,
+                peak_y: 64.0,
+                exhaustion_milli: 123,
+                saturation_milli: 456,
+                since_damage_ticks: 17,
+                drown_ticks: 2,
+                starvation_ticks: 4,
+                eating: None,
+                bow: None,
+                path: None,
+                aux: ActorAux::Companion {
+                    generation: 2,
+                    attempt: 3,
+                    task: mornlea_storage::StoredCompanionTask::default(),
+                    mining_target: None,
+                },
+            };
+            ctx.stage(RuleEffect::Runtime(runtime.clone())).unwrap();
+            let unrelated = BlockPos::new(8, 65, 8);
+            ctx.preload_block(observation(unrelated, AIR));
+            let observed = ctx
+                .read()
+                .observation(Dimension::OVERWORLD, unrelated)
+                .unwrap();
+            ctx.transaction()
+                .try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(observed, STONE).unwrap()],
+                )
+                .unwrap();
+            let outcome = ctx.transaction().try_place(resolved).unwrap();
+            assert_eq!(outcome.changed.len(), 1);
+            assert_eq!(ctx.read().inventory(actor).unwrap().slots[0].count, 2);
+            assert_eq!(ctx.read().actor(sibling.key), Some(&sibling));
+            assert_eq!(ctx.read().runtime(sibling.key), Some(&runtime));
+            assert_eq!(
+                ctx.read().block(Dimension::OVERWORLD, unrelated),
+                Some(STONE)
+            );
+        },
+    );
+}
+
+#[test]
+fn resolved_place_rechecks_missing_classifier_partner() {
+    fixture_case(
+        AIR,
+        AIR,
+        70,
+        ItemStack {
+            item: ITEM_DIRT,
+            count: 3,
+            durability: 0,
+        },
+        |ctx, session| {
+            let actor = ActorKey::Player(session);
+            let lower = BlockPos::new(0, 64, 2);
+            assert_eq!(ctx.read().observation(Dimension::OVERWORLD, lower), None);
+            let resolved = resolve_place(actor, &south_intent(), &ctx.read()).unwrap();
+            ctx.preload_block(observation(lower, 63));
+            let cells = [lower, BlockPos::new(0, 65, 1), BlockPos::new(0, 65, 2)];
+            let before = probe(ctx, &cells, &[actor], &[], &[]);
+            assert_eq!(
+                ctx.transaction().try_place(resolved),
+                Err(RuleReject::StaleObservation)
+            );
+            assert_eq!(probe(ctx, &cells, &[actor], &[], &[]), before);
+        },
+    );
+}
+
+#[test]
 fn two_chunk_door_atomic() {
     // The two-cell footprint crossing a chunk boundary is the bed form: a
     // bed's halves lie horizontally (foot at x=15 in chunk 0, east-facing

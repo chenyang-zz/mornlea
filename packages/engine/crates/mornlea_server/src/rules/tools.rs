@@ -20,7 +20,8 @@ use crate::core::contracts::{
     ServerError, SessionKey, WorkKind,
 };
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
-use crate::core::state::{ActionKind, AuthorityReadView, TickContext};
+use crate::core::state::{ActionKind, AuthorityReadView, ObservationTrace, TickContext};
+use std::cell::RefCell;
 
 const AIR: u16 = 0;
 const DIRT: u16 = 3;
@@ -171,7 +172,9 @@ fn settle(
         Command::CollectWater(look) => (look, true),
         _ => return Err(ServerError::InvalidInput { field: "command" }),
     };
-    let view = ctx.read();
+    let trace = RefCell::new(ObservationTrace::default());
+    let base = ctx.read();
+    let view = base.with_observation_trace(&trace);
     let (dimension, hit) = cast_ray(&view, actor, look, collect)?;
     let (inventory, index, stack) = selected(&view, actor)?;
     let (observed, replacement, next_stack, bucket, till) = match command {
@@ -281,6 +284,9 @@ fn settle(
     after.slots[index] = next_stack;
     let patch = InventoryPatch::try_new(actor, inventory, after).map_err(|_| REFUSAL)?;
     let write = BlockWrite::try_new(observed, replacement).map_err(|_| REFUSAL)?;
+    let read_basis = view
+        .mutation_basis(actor, &trace.borrow())
+        .map_err(|_| REFUSAL)?;
     if till {
         ctx.check_charge_capacity()?;
     }
@@ -291,6 +297,7 @@ fn settle(
     let txn = BlockTxn {
         producer: MutationProducer::Actor(actor),
         tick: ctx.read().tick(),
+        read_basis: Some(read_basis),
         writes: vec![write],
         inventory: Some(patch),
         containers: Vec::new(),

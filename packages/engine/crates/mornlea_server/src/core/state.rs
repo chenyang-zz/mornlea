@@ -7,6 +7,7 @@
 //! the overlay. Publication encodes control packets and routed events through
 //! the existing protocol conversion before it appends any frame.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mornlea_domain::{
@@ -1360,6 +1361,7 @@ impl SaveAuthority for AuthorityState {
 }
 
 /// Borrowed read surface. `None` means the value is unavailable, not air.
+#[derive(Clone, Copy)]
 pub struct AuthorityReadView<'a> {
     tick: u64,
     world: Option<WorldState>,
@@ -1381,6 +1383,41 @@ pub struct AuthorityReadView<'a> {
     projectiles: &'a [ProjectileRecord],
     damage_intents: &'a [DamageIntent],
     metadata: &'a mornlea_storage::Metadata,
+    observation_trace: Option<&'a RefCell<ObservationTrace>>,
+}
+
+/// One resolver owns this bounded trace; ordinary authority reads do not record.
+#[derive(Default)]
+pub(crate) struct ObservationTrace {
+    cells: BTreeMap<(Dimension, mornlea_domain::BlockPos), Option<BlockObservation>>,
+    overflow: bool,
+}
+
+impl ObservationTrace {
+    fn record(
+        &mut self,
+        dimension: Dimension,
+        pos: mornlea_domain::BlockPos,
+        value: Option<BlockObservation>,
+    ) -> bool {
+        if self.overflow {
+            return false;
+        }
+        if !self.cells.contains_key(&(dimension, pos)) && self.cells.len() >= 512 {
+            self.overflow = true;
+            return false;
+        }
+        self.cells.entry((dimension, pos)).or_insert(value);
+        true
+    }
+
+    pub(crate) fn check_capacity(&self) -> Result<(), RuleReject> {
+        if self.overflow {
+            Err(RuleReject::ResourceFull(Resource::RuleEffects))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Private cumulative output preview: failed attempts never consume capacity
@@ -1418,6 +1455,41 @@ impl DropRehearsal<'_> {
 }
 
 impl<'a> AuthorityReadView<'a> {
+    /// A shorter borrowed view keeps the collector local to one resolution.
+    pub(crate) fn with_observation_trace<'b>(
+        &'b self,
+        trace: &'b RefCell<ObservationTrace>,
+    ) -> AuthorityReadView<'b> {
+        let mut view = *self;
+        view.observation_trace = Some(trace);
+        view
+    }
+
+    pub(crate) fn mutation_basis(
+        &self,
+        actor: ActorKey,
+        trace: &ObservationTrace,
+    ) -> Result<MutationReadBasis, RuleReject> {
+        trace.check_capacity()?;
+        let record = self.actor(actor).ok_or(RuleReject::StaleObservation)?;
+        if record.lifecycle != ActorLifecycle::Active {
+            return Err(RuleReject::StaleObservation);
+        }
+        let environment = self.environment().ok_or(RuleReject::StaleObservation)?;
+        Ok(MutationReadBasis {
+            actor,
+            dimension: record.dimension,
+            motion: record.motion,
+            look: record.look,
+            seed: environment.seed,
+            tunables: environment.tunables,
+            cells: trace
+                .cells
+                .iter()
+                .map(|((dimension, pos), observed)| (*dimension, *pos, *observed))
+                .collect(),
+        })
+    }
     /// Sparse fixture cells alone do not establish a Ready chunk.
     pub fn ready_chunk(&self, key: ChunkKey) -> bool {
         self.ready.contains_key(&key)
@@ -1479,6 +1551,20 @@ impl<'a> AuthorityReadView<'a> {
     /// Exact chunk/cell indexing observes this tick's writes before the compact
     /// immutable base. Missing data remains unavailable rather than inferred air.
     pub fn observation(
+        &self,
+        dimension: Dimension,
+        pos: mornlea_domain::BlockPos,
+    ) -> Option<BlockObservation> {
+        let observed = self.untracked_observation(dimension, pos);
+        if let Some(trace) = self.observation_trace
+            && !trace.borrow_mut().record(dimension, pos, observed)
+        {
+            return None;
+        }
+        observed
+    }
+
+    fn untracked_observation(
         &self,
         dimension: Dimension,
         pos: mornlea_domain::BlockPos,
@@ -1949,6 +2035,7 @@ impl<'a> TickContext<'a> {
             projectiles: &self.projectiles,
             damage_intents: &self.damage_intents,
             metadata: &self.authority.metadata,
+            observation_trace: None,
         }
     }
 
@@ -2372,6 +2459,7 @@ impl<'a> TickContext<'a> {
                 _ => Err(RuleReject::Wire(RejectReason::InvalidInput)),
             },
             RuleEffect::Blocks(txn) => {
+                self.validate_mutation_basis(txn)?;
                 if txn.writes.len() > EFFECT_BUDGET {
                     return Err(RuleReject::ResourceFull(Resource::RuleEffects));
                 }
@@ -2454,6 +2542,35 @@ impl<'a> TickContext<'a> {
         }
         pending.insert(patch.actor, patch.after);
         Ok(())
+    }
+
+    /// All resolver preimages are checked before compound publication begins.
+    fn validate_mutation_basis(&self, txn: &BlockTxn) -> Result<(), RuleReject> {
+        if txn.tick != self.authority.next_tick {
+            return Err(RuleReject::StaleObservation);
+        }
+        match (&txn.producer, &txn.read_basis) {
+            (MutationProducer::System(_), None) => Ok(()),
+            (MutationProducer::Actor(actor), Some(basis)) if *actor == basis.actor => {
+                let view = self.read();
+                let record = view.actor(*actor).ok_or(RuleReject::StaleObservation)?;
+                let environment = view.environment().ok_or(RuleReject::StaleObservation)?;
+                if record.lifecycle != ActorLifecycle::Active
+                    || record.dimension != basis.dimension
+                    || record.motion != basis.motion
+                    || record.look != basis.look
+                    || environment.seed != basis.seed
+                    || environment.tunables != basis.tunables
+                    || basis.cells.iter().any(|(dimension, pos, observed)| {
+                        view.observation(*dimension, *pos) != *observed
+                    })
+                {
+                    return Err(RuleReject::StaleObservation);
+                }
+                Ok(())
+            }
+            _ => Err(RuleReject::StaleObservation),
+        }
     }
 
     fn check_container_revision(
@@ -3008,6 +3125,34 @@ mod support_changed_rollback_tests {
         assert_eq!(ctx.read().block(Dimension::OVERWORLD, first), Some(0));
         assert_eq!(ctx.read().block(Dimension::OVERWORLD, later), Some(4));
         assert_eq!(ctx.changed_blocks(), before);
+    }
+}
+
+#[cfg(test)]
+mod observation_trace_tests {
+    use super::*;
+    use mornlea_domain::BlockPos;
+
+    #[test]
+    fn trace_retains_missing_preimages_and_caps_distinct_cells() {
+        let mut trace = ObservationTrace::default();
+        let missing = BlockPos::new(0, 65, 0);
+        for _ in 0..600 {
+            assert!(trace.record(Dimension::OVERWORLD, missing, None));
+        }
+        assert_eq!(trace.cells.len(), 1);
+        assert_eq!(trace.cells[&(Dimension::OVERWORLD, missing)], None);
+        for x in 1..512 {
+            assert!(trace.record(Dimension::OVERWORLD, BlockPos::new(x, 65, 0), None));
+        }
+        assert_eq!(trace.check_capacity(), Ok(()));
+        assert!(!trace.record(Dimension::OVERWORLD, BlockPos::new(512, 65, 0), None));
+        assert_eq!(trace.cells.len(), 512);
+        assert_eq!(
+            trace.check_capacity(),
+            Err(RuleReject::ResourceFull(Resource::RuleEffects))
+        );
+        assert!(!trace.record(Dimension::OVERWORLD, missing, None));
     }
 }
 
