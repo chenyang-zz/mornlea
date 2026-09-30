@@ -86,3 +86,18 @@
   4. `codex/b36-axes-shovels` 未认领在途分支与脏 worktree（改动含本表）仍待控制会话裁决。
   5. 遗留未动项更新：重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat` 仍在；`archive/2026-08-28-placeable-torches/proposal.md` 延期与放弃节仍为占位符；F-04 仍无本机 worktree 可核对；上轮遗留的 `A-03-tiered-swords-combat` worktree 已消失（本轮已核实并在 A-03 行更新备注）；`mornlea-f2-w25c` 的 worktree 注册指向已删除目录（`git worktree prune` 属用户裁决）；`f2/provider-2-6c` worktree 有两个未提交文件（crafting.rs 面，当日活跃线，未触碰）。
   6. 待澄清累计清单（历轮挂起 + 本轮新增三项）：回血计时冻结、旧区块注水迁移、水下呼吸装备/附魔、漏斗、创造/旁观模式、主菜单重入装配、水中冲刺、鞘翅、`-connect` 远程加载屏、伙伴用弓/投射物、钓鱼/闪电/附魔/多材质护甲/护甲修复、数字键快速放入、加载中途取消、经验与等级系统、矿车与铁轨、村民与交易。
+
+## 2026-09-30（规划者第六轮）
+
+- **读取输入**：`docs/feature-backlog.md`、`docs/notes/agent-runs.md`（上轮 2026-09-29 第五轮）、`docs/notes/progress.md`、根 `AGENTS.md`（版本矩阵仍为协议 v45、玩家 schema v9、区块 schema v9、metadata v6、`companions.ai` v5、`hostile_mobs` v2、`passive_mobs` v1、engine ABI v11、client ABI v19、benchmark scenario v23）、`openspec/config.yaml`、Discussion #71（`gh api graphql` 撞未认证共享限流 403；`curl` 实测新 URL `chenyang-zz/mornlea/discussions/71` 返回 Not Found，改经旧 URL `channing771/mornlea` 公开页读取：可见评论 30 条、末条仍为 2026-09-13（B-35 完成）、正文仍缺 B-47 起的新行——**上轮以来无新评论、无正文更新**）、`origin/main`（fetch 后头仍 `2f17607e`，上轮以来零新提交）、`git branch -a`（`codex/*` 与 `f2/*` 在途分支均在）/`git worktree list`（13 个 worktree）及各 worktree 头 SHA 与脏状态、归档横扫（`git log --all --since=2026-09-29` 在 `openspec/changes/archive/` 下零结果，最新归档仍为 `2026-09-27-rust-native-numerical-closure`）。
+- **变更行**：**无新增行**——讨论零新评论、零新归档、MC 覆盖上轮已全量复核（本轮无变化）。校对（仅备注、状态均不变）：`B-36`（`codex/b36-axes-shovels` 头仍 `2a745374`、最后提交仍 2026-09-15，worktree 脏改动未收敛含本表 → 连续第三轮维持排队不晋升）；其余行状态与 git 一致，无待标完成行（`origin/main` 上轮以来无功能合入）。晋升检查：串行队首 B-36 前序已完成、版本槽空闲，但 worktree 证据不一致，按规则不晋升；各组尾号不变（B-52/D-21/E-21/F-11/C-11）。
+- **未落行（判定）**：本轮三通道均为空，无新请求可判定；上轮三条待澄清（经验与等级系统、矿车与铁轨、村民与交易）与历轮挂起项继续挂起（讨论通道仍不可用，无法补挂评论）。
+- **提交**：`ef25c733`（docs: plan B-36 recheck 2026-09-30）+ 本运行记录提交；两笔均在基于 `origin/main`（`2f17607e`）的临时 detached worktree `/tmp/mornlea-planner-r6` 制作（沿上轮先例，不触碰 `dev` 工作区与其在途提交）。
+- **推送**：两笔快进提交以 SSH URL `ssh://git@github.com/chenyang-zz/mornlea.git HEAD:main` 推送（HTTPS 凭据不可用沿既有先例）；推送结果以 `origin/main` 实际头为准，失败则终止不重放不强推、下轮补记。
+- **讨论同步**：**未执行**——`gh` token 失效（连续第六轮）且未认证 REST/GraphQL 撞共享限流；额外发现新仓库路径下 discussion 页返回 Not Found（旧 `channing771` 路径仍可读，迁移后讨论归属待用户确认）。正文 `--update` 与状态变更评论（本轮仅 B-36 备注复核）均发不出；正文镜像已落后五轮，以仓库文件为准。
+- **留给下一轮 / 用户**：
+  1. `gh` 凭据连续第六轮不可用；Discussion 镜像与评论积压待恢复后补发；另需确认讨论 #71 在新仓库路径下的可达性（本轮 `chenyang-zz/mornlea/discussions/71` 为 Not Found）。
+  2. `dev` 分支领先 `origin/main` 仍 249 提交（Rust 权威服务端/Godot 目标架构在途线；本轮 `f2/provider-*`、`cursor/rust-authoritative-server-98e6`、`codex/godot-view-layer`、`codex/unified-desktop-panels` 等 worktree 均有当日左右的活跃痕迹）；合入节奏与追溯属控制会话/用户裁决，规划者未触碰。
+  3. `codex/b36-axes-shovels` 未认领在途分支与脏 worktree（改动含本表与 golden）连续三轮无收敛，认领登记与处置属控制会话裁决。
+  4. 无 backlog 行但已合入 `main` 的控制会话 change 是否追溯补履历行，待用户裁决（维持不补先例）。
+  5. 遗留未动项：重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、torch proposal 延期章节占位符、F-04 仍无本机 worktree 可核对；待澄清累计清单见上轮第 6 项（本轮无新增）。
