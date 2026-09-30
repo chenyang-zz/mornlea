@@ -109,7 +109,15 @@ consume its cancellation and error contracts before joining the real backend.
   the retry boundary with the lease and resources retained.
   `AuthorityState::drive_shutdown` is the contract-landing scaffold behind the
   consumer double's endpoint; the real endpoint rewires to this provider at
-  the common transport integration node — do not extend the scaffold.
+  the common transport integration node. Both entries freeze the actual Agent
+  before memory work, stop/cancel/wait workers, and share the pending-memory
+  deadline barrier. Production persistence composition remains separate.
+  `MemoryOwner` retains semantic operations across attempts, reconciles exact
+  remote state before retrying a commit, and counts refused cleanup joins
+  independently. Actual Python/SQLite shutdown tests lose a confirmed response
+  and prove reconciliation precedes flush and release without a second commit.
+  Absent-ID local retirement is idempotent; first worker panic and live timeout
+  retain their diagnostic meanings.
 - `src/core/mutation.rs` owns the authority-resolved world transaction: the
   four `resolve_*` functions build complete private `BlockTxn`s — footprint
   from the frozen Go block tables (door/bed two cells, cross-chunk), selected
