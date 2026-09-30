@@ -818,7 +818,7 @@ fn step_input(
     let segment = ctx.read().tick() / WANDER_SEGMENT_TICKS;
     let base = splitmix64((environment.seed as u64) ^ segment ^ id.get());
     let want = normalize_yaw(
-        (base & 0xFF_FFFF) as f32 * ((2.0 * std::f64::consts::PI / 1_048_576.0) as f32),
+        (base & 0xFF_FFFF) as f32 * ((2.0 * std::f64::consts::PI / 16_777_216.0) as f32),
     );
     lane.yaw = turn_yaw_toward(lane.yaw, want, MAX_TURN);
     Ok((1, false))

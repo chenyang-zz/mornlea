@@ -398,7 +398,75 @@ fn yaw_to_point(dx: f32, dz: f32) -> f32 {
 /// fold over (seed, segment, id) narrowed through the 24-bit angle table.
 fn wander_want_yaw(seed: i64, segment: u64, id: u64) -> f32 {
     let base = splitmix64((seed as u64) ^ segment ^ id);
-    normalize_yaw((base & 0xFF_FFFF) as f32 * ((2.0 * std::f64::consts::PI / 1_048_576.0) as f32))
+    normalize_yaw((base & 0xFF_FFFF) as f32 * ((2.0 * std::f64::consts::PI / 16_777_216.0) as f32))
+}
+
+#[test]
+fn wander_matches_go_heading_and_carried_shortest_arc() {
+    // Independently executed Go `Sampler.SplitMix64` and `passiveStepInput`
+    // scalar known answers at seed 0, id 41. These expectations do not use
+    // the replay mirror above; each later call carries the provider's output.
+    let mut state = authority();
+    let mut actor = passive_actor(
+        41,
+        [0.5, 1.0, 0.5],
+        f32::from_bits(0x3fbb_d2f9),
+        20,
+        ActorLifecycle::Active,
+    );
+    let mut runtime = passive_runtime(41, passive_aux(BlockPos::new(0, 1, 0), 0, None, false));
+    for (tick, yaw_bits) in [(0, 0x3fbb_d2f9), (40, 0x3fd5_6c93), (80, 0x3fef_062d)] {
+        while state.next_tick() < tick {
+            state.advance_tick(TickBudget::full()).expect("empty tick");
+        }
+        let mut context = harness_context(&mut state);
+        context
+            .stage(RuleEffect::Environment(environment(0)))
+            .expect("environment");
+        stage_room(&mut context, -4, 4, -4, 4, 4);
+        // Dirt excludes grazing; no players excludes temptation and idle look.
+        for x in -4..=4 {
+            for z in -4..=4 {
+                context.preload_block(observation(BlockPos::new(x, 0, z), DIRT));
+            }
+        }
+        context
+            .stage(RuleEffect::Actor(actor.clone()))
+            .expect("carried actor");
+        context
+            .stage(RuleEffect::Runtime(runtime.clone()))
+            .expect("carried runtime");
+        provider::run(&mut context, passive_call()).expect("wander");
+        let next_actor = context
+            .read()
+            .actor(passive_key(41))
+            .expect("actor")
+            .clone();
+        let next_runtime = context
+            .read()
+            .runtime(passive_key(41))
+            .expect("runtime")
+            .clone();
+        assert_eq!(next_actor.look.yaw().to_bits(), yaw_bits, "tick {tick}");
+        let ActorBody::Passive(body) = &next_actor.body else {
+            panic!("passive body");
+        };
+        assert_eq!(body.yaw.to_bits(), yaw_bits, "body tick {tick}");
+        assert_eq!(body.position, next_actor.motion.position().get());
+        assert_eq!(body.velocity, next_actor.motion.velocity().get());
+        assert_eq!(body.on_ground, next_actor.motion.on_ground());
+        assert_eq!(body.health, actor.survival.health());
+        assert_eq!(next_actor.key, actor.key);
+        assert_eq!(next_actor.lifecycle, actor.lifecycle);
+        assert_eq!(next_actor.dimension, actor.dimension);
+        assert_eq!(next_actor.survival, actor.survival);
+        assert_eq!(next_actor.look.pitch(), actor.look.pitch());
+        let distance = horizontal_dist_sq(body.position, actor.motion.position().get());
+        assert!(distance > 0.0 && distance < 1.0, "bounded real motion");
+        assert_eq!(next_runtime, runtime, "neutral runtime tick {tick}");
+        actor = next_actor;
+        runtime = next_runtime;
+    }
 }
 
 fn first_hit_id(seed: i64, tick: u64, from: u64) -> u64 {
