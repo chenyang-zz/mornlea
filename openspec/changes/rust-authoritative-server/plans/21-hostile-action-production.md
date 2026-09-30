@@ -102,7 +102,7 @@ unobstructed. Eye is position plus the same tunable eye height the combat
 consumer uses; reuse that accessor, do not add a second constant. Aim is the
 normalized eye-to-eye direction; velocity follows Go `hostileShardVelocity`
 with `HostileShotSpread` SplitMix64 yaw/pitch offsets uniform in plus/minus
-0.06 rad keyed by seed, world_time (not tick), and hostile ID. Damage 3,
+0.06 rad keyed by seed, executing authority tick, and hostile ID. The global review supersedes the earlier world_time decision with verified Go hostile_action.go114 and sampler.go296; see plan29 for acceptance evidence. Damage 3,
 speed 22. Line of sight uses accepted `NativeRaycast` with
 `target_block` occlusion: any blocking cell strictly before the target eye
 blocks; equality with the target cell does not. This narrow occlusion helper
