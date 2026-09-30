@@ -77,6 +77,23 @@ counterpart: missing.md
 	}
 }
 
+func TestPublicRootReadmeOmitsFrontMatter(t *testing.T) {
+	root := t.TempDir()
+	entry := documentationManifestEntry{
+		ID:             "root-readme",
+		Classification: "bilingual",
+		Paths:          []string{"README.md", "README.zh.md"},
+		EnglishPath:    "README.md",
+		ChinesePath:    "README.zh.md",
+		Revision:       "2026-09-30.1",
+	}
+	writePairFixture(t, root, entry.EnglishPath, "# Mornlea\n")
+	writePairFixture(t, root, entry.ChinesePath, "# Mornlea\n")
+	if problems := validateDocumentationPair(root, entry); len(problems) != 0 {
+		t.Fatalf("public README pair without front matter was rejected:\n%s", strings.Join(problems, "\n"))
+	}
+}
+
 func TestDocumentationPairValidationAcceptsRelativeCounterparts(t *testing.T) {
 	root := t.TempDir()
 	entry := documentationManifestEntry{
@@ -160,6 +177,17 @@ func validateDocumentationPair(root string, entry documentationManifestEntry) []
 	}
 	if !strings.HasSuffix(entry.ChinesePath, ".zh.md") {
 		problems = append(problems, fmt.Sprintf("%s must use the *.zh.md Chinese counterpart suffix", entry.ChinesePath))
+	}
+	// The repository landing pages are the public GitHub README. They stay a
+	// bilingual pair under semantic checks, but they do not carry the internal
+	// YAML header used by long-lived docs.
+	if entry.ID == "root-readme" {
+		for _, relative := range []string{entry.EnglishPath, entry.ChinesePath} {
+			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(relative))); err != nil {
+				problems = append(problems, fmt.Sprintf("read %s: %v", relative, err))
+			}
+		}
+		return problems
 	}
 	english, englishProblems := readDocumentationFrontMatter(root, entry.EnglishPath)
 	chinese, chineseProblems := readDocumentationFrontMatter(root, entry.ChinesePath)
