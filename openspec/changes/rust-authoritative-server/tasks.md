@@ -121,6 +121,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [ ] 3.9q9 Refuse unrepresentable hostile geometry without partial effects.
 - [ ] 3.9q10 Reconcile and apply executing-tick hostile shot spread.
 - [x] 3.9d1 Enforce Agent HTTP absolute deadlines and close cancellation.
+- [ ] 3.9d2a Accept a clonable request cancellation contract with real HTTP evidence.
 - [ ] 3.9d2 Bound and reclaim Agent business request ownership.
 
 ## 4. Closeout
