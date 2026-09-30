@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mornlea_domain::CompanionId;
 
@@ -315,6 +315,9 @@ pub struct MemoryOwner {
     ready: BTreeMap<CompanionId, bool>,
     attempt: u64,
     attempt_deadline: Option<Deadline>,
+    attempt_wall_deadline: Option<Instant>,
+    confirmed_bases: BTreeSet<CompanionId>,
+    finalize_cursor: Option<CompanionId>,
 }
 
 impl MemoryOwner {
@@ -343,6 +346,9 @@ impl MemoryOwner {
             ready: BTreeMap::new(),
             attempt: 0,
             attempt_deadline: None,
+            attempt_wall_deadline: None,
+            confirmed_bases: BTreeSet::new(),
+            finalize_cursor: None,
         }
     }
 
@@ -447,6 +453,13 @@ impl MemoryOwner {
                 field: "memory_reservation",
             });
         }
+        if self.reservations.len() >= 64 {
+            return Err(ServerError::Capacity {
+                resource: Resource::AgentRuns,
+                limit: 64,
+                observed: 65,
+            });
+        }
         self.reservations.insert(reservation.companion, reservation);
         Ok(())
     }
@@ -503,6 +516,7 @@ impl MemoryOwner {
             let terminal = !matches!(poll, crate::contracts::AgentPoll::Pending);
             if terminal {
                 self.commits.remove(&companion);
+                self.confirmed_bases.remove(&companion);
             }
             match poll {
                 crate::contracts::AgentPoll::Pending => {}
@@ -537,8 +551,18 @@ impl MemoryOwner {
         companion: CompanionId,
         request_id: AgentRequestId,
     ) -> Result<ReconcileAdmit, ServerError> {
+        self.reconcile_admit(companion, request_id, None)
+    }
+
+    /// Only finalization may dispatch without waiting for ordinary tick backoff.
+    fn reconcile_admit(
+        &mut self,
+        companion: CompanionId,
+        request_id: AgentRequestId,
+        finalization: Option<Deadline>,
+    ) -> Result<ReconcileAdmit, ServerError> {
         self.reap_retirements();
-        if self.retry_wait(companion) > 0 {
+        if finalization.is_none() && self.retry_wait(companion) > 0 {
             return Ok(ReconcileAdmit::Waiting {
                 ticks: self.retry_wait(companion),
             });
@@ -557,6 +581,9 @@ impl MemoryOwner {
         let request = reconcile_request_for(self.leased(request_id), companion, mirror)?;
         let epoch = mirror.epoch;
         self.check_business_capacity()?;
+        if let Some(deadline) = finalization {
+            self.check_finalization_deadline(deadline)?;
+        }
         self.agent
             .submit(AgentRequest::Reconcile(request))
             .map_err(|_| unavailable())?;
@@ -580,6 +607,7 @@ impl MemoryOwner {
             let terminal = !matches!(poll, crate::contracts::AgentPoll::Pending);
             if terminal {
                 self.reconciles.remove(&companion);
+                self.confirmed_bases.remove(&companion);
             }
             match poll {
                 crate::contracts::AgentPoll::Pending => {}
@@ -690,6 +718,7 @@ impl MemoryOwner {
             let terminal = !matches!(poll, crate::contracts::AgentPoll::Pending);
             if terminal {
                 self.deletes.remove(&companion);
+                self.confirmed_bases.remove(&companion);
             }
             match poll {
                 crate::contracts::AgentPoll::Pending => {}
@@ -715,6 +744,115 @@ impl MemoryOwner {
             }
         }
         settled
+    }
+
+    /// Attempt-local HTTP maps relinquish ownership only through zero-wait
+    /// retirement. Refused joins remain in the independently charged ledger.
+    fn retire_attempt_requests(&mut self) {
+        let ids: Vec<_> = self
+            .commits
+            .values()
+            .map(|r| r.request_id)
+            .chain(self.reconciles.values().map(|r| r.request_id))
+            .chain(self.deletes.values().map(|r| r.request_id))
+            .collect();
+        self.commits.clear();
+        self.reconciles.clear();
+        self.deletes.clear();
+        self.confirmed_bases.clear();
+        for id in ids {
+            self.retire_request(id);
+        }
+    }
+
+    fn confirmed_reserved_base(&self, companion: CompanionId) -> bool {
+        let Some(reserved) = self.reservations.get(&companion) else {
+            return false;
+        };
+        self.mirrors.get(&companion).is_some_and(|mirror| {
+            mirror.active
+                && mirror.epoch == reserved.memory_epoch
+                && mirror.revision == reserved.base_revision
+        })
+    }
+
+    /// The wall bound prevents a paused injected clock from extending an attempt.
+    fn check_finalization_deadline(&mut self, caller: Deadline) -> Result<(), ServerError> {
+        let attempt = self.attempt_deadline.ok_or(ServerError::InvalidInput {
+            field: "memory finalization attempt",
+        })?;
+        let wall = self
+            .attempt_wall_deadline
+            .ok_or(ServerError::InvalidInput {
+                field: "memory finalization attempt",
+            })?;
+        let now = self.clock.monotonic();
+        if caller.expired(now) || attempt.expired(now) || Instant::now() >= wall {
+            self.retire_attempt_requests();
+            return Err(ServerError::Timeout {
+                operation: Operation::Shutdown,
+            });
+        }
+        Ok(())
+    }
+
+    fn fresh_request_id() -> Result<AgentRequestId, ServerError> {
+        let mut bytes = [0; 16];
+        getrandom::fill(&mut bytes).map_err(|_| ServerError::Internal {
+            invariant: "memory request entropy",
+        })?;
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        AgentRequestId::try_from_bytes(bytes).map_err(|_| ServerError::Internal {
+            invariant: "memory request entropy",
+        })
+    }
+
+    /// A retained tombstone wins over a proposal; commits consume one remote-base
+    /// authorization, and every uncertain outcome must reconcile again.
+    fn submit_finalization(
+        &mut self,
+        companion: CompanionId,
+        request_id: AgentRequestId,
+        deadline: Deadline,
+    ) -> Result<(), ServerError> {
+        if let Some(intent) = self.delete_intents.get(&companion).copied() {
+            // The checked original transition guarantees new_epoch is nonzero.
+            let request = delete_request_for(
+                self.leased(request_id),
+                companion,
+                intent.new_epoch - 1,
+                intent.new_epoch,
+                intent.tombstone,
+            );
+            self.check_business_capacity()?;
+            self.check_finalization_deadline(deadline)?;
+            self.agent.submit(AgentRequest::Delete(request))?;
+            self.deletes.insert(
+                companion,
+                DeleteInflight {
+                    request_id,
+                    new_epoch: intent.new_epoch,
+                    tombstone: intent.tombstone,
+                },
+            );
+            return Ok(());
+        }
+        if self.confirmed_bases.remove(&companion) && self.confirmed_reserved_base(companion) {
+            let request = commit_request_for(
+                self.leased(request_id),
+                companion,
+                self.reservations.get(&companion).unwrap(),
+            );
+            self.check_business_capacity()?;
+            self.check_finalization_deadline(deadline)?;
+            self.agent.submit(AgentRequest::Commit(request))?;
+            self.commits
+                .insert(companion, CommitInflight { request_id });
+            return Ok(());
+        }
+        self.reconcile_admit(companion, request_id, Some(deadline))?;
+        Ok(())
     }
 
     /// Builds the leased identity every memory RPC names.
@@ -957,50 +1095,108 @@ impl MemoryFinalizer for MemoryOwner {
         }
     }
 
-    /// Cancels the previous attempt and opens a fresh context of at most 30
-    /// seconds; unresolved operation identities are retained.
+    /// A fresh attempt replaces HTTP identities while retaining semantic work.
     fn begin_attempt(&mut self, deadline: Deadline) -> Result<(), ServerError> {
-        let in_flight: Vec<AgentRequestId> = self
-            .commits
-            .values()
-            .map(|record| record.request_id)
-            .chain(self.reconciles.values().map(|record| record.request_id))
-            .chain(self.deletes.values().map(|record| record.request_id))
-            .collect();
-        for id in in_flight {
-            let _ = self.agent.cancel(id, deadline);
-        }
+        self.retire_attempt_requests();
         self.attempt = self.attempt.saturating_add(1);
-        let fresh =
-            Deadline::after(self.clock.monotonic(), FINALIZE_CONTEXT_TIMEOUT).unwrap_or(deadline);
-        self.attempt_deadline = Some(if fresh.instant() < deadline.instant() {
+        let now = self.clock.monotonic();
+        let fresh = Deadline::after(now, FINALIZE_CONTEXT_TIMEOUT)?;
+        let bounded = if fresh.instant() < deadline.instant() {
             fresh
         } else {
             deadline
-        });
-        Ok(())
+        };
+        self.attempt_deadline = Some(bounded);
+        self.attempt_wall_deadline = Some(
+            Instant::now()
+                .checked_add(bounded.instant().saturating_duration_since(now))
+                .ok_or(ServerError::InvalidInput { field: "deadline" })?,
+        );
+        self.check_finalization_deadline(deadline)
     }
 
-    /// Polls admitted memory RPCs once without blocking; a nonzero
-    /// unresolved count is a typed shutdown failure. Callers repeat drain
-    /// until it succeeds or the caller deadline passes.
-    fn drain(&mut self, _deadline: Deadline) -> Result<MemoryFinalizationReport, ServerError> {
-        let mut completed = 0usize;
-        completed += self.poll_commits().len();
-        completed += self.poll_reconciles().len();
-        completed += self.poll_deletes().len();
-        let outstanding = self.commits.len()
-            + self.reconciles.len()
-            + self.deletes.len()
-            + self.reservations.len();
-        if outstanding > 0 {
-            return Err(ServerError::Timeout {
-                operation: Operation::Shutdown,
+    /// One bounded progress turn: consume terminals once and schedule at most
+    /// 64 semantic candidates. Pending work is reported without pretending it timed out.
+    fn drain(&mut self, deadline: Deadline) -> Result<MemoryFinalizationReport, ServerError> {
+        if self.attempt_deadline.is_none() && self.pending().outstanding != 0 {
+            return Err(ServerError::InvalidInput {
+                field: "memory finalization attempt",
             });
+        }
+        self.reap_retirements();
+        let mut completed = 0;
+        for outcome in self.poll_commits() {
+            if matches!(outcome, CommitSettled::Applied { .. }) {
+                completed += 1;
+            }
+        }
+        for outcome in self.poll_reconciles() {
+            if let ReconcileSettled::Ready {
+                companion,
+                fulfilled,
+            } = outcome
+            {
+                if fulfilled.is_some() {
+                    completed += 1;
+                } else if self.confirmed_reserved_base(companion) {
+                    self.confirmed_bases.insert(companion);
+                }
+            }
+        }
+        for outcome in self.poll_deletes() {
+            if matches!(outcome, DeleteSettled::Deleted { .. }) {
+                completed += 1;
+            }
+        }
+        let pending = self.pending();
+        if pending.outstanding == 0 {
+            return Ok(MemoryFinalizationReport {
+                completed,
+                outstanding: 0,
+            });
+        }
+        self.check_finalization_deadline(deadline)?;
+        let mut candidates: Vec<_> = self
+            .reservations
+            .keys()
+            .chain(self.delete_intents.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if let Some(cursor) = self.finalize_cursor {
+            let start = candidates.iter().position(|id| *id > cursor).unwrap_or(0);
+            candidates.rotate_left(start);
+        }
+        let mut attempted = 0;
+        for companion in candidates {
+            if self.commits.contains_key(&companion)
+                || self.reconciles.contains_key(&companion)
+                || self.deletes.contains_key(&companion)
+            {
+                continue;
+            }
+            self.check_finalization_deadline(deadline)?;
+            if attempted == 64 {
+                break;
+            }
+            attempted += 1;
+            self.finalize_cursor = Some(companion);
+            let request_id = Self::fresh_request_id()?;
+            if let Err(error) = self.submit_finalization(companion, request_id, deadline)
+                && matches!(
+                    error,
+                    ServerError::Timeout {
+                        operation: Operation::Shutdown
+                    }
+                )
+            {
+                return Err(error);
+            }
         }
         Ok(MemoryFinalizationReport {
             completed,
-            outstanding: 0,
+            outstanding: self.pending().outstanding,
         })
     }
 }
