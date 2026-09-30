@@ -8,6 +8,7 @@ publish = false
 crate-type = ["rlib"]
 
 [dependencies]
+getrandom = "=0.3.4"
 mornlea_domain = { path = "../mornlea_domain" }
 mornlea_engine = { path = "../mornlea_engine" }
 mornlea_protocol = { path = "../mornlea_protocol" }

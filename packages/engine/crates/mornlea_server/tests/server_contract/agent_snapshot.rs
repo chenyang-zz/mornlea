@@ -92,6 +92,38 @@ fn entropy() -> Arc<CycleEntropy> {
     })
 }
 
+/// Snapshot bearers must depend on operating-system entropy rather than
+/// observable process state, even when the entropy provider fails.
+#[test]
+fn system_entropy_uses_os_rng_without_predictable_fallback() {
+    let source = include_str!("../../src/agent/snapshot.rs");
+    let production = source
+        .split_once("pub struct SystemEntropy")
+        .expect("production entropy provider")
+        .1
+        .split_once("struct Record")
+        .expect("registry records follow entropy provider")
+        .0;
+    assert!(
+        production.contains("getrandom::fill(out)"),
+        "snapshot capabilities must use the operating-system RNG"
+    );
+    for predictable in [
+        "SystemTime",
+        "UNIX_EPOCH",
+        "process::id",
+        "as_ptr",
+        "*const",
+        "AtomicU64",
+        "sha256(",
+    ] {
+        assert!(
+            !production.contains(predictable),
+            "predictable entropy fallback: {predictable}"
+        );
+    }
+}
+
 fn player_id(text: &str) -> PlayerId {
     PlayerId::try_from_bytes(parse_canonical_uuid(text).expect("fixture uuid"))
         .expect("fixture player id")
@@ -592,6 +624,18 @@ fn register_rejects_bad_identity_and_deadline() {
             .is_err(),
         "entropy failure accepted"
     );
+    *entropy.fail.lock().unwrap() = false;
+    for generation in 1..=REGISTRY_CAPACITY as u64 {
+        registry
+            .register(
+                namespace(),
+                companion,
+                generation,
+                fixture_snapshot(generation),
+                Deadline::at(start + Duration::from_secs(1)),
+            )
+            .expect("failed registration must retain no snapshot slot");
+    }
 }
 
 // ---------------------------------------------------------------------------

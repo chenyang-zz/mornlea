@@ -17,7 +17,7 @@
 //! stay private correlation and are never serialized.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -806,25 +806,19 @@ pub fn canonical_snapshot_digest(
 // Registry.
 // ---------------------------------------------------------------------------
 
-/// Entropy source for snapshot UUIDs and the 32 capability bytes. The fake
-/// clock tests inject a deterministic cycle; production hashes wall time,
-/// process identity, and a counter (loopback bearer only, not a long-term
-/// secret store).
+/// Entropy source for snapshot UUIDs and the 32 capability bytes. Tests
+/// inject a deterministic cycle; production uses operating-system entropy.
 pub trait SnapshotEntropy: Send + Sync {
     fn fill(&self, out: &mut [u8; 32]) -> Result<(), ServerError>;
 }
 
-/// Production entropy: SHA-256 over wall time, process id, a per-fill
-/// counter, and the object address.
-pub struct SystemEntropy {
-    counter: AtomicU64,
-}
+/// Operating-system entropy for unguessable snapshot capabilities. Failure
+/// refuses registration rather than substituting predictable process state.
+pub struct SystemEntropy;
 
 impl SystemEntropy {
     pub fn new() -> Self {
-        Self {
-            counter: AtomicU64::new(0),
-        }
+        Self
     }
 }
 
@@ -836,19 +830,7 @@ impl Default for SystemEntropy {
 
 impl SnapshotEntropy for SystemEntropy {
     fn fill(&self, out: &mut [u8; 32]) -> Result<(), ServerError> {
-        let count = self.counter.fetch_add(1, Ordering::Relaxed);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or(0);
-        let mut input = [0u8; 64];
-        input[0..16].copy_from_slice(&nanos.to_be_bytes());
-        input[16..24].copy_from_slice(&count.to_be_bytes());
-        input[24..32].copy_from_slice(&(std::process::id() as u64).to_be_bytes());
-        input[32..40].copy_from_slice(&(self as *const Self as usize as u64).to_be_bytes());
-        input[40..48].copy_from_slice(&(out.as_ptr() as usize as u64).to_be_bytes());
-        *out = sha256(&input);
-        Ok(())
+        getrandom::fill(out).map_err(|_| invalid("entropy"))
     }
 }
 

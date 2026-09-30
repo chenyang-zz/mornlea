@@ -994,6 +994,7 @@ dependencies = [
 name = "mornlea_server"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "libc",
  "mornlea_domain",
  "mornlea_engine",
