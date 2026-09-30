@@ -36,6 +36,13 @@ impl ContainerState {
         }
     }
 
+    /// The resident commit advances observation identity with the owning
+    /// chunk and clears only this tick's durable mutation marker.
+    pub(crate) fn finish_tick(&mut self, revision: u64) {
+        self.revision = revision;
+        self.dirty = false;
+    }
+
     pub(crate) fn record(&self, key: ChunkKey, reference: ContainerRef) -> Option<ContainerRecord> {
         if reference.chunk() != key.pos {
             return None;

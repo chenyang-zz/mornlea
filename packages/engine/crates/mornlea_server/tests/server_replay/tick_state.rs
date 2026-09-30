@@ -553,7 +553,18 @@ fn committed_overlay_round_trips_every_map() {
     assert_eq!(snapshot[0].0, key);
     assert_eq!(snapshot[0].1, 1);
     assert_eq!(snapshot[0].2, 1);
-    assert_eq!(snapshot[0].3, chest_chunk());
+    let mut expected_chunk = chest_chunk();
+    for slot in [3, 4] {
+        expected_chunk.drops[slot] = mornlea_storage::DropSlot {
+            generation: 1,
+            active: true,
+            stack: coal(2),
+            block_index: mornlea_domain::chunk_block_index(BlockPos::new(0, 65, 2)),
+            age_ticks: 7,
+            pickup_delay_ticks: 5,
+        };
+    }
+    assert_eq!(snapshot[0].3, expected_chunk);
     assert_eq!(
         residents.drop_records(),
         vec![drop_record(3, 7), drop_record(4, 7)]
@@ -655,7 +666,15 @@ fn consecutive_live_ticks_carry_residents() {
     }
     assert_eq!(after.mining, before.mining);
     assert_eq!(after.blocks, before.blocks);
-    assert_eq!(after.ready_snapshot(), before.ready_snapshot());
+    let mut expected_chunks = before.ready_snapshot();
+    // Counter-only aging changes saved slot contents without a durable touch.
+    for (_, _, _, chunk) in &mut expected_chunks {
+        for slot in chunk.drops.iter_mut().filter(|slot| slot.active) {
+            slot.age_ticks = slot.age_ticks.wrapping_add(2);
+            slot.pickup_delay_ticks = slot.pickup_delay_ticks.saturating_sub(2);
+        }
+    }
+    assert_eq!(after.ready_snapshot(), expected_chunks);
     assert_eq!(after.container_records(), before.container_records());
     // Scoped drops age one step per tick with the pickup delay counting down.
     let mut aged = before.drop_records();

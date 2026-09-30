@@ -71,16 +71,19 @@ pub struct ResidentTickState {
 }
 
 impl ResidentTickState {
-    /// Ready chunks as keyed base snapshots in chunk-key order. Overlay
-    /// writes and staged drops stay out: this names the carried chunk
-    /// content, not the tick-local overlay around it.
+    /// Explicit durable snapshots in chunk-key order, including all committed
+    /// overlays and physical slots. Materialization belongs off the tick.
     pub fn ready_snapshot(&self) -> Vec<(ChunkKey, u64, u64, Chunk)> {
         self.ready
             .values()
             .map(|chunk| {
-                let (key, generation, revision, base) =
-                    chunk.snapshot(std::iter::empty(), None, None);
-                (key, generation, revision, base)
+                chunk.snapshot(
+                    self.blocks
+                        .values()
+                        .filter(|observed| observed.key == chunk.key),
+                    self.drops.get(&chunk.key),
+                    self.container_chunks.get(&chunk.key),
+                )
             })
             .collect()
     }
@@ -1494,6 +1497,20 @@ impl<'a> AuthorityReadView<'a> {
     pub fn ready_chunk(&self, key: ChunkKey) -> bool {
         self.ready.contains_key(&key)
     }
+    /// Exact Ready identity including accepted work in this tick. Sparse
+    /// observations cannot supply a revision for an unavailable chunk.
+    pub fn ready_chunk_revision(&self, key: ChunkKey) -> Option<u64> {
+        let chunk = self.ready.get(&key)?;
+        Some(
+            chunk.pending_revision(
+                self.drops.get(&key).is_some_and(|state| state.dirty)
+                    || self
+                        .container_chunks
+                        .get(&key)
+                        .is_some_and(|state| state.dirty),
+            ),
+        )
+    }
     /// Ready-chunk keys in deterministic key order for ring-ordered scans
     /// such as death drops. The set is bounded by chunk-result caps, so
     /// collecting it never scans the world.
@@ -2048,6 +2065,23 @@ impl<'a> TickContext<'a> {
     /// resident commit. Login staging lands before this read, so seeded
     /// actors commit exactly like carried ones.
     pub fn resident_snapshot(&self) -> ResidentTickState {
+        let mut ready = self.ready.clone();
+        let mut drops = self.drops.clone();
+        let mut container_chunks = self.container_chunks.clone();
+        // Commit revision metadata once without expanding compact storage.
+        // Reset markers on the carried copies so a no-op next tick stays clean.
+        for (key, chunk) in &mut ready {
+            chunk.finish_tick(
+                drops.get(key).is_some_and(|state| state.dirty)
+                    || container_chunks.get(key).is_some_and(|state| state.dirty),
+            );
+            if let Some(state) = drops.get_mut(key) {
+                state.dirty = false;
+            }
+            if let Some(state) = container_chunks.get_mut(key) {
+                state.finish_tick(chunk.revision);
+            }
+        }
         ResidentTickState {
             actors: self.actors.clone(),
             runtimes: self.runtimes.clone(),
@@ -2058,10 +2092,10 @@ impl<'a> TickContext<'a> {
             sleep_record: Some(self.sleep_record.clone()),
             sleeping: self.sleeping.clone(),
             blocks: self.blocks.clone(),
-            ready: self.ready.clone(),
-            drops: self.drops.clone(),
+            ready,
+            drops,
             containers: self.containers.clone(),
-            container_chunks: self.container_chunks.clone(),
+            container_chunks,
         }
     }
 
@@ -2852,10 +2886,12 @@ impl<'a> TickContext<'a> {
             } else {
                 current
             };
-            self.ready
+            let chunk = self
+                .ready
                 .get_mut(&observed.key)
-                .expect("Ready ownership cannot change during a write")
-                .set_height(pos.x(), pos.z(), next);
+                .expect("Ready ownership cannot change during a write");
+            chunk.mark_blocks_dirty();
+            chunk.set_height(pos.x(), pos.z(), next);
         }
     }
 }
@@ -3068,6 +3104,308 @@ fn apply_projectile(
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod ready_commit_tests {
+    use super::*;
+    use mornlea_domain::{BlockPos, ChunkPos, FiniteVec3};
+    use mornlea_storage::{ContainerSnapshot, ItemStack, StorageKind};
+
+    fn key() -> ChunkKey {
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        }
+    }
+
+    fn authority(revision: u64) -> AuthorityState {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            0,
+        )
+        .unwrap();
+        let chunk = Chunk {
+            sections: vec![
+                ContainerSnapshot {
+                    kind: StorageKind::Single,
+                    bits: 0,
+                    single: 0,
+                    palette: Vec::new(),
+                    packed: Vec::new(),
+                };
+                24
+            ],
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        };
+        let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+        ctx.preload_ready_chunk(ReadyChunk::try_new(key(), 7, revision, chunk).unwrap());
+        let residents = ctx.resident_snapshot();
+        drop(ctx);
+        authority.commit_residents(residents);
+        authority
+    }
+
+    fn write(
+        ctx: &mut TickContext<'_>,
+        pos: BlockPos,
+        block: u16,
+    ) -> Result<MutationOutcome, RuleReject> {
+        let observed = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
+        ctx.transaction().try_system(
+            SystemRule::Support,
+            vec![BlockWrite::try_new(observed, block).unwrap()],
+        )
+    }
+
+    fn commit(ctx: TickContext<'_>) {
+        let residents = ctx.resident_snapshot();
+        ctx.authority.commit_residents(residents);
+    }
+
+    #[test]
+    fn resident_save_materializes_all_carried_block_writes() {
+        let mut authority = authority(5);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        for x in [1, 2] {
+            write(&mut ctx, BlockPos::new(x, 64, 1), 4).unwrap();
+        }
+        commit(ctx);
+        let snapshots = authority.residents().ready_snapshot();
+        let saved = &snapshots[0];
+        let restored = ReadyChunk::try_new(saved.0, saved.1, saved.2, saved.3.clone()).unwrap();
+        for x in [1, 2] {
+            assert_eq!(restored.block(BlockPos::new(x, 64, 1)), Some(4));
+        }
+        assert_eq!(saved.2, 6);
+    }
+
+    #[test]
+    fn later_dirty_ticks_advance_once_and_noop_live_ticks_preserve_revision() {
+        let mut authority = authority(5);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut ctx, BlockPos::new(1, 64, 1), 4).unwrap();
+        write(&mut ctx, BlockPos::new(2, 64, 1), 4).unwrap();
+        commit(ctx);
+        authority.advance_tick(TickBudget::full()).unwrap();
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut ctx, BlockPos::new(3, 64, 1), 4).unwrap();
+        commit(ctx);
+        assert_eq!(authority.residents().ready_snapshot()[0].2, 7);
+        let saved = &authority.residents().ready_snapshot()[0];
+        let restored = ReadyChunk::try_new(saved.0, saved.1, saved.2, saved.3.clone()).unwrap();
+        for x in [1, 2, 3] {
+            assert_eq!(restored.block(BlockPos::new(x, 64, 1)), Some(4));
+        }
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(authority.residents().ready_snapshot()[0].2, 7);
+    }
+
+    #[test]
+    fn ready_query_uses_pending_chunk_identity_and_refuses_sparse_coverage() {
+        let mut authority = authority(5);
+        let empty = authority.residents().ready_snapshot()[0].3.clone();
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        let missing = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(1, 0),
+        };
+        let other_dimension = ChunkKey {
+            dimension: Dimension::DEPTHS,
+            pos: key().pos,
+        };
+        assert_eq!(ctx.read().ready_chunk_revision(key()), Some(5));
+        assert_eq!(ctx.read().ready_chunk_revision(other_dimension), None);
+        ctx.preload_block(
+            BlockObservation::try_new(missing, 1, 99, BlockPos::new(16, 64, 0), 4).unwrap(),
+        );
+        assert_eq!(ctx.read().ready_chunk_revision(missing), None);
+        ctx.preload_ready_chunk(
+            ReadyChunk::try_new(other_dimension, 7, 17, empty.clone()).unwrap(),
+        );
+        ctx.preload_ready_chunk(ReadyChunk::try_new(missing, 7, 23, empty).unwrap());
+        write(&mut ctx, BlockPos::new(1, 64, 1), 0).unwrap();
+        assert_eq!(ctx.read().ready_chunk_revision(key()), Some(5));
+        write(&mut ctx, BlockPos::new(1, 64, 1), 4).unwrap();
+        write(&mut ctx, BlockPos::new(2, 64, 1), 4).unwrap();
+        assert_eq!(ctx.read().ready_chunk_revision(key()), Some(6));
+        assert_eq!(ctx.read().ready_chunk_revision(other_dimension), Some(17));
+        assert_eq!(ctx.read().ready_chunk_revision(missing), Some(23));
+        assert_eq!(
+            ctx.resident_snapshot().ready_snapshot(),
+            ctx.resident_snapshot().ready_snapshot()
+        );
+        assert_eq!(ctx.read().ready_chunk_revision(key()), Some(6));
+        commit(ctx);
+        let ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        assert_eq!(ctx.read().ready_chunk_revision(key()), Some(6));
+        assert_eq!(ctx.read().ready_chunk_revision(other_dimension), Some(17));
+        assert_eq!(ctx.read().ready_chunk_revision(missing), Some(23));
+    }
+
+    #[test]
+    fn exhausted_chunk_revision_refuses_container_touch_before_publication() {
+        let mut authority = authority(5);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut ctx, BlockPos::new(1, 64, 1), 11).unwrap();
+        commit(ctx);
+        let chunk = authority.residents().ready_snapshot()[0].3.clone();
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        ctx.preload_ready_chunk(ReadyChunk::try_new(key(), 7, u64::MAX, chunk).unwrap());
+        let reference = ctx.container_chunks[&key()].references(key())[0];
+        let before = ctx.read().container(reference).unwrap();
+        let snapshot = ctx.resident_snapshot().ready_snapshot();
+        assert_eq!(
+            ctx.stage(RuleEffect::Container {
+                before: before.clone(),
+                after: before.clone()
+            }),
+            Err(RuleReject::StaleObservation)
+        );
+        assert_eq!(ctx.read().container(reference), Some(before));
+        assert_eq!(ctx.resident_snapshot().ready_snapshot(), snapshot);
+        assert_eq!(ctx.read().ready_chunk_revision(key()), Some(u64::MAX));
+    }
+
+    #[test]
+    fn exhausted_chunk_revision_refuses_changed_effects_and_admits_equal_writes() {
+        let mut authority = authority(u64::MAX);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        let pos = BlockPos::new(1, 64, 1);
+        let before = ctx.resident_snapshot().ready_snapshot();
+        write(&mut ctx, pos, 0).unwrap();
+        assert_eq!(write(&mut ctx, pos, 4), Err(RuleReject::StaleObservation));
+        let drops = DropBatch::try_new(
+            DropSource::System {
+                rule: SystemRule::Support,
+                tick: ctx.read().tick(),
+                target: pos,
+            },
+            Dimension::OVERWORLD,
+            FiniteVec3::try_new([1.5, 64.5, 1.5]).unwrap(),
+            vec![ItemStack {
+                item: 2,
+                count: 1,
+                durability: 0,
+            }],
+            5,
+        )
+        .unwrap();
+        assert_eq!(
+            ctx.transaction()
+                .try_system_with_drops(SystemRule::Support, Vec::new(), drops),
+            Err(RuleReject::StaleObservation)
+        );
+        assert_eq!(ctx.read().ready_chunk_revision(key()), Some(u64::MAX));
+        assert_eq!(ctx.resident_snapshot().ready_snapshot(), before);
+    }
+
+    #[test]
+    fn defensive_compound_rollback_restores_chunk_dirty_identity() {
+        let mut authority = authority(5);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        let pos = BlockPos::new(1, 64, 1);
+        let observed = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
+        let compound = RuleEffect::Compound(vec![
+            RuleEffect::Blocks(BlockTxn::system(
+                SystemRule::Support,
+                ctx.read().tick(),
+                vec![BlockWrite::try_new(observed, 4).unwrap()],
+            )),
+            RuleEffect::Projectile {
+                before: None,
+                after: None,
+            },
+        ]);
+        assert_eq!(
+            ctx.apply_effect(compound),
+            Err(RuleReject::Wire(RejectReason::InvalidInput))
+        );
+        assert_eq!(ctx.read().block(Dimension::OVERWORLD, pos), Some(0));
+        assert_eq!(ctx.read().ready_chunk_revision(key()), Some(5));
+        assert!(ctx.changed_blocks().is_empty());
+    }
+
+    #[test]
+    fn container_and_drop_work_share_revision_and_clear_committed_dirty_flags() {
+        let mut authority = authority(5);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut ctx, BlockPos::new(1, 64, 1), 11).unwrap();
+        let before = ctx.container_chunks[&key()]
+            .record(key(), ctx.container_chunks[&key()].references(key())[0])
+            .unwrap();
+        let mut after = before.clone();
+        let ContainerSlots::Chest(items) = &mut after.slots else {
+            panic!("expected chest")
+        };
+        items[0] = ItemStack {
+            item: 2,
+            count: 3,
+            durability: 0,
+        };
+        ctx.stage(RuleEffect::Container { before, after }).unwrap();
+        let pos = BlockPos::new(2, 64, 1);
+        let drops = DropBatch::try_new(
+            DropSource::System {
+                rule: SystemRule::Support,
+                tick: ctx.read().tick(),
+                target: pos,
+            },
+            Dimension::OVERWORLD,
+            FiniteVec3::try_new([2.5, 64.5, 1.5]).unwrap(),
+            vec![ItemStack {
+                item: 2,
+                count: 1,
+                durability: 0,
+            }],
+            5,
+        )
+        .unwrap();
+        ctx.transaction()
+            .try_system_with_drops(SystemRule::Support, Vec::new(), drops)
+            .unwrap();
+        commit(ctx);
+        let residents = authority.residents();
+        let saved = &residents.ready_snapshot()[0];
+        assert_eq!(saved.2, 6);
+        assert_eq!(saved.3.chests[0].items[0].count, 3);
+        assert!(saved.3.drops[0].active);
+        assert!(!residents.drops[&key()].dirty);
+        assert!(!residents.container_chunks[&key()].dirty);
+        assert_eq!(
+            residents
+                .container_records()
+                .values()
+                .next()
+                .unwrap()
+                .revision,
+            6
+        );
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(authority.residents().ready_snapshot()[0].2, 6);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        let before = ctx
+            .read()
+            .container(
+                residents
+                    .container_records()
+                    .keys()
+                    .next()
+                    .copied()
+                    .unwrap(),
+            )
+            .unwrap()
+            .clone();
+        ctx.stage(RuleEffect::Container {
+            before: before.clone(),
+            after: before,
+        })
+        .unwrap();
+        commit(ctx);
+        assert_eq!(authority.residents().ready_snapshot()[0].2, 7);
     }
 }
 

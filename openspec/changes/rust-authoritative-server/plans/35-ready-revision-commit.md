@@ -1,6 +1,6 @@
 # Ready chunk revision commit prerequisite
 
-Controller serially owns this shared-state prerequisite of 3.9q7b. Baseline19430b0e has successful full server tests but carries compact Ready bases at their original revision. Existing per-cell overlay counters are CAS tokens, not chunk revision identities. Editable source is src/core/world.rs, src/core/state.rs and src/core/container_store.rs under packages/engine/crates/mornlea_server; add private state unit tests in state.rs. Other source, wire/save schemas, storage, providers and Go oracle inputs remain read-only. Controller owns integration, acceptance, records and rollback of these three files.
+Controller serially owns this shared-state prerequisite of 3.9q7b. Baseline19430b0e has successful full server tests but carries compact Ready bases at their original revision. Existing per-cell overlay counters are CAS tokens, not chunk revision identities. Editable source is src/core/world.rs, src/core/state.rs and src/core/container_store.rs under packages/engine/crates/mornlea_server; add private state unit tests in state.rs. Existing tests/server_replay/tick_state.rs may reconcile the two base-only snapshot expectations: carried fixture drop slots must be present and counter-only aging changes payload without advancing revision. Other source, wire/save schemas, storage, providers and Go oracle inputs remain read-only. Controller owns integration, acceptance, records and rollback of these four files.
 
 ## Frozen algorithm and boundary
 

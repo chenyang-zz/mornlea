@@ -18,6 +18,7 @@ pub struct ReadyChunk {
     pub(crate) revision: u64,
     base: Arc<Chunk>,
     heights: [i16; 256],
+    blocks_dirty: bool,
 }
 
 impl ReadyChunk {
@@ -47,6 +48,7 @@ impl ReadyChunk {
             revision,
             base: Arc::new(save.chunk),
             heights: [-65; 256],
+            blocks_dirty: false,
         };
         for z in 0..16 {
             for x in 0..16 {
@@ -83,6 +85,29 @@ impl ReadyChunk {
 
     pub(crate) fn set_height(&mut self, x: i32, z: i32, y: i32) {
         self.heights[((z & 15) * 16 + (x & 15)) as usize] = y as i16;
+    }
+
+    pub(crate) fn mark_blocks_dirty(&mut self) {
+        self.blocks_dirty = true;
+    }
+
+    /// One durable identity covers every accepted mutation in this tick.
+    /// Carried cell overlays alone never create another revision.
+    pub(crate) fn pending_revision(&self, slots_dirty: bool) -> u64 {
+        if self.blocks_dirty || slots_dirty {
+            self.revision
+                .checked_add(1)
+                .expect("write preflight rejects exhausted durable revision")
+        } else {
+            self.revision
+        }
+    }
+
+    /// Commits only revision metadata; compact data stays shared and overlays
+    /// remain owned by the resident maps until an explicit save materializes them.
+    pub(crate) fn finish_tick(&mut self, slots_dirty: bool) {
+        self.revision = self.pending_revision(slots_dirty);
+        self.blocks_dirty = false;
     }
 
     pub(crate) fn container_state(&self) -> super::container_store::ContainerState {
@@ -132,16 +157,9 @@ impl ReadyChunk {
             chunk.furnaces = containers.furnaces.to_vec();
             chunk.chests = containers.chests.to_vec();
         }
-        let revision = if converted.is_empty()
-            && !drops.is_some_and(|state| state.dirty)
-            && !containers.is_some_and(|state| state.dirty)
-        {
-            self.revision
-        } else {
-            self.revision
-                .checked_add(1)
-                .expect("write preflight rejects exhausted durable revision")
-        };
+        let revision = self.pending_revision(
+            drops.is_some_and(|state| state.dirty) || containers.is_some_and(|state| state.dirty),
+        );
         (self.key, self.generation, revision, chunk)
     }
 }
