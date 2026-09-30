@@ -18,7 +18,7 @@ use crate::core::contracts::{
     RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
 };
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
-use crate::core::state::{AuthorityReadView, TickContext};
+use crate::core::state::{AuthorityReadView, DropRehearsal, TickContext};
 use crate::rules::{crafting, inventory, player_survival};
 
 const MAX_ACTORS: usize = 104;
@@ -1035,32 +1035,23 @@ fn settle_player_death(
     let mut after = repacked;
     let mut drops = Vec::new();
     if let Some(block) = death_block(record.motion.position().get()) {
-        let candidates = death_candidates(&view, record.dimension, block);
-        for index in 0..after.slots.len() {
-            drop_player_stack(
-                &view,
-                key,
-                tick,
-                record.dimension,
-                block,
-                &candidates,
-                &mut after.slots[index],
-                player_delay,
-                &mut drops,
-            );
-        }
-        for index in 0..after.armor.len() {
-            drop_player_stack(
-                &view,
-                key,
-                tick,
-                record.dimension,
-                block,
-                &candidates,
-                &mut after.armor[index],
-                player_delay,
-                &mut drops,
-            );
+        let mut rehearsal = view.drop_rehearsal();
+        // Source placement visits candidate chunks before inventory and armor
+        // slots; successful previews reserve capacity for the whole death.
+        for candidate in death_candidates(&view, record.dimension, block) {
+            for stack in after.slots.iter_mut().chain(after.armor.iter_mut()) {
+                drop_player_stack(
+                    &mut rehearsal,
+                    key,
+                    tick,
+                    record.dimension,
+                    block,
+                    candidate,
+                    stack,
+                    player_delay,
+                    &mut drops,
+                );
+            }
         }
     }
     let teleport = teleport_target(&view, &save);
@@ -1195,18 +1186,17 @@ fn rehearse_loot(
     None
 }
 
-/// One player slot through the same ring discipline (`placeDeathDrops`):
-/// each slot rehearses independently, first success commits and clears the
-/// slot, armor keeps its durability form, and unplaceable slots stay with the
-/// player through respawn.
+/// One whole player slot at one ring candidate (`placeDeathDrops`). Only a
+/// successful cumulative preview clears the slot; durable armor keeps its
+/// original form, and refused stacks remain available to later candidates.
 #[allow(clippy::too_many_arguments)]
 fn drop_player_stack(
-    view: &AuthorityReadView<'_>,
+    rehearsal: &mut DropRehearsal<'_>,
     actor: ActorKey,
     tick: u64,
     dimension: Dimension,
     block: BlockPos,
-    candidates: &[ChunkKey],
+    candidate: ChunkKey,
     stack: &mut ItemStack,
     pickup_delay: u8,
     drops: &mut Vec<RuleEffect>,
@@ -1214,25 +1204,22 @@ fn drop_player_stack(
     if stack.item == ITEM_NONE {
         return;
     }
-    for key in candidates {
-        let Some(origin) = death_origin(block, key.pos) else {
-            continue;
-        };
-        let Ok(batch) = DropBatch::try_new(
-            DropSource::Death { actor, tick },
-            dimension,
-            origin,
-            vec![*stack],
-            pickup_delay,
-        ) else {
-            // An unbatchable stack never places; it stays with the player.
-            return;
-        };
-        if view.check_drop_batch(&batch).is_ok() {
-            drops.push(RuleEffect::Drops(batch));
-            *stack = ItemStack::default();
-            return;
-        }
+    let Some(origin) = death_origin(block, candidate.pos) else {
+        return;
+    };
+    let Ok(batch) = DropBatch::try_new(
+        DropSource::Death { actor, tick },
+        dimension,
+        origin,
+        vec![*stack],
+        pickup_delay,
+    ) else {
+        // An unbatchable stack stays with the player through respawn.
+        return;
+    };
+    if rehearsal.try_insert(&batch).is_ok() {
+        drops.push(RuleEffect::Drops(batch));
+        *stack = ItemStack::default();
     }
 }
 

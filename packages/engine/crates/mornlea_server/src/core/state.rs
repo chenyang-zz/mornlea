@@ -1383,6 +1383,40 @@ pub struct AuthorityReadView<'a> {
     metadata: &'a mornlea_storage::Metadata,
 }
 
+/// Private cumulative output preview: failed attempts never consume capacity
+/// or mutate the immutable authority base. One player death admits at most
+/// forty slot batches; final compound staging remains the publication owner.
+pub(crate) struct DropRehearsal<'a> {
+    drops: &'a BTreeMap<ChunkKey, DropState>,
+    ready: &'a BTreeMap<ChunkKey, ReadyChunk>,
+    pending: BTreeMap<ChunkKey, DropState>,
+}
+
+impl DropRehearsal<'_> {
+    pub(crate) fn try_insert(&mut self, batch: &DropBatch) -> Result<(), RuleReject> {
+        drop_store::validate_batch(batch)?;
+        let (key, _) = drop_store::batch_location(batch)?;
+        let mut next = self
+            .pending
+            .get(&key)
+            .or_else(|| self.drops.get(&key))
+            .ok_or(RuleReject::StaleObservation)?
+            .clone();
+        next.insert(key, batch)?;
+        if next.dirty
+            && self
+                .ready
+                .get(&key)
+                .is_some_and(|chunk| chunk.revision == u64::MAX)
+        {
+            return Err(RuleReject::StaleObservation);
+        }
+        // Install only a complete successful preview, including revision admission.
+        self.pending.insert(key, next);
+        Ok(())
+    }
+}
+
 impl<'a> AuthorityReadView<'a> {
     /// Sparse fixture cells alone do not establish a Ready chunk.
     pub fn ready_chunk(&self, key: ChunkKey) -> bool {
@@ -1525,25 +1559,17 @@ impl<'a> AuthorityReadView<'a> {
     pub fn drops(&self, key: ChunkKey) -> &[DropRecord] {
         self.drops.get(&key).map(DropState::records).unwrap_or(&[])
     }
+    /// Cumulative preview borrows the base and retains only successful chunk copies.
+    pub(crate) fn drop_rehearsal(&self) -> DropRehearsal<'a> {
+        DropRehearsal {
+            drops: self.drops,
+            ready: self.ready,
+            pending: BTreeMap::new(),
+        }
+    }
     /// Rehearse the entire output on one fixed slot copy; commit must recheck it.
     pub fn check_drop_batch(&self, batch: &DropBatch) -> Result<(), RuleReject> {
-        drop_store::validate_batch(batch)?;
-        let (key, _) = drop_store::batch_location(batch)?;
-        let mut next = self
-            .drops
-            .get(&key)
-            .ok_or(RuleReject::StaleObservation)?
-            .clone();
-        next.insert(key, batch)?;
-        if next.dirty
-            && self
-                .ready
-                .get(&key)
-                .is_some_and(|chunk| chunk.revision == u64::MAX)
-        {
-            return Err(RuleReject::StaleObservation);
-        }
-        Ok(())
+        self.drop_rehearsal().try_insert(batch)
     }
     /// Immutable staged projectile records; providers cannot bypass compare-and-replace.
     pub fn projectiles(&self) -> &'a [ProjectileRecord] {
@@ -3115,5 +3141,83 @@ mod compound_inventory_tests {
                 assert!(ctx.events().is_empty());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod drop_rehearsal_tests {
+    use super::*;
+    use mornlea_domain::{BlockPos, ChunkPos, FiniteVec3, HostileId, chunk_block_index};
+    use mornlea_storage::{DropSlot, ItemStack};
+
+    fn stack(item: u16, count: u8) -> ItemStack {
+        ItemStack {
+            item,
+            count,
+            durability: 0,
+        }
+    }
+
+    fn batch(stacks: Vec<ItemStack>) -> DropBatch {
+        DropBatch::try_new(
+            DropSource::Death {
+                actor: ActorKey::Hostile(HostileId::try_new(1).unwrap()),
+                tick: 0,
+            },
+            Dimension::OVERWORLD,
+            FiniteVec3::try_new([0.5, 1.5, 0.5]).unwrap(),
+            stacks,
+            40,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn failed_merge_and_split_leave_cumulative_scratch_and_base_unchanged() {
+        let key = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        };
+        let mut slots = [DropSlot::default(); 32];
+        for (index, slot) in slots.iter_mut().take(31).enumerate() {
+            *slot = DropSlot {
+                generation: index as u32 + 1,
+                active: true,
+                stack: stack(1, 64),
+                block_index: chunk_block_index(BlockPos::new(0, 70, 0)),
+                age_ticks: 100,
+                pickup_delay_ticks: 2,
+            };
+        }
+        slots[0].stack = stack(3, 62);
+        slots[0].block_index = chunk_block_index(BlockPos::new(0, 1, 0));
+        slots[31].generation = 40;
+        let base = BTreeMap::from([(key, DropState::new(key, slots))]);
+        let ready = BTreeMap::new();
+        let mut rehearsal = DropRehearsal {
+            drops: &base,
+            ready: &ready,
+            pending: BTreeMap::new(),
+        };
+        rehearsal.try_insert(&batch(vec![stack(3, 1)])).unwrap();
+        let accepted = rehearsal.pending[&key].slots;
+        let accepted_records = rehearsal.pending[&key].records().to_vec();
+        assert_eq!(
+            rehearsal.try_insert(&batch(vec![stack(3, 2), stack(4, 1)])),
+            Err(RuleReject::Wire(RejectReason::DropCapacity)),
+        );
+        assert_eq!(rehearsal.pending[&key].slots, accepted);
+        assert_eq!(rehearsal.pending[&key].records(), accepted_records);
+        assert!(rehearsal.pending[&key].dirty);
+        rehearsal.try_insert(&batch(vec![stack(4, 1)])).unwrap();
+        let final_slots = &rehearsal.pending[&key].slots;
+        assert_eq!(final_slots[0].stack, stack(3, 63));
+        assert_eq!(final_slots[0].age_ticks, 100);
+        assert_eq!(final_slots[31].generation, 41);
+        assert_eq!(final_slots[31].stack, stack(4, 1));
+        assert_eq!(final_slots[31].age_ticks, 0);
+        assert_eq!(base[&key].slots, slots);
+        assert!(!base[&key].dirty);
+        assert_eq!(rehearsal.pending.len(), 1);
     }
 }

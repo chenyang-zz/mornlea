@@ -2899,6 +2899,7 @@ fn player_unplaceable_slots_stay_for_respawn() {
     ctx.stage(RuleEffect::Runtime(runtime(key, false))).unwrap();
     let mut before = InventoryRecord::empty();
     before.slots = [stack(1, 64, 0); 36];
+    before.armor[1] = stack(58, 1, 2);
     before.crafting_size = CraftingSize::Workbench;
     ctx.preload_inventory(key, before);
     let report = provider::run(&mut ctx, death_call()).unwrap();
@@ -2914,6 +2915,341 @@ fn player_unplaceable_slots_stay_for_respawn() {
     let settled = ctx.read().actor(key).unwrap();
     assert_eq!(settled.lifecycle, ActorLifecycle::Respawning);
     assert_eq!(settled.survival.health(), 20);
+    let ActorBody::Player(body) = &settled.body else {
+        unreachable!()
+    };
+    assert_eq!(body.armor, before.armor);
+}
+
+fn death_capacity_chunk(
+    ctx: &mut TickContext<'_>,
+    key: ChunkKey,
+    occupied: usize,
+    partial: Option<ItemStack>,
+    revision: u64,
+) {
+    let mut chunk = empty_chunk_data();
+    for (index, slot) in chunk.drops.iter_mut().enumerate() {
+        slot.generation = index as u32 + 10;
+        if index < occupied {
+            *slot = mornlea_storage::DropSlot {
+                active: true,
+                stack: stack(1, 64, 0),
+                block_index: mornlea_domain::chunk_block_index(BlockPos::new(
+                    key.pos.x() * 16 + (index % 16) as i32,
+                    70,
+                    key.pos.z() * 16 + (index / 16) as i32,
+                )),
+                age_ticks: 100 + index as u32,
+                pickup_delay_ticks: 2,
+                ..*slot
+            };
+        }
+    }
+    if let Some(stack) = partial {
+        chunk.drops[0].stack = stack;
+        chunk.drops[0].block_index = mornlea_domain::chunk_block_index(BlockPos::new(0, 1, 0));
+    }
+    ctx.preload_ready_chunk(ReadyChunk::try_new(key, 1, revision, chunk).unwrap());
+}
+
+fn stage_capacity_death(ctx: &mut TickContext<'_>, victim: SessionKey, before: InventoryRecord) {
+    let key = ActorKey::Player(victim);
+    let mut record = player(victim, 1, [0.5, 1.0, 0.5]);
+    record.survival = survival(0);
+    let ActorBody::Player(body) = &mut record.body else {
+        unreachable!()
+    };
+    body.health = 0;
+    body.armor = before.armor;
+    ctx.stage(RuleEffect::Actor(record)).unwrap();
+    ctx.stage(RuleEffect::Runtime(runtime(key, false))).unwrap();
+    ctx.preload_inventory(key, before);
+}
+
+#[test]
+fn cumulative_player_death_capacity_uses_neighbor_or_retains_later_stack() {
+    for neighbor_ready in [false, true] {
+        let mut state = authority();
+        let victim = session(&mut state, 1);
+        let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+        environment(&mut ctx);
+        let home = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        };
+        let neighbor = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(-1, -1),
+        };
+        death_capacity_chunk(&mut ctx, home, 31, None, 1);
+        if neighbor_ready {
+            preload_empty(&mut ctx, neighbor.dimension, -1, -1);
+        }
+        let original_drops = ctx.read().drops(home).to_vec();
+        let mut before = InventoryRecord::empty();
+        before.slots[0] = stack(3, 1, 0);
+        before.slots[1] = stack(4, 2, 0);
+        stage_capacity_death(&mut ctx, victim, before);
+        let report = provider::run(&mut ctx, death_call()).unwrap();
+        assert_eq!(
+            (report.examined, report.applied, report.rejected),
+            (1, 1, 0)
+        );
+        let key = ActorKey::Player(victim);
+        let after = ctx.read().inventory(key).unwrap();
+        assert_eq!(after.slots[0], ItemStack::default());
+        assert_eq!(
+            after.slots[1],
+            if neighbor_ready {
+                ItemStack::default()
+            } else {
+                before.slots[1]
+            }
+        );
+        let local = ctx.read().drops(home).to_vec();
+        assert_eq!(&local[..31], original_drops.as_slice());
+        assert_eq!(local[31].id.slot(), 31);
+        assert_eq!(local[31].id.generation(), 42);
+        assert_eq!(local[31].stack, before.slots[0]);
+        assert_eq!(local[31].position.get(), [0.5, 1.5, 0.5]);
+        assert_eq!((local[31].age, local[31].pickup_delay), (0, 40));
+        if neighbor_ready {
+            let remote = ctx.read().drops(neighbor).to_vec();
+            assert_eq!(remote.len(), 1);
+            assert_eq!((remote[0].id.slot(), remote[0].id.generation()), (0, 1));
+            assert_eq!(remote[0].position.get(), [-0.5, 1.5, -0.5]);
+            assert_eq!(remote[0].stack, before.slots[1]);
+        }
+        let settled = ctx.read().actor(key).unwrap();
+        assert_eq!(settled.lifecycle, ActorLifecycle::Respawning);
+        assert_eq!(settled.survival.health(), 20);
+        assert!(ctx.events().is_empty());
+        let local = ctx.read().drops(home).to_vec();
+        let remote = ctx.read().drops(neighbor).to_vec();
+        let after = *after;
+        let record = settled.clone();
+        let report = provider::run(&mut ctx, death_call()).unwrap();
+        assert_eq!(
+            (report.examined, report.applied, report.rejected),
+            (0, 0, 0)
+        );
+        assert_eq!(ctx.read().inventory(key), Some(&after));
+        assert_eq!(ctx.read().actor(key), Some(&record));
+        assert_eq!(ctx.read().drops(home), local);
+        assert_eq!(ctx.read().drops(neighbor), remote);
+    }
+}
+
+#[test]
+fn cumulative_player_death_merge_observes_earlier_slot_and_failed_attempt_rollback() {
+    for (occupied, initial, first, later, expected_local, expected_remote) in [
+        (31, 62, 2, 64, vec![64, 64], vec![]),
+        (31, 62, 3, 64, vec![64, 1], vec![64]),
+        (32, 62, 1, 2, vec![63], vec![2]),
+        (32, 62, 2, 3, vec![64], vec![3]),
+        (32, 62, 3, 2, vec![64], vec![3]),
+    ] {
+        let mut state = authority();
+        let victim = session(&mut state, 1);
+        let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+        environment(&mut ctx);
+        let home = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        };
+        let neighbor = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(-1, -1),
+        };
+        death_capacity_chunk(&mut ctx, home, occupied, Some(stack(3, initial, 0)), 1);
+        preload_empty(&mut ctx, neighbor.dimension, -1, -1);
+        let original = ctx.read().drops(home).to_vec();
+        let mut before = InventoryRecord::empty();
+        before.slots[0] = stack(3, first, 0);
+        before.slots[1] = stack(3, later, 0);
+        stage_capacity_death(&mut ctx, victim, before);
+        let report = provider::run(&mut ctx, death_call()).unwrap();
+        assert_eq!((report.applied, report.rejected), (1, 0));
+        let local = ctx.read().drops(home).to_vec();
+        assert_eq!(&local[1..occupied], &original[1..]);
+        assert_eq!(local[0].id, original[0].id);
+        assert_eq!(local[0].age, original[0].age);
+        assert_eq!(local[0].pickup_delay, 40);
+        let counts: Vec<_> = local
+            .iter()
+            .filter(|drop| drop.stack.item == 3)
+            .map(|drop| drop.stack.count)
+            .collect();
+        assert_eq!(counts, expected_local);
+        let remote = ctx.read().drops(neighbor).to_vec();
+        assert_eq!(
+            remote
+                .iter()
+                .map(|drop| drop.stack.count)
+                .collect::<Vec<_>>(),
+            expected_remote
+        );
+        if let Some(drop) = remote.first() {
+            assert_eq!((drop.id.slot(), drop.id.generation()), (0, 1));
+            assert_eq!(drop.position.get(), [-0.5, 1.5, -0.5]);
+            assert_eq!((drop.age, drop.pickup_delay), (0, 40));
+        }
+        let key = ActorKey::Player(victim);
+        assert!(
+            ctx.read()
+                .inventory(key)
+                .unwrap()
+                .slots
+                .iter()
+                .all(|slot| *slot == ItemStack::default())
+        );
+        assert_eq!(
+            ctx.read().actor(key).unwrap().lifecycle,
+            ActorLifecycle::Respawning
+        );
+    }
+}
+
+#[test]
+fn cumulative_player_death_revision_exhaustion_keeps_inventory_and_armor() {
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    death_capacity_chunk(&mut ctx, home, 0, None, u64::MAX);
+    let mut before = InventoryRecord::empty();
+    before.slots[0] = stack(3, 2, 0);
+    before.armor[1] = stack(58, 1, 2);
+    stage_capacity_death(&mut ctx, victim, before);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!((report.applied, report.rejected), (1, 0));
+    let key = ActorKey::Player(victim);
+    assert_eq!(ctx.read().inventory(key), Some(&before));
+    assert!(ctx.read().drops(home).is_empty());
+    let settled = ctx.read().actor(key).unwrap();
+    assert_eq!(settled.lifecycle, ActorLifecycle::Respawning);
+    let ActorBody::Player(body) = &settled.body else {
+        unreachable!()
+    };
+    assert_eq!(body.armor, before.armor);
+}
+
+#[test]
+fn cumulative_player_death_maximum_slots_preserves_durable_forms() {
+    let mut state = authority();
+    let victim = session(&mut state, 1);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    let neighbor = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(-1, -1),
+    };
+    preload_empty(&mut ctx, home.dimension, 0, 0);
+    preload_empty(&mut ctx, neighbor.dimension, -1, -1);
+    let mut before = InventoryRecord::empty();
+    for (index, slot) in before.slots.iter_mut().enumerate() {
+        *slot = stack(10, 1, index as u16 + 1);
+    }
+    for (index, slot) in before.armor.iter_mut().enumerate() {
+        *slot = stack(58 + index as u16, 1, index as u16 + 1);
+    }
+    stage_capacity_death(&mut ctx, victim, before);
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!((report.applied, report.rejected), (1, 0));
+    let local = ctx.read().drops(home).to_vec();
+    let remote = ctx.read().drops(neighbor).to_vec();
+    assert_eq!((local.len(), remote.len()), (32, 8));
+    assert_eq!(
+        local.iter().map(|drop| drop.stack).collect::<Vec<_>>(),
+        before.slots[..32]
+    );
+    assert_eq!(
+        remote.iter().map(|drop| drop.stack).collect::<Vec<_>>(),
+        before.slots[32..]
+            .iter()
+            .chain(before.armor.iter())
+            .copied()
+            .collect::<Vec<_>>()
+    );
+    for (drops, origin) in [(&local, [0.5, 1.5, 0.5]), (&remote, [-0.5, 1.5, -0.5])] {
+        for (index, drop) in drops.iter().enumerate() {
+            assert_eq!((drop.id.slot(), drop.id.generation()), (index as u8, 1));
+            assert_eq!(drop.position.get(), origin);
+            assert_eq!((drop.age, drop.pickup_delay), (0, 40));
+        }
+    }
+    let key = ActorKey::Player(victim);
+    let after = ctx.read().inventory(key).unwrap();
+    assert!(
+        after
+            .slots
+            .iter()
+            .chain(after.armor.iter())
+            .all(|slot| *slot == ItemStack::default())
+    );
+    let settled = ctx.read().actor(key).unwrap();
+    assert_eq!(settled.lifecycle, ActorLifecycle::Respawning);
+    let ActorBody::Player(body) = &settled.body else {
+        unreachable!()
+    };
+    assert_eq!(body.armor, [ItemStack::default(); 4]);
+    assert_eq!(settled.survival.armor_points(), 0);
+}
+
+#[test]
+fn cumulative_player_death_later_player_observes_prior_death_drops() {
+    let mut state = authority();
+    let first = session(&mut state, 1);
+    let second = session(&mut state, 2);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    environment(&mut ctx);
+    let home = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    };
+    let neighbor = ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(-1, -1),
+    };
+    death_capacity_chunk(&mut ctx, home, 31, None, 1);
+    preload_empty(&mut ctx, neighbor.dimension, -1, -1);
+    for (victim, item) in [(first, 3), (second, 4)] {
+        let mut before = InventoryRecord::empty();
+        before.slots[0] = stack(item, 64, 0);
+        before.slots[1] = stack(item + 2, 64, 0);
+        stage_capacity_death(&mut ctx, victim, before);
+    }
+    let report = provider::run(&mut ctx, death_call()).unwrap();
+    assert_eq!((report.applied, report.rejected), (2, 0));
+    assert_eq!(ctx.read().drops(home)[31].stack, stack(3, 64, 0));
+    assert_eq!(
+        drop_stacks(&ctx, neighbor),
+        vec![stack(5, 64, 0), stack(4, 64, 0), stack(6, 64, 0)]
+    );
+    for victim in [first, second] {
+        let key = ActorKey::Player(victim);
+        assert_eq!(
+            ctx.read().actor(key).unwrap().lifecycle,
+            ActorLifecycle::Respawning
+        );
+        assert!(
+            ctx.read()
+                .inventory(key)
+                .unwrap()
+                .slots
+                .iter()
+                .all(|slot| *slot == ItemStack::default())
+        );
+    }
 }
 
 #[test]

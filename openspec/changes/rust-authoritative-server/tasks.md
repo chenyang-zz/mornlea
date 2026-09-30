@@ -113,7 +113,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9s2 Prune disconnected sleep anchors before admitting replacement sessions.
 - [x] 3.9w1 Enforce source sneak-door gates after target classification.
 - [x] 3.9q1 Synchronize daylight burn health before hostile death settlement.
-- [ ] 3.9q2 Rehearse cumulative player-death drop capacity across slots.
+- [x] 3.9q2 Rehearse cumulative player-death drop capacity across slots.
 - [ ] 3.9q3 Share first-valid companion mining action and retain held intent.
 - [x] 3.9q4 Correct passive wander angular quantization.
 - [x] 3.9q5 Detect upper hostile body intersections with fluid.
