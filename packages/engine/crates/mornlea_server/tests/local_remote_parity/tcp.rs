@@ -531,6 +531,9 @@ impl McpLifecycle for IdleMcp {
 struct IdleMemory;
 
 impl MemoryFinalizer for IdleMemory {
+    fn pending(&self) -> MemoryFinalizationReport {
+        MemoryFinalizationReport::default()
+    }
     fn begin_attempt(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
         Ok(())
     }

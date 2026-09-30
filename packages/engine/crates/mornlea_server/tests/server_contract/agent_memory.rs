@@ -459,6 +459,74 @@ fn shutdown_reconcile_fresh_context() {
     assert_eq!(owner.mirror(companion()).unwrap().revision, 1);
 }
 
+#[test]
+fn pending_memory_counts_semantic_ownership_once_and_cleanup_separately() {
+    let (_, clock) = StepClock::start();
+    let script = ScriptAgent::new();
+    let mut owner = owner(script.clone(), &clock);
+    assert_eq!(owner.pending().outstanding, 0);
+    owner.set_mirror(companion(), active_mirror(1));
+    owner.reserve(reservation()).unwrap();
+    assert_eq!(owner.pending().outstanding, 1);
+    owner.commit(companion(), request_id(50)).unwrap();
+    assert_eq!(owner.pending().outstanding, 1);
+    script.push(AgentPoll::Failed(unavailable()));
+    script
+        .state
+        .refuse_retirement
+        .lock()
+        .unwrap()
+        .insert(request_id(50));
+    assert_eq!(owner.poll_commits().len(), 1);
+    assert_eq!(owner.pending().outstanding, 2);
+    owner
+        .delete(companion(), request_id(51), operation(61))
+        .unwrap();
+    assert_eq!(owner.pending().outstanding, 2);
+    script.push(AgentPoll::Completed(AgentResponse::Delete(
+        DeleteResponse {
+            leased: leased_for(51),
+            companion_id: companion(),
+            memory_epoch: 99,
+            tombstone_operation_id: operation(61),
+        },
+    )));
+    assert_eq!(
+        owner.poll_deletes(),
+        vec![DeleteSettled::Fenced {
+            companion: companion()
+        }]
+    );
+    assert_eq!(owner.pending().outstanding, 2);
+    assert_eq!(owner.pending().completed, 0);
+}
+
+#[test]
+fn pending_memory_retains_delete_intent_after_rpc_retirement() {
+    let (_, clock) = StepClock::start();
+    for terminal in [
+        AgentPoll::Failed(unavailable()),
+        AgentPoll::Completed(AgentResponse::Delete(DeleteResponse {
+            leased: leased_for(51),
+            companion_id: companion(),
+            memory_epoch: 99,
+            tombstone_operation_id: operation(61),
+        })),
+    ] {
+        let script = ScriptAgent::new();
+        let mut owner = owner(script.clone(), &clock);
+        owner.set_mirror(companion(), active_mirror(1));
+        owner
+            .delete(companion(), request_id(51), operation(61))
+            .unwrap();
+        script.push(terminal);
+        assert_eq!(owner.poll_deletes().len(), 1);
+        assert_eq!(*script.state.retired.lock().unwrap(), vec![request_id(51)]);
+        assert!(owner.reservation(companion()).is_none());
+        assert_eq!(owner.pending().outstanding, 1);
+    }
+}
+
 /// Reconcile backoff waits `1, 2, 4, 8, 16, 32` ticks capped: consecutive
 /// failures arm the wait, ticks count it down, and later companions still
 /// converge in the same batch.
@@ -657,34 +725,6 @@ impl mornlea_server::agent::lease::AgentWire for EchoMemoryWire {
     fn close(&self) {}
 }
 
-/// Test ownership wrapper exposes the actual provider's retained slot count.
-struct ObservedLease(Arc<Mutex<mornlea_server::agent::lease::LeaseController>>);
-
-impl AgentHandle for ObservedLease {
-    fn submit(&mut self, request: AgentRequest) -> Result<AgentRequestId, ServerError> {
-        self.0.lock().unwrap().submit(request)
-    }
-    fn poll(&mut self, id: AgentRequestId) -> AgentPoll {
-        self.0.lock().unwrap().poll(id)
-    }
-    fn cancel(&mut self, id: AgentRequestId, deadline: Deadline) -> Result<(), ServerError> {
-        self.0.lock().unwrap().cancel(id, deadline)
-    }
-    fn freeze(&mut self, clock: &dyn Clock) -> Option<mornlea_server::contracts::FrozenLease> {
-        self.0.lock().unwrap().freeze(clock)
-    }
-    fn release(
-        &mut self,
-        lease: &mornlea_server::contracts::FrozenLease,
-        deadline: Deadline,
-    ) -> Result<(), ServerError> {
-        self.0.lock().unwrap().release(lease, deadline)
-    }
-    fn close(&mut self, deadline: Deadline) -> Result<(), ServerError> {
-        self.0.lock().unwrap().close(deadline)
-    }
-}
-
 #[test]
 fn real_lease_reclaims_more_than_sixty_four_memory_cycles() {
     use mornlea_server::agent::lease::{LeaseConfig, LeaseController};
@@ -700,9 +740,9 @@ fn real_lease_reclaims_more_than_sixty_four_memory_cycles() {
     .unwrap();
     agent.refresh();
     agent.freeze(&*clock).unwrap();
-    let observed = Arc::new(Mutex::new(agent));
+    let mut observed = agent.clone();
     let mut owner = MemoryOwner::new(
-        Box::new(ObservedLease(observed.clone())),
+        Box::new(agent),
         clock.clone(),
         leased_for(1).base.client_instance_id,
         leased_for(1).base.namespace_id,
@@ -719,22 +759,14 @@ fn real_lease_reclaims_more_than_sixty_four_memory_cycles() {
             std::thread::yield_now();
         }
         assert_eq!(owner.mirror(companion()).unwrap().revision, 1);
-        assert_eq!(
-            observed.lock().unwrap().retained_requests(),
-            0,
-            "commit cycle {cycle}"
-        );
+        assert_eq!(observed.retained_requests(), 0, "commit cycle {cycle}");
         owner.reconcile(companion(), request_id(tag + 1)).unwrap();
         while owner.poll_reconciles().is_empty() {
             assert!(Instant::now() < until);
             std::thread::yield_now();
         }
         assert!(owner.is_ready(companion()));
-        assert_eq!(
-            observed.lock().unwrap().retained_requests(),
-            0,
-            "reconcile cycle {cycle}"
-        );
+        assert_eq!(observed.retained_requests(), 0, "reconcile cycle {cycle}");
         owner
             .delete(companion(), request_id(tag + 2), operation(61))
             .unwrap();
@@ -743,17 +775,9 @@ fn real_lease_reclaims_more_than_sixty_four_memory_cycles() {
             std::thread::yield_now();
         }
         assert!(!owner.mirror(companion()).unwrap().active);
-        assert_eq!(
-            observed.lock().unwrap().retained_requests(),
-            0,
-            "delete cycle {cycle}"
-        );
+        assert_eq!(observed.retained_requests(), 0, "delete cycle {cycle}");
     }
-    observed
-        .lock()
-        .unwrap()
-        .close(Deadline::at(clock.monotonic()))
-        .unwrap();
+    observed.close(Deadline::at(clock.monotonic())).unwrap();
 }
 
 #[test]

@@ -9,7 +9,7 @@
 //! discard) and `lease_fence` (business plan fencing).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -91,6 +91,7 @@ struct WireState {
     gate: Mutex<Option<mpsc::Receiver<()>>>,
     parked: AtomicBool,
     closed: AtomicBool,
+    close_calls: AtomicUsize,
 }
 
 /// Scripted wire double: records every round, optionally holds the caller on
@@ -111,6 +112,7 @@ impl ScriptedWire {
                 gate: Mutex::new(None),
                 parked: AtomicBool::new(false),
                 closed: AtomicBool::new(false),
+                close_calls: AtomicUsize::new(0),
             }),
         }
     }
@@ -199,6 +201,7 @@ impl AgentWire for ScriptedWire {
     }
 
     fn close(&self) {
+        self.state.close_calls.fetch_add(1, Ordering::SeqCst);
         self.state.closed.store(true, Ordering::SeqCst);
     }
 }
@@ -597,6 +600,7 @@ fn terminal_business_requests_remain_charged_until_retirement() {
     let (start, clock) = StepClock::start();
     let wire = ScriptedWire::new();
     let mut agent = controller(&wire, &clock);
+    let mut other = agent.clone();
     acquire_lease(&agent, lease_id(4));
     for tag in 20..84 {
         let request = tagged_plan(tag);
@@ -622,7 +626,7 @@ fn terminal_business_requests_remain_charged_until_retirement() {
         })
     );
     assert_eq!(
-        agent.submit(AgentRequest::Plan(tagged_plan(84))),
+        other.submit(AgentRequest::Plan(tagged_plan(84))),
         Err(ServerError::Capacity {
             resource: mornlea_server::contracts::Resource::AgentRuns,
             limit: 64,
@@ -630,7 +634,7 @@ fn terminal_business_requests_remain_charged_until_retirement() {
         })
     );
     assert_eq!(wire.rounds().len(), 64, "refusal must not call the wire");
-    agent
+    other
         .cancel(base_identity(20).request_id, Deadline::at(start))
         .unwrap();
     assert_eq!(agent.retained_requests(), 63);
@@ -654,6 +658,27 @@ fn terminal_business_requests_remain_charged_until_retirement() {
             .unwrap();
     }
     assert_eq!(agent.retained_requests(), 0);
+}
+
+#[test]
+fn cloned_controller_shares_frozen_identity_and_idempotent_close() {
+    let (start, clock) = StepClock::start();
+    let wire = ScriptedWire::new();
+    let mut agent = controller(&wire, &clock);
+    let mut other = agent.clone();
+    acquire_lease(&agent, lease_id(4));
+    let frozen = other.freeze(&*clock).unwrap();
+    assert_eq!(agent.control_phase(), ControlPhase::Frozen);
+    assert_eq!(agent.freeze(&*clock), Some(frozen));
+    other.close(Deadline::at(start)).unwrap();
+    assert_eq!(agent.control_phase(), ControlPhase::Closed);
+    assert_eq!(agent.current_lease(), None);
+    assert_eq!(
+        agent.submit(AgentRequest::Plan(tagged_plan(20))),
+        Err(unavailable())
+    );
+    agent.close(Deadline::at(start)).unwrap();
+    assert_eq!(wire.state.close_calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]

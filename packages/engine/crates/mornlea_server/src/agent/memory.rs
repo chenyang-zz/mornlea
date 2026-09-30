@@ -941,6 +941,22 @@ impl MemoryOwner {
 }
 
 impl MemoryFinalizer for MemoryOwner {
+    fn pending(&self) -> MemoryFinalizationReport {
+        let companions: BTreeSet<_> = self
+            .reservations
+            .keys()
+            .chain(self.delete_intents.keys())
+            .chain(self.commits.keys())
+            .chain(self.reconciles.keys())
+            .chain(self.deletes.keys())
+            .copied()
+            .collect();
+        MemoryFinalizationReport {
+            completed: 0,
+            outstanding: companions.len() + self.pending_retirements.len(),
+        }
+    }
+
     /// Cancels the previous attempt and opens a fresh context of at most 30
     /// seconds; unresolved operation identities are retained.
     fn begin_attempt(&mut self, deadline: Deadline) -> Result<(), ServerError> {

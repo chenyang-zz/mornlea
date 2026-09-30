@@ -155,6 +155,8 @@ fn unavailable() -> ServerError {
 /// by the explicit `start_control_round`/`settle_control` pair, which lets a
 /// host drive control RPCs from its own scheduler and keeps the machine
 /// deterministic under a test clock.
+/// Clones share the same lease, capacity, worker joins and close boundary.
+#[derive(Clone)]
 pub struct LeaseController {
     shared: Arc<Shared>,
 }

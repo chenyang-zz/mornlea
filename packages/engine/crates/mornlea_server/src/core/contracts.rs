@@ -2874,6 +2874,9 @@ pub trait McpLifecycle {
 }
 
 pub trait MemoryFinalizer {
+    /// Pure retained ownership snapshot, available even after an attempt fails.
+    /// A semantic operation and its current RPC count once; cleanup joins remain owned.
+    fn pending(&self) -> MemoryFinalizationReport;
     fn begin_attempt(&mut self, deadline: Deadline) -> Result<(), ServerError>;
     fn drain(&mut self, deadline: Deadline) -> Result<MemoryFinalizationReport, ServerError>;
 }

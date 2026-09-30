@@ -159,6 +159,9 @@ struct MemoryDouble {
 }
 
 impl MemoryFinalizer for MemoryDouble {
+    fn pending(&self) -> MemoryFinalizationReport {
+        MemoryFinalizationReport::default()
+    }
     fn begin_attempt(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
         self.attempts += 1;
         Ok(())
