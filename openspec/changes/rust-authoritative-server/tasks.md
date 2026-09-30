@@ -120,6 +120,11 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [ ] 3.9q8 Compare passive birth neighborhoods in chunks.
 - [ ] 3.9q9 Refuse unrepresentable hostile geometry without partial effects.
 - [ ] 3.9q10 Reconcile and apply executing-tick hostile shot spread.
+- [ ] 3.9m1 Match placement refusal precedence and ordinary fluid replacement.
+- [ ] 3.9m2 Validate crop, sapling and torch support before placement.
+- [ ] 3.9m3 Refuse player-overlapping block footprints.
+- [ ] 3.9m4 Revalidate resolved geometry and active actor bases at commit.
+- [ ] 3.9m5 Validate compound inventory preimages in cumulative order.
 - [x] 3.9d1 Enforce Agent HTTP absolute deadlines and close cancellation.
 - [ ] 3.9d2a Accept a clonable request cancellation contract with real HTTP evidence.
 - [ ] 3.9d2 Bound and reclaim Agent business request ownership.
