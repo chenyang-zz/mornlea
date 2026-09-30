@@ -1530,3 +1530,6 @@ Survival correction accepted after91dd4280. Reused isolated implementer owned fo
 
 
 Tuning access contract accepted afterae84ee53. Controller directly changed contracts.rs/world_read.rs only; eight missing-method compile errors are contract RED, followed by real default/non-default/zero-value constructor observations. GREEN world_read11/11, all-target clippy and owned fmt/diff. Accessors preserve constructor values without changing defaults or policy; new consumers must name this landing SHA. Survival/eating/furnace timing behavior remains unaccepted until separate real-provider boundary tests execute. Architecture skill: no change.
+
+
+Controller directly freezes and implements the two-file eating-duration consumer against accepted256fddf8. Exact source max1 fallback and interrupt-before-settlement order remain; eligible advancement needs the staged environment and never silently falls back to32. This work is independent of isolated intake edits and retains serial contract ownership. Survival/furnace consumers await separately frozen tests. Architecture skill: no change.

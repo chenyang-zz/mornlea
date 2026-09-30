@@ -106,6 +106,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [ ] 3.9p3 Preserve held sprint intent, gate effective physics and skip reset movement.
 - [ ] 3.9p4 Restore sneak-edge support probes and thick-snow speed scaling.
 - [x] 3.9t0 Expose the accepted per-tick survival, eating and furnace tuning snapshot.
+- [ ] 3.9t1e Consume configured eating duration at the settlement boundary.
 - [x] 3.9d1 Enforce Agent HTTP absolute deadlines and close cancellation.
 - [ ] 3.9d2 Bound and reclaim Agent business request ownership.
 
