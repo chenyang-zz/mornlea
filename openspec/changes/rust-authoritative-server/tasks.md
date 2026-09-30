@@ -124,7 +124,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9q10 Reconcile and apply executing-tick hostile shot spread.
 - [x] 3.9m1 Match placement refusal precedence and ordinary fluid replacement.
 - [x] 3.9m2 Validate crop, sapling and torch support before placement.
-- [ ] 3.9m3 Refuse player-overlapping placement target shapes.
+- [x] 3.9m3 Refuse player-overlapping placement target shapes.
 - [ ] 3.9m4 Revalidate resolved geometry and active actor bases at commit.
 - [x] 3.9m5 Validate compound inventory preimages in cumulative order.
 - [x] 3.9d1 Enforce Agent HTTP absolute deadlines and close cancellation.

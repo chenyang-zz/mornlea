@@ -2386,6 +2386,15 @@ fn place_ray_stops_at_closed_door() {
         },
         |context, session| {
             let actor = ActorKey::Player(session);
+            context
+                .stage(RuleEffect::Actor(player_actor(
+                    session,
+                    [0.5, 64.0, -0.5],
+                    std::f32::consts::PI,
+                    0.0,
+                )))
+                .unwrap();
+            context.preload_block(observation(BlockPos::new(0, 65, -1), AIR));
             let resolved =
                 resolve_place(actor, &south_intent(), &context.read()).expect("door is the hit");
             let outcome = context
@@ -2838,4 +2847,251 @@ fn torch_bottom_face_still_has_no_placeable_form() {
             );
         },
     );
+}
+
+fn assert_body_place(
+    context: &mut TickContext<'_>,
+    session: SessionKey,
+    intent: &PlacementIntent,
+    writes: &[(BlockPos, u16)],
+    refusal: Option<RejectReason>,
+    cells: &[BlockPos],
+) {
+    let actor = ActorKey::Player(session);
+    let chunks = [overworld_key(writes[0].0)];
+    let before = probe(context, cells, &[actor], &[chest_reference()], &chunks);
+    let resolved = resolve_place(actor, intent, &context.read());
+    assert_eq!(
+        probe(context, cells, &[actor], &[chest_reference()], &chunks),
+        before
+    );
+    if let Some(reason) = refusal {
+        assert_eq!(resolved, Err(RuleReject::Wire(reason)));
+        return;
+    }
+    let outcome = context
+        .transaction()
+        .try_place(resolved.expect("body-clear form resolves"))
+        .expect("commit");
+    assert_eq!(outcome.changed.len(), writes.len());
+    assert!(outcome.inventory_changed);
+    let mut expected = before;
+    expected.inventories[0].1.as_mut().unwrap().slots[0].count -= 1;
+    for ((pos, block), delta) in writes.iter().zip(&outcome.changed) {
+        assert_eq!(delta.pos, *pos);
+        assert_eq!(delta.block, *block);
+        let cell = expected
+            .cells
+            .iter_mut()
+            .find(|(candidate, _)| candidate == pos)
+            .unwrap()
+            .1
+            .as_mut()
+            .unwrap();
+        cell.block = *block;
+        cell.revision += 1;
+    }
+    assert_eq!(
+        probe(context, cells, &[actor], &[chest_reference()], &chunks),
+        expected
+    );
+}
+
+#[test]
+fn dirt_target_refuses_feet_overlap_but_allows_exact_tangent() {
+    for (foot_y, refusal) in [(64.5, Some(RejectReason::Occupied)), (65.0, None)] {
+        let target = BlockPos::new(0, 64, 0);
+        let cells = [
+            (BlockPos::new(0, 66, 0), AIR),
+            (BlockPos::new(0, 65, 0), AIR),
+            (target, AIR),
+            (BlockPos::new(0, 63, 0), STONE),
+        ];
+        support_geometry(
+            [0.5, foot_y, 0.5],
+            LookAngles::try_new(0.0, -std::f32::consts::FRAC_PI_2).unwrap(),
+            ITEM_DIRT,
+            &cells,
+            |ctx, session, intent| {
+                assert_body_place(
+                    ctx,
+                    session,
+                    intent,
+                    &[(target, DIRT)],
+                    refusal,
+                    &cells.map(|(pos, _)| pos),
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn dirt_target_refuses_torso_overlap_without_effects() {
+    for destination in [AIR, 27, 34] {
+        let target = BlockPos::new(0, 65, 0);
+        let cells = [(target, destination), (BlockPos::new(0, 65, 1), STONE)];
+        support_geometry(
+            [0.5, 64.0, 0.5],
+            south_intent().look(),
+            ITEM_DIRT,
+            &cells,
+            |ctx, session, intent| {
+                assert_body_place(
+                    ctx,
+                    session,
+                    intent,
+                    &[(target, DIRT)],
+                    Some(RejectReason::Occupied),
+                    &cells.map(|(pos, _)| pos),
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn qualified_zero_box_plants_can_occupy_the_player_cell() {
+    for (item, form, support) in [(34, 37, 35), (40, 46, 36), (41, 54, 35), (57, 89, DIRT)] {
+        let target = BlockPos::new(0, 65, 0);
+        let cells = [
+            (target, AIR),
+            (BlockPos::new(0, 65, 1), STONE),
+            (BlockPos::new(0, 64, 0), support),
+        ];
+        support_geometry(
+            [0.5, 64.0, 0.5],
+            south_intent().look(),
+            item,
+            &cells,
+            |ctx, session, intent| {
+                assert_body_place(
+                    ctx,
+                    session,
+                    intent,
+                    &[(target, form)],
+                    None,
+                    &cells.map(|(pos, _)| pos),
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn torch_full_cell_overlap_precedes_unsupported_shape() {
+    for support in [37, STONE] {
+        let target = BlockPos::new(0, 65, 0);
+        let cells = [(target, AIR), (BlockPos::new(0, 65, 1), support)];
+        support_geometry(
+            [0.5, 64.0, 0.5],
+            south_intent().look(),
+            44,
+            &cells,
+            |ctx, session, intent| {
+                assert_body_place(
+                    ctx,
+                    session,
+                    intent,
+                    &[(target, 75)],
+                    Some(RejectReason::Occupied),
+                    &cells.map(|(pos, _)| pos),
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn bed_target_uses_short_shape_and_strict_boundary() {
+    for (foot_y, refusal) in [
+        (64.5, Some(RejectReason::Occupied)),
+        (64.5625, None),
+        (64.75, None),
+    ] {
+        let target = BlockPos::new(0, 64, 0);
+        let head = BlockPos::new(0, 64, 1);
+        let cells = [
+            (BlockPos::new(0, 66, 0), AIR),
+            (BlockPos::new(0, 65, 0), AIR),
+            (target, AIR),
+            (head, AIR),
+            (BlockPos::new(0, 63, 0), STONE),
+            (BlockPos::new(0, 63, 1), STONE),
+        ];
+        support_geometry(
+            [0.5, foot_y, 0.5],
+            LookAngles::try_new(0.0, -std::f32::consts::FRAC_PI_2).unwrap(),
+            ITEM_BED,
+            &cells,
+            |ctx, session, intent| {
+                assert_body_place(
+                    ctx,
+                    session,
+                    intent,
+                    &[(target, 76), (head, 80)],
+                    refusal,
+                    &cells.map(|(pos, _)| pos),
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn door_target_uses_default_south_shape_before_yaw_expansion() {
+    for (z, yaw, lower, refusal) in [
+        (0.875, 0.0, 62, Some(RejectReason::Occupied)),
+        (0.25, std::f32::consts::PI, 66, None),
+    ] {
+        let target = BlockPos::new(0, 65, 0);
+        let hit_z = if yaw == 0.0 { -1 } else { 1 };
+        let upper = BlockPos::new(0, 66, 0);
+        let cells = [
+            (target, AIR),
+            (BlockPos::new(0, 65, hit_z), STONE),
+            (upper, AIR),
+            (BlockPos::new(0, 64, 0), STONE),
+        ];
+        support_geometry(
+            [0.5, 64.0, z],
+            LookAngles::try_new(yaw, 0.0).unwrap(),
+            43,
+            &cells,
+            |ctx, session, intent| {
+                assert_body_place(
+                    ctx,
+                    session,
+                    intent,
+                    &[(target, lower), (upper, 70)],
+                    refusal,
+                    &cells.map(|(pos, _)| pos),
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn torch_fluid_refusal_precedes_full_cell_overlap() {
+    for water in [27, 34] {
+        let target = BlockPos::new(0, 65, 0);
+        let cells = [(target, water), (BlockPos::new(0, 65, 1), STONE)];
+        support_geometry(
+            [0.5, 64.0, 0.5],
+            south_intent().look(),
+            44,
+            &cells,
+            |ctx, session, intent| {
+                assert_body_place(
+                    ctx,
+                    session,
+                    intent,
+                    &[(target, 75)],
+                    Some(RejectReason::InvalidBlock),
+                    &cells.map(|(pos, _)| pos),
+                );
+            },
+        );
+    }
 }

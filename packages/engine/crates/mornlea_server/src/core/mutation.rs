@@ -483,6 +483,7 @@ fn adjacent(cell: BlockPos, face: RayFace) -> BlockPos {
 /// unavailable, not the client payload that is invalid.
 struct ActorBasis {
     dimension: Dimension,
+    position: [f32; 3],
     eye: [f32; 3],
     reach: f32,
     drop_pickup_delay: u8,
@@ -498,6 +499,7 @@ fn actor_basis(view: &AuthorityReadView<'_>, actor: ActorKey) -> Result<ActorBas
     let position = record.motion.position().get();
     Ok(ActorBasis {
         dimension: record.dimension,
+        position,
         eye: [
             position[0],
             position[1] + tunables.eye_height(),
@@ -537,6 +539,59 @@ fn require_support(
         Some(below) if solid_support(below.block) => Ok(()),
         Some(_) => Err(RuleReject::Wire(RejectReason::InvalidBlock)),
     }
+}
+
+/// Local source shapes from `physics.BlockCollisionBoxes` in
+/// `packages/shared/physics/types.go`. Current placement forms have at most
+/// one box; this private admission check does not own shared motion geometry.
+fn placement_shape(form: u16) -> Option<[[f32; 3]; 2]> {
+    if form == AIR
+        || is_fluid(form)
+        || is_plant(form)
+        || is_torch(form)
+        || is_snow_layer(form)
+        || form == DOOR_UPPER
+    {
+        return None;
+    }
+    if (DOOR_LOWER_FIRST..DOOR_UPPER).contains(&form) {
+        let index = form - DOOR_LOWER_FIRST;
+        let direction = index / 2;
+        let open = index % 2 == 1;
+        let thin = 3.0 / 16.0;
+        let wide = 1.0 - thin;
+        return Some(match (direction, open) {
+            (0, false) | (1, true) => [[0.0, 0.0, wide], [1.0, 1.0, 1.0]],
+            (1, false) | (2, true) => [[0.0, 0.0, 0.0], [thin, 1.0, 1.0]],
+            (2, false) | (3, true) => [[0.0, 0.0, 0.0], [1.0, 1.0, thin]],
+            _ => [[wide, 0.0, 0.0], [1.0, 1.0, 1.0]],
+        });
+    }
+    let top = if is_bed(form) {
+        9.0 / 16.0
+    } else if is_farmland(form) {
+        15.0 / 16.0
+    } else {
+        1.0
+    };
+    Some([[0.0; 3], [1.0, top, 1.0]])
+}
+
+/// Strict volume overlap retains the source float32 order: player foot bounds
+/// use `physics.PlayerBounds`, and each local shape is added to the cast cell
+/// coordinates before `core.AABB.Overlaps`. Boundary contact remains legal.
+fn shape_overlaps_player(shape: [[f32; 3]; 2], target: BlockPos, position: [f32; 3]) -> bool {
+    let minimum = [position[0] - 0.3, position[1] - 0.0, position[2] - 0.3];
+    let maximum = [position[0] + 0.3, position[1] + 1.8, position[2] + 0.3];
+    let offset = [target.x() as f32, target.y() as f32, target.z() as f32];
+    (0..3).all(|axis| {
+        minimum[axis] < shape[1][axis] + offset[axis]
+            && maximum[axis] > shape[0][axis] + offset[axis]
+    })
+}
+
+fn placement_overlaps_player(form: u16, target: BlockPos, position: [f32; 3]) -> bool {
+    placement_shape(form).is_some_and(|shape| shape_overlaps_player(shape, target, position))
 }
 
 /// Torch support follows nonempty `physics.BlockCollisionBoxes` in
@@ -915,7 +970,10 @@ pub fn resolve_place(
     let target_observed = view
         .observation(basis.dimension, target)
         .ok_or(RuleReject::Wire(RejectReason::ChunkNotReady))?;
-    if target_observed.block != AIR && !is_fluid(target_observed.block) {
+    // Admission uses the source item form before yaw expands door/bed writes.
+    if (target_observed.block != AIR && !is_fluid(target_observed.block))
+        || placement_overlaps_player(form, target, basis.position)
+    {
         return Err(RuleReject::Wire(RejectReason::Occupied));
     }
     // Ordinary single-cell forms replace fluids. Multi-cell footprints keep
@@ -974,6 +1032,11 @@ pub fn resolve_place(
         writes.push(BlockWrite::try_new(target_observed, bed_foot_id(facing))?);
         writes.push(BlockWrite::try_new(head_observed, bed_head_id(facing))?);
     } else {
+        // Torches have no generic collision boxes but reserve their full cell
+        // before support admission (`torchCellOverlapsPlayer` in Go).
+        if is_torch(form) && shape_overlaps_player([[0.0; 3], [1.0; 3]], target, basis.position) {
+            return Err(RuleReject::Wire(RejectReason::Occupied));
+        }
         require_single_cell_support(view, basis.dimension, target, form)?;
         writes.push(BlockWrite::try_new(target_observed, form)?);
     }
@@ -1353,6 +1416,62 @@ mod placement_support_tests {
                 Err(RuleReject::Wire(RejectReason::ChunkNotReady))
             );
             assert!(context.events().is_empty());
+        }
+    }
+}
+
+#[cfg(test)]
+mod placement_body_tests {
+    use super::*;
+
+    // The human registry produces only the default south door form; every
+    // other local door shape is checked at this private geometry seam.
+    #[test]
+    fn source_door_edges_and_zero_box_families() {
+        let south = [[0.0, 0.0, 0.8125], [1.0, 1.0, 1.0]];
+        let east = [[0.8125, 0.0, 0.0], [1.0, 1.0, 1.0]];
+        let west = [[0.0, 0.0, 0.0], [0.1875, 1.0, 1.0]];
+        let north = [[0.0, 0.0, 0.0], [1.0, 1.0, 0.1875]];
+        for (form, expected) in [
+            (62, south),
+            (63, east),
+            (64, west),
+            (65, south),
+            (66, north),
+            (67, west),
+            (68, east),
+            (69, north),
+        ] {
+            assert_eq!(placement_shape(form), Some(expected));
+        }
+        for form in [
+            0, 27, 28, 29, 30, 31, 32, 33, 34, 37, 44, 46, 53, 54, 61, 70, 71, 72, 73, 74, 75, 84,
+            85, 86, 87, 88, 89,
+        ] {
+            assert_eq!(placement_shape(form), None);
+            assert!(!placement_overlaps_player(
+                form,
+                BlockPos::new(0, 64, 0),
+                [0.5, 64.0, 0.5]
+            ));
+        }
+        assert_eq!(placement_shape(3), Some([[0.0; 3], [1.0; 3]]));
+    }
+
+    // No human item places farmland, so its short height is proved through
+    // the same private source shape and overlap helpers used by admission.
+    #[test]
+    fn farmland_short_shape_and_strict_contact() {
+        let target = BlockPos::new(0, 64, 0);
+        for form in [35, 36] {
+            assert_eq!(placement_shape(form), Some([[0.0; 3], [1.0, 0.9375, 1.0]]));
+            assert!(placement_overlaps_player(form, target, [0.5, 64.875, 0.5]));
+            assert!(!placement_overlaps_player(
+                form,
+                target,
+                [0.5, 64.9375, 0.5]
+            ));
+            assert!(!placement_overlaps_player(form, target, [0.5, 65.0, 0.5]));
         }
     }
 }
