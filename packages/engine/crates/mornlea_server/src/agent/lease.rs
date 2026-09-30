@@ -116,7 +116,7 @@ struct BusinessSlot {
 }
 
 struct WorkerHandle {
-    cancel: Arc<AtomicBool>,
+    cancel: RpcCancellation,
     join: Option<JoinHandle<()>>,
 }
 
@@ -129,6 +129,7 @@ struct Core {
     frozen: Option<FrozenLease>,
     released: bool,
     closed: bool,
+    close_started: bool,
     business: HashMap<AgentRequestId, BusinessSlot>,
     worker: Option<WorkerHandle>,
 }
@@ -178,6 +179,7 @@ impl LeaseController {
                     frozen: None,
                     released: false,
                     closed: false,
+                    close_started: false,
                     business: HashMap::new(),
                     worker: None,
                 }),
@@ -190,41 +192,49 @@ impl LeaseController {
     }
 
     /// Spawns the pacing control worker: an immediate refresh, then one
-    /// refresh per heartbeat interval measured on the controller clock. The
-    /// worker is cancelled and joined by freeze or close.
+    /// refresh per heartbeat interval measured on the controller clock.
+    /// Freeze signals cancellation while retaining the join; close reaps it.
     pub fn spawn_control_worker(&self) -> Result<(), ServerError> {
         let mut core = self.shared.core.lock().unwrap();
-        if core.closed {
+        if core.closed || matches!(core.phase, ControlPhase::Frozen | ControlPhase::Closed) {
             return Err(unavailable());
         }
         if core.worker.is_some() {
             return Ok(());
         }
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = RpcCancellation::default();
         let shared = self.shared.clone();
         let worker_cancel = cancel.clone();
-        let join = std::thread::spawn(move || {
-            loop {
-                if worker_cancel.load(Ordering::SeqCst) {
-                    return;
-                }
-                refresh_shared(&shared);
-                if worker_cancel.load(Ordering::SeqCst) {
-                    return;
-                }
-                let due = shared
-                    .clock
-                    .monotonic()
-                    .checked_add(Duration::from_millis(HEARTBEAT_EVERY_MS));
-                let Some(due) = due else { return };
-                while shared.clock.monotonic() < due {
-                    if worker_cancel.load(Ordering::SeqCst) {
+        // Install actual producer ownership before it can acquire the core lock.
+        let join = std::thread::Builder::new()
+            .spawn(move || {
+                loop {
+                    if worker_cancel.is_cancelled() {
                         return;
                     }
-                    std::thread::sleep(Duration::from_millis(5));
+                    refresh_shared(&shared, &worker_cancel);
+                    if worker_cancel.is_cancelled()
+                        || matches!(
+                            shared.core.lock().unwrap().phase,
+                            ControlPhase::Frozen | ControlPhase::Closed
+                        )
+                    {
+                        return;
+                    }
+                    let due = shared
+                        .clock
+                        .monotonic()
+                        .checked_add(Duration::from_millis(HEARTBEAT_EVERY_MS));
+                    let Some(due) = due else { return };
+                    while shared.clock.monotonic() < due {
+                        if worker_cancel.is_cancelled() {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
                 }
-            }
-        });
+            })
+            .map_err(|_| unavailable())?;
         core.worker = Some(WorkerHandle {
             cancel,
             join: Some(join),
@@ -236,7 +246,7 @@ impl LeaseController {
     /// under the computed deadline, and settle the outcome. This is exactly
     /// the spawned worker's loop body.
     pub fn refresh(&self) {
-        refresh_shared(&self.shared);
+        refresh_shared(&self.shared, &RpcCancellation::default());
     }
 
     /// Starts one control round: bumps `control_revision`, computes the
@@ -399,18 +409,37 @@ impl LeaseController {
             .count()
     }
 
+    /// Control ownership remains retained until close reaps its producer.
+    pub fn retained_control_workers(&self) -> usize {
+        usize::from(self.shared.core.lock().unwrap().worker.is_some())
+    }
+
+    /// Reports whether the retained control producer has finished.
+    pub fn pending_control_worker(&self) -> bool {
+        self.shared
+            .core
+            .lock()
+            .unwrap()
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.join.as_ref().is_some_and(|join| !join.is_finished()))
+    }
+
     fn mint_request_id(&self) -> AgentRequestId {
         mint_request_id(&self.shared)
     }
 }
 
 /// Refresh body shared by the convenience method and the spawned worker.
-fn refresh_shared(shared: &Arc<Shared>) {
+fn refresh_shared(shared: &Arc<Shared>, cancellation: &RpcCancellation) {
     let controller = LeaseController {
         shared: shared.clone(),
     };
     if let Some(round) = controller.start_control_round() {
-        let outcome = shared.wire.rpc(round.request.clone(), round.deadline);
+        let outcome =
+            shared
+                .wire
+                .rpc_cancellable(round.request.clone(), round.deadline, cancellation);
         controller.settle_control(round, outcome);
     }
 }
@@ -645,54 +674,46 @@ impl AgentHandle for LeaseController {
     }
 
     fn freeze(&mut self, clock: &dyn Clock) -> Option<FrozenLease> {
-        let worker = {
-            let mut core = self.shared.core.lock().unwrap();
-            if core.closed {
-                return None;
-            }
-            // Fence off every late control outcome and stop the machine
-            // before deciding what to retain.
+        let mut core = self.shared.core.lock().unwrap();
+        if !core.closed {
+            // Fence every late outcome without relinquishing its producer handle.
             match core.control_revision.checked_add(1) {
-                Some(revision) => core.control_revision = revision,
+                Some(revision) => {
+                    core.control_revision = revision;
+                    core.phase = ControlPhase::Frozen;
+                }
                 None => {
                     core.closed = true;
                     core.phase = ControlPhase::Closed;
-                    return None;
                 }
             }
             core.inflight = None;
-            core.phase = ControlPhase::Frozen;
-            if core.frozen.is_none() && !core.released {
-                // Only a still-unexpired lease is retained.
-                let retained = core
-                    .active
-                    .as_ref()
-                    .filter(|active| active.expires_at > clock.monotonic())
-                    .map(|active| (active.id, active.fence, active.expires_at));
-                if let Some((id, fence, expires_at)) = retained {
-                    core.frozen = Some(FrozenLease {
-                        client: self.shared.config.client_instance_id,
-                        namespace: self.shared.config.namespace_id,
-                        lease: id,
-                        lease_fence: fence,
-                        expires_at,
-                    });
-                }
-            }
-            core.worker
-                .take()
-                .map(|mut worker| {
-                    worker.cancel.store(true, Ordering::SeqCst);
-                    worker.join.take()
-                })
-                .unwrap_or(None)
-        };
-        if let Some(join) = worker {
-            let _ = join.join();
         }
-        // A failed release retries the same identity: freeze keeps returning
-        // the retained lease until it expires or the release succeeds.
-        let core = self.shared.core.lock().unwrap();
+        if let Some(worker) = &core.worker {
+            // Freeze has no caller deadline, so it can only signal the producer.
+            // Close still owns the join if fencing overflowed or an RPC hangs.
+            worker.cancel.cancel();
+        }
+        if core.closed {
+            return None;
+        }
+        if core.frozen.is_none() && !core.released {
+            let retained = core
+                .active
+                .as_ref()
+                .filter(|active| active.expires_at > clock.monotonic())
+                .map(|active| (active.id, active.fence, active.expires_at));
+            if let Some((id, fence, expires_at)) = retained {
+                core.frozen = Some(FrozenLease {
+                    client: self.shared.config.client_instance_id,
+                    namespace: self.shared.config.namespace_id,
+                    lease: id,
+                    lease_fence: fence,
+                    expires_at,
+                });
+            }
+        }
+        // Release retries retain the same frozen identity until success/expiry.
         core.frozen
             .clone()
             .filter(|lease| lease.expires_at > clock.monotonic())
@@ -752,36 +773,98 @@ impl AgentHandle for LeaseController {
         }
     }
 
-    fn close(&mut self, _deadline: Deadline) -> Result<(), ServerError> {
-        let worker = {
+    fn close(&mut self, deadline: Deadline) -> Result<(), ServerError> {
+        let first_close = {
             let mut core = self.shared.core.lock().unwrap();
-            if core.closed {
-                return Ok(());
-            }
+            // Closed phase alone may reflect revision overflow, not wire close.
+            // The separate marker makes retries resume all retained ownership.
+            let first_close = !core.close_started;
+            core.close_started = true;
             core.closed = true;
             core.phase = ControlPhase::Closed;
-            if let Some(revision) = core.control_revision.checked_add(1) {
+            if first_close && let Some(revision) = core.control_revision.checked_add(1) {
                 core.control_revision = revision;
             }
+            core.active = None;
             core.inflight = None;
             core.frozen = None;
+            if let Some(worker) = &core.worker {
+                worker.cancel.cancel();
+            }
             for slot in core.business.values() {
                 slot.cancel.cancel();
             }
-            core.worker
-                .take()
-                .map(|mut worker| {
-                    worker.cancel.store(true, Ordering::SeqCst);
-                    worker.join.take()
-                })
-                .unwrap_or(None)
+            first_close
         };
-        if let Some(join) = worker {
-            let _ = join.join();
+        if first_close {
+            // Interrupt request sockets before any producer wait. Unfinished
+            // joins remain retained if a provider cannot yet observe the signal.
+            self.shared.wire.close();
         }
-        // Closes admitted requests and idle connections on the wire; a
-        // second close is a no-op success.
-        self.shared.wire.close();
-        Ok(())
+        let mut wall_expiry = None;
+        loop {
+            let (finished, outstanding) = {
+                let mut core = self.shared.core.lock().unwrap();
+                let mut finished = Vec::with_capacity(65);
+                if core.worker.as_ref().is_some_and(|worker| {
+                    worker.join.as_ref().is_some_and(|join| join.is_finished())
+                }) {
+                    let mut worker = core.worker.take().unwrap();
+                    finished.push((worker.join.take().unwrap(), "agent control worker"));
+                }
+                let retired: Vec<_> = core
+                    .business
+                    .iter()
+                    .filter_map(|(id, slot)| {
+                        slot.join
+                            .as_ref()
+                            .is_some_and(|join| join.is_finished())
+                            .then_some(*id)
+                    })
+                    .collect();
+                for id in retired {
+                    let mut slot = core.business.remove(&id).unwrap();
+                    finished.push((slot.join.take().unwrap(), "agent business worker"));
+                }
+                let outstanding = core.worker.is_some() || !core.business.is_empty();
+                (finished, outstanding)
+            };
+            let mut error = None;
+            for (join, invariant) in finished {
+                if join.join().is_err() && error.is_none() {
+                    error = Some(ServerError::Internal { invariant });
+                }
+            }
+            if let Some(error) = error {
+                return Err(error);
+            }
+            if !outstanding {
+                return Ok(());
+            }
+            let now = self.shared.clock.monotonic();
+            let expiry = match wall_expiry {
+                Some(expiry) => expiry,
+                None => {
+                    // A fixed authority clock cannot extend a caller's close
+                    // budget; wall time bounds only this ownership wait.
+                    let expiry = Instant::now()
+                        .checked_add(deadline.instant().saturating_duration_since(now))
+                        .ok_or(ServerError::InvalidInput { field: "deadline" })?;
+                    wall_expiry = Some(expiry);
+                    expiry
+                }
+            };
+            let wall_now = Instant::now();
+            if deadline.expired(now) || wall_now >= expiry {
+                return Err(ServerError::Timeout {
+                    operation: Operation::Close,
+                });
+            }
+            std::thread::sleep(
+                Duration::from_millis(2)
+                    .min(deadline.instant().saturating_duration_since(now))
+                    .min(expiry.saturating_duration_since(wall_now)),
+            );
+        }
     }
 }

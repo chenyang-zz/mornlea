@@ -773,3 +773,211 @@ fn panicked_business_worker_reports_internal_and_is_reclaimed() {
     assert_eq!(agent.retained_requests(), 0);
     assert_eq!(agent.cancel(id, Deadline::at(start)), Err(unavailable()));
 }
+
+/// Separate bounded gates permit actual control and business producers to be
+/// held concurrently without serializing the controller's wire calls.
+struct ShutdownWire {
+    control_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    business_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    entered: mpsc::Sender<bool>,
+    closed: AtomicBool,
+}
+
+impl AgentWire for ShutdownWire {
+    fn rpc_cancellable(
+        &self,
+        request: AgentRequest,
+        _deadline: Deadline,
+        _cancellation: &RpcCancellation,
+    ) -> Result<AgentResponse, ServerError> {
+        let control = matches!(request, AgentRequest::Heartbeat(_));
+        let receiver = if control {
+            self.control_gate.lock().unwrap().take()
+        } else {
+            self.business_gate.lock().unwrap().take()
+        };
+        self.entered.send(control).unwrap();
+        if let Some(receiver) = receiver {
+            let _ = receiver.recv_timeout(SECOND);
+        }
+        match request {
+            AgentRequest::Heartbeat(_) => Ok(heartbeat_response(&request)),
+            AgentRequest::Plan(ref request) => Ok(plan_response(request)),
+            _ => panic!("expected seeded control or business request"),
+        }
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+fn shutdown_wire() -> (
+    Arc<ShutdownWire>,
+    mpsc::Sender<()>,
+    mpsc::Sender<()>,
+    mpsc::Receiver<bool>,
+) {
+    let (control, control_gate) = mpsc::channel();
+    let (business, business_gate) = mpsc::channel();
+    let (entered, ready) = mpsc::channel();
+    (
+        Arc::new(ShutdownWire {
+            control_gate: Mutex::new(Some(control_gate)),
+            business_gate: Mutex::new(Some(business_gate)),
+            entered,
+            closed: AtomicBool::new(false),
+        }),
+        control,
+        business,
+        ready,
+    )
+}
+
+#[test]
+fn freeze_retains_noncooperative_control_join_without_waiting() {
+    let (start, clock) = StepClock::start();
+    let (wire, control, _business, ready) = shutdown_wire();
+    let mut agent = LeaseController::try_new(config(), wire, clock.clone()).unwrap();
+    acquire_lease(&agent, lease_id(4));
+    agent.spawn_control_worker().unwrap();
+    assert!(ready.recv_timeout(SECOND).expect("heartbeat entered"));
+    let before = Instant::now();
+    let frozen = agent.freeze(&*clock).expect("retained live lease");
+    let elapsed = before.elapsed();
+    let retained = agent.retained_control_workers();
+    let pending = agent.pending_control_worker();
+    let frozen_again = agent.freeze(&*clock).expect("same frozen lease");
+    let _ = control.send(());
+    let close = agent.close(Deadline::at(start + SECOND));
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "freeze elapsed {elapsed:?}"
+    );
+    assert_eq!(frozen.lease, lease_id(4));
+    assert_eq!(frozen.lease_fence, 1);
+    assert_eq!(frozen_again, frozen);
+    assert_eq!(retained, 1);
+    assert!(pending);
+    assert_eq!(close, Ok(()));
+    assert_eq!(agent.retained_control_workers(), 0);
+    assert!(agent.current_lease().is_none());
+    assert_eq!(agent.spawn_control_worker(), Err(unavailable()));
+}
+
+#[test]
+fn freeze_cancels_cooperative_control_rpc_without_closing_wire() {
+    let (start, clock) = StepClock::start();
+    let wire = ScriptedWire::new();
+    let mut agent = controller(&wire, &clock);
+    acquire_lease(&agent, lease_id(4));
+    let gate = wire.hold();
+    agent.spawn_control_worker().unwrap();
+    assert!(wait_until(|| wire.parked()));
+    let before = Instant::now();
+    let frozen = agent.freeze(&*clock);
+    let elapsed = before.elapsed();
+    let promptly_stopped = wait_until(|| !agent.pending_control_worker());
+    drop(gate);
+    assert!(frozen.is_some());
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "freeze elapsed {elapsed:?}"
+    );
+    assert!(promptly_stopped);
+    assert!(before.elapsed() < Duration::from_millis(200));
+    assert!(!wire.closed(), "freeze must not close the shared wire");
+    assert_eq!(agent.retained_control_workers(), 1);
+    assert_eq!(agent.spawn_control_worker(), Err(unavailable()));
+    agent.close(Deadline::at(start)).unwrap();
+    assert_eq!(agent.retained_control_workers(), 0);
+}
+
+#[test]
+fn close_bounds_both_owned_worker_lanes_and_retries_reclamation() {
+    let (start, clock) = StepClock::start();
+    let (wire, control, business, ready) = shutdown_wire();
+    let mut agent = LeaseController::try_new(config(), wire.clone(), clock.clone()).unwrap();
+    acquire_lease(&agent, lease_id(4));
+    agent.spawn_control_worker().unwrap();
+    assert!(ready.recv_timeout(SECOND).expect("heartbeat entered"));
+    agent.submit(AgentRequest::Plan(tagged_plan(20))).unwrap();
+    assert!(!ready.recv_timeout(SECOND).expect("business entered"));
+    let before = Instant::now();
+    let result = agent.close(Deadline::at(start + Duration::from_millis(20)));
+    let elapsed = before.elapsed();
+    let retained_control = agent.retained_control_workers();
+    let pending_control = agent.pending_control_worker();
+    let retained_business = agent.retained_requests();
+    let pending_business = agent.pending_business_workers();
+    let wire_closed = wire.closed.load(Ordering::SeqCst);
+    let lease_cleared = agent.current_lease().is_none();
+    let repeated_pending = agent.close(Deadline::at(start));
+    let _ = control.send(());
+    let _ = business.send(());
+    assert_eq!(
+        result,
+        Err(ServerError::Timeout {
+            operation: Operation::Close
+        })
+    );
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "close elapsed {elapsed:?}"
+    );
+    assert!(wire_closed);
+    assert_eq!(
+        repeated_pending,
+        Err(ServerError::Timeout {
+            operation: Operation::Close
+        })
+    );
+    assert!(lease_cleared);
+    assert_eq!(retained_control, 1);
+    assert!(pending_control);
+    assert_eq!(retained_business, 1);
+    assert_eq!(pending_business, 1);
+    assert!(wait_until(
+        || !agent.pending_control_worker() && agent.pending_business_workers() == 0
+    ));
+    agent.close(Deadline::at(start)).unwrap();
+    assert_eq!(agent.retained_control_workers(), 0);
+    assert_eq!(agent.retained_requests(), 0);
+    agent.close(Deadline::at(start)).unwrap();
+    assert_eq!(
+        agent.submit(AgentRequest::Plan(tagged_plan(21))),
+        Err(unavailable())
+    );
+    assert_eq!(agent.spawn_control_worker(), Err(unavailable()));
+    assert!(agent.current_lease().is_none());
+}
+
+#[test]
+fn close_reclaims_finished_control_and_business_panics_before_returning_error() {
+    for control in [true, false] {
+        let (start, clock) = StepClock::start();
+        let wire = ScriptedWire::new();
+        let mut agent = controller(&wire, &clock);
+        acquire_lease(&agent, lease_id(4));
+        wire.push_echo(|_| panic!("bounded shutdown producer panic"));
+        if control {
+            agent.spawn_control_worker().unwrap();
+            assert!(wait_until(|| !agent.pending_control_worker()));
+        } else {
+            agent.submit(AgentRequest::Plan(tagged_plan(20))).unwrap();
+            agent.submit(AgentRequest::Plan(tagged_plan(21))).unwrap();
+            assert!(wait_until(|| agent.pending_business_workers() == 0));
+        }
+        let error = ServerError::Internal {
+            invariant: if control {
+                "agent control worker"
+            } else {
+                "agent business worker"
+            },
+        };
+        assert_eq!(agent.close(Deadline::at(start)), Err(error));
+        assert_eq!(agent.retained_control_workers(), 0);
+        assert_eq!(agent.retained_requests(), 0);
+        assert_eq!(agent.close(Deadline::at(start)), Ok(()));
+    }
+}
