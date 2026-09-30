@@ -203,27 +203,202 @@ fn kill_pid(pid: u32) {
 }
 
 fn wait_pid_gone(pid: u32, timeout: Duration) -> bool {
-    wait_until(timeout, || {
-        Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| !status.success())
-            .unwrap_or(true)
-    })
+    wait_until(timeout, || process_terminated(pid))
 }
 
-/// Proves no process survives under one pid: `kill -0` must exit nonzero.
+/// Proves termination with the production predicate, including unreaped zombies.
 fn assert_pid_gone(pid: u32) {
-    let gone = Command::new("kill")
-        .args(["-0", &pid.to_string()])
+    assert!(
+        process_terminated(pid),
+        "no writer starts on backup failure"
+    );
+}
+
+/// Extracts the actual private shell predicate without executing the CLI.
+fn process_termination_shell() -> String {
+    let source = fs::read_to_string(optin_script()).expect("read production process predicate");
+    let (_, function) = source
+        .split_once("\nprocess_terminated() {\n")
+        .expect("production process predicate exists");
+    let (body, _) = function
+        .split_once("\n}\n")
+        .expect("production process predicate closes");
+    format!("process_terminated() {{\n{body}\n}}\n")
+}
+
+fn process_terminated(pid: u32) -> bool {
+    let program = format!(
+        "py() {{ python3 - \"$@\"; }}\n{}process_terminated \"$1\"\n",
+        process_termination_shell()
+    );
+    Command::new("bash")
+        .args(["-c", &program, "termination-probe", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map(|status| !status.success())
-        .unwrap_or(true);
-    assert!(gone, "no writer starts on backup failure");
+        .is_ok_and(|status| status.success())
+}
+
+/// The guard collects its own child even when a termination assertion fails.
+struct TerminationChild(Child);
+
+impl Drop for TerminationChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn process_termination_unreaped_child_is_not_a_live_writer() {
+    let mut child = TerminationChild(
+        Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn owned exiting child"),
+    );
+    let pid = child.0.id();
+    assert!(wait_until(Duration::from_secs(2), || {
+        fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit_once(')')
+                    .map(|(_, suffix)| suffix.split_whitespace().next() == Some("Z"))
+            })
+            .unwrap_or(false)
+    }));
+    assert!(
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .expect("probe owned zombie")
+            .success()
+    );
+    assert!(wait_pid_gone(pid, Duration::from_millis(200)));
+    assert!(child.0.wait().expect("reap owned zombie").success());
+}
+
+#[test]
+fn process_termination_live_child_stays_unproven_until_collected() {
+    let mut child = TerminationChild(
+        Command::new("sleep")
+            .arg("10")
+            .spawn()
+            .expect("spawn owned live child"),
+    );
+    let pid = child.0.id();
+    assert!(!wait_pid_gone(pid, Duration::from_millis(100)));
+    assert!(!process_terminated(0), "process-group probes are forbidden");
+    child.0.kill().expect("stop owned live child");
+    child.0.wait().expect("collect stopped child");
+    assert!(process_terminated(pid));
+}
+
+/// Faults are injected into the extracted Python only; the deployed shell
+/// predicate accepts neither substitute process evidence nor a test switch.
+fn process_termination_with_evidence(evidence: serde_json::Value) -> bool {
+    let function = process_termination_shell();
+    let (_, source) = function
+        .split_once("<<'EOF'\n")
+        .expect("production predicate uses the Python helper");
+    let (source, _) = source
+        .split_once("\nEOF\n")
+        .expect("production predicate Python closes");
+    let faults = r#"
+import builtins, io, json, os, sys
+evidence = json.loads(sys.argv[1])
+sys.argv = ["process-predicate", evidence["pid"]]
+sys.platform = evidence.get("platform", "linux")
+calls = 0
+def probe(pid, signal):
+    global calls
+    calls += 1
+    result = evidence["kill"]
+    if result == "absent" or (result == "exit-race" and calls > 1):
+        raise ProcessLookupError()
+    if result == "denied":
+        raise PermissionError()
+    if result == "error":
+        raise OSError("unavailable")
+def read_stat(*args, **kwargs):
+    result = evidence["read"]
+    if result == "missing":
+        raise FileNotFoundError()
+    if result == "denied":
+        raise PermissionError()
+    if result == "error":
+        raise OSError("unavailable")
+    return io.StringIO(evidence["stat"])
+os.kill = probe
+builtins.open = read_stat
+"#;
+    Command::new("python3")
+        .args(["-c", &format!("{faults}\n{source}"), &evidence.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[test]
+fn process_termination_stat_identity_and_read_errors_fail_closed() {
+    let zombie = "42 (name with ) embedded ( parentheses)) Z 1 2 3";
+    for (stat, terminated) in [
+        (zombie, true),
+        ("42 (simple) S 1 2 3", false),
+        ("43 (foreign) Z 1 2 3", false),
+        ("42 no-opening) Z 1 2 3", false),
+        ("42 (unterminated Z 1 2 3", false),
+        ("42 (empty-state)", false),
+        ("42 (unknown-state) Q 1 2 3", false),
+        ("42 (long-state) ZZ 1 2 3", false),
+        ("not-a-pid (name) Z 1 2 3", false),
+    ] {
+        assert_eq!(
+            process_termination_with_evidence(serde_json::json!({
+                "pid": "42", "kill": "live", "read": "ok", "stat": stat,
+            })),
+            terminated,
+            "stat evidence: {stat:?}"
+        );
+    }
+    for (kill, read, terminated) in [
+        ("live", "missing", false),
+        ("denied", "missing", false),
+        ("denied", "denied", false),
+        ("live", "denied", false),
+        ("live", "error", false),
+        ("error", "error", false),
+        ("exit-race", "missing", true),
+        ("absent", "denied", true),
+    ] {
+        assert_eq!(
+            process_termination_with_evidence(serde_json::json!({
+                "pid": "42", "kill": kill, "read": read, "stat": zombie,
+            })),
+            terminated,
+            "kill={kill}, read={read}"
+        );
+    }
+}
+
+#[test]
+fn process_termination_positive_pid_and_non_linux_absence_required() {
+    for pid in ["0", "-1", "", "word", "+42", " 42", "４２"] {
+        assert!(!process_termination_with_evidence(serde_json::json!({
+            "pid": pid, "kill": "absent", "read": "ok", "stat": "42 (name) Z 1",
+        })));
+    }
+    for (kill, terminated) in [("live", false), ("denied", false), ("absent", true)] {
+        assert_eq!(
+            process_termination_with_evidence(serde_json::json!({
+                "pid": "42", "kill": kill, "read": "ok", "stat": "42 (name) Z 1",
+                "platform": "darwin",
+            })),
+            terminated
+        );
+    }
 }
 
 fn run_script(args: &[&str]) -> (i32, String) {
@@ -236,6 +411,68 @@ fn run_script(args: &[&str]) -> (i32, String) {
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
     (code, text)
+}
+
+/// Executes the script's exact definitions before its final CLI dispatch,
+/// allowing restore bytes to be observed before the previous writer starts.
+fn run_script_functions(scope: &Scope, action: &str, args: &[&str]) -> (i32, String) {
+    let source = fs::read_to_string(optin_script()).expect("read production restore functions");
+    let (definitions, _) = source
+        .rsplit_once("\ncase \"${1:-}\" in\n")
+        .expect("production script has its final CLI dispatch");
+    let script = scope.path("script-functions.sh");
+    fs::write(&script, format!("{definitions}\n{action}\n"))
+        .expect("write exact script definitions fixture");
+    let output = Command::new("bash")
+        .arg(script)
+        .args(args)
+        .output()
+        .expect("execute production script functions");
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    (output.status.code().unwrap_or(-1), text)
+}
+
+fn assert_quiescent_restore(
+    scope: &Scope,
+    manifest_path: &Path,
+    world: &Path,
+    backup: &Path,
+    nonce: &str,
+) {
+    use std::os::unix::fs::MetadataExt;
+
+    let backup_tree = tree_hash(backup, &[LOCK_BASENAME, BACKUP_IDENTITY_BASENAME]);
+    let (code, output) = run_script_functions(
+        scope,
+        "restore_backup_world \"$1\" \"$2\" \"$3\" \"$4\"",
+        &[
+            &manifest_path.to_string_lossy(),
+            &world.to_string_lossy(),
+            &backup.to_string_lossy(),
+            nonce,
+        ],
+    );
+    assert_eq!(code, 0, "quiescent restore installs backup: {output}");
+    assert_eq!(
+        tree_hash(world, &[LOCK_BASENAME]),
+        backup_tree,
+        "quiescent restore installs the exact immutable backup bytes"
+    );
+    assert_eq!(
+        tree_hash(backup, &[LOCK_BASENAME, BACKUP_IDENTITY_BASENAME]),
+        backup_tree,
+        "restore preserves the named backup"
+    );
+    let restored_manifest = read_manifest(manifest_path);
+    assert_eq!(restored_manifest["restore_stage"], "backup_installed");
+    assert_eq!(restored_manifest["world_tree_sha256"], backup_tree);
+    let lock = fs::metadata(world.join(LOCK_BASENAME)).expect("stat installed lease inode");
+    assert_eq!(
+        restored_manifest["lease_identity"],
+        format!("world.lock:{}:{}", lock.dev(), lock.ino()),
+        "restore records the actual installed lock inode"
+    );
 }
 
 fn read_manifest(path: &Path) -> serde_json::Value {
@@ -746,6 +983,17 @@ fn actual_backup_restore() {
         "refusal names the incompatible save: {output}"
     );
 
+    let (code, output) =
+        run_script_functions(&scope, "lock_probe \"$1\"", &[&world.to_string_lossy()]);
+    assert_eq!(code, 0, "probe quiescent world lock: {output}");
+    assert_eq!(output.trim(), "FREE", "crashed owner released its lock");
+    assert_quiescent_restore(
+        &scope,
+        &manifest_path,
+        &world,
+        &backup,
+        &manifest_str(&manifest, "start_nonce"),
+    );
     let (code, output) = run_script(&[
         "rollback",
         "--manifest",
@@ -758,11 +1006,6 @@ fn actual_backup_restore() {
     assert_eq!(
         manifest.get("phase").and_then(|v| v.as_str()),
         Some("PreviousRunning")
-    );
-    assert_eq!(
-        tree_hash(&world, &[LOCK_BASENAME]),
-        world_before,
-        "restore reinstalls the exact backup bytes"
     );
     let identity_name = backup_identity_name(&backup);
     assert_eq!(
@@ -1197,6 +1440,10 @@ fn resume_restore_between_renames(previous: &Path, with_retired: bool) {
         wait_pid_gone(rust_pid, Duration::from_secs(30)),
         "crashed rust exits"
     );
+    let (code, output) =
+        run_script_functions(&scope, "lock_probe \"$1\"", &[&world.to_string_lossy()]);
+    assert_eq!(code, 0, "probe quiescent world lock: {output}");
+    assert_eq!(output.trim(), "FREE", "crashed owner released its lock");
     let nonce = manifest_str(&manifest, "start_nonce");
     let staged = world.parent().expect("run dir").join(format!(
         "{}.restore.{}",
@@ -1225,6 +1472,7 @@ fn resume_restore_between_renames(previous: &Path, with_retired: bool) {
             serde_json::Value::from("staged"),
         );
     }
+    assert_quiescent_restore(&scope, &manifest_path, &world, &backup, &nonce);
     let (code, output) = run_script(&[
         "rollback",
         "--manifest",
@@ -1237,12 +1485,6 @@ fn resume_restore_between_renames(previous: &Path, with_retired: bool) {
     assert_eq!(
         manifest.get("phase").and_then(|v| v.as_str()),
         Some("PreviousRunning")
-    );
-    let backup_tree = manifest_str(&manifest, "backup_tree_sha256");
-    assert_eq!(
-        tree_hash(&world, &[LOCK_BASENAME]),
-        backup_tree,
-        "resumed restore installs the exact backup bytes"
     );
     let listen = last_go_listen(&run_dir);
     let (_, seed_after) = go_login(&listen, identity, "rename-probe").expect("login after resume");

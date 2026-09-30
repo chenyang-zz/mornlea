@@ -71,6 +71,59 @@ py() {
     python3 - "$@"
 }
 
+# An unreaped Linux zombie has exited and released its writer resources;
+# PID existence alone cannot prove that it is still running.
+process_terminated() {
+    py "$1" <<'EOF'
+import os, sys
+
+raw = sys.argv[1]
+if not raw.isascii() or not raw.isdecimal():
+    sys.exit(1)
+try:
+    pid = int(raw)
+except ValueError:
+    sys.exit(1)
+if pid <= 0:
+    sys.exit(1)
+
+def absent():
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except (OSError, OverflowError, ValueError):
+        pass
+    return False
+
+if absent():
+    sys.exit(0)
+if not sys.platform.startswith("linux"):
+    sys.exit(1)
+try:
+    with open("/proc/%d/stat" % pid, encoding="utf-8") as handle:
+        stat = handle.read()
+except FileNotFoundError:
+    sys.exit(0 if absent() else 1)
+except (OSError, UnicodeError):
+    sys.exit(1)
+
+prefix, close, suffix = stat.rpartition(")")
+identity, opening, _ = prefix.partition("(")
+identity = identity.strip()
+fields = suffix.split()
+if not close or not opening or not identity.isascii() or not identity.isdecimal():
+    sys.exit(1)
+try:
+    matches = int(identity) == pid
+except ValueError:
+    sys.exit(1)
+if not matches or not fields or len(fields[0]) != 1 or fields[0] not in "RSDZTtXxKWPI":
+    sys.exit(1)
+sys.exit(0 if fields[0] == "Z" else 1)
+EOF
+}
+
 # Canonicalizes one path; refuses when resolution fails.
 canon() {
     py "$1" <<'EOF'
@@ -783,10 +836,10 @@ EOF
             local deadline
             deadline=$((SECONDS + SHUTDOWN_DEADLINE_MS / 1000 + 10))
             while [ $SECONDS -lt $deadline ]; do
-                kill -0 "$pid" 2>/dev/null || break
+                process_terminated "$pid" && break
                 sleep 1
             done
-            kill -0 "$pid" 2>/dev/null && fail "shutdown_failed" "rust process never exited"
+            process_terminated "$pid" || fail "shutdown_failed" "rust process termination was not proven"
         fi
         [ "$(manifest_get "$manifest" "phase")" = "Quiescent" ] || fail "shutdown_failed" "quiescent phase was never recorded"
     else
