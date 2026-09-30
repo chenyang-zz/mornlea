@@ -101,7 +101,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9g Reconcile Rust backup compatibility identities and English comment audit.
 - [x] 3.9h Bound activation control requests.
 - [x] 3.9i Correlate save completion ownership and prevent duplicate retries.
-- [ ] 3.9p1 Repair survival damage, fall and boundary semantics.
+- [x] 3.9p1 Repair survival damage, fall and boundary semantics.
 - [ ] 3.9p2 Stage validated player controls before action providers and interrupt rejected actions.
 - [ ] 3.9p3 Preserve held sprint intent, gate effective physics and skip reset movement.
 - [ ] 3.9p4 Restore sneak-edge support probes and thick-snow speed scaling.

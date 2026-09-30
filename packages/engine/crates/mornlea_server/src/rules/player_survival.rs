@@ -7,8 +7,8 @@
 //! It consumes the accepted motion provider's post-movement state and settles
 //! only survival state and damage. Eating settlement, inventory, mining and
 //! sleep belong to their own nodes; this provider clears the eating progress
-//! marker that real damage interrupts and emits the damage observation the
-//! sleep node consumes to wake sleepers.
+//! marker and bow progress that real damage interrupts and emits the damage
+//! observation the sleep node consumes to wake sleepers.
 //!
 //! Mirrored Go rows, each cited at its site:
 //!
@@ -66,8 +66,8 @@ use mornlea_domain::{
 };
 
 use crate::core::contracts::{
-    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, EatingProgress,
-    PhaseReport, RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
+    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BowProgress,
+    EatingProgress, PhaseReport, RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
 };
 use crate::core::state::{ActionKind, AuthorityReadView, TickContext};
 
@@ -170,6 +170,7 @@ struct SurvivalWork {
     drown_ticks: u32,
     starvation_ticks: u32,
     eating: Option<EatingProgress>,
+    bow: Option<BowProgress>,
 }
 
 /// Settles one per-actor survival call on exactly one of the three owned
@@ -339,15 +340,15 @@ fn load_work(record: &ActorRecord, runtime: &ActorRuntime) -> SurvivalWork {
         drown_ticks: runtime.drown_ticks,
         starvation_ticks: runtime.starvation_ticks,
         eating: runtime.eating,
+        bow: runtime.bow,
     }
 }
 
 /// Shared damage entry mirror (`applyDamage` in
 /// `packages/server/sim/entity/player.go`): non-positive damage is a no-op so
 /// a safe landing never interrupts anything; real damage resets the
-/// since-damage counter, clears eating progress, clamps health at zero, and
-/// reports the applied damage for the observation below. Bow progress and
-/// sleep belong to their own nodes and stay untouched here; the sleep node
+/// since-damage counter, clears eating and bow progress, clamps health at zero,
+/// and reports the applied damage for the observation below. The sleep node
 /// wakes sleepers by consuming the emitted observation.
 fn apply_damage(work: &mut SurvivalWork, amount: i32) -> u8 {
     if amount <= 0 {
@@ -355,6 +356,7 @@ fn apply_damage(work: &mut SurvivalWork, amount: i32) -> u8 {
     }
     work.since_damage_ticks = 0;
     work.eating = None;
+    work.bow = None;
     if amount >= i32::from(work.health) {
         let dealt = work.health;
         work.health = 0;
@@ -472,8 +474,9 @@ fn settle_exhaustion(work: &mut SurvivalWork, milli: u16, threshold: u16) {
 
 /// Writes the settled lanes back to the staged actor, body and runtime
 /// records. Survival owns the health, hunger, saturation, exhaustion, oxygen
-/// and eating lanes; every other lane carries forward untouched so the
-/// latest-wins overlay never clobbers a sibling provider's record.
+/// and eating lanes, plus bow interruption on damage; every other lane carries
+/// forward untouched so the latest-wins overlay never clobbers a sibling
+/// provider's record.
 fn write_back(
     ctx: &mut TickContext<'_>,
     record: &ActorRecord,
@@ -527,6 +530,7 @@ fn write_back(
         drown_ticks: work.drown_ticks,
         starvation_ticks: work.starvation_ticks,
         eating: work.eating,
+        bow: work.bow,
         controls,
         ..runtime.clone()
     }))
@@ -744,10 +748,9 @@ fn oxygen(
 /// pre-step ground charges 80. The peak resets on ground or body water and
 /// otherwise tracks the maximum, and the landing damage is
 /// `max(0, floor(peak - land) - 3)` through the shared damage entry, so armor
-/// never reduces it. The landing edge itself is not re-derived — no lane
-/// carries the pre-step ground state into the fall formula — but the per-tick
-/// peak reset makes the formula zero on every non-landing grounded tick, which
-/// is exactly the reachable behavior the edge produces.
+/// never reduces it. The pre-step snapshot identifies the landing edge and
+/// resets the peak for ground or newly arrived fluid before movement. Direct
+/// provider harnesses without a snapshot retain the explicit landing fallback.
 ///
 /// A call that kills stages the zero-health record silently: like
 /// `settleDeaths` running before publication, no half-dead pose is emitted;
@@ -768,6 +771,26 @@ fn post_physics(
         });
     }
     let body_in_fluid = body_submerged(&ctx.read(), record.dimension, position)?;
+    // Validate both prisms before draining receipts or staging effects: an
+    // unrepresentable pre-step body must refuse with the same pending work.
+    let pre_step = ctx
+        .read()
+        .pre_step_motion(record.key)
+        .map(|pre| {
+            let pre_position = pre.position().get();
+            body_submerged(&ctx.read(), record.dimension, pre_position)
+                .map(|pre_fluid| (pre, pre_position, pre_fluid))
+        })
+        .transpose()?;
+    let mut peak_baseline = runtime.peak_y;
+    if let Some((pre, pre_position, pre_fluid)) = pre_step
+        && (pre.on_ground() || pre_fluid)
+    {
+        peak_baseline = pre_position[1];
+    }
+    if body_in_fluid {
+        peak_baseline = position[1];
+    }
     let mut work = load_work(record, runtime);
     let held = held_control(ctx, session, runtime.controls);
     // Noted mining/till/melee charges settle before this tick's fall, closest
@@ -780,9 +803,7 @@ fn post_physics(
     // Motion charges read the pre-step snapshot the context took at
     // construction: without it (a context built empty) no charge fires, so a
     // missing snapshot never invents exhaustion.
-    if let Some(pre) = ctx.read().pre_step_motion(record.key) {
-        let pre_position = pre.position().get();
-        let pre_fluid = body_submerged(&ctx.read(), record.dimension, pre_position)?;
+    if let Some((pre, pre_position, pre_fluid)) = pre_step {
         // Swimming: body-submerged pre-step steps charge the exact
         // fixed-point horizontal displacement, independent of held input;
         // still water naturally converts to zero with no extra branch.
@@ -813,15 +834,18 @@ fn post_physics(
             }
         }
     }
-    if record.motion.on_ground() {
-        let fall = (f64::from(runtime.peak_y) - f64::from(position[1])).floor() as i32 - 3;
-        let dealt = apply_damage(&mut work, fall.max(0));
+    if record.motion.on_ground() && pre_step.is_none_or(|(pre, _, _)| !pre.on_ground()) {
+        // The source subtracts float32 positions before flooring. Bound the
+        // conversion and subtraction so extreme finite heights stay defined.
+        let height = f64::from(peak_baseline - position[1]).floor().max(0.0) as i32;
+        let fall = height.saturating_sub(3).max(0);
+        let dealt = apply_damage(&mut work, fall);
         emit_damage(ctx, session, dealt)?;
     }
     let peak_y = if record.motion.on_ground() || body_in_fluid {
         position[1]
     } else {
-        runtime.peak_y.max(position[1])
+        peak_baseline.max(position[1])
     };
     let controls = suppress_sprint_control(held, &work);
     write_back(ctx, record, runtime, &work, controls, peak_y)?;
@@ -1046,7 +1070,10 @@ fn body_submerged(
 /// touching a cell boundary does not claim the neighbor, clamped to scan at
 /// least one cell.
 fn fluid_upper(maximum: f32, lower: i32) -> Result<i32, ServerError> {
-    Ok((checked_ceil(maximum)? - 1).max(lower))
+    Ok(checked_ceil(maximum)?
+        .checked_sub(1)
+        .ok_or(ServerError::InvalidInput { field: "actor" })?
+        .max(lower))
 }
 
 /// Checked floor mirror (`collisionCheckedFloor` in

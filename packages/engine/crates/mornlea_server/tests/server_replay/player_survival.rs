@@ -1475,3 +1475,468 @@ fn zero_exhaustion_threshold_pins_to_one_in_regen() {
     }
     assert_eq!(snapshots[0], snapshots[1], "zero pins to one");
 }
+
+#[test]
+fn landed_body_fluid_clears_peak_without_damage() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = survival_scene(&mut context, session, [0.5, 10.0, 0.5], 20, 300, 20, 0);
+    stage_runtime(
+        &mut context,
+        actor,
+        300,
+        14.0,
+        0,
+        5_000,
+        50,
+        0,
+        0,
+        None,
+        None,
+        None,
+    );
+    context.preload_block(observation(BlockPos::new(0, 10, 0), WATER));
+    provider::run(&mut context, post_call(actor)).unwrap();
+    assert_eq!(context.read().actor(actor).unwrap().survival.health(), 20);
+    assert_eq!(context.read().runtime(actor).unwrap().peak_y, 10.0);
+    assert!(context.events().is_empty());
+}
+
+#[test]
+fn damage_interrupts_bow_without_inventory_or_projectile_effects() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (name, phase, hunger, oxygen, peak, drown, starve, damage) in [
+        (
+            "starvation",
+            RulePhase::PlayerRegenStarvation,
+            0,
+            300,
+            10.0,
+            0,
+            79,
+            true,
+        ),
+        (
+            "drowning",
+            RulePhase::PlayerPrePhysicsOxygen,
+            20,
+            0,
+            10.0,
+            19,
+            0,
+            true,
+        ),
+        (
+            "fall",
+            RulePhase::PlayerPostPhysics,
+            20,
+            300,
+            14.0,
+            0,
+            0,
+            true,
+        ),
+        (
+            "safe fall",
+            RulePhase::PlayerPostPhysics,
+            20,
+            300,
+            13.0,
+            0,
+            0,
+            false,
+        ),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = survival_scene(
+            &mut context,
+            session,
+            [0.5, 10.0, 0.5],
+            20,
+            oxygen,
+            hunger,
+            2,
+        );
+        stage_runtime(
+            &mut context,
+            actor,
+            oxygen,
+            peak,
+            0,
+            5_000,
+            50,
+            drown,
+            starve,
+            None,
+            None,
+            None,
+        );
+        let bow = Some(BowProgress {
+            slot: HotbarSlot::new(0).unwrap(),
+            ticks: 15,
+        });
+        let mut runtime = context.read().runtime(actor).unwrap().clone();
+        runtime.bow = bow;
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+        if name == "drowning" {
+            context.preload_block(observation(BlockPos::new(0, 11, 0), WATER));
+        }
+        let mut record = context.read().actor(actor).unwrap().clone();
+        let ActorBody::Player(body) = &mut record.body else {
+            unreachable!()
+        };
+        body.inventory.hotbar.slots[0] = ItemStack {
+            item: 62,
+            count: 1,
+            durability: 100,
+        };
+        body.inventory.backpack[0] = ItemStack {
+            item: 63,
+            count: 7,
+            durability: 0,
+        };
+        context.stage(RuleEffect::Actor(record)).unwrap();
+        let inventory = match &context.read().actor(actor).unwrap().body {
+            ActorBody::Player(body) => body.inventory,
+            _ => unreachable!(),
+        };
+        let mut carried_inventory = InventoryRecord::empty();
+        carried_inventory.slots[0] = ItemStack {
+            item: 62,
+            count: 1,
+            durability: 100,
+        };
+        carried_inventory.slots[1] = ItemStack {
+            item: 63,
+            count: 7,
+            durability: 0,
+        };
+        context.preload_inventory(actor, carried_inventory);
+        let projectiles = context.resident_snapshot().projectiles;
+        provider::run(
+            &mut context,
+            RuleCall {
+                phase,
+                actor: Some(actor),
+                command: None,
+                internal: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            context.read().actor(actor).unwrap().survival.health(),
+            if damage { 19 } else { 20 },
+            "{name}"
+        );
+        actual.push((name, context.read().runtime(actor).unwrap().bow));
+        expected.push((name, if damage { None } else { bow }));
+        let ActorBody::Player(body) = &context.read().actor(actor).unwrap().body else {
+            unreachable!()
+        };
+        assert_eq!(
+            body.inventory, inventory,
+            "{name}: damage never debits arrows"
+        );
+        assert_eq!(
+            context.read().inventory(actor),
+            Some(&carried_inventory),
+            "{name}: staged arrows and bow wear remain unchanged"
+        );
+        assert_eq!(
+            context.resident_snapshot().projectiles,
+            projectiles,
+            "{name}: damage never fires"
+        );
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn fall_height_subtracts_in_source_precision() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = survival_scene(&mut context, session, [0.5, 0.1, 0.5], 20, 300, 20, 0);
+    stage_runtime(
+        &mut context,
+        actor,
+        300,
+        -f32::MAX,
+        0,
+        5_000,
+        50,
+        0,
+        0,
+        None,
+        None,
+        None,
+    );
+    provider::run(&mut context, post_call(actor)).unwrap();
+    assert_eq!(
+        context.read().actor(actor).unwrap().survival.health(),
+        20,
+        "a negative huge fall is safe"
+    );
+    stage_runtime(
+        &mut context,
+        actor,
+        300,
+        4.1,
+        0,
+        5_000,
+        50,
+        0,
+        0,
+        None,
+        None,
+        None,
+    );
+    provider::run(&mut context, post_call(actor)).unwrap();
+    assert_eq!(context.read().actor(actor).unwrap().survival.health(), 19);
+}
+
+#[test]
+fn fall_uses_pre_step_ground_and_fluid_peak_resets() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (name, pre_ground, pre_wet, post_ground, pre_y, post_y, peak, health, next_peak) in [
+        (
+            "grounded stays grounded",
+            true,
+            false,
+            true,
+            10.0,
+            10.0,
+            14.0,
+            20,
+            10.0,
+        ),
+        (
+            "airborne lands",
+            false,
+            false,
+            true,
+            14.0,
+            10.0,
+            14.0,
+            19,
+            10.0,
+        ),
+        (
+            "grounded takeoff resets",
+            true,
+            false,
+            false,
+            10.0,
+            10.5,
+            14.0,
+            20,
+            10.5,
+        ),
+        (
+            "fluid leaves and lands",
+            false,
+            true,
+            true,
+            12.0,
+            10.0,
+            20.0,
+            20,
+            10.0,
+        ),
+        (
+            "fluid leaves airborne",
+            false,
+            true,
+            false,
+            12.0,
+            11.5,
+            20.0,
+            20,
+            12.0,
+        ),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let initial = fixture_state(
+            player_actor(
+                session,
+                [0.5, pre_y, 0.5],
+                [0.0; 3],
+                pre_ground,
+                20,
+                300,
+                20,
+            ),
+            world_record(),
+        );
+        let mut context = fixture_context(&mut state, &initial);
+        let actor = ActorKey::Player(session);
+        context
+            .stage(RuleEffect::Environment(environment_with(0)))
+            .unwrap();
+        context
+            .stage(RuleEffect::Actor(player_actor(
+                session,
+                [if pre_wet { 2.5 } else { 0.5 }, post_y, 0.5],
+                [0.0; 3],
+                post_ground,
+                20,
+                300,
+                20,
+            )))
+            .unwrap();
+        stage_runtime(
+            &mut context,
+            actor,
+            300,
+            peak,
+            0,
+            5_000,
+            50,
+            0,
+            0,
+            None,
+            None,
+            None,
+        );
+        if pre_wet {
+            context.preload_block(observation(BlockPos::new(0, 13, 0), WATER));
+        }
+        provider::run(&mut context, post_call(actor)).unwrap();
+        actual.push((
+            name,
+            context.read().actor(actor).unwrap().survival.health(),
+            context.read().runtime(actor).unwrap().peak_y,
+        ));
+        expected.push((name, health, next_peak));
+        if health == 19 {
+            provider::run(&mut context, post_call(actor)).unwrap();
+            assert_eq!(
+                context.read().actor(actor).unwrap().survival.health(),
+                19,
+                "settled peak prevents repeated damage"
+            );
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn survival_fluid_minimum_refuses_without_effect_and_nearby_succeeds() {
+    for (x, refused) in [
+        (i32::MIN as f32, true),
+        (i32::MIN as f32 + 256.0, false),
+        (0.3, false),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = survival_scene(&mut context, session, [x, 10.0, 0.5], 20, 300, 20, 0);
+        stage_runtime(
+            &mut context,
+            actor,
+            300,
+            10.0,
+            0,
+            5_000,
+            50,
+            0,
+            0,
+            None,
+            None,
+            None,
+        );
+        context.note_charge(actor, ActionKind::Melee).unwrap();
+        let before = {
+            let resident = context.resident_snapshot();
+            (
+                resident.actors,
+                resident.runtimes,
+                resident.inventories,
+                resident.projectiles,
+                resident.blocks,
+            )
+        };
+        let events = context.events().to_vec();
+        let result = provider::run(&mut context, post_call(actor));
+        if refused {
+            assert_eq!(result, Err(ServerError::InvalidInput { field: "actor" }));
+            assert_eq!(
+                {
+                    let resident = context.resident_snapshot();
+                    (
+                        resident.actors,
+                        resident.runtimes,
+                        resident.inventories,
+                        resident.projectiles,
+                        resident.blocks,
+                    )
+                },
+                before
+            );
+            assert_eq!(context.events(), events);
+            assert_eq!(context.take_charges(), vec![(actor, ActionKind::Melee)]);
+        } else {
+            assert!(applied(result.unwrap()));
+        }
+    }
+}
+
+#[test]
+fn pre_step_fluid_minimum_refusal_keeps_pending_charges() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let initial = fixture_state(
+        player_actor(
+            session,
+            [i32::MIN as f32, 10.0, 0.5],
+            [0.0; 3],
+            false,
+            20,
+            300,
+            20,
+        ),
+        world_record(),
+    );
+    let mut context = fixture_context(&mut state, &initial);
+    let actor = survival_scene(&mut context, session, [0.5, 10.0, 0.5], 20, 300, 20, 0);
+    stage_runtime(
+        &mut context,
+        actor,
+        300,
+        10.0,
+        0,
+        5_000,
+        50,
+        0,
+        0,
+        None,
+        None,
+        None,
+    );
+    context.note_charge(actor, ActionKind::Melee).unwrap();
+    let before = probe(&context, actor, &[]);
+    assert_eq!(
+        provider::run(&mut context, post_call(actor)),
+        Err(ServerError::InvalidInput { field: "actor" })
+    );
+    assert_eq!(probe(&context, actor, &[]), before);
+    assert_eq!(context.take_charges(), vec![(actor, ActionKind::Melee)]);
+}

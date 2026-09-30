@@ -477,7 +477,10 @@ fn is_fluid_at(view: &AuthorityReadView<'_>, dimension: Dimension, pos: BlockPos
 /// touching a cell boundary does not claim the neighbor, clamped to scan at
 /// least one cell.
 fn fluid_upper(maximum: f32, lower: i32) -> Result<i32, ServerError> {
-    Ok((checked_ceil(maximum)? - 1).max(lower))
+    Ok(checked_ceil(maximum)?
+        .checked_sub(1)
+        .ok_or(ServerError::InvalidInput { field: "actor" })?
+        .max(lower))
 }
 
 /// int32 span of the checked floor/ceil domain, mirroring the Go row

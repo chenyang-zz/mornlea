@@ -1008,3 +1008,50 @@ fn stale_sequence_no_effect() {
     assert!(provider::run(&mut context, motion_call(actor)).is_err());
     assert_eq!(probe(&context, actor, &cells), before);
 }
+
+#[test]
+fn motion_fluid_minimum_refuses_without_effect_and_nearby_succeeds() {
+    for (x, refused) in [
+        (i32::MIN as f32, true),
+        (i32::MIN as f32 + 256.0, false),
+        (0.3, false),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = motion_scene(&mut context, session, [x, 1.0, 0.5], [0.0; 3], true);
+        let before = {
+            let resident = context.resident_snapshot();
+            (
+                resident.actors,
+                resident.runtimes,
+                resident.inventories,
+                resident.projectiles,
+                resident.blocks,
+            )
+        };
+        let events = context.events().to_vec();
+        let result = provider::run(&mut context, motion_call(actor));
+        if refused {
+            assert_eq!(result, Err(ServerError::InvalidInput { field: "actor" }));
+            assert_eq!(
+                {
+                    let resident = context.resident_snapshot();
+                    (
+                        resident.actors,
+                        resident.runtimes,
+                        resident.inventories,
+                        resident.projectiles,
+                        resident.blocks,
+                    )
+                },
+                before
+            );
+            assert_eq!(context.events(), events);
+        } else {
+            assert!(applied(result.unwrap()));
+        }
+    }
+}
