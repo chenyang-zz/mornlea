@@ -86,7 +86,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.6d Execute Rust integration with the actual Python Agent and MCP ([packet](plans/04-refined-nodes.md)).
 - [x] 3.7a Implement tick hydration for live adapter flows ([packet](plans/28-tick-hydration.md)).
 - [x] 3.7 Prove real local/remote, save/restart and Agent integration against the full inventory ([packet](plans/01-server-slices.md)).
-- [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup.
+- [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)).
 
 ## 4. Closeout
 

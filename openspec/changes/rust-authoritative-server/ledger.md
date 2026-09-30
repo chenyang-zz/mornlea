@@ -1450,3 +1450,18 @@ failures) all green with independent review approval. Remaining recorded
 follow-ups (mob disk seeding, chunk streaming, despawn projection) block
 3.8, not this node.
 Architecture skill: no change.
+
+
+Main routes node 3.8 directly at the normative refined packet
+(plans/04-refined-nodes.md Node3.8): CLI/manifest/phases/rollback/failure
+codes and the four activation tests plus script self-test and dry-run are
+all controller-frozen there, with 3.7 parity as prerequisite. Ruling
+revising the 3.7 entry: the recorded follow-ups (mob disk seeding, chunk
+streaming, despawn projection, transport production impl) do NOT block
+opt-in qualification — 3.8 explicitly never changes default startup, and
+the design reserves default-switch for P14. They land as documented known
+limitations of the opt-in runtime in the activation guide, revisited before
+any future default consideration. One isolated implementer owns the binary,
+script, manifest fixture, activation tests, and guide under the controller
+serial edit lease; default Makefile/Go command/product entry untouched.
+Architecture skill: no change.
