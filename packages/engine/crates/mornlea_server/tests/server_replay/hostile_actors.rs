@@ -1587,3 +1587,323 @@ fn night_and_roof_preserve_authoritative_burn_health() {
         assert_eq!(actor.lifecycle, ActorLifecycle::Active);
     }
 }
+
+fn geometry_snapshot(ctx: &TickContext<'_>) -> mornlea_server::contracts::FixtureState {
+    ctx.snapshot_state(
+        WorldState::try_new(mornlea_domain::WorldStateParts {
+            day_phase_offset: 0,
+            world_time_ticks: 0,
+            weather: Weather::Clear,
+            season: mornlea_domain::Season::Spring,
+            season_progress: 0,
+            temperature: 0,
+        })
+        .unwrap(),
+    )
+}
+
+fn assert_geometry_refusal(ctx: &mut TickContext<'_>, call: RuleCall<'_>) {
+    let before = geometry_snapshot(ctx);
+    let events = ctx.events().to_vec();
+    let cells: Vec<_> = (-4..=8)
+        .flat_map(|x| {
+            (-4..=4)
+                .flat_map(move |z| (-64..320).map(move |y| mornlea_domain::BlockPos::new(x, y, z)))
+        })
+        .chain(
+            (-48..=48)
+                .flat_map(|z| (0..3).map(move |y| mornlea_domain::BlockPos::new(i32::MIN, y, z))),
+        )
+        .collect();
+    let blocks: Vec<_> = cells
+        .iter()
+        .map(|cell| ctx.read().observation(Dimension::OVERWORLD, *cell))
+        .collect();
+    assert!(matches!(
+        provider::run(ctx, call),
+        Err(ServerError::InvalidInput { field: "actor" })
+    ));
+    assert_eq!(geometry_snapshot(ctx), before);
+    assert_eq!(ctx.events(), events);
+    let after: Vec<_> = cells
+        .iter()
+        .map(|cell| ctx.read().observation(Dimension::OVERWORLD, *cell))
+        .collect();
+    assert_eq!(after, blocks);
+}
+
+#[test]
+fn geometry_motion_extreme_cells_refuse_without_effect() {
+    for value in [i32::MIN as f32, i32::MAX as f32, f32::MAX, -f32::MAX] {
+        for axis in [0, 2] {
+            let mut state = authority();
+            let session = anchor_session(&mut state);
+            let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+            stage_environment(&mut ctx, 1000, 1);
+            let mut pos = [0.5, 40.0, 0.5];
+            pos[axis] = value;
+            stage_actors(
+                &mut ctx,
+                &[
+                    player_actor(session, 1, [0.5, 40.0, 0.5]),
+                    hostile_actor(21, pos, NIGHTWALKER),
+                ],
+            );
+            assert_geometry_refusal(&mut ctx, motion_call());
+        }
+    }
+}
+
+#[test]
+fn geometry_motion_refusal_preserves_earlier_and_fresh_entries() {
+    for invalid_first in [false, true] {
+        for fresh in [false, true] {
+            let mut state = authority();
+            let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+            stage_environment(&mut ctx, 1000, 1);
+            let mut good = hostile_actor(
+                if invalid_first { 22 } else { 21 },
+                [0.5, 40.0, 0.5],
+                NIGHTWALKER,
+            );
+            let mut bad = hostile_actor(
+                if invalid_first { 21 } else { 22 },
+                [2.5, 40.0, 0.5],
+                NIGHTWALKER,
+            );
+            let ActorBody::Hostile(body) = &mut bad.body else {
+                unreachable!()
+            };
+            body.velocity = [f32::MAX, 0.0, 0.0];
+            bad.motion = MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new(body.position).unwrap(),
+                velocity: FiniteVec3::try_new(body.velocity).unwrap(),
+                on_ground: true,
+            });
+            let ActorBody::Hostile(body) = &mut good.body else {
+                unreachable!()
+            };
+            body.velocity = [1.0, 0.0, 0.0];
+            good.motion = MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new(body.position).unwrap(),
+                velocity: FiniteVec3::try_new(body.velocity).unwrap(),
+                on_ground: true,
+            });
+            let mut runtime = fluid_runtime(good.key);
+            if let ActorAux::Hostile { fresh: flag, .. } = &mut runtime.aux {
+                *flag = fresh;
+            }
+            stage_actors(&mut ctx, &[good, bad]);
+            ctx.stage(RuleEffect::Runtime(runtime)).unwrap();
+            for x in -4..=8 {
+                for z in -4..=4 {
+                    for y in 38..=43 {
+                        observe(
+                            &mut ctx,
+                            mornlea_domain::BlockPos::new(x, y, z),
+                            if y < 40 { STONE } else { AIR },
+                        );
+                    }
+                }
+            }
+            assert_geometry_refusal(&mut ctx, motion_call());
+        }
+    }
+}
+
+#[test]
+fn geometry_spawn_candidate_offsets_refuse() {
+    for axis in [1, 3] {
+        let seed = (0..100i64)
+            .find(|seed| ((splitmix64(*seed as u64 ^ NIGHT_START) >> 32) & 3) == axis)
+            .unwrap();
+        let mut state = authority();
+        let session = anchor_session(&mut state);
+        let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+        let mut env = environment(NIGHT_START, 0);
+        env.seed = seed;
+        ctx.stage(RuleEffect::Environment(env)).unwrap();
+        let pos = if axis == 1 {
+            [i32::MIN as f32, 40.0, 0.5]
+        } else {
+            [0.5, 40.0, i32::MIN as f32]
+        };
+        stage_actors(&mut ctx, &[player_actor(session, 1, pos)]);
+        assert_geometry_refusal(&mut ctx, motion_call());
+    }
+}
+
+#[test]
+fn geometry_spawn_light_window_refuses() {
+    let (seed, z) = (0..10000i64)
+        .find_map(|seed| {
+            let base = splitmix64(seed as u64 ^ NIGHT_START);
+            if (base >> 32) & 3 != 2 {
+                return None;
+            }
+            let z = 24 + (base % 25) as i32;
+            (candidate_hash(seed, NIGHT_START, i32::MIN, 1, z) & 0xff < SPAWN_GATE)
+                .then_some((seed, z))
+        })
+        .unwrap();
+    let mut state = authority();
+    let session = anchor_session(&mut state);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    let mut env = environment(NIGHT_START, 0);
+    env.seed = seed;
+    ctx.stage(RuleEffect::Environment(env)).unwrap();
+    stage_actors(
+        &mut ctx,
+        &[player_actor(session, 1, [i32::MIN as f32, 40.0, 0.5])],
+    );
+    preload_flat_column(&mut ctx, i32::MIN, z);
+    assert_geometry_refusal(&mut ctx, motion_call());
+}
+
+#[test]
+fn geometry_burn_refusal_preserves_entire_batch() {
+    for axis in [0, 2] {
+        let mut state = authority();
+        let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+        stage_environment(&mut ctx, 1000, 1);
+        let mut pos = [0.5, 40.0, 0.5];
+        pos[axis] = i32::MAX as f32;
+        stage_actors(
+            &mut ctx,
+            &[
+                hostile_actor_with(
+                    21,
+                    [0.5, 40.0, 0.5],
+                    NIGHTWALKER,
+                    1,
+                    7,
+                    false,
+                    StoredPlayerId::from_bytes([0; 16]),
+                ),
+                hostile_actor_with(
+                    22,
+                    pos,
+                    NIGHTWALKER,
+                    1,
+                    599,
+                    false,
+                    StoredPlayerId::from_bytes([0; 16]),
+                ),
+            ],
+        );
+        for y in 41..320 {
+            observe(&mut ctx, mornlea_domain::BlockPos::new(0, y, 0), AIR);
+        }
+        assert_geometry_refusal(&mut ctx, burn_call());
+    }
+}
+
+#[test]
+fn geometry_representable_edges_defer_and_negative_motion_succeeds() {
+    for edge in [
+        i32::MIN as f32 + 128.0,
+        f32::from_bits((i32::MAX as f32).to_bits() - 1),
+    ] {
+        let mut state = authority();
+        let session = anchor_session(&mut state);
+        let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+        stage_environment(&mut ctx, 1000, 1);
+        stage_actors(
+            &mut ctx,
+            &[
+                player_actor(session, 1, [0.5, 40.0, 0.5]),
+                hostile_actor(21, [edge, 40.0, edge], NIGHTWALKER),
+            ],
+        );
+        provider::run(&mut ctx, motion_call()).expect("representable unloaded edge");
+        assert!(
+            ctx.read()
+                .runtime(find_hostile(&ctx, 21).key)
+                .unwrap()
+                .path
+                .is_none()
+        );
+    }
+    let mut state = authority();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut ctx, 1000, 1);
+    stage_actors(
+        &mut ctx,
+        &[hostile_actor(21, [-2.5, 40.0, -2.5], NIGHTWALKER)],
+    );
+    for x in -4..=0 {
+        for z in -4..=0 {
+            for y in 38..=43 {
+                observe(
+                    &mut ctx,
+                    mornlea_domain::BlockPos::new(x, y, z),
+                    if y < 40 { STONE } else { AIR },
+                );
+            }
+        }
+    }
+    provider::run(&mut ctx, motion_call()).expect("negative motion");
+    assert_eq!(
+        find_hostile(&ctx, 21).motion.position().get(),
+        [-2.5, 40.0, -2.5]
+    );
+}
+
+#[test]
+fn geometry_loaded_edge_windows_preserve_exact_cells() {
+    for edge in [
+        i32::MIN as f32 + 128.0,
+        f32::from_bits((i32::MAX as f32).to_bits() - 1),
+    ] {
+        let center = edge as i32;
+        let mut state = authority();
+        let session = anchor_session(&mut state);
+        let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+        stage_environment(&mut ctx, 1000, 1);
+        stage_actors(
+            &mut ctx,
+            &[
+                player_actor(session, 1, [0.5, 40.0, 0.5]),
+                hostile_actor(21, [edge, 40.0, edge], NIGHTWALKER),
+            ],
+        );
+        for x in center - 16..=center + 16 {
+            for z in center - 16..=center + 16 {
+                for y in 36..=44 {
+                    observe(
+                        &mut ctx,
+                        mornlea_domain::BlockPos::new(x, y, z),
+                        if y < 40 { STONE } else { AIR },
+                    );
+                }
+            }
+        }
+        provider::run(&mut ctx, motion_call()).expect("loaded signed edge");
+        let runtime = ctx.read().runtime(find_hostile(&ctx, 21).key).unwrap();
+        let path = runtime.path.as_ref().expect("exact edge chase window");
+        let goal = if center < 0 { center + 16 } else { center - 16 };
+        assert_eq!(path.target, mornlea_domain::BlockPos::new(goal, 40, goal));
+    }
+}
+
+#[test]
+fn geometry_goal_y_distance_widens_before_subtraction() {
+    let mut state = authority();
+    let session = anchor_session(&mut state);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut ctx, 1000, 1);
+    stage_actors(
+        &mut ctx,
+        &[
+            player_actor(session, 1, [105.5, i32::MIN as f32, 100.5]),
+            hostile_actor(21, [100.5, 40.0, 100.5], NIGHTWALKER),
+        ],
+    );
+    preload_band_world(&mut ctx);
+    provider::run(&mut ctx, motion_call()).expect("finite admitted target Y");
+    let runtime = ctx.read().runtime(find_hostile(&ctx, 21).key).unwrap();
+    assert_eq!(
+        runtime.path.as_ref().unwrap().target,
+        mornlea_domain::BlockPos::new(105, 40, 100)
+    );
+}

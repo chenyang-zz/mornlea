@@ -1187,3 +1187,72 @@ fn missing_environment_is_internal() {
         "missing environment is internal, got {err:?}"
     );
 }
+
+fn geometry_snapshot(ctx: &TickContext<'_>) -> mornlea_server::contracts::FixtureState {
+    ctx.snapshot_state(
+        WorldState::try_new(mornlea_domain::WorldStateParts {
+            day_phase_offset: 0,
+            world_time_ticks: 0,
+            weather: Weather::Clear,
+            season: mornlea_domain::Season::Spring,
+            season_progress: 0,
+            temperature: 0,
+        })
+        .unwrap(),
+    )
+}
+
+#[test]
+fn geometry_shot_planning_refuses_unrepresentable_eyes() {
+    for bad_hostile in [true, false] {
+        for axis in [0, 1, 2] {
+            let mut state = authority();
+            let session = admit_session(&mut state, 1, "eye-geometry");
+            let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+            stage_environment(&mut ctx, NOON);
+            let mut hostile = [0.5, 1.0, 0.5];
+            let mut target = [10.5, 1.0, 0.5];
+            if bad_hostile {
+                hostile[axis] = i32::MAX as f32;
+            } else {
+                target[axis] = i32::MAX as f32;
+            }
+            stage_actors(
+                &mut ctx,
+                &[
+                    hostile_record(11, hostile, HURLER, 20, 0),
+                    player_record(session, 1, Dimension::OVERWORLD, target, 20),
+                ],
+            );
+            stage_hostile_runtime(&mut ctx, 11, 0, false);
+            let before = geometry_snapshot(&ctx);
+            let events = ctx.events().to_vec();
+            assert!(matches!(
+                provider::plan(&ctx),
+                Err(ServerError::InvalidInput { field: "actor" })
+            ));
+            assert_eq!(geometry_snapshot(&ctx), before);
+            assert_eq!(ctx.events(), events);
+        }
+    }
+}
+
+#[test]
+fn geometry_negative_clear_shot_remains_admitted() {
+    let mut state = authority();
+    let session = admit_session(&mut state, 1, "negative-shot");
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut ctx, NOON);
+    stage_actors(
+        &mut ctx,
+        &[
+            hostile_record(11, [-10.5, 1.0, 0.5], HURLER, 20, 0),
+            player_record(session, 1, Dimension::OVERWORLD, [-0.5, 1.0, 0.5], 20),
+        ],
+    );
+    observe_corridor(&mut ctx, -11, -1);
+    let plan = provider::plan(&ctx).unwrap();
+    let report = provider::apply(&mut ctx, plan).unwrap();
+    assert_eq!(report.applied, 1);
+    assert_eq!(ctx.read().projectiles().len(), 1);
+}

@@ -413,23 +413,27 @@ impl HostileEntry {
             },
         }
     }
+}
 
-    /// Stages the actor and runtime records when anything changed.
-    fn stage(&mut self, ctx: &mut TickContext<'_>) -> Result<bool, ServerError> {
-        if !self.dirty {
-            return Ok(false);
-        }
-        self.dirty = false;
-        ctx.stage(RuleEffect::Actor(self.record()?))
-            .map_err(|_| ServerError::Internal {
-                invariant: "hostile staging",
-            })?;
-        ctx.stage(RuleEffect::Runtime(self.runtime()))
-            .map_err(|_| ServerError::Internal {
-                invariant: "hostile runtime staging",
-            })?;
-        Ok(true)
+/// Publish the bounded actor/runtime pairs only after every geometry and
+/// record has been checked, so one refused actor preserves the entire batch.
+fn stage_entries(
+    ctx: &mut TickContext<'_>,
+    entries: &[HostileEntry],
+) -> Result<usize, ServerError> {
+    let mut effects = Vec::with_capacity(entries.len() * 2);
+    for entry in entries.iter().filter(|entry| entry.dirty) {
+        effects.push(RuleEffect::Actor(entry.record()?));
+        effects.push(RuleEffect::Runtime(entry.runtime()));
     }
+    let applied = effects.len() / 2;
+    if !effects.is_empty() {
+        ctx.stage(RuleEffect::Compound(effects))
+            .map_err(|_| ServerError::Internal {
+                invariant: "hostile batch staging",
+            })?;
+    }
+    Ok(applied)
 }
 
 /// The `HostileMotion` batch: spawn admission first (one candidate), then the
@@ -445,7 +449,6 @@ fn hostile_motion(ctx: &mut TickContext<'_>) -> Result<PhaseReport, ServerError>
         })?;
     let mut entries = collect_hostiles(ctx)?;
     let examined = entries.len();
-    let mut applied = 0usize;
 
     // Spawn admission (`advanceHostileSpawn`): exactly one candidate is
     // derived and validated per tick; a refused candidate ends the attempt
@@ -469,16 +472,12 @@ fn hostile_motion(ctx: &mut TickContext<'_>) -> Result<PhaseReport, ServerError>
             // the flag is the skip's only observable effect.
             entry.fresh = false;
             entry.dirty = true;
-            if entry.stage(ctx)? {
-                applied += 1;
-            }
             continue;
         }
-        if advance_movement(ctx, &environment, entry)? {
-            applied += 1;
-        }
+        advance_movement(ctx, &environment, entry)?;
     }
 
+    let applied = stage_entries(ctx, &entries)?;
     Ok(PhaseReport {
         examined: examined + 1,
         applied,
@@ -501,7 +500,6 @@ fn hostile_burn_distant(ctx: &mut TickContext<'_>) -> Result<PhaseReport, Server
         })?;
     let mut entries = collect_hostiles(ctx)?;
     let examined = entries.len();
-    let mut applied = 0usize;
 
     let phase = effective_day_phase_at(
         environment.world_time,
@@ -586,11 +584,7 @@ fn hostile_burn_distant(ctx: &mut TickContext<'_>) -> Result<PhaseReport, Server
         }
     }
 
-    for entry in &mut entries {
-        if entry.stage(ctx)? {
-            applied += 1;
-        }
-    }
+    let applied = stage_entries(ctx, &entries)?;
 
     Ok(PhaseReport {
         examined,
@@ -660,8 +654,14 @@ fn spawn_admission(
     let axis = ((base >> 32) & 3) as usize;
     let delta_x = [1i32, -1, 0, 0][axis];
     let delta_z = [0i32, 0, 1, -1][axis];
-    let x = anchor_cell.x() + delta_x * radius as i32;
-    let z = anchor_cell.z() + delta_z * radius as i32;
+    let x = anchor_cell
+        .x()
+        .checked_add(delta_x * radius as i32)
+        .ok_or(ServerError::InvalidInput { field: "actor" })?;
+    let z = anchor_cell
+        .z()
+        .checked_add(delta_z * radius as i32)
+        .ok_or(ServerError::InvalidInput { field: "actor" })?;
 
     // The candidate column must resolve to a standing spot on fully
     // observed data (`hostileSpawnColumnSpot`); unobserved cells refuse
@@ -853,13 +853,13 @@ fn near_limit_exceeded(
 
 /// Advances one hostile body by one fixed physics step. The per-tick input
 /// resets to neutral (own yaw only) and only a live chase path converts it
-/// into a forward step toward the first waypoint not yet reached. Returns
-/// whether the entry was staged.
+/// into a forward step toward the first waypoint not yet reached. The working
+/// copy remains private until the whole batch is ready to publish.
 fn advance_movement(
-    ctx: &mut TickContext<'_>,
+    ctx: &TickContext<'_>,
     environment: &EnvironmentState,
     entry: &mut HostileEntry,
-) -> Result<bool, ServerError> {
+) -> Result<(), ServerError> {
     let now = ctx.read().tick();
     let view = ctx.read();
     let tunables = environment.tunables;
@@ -972,7 +972,7 @@ fn advance_movement(
                 entry.dirty = true;
             }
             if let Some(waypoint) = path.waypoints.get(path.cursor) {
-                if let Some(input) = input_toward(entry.body.position, *waypoint) {
+                if let Some(input) = input_toward(entry.body.position, *waypoint)? {
                     move_input = input;
                 }
             } else {
@@ -999,7 +999,7 @@ fn advance_movement(
     {
         // A distorted body has no respawn path; it is removed deterministically.
         entry.remove();
-        return entry.stage(ctx);
+        return Ok(());
     }
     let view = ctx.read();
     let body_in_fluid = submersion_body(&view, entry.dimension, position)?;
@@ -1057,7 +1057,7 @@ fn advance_movement(
         || stepped.state.position[1] < WORLD_MIN_Y as f32
     {
         entry.remove();
-        return entry.stage(ctx);
+        return Ok(());
     }
     entry.body.position = stepped.state.position;
     entry.body.velocity = stepped.state.velocity;
@@ -1082,7 +1082,7 @@ fn advance_movement(
         entry.body.next_repath_ticks = path.next_repath_tick;
     }
 
-    entry.stage(ctx)
+    Ok(())
 }
 
 /// Resolves the chase path for one hostile through the F1 pathfinding
@@ -1091,7 +1091,7 @@ fn advance_movement(
 /// covered-chunk revisions and the 20-tick replan tick in the runtime path;
 /// a failure clears the path and retries next tick.
 fn refresh_path(
-    ctx: &mut TickContext<'_>,
+    ctx: &TickContext<'_>,
     entry: &mut HostileEntry,
     fact: &PlayerFact,
     raw_goal: BlockPos,
@@ -1111,7 +1111,7 @@ fn refresh_path(
         entry.dirty = true;
         return Ok(());
     };
-    let Some(goal) = chase_goal(&grid, origin, start_cell, raw_goal) else {
+    let Some(goal) = chase_goal(&grid, origin, raw_goal) else {
         entry.path = None;
         entry.body.has_target = true;
         entry.body.player_id = PlayerId::from_bytes(fact.id);
@@ -1176,23 +1176,26 @@ fn refresh_path(
 /// (`movementInputToward` in `companion_manager.go` via
 /// `applyHostileActions`), jumping when the waypoint sits a full block or
 /// more above the feet.
-fn input_toward(position: [f32; 3], waypoint: BlockPos) -> Option<MovementInput> {
+fn input_toward(
+    position: [f32; 3],
+    waypoint: BlockPos,
+) -> Result<Option<MovementInput>, ServerError> {
     let dx = waypoint.x() as f32 + 0.5 - position[0];
     let dz = waypoint.z() as f32 + 0.5 - position[2];
     let length = (f64::from(dx) * f64::from(dx) + f64::from(dz) * f64::from(dz)).sqrt();
     if length == 0.0 {
-        return None;
+        return Ok(None);
     }
     let yaw = normalize_yaw(f32::atan2(
         (f64::from(-dx) / length) as f32,
         (f64::from(-dz) / length) as f32,
     ));
-    Some(MovementInput {
+    Ok(Some(MovementInput {
         move_x: 0,
         move_z: 1,
-        jump: waypoint.y() > floor_to_i32(position[1]),
+        jump: waypoint.y() > floor_to_i32(position[1])?,
         yaw,
-    })
+    }))
 }
 
 /// Consumes waypoints already reached by the body (`advanceRunners`): the
@@ -1343,6 +1346,21 @@ fn passable_table() -> Result<PathBlockTable, ServerError> {
     })
 }
 
+/// Validate both ends before any window offset or allocation can use them.
+fn window_bounds(center: [i32; 3], radius: [i32; 3]) -> Result<([i32; 3], [i32; 3]), ServerError> {
+    let mut minimum = [0; 3];
+    let mut maximum = [0; 3];
+    for axis in 0..3 {
+        minimum[axis] = center[axis]
+            .checked_sub(radius[axis])
+            .ok_or(ServerError::InvalidInput { field: "actor" })?;
+        maximum[axis] = center[axis]
+            .checked_add(radius[axis])
+            .ok_or(ServerError::InvalidInput { field: "actor" })?;
+    }
+    Ok((minimum, maximum))
+}
+
 /// Builds the chase window grid from staged observations. Returns the grid
 /// plus its origin cell and the window's low y, or `None` when any covered
 /// chunk has no observed cell (the all-covered-ready gate).
@@ -1351,15 +1369,23 @@ fn build_path_grid(
     dimension: Dimension,
     center: PathCell,
 ) -> Result<Option<(PathGrid, PathCell)>, ServerError> {
-    let low_y = (center.y - WINDOW_VERTICAL_RADIUS).max(WORLD_MIN_Y);
-    let high_y = (center.y + WINDOW_VERTICAL_RADIUS).min(WORLD_MAX_Y - 1);
+    let (minimum, maximum) = window_bounds(
+        [center.x, center.y, center.z],
+        [
+            WINDOW_HORIZONTAL_RADIUS,
+            WINDOW_VERTICAL_RADIUS,
+            WINDOW_HORIZONTAL_RADIUS,
+        ],
+    )?;
+    let low_y = minimum[1].max(WORLD_MIN_Y);
+    let high_y = maximum[1].min(WORLD_MAX_Y - 1);
     if high_y < low_y {
         return Ok(None);
     }
     let origin = PathCell {
-        x: center.x - WINDOW_HORIZONTAL_RADIUS,
+        x: minimum[0],
         y: low_y,
-        z: center.z - WINDOW_HORIZONTAL_RADIUS,
+        z: minimum[2],
     };
     let size = [
         (2 * WINDOW_HORIZONTAL_RADIUS + 1) as u32,
@@ -1427,23 +1453,13 @@ fn build_path_grid(
 /// `hostile_manager.go` with `hostileStandable`; the standing rule is the
 /// kernel's `is_standing`, the same oracle the search validates endpoints
 /// against).
-fn chase_goal(
-    grid: &PathGrid,
-    origin: PathCell,
-    center: PathCell,
-    raw: BlockPos,
-) -> Option<PathCell> {
-    let goal_x = raw.x().clamp(
-        center.x - WINDOW_HORIZONTAL_RADIUS,
-        center.x + WINDOW_HORIZONTAL_RADIUS,
-    );
-    let goal_z = raw.z().clamp(
-        center.z - WINDOW_HORIZONTAL_RADIUS,
-        center.z + WINDOW_HORIZONTAL_RADIUS,
-    );
+fn chase_goal(grid: &PathGrid, origin: PathCell, raw: BlockPos) -> Option<PathCell> {
+    // The checked grid owns the proven endpoints; do not reconstruct radii.
     let size = grid.size();
+    let goal_x = raw.x().clamp(origin.x, origin.x + (size[0] as i32 - 1));
+    let goal_z = raw.z().clamp(origin.z, origin.z + (size[2] as i32 - 1));
     let mut best: Option<PathCell> = None;
-    let mut best_distance = 0i32;
+    let mut best_distance = 0i64;
     for y in origin.y..origin.y + size[1] as i32 {
         let candidate = PathCell {
             x: goal_x,
@@ -1453,7 +1469,7 @@ fn chase_goal(
         if !is_standing(grid, candidate) {
             continue;
         }
-        let distance = (candidate.y - raw.y()).abs();
+        let distance = (i64::from(candidate.y) - i64::from(raw.y())).abs();
         if best.is_none() || distance < best_distance {
             best = Some(candidate);
             best_distance = distance;
@@ -1474,9 +1490,8 @@ fn local_block_light(
     center: BlockPos,
 ) -> Result<u8, ServerError> {
     let side = LIGHT_SIDE as i32;
-    let base_x = center.x() - LIGHT_RADIUS;
-    let base_y = center.y() - LIGHT_RADIUS;
-    let base_z = center.z() - LIGHT_RADIUS;
+    let (minimum, _) = window_bounds([center.x(), center.y(), center.z()], [LIGHT_RADIUS; 3])?;
+    let [base_x, base_y, base_z] = minimum;
     let index_of = |rx: i32, ry: i32, rz: i32| -> usize { ((rx * side + ry) * side + rz) as usize };
     let mut levels = vec![0u8; LIGHT_SIDE * LIGHT_SIDE * LIGHT_SIDE];
     // Seeds: every observed cell's emission, even inside opaque blocks.
@@ -1624,7 +1639,7 @@ fn sky_exposed(
     position: [f32; 3],
 ) -> Result<bool, ServerError> {
     let column = block_pos_of(position)?;
-    let mut y = floor_to_i32(position[1] + PLAYER_HEIGHT);
+    let mut y = floor_to_i32(position[1] + PLAYER_HEIGHT)?;
     while y < WORLD_MAX_Y {
         match observed_block(view, dimension, BlockPos::new(column.x(), y, column.z()))? {
             None => return Ok(false),
@@ -1851,14 +1866,14 @@ fn step_prism(
         position[2] + sweep_max[2] + HALF_WIDTH + COLLISION_EPSILON,
     ];
     let origin = [
-        floor_to_i32(minimum[0]),
-        floor_to_i32(minimum[1]),
-        floor_to_i32(minimum[2]),
+        floor_to_i32(minimum[0])?,
+        floor_to_i32(minimum[1])?,
+        floor_to_i32(minimum[2])?,
     ];
     let end = [
-        floor_to_i32(maximum[0]),
-        floor_to_i32(maximum[1]),
-        floor_to_i32(maximum[2]),
+        floor_to_i32(maximum[0])?,
+        floor_to_i32(maximum[1])?,
+        floor_to_i32(maximum[2])?,
     ];
     let mut dimensions = [0u32; 3];
     let mut cells: u64 = 1;
@@ -2039,9 +2054,9 @@ fn horizontal_distance_sq(from: [f32; 3], to: [f32; 3]) -> f32 {
 /// Floor-to-cell mirror (`blockPosOf` in `hostile.go`).
 fn block_pos_of(position: [f32; 3]) -> Result<BlockPos, ServerError> {
     Ok(BlockPos::new(
-        floor_to_i32(position[0]),
-        floor_to_i32(position[1]),
-        floor_to_i32(position[2]),
+        floor_to_i32(position[0])?,
+        floor_to_i32(position[1])?,
+        floor_to_i32(position[2])?,
     ))
 }
 
@@ -2058,13 +2073,8 @@ fn standing_cell(position: [f32; 3]) -> Result<PathCell, ServerError> {
 
 /// Checked floor into i32; positions outside the int32 domain cannot name a
 /// cell and refuse (`collisionCheckedFloor`).
-fn floor_to_i32(value: f32) -> i32 {
-    let floored = f64::from(value).floor();
-    if !floored.is_finite() || !((i32::MIN as f64)..=(i32::MAX as f64)).contains(&floored) {
-        0
-    } else {
-        floored as i32
-    }
+fn floor_to_i32(value: f32) -> Result<i32, ServerError> {
+    checked_floor(value)
 }
 
 /// Yaw normalization mirror (`normalizeYaw` in

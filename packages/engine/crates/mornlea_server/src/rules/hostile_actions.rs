@@ -266,6 +266,11 @@ fn stage_shot(
         target.position[1] + eye_height,
         target.position[2],
     ];
+    // Finite stored positions do not necessarily name signed integer cells.
+    // Admit both endpoints before normalization or the numerical DDA walk.
+    for component in eye.into_iter().chain(target_eye) {
+        floor_to_i32(component)?;
+    }
     let delta = [
         target_eye[0] - eye[0],
         target_eye[1] - eye[1],
@@ -301,9 +306,9 @@ fn line_of_sight(
         .hypot(f64::from(target_eye[1] - origin[1]))
         .hypot(f64::from(target_eye[2] - origin[2])) as f32;
     let target = BlockPos::new(
-        floor_to_i32(target_eye[0]),
-        floor_to_i32(target_eye[1]),
-        floor_to_i32(target_eye[2]),
+        floor_to_i32(target_eye[0])?,
+        floor_to_i32(target_eye[1])?,
+        floor_to_i32(target_eye[2])?,
     );
     let mut cursor = RayCursor::try_new(Ray {
         origin,
@@ -518,15 +523,13 @@ fn horizontal_distance_sq(from: [f32; 3], to: [f32; 3]) -> f32 {
     dx * dx + dz * dz
 }
 
-/// Checked floor into i32 (`collisionCheckedFloor`); nonfinite or
-/// out-of-domain input saturates to `0` because callers only pass bounded
-/// world positions that never reach this arm.
-fn floor_to_i32(value: f32) -> i32 {
+/// Reject an unrepresentable eye cell before the numerical ray can alias it.
+fn floor_to_i32(value: f32) -> Result<i32, ServerError> {
     let floored = f64::from(value).floor();
     if !floored.is_finite() || !((i32::MIN as f64)..=(i32::MAX as f64)).contains(&floored) {
-        0
+        Err(ServerError::InvalidInput { field: "actor" })
     } else {
-        floored as i32
+        Ok(floored as i32)
     }
 }
 
