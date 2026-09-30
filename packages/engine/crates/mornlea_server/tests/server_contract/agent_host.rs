@@ -5,9 +5,9 @@
 //! unmatched outcomes without touching the active gate and
 //! `plannerOutcomeMatchesCurrentAuthority` rebuilds the current world before
 //! accepting a plan) and the bounded companion inbox (`companion.MaxActive`).
-//! One case runs against the real lease and HTTP providers with a
-//! deterministic loopback server; the rest use a scripted `AgentHandle`
-//! double with the real snapshot registry.
+//! Cases run the real lease over deterministic loopback HTTP or a panicking
+//! wire, alongside scripted `AgentHandle` cases. All use the real snapshot
+//! registry.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
@@ -26,13 +26,13 @@ use mornlea_server::agent::host::{
     PlanFailKind, PlanHost,
 };
 use mornlea_server::agent::http::AgentHttpWire;
-use mornlea_server::agent::lease::{LeaseConfig, LeaseController};
+use mornlea_server::agent::lease::{AgentWire, LeaseConfig, LeaseController, RpcCancellation};
 use mornlea_server::agent::snapshot::{SnapshotEntropy, SnapshotRegistry};
 use mornlea_server::contracts::{
     AgentErrorCode, AgentHandle, AgentPlan, AgentPoll, AgentRequest, AgentRequestId, AgentResponse,
     CancelResponse, ClientInstanceId, Clock, Deadline, DialogueEnvironment, DialogueFact, LeaseId,
-    NamespaceId, PlanRequest, PlanResponse, PlanStep, Resource, RunId, ServerError, SnapshotId,
-    SnapshotPort,
+    LeaseResponse, LeasedIdentity, NamespaceId, PlanRequest, PlanResponse, PlanStep, Resource,
+    RunId, ServerError, SnapshotId, SnapshotPort,
 };
 use mornlea_server::core::companion_ingress::{CompanionIngress, CompanionTaskGate};
 use mornlea_storage::ItemStack;
@@ -623,6 +623,7 @@ struct CountingSnapshots {
     inner: SnapshotRegistry,
     registers: usize,
     completes: usize,
+    cancels: usize,
 }
 
 impl CountingSnapshots {
@@ -631,6 +632,7 @@ impl CountingSnapshots {
             inner,
             registers: 0,
             completes: 0,
+            cancels: 0,
         }
     }
 
@@ -663,6 +665,7 @@ impl SnapshotPort for CountingSnapshots {
     }
 
     fn cancel(&mut self, id: SnapshotId) -> Result<(), ServerError> {
+        self.cancels += 1;
         self.inner.cancel(id)
     }
 
@@ -1252,4 +1255,153 @@ fn real_http_host_reclaims_more_than_sixty_four_plan_cycles() {
         assert_eq!(host.take_installed().len(), 1);
     }
     agent.close(Deadline::at(clock.monotonic())).unwrap();
+}
+
+/// Panic in the actual business worker while control and run cleanup echo
+/// their owned identities. Recording happens before the panic without
+/// retaining a poisoned mutex or replacing the lease's retirement behavior.
+#[derive(Default)]
+struct PanicPlanWire {
+    requests: Mutex<Vec<AgentRequest>>,
+    closed: AtomicBool,
+}
+
+impl AgentWire for PanicPlanWire {
+    fn rpc_cancellable(
+        &self,
+        request: AgentRequest,
+        _deadline: Deadline,
+        _cancellation: &RpcCancellation,
+    ) -> Result<AgentResponse, ServerError> {
+        self.requests.lock().unwrap().push(request.clone());
+        match request {
+            AgentRequest::Acquire(base) => Ok(AgentResponse::Acquire(LeaseResponse {
+                leased: LeasedIdentity {
+                    base,
+                    lease_id: lease(),
+                },
+            })),
+            AgentRequest::Plan(_) => panic!("injected plan worker panic"),
+            AgentRequest::Cancel(cancel) => Ok(AgentResponse::Cancel(CancelResponse {
+                leased: cancel.leased,
+                run_id: cancel.run_id,
+                cancelled: true,
+            })),
+            other => panic!("unexpected panic wire request: {other:?}"),
+        }
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A panicked join reports its failure on first retirement, then leaves an
+/// absent request for the host's retry. That retry must reclaim the cleanup
+/// charge so repeated failures cannot exhaust the 64 business slots.
+#[test]
+fn real_lease_host_reclaims_more_than_sixty_four_panicked_plan_cycles() {
+    let (_, clock) = StepClock::start();
+    let wire = Arc::new(PanicPlanWire::default());
+    let mut agent = LeaseController::try_new(
+        LeaseConfig {
+            client_instance_id: ClientInstanceId::try_from_bytes(uuid(2)).unwrap(),
+            namespace_id: NamespaceId::try_from_bytes(uuid(3)).unwrap(),
+        },
+        wire.clone(),
+        clock.clone(),
+    )
+    .unwrap();
+    agent.refresh();
+    let (lease_id, fence) = agent.current_lease().unwrap();
+    let mut snapshots = CountingSnapshots::new(registry(&clock));
+    let mut host = PlanHost::new();
+    for cycle in 0..65u8 {
+        assert_eq!(agent.retained_requests(), 0, "before plan cycle {cycle}");
+        let mut dispatch = plan_dispatch(100 + cycle * 2, 101 + cycle * 2, 100);
+        dispatch.lease = lease_id;
+        dispatch.lease_fence = fence;
+        let ticket = host
+            .dispatch_plan(&mut agent, &mut snapshots, &*clock, dispatch)
+            .unwrap_or_else(|error| panic!("panic plan cycle {cycle} admits: {error:?}"));
+        assert_eq!(ticket.attempt, u64::from(cycle) + 1);
+        assert!(host.plan_inflight(companion()));
+
+        let until = Instant::now() + Duration::from_secs(2);
+        loop {
+            match agent.poll(ticket.request_id) {
+                AgentPoll::Pending => {
+                    assert!(Instant::now() < until, "panic plan cycle {cycle}");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                terminal => {
+                    assert_eq!(
+                        terminal,
+                        AgentPoll::Failed(ServerError::Internal {
+                            invariant: "agent business worker",
+                        })
+                    );
+                    break;
+                }
+            }
+        }
+        assert_eq!(agent.retained_requests(), 1);
+        let snapshot_id = {
+            let requests = wire.requests.lock().unwrap();
+            let Some(AgentRequest::Plan(plan)) = requests.last() else {
+                panic!("expected original plan");
+            };
+            assert_eq!(plan.leased.base.request_id, ticket.request_id);
+            plan.snapshot_id
+        };
+        let report = host
+            .drain_outcomes(&mut agent, &mut snapshots, &*clock)
+            .unwrap();
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.completed, 0);
+        assert_eq!(agent.retained_requests(), 0, "panic plan cycle {cycle}");
+        assert!(!host.plan_inflight(companion()));
+        assert_eq!(host.outcome_len(), 0);
+        assert_eq!(host.task_len(), 0);
+        let failures = host.take_failures();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].companion, companion());
+        assert_eq!(failures[0].attempt, ticket.attempt);
+        assert_eq!(failures[0].kind, PlanFailKind::Unavailable);
+        assert_eq!(snapshots.registers, usize::from(cycle) + 1);
+        assert_eq!(snapshots.cancels, usize::from(cycle) + 1);
+        assert_eq!(snapshots.completes, 0);
+        assert!(snapshots.inner.complete(snapshot_id).is_err());
+
+        // A later drain retries any refused join retirement without replaying
+        // the transferred failure or touching its already cancelled snapshot.
+        let report = host
+            .drain_outcomes(&mut agent, &mut snapshots, &*clock)
+            .unwrap();
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.completed, 0);
+        assert!(host.take_failures().is_empty());
+        assert_eq!(snapshots.cancels, usize::from(cycle) + 1);
+        assert_eq!(snapshots.completes, 0);
+        assert_eq!(agent.retained_requests(), 0);
+    }
+    {
+        let requests = wire.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1 + 65 * 2);
+        assert!(matches!(requests[0], AgentRequest::Acquire(_)));
+        for pair in requests[1..].chunks_exact(2) {
+            let AgentRequest::Plan(plan) = &pair[0] else {
+                panic!("expected original plan");
+            };
+            let AgentRequest::Cancel(cancel) = &pair[1] else {
+                panic!("expected independent run cleanup");
+            };
+            assert_eq!(cancel.run_id, plan.run_id);
+            assert_eq!(cancel.leased.lease_id, lease_id);
+            assert_ne!(cancel.leased.base.request_id, plan.leased.base.request_id);
+        }
+    }
+    agent.close(Deadline::at(clock.monotonic())).unwrap();
+    assert_eq!(agent.retained_requests(), 0);
+    assert!(wire.closed.load(Ordering::SeqCst));
 }
