@@ -44,11 +44,10 @@
 //! accepted F1 `NativePathfind` kernel over a staged-observation grid, and
 //! every body displacement goes through `NativePhysics`, exactly like the
 //! player motion provider. The path lives in [`ActorRuntime::path`] as
-//! transient state (a restored hostile re-plans; nothing path-shaped is
-//! persisted). Go revalidates path revisions when applying asynchronous A*
-//! results; this provider computes and consumes the path within one
-//! synchronous provider call, so the result can never be stale at use, and
-//! the 20-tick replan bounds world drift afterwards.
+//! transient state; the durable calendar deadline controls replanning after
+//! restore. Exact Ready chunk revisions authorize construction and each
+//! later approaching movement step, matching `advanceRunners` even while
+//! the successful 20-tick deadline is still in the future.
 //!
 //! Deliberate boundaries (later nodes own them): combat intents and hit
 //! settlement, projectile firing and stepping, death drops and the loot
@@ -960,6 +959,15 @@ fn advance_movement(
         }
     } else if entry.body.has_target && !within_attack {
         let mut path = entry.path.take();
+        if let Some(cached) = &path
+            && !path_revisions_current(&view, entry.dimension, entry.body.position, cached)?
+        {
+            // Holds and retreat bypass this check, as `advanceRunners`
+            // does. Invalid approach paths retry next calendar tick.
+            path = None;
+            entry.body.next_repath_ticks = now.saturating_add(1);
+            entry.dirty = true;
+        }
         if let Some(path) = path.as_mut() {
             if consume_arrived(path, entry.body.position) {
                 entry.dirty = true;
@@ -1190,6 +1198,28 @@ fn input_toward(
     }))
 }
 
+/// Pure bounded reuse check against the standing cell's radius-one Ready
+/// view (`chunkRevisionsAround` / `PathPolicy.ShouldUse`). Saved identities
+/// cannot authorize another dimension or a chunk outside the current view.
+fn path_revisions_current(
+    view: &AuthorityReadView<'_>,
+    dimension: Dimension,
+    position: [f32; 3],
+    path: &PathState,
+) -> Result<bool, ServerError> {
+    if path.cursor >= path.waypoints.len() || path.revisions.len() > 9 {
+        return Ok(false);
+    }
+    let standing = standing_cell(position)?;
+    let center = [standing.x >> 4, standing.z >> 4];
+    Ok(path.revisions.iter().all(|(key, revision)| {
+        key.dimension == dimension
+            && (i64::from(key.pos.x()) - i64::from(center[0])).abs() <= 1
+            && (i64::from(key.pos.z()) - i64::from(center[1])).abs() <= 1
+            && view.ready_chunk_revision(*key) == Some(*revision)
+    }))
+}
+
 /// Consumes waypoints already reached by the body (`advanceRunners`): the
 /// 0.35 arrival radius compares horizontal components only. Returns whether
 /// any waypoint was consumed.
@@ -1332,7 +1362,7 @@ fn player_within(
 // ---------------------------------------------------------------------------
 // Path window construction over staged observations. The grid mirrors
 // `buildChaseGrid`: a 33x9x33 window centered on the standing cell, every
-// covered chunk observed, unobserved cells blocking.
+// covered chunk Ready, with staged writes over compact chunk bases.
 // ---------------------------------------------------------------------------
 
 /// The passable-block table shared with companion pathing
@@ -1370,9 +1400,9 @@ fn window_bounds(center: [i32; 3], radius: [i32; 3]) -> Result<([i32; 3], [i32; 
     Ok((minimum, maximum))
 }
 
-/// Builds the chase window grid from staged observations. Returns the grid
-/// plus its origin cell and the window's low y, or `None` when any covered
-/// chunk has no observed cell (the all-covered-ready gate).
+/// Builds the chase window from exact Ready ownership and current cell data.
+/// Missing coverage defers before grid allocation or observation scanning;
+/// per-cell CAS counters never supply the saved chunk identities.
 fn build_path_grid(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
@@ -1403,6 +1433,24 @@ fn build_path_grid(
         })?,
         (2 * WINDOW_HORIZONTAL_RADIUS + 1) as u32,
     ];
+    let chunk_origin = [minimum[0] >> 4, minimum[2] >> 4];
+    let chunk_end = [maximum[0] >> 4, maximum[2] >> 4];
+    let mut revisions = Vec::with_capacity(9);
+    for z in chunk_origin[1]..=chunk_end[1] {
+        for x in chunk_origin[0]..=chunk_end[0] {
+            let key = ChunkKey {
+                dimension,
+                pos: mornlea_domain::ChunkPos::new(x, z),
+            };
+            let Some(revision) = view.ready_chunk_revision(key) else {
+                return Ok(None);
+            };
+            revisions.push(PathRevision {
+                chunk: [x, z],
+                revision,
+            });
+        }
+    }
     let cells = size[0] as usize * size[1] as usize * size[2] as usize;
     // The search cap (`PathGrid::try_new` rejects grids above 131072
     // cells); the 33x9x33 window always fits.
@@ -1411,8 +1459,6 @@ fn build_path_grid(
     }
     let table = passable_table()?;
     let mut blocks = vec![u16::MAX; cells];
-    let mut revisions: Vec<PathRevision> = Vec::new();
-    let mut seen: Vec<([i32; 2], u64)> = Vec::new();
     // Fill in the kernel's `flat_index` order (x-outer, z-middle, y-inner)
     // so every staged cell lands on the slot `block_at` reads back.
     for lx in 0..size[0] as i32 {
@@ -1425,30 +1471,9 @@ fn build_path_grid(
                 let index =
                     (lx as usize * size[2] as usize + lz as usize) * size[1] as usize + ly as usize;
                 blocks[index] = observed.block;
-                let chunk = [pos.x() >> 4, pos.z() >> 4];
-                if !seen.iter().any(|(seen_chunk, _)| *seen_chunk == chunk) {
-                    seen.push((chunk, observed.revision));
-                }
             }
         }
     }
-    // Every covered chunk must carry at least one observed cell, mirroring
-    // the all-covered-ready gate: an uncovered window defers the attempt.
-    let span_x = size[0].div_ceil(16) as i32;
-    let span_z = size[2].div_ceil(16) as i32;
-    let base_chunk = [origin.x >> 4, origin.z >> 4];
-    for dx in 0..span_x {
-        for dz in 0..span_z {
-            let want = [base_chunk[0] + dx, base_chunk[1] + dz];
-            if !seen.iter().any(|(chunk, _)| *chunk == want) {
-                return Ok(None);
-            }
-        }
-    }
-    revisions.extend(seen.iter().map(|(chunk, revision)| PathRevision {
-        chunk: *chunk,
-        revision: *revision,
-    }));
     let grid = PathGrid::try_new(origin, size, blocks.into_boxed_slice(), table, revisions)
         .map_err(|_| ServerError::Internal {
             invariant: "hostile path grid",

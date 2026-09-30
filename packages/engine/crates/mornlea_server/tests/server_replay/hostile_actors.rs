@@ -687,7 +687,7 @@ fn night_tie_capacity_distance() {
     let mut context = TickContext::harness(&mut state, TickBudget::full());
     stage_environment(&mut context, 1000, 0);
     // Flat 33x9x33 path window around the hostile: stone below y=40, air
-    // at and above it.
+    // at and above it, with actual Ready ownership.
     for x in 84..=116 {
         for z in 84..=116 {
             for y in 36..=44 {
@@ -699,6 +699,7 @@ fn night_tie_capacity_distance() {
             }
         }
     }
+    preload_ready_window(&mut context, 100, 100);
     stage_actors(
         &mut context,
         &[
@@ -1181,8 +1182,87 @@ fn fresh_skip_neutral_move_and_burn() {
 // positions only, never intents.
 // -----------------------------------------------------------------------
 
+fn ready_air_chunk() -> mornlea_storage::Chunk {
+    mornlea_storage::Chunk {
+        sections: vec![
+            mornlea_storage::ContainerSnapshot {
+                kind: mornlea_storage::StorageKind::Single,
+                bits: 0,
+                single: AIR,
+                palette: vec![],
+                packed: vec![],
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![Default::default(); 32],
+        chests: vec![Default::default(); 16],
+    }
+}
+
+fn set_ready_cell(chunk: &mut mornlea_storage::Chunk, pos: mornlea_domain::BlockPos, block: u16) {
+    let section = &mut chunk.sections[((pos.y() + 64) / 16) as usize];
+    if section.kind == mornlea_storage::StorageKind::Single {
+        let single = u64::from(section.single);
+        let packed = single | single << 15 | single << 30 | single << 45;
+        *section = mornlea_storage::ContainerSnapshot {
+            kind: mornlea_storage::StorageKind::Direct,
+            bits: 15,
+            single: 0,
+            palette: vec![],
+            packed: vec![packed; 1024],
+        };
+    }
+    assert_eq!(section.kind, mornlea_storage::StorageKind::Direct);
+    let index = (((pos.y() + 64) % 16) * 256 + (pos.z() & 15) * 16 + (pos.x() & 15)) as usize;
+    let shift = (index % 4) * 15;
+    section.packed[index / 4] =
+        (section.packed[index / 4] & !(0x7fff << shift)) | u64::from(block) << shift;
+}
+
+fn ready_window_chunk(context: &TickContext<'_>, key: ChunkKey) -> mornlea_storage::Chunk {
+    let mut chunk = ready_air_chunk();
+    for x in key.pos.x() * 16..=key.pos.x() * 16 + 15 {
+        for z in key.pos.z() * 16..=key.pos.z() * 16 + 15 {
+            for y in 36..=44 {
+                let pos = mornlea_domain::BlockPos::new(x, y, z);
+                if let Some(observed) = context.read().observation(key.dimension, pos) {
+                    set_ready_cell(&mut chunk, pos, observed.block);
+                }
+            }
+        }
+    }
+    chunk
+}
+
+/// Prepare validated compact bases from exact sparse terrain off-tick.
+fn preload_ready_window(context: &mut TickContext<'_>, x: i32, z: i32) {
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            let key = ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new((x >> 4) + dx, (z >> 4) + dz),
+            };
+            context.preload_ready_chunk(
+                mornlea_server::core::world::ReadyChunk::try_new(
+                    key,
+                    1,
+                    (50 + (dx + 1) * 3 + dz + 1) as u64,
+                    ready_window_chunk(context, key),
+                )
+                .unwrap(),
+            );
+        }
+    }
+}
+
 /// Flat 33x9x33 walk volume around the scene: stone below y=40, air above.
 fn preload_band_world(context: &mut TickContext<'_>) {
+    preload_sparse_band_world(context);
+    preload_ready_window(context, 100, 100);
+}
+
+fn preload_sparse_band_world(context: &mut TickContext<'_>) {
     for x in 84..=116 {
         for z in 84..=116 {
             for y in 36..=44 {
@@ -1883,6 +1963,7 @@ fn geometry_loaded_edge_windows_preserve_exact_cells() {
                 }
             }
         }
+        preload_ready_window(&mut ctx, center, 100);
         provider::run(&mut ctx, motion_call()).expect("loaded signed edge");
         let runtime = ctx.read().runtime(find_hostile(&ctx, 21).key).unwrap();
         let path = runtime.path.as_ref().expect("exact edge chase window");
@@ -2247,11 +2328,25 @@ fn cadence_hurler_bands_follow_owned_uuid_live_position_between_dispatches() {
 fn cadence_failed_search_retries_next_calendar_tick() {
     let (mut state, _) = cadence_seed([110.5, 40.0, 100.5], 1000, true);
     let mut residents = state.residents();
-    for observed in residents.blocks.values_mut() {
-        if observed.pos.x() == 105 && observed.pos.y() >= 40 {
-            observed.block = STONE;
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    ready_hydrate(&mut ctx, &residents, None);
+    for (key, generation, revision, mut chunk) in residents.ready_snapshot() {
+        if key.pos.x() == 105 >> 4 {
+            for z in 84..=116 {
+                if z >> 4 == key.pos.z() {
+                    for y in 40..=44 {
+                        set_ready_cell(&mut chunk, mornlea_domain::BlockPos::new(105, y, z), STONE);
+                    }
+                }
+            }
+            ctx.preload_ready_chunk(
+                mornlea_server::core::world::ReadyChunk::try_new(key, generation, revision, chunk)
+                    .unwrap(),
+            );
         }
     }
+    residents = ctx.resident_snapshot();
+    drop(ctx);
     state.commit_residents(residents);
     cadence_tick(&mut state, 1000);
     assert!(cadence_path(&state).is_none());
@@ -2351,6 +2446,7 @@ fn geometry_both_edge_axes_complete_at_the_exhaustion_retry() {
                 }
             }
         }
+        preload_ready_window(&mut ctx, center, center);
         // Float32 projects every horizontal cell center in this window to
         // the same position, so all arrived waypoints clear in this call.
         provider::run(&mut ctx, motion_call()).expect("representable signed axes");
@@ -2365,4 +2461,486 @@ fn geometry_both_edge_axes_complete_at_the_exhaustion_retry() {
         assert!(body.has_target);
         assert_eq!(body.player_id, StoredPlayerId::from_bytes(uuid_bytes(1)));
     }
+}
+
+/// Public replay hydration materializes carried values before Ready install.
+/// No sparse preload can override Ready height or revision ownership.
+fn ready_hydrate(
+    ctx: &mut TickContext<'_>,
+    residents: &mornlea_server::state::ResidentTickState,
+    missing: Option<ChunkKey>,
+) {
+    for (key, generation, revision, chunk) in residents.ready_snapshot() {
+        if Some(key) != missing {
+            ctx.preload_ready_chunk(
+                mornlea_server::core::world::ReadyChunk::try_new(key, generation, revision, chunk)
+                    .unwrap(),
+            );
+        }
+    }
+    for observed in residents.blocks.values() {
+        if ctx.read().ready_chunk_revision(observed.key).is_none() {
+            ctx.preload_block(*observed);
+        }
+    }
+    stage_actors(ctx, &residents.actors);
+    for runtime in residents.runtimes.values() {
+        ctx.stage(RuleEffect::Runtime(runtime.clone())).unwrap();
+    }
+    for (key, inventory) in &residents.inventories {
+        ctx.preload_inventory(*key, *inventory);
+    }
+    ctx.stage(RuleEffect::Environment(
+        residents.environment.as_ref().unwrap().clone(),
+    ))
+    .unwrap();
+    assert!(residents.mining.is_empty());
+    assert!(residents.projectiles.is_empty());
+    assert!(residents.sleeping.is_empty());
+}
+
+fn ready_commit_hydrated(
+    ctx: &TickContext<'_>,
+    before: &mornlea_server::state::ResidentTickState,
+) -> mornlea_server::state::ResidentTickState {
+    let mut next = ctx.resident_snapshot();
+    let changed = ctx.changed_blocks();
+    // Materialization preserves values; restore untouched carried CAS lanes.
+    // Changed cells retain their newly admitted transaction observations.
+    for (key, observed) in &before.blocks {
+        if !changed.iter().any(|cell| (cell.key, cell.pos) == *key) {
+            next.blocks.insert(*key, *observed);
+        }
+    }
+    next
+}
+
+fn assert_ready_cache_retained(
+    actual: &mornlea_server::contracts::PathState,
+    expected: &mornlea_server::contracts::PathState,
+) {
+    assert_eq!(actual.generation, expected.generation);
+    assert_eq!(actual.target, expected.target);
+    assert_eq!(actual.revisions, expected.revisions);
+    assert_eq!(actual.waypoints, expected.waypoints);
+    assert_eq!(actual.next_repath_tick, expected.next_repath_tick);
+    assert!(actual.cursor >= expected.cursor);
+    assert!(actual.cursor < actual.waypoints.len());
+}
+
+fn ready_saved_revision(state: &AuthorityState, key: ChunkKey) -> u64 {
+    state
+        .residents()
+        .ready_snapshot()
+        .into_iter()
+        .find(|chunk| chunk.0 == key)
+        .unwrap()
+        .2
+}
+
+/// Admit real writes through the public transaction/commit boundary, then
+/// let actual reducer ticks consume the carried state. This is not network
+/// command admission; changed cell CAS may rebase when materialized here.
+fn ready_admit_writes(
+    state: &mut AuthorityState,
+    pos: mornlea_domain::BlockPos,
+    replacements: &[u16],
+) -> u64 {
+    let before = state.residents();
+    let key = overworld_cell(pos);
+    let previous = ready_saved_revision(state, key);
+    let mut ctx = TickContext::harness(state, TickBudget::full());
+    ready_hydrate(&mut ctx, &before, None);
+    assert_eq!(ctx.read().ready_chunk_revision(key), Some(previous));
+    for block in replacements {
+        let observed = ctx.read().observation(key.dimension, pos).unwrap();
+        let outcome = ctx
+            .transaction()
+            .try_system(
+                mornlea_server::contracts::SystemRule::Support,
+                vec![mornlea_server::contracts::BlockWrite::try_new(observed, *block).unwrap()],
+            )
+            .unwrap();
+        assert_eq!(outcome.changed.len(), 1);
+        assert_eq!(ctx.read().ready_chunk_revision(key), Some(previous + 1));
+    }
+    let next = ready_commit_hydrated(&ctx, &before);
+    drop(ctx);
+    state.commit_residents(next);
+    assert_eq!(ready_saved_revision(state, key), previous + 1);
+    previous + 1
+}
+
+#[test]
+fn ready_sparse_chunk_samples_defer_without_ready_ownership() {
+    let mut state = authority();
+    let session = anchor_session(&mut state);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut ctx, 1000, 1);
+    stage_actors(
+        &mut ctx,
+        &[
+            player_actor(session, 1, [110.5, 40.0, 100.5]),
+            hostile_actor(21, [100.5, 40.0, 100.5], NIGHTWALKER),
+        ],
+    );
+    for x in [84, 100, 116] {
+        for z in [84, 100, 116] {
+            observe(&mut ctx, mornlea_domain::BlockPos::new(x, 36, z), AIR);
+        }
+    }
+    // A valid sparse corridor makes the old search succeed without Ready data.
+    for x in 100..=110 {
+        for y in 39..=41 {
+            observe(
+                &mut ctx,
+                mornlea_domain::BlockPos::new(x, y, 100),
+                if y == 39 { STONE } else { AIR },
+            );
+        }
+    }
+    provider::run(&mut ctx, motion_call()).unwrap();
+    let actor = find_hostile(&ctx, 21);
+    assert!(ctx.read().runtime(actor.key).unwrap().path.is_none());
+    let ActorBody::Hostile(body) = &actor.body else {
+        unreachable!()
+    };
+    assert_eq!(body.next_repath_ticks, 1001);
+}
+
+#[test]
+fn ready_grid_captures_exact_chunk_revisions_instead_of_cell_cas() {
+    let (mut state, _) = cadence_seed([110.5, 40.0, 100.5], 1000, true);
+    let before = state.residents();
+    let first = mornlea_domain::BlockPos::new(84, 36, 84);
+    let key = overworld_cell(first);
+    let previous = ready_saved_revision(&state, key);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    ready_hydrate(&mut ctx, &before, None);
+    for block in [13, STONE] {
+        let observed = ctx.read().observation(key.dimension, first).unwrap();
+        ctx.transaction()
+            .try_system(
+                mornlea_server::contracts::SystemRule::Support,
+                vec![mornlea_server::contracts::BlockWrite::try_new(observed, block).unwrap()],
+            )
+            .unwrap();
+    }
+    let cas = ctx
+        .read()
+        .observation(key.dimension, first)
+        .unwrap()
+        .revision;
+    assert_eq!(cas, previous + 2);
+    assert_eq!(ctx.read().ready_chunk_revision(key), Some(previous + 1));
+    provider::run(&mut ctx, motion_call()).unwrap();
+    let actor = find_hostile(&ctx, 21);
+    let path = ctx
+        .read()
+        .runtime(actor.key)
+        .unwrap()
+        .path
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert_eq!(path.revisions.len(), 9);
+    for (key, revision) in path.revisions {
+        assert_eq!(Some(revision), ctx.read().ready_chunk_revision(key));
+    }
+    let ActorBody::Hostile(body) = &actor.body else {
+        unreachable!()
+    };
+    assert!(body.position[0] > 100.5, "a freshly built Ready path moves");
+    assert_eq!(body.next_repath_ticks, 1020);
+}
+
+#[test]
+fn ready_missing_one_covered_key_defers_despite_sparse_sample() {
+    let (mut state, _) = cadence_seed([110.5, 40.0, 100.5], 1000, true);
+    let residents = state.residents();
+    let missing = overworld_cell(mornlea_domain::BlockPos::new(116, 36, 116));
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    ready_hydrate(&mut ctx, &residents, Some(missing));
+    observe(&mut ctx, mornlea_domain::BlockPos::new(116, 36, 116), AIR);
+    assert_eq!(ctx.read().ready_chunk_revision(missing), None);
+    provider::run(&mut ctx, motion_call()).unwrap();
+    let actor = find_hostile(&ctx, 21);
+    assert!(ctx.read().runtime(actor.key).unwrap().path.is_none());
+    let ActorBody::Hostile(body) = &actor.body else {
+        unreachable!()
+    };
+    assert_eq!(body.next_repath_ticks, 1001);
+}
+
+#[test]
+fn ready_two_later_committed_writes_invalidate_real_carried_paths() {
+    let (mut state, _) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+    cadence_tick(&mut state, 1000);
+    let first = cadence_path(&state).unwrap();
+    cadence_tick(&mut state, 1001);
+    assert_eq!(cadence_path(&state).unwrap(), first);
+    let pos = mornlea_domain::BlockPos::new(84, 36, 84);
+    let key = overworld_cell(pos);
+    let revision = ready_admit_writes(&mut state, pos, &[13]);
+    cadence_tick(&mut state, 1002);
+    assert!(cadence_path(&state).is_none());
+    assert_eq!(
+        cadence_body(&state).player_id,
+        StoredPlayerId::from_bytes(uuid_bytes(1))
+    );
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1003);
+    cadence_tick(&mut state, 1003);
+    let refreshed = cadence_path(&state).unwrap();
+    assert!(refreshed.revisions.contains(&(key, revision)));
+    assert_eq!(refreshed.next_repath_tick, 1023);
+    cadence_tick(&mut state, 1004);
+    assert_ready_cache_retained(&cadence_path(&state).unwrap(), &refreshed);
+    let second_revision = ready_admit_writes(&mut state, pos, &[STONE]);
+    assert_eq!(second_revision, revision + 1);
+    cadence_tick(&mut state, 1005);
+    assert!(cadence_path(&state).is_none());
+    assert_eq!(
+        cadence_body(&state).player_id,
+        StoredPlayerId::from_bytes(uuid_bytes(1))
+    );
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1006);
+    cadence_tick(&mut state, 1006);
+    let second = cadence_path(&state).unwrap();
+    assert!(second.revisions.contains(&(key, second_revision)));
+    assert_eq!(second.next_repath_tick, 1026);
+    cadence_tick(&mut state, 1007);
+    assert_ready_cache_retained(&cadence_path(&state).unwrap(), &second);
+}
+
+#[test]
+fn ready_unrelated_chunk_write_preserves_carried_cache_and_deadline() {
+    let (mut state, _) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+    let before = state.residents();
+    let pos = mornlea_domain::BlockPos::new(1000, 60, 1000);
+    let key = overworld_cell(pos);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    ready_hydrate(&mut ctx, &before, None);
+    ctx.preload_ready_chunk(
+        mornlea_server::core::world::ReadyChunk::try_new(key, 1, 77, ready_air_chunk()).unwrap(),
+    );
+    let next = ctx.resident_snapshot();
+    drop(ctx);
+    state.commit_residents(next);
+    cadence_tick(&mut state, 1000);
+    let first = cadence_path(&state).unwrap();
+    assert!(!first.revisions.iter().any(|saved| saved.0 == key));
+    assert_eq!(ready_admit_writes(&mut state, pos, &[STONE]), 78);
+    cadence_tick(&mut state, 1001);
+    let retained = cadence_path(&state).unwrap();
+    assert_eq!(retained.generation, first.generation);
+    assert_eq!(retained.target, first.target);
+    assert_eq!(retained.revisions, first.revisions);
+    assert_eq!(retained.next_repath_tick, first.next_repath_tick);
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1020);
+}
+
+fn ready_corrupt_cache(case: &str) {
+    let (mut state, _) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+    cadence_tick(&mut state, 1000);
+    let residents = state.residents();
+    let key = ActorKey::Hostile(mornlea_domain::HostileId::try_new(21).unwrap());
+    let mut runtime = residents.runtimes[&key].clone();
+    let path = runtime.path.as_mut().unwrap();
+    let missing = if case == "missing" {
+        Some(path.revisions[0].0)
+    } else {
+        None
+    };
+    match case {
+        "missing" => {}
+        "changed" => path.revisions[0].1 += 1,
+        "dimension" => path.revisions[0].0.dimension = Dimension::new(1).unwrap(),
+        "outside" => path.revisions[0].0.pos = ChunkPos::new(30, 30),
+        "oversized" => path.revisions.push(path.revisions[0]),
+        "exhausted" => path.cursor = path.waypoints.len(),
+        _ => unreachable!(),
+    }
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    ready_hydrate(&mut ctx, &residents, missing);
+    if let Some(missing) = missing {
+        let pos = mornlea_domain::BlockPos::new(missing.pos.x() * 16, 36, missing.pos.z() * 16);
+        observe(&mut ctx, pos, AIR);
+        assert_eq!(ctx.read().ready_chunk_revision(missing), None);
+    }
+    ctx.stage(RuleEffect::Runtime(runtime)).unwrap();
+    provider::run(&mut ctx, motion_call()).unwrap();
+    let actor = find_hostile(&ctx, 21);
+    assert!(
+        ctx.read().runtime(actor.key).unwrap().path.is_none(),
+        "{case}"
+    );
+    let ActorBody::Hostile(body) = &actor.body else {
+        unreachable!()
+    };
+    assert!(body.has_target);
+    assert_eq!(body.player_id, StoredPlayerId::from_bytes(uuid_bytes(1)));
+    assert_eq!(body.next_repath_ticks, 1002);
+}
+
+#[test]
+fn ready_cached_missing_or_sparse_only_key_refuses_reuse() {
+    ready_corrupt_cache("missing");
+}
+#[test]
+fn ready_cached_changed_revision_refuses_reuse() {
+    ready_corrupt_cache("changed");
+}
+#[test]
+fn ready_cached_wrong_dimension_refuses_reuse() {
+    ready_corrupt_cache("dimension");
+}
+#[test]
+fn ready_cached_outside_current_view_refuses_reuse() {
+    ready_corrupt_cache("outside");
+}
+#[test]
+fn ready_cached_oversized_revision_set_refuses_reuse() {
+    ready_corrupt_cache("oversized");
+}
+#[test]
+fn ready_cached_exhausted_cursor_refuses_reuse() {
+    ready_corrupt_cache("exhausted");
+}
+
+#[test]
+fn ready_walker_hold_and_hurler_hold_or_retreat_bypass_stale_cache() {
+    for (kind, distance) in [(NIGHTWALKER, 1.0), (HURLER, 8.0), (HURLER, 3.0)] {
+        let (mut state, session) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+        cadence_tick(&mut state, 1000);
+        let mut residents = state.residents();
+        let key = ActorKey::Hostile(mornlea_domain::HostileId::try_new(21).unwrap());
+        let ActorBody::Hostile(body) = &mut residents
+            .actors
+            .iter_mut()
+            .find(|a| a.key == key)
+            .unwrap()
+            .body
+        else {
+            unreachable!()
+        };
+        body.kind = kind;
+        residents
+            .runtimes
+            .get_mut(&key)
+            .unwrap()
+            .path
+            .as_mut()
+            .unwrap()
+            .revisions[0]
+            .1 += 1;
+        state.commit_residents(residents);
+        let position = cadence_body(&state).position;
+        cadence_move_player(
+            &mut state,
+            session,
+            [position[0] + distance, 40.0, position[2]],
+        );
+        let stale = cadence_path(&state).unwrap();
+        let before_yaw = cadence_body(&state).yaw;
+        cadence_tick(&mut state, 1001);
+        assert_eq!(cadence_path(&state).unwrap(), stale);
+        assert_eq!(cadence_body(&state).next_repath_ticks, 1020);
+        if kind == HURLER && distance < 6.0 {
+            assert_ne!(cadence_body(&state).yaw, before_yaw);
+        }
+    }
+}
+
+#[test]
+fn ready_actual_drop_change_invalidates_carried_path() {
+    let (mut state, _) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+    cadence_tick(&mut state, 1000);
+    let before = state.residents();
+    let pos = mornlea_domain::BlockPos::new(84, 60, 84);
+    let key = overworld_cell(pos);
+    let revision = ready_saved_revision(&state, key);
+    let mutation_tick = state.next_tick();
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    ready_hydrate(&mut ctx, &before, None);
+    let batch = mornlea_server::contracts::DropBatch::try_new(
+        mornlea_server::contracts::DropSource::System {
+            rule: mornlea_server::contracts::SystemRule::Support,
+            tick: mutation_tick,
+            target: pos,
+        },
+        Dimension::OVERWORLD,
+        FiniteVec3::try_new([84.5, 60.5, 84.5]).unwrap(),
+        vec![ItemStack {
+            item: 2,
+            count: 1,
+            durability: 0,
+        }],
+        5,
+    )
+    .unwrap();
+    ctx.transaction()
+        .try_system_with_drops(
+            mornlea_server::contracts::SystemRule::Support,
+            vec![],
+            batch,
+        )
+        .unwrap();
+    assert_eq!(ctx.read().ready_chunk_revision(key), Some(revision + 1));
+    let next = ready_commit_hydrated(&ctx, &before);
+    drop(ctx);
+    state.commit_residents(next);
+    assert_eq!(ready_saved_revision(&state, key), revision + 1);
+    cadence_tick(&mut state, 1001);
+    assert!(cadence_path(&state).is_none());
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1002);
+}
+
+#[test]
+fn ready_actual_container_change_invalidates_carried_path() {
+    let (mut state, _) = cadence_seed([130.5, 40.0, 100.5], 1000, true);
+    let pos = mornlea_domain::BlockPos::new(84, 60, 84);
+    let key = overworld_cell(pos);
+    // Establish the physical chest before the first path; this is setup,
+    // separate from the later accepted container mutation being measured.
+    ready_admit_writes(&mut state, pos, &[11]);
+    cadence_tick(&mut state, 1000);
+    let residents = state.residents();
+    let revision = ready_saved_revision(&state, key);
+    let mut ctx = TickContext::harness(&mut state, TickBudget::full());
+    ready_hydrate(&mut ctx, &residents, None);
+    let before = ctx
+        .read()
+        .container_at(
+            Dimension::OVERWORLD,
+            pos,
+            mornlea_domain::ContainerKind::Chest,
+        )
+        .unwrap();
+    let mut after = before.clone();
+    let mornlea_server::contracts::ContainerSlots::Chest(items) = &mut after.slots else {
+        unreachable!()
+    };
+    items[0] = ItemStack {
+        item: 2,
+        count: 1,
+        durability: 0,
+    };
+    ctx.stage(RuleEffect::WorldContainer {
+        dimension: Dimension::OVERWORLD,
+        before,
+        after,
+    })
+    .unwrap();
+    assert_eq!(ctx.read().ready_chunk_revision(key), Some(revision + 1));
+    let next = ready_commit_hydrated(&ctx, &residents);
+    drop(ctx);
+    state.commit_residents(next);
+    assert_eq!(ready_saved_revision(&state, key), revision + 1);
+    cadence_tick(&mut state, 1001);
+    assert!(cadence_path(&state).is_none());
+    assert_eq!(
+        cadence_body(&state).player_id,
+        StoredPlayerId::from_bytes(uuid_bytes(1))
+    );
+    assert_eq!(cadence_body(&state).next_repath_ticks, 1002);
 }
