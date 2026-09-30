@@ -719,9 +719,13 @@ impl AgentHttpWire {
 
     /// Remaining real time until the deadline, measured on this wire's clock.
     fn timeout_until(&self, deadline: Deadline) -> Result<Duration, ServerError> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(unavailable());
+        }
         deadline
             .instant()
             .checked_duration_since(self.clock.monotonic())
+            .filter(|remaining| !remaining.is_zero())
             .ok_or(ServerError::Timeout {
                 operation: Operation::AgentRpc,
             })
@@ -739,16 +743,15 @@ impl AgentWire for AgentHttpWire {
         let timeout = self.timeout_until(deadline)?;
         let mut stream = TcpStream::connect_timeout(&self.endpoint.socket_address(), timeout)
             .map_err(|_| unavailable())?;
-        stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|_| unavailable())?;
-        stream
-            .set_write_timeout(Some(timeout))
-            .map_err(|_| unavailable())?;
+        let mut io = RpcIo {
+            wire: self,
+            stream: &mut stream,
+            deadline,
+        };
         let mut outbound = head.into_bytes();
         outbound.extend_from_slice(&body);
-        stream.write_all(&outbound).map_err(|_| unavailable())?;
-        let response = read_http_response(&mut stream)?;
+        io.write_all(&outbound)?;
+        let response = read_http_response(&mut io)?;
         let status = response.status;
         // A 3xx never redirects: the boundary forbids following, so a
         // redirect status is a wire failure.
@@ -775,14 +778,81 @@ impl AgentWire for AgentHttpWire {
             return Err(plan_success_body_failure(route, status));
         }
         if status == 200 {
-            return decode_success(&request, &response.body);
+            let decoded = decode_success(&request, &response.body)?;
+            self.timeout_until(deadline)?;
+            return Ok(decoded);
         }
         let expected = identity_request_id(&request);
+        self.timeout_until(deadline)?;
         Err(error_failure(route, status, &expected, &response.body))
     }
 
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Every socket operation spends the same total deadline. Short syscall
+/// slices also let owner close interrupt a blocked response without another
+/// thread or a socket registry.
+struct RpcIo<'a> {
+    wire: &'a AgentHttpWire,
+    stream: &'a mut TcpStream,
+    deadline: Deadline,
+}
+
+impl RpcIo<'_> {
+    fn timeout(&self) -> Result<Duration, ServerError> {
+        Ok(self
+            .wire
+            .timeout_until(self.deadline)?
+            .min(Duration::from_millis(20)))
+    }
+
+    fn read(&mut self, bytes: &mut [u8]) -> Result<usize, ServerError> {
+        loop {
+            self.stream
+                .set_read_timeout(Some(self.timeout()?))
+                .map_err(|_| unavailable())?;
+            match self.stream.read(bytes) {
+                Ok(count) => return Ok(count),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue;
+                }
+                Err(_) => return Err(unavailable()),
+            }
+        }
+    }
+
+    fn write_all(&mut self, mut bytes: &[u8]) -> Result<(), ServerError> {
+        while !bytes.is_empty() {
+            self.stream
+                .set_write_timeout(Some(self.timeout()?))
+                .map_err(|_| unavailable())?;
+            match self.stream.write(bytes) {
+                Ok(0) => return Err(unavailable()),
+                Ok(count) => bytes = &bytes[count..],
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue;
+                }
+                Err(_) => return Err(unavailable()),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -795,7 +865,7 @@ struct RawResponse {
 
 /// Reads one HTTP/1.1 response: the head bounded well past the header
 /// ceiling, then the body capped one byte past the response ceiling.
-fn read_http_response(stream: &mut TcpStream) -> Result<RawResponse, ServerError> {
+fn read_http_response(stream: &mut RpcIo<'_>) -> Result<RawResponse, ServerError> {
     let mut head = Vec::new();
     let mut buffer = [0u8; 1024];
     let head_end = loop {
@@ -805,7 +875,7 @@ fn read_http_response(stream: &mut TcpStream) -> Result<RawResponse, ServerError
         if head.len() > MAX_HEADER_BYTES * 4 {
             return Err(unavailable());
         }
-        let read = stream.read(&mut buffer).map_err(|_| unavailable())?;
+        let read = stream.read(&mut buffer)?;
         if read == 0 {
             return Err(unavailable());
         }
@@ -844,7 +914,7 @@ fn read_http_response(stream: &mut TcpStream) -> Result<RawResponse, ServerError
     let mut body = head[head_end + 4..].to_vec();
     let cap = MAX_RESPONSE_BODY_BYTES + 1;
     while body.len() < cap {
-        let read = stream.read(&mut buffer).map_err(|_| unavailable())?;
+        let read = stream.read(&mut buffer)?;
         if read == 0 {
             break;
         }

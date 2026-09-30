@@ -23,8 +23,8 @@ use mornlea_server::agent::http::{
 use mornlea_server::agent::lease::AgentWire;
 use mornlea_server::contracts::{
     AgentErrorCode, AgentRequest, AgentRequestId, AgentResponse, BaseIdentity, ClientInstanceId,
-    Clock, Deadline, LeaseId, LeasedIdentity, NamespaceId, PlanRequest, RunId, ServerError,
-    SnapshotId,
+    Clock, Deadline, LeaseId, LeasedIdentity, NamespaceId, Operation, PlanRequest, RunId,
+    ServerError, SnapshotId,
 };
 
 /// Real monotonic clock for socket deadlines.
@@ -698,4 +698,89 @@ fn accepted_connection_waits_for_request() {
     assert_eq!(observed.len(), 1);
     assert_eq!(observed[0].path, "/delayed");
     assert_eq!(observed[0].body, b"ping");
+}
+
+/// Progress on a socket cannot renew the total RPC deadline.
+#[test]
+fn response_drips_share_one_absolute_deadline() {
+    for body_drip in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            read_request(&mut stream).unwrap();
+            if body_drip {
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 20\r\n\r\n").unwrap();
+            }
+            let byte = if body_drip { b' ' } else { b'H' };
+            for _ in 0..20 {
+                if stream.write_all(&[byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let wire = AgentHttpWire::try_new(&endpoint, "secret", clock()).unwrap();
+        let started = Instant::now();
+        let result = wire.rpc(
+            acquire_request(),
+            Deadline::at(started + Duration::from_millis(80)),
+        );
+        let elapsed = started.elapsed();
+        server.join().unwrap();
+        assert_eq!(
+            result,
+            Err(ServerError::Timeout {
+                operation: Operation::AgentRpc
+            }),
+            "body drip={body_drip}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "body drip={body_drip} renewed deadline: {elapsed:?}"
+        );
+    }
+}
+
+/// Closing the owner interrupts an admitted response without waiting for its
+/// much longer business deadline.
+#[test]
+fn close_interrupts_blocked_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (accepted, waiting) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        read_request(&mut stream).unwrap();
+        accepted.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+    });
+    let wire = Arc::new(AgentHttpWire::try_new(&endpoint, "secret", clock()).unwrap());
+    let rpc_wire = wire.clone();
+    let rpc = std::thread::spawn(move || {
+        rpc_wire.rpc(
+            acquire_request(),
+            Deadline::at(Instant::now() + Duration::from_secs(2)),
+        )
+    });
+    waiting.recv_timeout(Duration::from_secs(1)).unwrap();
+    let closed = Instant::now();
+    wire.close();
+    let result = rpc.join().unwrap();
+    let elapsed = closed.elapsed();
+    server.join().unwrap();
+    assert!(result.is_err());
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "closed wire retained the response socket: {elapsed:?}"
+    );
 }
