@@ -20,9 +20,11 @@ use mornlea_server::agent::lease::{
 };
 use mornlea_server::contracts::{
     AgentErrorCode, AgentHandle, AgentPlan, AgentPoll, AgentRequest, AgentRequestId, AgentResponse,
-    BaseIdentity, ClientInstanceId, Clock, Deadline, FrozenLease, LEASE_EXPIRES_IN_MS, LeaseId,
-    LeaseResponse, LeasedIdentity, NamespaceId, Operation, PlanRequest, PlanResponse, PlanStep,
-    RunId, ServerError, SnapshotId,
+    BaseIdentity, CancelRequest, CancelResponse, ClientInstanceId, Clock, CommitRequest, Deadline,
+    DeleteRequest, DialogueEnvironment, DialogueFact, DialogueRequest, FrozenLease,
+    LEASE_EXPIRES_IN_MS, LeaseId, LeaseResponse, LeasedIdentity, MemoryState, NamespaceId,
+    Operation, OperationId, PlanRequest, PlanResponse, PlanStep, ReconcileRequest, RunId,
+    ServerError, SnapshotId,
 };
 
 const SECOND: Duration = Duration::from_secs(1);
@@ -980,4 +982,200 @@ fn close_reclaims_finished_control_and_business_panics_before_returning_error() 
         assert_eq!(agent.retained_requests(), 0);
         assert_eq!(agent.close(Deadline::at(start)), Ok(()));
     }
+}
+
+fn cleanup_request(tag: u8, kind: u8) -> AgentRequest {
+    let leased = LeasedIdentity {
+        base: base_identity(tag),
+        lease_id: lease_id(4),
+    };
+    let companion_id = CompanionId::try_from_bytes(uuid(6)).unwrap();
+    let operation_id = OperationId::try_from_bytes(uuid(7)).unwrap();
+    match kind {
+        0 => AgentRequest::Commit(CommitRequest {
+            leased,
+            companion_id,
+            memory_epoch: 1,
+            base_revision: 0,
+            operation_id,
+            summary: "confirmed".to_owned(),
+        }),
+        1 => AgentRequest::Reconcile(ReconcileRequest::Active {
+            leased,
+            companion_id,
+            memory_epoch: 1,
+            mirror: MemoryState::Absent,
+        }),
+        2 => AgentRequest::Reconcile(ReconcileRequest::Inactive {
+            leased,
+            companion_id,
+            memory_epoch: 2,
+            tombstone_operation_id: operation_id,
+        }),
+        3 => AgentRequest::Delete(DeleteRequest {
+            leased,
+            companion_id,
+            old_memory_epoch: 1,
+            new_memory_epoch: 2,
+            tombstone_operation_id: operation_id,
+        }),
+        _ => AgentRequest::Cancel(CancelRequest {
+            leased,
+            run_id: RunId::try_from_bytes(uuid(8)).unwrap(),
+        }),
+    }
+}
+
+#[test]
+fn frozen_lease_admits_only_retained_finalization_identity() {
+    let (start, clock) = StepClock::start();
+    let wire = ScriptedWire::new();
+    let mut agent = controller(&wire, &clock);
+    acquire_lease(&agent, lease_id(4));
+    let frozen = agent.freeze(&*clock).unwrap();
+    let rounds = wire.rounds().len();
+    assert_eq!(
+        agent.submit(AgentRequest::Plan(tagged_plan(20))),
+        Err(unavailable())
+    );
+    let dialogue = DialogueRequest {
+        leased: LeasedIdentity {
+            base: base_identity(21),
+            lease_id: lease_id(4),
+        },
+        run_id: RunId::try_from_bytes(uuid(8)).unwrap(),
+        companion_id: CompanionId::try_from_bytes(uuid(6)).unwrap(),
+        generation: 1,
+        memory_epoch: 1,
+        deadline_unix_ms: 1_800_000_001_000,
+        persona: String::new(),
+        fact_node: DialogueFact::Idle,
+        environment: DialogueEnvironment {
+            exposed_blocks: Vec::new(),
+            heights: Vec::new(),
+        },
+        terminal: false,
+    };
+    assert_eq!(
+        agent.submit(AgentRequest::Dialogue(dialogue)),
+        Err(unavailable())
+    );
+    assert_eq!(wire.rounds().len(), rounds);
+    for kind in 0..5 {
+        wire.push(Err(unavailable()));
+        let id = agent
+            .submit(cleanup_request(30 + kind, kind))
+            .expect("finalizer admitted");
+        assert!(wait_until(|| !matches!(agent.poll(id), AgentPoll::Pending)));
+        assert_eq!(wire.rounds().len(), rounds + usize::from(kind) + 1);
+        assert_eq!(agent.poll(id), AgentPoll::Failed(unavailable()));
+        agent.cancel(id, Deadline::at(start)).unwrap();
+    }
+    assert!(agent.current_lease().is_none());
+    assert_eq!(agent.retained_requests(), 0);
+    for mismatch in 0..3 {
+        let AgentRequest::Cancel(mut request) = cleanup_request(40 + mismatch, 4) else {
+            unreachable!()
+        };
+        match mismatch {
+            0 => {
+                request.leased.base.client_instance_id =
+                    ClientInstanceId::try_from_bytes(uuid(99)).unwrap()
+            }
+            1 => request.leased.base.namespace_id = NamespaceId::try_from_bytes(uuid(99)).unwrap(),
+            _ => request.leased.lease_id = lease_id(99),
+        }
+        assert_eq!(
+            agent.submit(AgentRequest::Cancel(request)),
+            Err(unavailable())
+        );
+    }
+    assert_eq!(wire.rounds().len(), rounds + 5);
+    wire.push(Err(unavailable()));
+    assert_eq!(
+        agent.release(&frozen, Deadline::at(start + SECOND)),
+        Err(unavailable())
+    );
+    let id = agent
+        .submit(cleanup_request(45, 4))
+        .expect("failed release retains finalizer");
+    assert!(wait_until(|| !matches!(agent.poll(id), AgentPoll::Pending)));
+    agent.cancel(id, Deadline::at(start)).unwrap();
+    wire.push_echo(|request| Ok(release_response(request)));
+    agent
+        .release(&frozen, Deadline::at(start + SECOND))
+        .unwrap();
+    assert!(agent.current_lease().is_none());
+    let rounds = wire.rounds().len();
+    assert_eq!(agent.submit(cleanup_request(46, 4)), Err(unavailable()));
+    assert_eq!(wire.rounds().len(), rounds);
+    agent.close(Deadline::at(start)).unwrap();
+    assert_eq!(agent.submit(cleanup_request(47, 4)), Err(unavailable()));
+
+    let mut expired = controller(&ScriptedWire::new(), &clock);
+    acquire_lease(&expired, lease_id(4));
+    expired.freeze(&*clock).unwrap();
+    clock.set(start + TTL);
+    assert_eq!(expired.submit(cleanup_request(48, 4)), Err(unavailable()));
+    assert!(expired.current_lease().is_none());
+    expired.close(Deadline::at(start + TTL)).unwrap();
+}
+
+#[test]
+fn freeze_fences_held_plan_completion() {
+    let (start, clock) = StepClock::start();
+    let wire = ScriptedWire::new();
+    let mut agent = controller(&wire, &clock);
+    acquire_lease(&agent, lease_id(4));
+    let request = tagged_plan(20);
+    wire.push(Ok(plan_response(&request)));
+    let gate = wire.hold();
+    let id = agent.submit(AgentRequest::Plan(request)).unwrap();
+    assert!(wait_until(|| wire.parked()));
+    agent.freeze(&*clock).unwrap();
+    let _ = gate.send(());
+    assert!(wait_until(|| !matches!(agent.poll(id), AgentPoll::Pending)));
+    let actual = agent.poll(id);
+    agent.cancel(id, Deadline::at(start)).unwrap();
+    agent.close(Deadline::at(start)).unwrap();
+    assert_eq!(actual, AgentPoll::Failed(unavailable()));
+}
+
+#[test]
+fn release_fences_held_frozen_cleanup_completion() {
+    let (start, clock) = StepClock::start();
+    let wire = ScriptedWire::new();
+    let mut agent = controller(&wire, &clock);
+    acquire_lease(&agent, lease_id(4));
+    let frozen = agent.freeze(&*clock).unwrap();
+    for _ in 0..2 {
+        wire.push_echo(|request| match request {
+            AgentRequest::Cancel(request) => Ok(AgentResponse::Cancel(CancelResponse {
+                leased: request.leased.clone(),
+                run_id: request.run_id,
+                cancelled: true,
+            })),
+            AgentRequest::Release(_) => Ok(release_response(request)),
+            _ => unreachable!(),
+        });
+    }
+    let gate = wire.hold();
+    let admitted = agent.submit(cleanup_request(20, 4));
+    let id = match admitted {
+        Ok(id) => id,
+        Err(error) => {
+            drop(gate);
+            agent.close(Deadline::at(start)).unwrap();
+            panic!("frozen cleanup refused: {error:?}")
+        }
+    };
+    assert!(wait_until(|| wire.parked()));
+    let released = agent.release(&frozen, Deadline::at(start + SECOND));
+    let _ = gate.send(());
+    assert!(wait_until(|| !matches!(agent.poll(id), AgentPoll::Pending)));
+    let actual = agent.poll(id);
+    agent.cancel(id, Deadline::at(start)).unwrap();
+    agent.close(Deadline::at(start)).unwrap();
+    assert_eq!(released, Ok(()));
+    assert_eq!(actual, AgentPoll::Failed(unavailable()));
 }

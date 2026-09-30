@@ -181,8 +181,11 @@ fn real_memory_commit_reconcile() {
     let token = "memory-child-token";
     let mut child = spawn_helper("memory", token);
     let (_start, clock) = StepClock::start();
-    let agent = acquire_lease(&clock, &child.endpoint(), token);
+    let mut agent = acquire_lease(&clock, &child.endpoint(), token);
     let (lease_id, _) = agent.current_lease().expect("acquire admitted");
+    let frozen = agent.freeze(&*clock).expect("retained finalizer lease");
+    assert_eq!(frozen.lease, lease_id);
+    assert_eq!(agent.control_phase(), ControlPhase::Frozen);
     let mut owner = MemoryOwner::new(
         Box::new(agent),
         clock.clone(),

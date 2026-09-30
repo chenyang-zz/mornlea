@@ -385,11 +385,7 @@ impl LeaseController {
     /// The current unexpired lease identity and its fence, if any.
     pub fn current_lease(&self) -> Option<(LeaseId, u64)> {
         let core = self.shared.core.lock().unwrap();
-        let active = core.active.as_ref()?;
-        if active.expires_at <= self.shared.clock.monotonic() {
-            return None;
-        }
-        Some((active.id, active.fence))
+        eligible_business_lease(&core, false, self.shared.clock.monotonic())
     }
 
     /// Requests remain charged until the consumer retires their owned outcome.
@@ -519,11 +515,43 @@ fn business_identity(
     }
 }
 
+/// Finalization uses the retained release identity after planner admission
+/// closes. New planning and late planning results cannot cross freeze.
+fn is_finalizer_request(request: &AgentRequest) -> bool {
+    matches!(
+        request,
+        AgentRequest::Commit(_)
+            | AgentRequest::Reconcile(_)
+            | AgentRequest::Delete(_)
+            | AgentRequest::Cancel(_)
+    )
+}
+
+/// Admission and completion share one lease policy so release or expiry
+/// fences a finalizer result just as freeze fences a planner result.
+fn eligible_business_lease(core: &Core, finalizer: bool, now: Instant) -> Option<(LeaseId, u64)> {
+    if core.closed || core.released {
+        return None;
+    }
+    if core.phase == ControlPhase::Frozen {
+        return core
+            .frozen
+            .as_ref()
+            .filter(|lease| finalizer && lease.expires_at > now)
+            .map(|lease| (lease.lease, lease.lease_fence));
+    }
+    core.active
+        .as_ref()
+        .filter(|lease| lease.expires_at > now)
+        .map(|lease| (lease.id, lease.fence))
+}
+
 impl AgentHandle for LeaseController {
     fn submit(&mut self, request: AgentRequest) -> Result<AgentRequestId, ServerError> {
         let (leased, id) = business_identity(&request)?;
         let mut core = self.shared.core.lock().unwrap();
-        if core.closed || core.phase == ControlPhase::Frozen {
+        let finalizer = is_finalizer_request(&request);
+        if core.closed || (core.phase == ControlPhase::Frozen && !finalizer) {
             return Err(unavailable());
         }
         if core.business.contains_key(&id) {
@@ -531,19 +559,17 @@ impl AgentHandle for LeaseController {
                 field: "agent_request_id",
             });
         }
-        // Admission mirrors the Go planner: a business request needs the
-        // current unexpired lease, and names exactly that lease identity.
+        // Freeze closes planner work while finalization keeps the retained
+        // identity until release. A caller cannot borrow another namespace.
         let now = self.shared.clock.monotonic();
-        let active = core
-            .active
-            .as_ref()
-            .filter(|active| active.expires_at > now)
-            .ok_or_else(unavailable)?;
-        if leased.lease_id != active.id {
+        let (lease_snapshot, fence_snapshot) =
+            eligible_business_lease(&core, finalizer, now).ok_or_else(unavailable)?;
+        if leased.lease_id != lease_snapshot
+            || leased.base.client_instance_id != self.shared.config.client_instance_id
+            || leased.base.namespace_id != self.shared.config.namespace_id
+        {
             return Err(unavailable());
         }
-        let lease_snapshot = active.id;
-        let fence_snapshot = active.fence;
         if core.business.len() >= 64 {
             return Err(ServerError::Capacity {
                 resource: Resource::AgentRuns,
@@ -569,11 +595,9 @@ impl AgentHandle for LeaseController {
                     if worker_cancel.is_cancelled() || core.closed {
                         AgentPoll::Failed(unavailable())
                     } else {
-                        let correlated = core.active.as_ref().is_some_and(|active| {
-                            active.id == lease_snapshot
-                                && active.fence == fence_snapshot
-                                && active.expires_at > shared.clock.monotonic()
-                        });
+                        let correlated =
+                            eligible_business_lease(&core, finalizer, shared.clock.monotonic())
+                                == Some((lease_snapshot, fence_snapshot));
                         match (outcome, correlated) {
                             (Ok(response), true) => AgentPoll::Completed(response),
                             (Ok(_), false) => AgentPoll::Failed(unavailable()),

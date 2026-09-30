@@ -131,7 +131,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9d2a Accept a clonable request cancellation contract with real HTTP evidence.
 - [x] 3.9d2 Bound and reclaim Agent business request ownership.
 - [x] 3.9d3 Retain and reap Agent control and business workers through bounded close.
-- [ ] 3.9d4 Admit frozen finalization while fencing new or late plans.
+- [x] 3.9d4 Admit frozen finalization while fencing new or late plans.
 - [ ] 3.9d5 Transfer and retire host/memory terminal request ownership once.
 - [ ] 3.9d6 Drive retryable memory finalization through bounded shutdown.
 
