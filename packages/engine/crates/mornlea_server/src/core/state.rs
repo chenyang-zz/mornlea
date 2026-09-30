@@ -1024,9 +1024,16 @@ impl AuthorityState {
             }
             ShutdownPhase::Freeze => {
                 let _ = self.freeze();
+                // Retain the lease while refusing planner work throughout
+                // memory finalization, including a timed-out attempt.
+                let _ = io.agent.freeze(io.clock);
                 Ok(())
             }
-            ShutdownPhase::WaitWorkers => io.workers.wait(deadline),
+            ShutdownPhase::WaitWorkers => {
+                io.workers.stop_new()?;
+                io.workers.cancel()?;
+                io.workers.wait(deadline)
+            }
             ShutdownPhase::FinalizeMemory => {
                 super::shutdown::finalize_memory(io.memory, io.clock, deadline, report)
             }

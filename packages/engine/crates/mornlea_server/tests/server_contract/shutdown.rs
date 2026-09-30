@@ -474,6 +474,99 @@ impl Harness {
 
 /// This entry point does not invoke planning snapshots during shutdown.
 struct IdleSnapshots;
+
+#[test]
+fn state_shutdown_quiesces_actual_agent_before_memory_failure() {
+    use mornlea_server::agent::lease::{
+        AgentWire, ControlPhase, LeaseConfig, LeaseController, RpcCancellation,
+    };
+    use mornlea_server::contracts::{AgentResponse, LeaseResponse, LeasedIdentity};
+    use std::sync::Arc;
+
+    struct FixedClock(Instant);
+    impl Clock for FixedClock {
+        fn monotonic(&self) -> Instant {
+            self.0
+        }
+        fn unix_ms(&self) -> i64 {
+            0
+        }
+    }
+    struct AcquireWire(LeaseId);
+    impl AgentWire for AcquireWire {
+        fn rpc_cancellable(
+            &self,
+            request: AgentRequest,
+            _: Deadline,
+            _: &RpcCancellation,
+        ) -> Result<AgentResponse, ServerError> {
+            match request {
+                AgentRequest::Acquire(base) => Ok(AgentResponse::Acquire(LeaseResponse {
+                    leased: LeasedIdentity {
+                        base,
+                        lease_id: self.0,
+                    },
+                })),
+                _ => Err(unused()),
+            }
+        }
+        fn close(&self) {}
+    }
+
+    let mut h = Harness::new(Instant::now());
+    let clock = Arc::new(FixedClock(h.clock.monotonic()));
+    let mut agent = LeaseController::try_new(
+        LeaseConfig {
+            client_instance_id: h.agent.lease.client,
+            namespace_id: h.agent.lease.namespace,
+        },
+        Arc::new(AcquireWire(h.agent.lease.lease)),
+        clock.clone(),
+    )
+    .unwrap();
+    agent.refresh();
+    let original = agent.current_lease().unwrap();
+    assert_eq!(agent.control_phase(), ControlPhase::Active);
+    h.memory.outstanding = 3;
+    h.memory.fail_begin_once = Some(ServerError::Timeout {
+        operation: Operation::AgentRpc,
+    });
+    let mut state = authority();
+    let mut snapshots = IdleSnapshots;
+    let failure = state
+        .drive_shutdown(
+            h.deadline,
+            &mut ShutdownIo {
+                reducer: &mut h.reducer,
+                store: &mut h.store,
+                agent: &mut agent,
+                snapshots: &mut snapshots,
+                clock: &*clock,
+                workers: &mut h.workers,
+                persistence: &mut h.actors,
+                mcp: &mut h.mcp,
+                memory: &mut h.memory,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(failure.report.next, ShutdownPhase::FinalizeMemory);
+    assert_eq!(failure.report.outstanding, 3);
+    assert_eq!(agent.control_phase(), ControlPhase::Frozen);
+    let retained = agent.freeze(&*clock).unwrap();
+    assert_eq!((retained.lease, retained.lease_fence), original);
+    assert_eq!(
+        (h.workers.stop_new, h.workers.cancel, h.workers.wait),
+        (1, 1, 1)
+    );
+    assert_eq!(h.reducer.calls, 1);
+    assert!(h.actors.flushes.is_empty());
+    assert_eq!(
+        (h.store.sync_calls, h.store.close_calls, h.mcp.close_calls),
+        (0, 0, 0)
+    );
+    agent.close(h.deadline).unwrap();
+}
+
 impl mornlea_server::contracts::SnapshotPort for IdleSnapshots {
     fn register(
         &mut self,
