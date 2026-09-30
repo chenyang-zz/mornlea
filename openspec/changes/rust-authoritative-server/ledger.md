@@ -1582,3 +1582,6 @@ Configured survival timing accepted after0e199276 against contract256fddf8. Cont
 
 
 Actual Agent integration discovers a stale consumer oracle before business acceptance: block_cancel_deadline_and_shutdown requires timeout even though its HTTP now honors per-request cancellation. Main qualifies the concrete serial test adaptation above, preserving remote run ownership/cleanup and replacing the detached clock pacer with direct socket-worker reclamation assertions. Worker stays within two source/test files. First Python3/4 result is incomplete, not waived. Architecture skill: no change.
+
+
+Second actual Python run3/4 fails the old helper's unconditional cancelled=true assertion after HTTP disconnect has already finished the remote handle. Current Python RunGate returns false for absent handles; both answers are valid for this raced idempotent cleanup. Main qualifies helper boolean return/exact echo and terminal cancel-request retirement, retaining true for the connected case and full subsequent capacity recovery. This failed run is recorded as incomplete. Architecture skill: no change.
