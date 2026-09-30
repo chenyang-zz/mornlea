@@ -1455,6 +1455,9 @@ pub enum ActorAux {
         generation: u64,
         attempt: u64,
         task: StoredCompanionTask,
+        /// Held target survives progress interruption until an explicit release.
+        /// This is transient authority state and never enters companion saves.
+        mining_target: Option<BlockPos>,
     },
     Hostile {
         distant_ticks: u16,

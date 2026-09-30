@@ -844,6 +844,34 @@ fn neutral_hold_release_and_container_atomic() {
         2,
         "the hold persists without a new envelope"
     );
+    // Release is the first action of a new tick, rather than a duplicate of
+    // the earlier hold in the same frozen action batch.
+    let carried = context.resident_snapshot();
+    drop(context);
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    for record in carried.actors {
+        context.stage(RuleEffect::Actor(record)).unwrap();
+    }
+    for runtime in carried.runtimes.into_values() {
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+    }
+    for (key, inventory) in carried.inventories {
+        context.preload_inventory(key, inventory);
+    }
+    for (actor, progress) in carried.mining {
+        context
+            .stage(RuleEffect::Mining {
+                actor,
+                progress: Some(progress),
+            })
+            .unwrap();
+    }
+    for observed in carried.blocks.into_values() {
+        context.preload_block(observed);
+    }
     context.preload_companion_action(envelope(miner, 46, CompanionAction::MineRelease));
     mine_provider::run(&mut context, mine_call).expect("release tick");
     assert_eq!(context.read().mining(miner_key), None);

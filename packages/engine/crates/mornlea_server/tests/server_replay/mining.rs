@@ -372,6 +372,304 @@ fn chest_record(pos: BlockPos, contents: &[ItemStack]) -> ContainerRecord {
     }
 }
 
+#[test]
+fn companion_first_valid_hold_ignores_duplicate_release() {
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let id = companion_id();
+    let target = BlockPos::new(2, 65, 2);
+    let actor = companion_scene(
+        &mut context,
+        id,
+        target,
+        InventoryRecord::empty(),
+        &[(target, DIRT)],
+    );
+    context.preload_companion_action(companion_envelope(id, 40, CompanionAction::MineRelease));
+    provider::run(&mut context, mine_call(actor)).unwrap();
+    assert_eq!(context.read().mining(actor).unwrap().elapsed, 1);
+}
+
+#[test]
+fn companion_first_valid_selection_is_shared_across_action_kinds() {
+    let target = BlockPos::new(2, 65, 2);
+    for (first, expected) in [
+        (CompanionAction::MineRelease, false),
+        (
+            CompanionAction::Move {
+                move_x: 1,
+                move_z: 0,
+                jump: false,
+                yaw: 0.0,
+            },
+            false,
+        ),
+        (
+            CompanionAction::Place {
+                target,
+                block: DIRT,
+            },
+            false,
+        ),
+        (
+            CompanionAction::Move {
+                move_x: 2,
+                move_z: 0,
+                jump: false,
+                yaw: 0.0,
+            },
+            true,
+        ),
+    ] {
+        let mut state = authority();
+        let mut context = harness_context(&mut state);
+        let id = companion_id();
+        context.preload_companion_action(companion_envelope(id, 40, first.clone()));
+        let actor = companion_scene(
+            &mut context,
+            id,
+            target,
+            InventoryRecord::empty(),
+            &[(target, DIRT)],
+        );
+        provider::run(&mut context, mine_call(actor)).unwrap();
+        assert_eq!(
+            context.read().mining(actor).is_some(),
+            expected,
+            "{first:?}"
+        );
+        assert_eq!(
+            context
+                .read()
+                .observation(Dimension::OVERWORLD, target)
+                .unwrap()
+                .block,
+            DIRT
+        );
+        assert_eq!(
+            context.read().inventory(actor),
+            Some(&InventoryRecord::empty())
+        );
+    }
+}
+
+#[test]
+fn companion_hold_survives_blocked_progress_and_runtime_carry() {
+    for (obstruction, initial_target) in [(STONE, DIRT), (AIR, SHORT_GRASS)] {
+        let mut state = authority();
+        let id = companion_id();
+        let target = BlockPos::new(2, 65, 2);
+        let actor = ActorKey::Companion(id);
+        let retained = {
+            let mut context = harness_context(&mut state);
+            companion_scene(
+                &mut context,
+                id,
+                target,
+                InventoryRecord::empty(),
+                &[
+                    (BlockPos::new(2, 65, 1), obstruction),
+                    (target, initial_target),
+                ],
+            );
+            provider::run(&mut context, mine_call(actor)).unwrap();
+            assert_eq!(context.read().mining(actor), None);
+            context.resident_snapshot()
+        };
+        state.commit_residents(retained.clone());
+        assert_eq!(state.residents().runtimes, retained.runtimes);
+        let mut context = harness_context(&mut state);
+        for record in retained.actors {
+            context.stage(RuleEffect::Actor(record)).unwrap();
+        }
+        for runtime in retained.runtimes.into_values() {
+            context.stage(RuleEffect::Runtime(runtime)).unwrap();
+        }
+        context
+            .stage(RuleEffect::Environment(environment()))
+            .unwrap();
+        context.preload_inventory(actor, InventoryRecord::empty());
+        for (pos, block) in [
+            (BlockPos::new(2, 65, 0), AIR),
+            (BlockPos::new(2, 65, 1), AIR),
+            (target, DIRT),
+        ] {
+            context.preload_block(observation(pos, block));
+        }
+        provider::run(&mut context, mine_call(actor)).unwrap();
+        assert_eq!(context.read().mining(actor).unwrap().elapsed, 1);
+    }
+}
+#[test]
+fn companion_hold_survives_completion_and_nonmining_selection() {
+    for nonmining in [false, true] {
+        let mut state = authority();
+        let id = companion_id();
+        let target = BlockPos::new(2, 65, 2);
+        let actor = ActorKey::Companion(id);
+        let retained = {
+            let mut context = harness_context(&mut state);
+            companion_scene(
+                &mut context,
+                id,
+                target,
+                InventoryRecord::empty(),
+                &[(target, DIRT)],
+            );
+            for _ in 0..5 {
+                provider::run(&mut context, mine_call(actor)).unwrap();
+            }
+            assert_eq!(context.read().mining(actor), None);
+            assert_eq!(
+                context
+                    .read()
+                    .observation(Dimension::OVERWORLD, target)
+                    .unwrap()
+                    .block,
+                AIR
+            );
+            context.resident_snapshot()
+        };
+        let mut context = harness_context(&mut state);
+        for record in retained.actors {
+            context.stage(RuleEffect::Actor(record)).unwrap();
+        }
+        for mut runtime in retained.runtimes.into_values() {
+            runtime.hurt_cooldown = 17;
+            runtime.exhaustion_milli = 37;
+            context.stage(RuleEffect::Runtime(runtime)).unwrap();
+        }
+        context
+            .stage(RuleEffect::Environment(environment()))
+            .unwrap();
+        context.preload_inventory(actor, InventoryRecord::empty());
+        for (pos, block) in [
+            (BlockPos::new(2, 65, 0), AIR),
+            (BlockPos::new(2, 65, 1), AIR),
+            (target, DIRT),
+        ] {
+            context.preload_block(observation(pos, block));
+        }
+        if nonmining {
+            context.preload_companion_action(companion_envelope(
+                id,
+                40,
+                CompanionAction::Move {
+                    move_x: 0,
+                    move_z: 0,
+                    jump: false,
+                    yaw: 0.0,
+                },
+            ));
+            context.preload_companion_action(companion_envelope(
+                id,
+                50,
+                CompanionAction::MineRelease,
+            ));
+        }
+        provider::run(&mut context, mine_call(actor)).unwrap();
+        assert_eq!(context.read().mining(actor).unwrap().elapsed, 1);
+        let runtime = context.read().runtime(actor).unwrap().clone();
+        assert_eq!(runtime.hurt_cooldown, 17);
+        assert_eq!(runtime.exhaustion_milli, 37);
+    }
+}
+
+#[test]
+fn companion_hold_update_preserves_runtime_siblings_and_refuses_wrong_aux() {
+    let id = companion_id();
+    let target = BlockPos::new(2, 65, 2);
+    let actor = ActorKey::Companion(id);
+    let mut state = authority();
+    let carried = {
+        let mut context = harness_context(&mut state);
+        companion_scene(
+            &mut context,
+            id,
+            target,
+            InventoryRecord::empty(),
+            &[(target, DIRT)],
+        );
+        provider::run(&mut context, mine_call(actor)).unwrap();
+        context.resident_snapshot()
+    };
+    let mut runtime = carried.runtimes[&actor].clone();
+    runtime.attack_cooldown = 9;
+    runtime.hurt_cooldown = 17;
+    runtime.burn_cooldown = 23;
+    runtime.oxygen = 123;
+    runtime.peak_y = 71.5;
+    runtime.exhaustion_milli = 37;
+    runtime.saturation_milli = 200;
+    runtime.since_damage_ticks = 11;
+    if let ActorAux::Companion {
+        generation,
+        attempt,
+        task,
+        ..
+    } = &mut runtime.aux
+    {
+        *generation = 7;
+        *attempt = 13;
+        task.command = "retain task".to_owned();
+    }
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Actor(carried.actors[0].clone()))
+        .unwrap();
+    context.stage(RuleEffect::Runtime(runtime.clone())).unwrap();
+    context.preload_companion_action(companion_envelope(id, 40, CompanionAction::MineRelease));
+    provider::run(&mut context, mine_call(actor)).unwrap();
+    assert_eq!(context.read().mining(actor), None);
+    let updated = context.read().runtime(actor).unwrap().clone();
+    let ActorAux::Companion {
+        generation,
+        attempt,
+        task,
+        ..
+    } = &updated.aux
+    else {
+        panic!("companion aux")
+    };
+    assert_eq!(
+        (*generation, *attempt, task.command.as_str()),
+        (7, 13, "retain task")
+    );
+    runtime.aux = updated.aux.clone();
+    assert_eq!(updated, runtime);
+    drop(context);
+
+    let mut context = harness_context(&mut state);
+    companion_scene(
+        &mut context,
+        id,
+        target,
+        InventoryRecord::empty(),
+        &[(target, DIRT)],
+    );
+    context
+        .stage(RuleEffect::Runtime(human_runtime(
+            actor,
+            control(true, 0.0, 0.0),
+            false,
+        )))
+        .unwrap();
+    let before = context.resident_snapshot();
+    assert_eq!(
+        provider::run(&mut context, mine_call(actor)),
+        Err(ServerError::Internal {
+            invariant: "companion mining runtime"
+        })
+    );
+    let after = context.resident_snapshot();
+    assert_eq!(after.actors, before.actors);
+    assert_eq!(after.runtimes, before.runtimes);
+    assert_eq!(after.inventories, before.inventories);
+    assert_eq!(after.blocks, before.blocks);
+    assert_eq!(after.mining, before.mining);
+    assert!(context.events().is_empty());
+}
+
 /// Fills every drop slot of the target's chunk so the human output preflight
 /// refuses with `DropCapacity`.
 fn fill_drop_table(context: &mut TickContext<'_>, pos: BlockPos) {

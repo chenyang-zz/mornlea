@@ -334,8 +334,8 @@ fn run_human(
     }
 }
 
-/// Settles one companion actor tick: the latest `MineHold` proposal in the
-/// view holds until a `MineRelease`, the authority ray must hit exactly the
+/// Settles one companion actor tick: the first valid selected `MineHold`
+/// holds until a selected `MineRelease`, the authority ray must hit exactly the
 /// proposed cell, and the companion target registry gates accumulation.
 /// Saturation completes exactly once through the accepted companion resolver;
 /// only a full inventory keeps the saturated record for retry.
@@ -345,6 +345,10 @@ fn run_companion(
     id: CompanionId,
 ) -> Result<PhaseReport, ServerError> {
     const REFUSAL: ServerError = ServerError::InvalidInput { field: "mining" };
+    let Some(target) = companion_mining_target(ctx, actor, id)? else {
+        let prior = ctx.read().mining(actor).cloned();
+        return stage_clear(ctx, actor, prior);
+    };
     let view = ctx.read();
     let basis = match actor_basis(&view, actor) {
         Some(basis) => basis,
@@ -353,35 +357,8 @@ fn run_companion(
             return stage_clear(ctx, actor, prior);
         }
     };
-    // Latest proposal per companion wins; movement and placement proposals do
-    // not touch the mining hold, which persists until an explicit release.
-    let mut held: Option<BlockPos> = None;
-    let mut released = false;
-    for envelope in view.companion_actions() {
-        if envelope.companion_id != id {
-            continue;
-        }
-        match envelope.action {
-            CompanionAction::MineHold { target } => {
-                held = Some(target);
-                released = false;
-            }
-            CompanionAction::MineRelease => {
-                held = None;
-                released = true;
-            }
-            _ => {}
-        }
-    }
     let prior = view.mining(actor).cloned();
     let tick = view.tick();
-    let target = match (held, released, &prior) {
-        (Some(target), _, _) => target,
-        (None, true, _) | (None, false, None) => {
-            return stage_clear(ctx, actor, prior);
-        }
-        (None, false, Some(previous)) => previous.target,
-    };
     let center = [
         target.x() as f32 + 0.5,
         target.y() as f32 + 0.5,
@@ -473,6 +450,80 @@ fn run_companion(
             Err(REFUSAL)
         }
     }
+}
+
+/// Shares arrival-order selection with motion and placement while retaining
+/// mining intent separately from the fallible progress/settlement lane.
+fn companion_mining_target(
+    ctx: &mut TickContext<'_>,
+    actor: ActorKey,
+    id: CompanionId,
+) -> Result<Option<BlockPos>, ServerError> {
+    let view = ctx.read();
+    let Some(record) = view
+        .actor(actor)
+        .filter(|record| record.lifecycle == ActorLifecycle::Active)
+    else {
+        return Ok(None);
+    };
+    let selected = crate::rules::companions::select(&view)
+        .0
+        .into_iter()
+        .find(|(selected_id, _)| *selected_id == id)
+        .map(|(_, action)| action);
+    let previous = view.runtime(actor);
+    let held = match previous.map(|runtime| &runtime.aux) {
+        Some(crate::core::contracts::ActorAux::Companion { mining_target, .. }) => *mining_target,
+        Some(_) => {
+            return Err(ServerError::Internal {
+                invariant: "companion mining runtime",
+            });
+        }
+        None => None,
+    };
+    let target = match selected {
+        Some(CompanionAction::MineHold { target }) => Some(target),
+        Some(CompanionAction::MineRelease) => None,
+        _ => return Ok(held),
+    };
+    if target == held {
+        return Ok(target);
+    }
+    let mut runtime = previous
+        .cloned()
+        .unwrap_or_else(|| crate::core::contracts::ActorRuntime {
+            key: actor,
+            controls: None,
+            has_view: false,
+            reset: false,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 0,
+            oxygen: record.survival.oxygen(),
+            peak_y: record.motion.position().get()[1],
+            exhaustion_milli: 0,
+            saturation_milli: 0,
+            since_damage_ticks: 0,
+            drown_ticks: 0,
+            starvation_ticks: 0,
+            eating: None,
+            bow: None,
+            path: None,
+            aux: crate::core::contracts::ActorAux::Companion {
+                generation: 0,
+                attempt: 0,
+                task: Default::default(),
+                mining_target: None,
+            },
+        });
+    if let crate::core::contracts::ActorAux::Companion { mining_target, .. } = &mut runtime.aux {
+        *mining_target = target;
+    }
+    ctx.stage(RuleEffect::Runtime(runtime))
+        .map_err(|_| ServerError::Internal {
+            invariant: "companion mining runtime staging",
+        })?;
+    Ok(target)
 }
 
 /// The mining-phase entry: exactly one ordered human or companion actor

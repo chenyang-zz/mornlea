@@ -16,10 +16,9 @@
 //! - `RulePhase::CompanionPlacement` settles selected `Place` intents in
 //!   companion-ID byte order through the shared transaction.
 //!
-//! Selection is recomputed from the view on every call; no cross-tick intent
-//! state lives in this provider. Mining intents are owned end-to-end by the
-//! accepted mining consumer, so this provider stages nothing for mining and
-//! duplicates none of its registry logic.
+//! Selection is recomputed from the view on every call and shared with mining.
+//! Movement and placement last one tick; mining owns its separately retained
+//! hold in companion runtime, so an interrupted progress record cannot release it.
 //!
 //! Mirrored Go rows, each cited at its site:
 //!
@@ -189,7 +188,7 @@ fn valid_target(target: BlockPos) -> bool {
 /// [`ActorKey::Companion`] records are selectable. Returns the selections
 /// with the envelope count; the caller derives `rejected` as the ignored
 /// remainder.
-fn select(view: &AuthorityReadView<'_>) -> (Vec<(CompanionId, CompanionAction)>, usize) {
+pub(crate) fn select(view: &AuthorityReadView<'_>) -> (Vec<(CompanionId, CompanionAction)>, usize) {
     let envelopes = view.companion_actions();
     let examined = envelopes.len();
     let mut selected = Vec::new();
