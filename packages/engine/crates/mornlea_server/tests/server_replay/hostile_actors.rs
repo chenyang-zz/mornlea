@@ -61,6 +61,7 @@ use mornlea_storage::{HostileMob, ItemStack, PlayerId as StoredPlayerId};
 const AIR: u16 = 0;
 const STONE: u16 = 2;
 const GRASS: u16 = 4;
+const WATER: u16 = 27;
 const TORCH_STANDING: u16 = 71;
 const MAX_Y: i32 = 320;
 
@@ -307,6 +308,222 @@ fn burn_call() -> RuleCall<'static> {
         command: None,
         internal: None,
     }
+}
+
+fn fluid_runtime(key: ActorKey) -> ActorRuntime {
+    ActorRuntime {
+        key,
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 20,
+        oxygen: 0,
+        peak_y: 0.0,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Hostile {
+            distant_ticks: 0,
+            shoot_cooldown: 0,
+            fresh: false,
+        },
+    }
+}
+
+fn airborne_hostile(position: [f32; 3]) -> ActorRecord {
+    let mut actor = hostile_actor(21, position, NIGHTWALKER);
+    actor.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new(position).expect("position"),
+        velocity: FiniteVec3::try_new([0.0; 3]).expect("velocity"),
+        on_ground: false,
+    });
+    let ActorBody::Hostile(body) = &mut actor.body else {
+        unreachable!();
+    };
+    body.on_ground = false;
+    actor
+}
+
+fn assert_fluid_entry(position: [f32; 3], water: Option<[i32; 3]>, immersed: bool) {
+    use mornlea_engine::native::contracts::collision::{Aabb, CollisionCell, CollisionGrid};
+    use mornlea_engine::native::contracts::physics::{
+        PhysicsControls, PhysicsOp, PhysicsRequest, PhysicsState, SweepBounds,
+    };
+    use mornlea_engine::native::physics::NativePhysics;
+    let mut state = authority();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    let actor = airborne_hostile(position);
+    let runtime = fluid_runtime(actor.key);
+    stage_actors(&mut context, std::slice::from_ref(&actor));
+    context.stage(RuleEffect::Runtime(runtime.clone())).unwrap();
+    let origin = [
+        position[0].floor() as i32 - 4,
+        -2,
+        position[2].floor() as i32 - 4,
+    ];
+    let empty = CollisionCell::try_new(
+        true,
+        [Aabb {
+            minimum: [0.0; 3],
+            maximum: [0.0; 3],
+        }; 8],
+        0,
+    )
+    .unwrap();
+    let cells = vec![empty; 9 * 9 * 9];
+    for y in -2..=6 {
+        for x in origin[0]..origin[0] + 9 {
+            for z in origin[2]..origin[2] + 9 {
+                observe(
+                    &mut context,
+                    mornlea_domain::BlockPos::new(x, y, z),
+                    if water == Some([x, y, z]) { WATER } else { AIR },
+                );
+            }
+        }
+    }
+    // Source `SubmersionFlagsWithTunables` pins the flag per scene; the
+    // numerical expectation calls the real kernel without copying its math.
+    let expected = NativePhysics
+        .step(&PhysicsRequest {
+            state: PhysicsState {
+                position,
+                velocity: [0.0; 3],
+                on_ground: false,
+            },
+            controls: PhysicsControls {
+                move_x: 0,
+                move_z: 0,
+                jump: false,
+                yaw_sin: 0.0,
+                yaw_cos: 1.0,
+                body_in_fluid: immersed,
+                sprinting: false,
+                sneaking: false,
+            },
+            tuning: RuleTunables::source_defaults().physics(),
+            sweep: SweepBounds {
+                minimum: [-2.0; 3],
+                maximum: [2.0; 3],
+            },
+            grid: CollisionGrid::try_new(origin, [9, 9, 9], &cells).unwrap(),
+        })
+        .unwrap()
+        .state;
+    let blocks = context.changed_blocks();
+    let events = context.events().to_vec();
+    provider::run(&mut context, motion_call()).expect("fluid motion");
+    let actual = find_hostile(&context, 21);
+    assert_eq!(
+        actual.motion.position().get().map(f32::to_bits),
+        expected.position.map(f32::to_bits)
+    );
+    assert_eq!(
+        actual.motion.velocity().get().map(f32::to_bits),
+        expected.velocity.map(f32::to_bits)
+    );
+    assert_eq!(actual.motion.on_ground(), expected.on_ground);
+    assert_eq!(actual.survival, actor.survival);
+    assert_eq!(actual.look, actor.look);
+    assert_eq!(actual.lifecycle, actor.lifecycle);
+    assert_eq!(context.read().runtime(actor.key), Some(&runtime));
+    assert_eq!(context.changed_blocks(), blocks);
+    assert_eq!(context.events(), events);
+    let ActorBody::Hostile(body) = &actual.body else {
+        unreachable!();
+    };
+    assert_eq!(body.position, actual.motion.position().get());
+    assert_eq!(body.velocity, actual.motion.velocity().get());
+    assert_eq!(body.on_ground, actual.motion.on_ground());
+}
+
+#[test]
+fn torso_water_enters_immersed_native_physics() {
+    assert_fluid_entry([0.5, 1.0, 0.5], Some([0, 2, 0]), true);
+}
+
+#[test]
+fn fractional_horizontal_upper_cells_enter_immersed_native_physics() {
+    for (position, water) in [
+        ([0.8, 1.0, 0.5], [1, 1, 0]),
+        ([0.5, 1.0, 0.8], [0, 1, 1]),
+        ([-0.1, 1.0, 0.5], [0, 1, 0]),
+        ([0.5, 1.0, -0.1], [0, 1, 0]),
+        ([-2.5, 1.0, -2.5], [-3, 2, -3]),
+    ] {
+        assert_fluid_entry(position, Some(water), true);
+    }
+}
+
+#[test]
+fn touching_upper_cells_and_dry_rooms_exclude_immersion() {
+    for (position, water) in [
+        ([0.7, 1.0, 0.5], Some([1, 1, 0])),
+        ([0.5, 1.0, 0.7], Some([0, 1, 1])),
+        ([-0.3, 1.0, 0.5], Some([0, 1, 0])),
+        ([0.5, 1.0, -0.3], Some([0, 1, 0])),
+        ([0.5, 1.2, 0.5], Some([0, 3, 0])),
+        ([-2.5, 1.0, -2.5], None),
+    ] {
+        assert_fluid_entry(position, water, false);
+    }
+}
+
+fn assert_fluid_coordinate_refusal(value: f32) {
+    for axis in 0..3 {
+        let mut position = [0.5, 1.0, 0.5];
+        position[axis] = value;
+        let mut state = authority();
+        let mut context = TickContext::harness(&mut state, TickBudget::full());
+        stage_environment(&mut context, 1000, 0);
+        let actor = airborne_hostile(position);
+        let mut runtime = fluid_runtime(actor.key);
+        runtime.attack_cooldown = 13;
+        runtime.hurt_cooldown = 17;
+        runtime.oxygen = 211;
+        runtime.peak_y = 77.0;
+        stage_actors(&mut context, std::slice::from_ref(&actor));
+        context.stage(RuleEffect::Runtime(runtime.clone())).unwrap();
+        let marker = mornlea_domain::BlockPos::new(0, 0, 0);
+        observe(&mut context, marker, STONE);
+        let actors = context.read().actors().to_vec();
+        let blocks = context.changed_blocks();
+        let observed = context.read().observation(Dimension::OVERWORLD, marker);
+        let environment = context.read().environment().cloned();
+        let events = context.events().to_vec();
+        let result = provider::run(&mut context, motion_call());
+        assert!(
+            matches!(result, Err(ServerError::InvalidInput { field: "actor" })),
+            "axis {axis}, result {result:?}"
+        );
+        assert_eq!(context.read().actors(), actors);
+        assert_eq!(context.read().runtime(actor.key), Some(&runtime));
+        assert_eq!(context.changed_blocks(), blocks);
+        assert_eq!(
+            context.read().observation(Dimension::OVERWORLD, marker),
+            observed
+        );
+        assert_eq!(context.read().environment(), environment.as_ref());
+        assert_eq!(context.events(), events);
+    }
+}
+
+#[test]
+fn minimum_fluid_coordinates_refuse_without_effect() {
+    assert_fluid_coordinate_refusal(i32::MIN as f32);
+}
+
+#[test]
+fn maximum_fluid_coordinates_refuse_without_effect() {
+    assert_fluid_coordinate_refusal(i32::MAX as f32);
 }
 
 // -----------------------------------------------------------------------

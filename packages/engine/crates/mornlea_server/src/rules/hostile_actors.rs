@@ -1966,14 +1966,14 @@ fn submersion_body(
     position: [f32; 3],
 ) -> Result<bool, ServerError> {
     let minimum = [
-        floor_to_i32(position[0] - HALF_WIDTH),
-        floor_to_i32(position[1]),
-        floor_to_i32(position[2] - HALF_WIDTH),
+        checked_floor(position[0] - HALF_WIDTH)?,
+        checked_floor(position[1])?,
+        checked_floor(position[2] - HALF_WIDTH)?,
     ];
     let maximum = [
-        fluid_upper(position[0] + HALF_WIDTH, minimum[0]),
-        fluid_upper(position[1] + PLAYER_HEIGHT, minimum[1]),
-        fluid_upper(position[2] + HALF_WIDTH, minimum[2]),
+        fluid_upper(position[0] + HALF_WIDTH, minimum[0])?,
+        fluid_upper(position[1] + PLAYER_HEIGHT, minimum[1])?,
+        fluid_upper(position[2] + HALF_WIDTH, minimum[2])?,
     ];
     for y in minimum[1]..=maximum[1] {
         for x in minimum[0]..=maximum[0] {
@@ -1989,9 +1989,31 @@ fn submersion_body(
     Ok(false)
 }
 
-/// AABB upper-cell mirror (`fluidCellUpperBound`).
-fn fluid_upper(maximum: f32, lower: i32) -> i32 {
-    (floor_to_i32(maximum) - 1).max(lower)
+/// AABB upper-cell mirror (`fluidCellUpperBound`): fractional overlap claims
+/// the upper cell, while touching its boundary does not claim the neighbor.
+fn fluid_upper(maximum: f32, lower: i32) -> Result<i32, ServerError> {
+    Ok(checked_ceil(maximum)?
+        .checked_sub(1)
+        .ok_or(ServerError::InvalidInput { field: "actor" })?
+        .max(lower))
+}
+
+/// Submersion refuses an unrepresentable cell before narrowing or staging.
+fn checked_floor(value: f32) -> Result<i32, ServerError> {
+    let floored = f64::from(value).floor();
+    if !floored.is_finite() || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&floored) {
+        return Err(ServerError::InvalidInput { field: "actor" });
+    }
+    Ok(floored as i32)
+}
+
+/// The checked ceil uses the same signed domain as the lower body bounds.
+fn checked_ceil(value: f32) -> Result<i32, ServerError> {
+    let ceiling = f64::from(value).ceil();
+    if !ceiling.is_finite() || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&ceiling) {
+        return Err(ServerError::InvalidInput { field: "actor" });
+    }
+    Ok(ceiling as i32)
 }
 
 // ---------------------------------------------------------------------------
