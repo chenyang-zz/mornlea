@@ -173,7 +173,7 @@ Tests `eating::tick_31_32_atomic` initialhunger10/saturation0/bread2 givesunchan
 
 ### Node2.6e: Farming tools and buckets
 
-Editable `S/src/rules/tools.rs`, `S/tests/server_replay/tools.rs`; read-only02 ray/BlockTxn/Inventory ports, Go farming.go/bone_meal.go/bucket.go; after1.6/2.1b/2.6a/2.4a. Till intact selected hoe,grass/dirt+air above,derivewetnessbyradius4scan,atomicblock+durability1;lastpoint succeeds then brokenform. Bone meal immaturewheat/potato/carrot incrementsone andspendsone; mature/sapling refusesno consumption. Collect only sourcewater with emptybucket; place intoair/flowingwater with waterbucket,solid/source refuses; atomicallysubstitutebucket+block,successsuppressminingonlythistick,publishexistingplacementsequence. No trustedclienttarget.
+Editable `S/src/rules/tools.rs`, `S/tests/server_replay/tools.rs`; read-only02 ray/BlockTxn/Inventory ports, Go farming.go/bone_meal.go/bucket.go; after1.6/2.1b/2.6a/2.4a. Till intact selected hoe,grass/dirt+air above,write dry farmland immediately (Go farming.go); the later moisture phase hydrates it,atomicblock+durability1;lastpoint succeeds then brokenform. Bone meal immaturewheat/potato/carrot incrementsone andspendsone; mature/sapling refusesno consumption. Collect only sourcewater with emptybucket; place intoair/flowingwater with waterbucket,solid/source refuses; atomicallysubstitutebucket+block,successsuppressminingonlythistick,publishexistingplacementsequence. No trustedclienttarget.
 
 Tests `tools::hoe_last_point`, `tools::bone_meal_one_stage`, `tools::bucket_source_and_flowing`, `tools::bucket_failure_conservation`:hoe1 producesfarmland+brokenhoe;immaturecrop+1/bonemeal-1,mature/saplingunchanged;sourcecollectwater→air/empty→waterbucket,flowingplace→source/water→emptybucket;blocked/fullbudget hashunchanged. Run CT(server_replay,tools), `go test ./packages/server/sim/entity -run 'Till|BoneMeal|Bucket' -count=1`.3.1 tests bucket suppresses mine exactlyone tick; rollback two files. Commit `feat(server): implement authoritative tools and buckets`.
 
@@ -196,7 +196,7 @@ Tests `tools::hoe_last_point`, `tools::bone_meal_one_stage`, `tools::bucket_sour
 |2.6d furnace|sorteduniqueinterest/slotadvanceonce;outsideReadyplayerinterestpause. invalidinput/fulloutputpausefuelandprogress. burn0consumecoal1/set1600 thenburn--/progress++ same tick;200resetsprogress0/input--/output++;switchinputkindresetsprogress. smelt6→7,18→23,27→24,53→54. `furnaces::fuel_1600_smelt_200`, `furnaces::full_output_pauses_both`:firsttick1599/1;200th1400/0/input-1/output+1;fulloutputstartingfuel17/progress199 unchanged17/199;restore resumesexactvalue. `go test ./packages/server/sim/runtime -run Furnace -count=1`. |
 |2.7a hostile|global64/sortedID;night13000..23000,peacefulno spawn;onecandidate/tick anchor sortedSession atworldtime%len,SM(seed^time)radius24..48/axis+X,-X,+Z,-Z;low8hash<13,kind%3hurler;48localwalker8/hurler4/light<=7. Nativepathgrid<=131072cells/cancelgeneration,repathownedRuntime. Movefirstlegal/neutralreset;freshskipsmotion;dist>64allactive sameDimplayers600ticksdespawn,no drop. `hostile_actors::night_tie_capacity_distance`:nightendinclusive;64residentcap65refused;equaldistancechoose stableID;599retained/600removed. `go test ./packages/server/sim/entity -run 'HostileSpawn|HostileMovement|HostileDistant' -count=1`. |
 |2.7b projectile/bow|spawn128evictsminimumIDthenaccept;gravity18/dt0.05,vY-=0.9beforepositiondelta,spawnmoves same tick,lifetime100completedsteps/expire nextentry;segmentnearest,blocktieswin,entitykind/IDties,unknownraynotblockhit. Bowdraw6..19speed16damage2,>=20speed30damage5;firsthold1;releaseinterruptbeforedebit;scanammo0..35/debit1/bowwear1then spawn,defensivespawnfailuredoesnotrefund. `projectiles::spawn_129_evicts_1`, `projectiles::gravity_first_lifetime`, `projectiles::bow_5_6_19_20_and_fault`:IDs2..129,firstdyinitialvy-0.9 times0.05,5nodamage/6&19damage2/20damage5,exceptionaldebitnotrefunded. `go test ./packages/server/sim/entity -run 'Projectile|Arrow|Bow' -count=1`. |
-|2.7c combat/death|snapshotcap104,intent72,hostileIDs→playersessions→passiveIDs;freezeallbeforewrite,decrementcooldownsinsnapshot;overflowno commit. Hostileintentsbeforeplayer,firstvictimreservationwins,losernosideeffects;playerreach3,nearestAABB/hurt-protectednearestblocksfarther;blockdistance strictlylessoccludes(equaldoesnot). Validatefrozenliveidentities/slot/item/count,knockback0.35,yawfallbackoverlap;cooldownplayer10/hostile20,rawdamageevent. Mutuallethalbeforedeath. Hostiledeathlootringradius0,1,2firstwholefit,allfullomitslootbutdeathproceeds;walker1rottenflesh/hurlerbones0..2,bow1/8deterministicno reroll. `hostile_outcomes::reservation_mutual_death`, `hostile_outcomes::full_drop_death_no_duplicate`:loser0cooldown/wear/damage;mutuallethalbothdead;allfullomitslootonce. `go test ./packages/server/sim/entity -run 'Combat|HostileDeath|HurlerDeath' -count=1`. |
+|2.7c combat/death|snapshotcap104,intent72,hostileIDs→playersessions→passiveIDs;freezeallbeforewrite,decrementcooldownsinsnapshot;overflowno commit. Hostileintentsbeforeplayer,firstvictimreservationwins,losernosideeffects;playerreach3,nearestAABB/hurt-protectednearestblocksfarther;blockdistance strictlylessoccludes(equaldoesnot). Validatefrozenliveidentities/slot/item/count,knockback0.35,yawfallbackoverlap;cooldownplayer10/hostile20,rawdamageevent. Mutuallethalbeforedeath. HostiledeathlootallReadykeyssortedbyChebyshevringthenstablechunkorder,firstwholefit,allfullomitslootbutdeathproceeds;walker1rottenflesh/hurlerbones0..2,bow1/8deterministicno reroll. `hostile_outcomes::reservation_mutual_death`, `hostile_outcomes::full_drop_death_no_duplicate`:loser0cooldown/wear/damage;mutuallethalbothdead;allfullomitslootonce. `go test ./packages/server/sim/entity -run 'Combat|HostileDeath|HurlerDeath' -count=1`. |
 |2.8a passive|global32onecandidate/tickOverworlddaytime;local48radiuscap6,grass;sortedID,freshskipsfirstmovement. Priorityswim/dryturn→shore→flee60→graze→tempt→idle→wander;wheatwithin8inclusive nearest/sessiontie,stop2.5,turn0.2;grazeroll1/600salt0x51ab3e4d07c3f291,20ticksincludingstart,supportchange/flee/unreadyabort. `passives::tempt_8_stop_2_5_and_graze20`, `passives::32_33_and_restore_transient`:trigger+19settlesgrass→dirt,unreadydoesnotwrite;restoregraze0. `go test ./packages/server/sim/entity -run Passive -count=1`. |
 |2.8b drops|stablechunk/session/slot,32slots/chunk,25chunkradius2;delaydecrement/ageincrement,expire>=6000beforepickup;distance<=1.25;4phaseinventorycreditpartialremainder,repackvetobeforecommit. Miningdelay10/deathandQ40;Qone,panelwholeviewstack;footchunkReady/blockindexbeforedebit. `drops::delay_40_radius_and_expire6000`, `drops::panel_full_capacity_atomic`:39notpickup/40eligible,age5999→6000expiredfirst;fulloutputsourceunchanged,partialpickupconservation. `go test ./packages/server/sim/entity -run 'Drop|Pickup' -count=1`. |
 |2.8c sleep|internalauthoritybedraynight13000..23000/sneakrefusal/nonbedsilent;foot/headorientation,recordrespawn. Allactive/nonzeroasleep→EffectiveMorningOffset(worldtime+1,DayArcTicks(YearPhaseAt(completed,seasonoffset)),0),absoluteclockunchanged,wakeall. MoveX/Z/jump/actualdamagewakes,look/sprintalone no. Unverifiedbedretainsrecord/anchorfallback,provenmissingclears,crossdimretains/deathdimanchor. `sleep::seasonal_morning_disconnect_and_respawn`:fixture source exactoffset/time snapshot;disconnectupdateseligiblecount;unreadybedretain. `go test ./packages/server/sim/entity -run 'Sleep|BedInteract|Sleeping|Death.*(Respawn|Bed)' -count=1`. |
@@ -243,6 +243,204 @@ For restore policy, require quiescent lock and same-parent paths. Stage named ve
 
 `drops::inactive_delay_and_restart` createsdelay40/age0 then advances10 active ticks→delay30/age10, leaves activeinterest60ticks→unchanged30/10, restores/save-reloadsremaining30/10, then advancesoneactive→29/11. Global tick/wall time alone never enables pickup. This test also proves new DropPatch CAS inventory combination.
 
-1.1b additionally owns `packages/server/server/migration_actor_capacity_oracle_test.go`, `TestMigrationActorCapacityReplay`, using real package-local player/companion/hostile/passive persistence owners and gated test stores. Sample raw snapshot allocation tickets immediately at selection/enqueue/held/completion/retry transfer, include metadata in the world-owner observer, and export the same immutable sample schema. This package does not import runtime internals; it combines host-owned actor lanes with previously collected runtime/world samples by the controller's recorded schedule boundary ID. Supported cases include all8 players plus standalone aggregate families and final metadata, reporting per-family count/logical bound/encoded-equivalent length and total retained snapshots. Run `go test ./packages/server/server -run '^TestMigrationActorCapacityReplay$' -count=1 -v`. All three exports/source-hash/case-set equality are required before1.1c; actor/metadata not-applicable is explicit, not silently omitted. This remains an offline migration oracle with no production Go changes.
+1.1b additionally owns `packages/server/server/persistence/migration_actor_capacity_oracle_test.go`, `TestMigrationActorCapacityReplay`, using real package-local player/companion/hostile/passive persistence owners and gated test stores. The actor owners live in package `persistence`; a `server` package test cannot read their unexported tickets without a production accessor, so this file stays in `persistence`. Sample raw snapshot allocation tickets immediately at selection/enqueue/held/completion/retry transfer, include metadata in the world-owner observer, and export the same immutable sample schema. This package does not import runtime internals; it combines host-owned actor lanes with previously collected runtime/world samples by the controller's recorded schedule boundary ID. Supported cases include all8 players plus standalone aggregate families and final metadata, reporting per-family count/logical bound/encoded-equivalent length and total retained snapshots. Run `go test ./packages/server/server/persistence -run '^TestMigrationActorCapacityReplay$' -count=1 -v`. All three exports/source-hash/case-set equality are required before1.1c; actor/metadata not-applicable is explicit, not silently omitted. This remains an offline migration oracle with no production Go changes.
 
 Node1.6 owns the real `try_system` transaction as well as actor resolution. Fluid2.3 and passive2.8a therefore require its accepted SHA before system-write provider tests; companion2.9b requires actual2.1c mining progression for its complete mining/retry cases. These dependencies are explicit in03; they do not alter the first independent environment2.2/inventory2.6a/store-mailbox3.4a wave.
+
+### Node 2.7b0: Executable projectile staging contract
+
+Baseline `4bfe8105`; accepted original S1 repair `10023cfc`. The controller owns
+`packages/engine/crates/mornlea_server/src/core/state.rs`, its crate `AGENTS.md`,
+and `tests/server_contract/contract_double.rs`. Read-only: `core/contracts.rs`,
+the existing `FixtureState`, `ProjectileRecord`, `ActorRuntime`, and `RuleEffect`
+declarations. No wire/save change or new authority owner.
+
+Expose `AuthorityReadView::projectiles(&self) -> &[ProjectileRecord]`. Initialize
+projectiles and keyed actor runtimes from `FixtureState` in `from_fixture`; these
+are fixture-only records and do not add a production load path. Complete the
+existing `RuleEffect::Projectile { before, after }` semantics: an absent `before`
+inserts a previously absent ID subject to the 128-record cap; an exact `before`
+replaces or removes its resident record. Replacement keeps the ID. Missing or
+stale `before` and duplicate insertion return `StaleObservation`; both values
+absent or an ID-changing replacement return `Wire(InvalidInput)`. Rejection
+preserves all state. Validate projectile components against a bounded scratch
+copy in compound order so remove-then-insert at capacity succeeds, but
+insert-then-remove at capacity refuses. Validate every component before applying
+any. Lazily allocate this scratch only for a projectile effect, not unrelated
+staging calls. Non-projectile validation remains unchanged.
+
+First add behavioral contract cases using existing `snapshot_state` access:
+`projectile_update_remove_and_stale`, `projectile_compound_capacity_and_rollback`,
+`projectile_fixture_initialization`, `projectile_invalid_shapes_and_identity`.
+Pin resident update count one, stale compare zero effects, removal count zero,
+full-cap update, full-cap evict+insert IDs 2..129, failed later duplicate rolling
+back an earlier inventory change/removal, initial bow/projectile preservation,
+and unchanged projectile identity. Baseline must fail assertions rather than
+imports. Add the immutable read getter assertions after the getter lands.
+
+Run nonempty discovery and execution with `rustup run 1.97.1 cargo test
+--manifest-path packages/engine/Cargo.toml -p mornlea_server --locked --test
+server_contract projectile`, then the full server crate, crate fmt/clippy,
+strict change validation and `git diff --check`. No Go source, derived corpus
+pins or wire/save versions change. The controller reviews and commits
+`fix(server): complete projectile staging contract` before the projectile
+provider consumes its accepted SHA. Rollback the contract commit only after
+invalidating dependent provider acceptance; actual collision/bow behavior stays
+in 2.7b and actual tick integration in 3.1.
+
+
+The same contract repair retains ordered `DamageIntent` effects in the tick
+context, exposed by `AuthorityReadView::damage_intents() -> &[DamageIntent]`.
+Capacity is 4096, counting every component of a compound before publication;
+refusal preserves projectiles, inventory and the prior intent list. This lane records unsettled damage; projectile flight must not enqueue its
+already-settled impacts. Melee/combat owns its own damage and later death settlement. Fixture
+snapshot output preserves actor runtimes for next-step replay continuity.
+`projectile_damage_staging_is_bounded_and_atomic` pins 4095/4096/4097 and atomic
+projectile-removal plus hit retention.
+
+Projectile provider input refinement: `ProjectileScope { dimension: Dimension,
+center: ChunkPos, radius: u64 }` represents one Ready session subscription square.
+`advance(ctx: &mut TickContext<'_>, scopes: &[ProjectileScope]) -> Result<PhaseReport,
+ServerError>` rejects more than eight scopes or radius above `i64::MAX` before
+mutation, then compares coordinate differences in i64 without enumerating the
+square. Go's configured radius has no finite gameplay ceiling; a u8 radius
+would incorrectly narrow compatibility. Unsubscribed post-step chunks remove
+the projectile even if loaded, while unloaded cells inside a subscribed square
+are not block hits. `run(ctx, call)` owns BowDraw and batch-shape validation;
+3.1 supplies actual Ready scopes then invokes the batch body, following the
+accepted furnace precedent. Tests must exercise empty scope, dimension mismatch,
+nine-scope refusal, and large radius without overflow.
+
+`spawn(ctx: &mut TickContext<'_>, record: ProjectileRecord) -> Result<(), RuleReject>`
+consumes authoritative resolved facts; validate before minimum-ID eviction.
+`derive_spawn_id(ctx: &TickContext<'_>, kind: ProjectileKind, dimension: Dimension,
+owner: ActorKey, position: FiniteVec3) -> Result<ProjectileId, RuleReject>` uses the
+Go spawn hash and at most 64 nonzero/unique probes. Bow and the later hostile
+ranged caller share this function. The serial reducer/hostile combat integration
+owns ranged target/cooldown decisions before calling spawn; it must not omit the
+ranged call when integrating the provider. No client supplies an authoritative
+projectile record or subscription scope.
+
+
+### Node 2.6e0: Tick-local action settlement preflight
+
+Controller-owned files: `S/src/core/state.rs`, `S/src/rules/mining.rs`,
+`S/tests/server_replay/mining.rs`, `S/tests/server_contract/contract_double.rs`,
+and `S/AGENTS.md`. Accepted predecessor is mining checkpoint `e15b7410`; baseline
+includes projectile contract `611536fb`. No new wire or saved actor fields.
+
+Add `TickContext::check_charge_capacity(&self) -> Result<(), ServerError>` using
+the exact existing 4096-receipt ceiling and error of `note_charge`; that method
+calls the same preflight before appending. Add tick-local Player-key suppression
+with at most eight distinct keys: `check_mining_suppression(&self, actor: ActorKey)
+-> Result<(), ServerError>`, `suppress_mining(&mut self, actor: ActorKey) ->
+Result<(), ServerError>`, `mining_suppressed(&self, actor: ActorKey) -> bool`.
+Non-player keys return InvalidInput(actor); duplicate keys are idempotent; a ninth
+new key returns Capacity(Players,8,9). The set starts empty with every context
+and is excluded from fixtures and persistent runtime. Mining clears progress
+without ray traversal when this tick's Player key is suppressed.
+
+Tools preflight charge/suppression capacity before changing world or inventory,
+then append their receipt immediately after a successful transaction under the
+same exclusive context borrow. A refusal records neither receipt. Only bucket
+success suppresses mining; till emits a Till exhaustion receipt; bone meal does
+neither. This preserves Go bucket.go success plus mining.go interruption and
+clearing semantics. Immediate till result is always dry farmland (farming.go);
+the later moisture phase is the hydration owner. Only bucket success emits the
+existing PlacementSuccess sequence, as verified in tick.go.
+
+Behavioral tests: `mining::bucket_suppression_is_tick_local` starts progress on
+stone, suppresses the actor and asserts progress clears/block+tool remain,
+then creates a new context and proves mining resumes at one. Contract
+`action_receipt_preflight_and_suppression_capacity` checks nonmutating preflight
+at 4095/4096, exact capacity errors, duplicate suppression and ninth-key refusal.
+Start with compiling no-op suppression methods and an always-successful charge
+preflight to observe assertion failures, then implement bounded state and mining
+consumption. Focused commands are the server_replay mining filter and
+server_contract action_receipt filter; run the full server crate, fmt/clippy,
+Go entity Bucket oracle, strict OpenSpec and diff checks before committing
+`fix(server): preserve atomic action receipt boundaries`. The tools worker
+consumes this accepted SHA; controller owns integration and rollback.
+
+
+Projectile traversal bound: the provider observes at most 512 world cells per
+projectile (at most 65536 for the 128-record resident cap). The native DDA
+reports completion lazily when a batch ends exactly at 64 records. After eight
+batches, permit one bounded numerical lookahead batch without observing or
+handling any of its cells: empty plus done means completion; any returned
+record means traversal remains. This is at most 576 numerical records per
+projectile, 73728 per resident set; it does not change the accepted F1 kernel.
+If traversal remains, return
+`ServerError::Capacity { resource: RuleEffects, limit: 512, observed: 513 }`.
+Keep that projectile unchanged and emit no hit/removal for it. Earlier ordered
+records may already be settled; the phase is not a whole-batch transaction.
+Exactly-at-limit completed rays succeed. Unknown world cells are separately
+handled by the Go no-confirmed-block-hit rule. Source-produced speeds 16/22/30
+m/s with dt 0.05 are far below this defensive bound. An adversarial finite
+velocity regression must prove an explicit capacity error, not silent tunneling.
+
+
+Projectile impact refinement (controller ruling before provider acceptance):
+Go settles each impact immediately inside the ascending-ID flight loop. A
+queued-only `DamageIntent` changes the next projectile's candidate set and is
+not compatible. Keep the public `advance`/`spawn` signatures. Add a private
+impact builder in the projectile provider that reads the current overlay and
+returns one compound: projectile removal, updated actor, and (for players)
+whole-record inventory patch plus runtime, or (for passives) updated runtime.
+Build all records and the optional event before staging. Do not enqueue a
+`DamageIntent` for this already-settled impact; later combat must not apply it
+again. Death, drops, despawn and respawn remain later phase responsibilities.
+
+The exact impact algorithm is:
+- Clone the live target and preserve lifecycle, dimension, pose, look and all
+  unrelated fields. Compute horizontal impulse from the gravity-adjusted
+  projectile velocity using Go f32 `Normalize()*0.35`; a zero horizontal vector
+  contributes zero. Add to actor motion velocity; retain its position/grounded
+  state. Mirror health and velocity into hostile/passive bodies; player body
+  mirrors health and worn armor while the inventory overlay remains authority.
+- Player targets require their current inventory and runtime; absence is
+  `InvalidInput { field: "projectile_target" }` before removal or mutation.
+  Freeze points with `inventory::armor_points`, call accepted
+  `inventory::settle_damage(DamageCause::Projectile, raw, points, armor)`, and
+  saturating-subtract effective damage from health. Update the survival record
+  preserving oxygen/hunger/saturation and recomputing worn armor points. Set
+  `since_damage_ticks=0`, `eating=None`, `bow=None`; keep all other runtime
+  lanes. No inventory ammunition changes occur at impact.
+- Hostiles saturating-subtract raw damage from health. Passives do the same,
+  require a matching Passive runtime before staging, set `flee_ticks=60`,
+  `flee_from=Some(projectile.position)` (pre-step position), `graze_ticks=0`,
+  and preserve `graze_at` and every other lane. Missing/mismatched runtime
+  returns the same pre-mutation target error. Update both SurvivalState and
+  body health; no lifecycle reset or cooldown is invented.
+- After a successful compound, an Arrow emits the existing owner-session
+  `CombatHit` with raw damage and actual target kind. Shards emit none. Tick
+  zero remains event-silent like accepted survival replay because the frozen
+  event contract requires nonzero ticks. Validate the event before staging;
+  real source damage is 2/5/3, and public spawn rejects raw damage outside
+  1..=20 plus nonzero birth age before eviction. Opening-fixture records that
+  cannot construct a valid required event fail before mutation.
+
+Behavioral RED/GREEN must cover: two ordered lethal arrows skip the now-dead
+first victim and let the second hit a farther live actor; armor reduction and
+one-point wear per hit using the latest inventory for the next projectile;
+player regen/eating/bow interruption with unrelated lanes unchanged; passive
+flee origin/duration and grazing cancellation; Arrow raw owner confirmation
+versus Shard silence; missing required runtime/inventory leaves projectile and
+all state untouched. Existing collision tests assert settled health and zero
+queued intents rather than mere receipt count. Run the projectile replay filter,
+full server crate, fmt/clippy and the Go projectile/bow/combat oracle.
+
+Serial integration obligations discovered in this review: before projectile
+advance capture at most eight player health values, then capture actual health
+decreases immediately afterward (before death/reset). These victim identities
+must remove sleepers. The current sleep provider infers victims from wire
+`CombatHit` recipients, which is ambiguous when an Arrow owner's target is a
+player; before reducer acceptance, replace that inference with a typed explicit
+victim input covering all damage providers. Do not invent victim CombatHit
+messages or let an attacker confirmation wake the attacker. Also filter retired
+sessions before command provider dispatch: queued commands cannot execute just
+because their actor record still has Active lifecycle. Current `apply_sequence`
+checks only sequence/key, so session retirement alone is not that filter.
+World observation lookup currently scans the overlay; the actual reducer must
+supply indexed lookup or charge that work before claiming a bounded hot path.
+These are explicit integration gates, not accepted runtime behavior.

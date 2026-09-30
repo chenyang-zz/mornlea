@@ -65,3 +65,120 @@ Persistence uses existing MCGR/MCGB bank commits and standalone atomic replaceme
 Agent HTTP remains schema v1 with no source_tick/attempt fields; private u64 attempt/source_tick distinguish callbacks from game world time. HTTP/lease, frozen snapshot/MCP, task/dialogue/memory and real-process gate have separate nodes. Test-only process owners launch the real Python gateway with deterministic model fixtures; production never launches or embeds Python. Shutdown exposes once-only phases and a failure report, retaining frozen Agent/world ownership on retry. Release is not given a fabricated idempotent receipt.
 
 Opt-in activation and rollback execute stop/wait/verify-or-restore/start against selected real binaries and disposable worlds. Dry-run remains inspection only. Parallel packet/file/DAG updates preserve accepted F3 S2 alias and all F2 checkboxes remain pending.
+
+
+## Projectile contract completion
+
+Continuation discovery found that the declared projectile before/after effect
+only appended records, and fixture initialization discarded projectiles and actor
+runtime. Node 2.7b0 completes the accepted declaration before provider work:
+immutable reads, exact-record compare-and-replace/removal, bounded ordered
+compound preflight, and fixture continuity. A provider-private projectile store
+was rejected because it would create a second owner and bypass the tick overlay.
+The refined packet defines error precedence and tests; 2.7b consumes its accepted
+commit, while 3.1 retains real reducer ownership.
+
+
+## Ordered projectile impact settlement
+
+Projectile flight settles each hit in the current actor/inventory/runtime
+overlay before scanning the next projectile. Deferring raw damage until the
+later combat/death phase was rejected because the next projectile must skip a
+target killed by the preceding projectile. Each hit stages removal and all
+target changes atomically, reuses the accepted armor helper, and emits only
+the existing owner confirmation. It does not also queue a damage intent.
+Death/reset/drop ownership remains later in the fixed tick order. The exact
+algorithm and red/green cases are in the refined projectile packet.
+
+The serial reducer must pass actual damaged player identities to sleeping
+settlement; a wire CombatHit recipient can be an attacker and is not a victim
+identity. It must also discard commands from sessions retired after admission
+but before execution. Both remain integration gates until their real consumers
+are implemented and tested. No wire/save schema changes follow this decision.
+
+
+## Persistence provider continuation contracts
+
+Decoded loads preserve F1 migration facts in LoadedValue rather than converting
+to SaveValue. Region commit reports committed keys and an error independently,
+matching per-key S3 acknowledgment. A per-request cancellation token is checked
+before durable publication, with no cancellation after publication begins. A
+shared narrow I/O hook exposes actual failure/crash boundaries and partial/zero
+writes to integration tests; ordinary constructors always use native I/O.
+Native fallible close is confined to two platform adapters. The exact landing,
+provider signatures and retry semantics are in
+[the persistence continuation packet](plans/05-persistence-io-contract.md).
+
+## Indexed Ready world observations
+
+Rule and snapshot consumers share checked compact Ready bases and exact keyed
+overlay reads. Missing cells are not inferred as air; sky uses the source's
+highest non-air column including transparent blocks. Base validation and height
+construction happen off the tick, while bounded writes update heights before
+the next provider reads them. Replay snapshots preserve base content and
+increment each changed chunk once, separately from per-cell staging CAS.
+[The Ready world packet](plans/06-world-read-and-random.md) owns the accepted
+contract and random-rule refinement. Actual reducer integration remains open.
+
+The [exclusive backend packet](plans/07-disk-backend.md) fixes world-lock order,
+metadata sequence initialization, bounded region ownership, partial durable
+acknowledgments, and source-compatible named backups for the real disk join.
+
+The [drop ownership contract](plans/08-drop-contract.md) fixes 36 input stacks,
+32 persistent slots, ordered atomic staging and tick revision semantics before
+any drop-producing or pickup provider is accepted. Counter-only aging retains
+the verified Go dirty-selection behavior; this migration adds no save guarantee.
+
+The [drop lifecycle packet](plans/09-drop-lifecycle.md) consumes accepted slots
+independently of loot producers. The reducer retains the radius2 active-interest
+union and publication ownership; command and producer acceptance stays separate.
+
+The [world output contract](plans/10-world-output-contract.md) reconciles fixed
+container slots and complete mining/system transactions. Internal chunk dimension
+remains separate from the Overworld-only v45 container wire reference. Exact
+integer source cells own block-generated loot; float centers are observations.
+
+The [container view/drop packet](plans/16-container-drop-views.md) replaces
+history-based first-move binding with the actual Ready ray-hit reference and
+seeds one complete tick viewer set, so close cannot fall back to a stale lease.
+A container write is an explicit durable touch even when an inventory-region
+transfer leaves its slots equal, matching the Go revision barrier. Reach
+invalidates views during publication after transfers; reducer scheduling and
+workbench anchor ownership remain explicit follow-ups.
+
+The [combat input contract](plans/17-combat-input-contract.md) freezes typed
+hostile melee choices before independent action/settlement implementations.
+Source audit requires pre-player-physics action facts and post-motion combat
+validation, hurler-specific ranged strategy, and all-Ready death spill order.
+Earlier provider tests do not accept these missing integrations. Workbench
+anchor lifetime and container mutual exclusion also remain an explicit node.
+
+
+The [melee provider packet](plans/19-melee-settlement.md) freezes bounded combat
+actors and intents before cooldown mutation, preserves live identity checks and
+mutual lethal hits, and returns actual damaged player sessions separately from
+attacker-directed hit receipts. Death and cross-phase runtime merging remain
+explicit integration work. The existing exhaustion calculation becomes one
+pure configured-threshold helper shared by survival and melee.
+
+
+## Whole-branch review correction
+
+The activation executable at the review baseline only holds a world lock and a control socket; it neither ticks nor serves gameplay. This does not qualify the Rust authority described by the proposal and delta specification. The prior ledger ruling that deferred production transport, chunk loading, mob recovery and publication until default cutover is withdrawn. Leaving default startup on Go is a deployment constraint, not an exception to F2 behavior or acceptance. Node 3.7 is reopened: identical Rust transcripts, source fingerprints and directly constructed save records do not establish full real-runtime parity or durable mutation. Nodes 3.8 and 4 remain pending until those real paths and the previous-runtime rollback verifier execute.
+
+Bounded review fixes first preserve existing ownership: movement clones the current actor runtime and changes only held controls; the tick-start environment uses committed live state after initial metadata hydration; sleep anchors and eligibility persist with resident state. Terminal transport records release payload ownership while retaining only bounded diagnostic replay. Agent I/O uses one absolute deadline across all reads. Exact tests and file ownership are in the review repair packet. These fixes change no wire/save version or gameplay rule.
+
+
+### Source-exact shot clock and transient retirement
+
+Verified Go hostile shard production uses executing authority tick, independently of calendar world time. The review correction in plan29 supersedes packet21's earlier world_time spread input; salt, float order and version remain unchanged. Session retirement prunes only transient sleep participation/anchors immediately, while durable respawn and latest-save/history ownership remain separate. Placement plant and torch support predicates follow current collision and farming source facts; body overlap and commit read bases retain separately qualified serial owners.
+
+
+### Source order for death and placement geometry
+
+Player death output rehearses candidate chunks in ring order, then inventory and armor slots within each candidate, retaining successful fixed-slot scratch state for later attempts before one compound publication. Placement player overlap uses the current Go target/default-form gate with a separate full-cell torch gate; it does not add new bed-head or door-upper collision rules. Exact private shapes, float order and refusal precedence are frozen in plan29.
+
+
+### Frozen lease business classes
+
+Freeze removes the current planner lease and fences late planner outcomes while retaining only the unexpired finalization/release identity. Commit/reconcile/delete/run cleanup may use that identity until successful release or expiry; plan/dialogue cannot. Admission and late-result checks share one private eligibility policy. Terminal transfer and memory finalization retry remain separate acceptance nodes.
