@@ -1491,3 +1491,9 @@ Region parent barrier repair accepted after 2a99e64b. Isolated implementer owned
 
 
 Continuity packet refinement before dispatch: retain environment and sleep in residents first. Metadata dirtying is moved to the serial persistence/reducer boundary repair because the current reducer is infallible and completion overwrites metadata_sequence; saturating a revision would allow different bytes under one revision. This preserves the complete requirement as an integration blocker, without silently widening a private continuity task or adding a panic. Baseline d2663098; one isolated implementer owns state.rs and tick_state.rs only. Architecture skill: no change.
+
+
+Controller freezes direct HTTP deadline node separately from business ownership: private RpcIo rearms a20ms maximum syscall slice against one absolute deadline and close flag. No shared AgentWire contract changes yet; per-request cancellation needs a serial compile-ready seam before lease/HTTP consumers change. Direct execution keeps this tightly coupled private I/O correction cheap to integrate; real raw-socket RED cases precede code. Architecture skill: no change.
+
+
+Bounded activation-control correction accepted after 3788d7aa. Isolated implementer owns binary and actual-process tests. Three RED cases pinned incomplete, oversized and dribbled request blocking; GREEN full activation10/10 with the explicit rebuilt compatible Go fixture and focused control4/4. Controller review caught partial reply writes renewing the timeout; an added private socket regression RED emitted6 writes, GREEN emits1 and0flushes after deadline. Controller independently reran binary unit1/1; owned fmt, all-target clippy and diff checks passed. This accepts request framing only; gameplay and rollback blockers remain open. Architecture skill: no change.

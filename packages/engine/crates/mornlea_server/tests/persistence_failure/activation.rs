@@ -1465,3 +1465,121 @@ fn control_rejects_world_actions() {
     );
     assert!(wait_pid_gone(rust_pid, Duration::from_secs(30)));
 }
+
+/// Real activated process retained until the control deadline assertions
+/// finish; failed assertions must not leave a world owner behind.
+struct ControlOwner {
+    _scope: Scope,
+    socket: PathBuf,
+    pid: u32,
+}
+
+impl ControlOwner {
+    fn start(case: &str) -> Self {
+        let scope = Scope::fresh(case);
+        let run = scope.path("run");
+        let world = run.join("world");
+        let previous = previous_bin();
+        let (mut go, _, _, _) = prepare_go_world(&previous, &world, "deadline-probe");
+        stop_child(&mut go, "preparing previous binary");
+        let manifest_path = script_activate(&scope, &world, &run.join("backup"), &run, &[]);
+        let manifest = read_manifest(&manifest_path);
+        Self {
+            _scope: scope,
+            socket: PathBuf::from(manifest_str(&manifest, "control_socket")),
+            pid: manifest["pid"].as_u64().expect("activated pid") as u32,
+        }
+    }
+
+    fn shutdown(&self) {
+        let reply =
+            bounded_control_request(&self.socket, r#"{"op":"shutdown","deadline_ms":5000}"#);
+        assert_eq!(reply["phase"], "Quiescent");
+        assert!(wait_pid_gone(self.pid, Duration::from_secs(5)));
+    }
+}
+
+impl Drop for ControlOwner {
+    fn drop(&mut self) {
+        kill_pid(self.pid);
+        let _ = wait_pid_gone(self.pid, Duration::from_secs(5));
+    }
+}
+
+fn bounded_control_request(socket: &Path, request: &str) -> serde_json::Value {
+    let mut stream = UnixStream::connect(socket).expect("connect bounded control client");
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .expect("bounded reply timeout");
+    stream
+        .write_all(request.as_bytes())
+        .expect("control request");
+    stream.write_all(b"\n").expect("control newline");
+    let mut line = String::new();
+    BufReader::new(stream)
+        .read_line(&mut line)
+        .expect("control must progress within 500 ms");
+    serde_json::from_str(line.trim()).expect("bounded control response")
+}
+
+#[test]
+fn control_incomplete_request_cannot_block_shutdown() {
+    let owner = ControlOwner::start("control-stall");
+    let mut stalled = UnixStream::connect(&owner.socket).expect("connect stalled client");
+    stalled.write_all(b"{").expect("partial JSON");
+    let start = Instant::now();
+    owner.shutdown();
+    assert!(start.elapsed() < Duration::from_millis(500));
+}
+
+#[test]
+fn control_oversized_request_is_retired_before_next_request() {
+    let owner = ControlOwner::start("control-size");
+    let mut oversized = UnixStream::connect(&owner.socket).expect("connect oversized client");
+    oversized
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .expect("oversized reply timeout");
+    oversized.write_all(&[b'x'; 4097]).expect("oversized JSON");
+    let mut line = String::new();
+    BufReader::new(oversized)
+        .read_line(&mut line)
+        .expect("oversized request must be refused without a newline");
+    let reply: serde_json::Value = serde_json::from_str(line.trim()).expect("oversized refusal");
+    assert!(matches!(
+        reply["error"].as_str(),
+        Some("malformed" | "request_too_large")
+    ));
+    let status = bounded_control_request(&owner.socket, r#"{"op":"status"}"#);
+    assert_eq!(status["phase"], "RustRunning");
+    owner.shutdown();
+}
+
+#[test]
+fn control_dribbled_request_obeys_absolute_deadline() {
+    let owner = ControlOwner::start("control-drip");
+    let mut dribbled = UnixStream::connect(&owner.socket).expect("connect dribbling client");
+    dribbled
+        .set_read_timeout(Some(Duration::from_millis(350)))
+        .expect("retirement scheduling tolerance");
+    dribbled.write_all(b"{").expect("first dribbled byte");
+    let mut sender = dribbled.try_clone().expect("clone dribbling socket");
+    let start = Instant::now();
+    let writer = std::thread::spawn(move || {
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(20));
+            if sender.write_all(b" ").is_err() {
+                break;
+            }
+        }
+    });
+    let mut byte = [0];
+    let retired = dribbled.read(&mut byte);
+    let elapsed = start.elapsed();
+    writer.join().expect("dribbling sender finishes");
+    assert!(
+        matches!(retired, Ok(0)),
+        "connection not retired: {retired:?}"
+    );
+    assert!(elapsed < Duration::from_millis(350));
+    owner.shutdown();
+}

@@ -16,9 +16,10 @@ use mornlea_server::core::contracts::{LoadedValue, SaveKey, ServerError};
 use mornlea_server::store::atomic_file::AtomicFiles;
 use mornlea_server::store::lease::WorldLease;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Usage failures exit here; operational failures print one `FAIL <code>`
 /// line and exit `1` so the opt-in script can match the failure vocabulary.
@@ -27,6 +28,39 @@ const USAGE_EXIT: i32 = 2;
 /// Second argument of every control `shutdown` request; larger values are
 /// refused before any state changes.
 const MAX_SHUTDOWN_DEADLINE_MS: u64 = 30_000;
+
+/// Control requests share one deadline across every read and reply so a
+/// slow client cannot monopolize the serial control owner.
+const CONTROL_TIMEOUT: Duration = Duration::from_millis(200);
+const MAX_CONTROL_REQUEST_BYTES: usize = 4096;
+
+/// Both local socket adapters retain the same bounded connection policy.
+trait ControlSocket: Read + Write {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+}
+
+#[cfg(unix)]
+impl ControlSocket for std::os::unix::net::UnixStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        Self::set_read_timeout(self, timeout)
+    }
+
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        Self::set_write_timeout(self, timeout)
+    }
+}
+
+#[cfg(not(unix))]
+impl ControlSocket for std::net::TcpStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        Self::set_read_timeout(self, timeout)
+    }
+
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        Self::set_write_timeout(self, timeout)
+    }
+}
 
 struct Args {
     world: PathBuf,
@@ -187,7 +221,13 @@ fn store_manifest(path: &Path, manifest: &serde_json::Value) {
     fs::rename(&staged, path).unwrap_or_else(|_| fail("invalid_manifest", "manifest not replaced"));
 }
 
-fn reply_status(stream: &mut impl Write, nonce: &str, phase: &str, world_closed: bool) {
+fn reply_status(
+    stream: &mut impl ControlSocket,
+    deadline: Instant,
+    nonce: &str,
+    phase: &str,
+    world_closed: bool,
+) {
     let line = serde_json::json!({
         "nonce": nonce,
         "phase": phase,
@@ -196,16 +236,33 @@ fn reply_status(stream: &mut impl Write, nonce: &str, phase: &str, world_closed:
     });
     let mut text = serde_json::to_string(&line).expect("status renders");
     text.push('\n');
-    let _ = stream.write_all(text.as_bytes());
-    let _ = stream.flush();
+    write_control_reply(stream, deadline, text.as_bytes());
 }
 
-fn reply_error(stream: &mut impl Write, code: &str) {
+fn reply_error(stream: &mut impl ControlSocket, deadline: Instant, code: &str) {
     let line = serde_json::json!({ "error": code });
     let mut text = serde_json::to_string(&line).expect("error renders");
     text.push('\n');
-    let _ = stream.write_all(text.as_bytes());
-    let _ = stream.flush();
+    write_control_reply(stream, deadline, text.as_bytes());
+}
+
+fn write_control_reply(stream: &mut impl ControlSocket, deadline: Instant, mut bytes: &[u8]) {
+    while !bytes.is_empty() {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return;
+        };
+        if remaining.is_zero() || stream.set_write_timeout(Some(remaining)).is_err() {
+            return;
+        }
+        match stream.write(bytes) {
+            Ok(0) => return,
+            Ok(count) => bytes = &bytes[count..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return,
+        }
+    }
+    // Both adapters are unbuffered sockets, so completion needs no flush
+    // that could perform another operation after the deadline.
 }
 
 fn main() {
@@ -320,42 +377,68 @@ fn serve_control(args: &Args, nonce: &str, files: &mut AtomicFiles) {
 
 /// Returns true once the process must exit after an orderly shutdown.
 fn handle_connection(
-    stream: impl std::io::Read + Write,
+    mut stream: impl ControlSocket,
     args: &Args,
     nonce: &str,
     files: &mut AtomicFiles,
 ) -> bool {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    if reader.read_line(&mut line).is_err() {
-        return false;
-    }
-    let request: serde_json::Value = match serde_json::from_str(line.trim()) {
+    let deadline = Instant::now() + CONTROL_TIMEOUT;
+    // The extra byte detects an oversized request without waiting for its
+    // newline or allocating storage from a client-controlled length.
+    let mut bytes = [0; MAX_CONTROL_REQUEST_BYTES + 1];
+    let mut used = 0;
+    let line_end = loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return false;
+        };
+        if remaining.is_zero() || stream.set_read_timeout(Some(remaining)).is_err() {
+            return false;
+        }
+        match stream.read(&mut bytes[used..]) {
+            Ok(0) => {
+                reply_error(&mut stream, deadline, "malformed");
+                return false;
+            }
+            Ok(count) => {
+                used += count;
+                if let Some(end) = bytes[..used].iter().position(|byte| *byte == b'\n') {
+                    break end;
+                }
+                if used > MAX_CONTROL_REQUEST_BYTES {
+                    reply_error(&mut stream, deadline, "malformed");
+                    return false;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return false,
+        }
+    };
+    let request: serde_json::Value = match serde_json::from_slice(&bytes[..line_end]) {
         Ok(request) => request,
         Err(_) => {
-            reply_error(reader.get_mut(), "malformed");
+            reply_error(&mut stream, deadline, "malformed");
             return false;
         }
     };
     match request.get("op").and_then(|op| op.as_str()) {
         Some("status") => {
-            reply_status(reader.get_mut(), nonce, current_phase(args), false);
+            reply_status(&mut stream, deadline, nonce, current_phase(args), false);
             false
         }
         Some("shutdown") => {
-            let deadline = request.get("deadline_ms").and_then(|value| value.as_u64());
-            match deadline {
+            let requested_ms = request.get("deadline_ms").and_then(|value| value.as_u64());
+            match requested_ms {
                 Some(ms) if (1..=MAX_SHUTDOWN_DEADLINE_MS).contains(&ms) => {
-                    orderly_shutdown(args, nonce, files, reader.get_mut())
+                    orderly_shutdown(args, nonce, files, &mut stream, deadline)
                 }
                 _ => {
-                    reply_error(reader.get_mut(), "deadline_exceeds_max");
+                    reply_error(&mut stream, deadline, "deadline_exceeds_max");
                     false
                 }
             }
         }
         _ => {
-            reply_error(reader.get_mut(), "unknown_op");
+            reply_error(&mut stream, deadline, "unknown_op");
             false
         }
     }
@@ -378,14 +461,15 @@ fn orderly_shutdown(
     args: &Args,
     nonce: &str,
     files: &mut AtomicFiles,
-    stream: &mut impl Write,
+    stream: &mut impl ControlSocket,
+    deadline: Instant,
 ) -> bool {
     let mut manifest = load_manifest(&args.manifest);
     manifest["phase"] = serde_json::Value::from("StopRequested");
     store_manifest(&args.manifest, &manifest);
     match files.close() {
         Ok(()) => {
-            reply_status(stream, nonce, "Quiescent", true);
+            reply_status(stream, deadline, nonce, "Quiescent", true);
             manifest["phase"] = serde_json::Value::from("Quiescent");
             manifest["last_error"] = serde_json::Value::Null;
             store_manifest(&args.manifest, &manifest);
@@ -395,7 +479,7 @@ fn orderly_shutdown(
             manifest["last_error"] =
                 serde_json::json!({ "code": "shutdown_failed", "detail": "store close refused" });
             store_manifest(&args.manifest, &manifest);
-            reply_error(stream, "shutdown_failed");
+            reply_error(stream, deadline, "shutdown_failed");
             eprintln!("FAIL shutdown_failed store close refused");
             std::process::exit(1);
         }
@@ -417,5 +501,67 @@ fn serve_control_tcp(args: &Args, nonce: &str, files: &mut AtomicFiles) {
         if handle_connection(stream, args, nonce, files) {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod control_reply_tests {
+    use super::{ControlSocket, write_control_reply};
+    use std::io::{self, Read, Write};
+    use std::time::{Duration, Instant};
+
+    /// Models a partial socket write that consumes the absolute deadline;
+    /// the control owner must stop before asking the socket to write again.
+    struct DeadlineConsumingSocket {
+        deadline: Instant,
+        writes: usize,
+        flushes: usize,
+    }
+
+    impl Read for DeadlineConsumingSocket {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            unreachable!("reply test performs no reads")
+        }
+    }
+
+    impl Write for DeadlineConsumingSocket {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.writes += 1;
+            if self.writes == 1 {
+                std::thread::sleep(
+                    self.deadline.saturating_duration_since(Instant::now())
+                        + Duration::from_millis(1),
+                );
+            }
+            Ok(bytes.len().min(1))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            Ok(())
+        }
+    }
+
+    impl ControlSocket for DeadlineConsumingSocket {
+        fn set_read_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn set_write_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn partial_reply_stops_when_absolute_deadline_expires() {
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let mut socket = DeadlineConsumingSocket {
+            deadline,
+            writes: 0,
+            flushes: 0,
+        };
+        write_control_reply(&mut socket, deadline, b"reply\n");
+        assert_eq!(socket.writes, 1, "expired reply must not write again");
+        assert_eq!(socket.flushes, 0, "expired reply must not flush");
     }
 }
