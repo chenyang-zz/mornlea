@@ -94,6 +94,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.9l1 Make the MCP serve-failure fixture portable across Unix socket layouts.
 - [x] 3.9l2 Bound loopback delivery waits by real deadlines while preserving protocol clocks.
+- [ ] 3.9l3 Recognize proven Linux zombie termination without weakening writer-lock guards ([packet](plans/33-linux-process-termination.md)).
 
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.
