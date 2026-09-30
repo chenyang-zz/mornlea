@@ -426,3 +426,64 @@ uses its same-dimension lower form with missing/nonlower fallback closed. Target
 classification grants no collision, support or harvest permission. Callers
 retain their own original-cell readiness/error policy, including projectile
 flight's distinct handling. Interaction consumers must reuse this classifier.
+
+## Opt-in activation and rollback
+
+The opt-in runtime qualifies one disposable world copy for the Rust server
+without changing default startup. `src/bin/mornlea-server.rs` proves one
+claim: this exact process exclusively owns the named world and answers the
+local control plane. `scripts/rust-server-opt-in.sh` drives `activate` and
+`rollback` around it, `testdata/runtime-migration/server/activation.json`
+pins the manifest shape, and `tests/persistence_failure/activation.rs`
+executes the real workflows against the rebuilt Rust binary and the real
+previous Go binary. Default `Makefile`, Go command, and product entry stay
+untouched; the script self-test and the activation suite assert that.
+
+- The binary accepts `--world`, `--listen`, `--activation-manifest`,
+  `--control-socket`, and `--dry-run`. It binds the loopback game port as a
+  reservation, matches the manifest nonce and world path, acquires the OS
+  world lock, loads the stored metadata through the real standalone reader,
+  then serves `status` and `shutdown{deadline_ms}` (deadline at most 30000)
+  with `{nonce,phase,final_tick,world_closed}` on the local socket. It runs
+  no ticks, admits no sessions, and rejects every other op, so no world
+  action endpoint exists. Orderly shutdown closes the store, reports
+  `Quiescent`, records the manifest, and exits so the lock releases exactly
+  once; a close failure retains `StopRequested` with `shutdown_failed`. The
+  binary never hashes executables; the script validates binary hashes before
+  start and on resume, while the binary binds the nonce, world, and lock.
+- The script confines the world, backup, and run directory inside the run
+  directory under a system temporary tree, refuses leaf symlink aliases,
+  validates both binary hashes and the named backup identity before start,
+  and configures the previous binary explicitly, never through `PATH`. The
+  versioned manifest carries runtime, source, executable, previous binary,
+  protocol and save identities, world and backup paths and tree hashes,
+  control socket, pid, start nonce, lease identity, and phase.
+- Phases run `Prepared`, `RustRunning`, `StopRequested`, `Quiescent`,
+  `DataVerified`, `PreviousRunning`. Rollback requests real Rust shutdown,
+  waits for process exit, proves lock reacquisition, then either preserves
+  current bytes under the compatible policy or reinstalls the verified
+  backup through the resumable stage, retire, install renames under the
+  restore policy; a shutdown timeout or error retains `StopRequested` and
+  refuses the previous start. Crashes resume idempotently from the manifest
+  by checking pid liveness never alone but control nonce, hashes, and lock
+  state together. Failure codes are `invalid_manifest`, `identity_mismatch`,
+  `writer_live`, `shutdown_failed`, `incompatible_save`, `backup_mismatch`,
+  `restore_failed`, and `previous_start_failed`, each retaining the last
+  proven phase with no dual writer. Dry-run reports the selected Rust
+  binary and hash but creates nothing and qualifies no cutover.
+- Tree digests agree byte for byte between the script and the suite: regular
+  files sorted by `/`-joined relative path, each contributing path bytes,
+  one zero byte, the little-endian content length, then the content. World
+  trees skip `world.lock`; backup and staged trees additionally skip the
+  backup identity record.
+- Known opt-in limitations live here until revisited before any default
+  consideration: mob disk seeding, chunk streaming, despawn projection, and
+  the production gameplay transport (the binary reserves the game port and
+  serves only the control plane with `final_tick` zero). The script requires
+  a Unix host. Wiring the offline previous-runtime verifier binary into the
+  compatible policy is separate controller-owned work; until it lands, that
+  policy checks manifest identities and hashes, preserves current bytes, and
+  proves compatibility through the previous binary's own load plus verified
+  login, seed continuity, and sole lock. A crash between the previous start
+  and its manifest record refuses as `writer_live`; clear the orphan owner
+  and re-run rollback.
