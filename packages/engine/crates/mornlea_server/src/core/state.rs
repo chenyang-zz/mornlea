@@ -835,30 +835,74 @@ impl AuthorityState {
     }
 
     pub fn apply_completion(&mut self, completion: SaveCompletion) -> AckReport {
+        // The scheduler owns ticket correlation; this owner verifies the
+        // echoed immutable preimages before touching any selected token.
+        let identities_match = completion.submitted.len() == completion.snapshots.len()
+            && completion.submitted.iter().zip(&completion.snapshots).all(
+                |((key, revision), snapshot)| {
+                    key == &snapshot.key && *revision == snapshot.revision
+                },
+            )
+            && completion
+                .committed
+                .iter()
+                .all(|identity| completion.submitted.contains(identity))
+            && completion.snapshots.iter().all(|snapshot| {
+                self.in_flight
+                    .iter()
+                    .filter(|held| held.key == snapshot.key && held.revision == snapshot.revision)
+                    .all(|held| held == snapshot)
+            });
+        let mut errors: Vec<_> = completion.error.into_iter().collect();
+        if !identities_match {
+            errors.push(ServerError::Internal {
+                invariant: "save completion identity",
+            });
+            return AckReport {
+                acked: 0,
+                released: 0,
+                retry: Vec::new(),
+                errors,
+            };
+        }
         let mut acked = 0;
         let mut released = 0;
         let mut retry = Vec::new();
-        for held in self.in_flight.drain(..) {
+        for snapshot in completion.snapshots {
+            let position = self
+                .in_flight
+                .iter()
+                .position(|held| held.key == snapshot.key && held.revision == snapshot.revision);
+            // Metadata has an explicit direct-scheduler lane: unlike actor
+            // and chunk saves, metadata_snapshot is submitted without select.
+            if position.is_none() && !matches!(snapshot.key, SaveKey::Metadata) {
+                continue;
+            }
             let listed = completion
                 .committed
-                .iter()
-                .any(|(key, revision)| key == &held.key && *revision == held.revision);
+                .contains(&(snapshot.key.clone(), snapshot.revision));
             if listed {
                 acked += 1;
-                if matches!(held.key, SaveKey::Metadata) {
-                    self.metadata_sequence = held.revision;
+                if let Some(position) = position {
+                    self.in_flight.remove(position);
                 }
             } else {
                 released += 1;
-                retry.push(held);
+                // Backoff owns a payload copy while this token remains
+                // charged; return_dirty or its retry ack releases the token.
+                retry.push(snapshot);
             }
         }
-        self.dirty.extend(retry.iter().cloned());
+        if !retry.is_empty() && errors.is_empty() {
+            errors.push(ServerError::Internal {
+                invariant: "incomplete save completion",
+            });
+        }
         AckReport {
             acked,
             released,
             retry,
-            errors: completion.error.into_iter().collect(),
+            errors,
         }
     }
 

@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use mornlea_domain::{ChunkPos, Dimension, PlayerId};
 use mornlea_server::contracts::{
-    ChunkKey, DiskBackend, LoadedValue, OwnedSnapshot, SaveBudget, SaveKey, SaveMode, SaveRequest,
-    SaveTicket, SaveUrgency, SaveValue, ServerLimits,
+    ChunkKey, DiskBackend, LoadedValue, OwnedSnapshot, SaveBudget, SaveCompletion, SaveKey,
+    SaveMode, SaveRequest, SaveTicket, SaveUrgency, SaveValue, ServerError, ServerLimits,
 };
 use mornlea_server::state::AuthorityState;
 use mornlea_server::store::disk::{DiskOptions, DiskStore};
@@ -196,6 +196,182 @@ fn authority() -> AuthorityState {
         13,
     )
     .unwrap()
+}
+
+fn select_family(state: &mut AuthorityState, key: SaveKey, revision: u64) -> Vec<OwnedSnapshot> {
+    let mut snapshot = family_snapshots()
+        .into_iter()
+        .find(|value| value.key == key)
+        .unwrap();
+    snapshot.revision = revision;
+    match &mut snapshot.value {
+        SaveValue::Hostiles(save) => save.revision = revision,
+        SaveValue::Passives(save) => save.revision = revision,
+        SaveValue::Companions(save) => save.revision = revision,
+        SaveValue::Metadata(_) => {}
+        _ => unreachable!("standalone family fixture"),
+    }
+    state.remember_dirty(snapshot);
+    state.select(SaveMode::All, SaveBudget::default())
+}
+
+fn completed(
+    ticket: u64,
+    snapshots: Vec<OwnedSnapshot>,
+    committed: Vec<(SaveKey, u64)>,
+    error: Option<ServerError>,
+) -> SaveCompletion {
+    SaveCompletion {
+        ticket: SaveTicket::try_from_raw(ticket).unwrap(),
+        submitted: snapshots
+            .iter()
+            .map(|snapshot| (snapshot.key.clone(), snapshot.revision))
+            .collect(),
+        snapshots,
+        committed,
+        error,
+    }
+}
+
+/// Independent jobs cannot release one another's selected snapshot tokens.
+#[test]
+fn save_completions_settle_only_their_owned_submission() {
+    for newer_same_key in [false, true] {
+        let mut state = authority();
+        let first = select_family(&mut state, SaveKey::Hostiles, 1);
+        let second_key = if newer_same_key {
+            SaveKey::Hostiles
+        } else {
+            SaveKey::Passives
+        };
+        let second = select_family(&mut state, second_key.clone(), 2);
+        assert_eq!(state.save_stats().in_flight, 2);
+        let ack = state.apply_completion(completed(1, first, vec![(SaveKey::Hostiles, 1)], None));
+        assert_eq!(ack.acked, 1);
+        assert_eq!(ack.released, 0, "another worker still owns the second job");
+        assert!(ack.retry.is_empty());
+        assert_eq!(state.save_stats().dirty, 0);
+        assert_eq!(state.save_stats().in_flight, 1);
+        let ack = state.apply_completion(completed(2, second, vec![(second_key, 2)], None));
+        assert_eq!(ack.acked, 1);
+        assert_eq!(ack.released, 0);
+        assert_eq!(state.save_stats().in_flight, 0);
+    }
+}
+
+/// Failed work stays charged through scheduler backoff and acknowledges on
+/// its retry without becoming selectable as a duplicate fresh submission.
+#[test]
+fn partial_completion_retains_retry_tokens_without_dirty_duplicates() {
+    let mut state = authority();
+    let mut first = select_family(&mut state, SaveKey::Hostiles, 1);
+    first.extend(select_family(&mut state, SaveKey::Passives, 1));
+    let second = select_family(&mut state, SaveKey::Companions, 2);
+    let error = ServerError::Internal {
+        invariant: "test commit failure",
+    };
+    let ack = state.apply_completion(completed(
+        1,
+        first,
+        vec![(SaveKey::Hostiles, 1)],
+        Some(error),
+    ));
+    assert_eq!(ack.acked, 1);
+    assert_eq!(ack.released, 1);
+    assert_eq!(ack.errors, vec![error]);
+    assert_eq!(ack.retry.len(), 1);
+    assert_eq!(ack.retry[0].key, SaveKey::Passives);
+    assert_eq!(state.save_stats().dirty, 0);
+    assert_eq!(state.save_stats().in_flight, 2);
+    assert!(
+        state
+            .select(SaveMode::All, SaveBudget::default())
+            .is_empty()
+    );
+    let retry = state.apply_completion(completed(3, ack.retry, vec![(SaveKey::Passives, 1)], None));
+    assert_eq!(retry.acked, 1);
+    assert!(retry.retry.is_empty());
+    assert_eq!(state.save_stats().in_flight, 1);
+    let second = state.apply_completion(completed(2, second, vec![(SaveKey::Companions, 2)], None));
+    assert_eq!(second.acked, 1);
+    assert_eq!(state.save_stats().in_flight, 0);
+}
+
+/// A foreign acknowledgment or altered submitted preimage cannot consume
+/// another worker's authority ownership.
+#[test]
+fn invalid_completion_preserves_all_inflight_ownership() {
+    for altered_preimage in [false, true] {
+        let mut state = authority();
+        let mut first = select_family(&mut state, SaveKey::Hostiles, 1);
+        let _second = select_family(&mut state, SaveKey::Passives, 2);
+        let committed = if altered_preimage {
+            first[0].estimated_bytes += 1;
+            vec![(SaveKey::Hostiles, 1)]
+        } else {
+            vec![(SaveKey::Passives, 2)]
+        };
+        let ack = state.apply_completion(completed(1, first, committed, None));
+        assert_eq!(ack.acked, 0);
+        assert_eq!(ack.released, 0);
+        assert!(!ack.errors.is_empty());
+        assert!(ack.retry.is_empty());
+        assert_eq!(state.save_stats().dirty, 0);
+        assert_eq!(state.save_stats().in_flight, 2);
+    }
+}
+
+/// An omitted durable echo is a hard failure, including metadata's direct
+/// scheduler lane, which has no selected authority token.
+#[test]
+fn incomplete_completion_is_not_durable_success() {
+    for metadata in [false, true] {
+        let mut state = authority();
+        let first = if metadata {
+            vec![state.metadata_snapshot()]
+        } else {
+            select_family(&mut state, SaveKey::Hostiles, 1)
+        };
+        let ack = state.apply_completion(completed(1, first.clone(), vec![], None));
+        assert_eq!(ack.acked, 0);
+        assert_eq!(ack.released, 1);
+        assert!(!ack.errors.is_empty());
+        assert_eq!(ack.retry, first);
+        assert_eq!(state.save_stats().dirty, 0);
+        assert_eq!(state.save_stats().in_flight, usize::from(!metadata));
+    }
+}
+
+/// Acknowledgment records durability; it cannot rewrite the authority's
+/// current process-local metadata sequence or drain unrelated actor jobs.
+#[test]
+fn metadata_completion_keeps_current_revision_and_other_jobs() {
+    let mut state = authority();
+    let initial = state.metadata_snapshot().revision;
+    let actor = select_family(&mut state, SaveKey::Hostiles, 1);
+    let metadata = select_family(&mut state, SaveKey::Metadata, 9);
+    let ack = state.apply_completion(completed(1, metadata, vec![(SaveKey::Metadata, 9)], None));
+    assert_eq!(ack.acked, 1);
+    assert_eq!(ack.released, 0);
+    assert!(ack.errors.is_empty());
+    assert_eq!(state.metadata_snapshot().revision, initial);
+    assert_eq!(state.save_stats().in_flight, 1);
+    let direct = state.metadata_snapshot();
+    let ack = state.apply_completion(completed(
+        2,
+        vec![direct],
+        vec![(SaveKey::Metadata, initial)],
+        None,
+    ));
+    assert_eq!(ack.acked, 1);
+    assert!(ack.errors.is_empty());
+    assert_eq!(state.save_stats().in_flight, 1);
+    assert_eq!(
+        state
+            .apply_completion(completed(3, actor, vec![(SaveKey::Hostiles, 1)], None))
+            .acked,
+        1
+    );
 }
 
 /// Stages snapshots through the real authority dirty lane, commits them with
