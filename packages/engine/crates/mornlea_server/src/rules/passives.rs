@@ -1583,9 +1583,9 @@ fn turn_yaw_toward(current: f32, want: f32, max_step: f32) -> f32 {
 /// Outside the birth-chunk neighborhood when the Chebyshev chunk distance
 /// exceeds one (`outsideHomeNeighborhood`, `passive.go`).
 fn outside_home_neighborhood(home: BlockPos, position: [f32; 3]) -> bool {
-    let chunk = block_of(position);
-    let dx = i64::from(chunk.x() - home.x()).abs();
-    let dz = i64::from(chunk.z() - home.z()).abs();
+    let current_block = block_of(position);
+    let dx = (i64::from(current_block.x() >> 4) - i64::from(home.x() >> 4)).abs();
+    let dz = (i64::from(current_block.z() >> 4) - i64::from(home.z() >> 4)).abs();
     dx > 1 || dz > 1
 }
 

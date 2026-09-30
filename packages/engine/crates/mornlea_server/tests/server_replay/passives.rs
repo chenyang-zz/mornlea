@@ -469,6 +469,149 @@ fn wander_matches_go_heading_and_carried_shortest_arc() {
     }
 }
 
+fn assert_home_step(
+    home: BlockPos,
+    position: [f32; 3],
+    axis: usize,
+    direction: i32,
+    chunk: Option<i32>,
+) {
+    let yaw = match (axis, direction) {
+        (0, 1) => -1.5,
+        (0, -1) => 1.5,
+        (2, 1) => 3.0,
+        (2, -1) => -0.1,
+        _ => panic!("horizontal direction"),
+    };
+    let actor = passive_actor(41, position, yaw, 20, ActorLifecycle::Active);
+    let runtime = passive_runtime(41, passive_aux(home, 0, None, false));
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment(0)))
+        .expect("environment");
+    let x = position[0].floor() as i32;
+    let z = position[2].floor() as i32;
+    stage_room(&mut context, x - 4, x + 4, z - 4, z + 4, 4);
+    for x in x - 4..=x + 4 {
+        for z in z - 4..=z + 4 {
+            context.preload_block(observation(BlockPos::new(x, 0, z), DIRT));
+        }
+    }
+    context
+        .stage(RuleEffect::Actor(actor.clone()))
+        .expect("actor");
+    context
+        .stage(RuleEffect::Runtime(runtime.clone()))
+        .expect("runtime");
+    provider::run(&mut context, passive_call()).expect("home movement");
+    let next = context
+        .read()
+        .actor(passive_key(41))
+        .expect("actor")
+        .clone();
+    assert_eq!(context.read().runtime(passive_key(41)), Some(&runtime));
+    if let Some(chunk) = chunk {
+        let next_position = next.motion.position().get();
+        assert!(
+            (next_position[axis] - position[axis]) * direction as f32 > 0.0,
+            "accepted motion from {position:?}, home {home:?}"
+        );
+        assert!(horizontal_dist_sq(next_position, position) < 1.0);
+        assert_eq!((next_position[axis].floor() as i32) >> 4, chunk);
+        assert_eq!(next.key, actor.key);
+        assert_eq!(next.lifecycle, actor.lifecycle);
+        assert_eq!(next.dimension, actor.dimension);
+        assert_eq!(next.survival, actor.survival);
+        assert_eq!(next.look.pitch(), actor.look.pitch());
+        let ActorBody::Passive(body) = &next.body else {
+            panic!("passive body");
+        };
+        assert_eq!(body.position, next_position);
+        assert_eq!(body.velocity, next.motion.velocity().get());
+        assert_eq!(body.on_ground, next.motion.on_ground());
+        assert_eq!(body.yaw, next.look.yaw());
+        assert_eq!(body.health, actor.survival.health());
+    } else {
+        assert_eq!(next, actor, "rollback from {position:?}, home {home:?}");
+        assert_eq!(next.motion.velocity().get(), [0.0; 3]);
+    }
+}
+
+fn assert_home_axis(axis: usize) {
+    // Go `outsideHomeNeighborhood` permits a Chebyshev chunk distance of
+    // one. Signed floor/shift gives birth block -1 the birth chunk -1.
+    for (home_axis, current_axis, direction, chunk) in [
+        (0, 1.99, 1, Some(0)),
+        (0, 15.99, 1, Some(1)),
+        (0, 31.99, 1, None),
+        (0, -0.01, -1, Some(-1)),
+        (0, -15.99, -1, None),
+        (-1, -15.99, -1, Some(-2)),
+        (-1, -31.99, -1, None),
+        (-1, -0.01, 1, Some(0)),
+        (-1, 15.99, 1, None),
+    ] {
+        let mut home = [0, 1, 0];
+        home[axis] = home_axis;
+        let mut position = [0.5, 1.0, 0.5];
+        position[axis] = current_axis;
+        assert_home_step(
+            BlockPos::new(home[0], home[1], home[2]),
+            position,
+            axis,
+            direction,
+            chunk,
+        );
+    }
+}
+
+#[test]
+fn home_neighborhood_x_uses_signed_chunks() {
+    assert_home_axis(0);
+}
+
+#[test]
+fn home_neighborhood_z_uses_signed_chunks() {
+    assert_home_axis(2);
+}
+
+fn assert_far_home_axis(axis: usize, home_axis: i32, current_axis: f32, direction: i32) {
+    // Extreme saved home coordinates do not require an extreme physics grid:
+    // ordinary resident positions must safely roll back outside their home.
+    let mut home = [0, 1, 0];
+    home[axis] = home_axis;
+    let mut position = [0.5, 1.0, 0.5];
+    position[axis] = current_axis;
+    assert_home_step(
+        BlockPos::new(home[0], home[1], home[2]),
+        position,
+        axis,
+        direction,
+        None,
+    );
+}
+
+#[test]
+fn minimum_home_x_rolls_back_without_overflow() {
+    assert_far_home_axis(0, i32::MIN, 2.5, 1);
+}
+
+#[test]
+fn maximum_home_x_rolls_back_without_overflow() {
+    assert_far_home_axis(0, i32::MAX, -2.5, -1);
+}
+
+#[test]
+fn minimum_home_z_rolls_back_without_overflow() {
+    assert_far_home_axis(2, i32::MIN, 2.5, 1);
+}
+
+#[test]
+fn maximum_home_z_rolls_back_without_overflow() {
+    assert_far_home_axis(2, i32::MAX, -2.5, -1);
+}
+
 fn first_hit_id(seed: i64, tick: u64, from: u64) -> u64 {
     (from..)
         .find(|&id| graze_hit(seed, tick, id))
