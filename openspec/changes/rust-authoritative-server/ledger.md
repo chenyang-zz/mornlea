@@ -1434,3 +1434,19 @@ interpreter fixture only). Independent review approved with non-blocking
 observations only (environment re-derivation and saturation-hint convergence
 both documented by design). Ticks now remember; 3.7 adapter runs proceed.
 Architecture skill: no change.
+
+
+Real integration accepted from e4d5707d (isolated worker, tests-only) after
+a flake hunt with production consequences. The agent_process suite flaked
+~1/6 with fast Unavailable failures; deep diagnosis proved accepted MCP
+sockets inherit listener nonblocking mode, so early reads surfaced
+WouldBlock as bogus 503/400 — a real production race, not test load.
+Main fixed it in 92ba1b39 (restore blocking reads + slow-body regression
+test with negative control: fails pre-fix in 0.22s, passes post-fix) plus
+test serialization and poison tolerance. Post-fix: 6/6 suite and 2/2 full
+greens. 3.7 proofs (dual-transport parity, real DiskStore save/restart,
+78-row corpus with logical digests, real agent admission, three induced
+failures) all green with independent review approval. Remaining recorded
+follow-ups (mob disk seeding, chunk streaming, despawn projection) block
+3.8, not this node.
+Architecture skill: no change.
