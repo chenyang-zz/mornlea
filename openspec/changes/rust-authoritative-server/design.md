@@ -172,3 +172,8 @@ Bounded review fixes first preserve existing ownership: movement clones the curr
 ### Source-exact shot clock and transient retirement
 
 Verified Go hostile shard production uses executing authority tick, independently of calendar world time. The review correction in plan29 supersedes packet21's earlier world_time spread input; salt, float order and version remain unchanged. Session retirement prunes only transient sleep participation/anchors immediately, while durable respawn and latest-save/history ownership remain separate. Placement plant and torch support predicates follow current collision and farming source facts; body overlap and commit read bases retain separately qualified serial owners.
+
+
+### Source order for death and placement geometry
+
+Player death output rehearses candidate chunks in ring order, then inventory and armor slots within each candidate, retaining successful fixed-slot scratch state for later attempts before one compound publication. Placement player overlap uses the current Go target/default-form gate with a separate full-cell torch gate; it does not add new bed-head or door-upper collision rules. Exact private shapes, float order and refusal precedence are frozen in plan29.
