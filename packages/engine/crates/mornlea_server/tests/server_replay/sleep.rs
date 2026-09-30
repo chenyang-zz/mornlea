@@ -1154,13 +1154,12 @@ fn non_bed_target_is_silent_noop() {
     assert!(context.events().is_empty());
 }
 
-/// The checked S1 bound caps the record at eight bed rows
+/// The checked sleep record bound caps the record at eight bed rows
 /// (`SleepState::try_new` with the frozen `MAX_SLEEP_BEDS` bound): a record
 /// at the bound accepts a listed session's re-entry as a replace, so the row
-/// count never grows past the bound. An over-bound row is unreachable through
-/// real admission — admission caps at the same eight players, and session
-/// keys number 1..=players process-locally, so no ninth distinct key exists
-/// to mint — which leaves the replace row as the at-bound behavior.
+/// count never grows past the bound. Admission caps concurrent players, while
+/// session identities increase across retirement and replacement. A new key
+/// against a full retained record therefore has a separate atomic-refusal case.
 #[test]
 fn full_record_replaces_within_bound() {
     let sessions = mint_sessions(8);
@@ -1169,7 +1168,7 @@ fn full_record_replaces_within_bound() {
         .iter()
         .map(|session| (*session, Dimension::OVERWORLD, anchor))
         .collect();
-    let carried = SleepState::try_new(full, 0, None).expect("full record");
+    let carried = SleepState::try_new(full, 1234, Some(5678)).expect("full record");
     let mut state = authority();
     let mut context = harness_context(&mut state);
     context
@@ -1386,4 +1385,344 @@ fn night_entry_passes_transparent_cells() {
     .expect("a closed door is the silent non-bed hit");
     assert_eq!(outcome.0.applied, 0);
     assert!(outcome.1.beds.is_empty());
+}
+
+/// Refusals preserve all observable authority lanes, including the caller-owned
+/// sleep record and sleeping set that fixture snapshots do not carry.
+#[derive(Clone, Debug, PartialEq)]
+struct SleepEntryProbe {
+    state: mornlea_server::contracts::FixtureState,
+    environment: Option<EnvironmentState>,
+    record: SleepState,
+    sleeping: Vec<SessionKey>,
+    cells: Vec<Option<BlockObservation>>,
+    changes: Vec<BlockObservation>,
+    events: Vec<mornlea_domain::RoutedEvent>,
+}
+
+fn entry_probe(context: &TickContext<'_>, cells: &[BlockPos]) -> SleepEntryProbe {
+    SleepEntryProbe {
+        state: context.snapshot_state(expected_world(0)),
+        environment: context.read().environment().cloned(),
+        record: context.sleep_record().clone(),
+        sleeping: context.sleeping(),
+        cells: cells
+            .iter()
+            .map(|pos| context.read().observation(Dimension::OVERWORLD, *pos))
+            .collect(),
+        changes: context.changed_blocks(),
+        events: context.events().to_vec(),
+    }
+}
+
+/// Real admission can mint a ninth lifetime identity after retirement frees
+/// capacity. Until retained anchors are pruned by their owner, a full record
+/// refuses that new key without publishing any part of the attempted entry.
+#[test]
+fn replacement_session_full_record_refuses_without_effect() {
+    let mut state = authority();
+    let sessions: Vec<_> = (1..=8)
+        .map(|tag| {
+            state
+                .admit(admitted(tag, &format!("old-{tag}")), TransportKind::Memory)
+                .expect("old session")
+        })
+        .collect();
+    state
+        .retire(
+            sessions[0],
+            mornlea_server::contracts::CloseReason::Shutdown,
+        )
+        .expect("retire");
+    let ninth = state
+        .admit(admitted(9, "replacement"), TransportKind::Memory)
+        .expect("replacement session");
+    assert_eq!(ninth.get(), 9);
+    let foot = BlockPos::new(3, 1, 5);
+    let head = BlockPos::new(3, 1, 6);
+    let carried = SleepState::try_new(
+        sessions
+            .iter()
+            .map(|session| (*session, Dimension::OVERWORLD, foot))
+            .collect(),
+        1234,
+        Some(5678),
+    )
+    .expect("full carried record");
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment(
+            SETTLE_WORLD_TIME,
+            0,
+            WINTER_SOLSTICE_SEASON_OFFSET,
+        )))
+        .expect("environment");
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            ninth,
+            [3.5, 1.0, 9.5],
+            0.0,
+            0.0,
+        )))
+        .expect("actor");
+    let actor = mornlea_server::contracts::ActorKey::Player(ninth);
+    stage_controls(&mut context, actor, 0, 0, false, false, false, 0.0);
+    let mut inventory = mornlea_server::contracts::InventoryRecord::empty();
+    inventory.slots[0] = ItemStack {
+        item: 2,
+        count: 3,
+        durability: 0,
+    };
+    context.preload_inventory(actor, inventory);
+    context.set_sleep_record(carried.clone());
+    context.set_sleeping(vec![sessions[1]]);
+    stage_corridor(
+        &mut context,
+        3,
+        &[(3, 1, 5, BED_FOOT_SOUTH), (3, 1, 6, BED_HEAD_SOUTH)],
+    );
+    let before = entry_probe(&context, &[foot, head]);
+    let (yaw, pitch) = look_at_point([3.5, 2.62, 9.5], [3.5, 1.5, 5.5]);
+    assert!(matches!(
+        provider::enter(
+            &mut context,
+            &carried,
+            &bed_interaction(ninth, yaw, pitch, 1)
+        ),
+        Err(ServerError::InvalidInput { field: "sleep" })
+    ));
+    assert_eq!(entry_probe(&context, &[foot, head]), before);
+    assert_eq!(carried, before.record);
+}
+
+/// Float spacing near the upper integer edge leaves the closest lower origin
+/// 127 cells away. A longer admitted ray and observed air corridor reach the
+/// exact target without fabricating a kernel hit or changing production geometry.
+fn stage_edge_scene(
+    context: &mut TickContext<'_>,
+    session: SessionKey,
+    target: BlockPos,
+    block: u16,
+) -> AuthorityInteraction {
+    let mut baseline = environment(SETTLE_WORLD_TIME, 0, WINTER_SOLSTICE_SEASON_OFFSET);
+    let mut position = [target.x() as f32, 1.0, target.z() as f32];
+    let mut yaw = 0.0;
+    if target.x() == i32::MAX || target.z() == i32::MAX {
+        baseline.tunables = RuleTunables::try_new(
+            RuleTunables::source_defaults().physics(),
+            100,
+            40,
+            20,
+            80,
+            18,
+            4000,
+            32,
+            1600,
+            200,
+            5,
+            3,
+            50,
+            130.0,
+            1.62,
+            10,
+            40,
+            6000,
+            1.25,
+        )
+        .expect("edge reach");
+        let origin = i32::MAX - 127;
+        if target.x() == i32::MAX {
+            position = [origin as f32, 1.0, 5.5];
+            yaw = -std::f32::consts::FRAC_PI_2;
+            for x in origin..i32::MAX {
+                context.preload_block(observation(BlockPos::new(x, 2, 5), AIR));
+            }
+        } else {
+            position = [5.5, 1.0, origin as f32];
+            yaw = std::f32::consts::PI;
+            for z in origin..i32::MAX {
+                context.preload_block(observation(BlockPos::new(5, 2, z), AIR));
+            }
+        }
+    }
+    context
+        .stage(RuleEffect::Environment(baseline.clone()))
+        .expect("environment");
+    context
+        .stage(RuleEffect::Actor(player_actor(session, position, yaw, 0.0)))
+        .expect("actor");
+    stage_controls(
+        context,
+        mornlea_server::contracts::ActorKey::Player(session),
+        0,
+        0,
+        false,
+        false,
+        false,
+        yaw,
+    );
+    context.preload_block(observation(target, block));
+    use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
+    let direction = mornlea_server::core::interaction::look_direction(yaw, 0.0);
+    let direction =
+        mornlea_server::core::interaction::normalized_direction(direction).expect("direction");
+    let mut ray = RayCursor::try_new(Ray {
+        origin: [
+            position[0],
+            position[1] + baseline.tunables.eye_height(),
+            position[2],
+        ],
+        direction,
+        maximum: baseline.tunables.interaction_reach(),
+    })
+    .expect("certified ray");
+    let actual_hit = 'walk: loop {
+        let batch = mornlea_engine::native::raycast::NativeRaycast
+            .next_batch(&mut ray)
+            .expect("ray batch");
+        for record in batch.records() {
+            let pos = BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
+            let observed = context
+                .read()
+                .block(Dimension::OVERWORLD, pos)
+                .expect("observed ray corridor");
+            if observed != AIR {
+                break 'walk pos;
+            }
+        }
+        assert!(
+            !batch.is_done(),
+            "the actual ray must reach the boundary bed"
+        );
+    };
+    assert_eq!(actual_hit, target);
+    bed_interaction(session, yaw, 0.0, 1)
+}
+
+/// Each directional overflow is reached through an actual observed bed hit.
+/// Upper-edge hits use a representable origin and a fully observed corridor;
+/// increasing the fixture's admitted reach keeps ray geometry real despite
+/// float spacing near the integer limit. Partner refusal changes no authority lane.
+#[test]
+fn bed_partner_coordinate_overflow_refuses_without_effect() {
+    let mut failed_refusals = Vec::new();
+    for (target, block) in [
+        (BlockPos::new(i32::MIN, 2, 5), 77),
+        (BlockPos::new(i32::MAX, 2, 5), 79),
+        (BlockPos::new(i32::MAX, 2, 5), 81),
+        (BlockPos::new(i32::MIN, 2, 5), 83),
+        (BlockPos::new(5, 2, i32::MIN), 78),
+        (BlockPos::new(5, 2, i32::MAX), 76),
+        (BlockPos::new(5, 2, i32::MAX), 82),
+        (BlockPos::new(5, 2, i32::MIN), 80),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "edge"), TransportKind::Memory)
+            .expect("session");
+        let mut context = harness_context(&mut state);
+        let interaction = stage_edge_scene(&mut context, session, target, block);
+
+        let carried = SleepState::try_new(vec![], 1234, Some(5678)).expect("carried record");
+        context.set_sleep_record(carried.clone());
+        context.set_sleeping(vec![session]);
+        let before = entry_probe(&context, &[target]);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            provider::enter(&mut context, &carried, &interaction)
+        }));
+        if !matches!(
+            outcome,
+            Ok(Err(ServerError::InvalidInput { field: "sleep" }))
+        ) {
+            failed_refusals.push(format!("target {target:?}, block {block}: {outcome:?}"));
+        }
+        assert_eq!(
+            entry_probe(&context, &[target]),
+            before,
+            "target {target:?}, block {block}"
+        );
+    }
+    assert!(
+        failed_refusals.is_empty(),
+        "expected atomic geometry refusals: {failed_refusals:?}"
+    );
+}
+
+/// Opposite-facing halves at the same coordinate edges have representable
+/// partners. They retain source respawn-foot resolution and caller-owned commit.
+#[test]
+fn bed_partner_coordinate_edges_keep_representable_pairs() {
+    for (target, block, foot) in [
+        (
+            BlockPos::new(i32::MIN, 2, 5),
+            79,
+            BlockPos::new(i32::MIN, 2, 5),
+        ),
+        (
+            BlockPos::new(i32::MAX, 2, 5),
+            77,
+            BlockPos::new(i32::MAX, 2, 5),
+        ),
+        (
+            BlockPos::new(i32::MIN, 2, 5),
+            81,
+            BlockPos::new(i32::MIN + 1, 2, 5),
+        ),
+        (
+            BlockPos::new(i32::MAX, 2, 5),
+            83,
+            BlockPos::new(i32::MAX - 1, 2, 5),
+        ),
+        (
+            BlockPos::new(5, 2, i32::MIN),
+            76,
+            BlockPos::new(5, 2, i32::MIN),
+        ),
+        (
+            BlockPos::new(5, 2, i32::MAX),
+            78,
+            BlockPos::new(5, 2, i32::MAX),
+        ),
+        (
+            BlockPos::new(5, 2, i32::MIN),
+            82,
+            BlockPos::new(5, 2, i32::MIN + 1),
+        ),
+        (
+            BlockPos::new(5, 2, i32::MAX),
+            80,
+            BlockPos::new(5, 2, i32::MAX - 1),
+        ),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "edge"), TransportKind::Memory)
+            .expect("session");
+        let mut context = harness_context(&mut state);
+        let interaction = stage_edge_scene(&mut context, session, target, block);
+        let carried = SleepState::try_new(vec![], 1234, Some(5678)).expect("carried record");
+        context.set_sleep_record(carried.clone());
+        let (report, updated) = provider::enter(&mut context, &carried, &interaction)
+            .unwrap_or_else(|error| panic!("target {target:?}, block {block}: {error:?}"));
+        assert_eq!(report.applied, 1);
+        assert_eq!(updated.beds, vec![(session, Dimension::OVERWORLD, foot)]);
+        assert_eq!(updated.day_phase_offset, 1234);
+        assert_eq!(updated.pending_offset, Some(5678));
+        assert_eq!(
+            context.sleep_record(),
+            &carried,
+            "entry returns a record for its caller to commit"
+        );
+        assert_eq!(
+            context
+                .read()
+                .runtime(mornlea_server::contracts::ActorKey::Player(session))
+                .expect("runtime")
+                .aux,
+            ActorAux::Player {
+                respawn: Some((Dimension::OVERWORLD, foot)),
+                workbench: None
+            }
+        );
+    }
 }

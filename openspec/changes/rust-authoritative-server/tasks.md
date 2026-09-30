@@ -107,7 +107,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [ ] 3.9p4 Restore sneak-edge support probes and thick-snow speed scaling.
 - [x] 3.9t0 Expose the accepted per-tick survival, eating and furnace tuning snapshot.
 - [x] 3.9t1e Consume configured eating duration at the settlement boundary.
-- [ ] 3.9s1 Keep sleep refusals atomic and check bed partner coordinates.
+- [x] 3.9s1 Keep sleep refusals atomic and check bed partner coordinates.
 - [ ] 3.9s2 Prune disconnected sleep anchors before admitting replacement sessions.
 - [x] 3.9w1 Enforce source sneak-door gates after target classification.
 - [ ] 3.9q1 Synchronize daylight burn health before hostile death settlement.

@@ -204,7 +204,8 @@ pub fn enter(
         return Err(REFUSAL);
     }
     let Some((foot, _head)) = bed_half_positions(hit.pos, hit.block) else {
-        // Defensive: `is_bed` already guarantees the half resolution.
+        // A registered bed form may name a partner outside the coordinate
+        // range. Refuse before publishing either runtime or carried state.
         return Err(REFUSAL);
     };
     // The respawn anchor lands on the runtime lane the survival death path
@@ -220,10 +221,6 @@ pub fn enter(
         respawn: Some((dimension, foot)),
         workbench: bench,
     };
-    ctx.stage(RuleEffect::Runtime(runtime))
-        .map_err(|_| ServerError::Internal {
-            invariant: "sleep respawn staging",
-        })?;
     // The record stores the respawn anchor keyed by session, replacing the
     // session's own row and never touching the other players' anchors.
     let mut beds = record.beds.clone();
@@ -236,6 +233,12 @@ pub fn enter(
     }
     let updated = SleepState::try_new(beds, record.day_phase_offset, record.pending_offset)
         .map_err(|_| REFUSAL)?;
+    // The caller owns the returned record's commit. Validate it before
+    // publishing runtime so a capacity refusal cannot leave a respawn anchor.
+    ctx.stage(RuleEffect::Runtime(runtime))
+        .map_err(|_| ServerError::Internal {
+            invariant: "sleep respawn staging",
+        })?;
     Ok((
         PhaseReport {
             examined: 1,
@@ -468,14 +471,18 @@ fn bed_dir(block: u16) -> Option<u8> {
 
 /// Head-cell neighbor of a foot cell in the bed's facing
 /// (`core.BedHeadNeighbor`): south +Z, west -X, north -Z, east +X.
-fn bed_head_neighbor(foot: BlockPos, dir: u8) -> BlockPos {
+fn bed_head_neighbor(foot: BlockPos, dir: u8) -> Option<BlockPos> {
     let (dx, dz) = match dir {
         0 => (0, 1),
         1 => (-1, 0),
         2 => (0, -1),
         _ => (1, 0),
     };
-    BlockPos::new(foot.x() + dx, foot.y(), foot.z() + dz)
+    Some(BlockPos::new(
+        foot.x().checked_add(dx)?,
+        foot.y(),
+        foot.z().checked_add(dz)?,
+    ))
 }
 
 /// Resolves the (foot, head) pair of a bed hit (`bedHalfPositions`,
@@ -484,7 +491,7 @@ fn bed_head_neighbor(foot: BlockPos, dir: u8) -> BlockPos {
 fn bed_half_positions(target: BlockPos, block: u16) -> Option<(BlockPos, BlockPos)> {
     let dir = bed_dir(block)?;
     if is_bed_foot(block) {
-        return Some((target, bed_head_neighbor(target, dir)));
+        return Some((target, bed_head_neighbor(target, dir)?));
     }
     let (dx, dz) = match dir {
         0 => (0, -1),
@@ -492,7 +499,11 @@ fn bed_half_positions(target: BlockPos, block: u16) -> Option<(BlockPos, BlockPo
         2 => (0, 1),
         _ => (-1, 0),
     };
-    let foot = BlockPos::new(target.x() + dx, target.y(), target.z() + dz);
+    let foot = BlockPos::new(
+        target.x().checked_add(dx)?,
+        target.y(),
+        target.z().checked_add(dz)?,
+    );
     Some((foot, target))
 }
 
