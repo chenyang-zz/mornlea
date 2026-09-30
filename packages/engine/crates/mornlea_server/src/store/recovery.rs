@@ -9,7 +9,8 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const IDENTITY: &str = ".mcgo-world-backup-v1.json";
+/// Existing Go backup identity; both runtimes must recognize the same snapshot.
+pub const BACKUP_IDENTITY: &str = ".mcgo-world-backup-v1.json";
 const IDENTITY_LIMIT: u64 = 4096;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -79,7 +80,11 @@ pub(crate) fn backup(
                 field: "backup_identity",
             })?;
         identity_bytes.push(b'\n');
-        write_file(&temporary.join(IDENTITY), &identity_bytes, io.as_mut())?;
+        write_file(
+            &temporary.join(BACKUP_IDENTITY),
+            &identity_bytes,
+            io.as_mut(),
+        )?;
         let root_permissions = fs::metadata(&source)
             .map_err(|error| io_error(Operation::Load, error))?
             .permissions();
@@ -179,7 +184,7 @@ fn target_matches(target: &Path, want: &Value, io: &mut dyn DiskIo) -> Result<bo
             field: "backup_destination",
         });
     }
-    let path = target.join(IDENTITY);
+    let path = target.join(BACKUP_IDENTITY);
     let info = fs::symlink_metadata(&path).map_err(|error| io_error(Operation::Load, error))?;
     if !info.is_file() || info.file_type().is_symlink() || info.len() > IDENTITY_LIMIT {
         return Err(ServerError::InvalidInput {
@@ -258,7 +263,7 @@ fn copy_tree(
                 field: "backup_source",
             });
         }
-        if (source == root && (name_text == "world.lock" || name_text == IDENTITY))
+        if (source == root && (name_text == "world.lock" || name_text == BACKUP_IDENTITY))
             || temporary_name(&name_text)
         {
             continue;

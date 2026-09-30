@@ -33,7 +33,7 @@ const LOCK_BASENAME: &str = "world.lock";
 /// the script adopts must reproduce the record name its backup verification
 /// checks, while assertion-side discovery stays suffix-based through
 /// `backup_identity_name`.
-const BACKUP_IDENTITY_BASENAME: &str = ".mcgo-world-backup-v1.json";
+use mornlea_server::store::recovery::BACKUP_IDENTITY as BACKUP_IDENTITY_BASENAME;
 
 /// Discovers the named-backup identity record inside a backup directory by
 /// its stable suffix and proves exactly one record exists.

@@ -26,8 +26,8 @@ import (
 
 const (
 	modulePath                       = "github.com/channing771/mornlea"
-	expectedLegacyIdentityAllowances = 41
-	expectedLegacyIdentityMatches    = 45
+	expectedLegacyIdentityAllowances = 42
+	expectedLegacyIdentityMatches    = 46
 )
 
 var (
@@ -80,6 +80,8 @@ type legacyIdentityAllowance struct {
 }
 
 var legacyIdentityAllowances = []legacyIdentityAllowance{
+	// The Rust store shares the existing on-disk backup identity with Go.
+	{"packages/engine/crates/mornlea_server/src/store/recovery.rs", legacyBackupIdentity, "BACKUP_IDENTITY", 1},
 	{"packages/shared/config/config.go", legacyDataDirectory, "defaultPaths", 1},
 	{"packages/shared/config/migration_test.go", legacyDataDirectory, "TestLoadDefaultUsesMornleaCurrentAndMinecraftGoLegacy", 1},
 	{"packages/shared/config/migration_test.go", legacyDataDirectory, "TestLoadDefaultPrefersExistingMornleaConfig", 1},
@@ -203,7 +205,7 @@ func TestMornleaCurrentIdentity(t *testing.T) {
 		// 子树）；存在才扫，统一扫描会让只建一侧的 mutation 误报「身份扫描根
 		// 不存在」。cmd/internal 已随根模块解散退役，mutation 的落点改用
 		// packages/tools 子树。
-		for _, relative := range []string{"packages/tools", "packages/client", "packages/server"} {
+		for _, relative := range []string{"packages/tools", "packages/client", "packages/server", "packages/engine/crates"} {
 			if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(relative))); err == nil {
 				scanCurrentIdentityRoot(t, root, relative, actual, goScanner)
 			}
@@ -501,6 +503,9 @@ func scanCurrentIdentityFile(t *testing.T, root, path string, actual []int, goSc
 		goScanner.directories[filepath.Dir(relative)] = true
 	}
 
+	if filepath.Ext(path) == ".rs" {
+		literals = parseRustCompatibilityConstants(source)
+	}
 	for _, forbidden := range forbiddenCurrentIdentity {
 		if bytes.Contains(source, []byte(forbidden)) {
 			t.Errorf("%s 包含禁止的当前技术身份 %q", relative, forbidden)
@@ -986,4 +991,54 @@ func containsLegacyIdentity(value string) bool {
 		}
 	}
 	return legacyIdentityPattern.MatchString(value)
+}
+
+// Rust compatibility identities are admitted only as a complete named const
+// declaration before any string or block comment. This deliberately narrow
+// grammar cannot grant an allowance to text inside another source construct.
+func parseRustCompatibilityConstants(source []byte) []sourceStringLiteral {
+	pattern := regexp.MustCompile(`(?m)^(?:pub )?const ([A-Z][A-Z_0-9]*): &str = ("[^"\\\n]*");$`)
+	var literals []sourceStringLiteral
+	for _, match := range pattern.FindAllSubmatchIndex(source, -1) {
+		prefix := source[:match[0]]
+		if bytes.Contains(prefix, []byte("/*")) || bytes.Contains(prefix, []byte{'"'}) {
+			continue
+		}
+		value, err := strconv.Unquote(string(source[match[4]:match[5]]))
+		if err != nil {
+			continue
+		}
+		literals = append(literals, sourceStringLiteral{
+			value: value, owner: string(source[match[2]:match[3]]),
+			start: match[4], end: match[5], canonical: true,
+		})
+	}
+	return literals
+}
+
+func TestRustCompatibilityIdentityLiterals(t *testing.T) {
+	literal := strconv.Quote(legacyBackupIdentity)
+	for _, test := range []struct {
+		name   string
+		source string
+		want   int
+	}{
+		{"canonical", "pub const BACKUP_IDENTITY: &str = " + literal + ";\n", 1},
+		{"line comment", "// const BACKUP_IDENTITY: &str = " + literal + ";\n", 0},
+		{"block comment", "/*\npub const BACKUP_IDENTITY: &str = " + literal + ";\n*/", 0},
+		{"raw body", "let text = r#\"\npub const BACKUP_IDENTITY: &str = " + literal + ";\n\"#;", 0},
+		{"other expression", "let value = " + literal + ";\n", 0},
+		{"raw string", `const BACKUP_IDENTITY: &str = r` + literal + ";\n", 0},
+		{"computed", `const BACKUP_IDENTITY: &str = concat!(".mc", "go-world-backup-v1.json");` + "\n", 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := parseRustCompatibilityConstants([]byte(test.source))
+			if len(got) != test.want {
+				t.Fatalf("literal count %d, want %d", len(got), test.want)
+			}
+			if test.want == 1 && (got[0].owner != "BACKUP_IDENTITY" || got[0].value != legacyBackupIdentity) {
+				t.Fatal("compatibility owner or bytes changed")
+			}
+		})
+	}
 }

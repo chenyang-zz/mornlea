@@ -137,7 +137,7 @@ fn terrain_with(origin: BlockPos, blocks: &[(BlockPos, u16)], height: i16) -> Sn
 
 /// Base snapshot both golden comparisons build on: issuer `9999…` at
 /// `(4.5, 64, -1.5)` looking at `(8, 63, -2)`, companion `6666…` at
-/// `(5.5, 64, -1.5)` with status `规划中`, world time 1200, one revision.
+/// `(5.5, 64, -1.5)` with the planning-status fixture, world time 1200, one revision.
 fn base_snapshot(
     instruction: &str,
     exposed: Vec<SnapshotBlock>,

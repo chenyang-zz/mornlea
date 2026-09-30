@@ -849,7 +849,11 @@ fn failed_backup_parent_sync_leaves_reusable_complete_target() {
     state.lock().unwrap().0 = true;
     assert!(disk.backup(&target, &IoCancellation::new()).is_err());
     assert_eq!(fs::read(target.join("extra.dat")).unwrap(), b"complete");
-    assert!(target.join(".mcgo-world-backup-v1.json").exists());
+    assert!(
+        target
+            .join(mornlea_server::store::recovery::BACKUP_IDENTITY)
+            .exists()
+    );
     disk.backup(&target, &IoCancellation::new()).unwrap();
     fs::remove_dir_all(target).unwrap();
     disk.close().unwrap();
@@ -1059,7 +1063,7 @@ fn backup_wrong_identity_is_unchanged() {
         NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&target).unwrap();
-    let identity = target.join(".mcgo-world-backup-v1.json");
+    let identity = target.join(mornlea_server::store::recovery::BACKUP_IDENTITY);
     let wrong = b"{\"source\":\"wrong\",\"seed\":13,\"migration_version\":1}\n";
     fs::write(&identity, wrong).unwrap();
     assert!(disk.backup(&target, &IoCancellation::new()).is_err());
