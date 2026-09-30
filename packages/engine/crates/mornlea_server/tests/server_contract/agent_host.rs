@@ -9,7 +9,7 @@
 //! deterministic loopback server; the rest use a scripted `AgentHandle`
 //! double with the real snapshot registry.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{
@@ -269,6 +269,9 @@ struct ScriptAgent {
     polls: Mutex<VecDeque<AgentPoll>>,
     submitted: Mutex<Vec<AgentRequest>>,
     cancelled: Mutex<Vec<AgentRequestId>>,
+    terminals: BTreeMap<AgentRequestId, AgentPoll>,
+    refuse_retirement: BTreeSet<AgentRequestId>,
+    pending_cancels: bool,
 }
 
 impl ScriptAgent {
@@ -277,6 +280,9 @@ impl ScriptAgent {
             polls: Mutex::new(VecDeque::new()),
             submitted: Mutex::new(Vec::new()),
             cancelled: Mutex::new(Vec::new()),
+            terminals: BTreeMap::new(),
+            refuse_retirement: BTreeSet::new(),
+            pending_cancels: false,
         }
     }
 
@@ -319,7 +325,12 @@ impl AgentHandle for ScriptAgent {
     }
 
     fn poll(&mut self, id: AgentRequestId) -> AgentPoll {
-        let _ = id;
+        if let Some(poll) = self.terminals.get(&id) {
+            return poll.clone();
+        }
+        if self.pending_cancels {
+            return AgentPoll::Pending;
+        }
         self.polls
             .lock()
             .unwrap()
@@ -328,6 +339,11 @@ impl AgentHandle for ScriptAgent {
     }
 
     fn cancel(&mut self, id: AgentRequestId, _deadline: Deadline) -> Result<(), ServerError> {
+        if self.refuse_retirement.contains(&id) {
+            return Err(ServerError::Timeout {
+                operation: mornlea_server::contracts::Operation::AgentRpc,
+            });
+        }
         self.cancelled.lock().unwrap().push(id);
         Ok(())
     }
@@ -380,115 +396,61 @@ fn plan_dispatch(request_tag: u8, run_tag: u8, source_tick: u64) -> PlanDispatch
 /// the host still holds the companion, installs the fresh outcome, and
 /// emits nothing for the stale one.
 #[test]
-fn wrong_attempt_does_not_clear_gate() {
-    let (_start, clock) = StepClock::start();
+fn invalid_terminal_releases_only_its_current_gate() {
+    let (_, clock) = StepClock::start();
     let mut script = ScriptAgent::new();
     let mut snapshots = registry(&clock);
     let mut host = PlanHost::new();
-
-    let first = host
-        .dispatch_plan(
-            &mut script,
-            &mut snapshots,
-            &*clock,
-            plan_dispatch(40, 41, 100),
-        )
-        .expect("first dispatch admits");
-    assert_eq!(first.attempt, 1);
-    assert!(host.plan_inflight(companion()));
-
+    host.dispatch_plan(
+        &mut script,
+        &mut snapshots,
+        &*clock,
+        plan_dispatch(40, 41, 100),
+    )
+    .unwrap();
+    let mut other = plan_dispatch(42, 43, 100);
+    other.companion = companion_at(1);
+    other.snapshot.companion.companion_id = other.companion;
+    host.dispatch_plan(&mut script, &mut snapshots, &*clock, other)
+        .unwrap();
     let request = plan_request_at(&script, 0);
-    script.push(AgentPoll::Completed(echo_plan(
-        &request,
-        mine_target_plan(),
-    )));
-    let drained = host
-        .drain_outcomes(&mut script, &mut snapshots, &*clock)
-        .expect("drain polls");
-    assert_eq!(drained.completed, 1);
-    let installed = host.install(100, 9, &matching_world(100));
-    assert_eq!(installed.installed, 1);
-    assert_eq!(installed.envelopes.len(), 1);
-    assert!(installed.rejected.is_empty());
+    let mut foreign = request.clone();
+    foreign.leased.base.request_id = AgentRequestId::try_from_bytes(uuid(99)).unwrap();
+    script.terminals.insert(
+        request.leased.base.request_id,
+        AgentPoll::Completed(echo_plan(&foreign, mine_target_plan())),
+    );
+    assert_eq!(
+        host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+            .unwrap()
+            .failed,
+        1
+    );
     assert!(!host.plan_inflight(companion()));
-
-    let second = host
-        .dispatch_plan(
-            &mut script,
-            &mut snapshots,
-            &*clock,
-            plan_dispatch(42, 43, 101),
-        )
-        .expect("second dispatch admits");
-    assert_eq!(second.attempt, 2);
-
-    // The previous attempt answers late with its own request identity: the
-    // response echoes the first request, not the polled second one.
-    script.push(AgentPoll::Completed(echo_plan(
-        &request,
-        mine_target_plan(),
-    )));
-    let drained = host
-        .drain_outcomes(&mut script, &mut snapshots, &*clock)
-        .expect("stale drain polls");
-    assert_eq!(drained.completed, 0);
-    assert_eq!(drained.failed, 0);
-    let installed = host.install(101, 9, &matching_world(101));
-    assert!(installed.envelopes.is_empty());
-    assert!(installed.rejected.is_empty());
-    assert!(
-        host.plan_inflight(companion()),
-        "stale previous-attempt outcome cleared the active gate"
+    assert!(host.plan_inflight(companion_at(1)));
+    assert!(script.cancelled().contains(&request.leased.base.request_id));
+    host.dispatch_plan(
+        &mut script,
+        &mut snapshots,
+        &*clock,
+        plan_dispatch(44, 45, 101),
+    )
+    .unwrap();
+    let request = plan_request_at(&script, 3);
+    script.terminals.insert(
+        request.leased.base.request_id,
+        AgentPoll::Completed(echo_plan_generation(&request, mine_target_plan(), 8)),
     );
-
-    let second_request = plan_request_at(&script, 1);
     assert_eq!(
-        second_request.leased.base.request_id, second.request_id,
-        "second dispatch kept its own request identity"
+        host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+            .unwrap()
+            .completed,
+        1
     );
-    assert!(
-        script.cancelled().is_empty(),
-        "stale outcome sends no CancelRun"
-    );
-
-    // A response routed to the new request but naming another generation
-    // queues at drain, then fences at install with the gate still held.
-    script.push(AgentPoll::Completed(echo_plan_generation(
-        &second_request,
-        mine_target_plan(),
-        8,
-    )));
-    let drained = host
-        .drain_outcomes(&mut script, &mut snapshots, &*clock)
-        .expect("mismatched drain polls");
-    assert_eq!(drained.completed, 1);
     let installed = host.install(101, 9, &matching_world(101));
-    assert!(installed.envelopes.is_empty());
-    assert_eq!(
-        installed.rejected,
-        vec![mornlea_server::agent::host::InstallRejection {
-            companion: companion(),
-            attempt: 2,
-            reason: InstallReject::StaleIdentities,
-        }]
-    );
-    assert!(
-        host.plan_inflight(companion()),
-        "mismatched outcome cleared the active gate"
-    );
-
-    // The true outcome still installs afterwards.
-    script.push(AgentPoll::Completed(echo_plan(
-        &second_request,
-        mine_target_plan(),
-    )));
-    let drained = host
-        .drain_outcomes(&mut script, &mut snapshots, &*clock)
-        .expect("true drain polls");
-    assert_eq!(drained.completed, 1);
-    let installed = host.install(102, 9, &matching_world(102));
-    assert_eq!(installed.installed, 1);
-    assert_eq!(installed.envelopes.len(), 1);
+    assert_eq!(installed.rejected[0].reason, InstallReject::StaleIdentities);
+    assert!(!host.plan_inflight(companion()));
+    assert!(host.plan_inflight(companion_at(1)));
 }
 
 /// The tick install revalidates the arriving plan against the current world:
@@ -661,6 +623,7 @@ fn four_then_five_no_world_effect() {
 struct CountingSnapshots {
     inner: SnapshotRegistry,
     registers: usize,
+    completes: usize,
 }
 
 impl CountingSnapshots {
@@ -668,6 +631,7 @@ impl CountingSnapshots {
         Self {
             inner,
             registers: 0,
+            completes: 0,
         }
     }
 
@@ -695,6 +659,7 @@ impl SnapshotPort for CountingSnapshots {
     }
 
     fn complete(&mut self, id: SnapshotId) -> Result<(), ServerError> {
+        self.completes += 1;
         self.inner.complete(id)
     }
 
@@ -1013,4 +978,279 @@ fn dialogue_persona_bound_and_skip() {
         })
     );
     assert_eq!(script.submitted().len(), 1, "refused dialogue submitted");
+}
+
+#[test]
+fn repeatable_plan_terminal_transfers_and_retires_once() {
+    let (_, clock) = StepClock::start();
+    let mut script = ScriptAgent::new();
+    let mut snapshots = CountingSnapshots::new(registry(&clock));
+    let mut host = PlanHost::new();
+    host.dispatch_plan(
+        &mut script,
+        &mut snapshots,
+        &*clock,
+        plan_dispatch(40, 41, 100),
+    )
+    .unwrap();
+    let request = plan_request_at(&script, 0);
+    script.terminals.insert(
+        request.leased.base.request_id,
+        AgentPoll::Completed(echo_plan(&request, mine_target_plan())),
+    );
+    for expected in [1, 0, 0] {
+        assert_eq!(
+            host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+                .unwrap()
+                .completed,
+            expected
+        );
+    }
+    assert_eq!(host.outcome_len(), 1);
+    assert_eq!(snapshots.completes, 1);
+    assert_eq!(script.cancelled(), vec![request.leased.base.request_id]);
+    assert_eq!(host.install(100, 9, &matching_world(100)).installed, 1);
+}
+
+fn dialogue_dispatch(tag: u8) -> DialogueDispatch {
+    DialogueDispatch {
+        companion: companion(),
+        generation: 7,
+        memory_epoch: 1,
+        request_id: AgentRequestId::try_from_bytes(uuid(tag)).unwrap(),
+        run_id: RunId::try_from_bytes(uuid(tag + 1)).unwrap(),
+        client: ClientInstanceId::try_from_bytes(uuid(2)).unwrap(),
+        namespace: NamespaceId::try_from_bytes(uuid(3)).unwrap(),
+        lease: lease(),
+        lease_fence: 9,
+        persona: "hello".to_owned(),
+        fact: DialogueFact::Start,
+        environment: DialogueEnvironment {
+            exposed_blocks: Vec::new(),
+            heights: Vec::new(),
+        },
+        terminal: false,
+        deadline_unix_ms: 1_800_000_000_000,
+    }
+}
+
+#[test]
+fn repeatable_dialogue_terminal_transfers_and_retires_once() {
+    let (_, clock) = StepClock::start();
+    let mut script = ScriptAgent::new();
+    let mut snapshots = registry(&clock);
+    let mut host = PlanHost::new();
+    host.dispatch_dialogue(&mut script, &*clock, dialogue_dispatch(60))
+        .unwrap();
+    let AgentRequest::Dialogue(request) = script.submitted()[0].clone() else {
+        panic!("dialogue")
+    };
+    script.terminals.insert(
+        request.leased.base.request_id,
+        AgentPoll::Completed(AgentResponse::Dialogue(
+            mornlea_server::contracts::DialogueResponse {
+                leased: request.leased.clone(),
+                run_id: request.run_id,
+                companion_id: request.companion_id,
+                generation: request.generation,
+                memory_epoch: request.memory_epoch,
+                line: "hello".to_owned(),
+                memory_proposal: None,
+            },
+        )),
+    );
+    for expected in [1, 0, 0] {
+        assert_eq!(
+            host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+                .unwrap()
+                .completed,
+            expected
+        );
+    }
+    assert_eq!(script.cancelled(), vec![request.leased.base.request_id]);
+    assert_eq!(host.install(100, 9, &matching_world(100)).lines.len(), 1);
+}
+
+#[test]
+fn host_retirement_refusal_bounds_admission_then_reaps() {
+    let (_, clock) = StepClock::start();
+    let mut script = ScriptAgent::new();
+    let mut snapshots = registry(&clock);
+    let mut host = PlanHost::new();
+    for index in 0..64u8 {
+        let dispatch = dialogue_dispatch(100 + index);
+        let id = dispatch.request_id;
+        host.dispatch_dialogue(&mut script, &*clock, dispatch)
+            .unwrap();
+        script
+            .terminals
+            .insert(id, AgentPoll::Failed(ServerError::Disconnected));
+        script.refuse_retirement.insert(id);
+        // Independent cleanup finishes; only the original HTTP retirement refuses.
+        script.push(AgentPoll::Failed(ServerError::Disconnected));
+        host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+            .unwrap();
+        assert_eq!(host.take_failures().len(), 1);
+    }
+    let before = script.submitted().len();
+    assert_eq!(
+        host.dispatch_dialogue(&mut script, &*clock, dialogue_dispatch(200)),
+        Err(ServerError::Capacity {
+            resource: Resource::AgentRuns,
+            limit: 64,
+            observed: 65
+        })
+    );
+    assert_eq!(script.submitted().len(), before);
+    script.refuse_retirement.clear();
+    host.dispatch_dialogue(&mut script, &*clock, dialogue_dispatch(200))
+        .unwrap();
+    for id in script.terminals.keys() {
+        assert_eq!(
+            script
+                .cancelled()
+                .iter()
+                .filter(|retired| *retired == id)
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn pending_cancel_run_keeps_ownership_until_later_retirement() {
+    let (_, clock) = StepClock::start();
+    let mut script = ScriptAgent::new();
+    let mut snapshots = registry(&clock);
+    let mut host = PlanHost::new();
+    host.dispatch_plan(
+        &mut script,
+        &mut snapshots,
+        &*clock,
+        plan_dispatch(40, 41, 100),
+    )
+    .unwrap();
+    let request = plan_request_at(&script, 0);
+    script.terminals.insert(
+        request.leased.base.request_id,
+        AgentPoll::Failed(ServerError::Disconnected),
+    );
+    script.pending_cancels = true;
+    let started = Instant::now();
+    host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_millis(250));
+    let AgentRequest::Cancel(cancel) = script.submitted()[1].clone() else {
+        panic!("cleanup")
+    };
+    assert!(!script.cancelled().contains(&cancel.leased.base.request_id));
+    script.terminals.insert(
+        cancel.leased.base.request_id,
+        AgentPoll::Completed(AgentResponse::Cancel(CancelResponse {
+            leased: cancel.leased.clone(),
+            run_id: cancel.run_id,
+            cancelled: false,
+        })),
+    );
+    script.pending_cancels = false;
+    host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+        .unwrap();
+    assert!(script.cancelled().contains(&cancel.leased.base.request_id));
+    assert_eq!(script.submitted().len(), 2);
+}
+
+#[test]
+fn four_terminal_outcomes_preserve_worker_capacity_until_install() {
+    let (_, clock) = StepClock::start();
+    let mut script = ScriptAgent::new();
+    let mut snapshots = CountingSnapshots::new(registry(&clock));
+    let mut host = PlanHost::new();
+    for index in 0..4u8 {
+        let mut dispatch = plan_dispatch(40 + index * 2, 41 + index * 2, 100);
+        dispatch.companion = companion_at(index);
+        dispatch.snapshot.companion.companion_id = dispatch.companion;
+        host.dispatch_plan(&mut script, &mut snapshots, &*clock, dispatch)
+            .unwrap();
+        let request = plan_request_at(&script, usize::from(index));
+        script.terminals.insert(
+            request.leased.base.request_id,
+            AgentPoll::Completed(echo_plan(&request, mine_target_plan())),
+        );
+    }
+    assert_eq!(
+        host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+            .unwrap()
+            .completed,
+        4
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+                .unwrap()
+                .completed,
+            0
+        );
+    }
+    assert_eq!(host.outcome_len(), 4);
+    assert_eq!(snapshots.completes, 4);
+    assert_eq!(script.cancelled().len(), 4);
+    let mut fifth = plan_dispatch(60, 61, 100);
+    fifth.companion = companion_at(5);
+    fifth.snapshot.companion.companion_id = fifth.companion;
+    assert_eq!(
+        host.dispatch_plan(&mut script, &mut snapshots, &*clock, fifth),
+        Err(ServerError::Capacity {
+            resource: Resource::AgentRuns,
+            limit: 4,
+            observed: 5
+        })
+    );
+    assert_eq!(script.submitted().len(), 4);
+    assert_eq!(snapshots.registers, 4);
+    host.install(100, 9, &matching_world(100));
+    assert_eq!(host.outcome_len(), 0);
+}
+
+#[test]
+fn real_http_host_reclaims_more_than_sixty_four_plan_cycles() {
+    let (_, clock) = StepClock::start();
+    let server = EchoServer::serve();
+    let wire =
+        AgentHttpWire::try_new(&server.endpoint(), "test-agent-secret", clock.clone()).unwrap();
+    let mut agent = LeaseController::try_new(
+        LeaseConfig {
+            client_instance_id: ClientInstanceId::try_from_bytes(uuid(2)).unwrap(),
+            namespace_id: NamespaceId::try_from_bytes(uuid(3)).unwrap(),
+        },
+        Arc::new(wire),
+        clock.clone(),
+    )
+    .unwrap();
+    agent.refresh();
+    let (lease_id, fence) = agent.current_lease().unwrap();
+    let mut snapshots = registry(&clock);
+    let mut host = PlanHost::new();
+    for cycle in 0..65u8 {
+        let mut dispatch = plan_dispatch(100 + cycle * 2, 101 + cycle * 2, 100);
+        dispatch.lease = lease_id;
+        dispatch.lease_fence = fence;
+        host.dispatch_plan(&mut agent, &mut snapshots, &*clock, dispatch)
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(2);
+        loop {
+            let report = host
+                .drain_outcomes(&mut agent, &mut snapshots, &*clock)
+                .unwrap();
+            assert_eq!(report.failed, 0);
+            if report.completed == 1 {
+                break;
+            }
+            assert!(Instant::now() < until, "plan cycle {cycle}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(agent.retained_requests(), 0, "plan cycle {cycle}");
+        assert_eq!(host.install(100, fence, &matching_world(100)).installed, 1);
+        assert_eq!(host.take_installed().len(), 1);
+    }
+    agent.close(Deadline::at(clock.monotonic())).unwrap();
 }

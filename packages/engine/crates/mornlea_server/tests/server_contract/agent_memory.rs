@@ -7,7 +7,7 @@
 //! errors re-arm reconcile for the same operation, and shutdown retries
 //! pending memory work under a fresh context per attempt).
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -83,6 +83,9 @@ struct ScriptState {
     polls: Mutex<VecDeque<AgentPoll>>,
     submitted: Mutex<Vec<AgentRequest>>,
     parked: Mutex<Vec<AgentRequestId>>,
+    terminals: Mutex<BTreeMap<AgentRequestId, AgentPoll>>,
+    retired: Mutex<Vec<AgentRequestId>>,
+    refuse_retirement: Mutex<BTreeSet<AgentRequestId>>,
 }
 
 impl ScriptAgent {
@@ -92,6 +95,9 @@ impl ScriptAgent {
                 polls: Mutex::new(VecDeque::new()),
                 submitted: Mutex::new(Vec::new()),
                 parked: Mutex::new(Vec::new()),
+                terminals: Mutex::new(BTreeMap::new()),
+                retired: Mutex::new(Vec::new()),
+                refuse_retirement: Mutex::new(BTreeSet::new()),
             }),
         }
     }
@@ -162,6 +168,9 @@ impl AgentHandle for ScriptAgent {
     }
 
     fn poll(&mut self, id: AgentRequestId) -> AgentPoll {
+        if let Some(poll) = self.state.terminals.lock().unwrap().get(&id) {
+            return poll.clone();
+        }
         if self.state.parked.lock().unwrap().contains(&id) {
             return AgentPoll::Pending;
         }
@@ -173,7 +182,13 @@ impl AgentHandle for ScriptAgent {
             .unwrap_or(AgentPoll::Pending)
     }
 
-    fn cancel(&mut self, _id: AgentRequestId, _deadline: Deadline) -> Result<(), ServerError> {
+    fn cancel(&mut self, id: AgentRequestId, _deadline: Deadline) -> Result<(), ServerError> {
+        if self.state.refuse_retirement.lock().unwrap().contains(&id) {
+            return Err(ServerError::Timeout {
+                operation: mornlea_server::contracts::Operation::AgentRpc,
+            });
+        }
+        self.state.retired.lock().unwrap().push(id);
         Ok(())
     }
 
@@ -482,4 +497,376 @@ fn reconcile_retry_backoff_schedule() {
     assert_eq!(owner.retry_attempts(companion()), 1);
     assert_eq!(owner.retry_wait(companion()), 1);
     assert!(owner.is_ready(other));
+}
+
+#[test]
+fn memory_terminal_lanes_reclaim_once_and_fenced_delete_can_retry() {
+    let (_, clock) = StepClock::start();
+    let script = ScriptAgent::new();
+    let mut owner = owner(script.clone(), &clock);
+    owner.set_mirror(companion(), active_mirror(1));
+    owner.reserve(reservation()).unwrap();
+    owner.commit(companion(), request_id(50)).unwrap();
+    script.state.terminals.lock().unwrap().insert(
+        request_id(50),
+        AgentPoll::Completed(commit_response(1, 60, 1)),
+    );
+    assert_eq!(owner.poll_commits().len(), 1);
+    assert!(owner.poll_commits().is_empty());
+    owner.reconcile(companion(), request_id(51)).unwrap();
+    script.state.terminals.lock().unwrap().insert(
+        request_id(51),
+        AgentPoll::Completed(AgentResponse::Reconcile(ReconcileResponse::Active {
+            leased: leased_for(51),
+            companion_id: companion(),
+            memory_epoch: 1,
+            memory: MemoryState::Present {
+                revision: NonZeroU64::new(1).unwrap(),
+                operation_id: operation(60),
+                summary: reservation().summary,
+            },
+        })),
+    );
+    assert_eq!(owner.poll_reconciles().len(), 1);
+    assert!(owner.poll_reconciles().is_empty());
+    owner
+        .delete(companion(), request_id(52), operation(61))
+        .unwrap();
+    script.state.terminals.lock().unwrap().insert(
+        request_id(52),
+        AgentPoll::Completed(AgentResponse::Delete(DeleteResponse {
+            leased: leased_for(52),
+            companion_id: companion(),
+            memory_epoch: 99,
+            tombstone_operation_id: operation(61),
+        })),
+    );
+    assert_eq!(
+        owner.poll_deletes(),
+        vec![DeleteSettled::Fenced {
+            companion: companion()
+        }]
+    );
+    assert!(owner.poll_deletes().is_empty());
+    assert!(owner.mirror(companion()).unwrap().active);
+    owner
+        .delete(companion(), request_id(53), operation(61))
+        .unwrap();
+    script.state.terminals.lock().unwrap().insert(
+        request_id(53),
+        AgentPoll::Completed(AgentResponse::Delete(DeleteResponse {
+            leased: leased_for(53),
+            companion_id: companion(),
+            memory_epoch: 2,
+            tombstone_operation_id: operation(61),
+        })),
+    );
+    assert_eq!(owner.poll_deletes().len(), 1);
+    assert!(owner.poll_deletes().is_empty());
+    assert_eq!(
+        *script.state.retired.lock().unwrap(),
+        vec![
+            request_id(50),
+            request_id(51),
+            request_id(52),
+            request_id(53)
+        ]
+    );
+}
+
+#[test]
+fn memory_retirement_refusal_bounds_requests_then_reaps() {
+    let (_, clock) = StepClock::start();
+    let script = ScriptAgent::new();
+    let mut owner = owner(script.clone(), &clock);
+    owner.set_mirror(companion(), active_mirror(1));
+    owner.reserve(reservation()).unwrap();
+    for tag in 100..164 {
+        let id = request_id(tag);
+        owner.commit(companion(), id).unwrap();
+        script
+            .state
+            .terminals
+            .lock()
+            .unwrap()
+            .insert(id, AgentPoll::Failed(unavailable()));
+        script.state.refuse_retirement.lock().unwrap().insert(id);
+        assert_eq!(owner.poll_commits().len(), 1);
+        assert!(owner.poll_commits().is_empty());
+    }
+    let before = script.submitted().len();
+    assert_eq!(
+        owner.commit(companion(), request_id(200)),
+        Err(ServerError::Capacity {
+            resource: mornlea_server::contracts::Resource::AgentRuns,
+            limit: 64,
+            observed: 65
+        })
+    );
+    assert_eq!(script.submitted().len(), before);
+    script.state.refuse_retirement.lock().unwrap().clear();
+    owner.commit(companion(), request_id(200)).unwrap();
+    assert_eq!(script.state.retired.lock().unwrap().len(), 64);
+    assert_eq!(owner.reservation(companion()), Some(&reservation()));
+}
+
+struct EchoMemoryWire;
+
+impl mornlea_server::agent::lease::AgentWire for EchoMemoryWire {
+    fn rpc_cancellable(
+        &self,
+        request: AgentRequest,
+        _deadline: Deadline,
+        _cancellation: &mornlea_server::agent::lease::RpcCancellation,
+    ) -> Result<AgentResponse, ServerError> {
+        use mornlea_server::contracts::{LeaseResponse, ReconcileRequest};
+        Ok(match request {
+            AgentRequest::Acquire(base) => AgentResponse::Acquire(LeaseResponse {
+                leased: LeasedIdentity {
+                    base,
+                    lease_id: leased_for(1).lease_id,
+                },
+            }),
+            AgentRequest::Commit(request) => AgentResponse::Commit(CommitResponse {
+                leased: request.leased,
+                companion_id: request.companion_id,
+                memory_epoch: request.memory_epoch,
+                operation_id: request.operation_id,
+                committed_revision: NonZeroU64::new(request.base_revision + 1).unwrap(),
+            }),
+            AgentRequest::Reconcile(ReconcileRequest::Active {
+                leased,
+                companion_id,
+                memory_epoch,
+                mirror,
+            }) => AgentResponse::Reconcile(ReconcileResponse::Active {
+                leased,
+                companion_id,
+                memory_epoch,
+                memory: mirror,
+            }),
+            AgentRequest::Delete(request) => AgentResponse::Delete(DeleteResponse {
+                leased: request.leased,
+                companion_id: request.companion_id,
+                memory_epoch: request.new_memory_epoch,
+                tombstone_operation_id: request.tombstone_operation_id,
+            }),
+            _ => return Err(unavailable()),
+        })
+    }
+    fn close(&self) {}
+}
+
+/// Test ownership wrapper exposes the actual provider's retained slot count.
+struct ObservedLease(Arc<Mutex<mornlea_server::agent::lease::LeaseController>>);
+
+impl AgentHandle for ObservedLease {
+    fn submit(&mut self, request: AgentRequest) -> Result<AgentRequestId, ServerError> {
+        self.0.lock().unwrap().submit(request)
+    }
+    fn poll(&mut self, id: AgentRequestId) -> AgentPoll {
+        self.0.lock().unwrap().poll(id)
+    }
+    fn cancel(&mut self, id: AgentRequestId, deadline: Deadline) -> Result<(), ServerError> {
+        self.0.lock().unwrap().cancel(id, deadline)
+    }
+    fn freeze(&mut self, clock: &dyn Clock) -> Option<mornlea_server::contracts::FrozenLease> {
+        self.0.lock().unwrap().freeze(clock)
+    }
+    fn release(
+        &mut self,
+        lease: &mornlea_server::contracts::FrozenLease,
+        deadline: Deadline,
+    ) -> Result<(), ServerError> {
+        self.0.lock().unwrap().release(lease, deadline)
+    }
+    fn close(&mut self, deadline: Deadline) -> Result<(), ServerError> {
+        self.0.lock().unwrap().close(deadline)
+    }
+}
+
+#[test]
+fn real_lease_reclaims_more_than_sixty_four_memory_cycles() {
+    use mornlea_server::agent::lease::{LeaseConfig, LeaseController};
+    let (_, clock) = StepClock::start();
+    let mut agent = LeaseController::try_new(
+        LeaseConfig {
+            client_instance_id: leased_for(1).base.client_instance_id,
+            namespace_id: leased_for(1).base.namespace_id,
+        },
+        Arc::new(EchoMemoryWire),
+        clock.clone(),
+    )
+    .unwrap();
+    agent.refresh();
+    agent.freeze(&*clock).unwrap();
+    let observed = Arc::new(Mutex::new(agent));
+    let mut owner = MemoryOwner::new(
+        Box::new(ObservedLease(observed.clone())),
+        clock.clone(),
+        leased_for(1).base.client_instance_id,
+        leased_for(1).base.namespace_id,
+        leased_for(1).lease_id,
+    );
+    for cycle in 0..65u8 {
+        let tag = 10 + cycle * 3;
+        owner.set_mirror(companion(), active_mirror(1));
+        owner.reserve(reservation()).unwrap();
+        owner.commit(companion(), request_id(tag)).unwrap();
+        let until = Instant::now() + Duration::from_secs(2);
+        while owner.poll_commits().is_empty() {
+            assert!(Instant::now() < until);
+            std::thread::yield_now();
+        }
+        assert_eq!(owner.mirror(companion()).unwrap().revision, 1);
+        assert_eq!(
+            observed.lock().unwrap().retained_requests(),
+            0,
+            "commit cycle {cycle}"
+        );
+        owner.reconcile(companion(), request_id(tag + 1)).unwrap();
+        while owner.poll_reconciles().is_empty() {
+            assert!(Instant::now() < until);
+            std::thread::yield_now();
+        }
+        assert!(owner.is_ready(companion()));
+        assert_eq!(
+            observed.lock().unwrap().retained_requests(),
+            0,
+            "reconcile cycle {cycle}"
+        );
+        owner
+            .delete(companion(), request_id(tag + 2), operation(61))
+            .unwrap();
+        while owner.poll_deletes().is_empty() {
+            assert!(Instant::now() < until);
+            std::thread::yield_now();
+        }
+        assert!(!owner.mirror(companion()).unwrap().active);
+        assert_eq!(
+            observed.lock().unwrap().retained_requests(),
+            0,
+            "delete cycle {cycle}"
+        );
+    }
+    observed
+        .lock()
+        .unwrap()
+        .close(Deadline::at(clock.monotonic()))
+        .unwrap();
+}
+
+#[test]
+fn repeatable_memory_refusals_do_not_rearm_or_mutate_twice() {
+    let (_, clock) = StepClock::start();
+    let script = ScriptAgent::new();
+    let mut owner = owner(script.clone(), &clock);
+    owner.set_mirror(companion(), active_mirror(1));
+    owner.reserve(reservation()).unwrap();
+    owner.reconcile(companion(), request_id(50)).unwrap();
+    script
+        .state
+        .terminals
+        .lock()
+        .unwrap()
+        .insert(request_id(50), AgentPoll::Failed(unavailable()));
+    assert_eq!(
+        owner.poll_reconciles(),
+        vec![ReconcileSettled::NotReady {
+            companion: companion()
+        }]
+    );
+    for _ in 0..2 {
+        assert!(owner.poll_reconciles().is_empty());
+    }
+    assert_eq!(owner.retry_attempts(companion()), 1);
+    assert_eq!(owner.reservation(companion()), Some(&reservation()));
+    owner
+        .delete(companion(), request_id(51), operation(61))
+        .unwrap();
+    script.state.terminals.lock().unwrap().insert(
+        request_id(51),
+        AgentPoll::Completed(commit_response(1, 60, 1)),
+    );
+    assert_eq!(
+        owner.poll_deletes(),
+        vec![DeleteSettled::Failed {
+            companion: companion(),
+            error: unavailable()
+        }]
+    );
+    for _ in 0..2 {
+        assert!(owner.poll_deletes().is_empty());
+    }
+    assert_eq!(owner.mirror(companion()), Some(&active_mirror(1)));
+    assert_eq!(owner.reservation(companion()), Some(&reservation()));
+    assert_eq!(
+        *script.state.retired.lock().unwrap(),
+        vec![request_id(50), request_id(51)]
+    );
+}
+
+#[test]
+fn unresolved_delete_intent_refuses_conflicting_retry() {
+    let (_, clock) = StepClock::start();
+    let script = ScriptAgent::new();
+    let mut owner = owner(script.clone(), &clock);
+    owner.set_mirror(companion(), active_mirror(1));
+    owner
+        .delete(companion(), request_id(50), operation(61))
+        .unwrap();
+    script
+        .state
+        .terminals
+        .lock()
+        .unwrap()
+        .insert(request_id(50), AgentPoll::Failed(unavailable()));
+    assert_eq!(owner.poll_deletes().len(), 1);
+    assert_eq!(
+        owner.delete(companion(), request_id(51), operation(62)),
+        Err(ServerError::InvalidInput {
+            field: "memory_delete_intent"
+        })
+    );
+    assert_eq!(script.submitted().len(), 1);
+    assert_eq!(owner.mirror(companion()), Some(&active_mirror(1)));
+    owner
+        .delete(companion(), request_id(52), operation(61))
+        .unwrap();
+    let AgentRequest::Delete(retry) = script.submitted()[1].clone() else {
+        panic!("delete")
+    };
+    assert_eq!(retry.new_memory_epoch, 2);
+    assert_eq!(retry.tombstone_operation_id, operation(61));
+}
+
+#[test]
+fn unresolved_delete_intents_refuse_sixty_fifth_distinct_name() {
+    let (_, clock) = StepClock::start();
+    let script = ScriptAgent::new();
+    let mut owner = owner(script.clone(), &clock);
+    for tag in 100..164u8 {
+        let id = CompanionId::try_from_bytes(uuid(tag)).unwrap();
+        owner.set_mirror(id, active_mirror(1));
+        owner.delete(id, request_id(tag), operation(61)).unwrap();
+        script
+            .state
+            .terminals
+            .lock()
+            .unwrap()
+            .insert(request_id(tag), AgentPoll::Failed(unavailable()));
+        assert_eq!(owner.poll_deletes().len(), 1);
+    }
+    let id = CompanionId::try_from_bytes(uuid(200)).unwrap();
+    owner.set_mirror(id, active_mirror(1));
+    assert_eq!(
+        owner.delete(id, request_id(200), operation(61)),
+        Err(ServerError::Capacity {
+            resource: mornlea_server::contracts::Resource::AgentRuns,
+            limit: 64,
+            observed: 65
+        })
+    );
+    assert_eq!(script.submitted().len(), 64);
+    assert_eq!(owner.mirror(id), Some(&active_mirror(1)));
 }

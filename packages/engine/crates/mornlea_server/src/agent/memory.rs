@@ -11,7 +11,7 @@
 //! Shutdown finalization uses a fresh context of at most 30 seconds per
 //! attempt and retains every unresolved operation identity.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +22,7 @@ use crate::contracts::{
     AgentHandle, AgentRequest, AgentRequestId, BaseIdentity, ClientInstanceId, Clock,
     CommitRequest, CommitResponse, Deadline, DeleteRequest, DeleteResponse, LeaseId,
     LeasedIdentity, MemoryFinalizationReport, MemoryFinalizer, MemoryState, NamespaceId, Operation,
-    OperationId, ReconcileRequest, ReconcileResponse, ServerError,
+    OperationId, ReconcileRequest, ReconcileResponse, Resource, ServerError,
 };
 
 /// Reconcile retry attempts before the wait saturates.
@@ -289,6 +289,13 @@ struct DeleteInflight {
     tombstone: OperationId,
 }
 
+/// A delete's semantic identity survives retirement of its HTTP attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeleteIntent {
+    new_epoch: u64,
+    tombstone: OperationId,
+}
+
 /// Companion memory owner: mirrors, reservations, admitted RPCs, retry
 /// backoff, and shutdown finalization for every companion.
 pub struct MemoryOwner {
@@ -302,6 +309,8 @@ pub struct MemoryOwner {
     commits: BTreeMap<CompanionId, CommitInflight>,
     reconciles: BTreeMap<CompanionId, ReconcileInflight>,
     deletes: BTreeMap<CompanionId, DeleteInflight>,
+    delete_intents: BTreeMap<CompanionId, DeleteIntent>,
+    pending_retirements: BTreeSet<AgentRequestId>,
     retries: BTreeMap<CompanionId, ReconcileRetry>,
     ready: BTreeMap<CompanionId, bool>,
     attempt: u64,
@@ -328,11 +337,45 @@ impl MemoryOwner {
             commits: BTreeMap::new(),
             reconciles: BTreeMap::new(),
             deletes: BTreeMap::new(),
+            delete_intents: BTreeMap::new(),
+            pending_retirements: BTreeSet::new(),
             retries: BTreeMap::new(),
             ready: BTreeMap::new(),
             attempt: 0,
             attempt_deadline: None,
         }
+    }
+
+    /// Failed reclamation remains charged without replaying its settlement.
+    fn reap_retirements(&mut self) {
+        let deadline = Deadline::at(self.clock.monotonic());
+        self.pending_retirements
+            .retain(|id| self.agent.cancel(*id, deadline).is_err());
+    }
+
+    fn retire_request(&mut self, id: AgentRequestId) {
+        if self
+            .agent
+            .cancel(id, Deadline::at(self.clock.monotonic()))
+            .is_err()
+        {
+            self.pending_retirements.insert(id);
+        }
+    }
+
+    fn check_business_capacity(&self) -> Result<(), ServerError> {
+        let owned = self.commits.len()
+            + self.reconciles.len()
+            + self.deletes.len()
+            + self.pending_retirements.len();
+        if owned >= 64 {
+            return Err(ServerError::Capacity {
+                resource: Resource::AgentRuns,
+                limit: 64,
+                observed: 65,
+            });
+        }
+        Ok(())
     }
 
     /// Replaces the lease after acquire or reacquire; in-flight RPCs keep
@@ -415,6 +458,7 @@ impl MemoryOwner {
         companion: CompanionId,
         request_id: AgentRequestId,
     ) -> Result<(), ServerError> {
+        self.reap_retirements();
         let mirror = self
             .mirrors
             .get(&companion)
@@ -438,6 +482,7 @@ impl MemoryOwner {
             });
         }
         let request = commit_request_for(self.leased(request_id), companion, reservation);
+        self.check_business_capacity()?;
         self.agent.submit(AgentRequest::Commit(request))?;
         self.commits
             .insert(companion, CommitInflight { request_id });
@@ -446,6 +491,7 @@ impl MemoryOwner {
 
     /// Polls admitted commits once and applies fenced outcomes.
     pub fn poll_commits(&mut self) -> Vec<CommitSettled> {
+        self.reap_retirements();
         let pending: Vec<(CompanionId, CommitInflight)> = self
             .commits
             .iter()
@@ -453,7 +499,12 @@ impl MemoryOwner {
             .collect();
         let mut settled = Vec::new();
         for (companion, record) in pending {
-            match self.agent.poll(record.request_id) {
+            let poll = self.agent.poll(record.request_id);
+            let terminal = !matches!(poll, crate::contracts::AgentPoll::Pending);
+            if terminal {
+                self.commits.remove(&companion);
+            }
+            match poll {
                 crate::contracts::AgentPoll::Pending => {}
                 crate::contracts::AgentPoll::Completed(
                     crate::contracts::AgentResponse::Commit(response),
@@ -472,6 +523,9 @@ impl MemoryOwner {
                     settled.push(CommitSettled::Failed { companion, error });
                 }
             }
+            if terminal {
+                self.retire_request(record.request_id);
+            }
         }
         settled
     }
@@ -483,6 +537,7 @@ impl MemoryOwner {
         companion: CompanionId,
         request_id: AgentRequestId,
     ) -> Result<ReconcileAdmit, ServerError> {
+        self.reap_retirements();
         if self.retry_wait(companion) > 0 {
             return Ok(ReconcileAdmit::Waiting {
                 ticks: self.retry_wait(companion),
@@ -501,6 +556,7 @@ impl MemoryOwner {
         }
         let request = reconcile_request_for(self.leased(request_id), companion, mirror)?;
         let epoch = mirror.epoch;
+        self.check_business_capacity()?;
         self.agent
             .submit(AgentRequest::Reconcile(request))
             .map_err(|_| unavailable())?;
@@ -512,6 +568,7 @@ impl MemoryOwner {
     /// Polls admitted reconciles once; one companion's failure never stops
     /// the later companions and rearms its own backoff.
     pub fn poll_reconciles(&mut self) -> Vec<ReconcileSettled> {
+        self.reap_retirements();
         let pending: Vec<(CompanionId, ReconcileInflight)> = self
             .reconciles
             .iter()
@@ -519,7 +576,12 @@ impl MemoryOwner {
             .collect();
         let mut settled = Vec::new();
         for (companion, record) in pending {
-            match self.agent.poll(record.request_id) {
+            let poll = self.agent.poll(record.request_id);
+            let terminal = !matches!(poll, crate::contracts::AgentPoll::Pending);
+            if terminal {
+                self.reconciles.remove(&companion);
+            }
+            match poll {
                 crate::contracts::AgentPoll::Pending => {}
                 crate::contracts::AgentPoll::Completed(
                     crate::contracts::AgentResponse::Reconcile(response),
@@ -537,6 +599,9 @@ impl MemoryOwner {
                     settled.push(ReconcileSettled::NotReady { companion });
                 }
             }
+            if terminal {
+                self.retire_request(record.request_id);
+            }
         }
         settled
     }
@@ -549,6 +614,7 @@ impl MemoryOwner {
         request_id: AgentRequestId,
         tombstone: OperationId,
     ) -> Result<(), ServerError> {
+        self.reap_retirements();
         let mirror = self
             .mirrors
             .get(&companion)
@@ -576,9 +642,29 @@ impl MemoryOwner {
             new_epoch,
             tombstone,
         );
+        self.check_business_capacity()?;
+        let intent = DeleteIntent {
+            new_epoch,
+            tombstone,
+        };
+        // A retry keeps the original tombstone identity after HTTP retirement.
+        if let Some(retained) = self.delete_intents.get(&companion) {
+            if *retained != intent {
+                return Err(ServerError::InvalidInput {
+                    field: "memory_delete_intent",
+                });
+            }
+        } else if self.delete_intents.len() >= 64 {
+            return Err(ServerError::Capacity {
+                resource: Resource::AgentRuns,
+                limit: 64,
+                observed: 65,
+            });
+        }
         self.agent
             .submit(AgentRequest::Delete(request))
             .map_err(|_| unavailable())?;
+        self.delete_intents.insert(companion, intent);
         self.deletes.insert(
             companion,
             DeleteInflight {
@@ -592,6 +678,7 @@ impl MemoryOwner {
 
     /// Polls admitted deletes once and installs matching tombstones.
     pub fn poll_deletes(&mut self) -> Vec<DeleteSettled> {
+        self.reap_retirements();
         let pending: Vec<(CompanionId, DeleteInflight)> = self
             .deletes
             .iter()
@@ -599,7 +686,12 @@ impl MemoryOwner {
             .collect();
         let mut settled = Vec::new();
         for (companion, record) in pending {
-            match self.agent.poll(record.request_id) {
+            let poll = self.agent.poll(record.request_id);
+            let terminal = !matches!(poll, crate::contracts::AgentPoll::Pending);
+            if terminal {
+                self.deletes.remove(&companion);
+            }
+            match poll {
                 crate::contracts::AgentPoll::Pending => {}
                 crate::contracts::AgentPoll::Completed(
                     crate::contracts::AgentResponse::Delete(response),
@@ -617,6 +709,9 @@ impl MemoryOwner {
                     self.deletes.remove(&companion);
                     settled.push(DeleteSettled::Failed { companion, error });
                 }
+            }
+            if terminal {
+                self.retire_request(record.request_id);
             }
         }
         settled
@@ -836,6 +931,7 @@ impl MemoryOwner {
             mirror.tombstone = Some(record.tombstone);
         }
         self.deletes.remove(&companion);
+        self.delete_intents.remove(&companion);
         self.reservations.remove(&companion);
         DeleteSettled::Deleted {
             companion,

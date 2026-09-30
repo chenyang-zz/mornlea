@@ -15,7 +15,7 @@
 //! queue, and outcome capacity are bounded; admission refuses before any side
 //! effect once a bound is reached.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use mornlea_domain::{BlockPos, ChunkPos, CompanionId, PlayerId};
@@ -447,6 +447,7 @@ struct PlanSlot {
     client: ClientInstanceId,
     namespace: NamespaceId,
     frozen: crate::contracts::PlanningSnapshot,
+    terminal_transferred: bool,
 }
 
 /// One active dialogue: the frozen dispatch identities for outcome binding.
@@ -462,6 +463,7 @@ struct DialogueSlot {
     client: ClientInstanceId,
     namespace: NamespaceId,
     terminal: bool,
+    terminal_transferred: bool,
 }
 
 /// Queued successful outcome awaiting tick install.
@@ -502,6 +504,8 @@ pub struct PlanHost {
     outcomes: VecDeque<QueuedOutcome>,
     failures: Vec<PlanFailure>,
     cancel_counter: u64,
+    // Retirement retains HTTP ownership independently of tick install slots.
+    pending_retirements: BTreeSet<AgentRequestId>,
 }
 
 impl PlanHost {
@@ -516,6 +520,7 @@ impl PlanHost {
             outcomes: VecDeque::new(),
             failures: Vec::new(),
             cancel_counter: 0,
+            pending_retirements: BTreeSet::new(),
         }
     }
 
@@ -561,6 +566,60 @@ impl PlanHost {
             .collect()
     }
 
+    /// Retries reclamation without repeating a transferred semantic outcome.
+    fn reap_retirements(&mut self, agent: &mut dyn AgentHandle, clock: &dyn Clock) {
+        self.pending_retirements
+            .retain(|id| agent.cancel(*id, Deadline::at(clock.monotonic())).is_err());
+    }
+
+    fn retire_request(
+        &mut self,
+        agent: &mut dyn AgentHandle,
+        clock: &dyn Clock,
+        id: AgentRequestId,
+    ) {
+        if agent.cancel(id, Deadline::at(clock.monotonic())).is_err() {
+            self.pending_retirements.insert(id);
+        }
+    }
+
+    /// Transfer conserves a charged HTTP slot even when retirement refuses.
+    fn check_business_capacity(&self) -> Result<(), ServerError> {
+        let active = self
+            .plans
+            .values()
+            .filter(|slot| !slot.terminal_transferred)
+            .count()
+            + self
+                .dialogues
+                .values()
+                .filter(|slot| !slot.terminal_transferred)
+                .count();
+        if active + self.pending_retirements.len() >= 64 {
+            return Err(ServerError::Capacity {
+                resource: Resource::AgentRuns,
+                limit: 64,
+                observed: 65,
+            });
+        }
+        Ok(())
+    }
+
+    fn cleanup_run(
+        &mut self,
+        agent: &mut dyn AgentHandle,
+        clock: &dyn Clock,
+        leased: LeasedIdentity,
+        run_id: RunId,
+    ) {
+        self.reap_retirements(agent, clock);
+        if self.check_business_capacity().is_ok()
+            && let Some(id) = cancel_admitted_run(agent, clock, leased, run_id)
+        {
+            self.pending_retirements.insert(id);
+        }
+    }
+
     /// Mints a fresh v4 correlation id for a `CancelRun` request.
     ///
     /// Business request and run ids stay caller-minted; only the cancel
@@ -602,6 +661,7 @@ impl PlanHost {
         clock: &dyn Clock,
         dispatch: PlanDispatch,
     ) -> Result<PlanTicket, ServerError> {
+        self.reap_retirements(agent, clock);
         if dispatch.generation == 0 {
             return Err(ServerError::InvalidInput {
                 field: "companion_generation",
@@ -629,6 +689,7 @@ impl PlanHost {
                 observed: WORKER_CAPACITY + 1,
             });
         }
+        self.check_business_capacity()?;
         let attempt = self.attempts.get(&dispatch.companion).copied().unwrap_or(0);
         let attempt = attempt.checked_add(1).ok_or(ServerError::InvalidInput {
             field: "companion_attempt",
@@ -705,6 +766,7 @@ impl PlanHost {
                 client: dispatch.client,
                 namespace: dispatch.namespace,
                 frozen,
+                terminal_transferred: false,
             },
         );
         Ok(PlanTicket {
@@ -723,6 +785,7 @@ impl PlanHost {
         clock: &dyn Clock,
         dispatch: DialogueDispatch,
     ) -> Result<DialogueAdmit, ServerError> {
+        self.reap_retirements(agent, clock);
         if dispatch.generation == 0 {
             return Err(ServerError::InvalidInput {
                 field: "companion_generation",
@@ -749,6 +812,7 @@ impl PlanHost {
         if self.plans.len() + self.dialogues.len() >= WORKER_CAPACITY {
             return Ok(DialogueAdmit::Skipped);
         }
+        self.check_business_capacity()?;
         let attempt = self
             .dialogue_attempts
             .get(&dispatch.companion)
@@ -793,6 +857,7 @@ impl PlanHost {
                 client: dispatch.client,
                 namespace: dispatch.namespace,
                 terminal: dispatch.terminal,
+                terminal_transferred: false,
             },
         );
         Ok(DialogueAdmit::Admitted {
@@ -806,25 +871,34 @@ impl PlanHost {
     /// the outcome queue while every failure path cancels its registry entry
     /// and sends an independent `CancelRun` for the admitted run.
     ///
-    /// A response echoing another request id is dropped without touching any
-    /// gate; a full outcome queue leaves the remaining slots awaiting the
-    /// next drain.
+    /// A permanently invalid terminal echo releases only its own gate. A full
+    /// outcome queue retains the untransferred request for the next drain.
     pub fn drain_outcomes(
         &mut self,
         agent: &mut dyn AgentHandle,
         snapshots: &mut dyn SnapshotPort,
         clock: &dyn Clock,
     ) -> Result<DrainReport, ServerError> {
+        self.reap_retirements(agent, clock);
         let mut report = DrainReport::default();
         let companions: Vec<CompanionId> = self.plans.keys().copied().collect();
         for companion in companions {
             let Some(slot) = self.plans.get(&companion) else {
                 continue;
             };
+            if slot.terminal_transferred {
+                continue;
+            }
             match agent.poll(slot.request_id) {
                 AgentPoll::Pending => {}
                 AgentPoll::Completed(AgentResponse::Plan(response)) => {
                     if response.leased.base.request_id != slot.request_id {
+                        let error = ServerError::Agent {
+                            code: AgentErrorCode::InvalidModelOutput,
+                            status: 422,
+                        };
+                        self.fail_plan_slot(agent, snapshots, clock, companion, &error);
+                        report.failed += 1;
                         continue;
                     }
                     if self.outcomes.len() >= OUTCOME_CAPACITY {
@@ -836,6 +910,9 @@ impl PlanHost {
                         attempt: slot.attempt,
                         response,
                     });
+                    let request_id = slot.request_id;
+                    self.plans.get_mut(&companion).unwrap().terminal_transferred = true;
+                    self.retire_request(agent, clock, request_id);
                     report.completed += 1;
                 }
                 AgentPoll::Completed(_) => {
@@ -862,10 +939,19 @@ impl PlanHost {
             let Some(slot) = self.dialogues.get(&companion) else {
                 continue;
             };
+            if slot.terminal_transferred {
+                continue;
+            }
             match agent.poll(slot.request_id) {
                 AgentPoll::Pending => {}
                 AgentPoll::Completed(AgentResponse::Dialogue(response)) => {
                     if response.leased.base.request_id != slot.request_id {
+                        let error = ServerError::Agent {
+                            code: AgentErrorCode::InvalidModelOutput,
+                            status: 422,
+                        };
+                        self.fail_dialogue_slot(agent, clock, companion, &error);
+                        report.failed += 1;
                         continue;
                     }
                     if self.outcomes.len() >= OUTCOME_CAPACITY {
@@ -876,6 +962,12 @@ impl PlanHost {
                         attempt: slot.attempt,
                         response,
                     });
+                    let request_id = slot.request_id;
+                    self.dialogues
+                        .get_mut(&companion)
+                        .unwrap()
+                        .terminal_transferred = true;
+                    self.retire_request(agent, clock, request_id);
                     report.completed += 1;
                 }
                 AgentPoll::Completed(_) => {
@@ -912,6 +1004,7 @@ impl PlanHost {
         let Some(slot) = self.plans.remove(&companion) else {
             return;
         };
+        self.retire_request(agent, clock, slot.request_id);
         let _ = snapshots.cancel(slot.snapshot_id);
         let leased = LeasedIdentity {
             base: BaseIdentity {
@@ -921,7 +1014,7 @@ impl PlanHost {
             },
             lease_id: slot.lease,
         };
-        cancel_admitted_run(agent, clock, leased, slot.run_id);
+        self.cleanup_run(agent, clock, leased, slot.run_id);
         self.failures.push(PlanFailure {
             companion,
             attempt: slot.attempt,
@@ -941,6 +1034,7 @@ impl PlanHost {
         let Some(slot) = self.dialogues.remove(&companion) else {
             return;
         };
+        self.retire_request(agent, clock, slot.request_id);
         let leased = LeasedIdentity {
             base: BaseIdentity {
                 request_id: self.mint_cancel_id(),
@@ -949,7 +1043,7 @@ impl PlanHost {
             },
             lease_id: slot.lease,
         };
-        cancel_admitted_run(agent, clock, leased, slot.run_id);
+        self.cleanup_run(agent, clock, leased, slot.run_id);
         self.failures.push(PlanFailure {
             companion,
             attempt: slot.attempt,
@@ -960,8 +1054,8 @@ impl PlanHost {
     /// Installs queued outcomes at the tick boundary: checks the active
     /// slot, generation, attempt, fence, run, snapshot, and digest, then
     /// revalidates the plan against the current world before the task queue
-    /// admits it and the runner emits the first action. Identity mismatches
-    /// keep the slot; world and payload failures release it.
+    /// admits it and the runner emits the first action. Older queued attempts
+    /// cannot clear newer slots; invalid identities release their own slot.
     pub fn install(&mut self, tick: u64, lease_fence: u64, world: &CurrentWorld) -> InstallReport {
         let mut report = InstallReport::default();
         let outcomes: Vec<QueuedOutcome> = self.outcomes.drain(..).collect();
@@ -1005,9 +1099,15 @@ impl PlanHost {
         let Some(slot) = self.plans.get(&companion) else {
             return;
         };
-        if slot.attempt != attempt
-            || slot.fence != lease_fence
-            || response.leased.base.request_id != slot.request_id
+        if slot.attempt != attempt || response.leased.base.request_id != slot.request_id {
+            report.rejected.push(InstallRejection {
+                companion,
+                attempt,
+                reason: InstallReject::StaleIdentities,
+            });
+            return;
+        }
+        if slot.fence != lease_fence
             || response.leased.lease_id != slot.lease
             || response.run_id != slot.run_id
             || response.companion_id != slot.companion
@@ -1015,6 +1115,7 @@ impl PlanHost {
             || response.snapshot_id != slot.snapshot_id
             || response.snapshot_digest != slot.digest
         {
+            self.plans.remove(&companion);
             report.rejected.push(InstallRejection {
                 companion,
                 attempt,
@@ -1071,15 +1172,22 @@ impl PlanHost {
         let Some(slot) = self.dialogues.get(&companion) else {
             return;
         };
-        if slot.attempt != attempt
-            || slot.fence != lease_fence
-            || response.leased.base.request_id != slot.request_id
+        if slot.attempt != attempt || response.leased.base.request_id != slot.request_id {
+            report.rejected.push(InstallRejection {
+                companion,
+                attempt,
+                reason: InstallReject::StaleIdentities,
+            });
+            return;
+        }
+        if slot.fence != lease_fence
             || response.leased.lease_id != slot.lease
             || response.run_id != slot.run_id
             || response.companion_id != slot.companion
             || response.generation != slot.generation
             || response.memory_epoch != slot.memory_epoch
         {
+            self.dialogues.remove(&companion);
             report.rejected.push(InstallRejection {
                 companion,
                 attempt,
@@ -1306,27 +1414,34 @@ fn first_action(slot: &PlanSlot, tick: u64, plan: &AgentPlan) -> Option<Companio
 /// Cancels one admitted run within the independent failure budget.
 ///
 /// The cancel carries the frozen lease of the failed request; a best-effort
-/// attempt that never blocks the caller past the budget.
+/// attempt that never blocks the caller past the budget. An admitted request
+/// that cannot retire in that window returns its identity to the host ledger.
 pub(crate) fn cancel_admitted_run(
     agent: &mut dyn AgentHandle,
     clock: &dyn Clock,
     leased: LeasedIdentity,
     run_id: RunId,
-) {
-    let budget_until = clock.monotonic() + CANCEL_RUN_TIMEOUT;
-    let Ok(request_id) = agent.submit(AgentRequest::Cancel(CancelRequest { leased, run_id }))
-    else {
-        return;
-    };
-    let deadline = Deadline::at(budget_until);
+) -> Option<AgentRequestId> {
+    let deadline = Deadline::after(clock.monotonic(), CANCEL_RUN_TIMEOUT).ok()?;
+    let wall_expiry = Instant::now().checked_add(CANCEL_RUN_TIMEOUT)?;
+    let request_id = agent
+        .submit(AgentRequest::Cancel(CancelRequest { leased, run_id }))
+        .ok()?;
     loop {
         match agent.poll(request_id) {
-            AgentPoll::Completed(_) | AgentPoll::Failed(_) => return,
+            AgentPoll::Completed(_) | AgentPoll::Failed(_) => {
+                return agent
+                    .cancel(request_id, Deadline::at(clock.monotonic()))
+                    .err()
+                    .map(|_| request_id);
+            }
             AgentPoll::Pending => {}
         }
-        if clock.monotonic() >= deadline.instant() || Instant::now() >= budget_until {
-            return;
+        if deadline.expired(clock.monotonic()) || Instant::now() >= wall_expiry {
+            return Some(request_id);
         }
-        std::thread::sleep(Duration::from_millis(1));
+        std::thread::sleep(
+            Duration::from_millis(1).min(wall_expiry.saturating_duration_since(Instant::now())),
+        );
     }
 }
