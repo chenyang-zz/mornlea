@@ -1664,28 +1664,13 @@ fn service_loopback_close_and_serve_failure_isolation() {
 
 #[cfg(unix)]
 fn closed_listener() -> TcpListener {
-    use std::os::unix::io::FromRawFd;
+    use std::net::UdpSocket;
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
     // A bound datagram socket has an address but refuses accept, which is
     // exactly the serve failure path without touching the network.
-    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
-    assert!(fd >= 0, "udp socket");
-    let addr = libc::sockaddr_in {
-        sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
-        sin_family: libc::AF_INET as u8,
-        sin_port: 0,
-        sin_addr: libc::in_addr {
-            s_addr: u32::from_ne_bytes([127, 0, 0, 1]),
-        },
-        sin_zero: [0; 8],
-    };
-    let bound = unsafe {
-        libc::bind(
-            fd,
-            &addr as *const libc::sockaddr_in as *const libc::sockaddr,
-            std::mem::size_of::<libc::sockaddr_in>() as u32,
-        )
-    };
-    assert_eq!(bound, 0, "udp bind");
+    let fd = UdpSocket::bind("127.0.0.1:0")
+        .expect("udp bind")
+        .into_raw_fd();
     unsafe { TcpListener::from_raw_fd(fd) }
 }
 
