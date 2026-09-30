@@ -1329,6 +1329,57 @@ fn schema_tools_protocol_matrix() {
     live.service.close();
 }
 
+/// Slow-arriving bodies wait instead of refusing: accepted sockets inherit
+/// the nonblocking listener mode, and the server restores blocking reads so
+/// an early read waits for bytes rather than surfacing `WouldBlock` as a
+/// bogus 400 or 503.
+#[test]
+fn slow_body_waits_for_bytes() {
+    let harness = harness(base_snapshot("采一块石头", Vec::new(), &[]));
+    let live = live_service(&harness, Arc::new(FrozenTools));
+    let headers = standard_headers(&live, &harness, true);
+    let borrowed: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    let full = request(
+        "POST",
+        "/mcp",
+        &borrowed,
+        tool_call_body(60, "get_planning_context", "{}").as_bytes(),
+    );
+    let split = full
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+        .expect("head");
+    let mut stream = TcpStream::connect(&live.addr).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    stream.write_all(&full[..split]).expect("head");
+    std::thread::sleep(Duration::from_millis(200));
+    stream.write_all(&full[split..]).expect("body");
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => raw.extend_from_slice(&chunk[..read]),
+            Err(error) => panic!("read: {error}"),
+        }
+    }
+    let text = String::from_utf8(raw).expect("utf8");
+    assert!(
+        text.starts_with("HTTP/1.1 200"),
+        "slow body refused: {text}"
+    );
+    let body = text.split("\r\n\r\n").nth(1).expect("body");
+    let value: serde_json::Value = serde_json::from_str(body).expect("json");
+    assert!(value.get("result").is_some(), "success wrapper missing");
+    live.service.close();
+}
+
 #[test]
 fn cancel_before_after_encode() {
     use mornlea_server::contracts::SnapshotPort;

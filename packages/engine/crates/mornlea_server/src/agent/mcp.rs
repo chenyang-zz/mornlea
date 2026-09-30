@@ -2472,6 +2472,15 @@ fn content_type_is_json(headers: &[(String, String)]) -> bool {
 }
 
 fn serve_connection(inner: &Arc<ServiceInner>, mut stream: TcpStream) {
+    // Accepted sockets inherit the listener nonblocking mode, while the
+    // request path assumes blocking reads with timeouts. Restore blocking
+    // mode so an early read waits for bytes instead of surfacing
+    // `WouldBlock` as a bogus 503 or 400.
+    if stream.set_nonblocking(false).is_err() {
+        let refused = OuterError::unavailable(503);
+        respond_error(&mut stream, &refused);
+        return;
+    }
     let result = serve_request(inner, &mut stream);
     if let Err(error) = result {
         respond_error(&mut stream, &error);
