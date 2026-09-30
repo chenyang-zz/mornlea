@@ -10,15 +10,16 @@
 
 use mornlea_domain::{
     BlockPos, ChunkPos, ContainerKind, ContainerRef, CraftingSize, Dimension, DropId, FiniteVec3,
-    HostileId, HotbarSlot, LookAngles, MotionState, MotionStateParts, PlayerId, ProjectileId,
-    ProjectileKind, SurvivalState, SurvivalStateParts, Weather,
+    HeldActions, HostileId, HotbarSlot, LookAngles, MotionState, MotionStateParts, Movement,
+    PlayerControl, PlayerControlParts, PlayerId, ProjectileId, ProjectileKind, SurvivalState,
+    SurvivalStateParts, Weather,
 };
 use mornlea_protocol::{AdmittedLogin, LoginStart, admit_login};
 use mornlea_server::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation,
-    ChunkKey, ContainerRecord, ContainerSlots, DropRecord, EnvironmentState, InventoryRecord,
-    MiningProgress, ProjectileRecord, RuleEffect, RuleTunables, ServerLimits, SessionKey,
-    SleepState, TickBudget, TransportKind,
+    BowProgress, ChunkKey, ContainerRecord, ContainerSlots, DropRecord, EatingProgress,
+    EnvironmentState, InventoryRecord, MiningProgress, ProjectileRecord, RuleEffect, RuleTunables,
+    ServerLimits, SessionKey, SleepState, TickBudget, TransportKind,
 };
 use mornlea_server::core::login_seed::seed_player;
 use mornlea_server::core::world::ReadyChunk;
@@ -858,4 +859,118 @@ fn full_residents_carry_within_caps() {
     let again = authority.residents();
     assert_eq!(again.actors.len(), 8);
     assert_eq!(again.ready_snapshot().len(), 64);
+}
+
+#[test]
+fn live_reset_keeps_physics_lanes_while_regen_and_actions_advance() {
+    let mut authority = authority();
+    let login = admitted(1, "Ada");
+    let (_, save) = customized_save(login.player_id());
+    let session = authority.admit(login, TransportKind::Memory).unwrap();
+    let mut actor = expected_actor(session, &save);
+    actor.motion = MotionState::new(MotionStateParts {
+        position: actor.motion.position(),
+        velocity: FiniteVec3::try_new([4.0, -3.0, 2.0]).unwrap(),
+        on_ground: false,
+    });
+    actor.survival = SurvivalState::try_new(SurvivalStateParts {
+        health: 15,
+        oxygen: 211,
+        hunger: 17,
+        saturation_zero: false,
+        armor_points: 0,
+    })
+    .unwrap();
+    let key = actor.key;
+    let raw = PlayerControl::new(PlayerControlParts {
+        movement: Movement {
+            move_x: 0,
+            move_z: 1,
+            jump: true,
+        },
+        look: actor.look,
+        actions: HeldActions {
+            primary: true,
+            eating: true,
+            sprinting: true,
+            sneaking: false,
+        },
+    });
+    let before = ActorRuntime {
+        key,
+        controls: Some(raw),
+        has_view: true,
+        reset: true,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 211,
+        peak_y: 77.0,
+        exhaustion_milli: 1_250,
+        saturation_milli: 8_500,
+        since_damage_ticks: 71,
+        drown_ticks: 23,
+        starvation_ticks: 31,
+        eating: Some(EatingProgress {
+            slot: HotbarSlot::new(0).unwrap(),
+            item: 36,
+            ticks: 31,
+        }),
+        bow: Some(BowProgress {
+            slot: HotbarSlot::new(0).unwrap(),
+            ticks: 20,
+        }),
+        path: None,
+        aux: ActorAux::Player {
+            respawn: Some((Dimension::DEPTHS, BlockPos::new(16, 64, 32))),
+            workbench: None,
+        },
+    };
+    let mut context = TickContext::harness(&mut authority, TickBudget::full());
+    context.stage(RuleEffect::Actor(actor.clone())).unwrap();
+    context.stage(RuleEffect::Runtime(before.clone())).unwrap();
+    context.preload_inventory(key, InventoryRecord::empty());
+    let water = BlockPos::new(10, 66, -4);
+    context.preload_block(BlockObservation::try_new(chunk_key(0, -1), 1, 1, water, 27).unwrap());
+    let residents = context.resident_snapshot();
+    drop(context);
+    authority.commit_residents(residents);
+    authority.advance_tick(TickBudget::full()).unwrap();
+    let resident = authority.residents();
+    let after = resident.runtimes.get(&key).unwrap();
+    assert_eq!(
+        after.since_damage_ticks, 72,
+        "regen advances before reset short-circuit"
+    );
+    assert_eq!(after.eating, None, "Eating still interrupts reset actors");
+    assert_eq!(after.bow, None, "BowDraw still interrupts reset actors");
+    assert_eq!(
+        after,
+        &ActorRuntime {
+            since_damage_ticks: 72,
+            starvation_ticks: 0,
+            eating: None,
+            bow: None,
+            ..before
+        }
+    );
+    assert_eq!(
+        resident.actors[0].motion, actor.motion,
+        "position and nonzero velocity are preserved"
+    );
+    assert_eq!(resident.actors[0].look, actor.look);
+    assert_eq!(resident.actors[0].survival, actor.survival);
+    let ActorBody::Player(body) = &mut actor.body else {
+        unreachable!()
+    };
+    body.saturation_milli = 8_500;
+    body.exhaustion_milli = 1_250;
+    assert_eq!(
+        resident.actors[0], actor,
+        "regen changes only its saved survival lanes"
+    );
+    assert_eq!(
+        resident.inventories.get(&key),
+        Some(&InventoryRecord::empty())
+    );
 }

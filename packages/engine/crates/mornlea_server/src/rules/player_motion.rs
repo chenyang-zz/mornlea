@@ -53,10 +53,10 @@
 //! control call uses the survival
 //! initializer to preserve the saved hunger and respawn defaults.
 //!
-//! Deliberate boundaries (later nodes own them): the starvation sprint gate
-//! (`hunger < 6`), the sneak-edge intent clamp, oxygen and fall-damage
-//! settlement, exhaustion accounting, trample and snow-footprint collection,
-//! and safe-location tracking all stay out, exactly like the frozen algorithm.
+//! Oxygen, fall damage and exhaustion belong to the survival provider;
+//! trample and snow-footprint collection belong to the crops provider.
+//! Sneak-edge clamping and safe-location tracking still require separate
+//! qualification at their motion and lifecycle boundaries.
 
 use mornlea_domain::{
     BlockPos, Command, Dimension, FiniteVec3, LookAngles, MotionState, MotionStateParts,
@@ -291,6 +291,21 @@ fn run_motion(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
         },
         None => runtime.controls,
     };
+    if runtime.reset {
+        // Reset actors still accept raw controls, but their pose and look must
+        // not enter geometry or integration until the reset tick ends.
+        runtime.controls = held;
+        ctx.stage(RuleEffect::Runtime(runtime))
+            .map_err(|_| ServerError::Internal {
+                invariant: "player motion staging",
+            })?;
+        return Ok(PhaseReport {
+            examined: 1,
+            applied: 1,
+            carried: 0,
+            rejected: 0,
+        });
+    }
     let (yaw, pitch, move_x, move_z, jump, sprinting, sneaking) = match held {
         Some(control) => {
             let movement = control.movement();
@@ -316,6 +331,9 @@ fn run_motion(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
         ),
     };
 
+    // Source gates change the local physics input, never the held record: a
+    // packet-free tick can resume sprint after hunger recovers.
+    let sprinting = sprinting && record.survival.hunger() >= 6 && !sneaking;
     let tuning: PhysicsTuning = tunables.physics();
     let step = HeldStep {
         move_x,

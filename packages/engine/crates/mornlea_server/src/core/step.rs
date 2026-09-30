@@ -321,6 +321,15 @@ fn dispatch_rows(
         )?;
         per_actor(context, RulePhase::Eating, actor, eating::run)?;
         per_actor(context, RulePhase::BowDraw, actor, projectiles::run)?;
+        // Regen and action interruption still run during reset. Physics and
+        // its oxygen/exhaustion settlement resume after the reset tick.
+        if context
+            .read()
+            .runtime(actor)
+            .is_some_and(|runtime| runtime.reset)
+        {
+            continue;
+        }
         per_actor(
             context,
             RulePhase::PlayerPrePhysicsOxygen,

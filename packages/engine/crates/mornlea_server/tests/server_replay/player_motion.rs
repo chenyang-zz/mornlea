@@ -318,7 +318,7 @@ fn motion_preserves_sibling_runtime() {
             key: actor,
             controls: Some(prior_control),
             has_view: true,
-            reset: true,
+            reset: false,
             attack_cooldown: 13,
             hurt_cooldown: 17,
             burn_cooldown: 19,
@@ -1164,4 +1164,202 @@ fn malformed_intake_and_missing_session_leave_state_unchanged() {
         assert_eq!(context.events(), events);
         assert_eq!(context.deferred(RulePhase::PlayerMotion), deferred);
     }
+}
+
+fn with_hunger(mut actor: ActorRecord, hunger: u8) -> ActorRecord {
+    actor.survival = SurvivalState::try_new(SurvivalStateParts {
+        health: actor.survival.health(),
+        oxygen: actor.survival.oxygen(),
+        hunger,
+        saturation_zero: actor.survival.saturation_zero(),
+        armor_points: actor.survival.armor_points(),
+    })
+    .unwrap();
+    let ActorBody::Player(body) = &mut actor.body else {
+        unreachable!()
+    };
+    body.hunger = hunger;
+    actor
+}
+
+fn sprint_control(sneaking: bool) -> PlayerControl {
+    let ordinary = control(0, 1, false, 0.0, 0.0);
+    PlayerControl::new(PlayerControlParts {
+        movement: ordinary.movement(),
+        look: ordinary.look(),
+        actions: HeldActions {
+            sprinting: true,
+            sneaking,
+            ..ordinary.actions()
+        },
+    })
+}
+
+#[test]
+fn fresh_sprint_packet_obeys_hunger_and_sneak_gates() {
+    // Start at walking speed so one fixed step can reach either target;
+    // acceleration from rest would hide both targets behind the same cap.
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (hunger, sneaking, speed) in [
+        (5, false, 4.3f32),
+        (6, false, 4.3f32 * 1.3),
+        (20, true, 4.3f32 * 0.3),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = motion_scene(
+            &mut context,
+            session,
+            [0.5, 1.0, 0.5],
+            if sneaking { [0.0; 3] } else { [0.0, 0.0, -4.3] },
+            true,
+        );
+        let record = with_hunger(context.read().actor(actor).unwrap().clone(), hunger);
+        context.stage(RuleEffect::Actor(record)).unwrap();
+        let raw = sprint_control(sneaking);
+        let input = envelope(session, 1, Command::PlayerInput(raw));
+        provider::run(&mut context, intake_call(&input)).unwrap();
+        let before = context.read().runtime(actor).unwrap().clone();
+        provider::run(&mut context, motion_call(actor)).unwrap();
+        actual.push((
+            hunger,
+            sneaking,
+            context.read().actor(actor).unwrap().motion.velocity().get()[2].to_bits(),
+        ));
+        expected.push((hunger, sneaking, (-speed).to_bits()));
+        assert_eq!(
+            context.read().runtime(actor),
+            Some(&before),
+            "motion retains raw intent and sibling lanes"
+        );
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn live_sprint_intent_resumes_when_hunger_recovers_without_packet() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = motion_scene(
+        &mut context,
+        session,
+        [0.5, 1.0, 0.5],
+        [0.0, 0.0, -4.3],
+        true,
+    );
+    let record = with_hunger(context.read().actor(actor).unwrap().clone(), 5);
+    context.stage(RuleEffect::Actor(record)).unwrap();
+    context.preload_inventory(actor, InventoryRecord::empty());
+    let residents = context.resident_snapshot();
+    drop(context);
+    state.commit_residents(residents);
+    let raw = sprint_control(false);
+    state
+        .submit(
+            session,
+            mornlea_protocol::PlayIntent::Sequenced {
+                sequence: 1,
+                command: Command::PlayerInput(raw),
+            },
+        )
+        .unwrap();
+    state.advance_tick(TickBudget::full()).unwrap();
+    let first_speed = state.residents().actors[0].motion.velocity().get()[2];
+    let first_controls = state.residents().runtimes.get(&actor).unwrap().controls;
+    let mut recovered = state.residents().clone();
+    recovered.actors[0] = with_hunger(recovered.actors[0].clone(), 6);
+    state.commit_residents(recovered);
+    state.advance_tick(TickBudget::full()).unwrap();
+    let second_speed = state.residents().actors[0].motion.velocity().get()[2];
+    let second_controls = state.residents().runtimes.get(&actor).unwrap().controls;
+    assert_eq!(
+        (
+            first_speed.to_bits(),
+            second_speed.to_bits(),
+            first_controls,
+            second_controls
+        ),
+        (
+            (-4.3f32).to_bits(),
+            (-(4.3f32 * 1.3)).to_bits(),
+            Some(raw),
+            Some(raw)
+        )
+    );
+}
+
+#[test]
+fn reset_motion_preserves_pose_and_all_sibling_runtime_lanes() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = motion_scene(
+        &mut context,
+        session,
+        [i32::MIN as f32, 1.0, 0.5],
+        [4.0, -3.0, 2.0],
+        false,
+    );
+    let before_actor = context.read().actor(actor).unwrap().clone();
+    let before = ActorRuntime {
+        key: actor,
+        controls: Some(sprint_control(false)),
+        has_view: true,
+        reset: true,
+        attack_cooldown: 13,
+        hurt_cooldown: 17,
+        burn_cooldown: 19,
+        oxygen: 211,
+        peak_y: 77.0,
+        exhaustion_milli: 1_250,
+        saturation_milli: 8_500,
+        since_damage_ticks: 71,
+        drown_ticks: 23,
+        starvation_ticks: 31,
+        eating: Some(EatingProgress {
+            slot: HotbarSlot::new(2).unwrap(),
+            item: 36,
+            ticks: 11,
+        }),
+        bow: Some(BowProgress {
+            slot: HotbarSlot::new(3).unwrap(),
+            ticks: 15,
+        }),
+        path: None,
+        aux: ActorAux::Player {
+            respawn: Some((Dimension::DEPTHS, BlockPos::new(16, 64, 32))),
+            workbench: Some(BlockPos::new(4, 1, 0)),
+        },
+    };
+    context.stage(RuleEffect::Runtime(before.clone())).unwrap();
+    let fresh = control(-1, 0, true, 1.234, 0.321);
+    context
+        .defer(
+            envelope(session, 1, Command::PlayerInput(fresh)),
+            RulePhase::PlayerMotion,
+        )
+        .unwrap();
+    provider::run(&mut context, motion_call(actor)).unwrap();
+    assert_eq!(
+        context.read().actor(actor),
+        Some(&before_actor),
+        "reset bypasses even unrepresentable geometry without updating look"
+    );
+    assert_eq!(
+        context.read().runtime(actor),
+        Some(&ActorRuntime {
+            controls: Some(fresh),
+            ..before
+        })
+    );
+    assert!(context.events().is_empty());
 }

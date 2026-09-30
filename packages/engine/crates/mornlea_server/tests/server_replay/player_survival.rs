@@ -973,7 +973,7 @@ fn fall_curve_3_4() {
     }
 
     // Sprint actual: held sprint with forward intent on dry pre-step ground
-    // charges 80; hunger below 6 suppresses the staged sprint bit and charges
+    // charges 80; hunger below 6 suppresses effective sprint and charges
     // nothing; sneaking and mid-air sprints charge nothing either.
     for (name, hunger, sneaking, pre_ground, want) in [
         ("sprint", 20, false, true, 80),
@@ -1028,8 +1028,8 @@ fn fall_curve_3_4() {
         if want == 0 && (hunger < 6 || sneaking) {
             assert_eq!(
                 runtime.controls.map(|held| held.actions().sprinting),
-                Some(false),
-                "{name} clears the staged sprint bit"
+                Some(true),
+                "{name} retains raw sprint intent"
             );
         }
         assert_eq!(context.events().len(), 1, "{name} emits only the pose");
@@ -1939,4 +1939,107 @@ fn pre_step_fluid_minimum_refusal_keeps_pending_charges() {
     );
     assert_eq!(probe(&context, actor, &[]), before);
     assert_eq!(context.take_charges(), vec![(actor, ActionKind::Melee)]);
+}
+
+#[test]
+fn oxygen_preserves_raw_sprint_intent_and_sibling_runtime() {
+    for (hunger, sneaking) in [(5, false), (20, true)] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let actor = survival_scene(&mut context, session, [0.5, 10.0, 0.5], 20, 211, hunger, 0);
+        let raw = action_control(0, 1, false, true, sneaking);
+        stage_runtime(
+            &mut context,
+            actor,
+            211,
+            77.0,
+            1_250,
+            8_500,
+            71,
+            23,
+            31,
+            Some(EatingProgress {
+                slot: HotbarSlot::new(2).unwrap(),
+                item: 36,
+                ticks: 11,
+            }),
+            Some(raw),
+            None,
+        );
+        let mut before = context.read().runtime(actor).unwrap().clone();
+        before.bow = Some(BowProgress {
+            slot: HotbarSlot::new(3).unwrap(),
+            ticks: 15,
+        });
+        before.attack_cooldown = 13;
+        before.hurt_cooldown = 17;
+        before.burn_cooldown = 19;
+        context.stage(RuleEffect::Runtime(before.clone())).unwrap();
+        provider::run(&mut context, oxygen_call(actor)).unwrap();
+        assert_eq!(
+            context.read().runtime(actor),
+            Some(&ActorRuntime {
+                oxygen: 300,
+                drown_ticks: 0,
+                ..before
+            })
+        );
+    }
+}
+
+#[test]
+fn jump_debit_does_not_revoke_already_effective_sprint() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let initial = fixture_state(
+        player_actor(session, [0.5, 10.0, 0.5], [0.0; 3], true, 20, 300, 6),
+        world_record(),
+    );
+    let mut context = fixture_context(&mut state, &initial);
+    let actor = ActorKey::Player(session);
+    context
+        .stage(RuleEffect::Environment(environment_with(0)))
+        .unwrap();
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            [0.5, 10.5, 0.3],
+            [0.0; 3],
+            false,
+            20,
+            300,
+            6,
+        )))
+        .unwrap();
+    let raw = action_control(0, 1, true, true, false);
+    stage_runtime(
+        &mut context,
+        actor,
+        300,
+        10.0,
+        3_970,
+        0,
+        71,
+        23,
+        31,
+        None,
+        Some(raw),
+        None,
+    );
+    let before = context.read().runtime(actor).unwrap().clone();
+    provider::run(&mut context, post_call(actor)).unwrap();
+    assert_eq!(context.read().actor(actor).unwrap().survival.hunger(), 5);
+    assert_eq!(
+        context.read().runtime(actor),
+        Some(&ActorRuntime {
+            exhaustion_milli: 100,
+            peak_y: 10.5,
+            ..before
+        })
+    );
 }

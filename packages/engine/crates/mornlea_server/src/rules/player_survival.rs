@@ -2,7 +2,7 @@
 //!
 //! This provider owns three per-actor calls: `PlayerRegenStarvation` (pre-motion
 //! regen and starvation), `PlayerPrePhysicsOxygen` (pre-physics eye-submersion
-//! oxygen plus the sprint-suppression staging), and `PlayerPostPhysics`
+//! oxygen plus raw held-control staging), and `PlayerPostPhysics`
 //! (post-step peak tracking, fall settlement and the confirmed-pose emission).
 //! It consumes the accepted motion provider's post-movement state and settles
 //! only survival state and damage. Eating settlement, inventory, mining and
@@ -61,8 +61,8 @@
 
 use mornlea_domain::{
     BlockPos, CombatHit, CombatTarget, Command, Dimension, Event, EventRecipient, FiniteVec3,
-    HeldActions, MiningState, MiningStateParts, MotionState, MotionStateParts, PlayerControl,
-    PlayerControlParts, PlayerState, PlayerStateParts, SurvivalState, SurvivalStateParts,
+    MiningState, MiningStateParts, MotionState, MotionStateParts, PlayerControl, PlayerState,
+    PlayerStateParts, SurvivalState, SurvivalStateParts,
 };
 
 use crate::core::contracts::{
@@ -695,10 +695,8 @@ fn regen_starvation(
 /// Pre-physics eye-submersion mirror (`advanceOxygen` in
 /// `packages/server/sim/entity/oxygen.go`, called with the tick-start eye
 /// flag in `advanceActivePlayers`): dry eyes refill immediately, wet ticks
-/// drain one oxygen, and zero oxygen counts 20 ticks per damage. Hunger below
-/// 6 or a sneaking held input suppresses the staged sprint bit, mirroring the
-/// two sprint gates; the crouch edge and collision stay with the accepted
-/// native kernels.
+/// drain one oxygen, and zero oxygen counts 20 ticks per damage. Held controls
+/// remain raw; hunger and sneak gates belong to the local physics input.
 fn oxygen(
     ctx: &mut TickContext<'_>,
     session: SessionKey,
@@ -727,7 +725,7 @@ fn oxygen(
             emit_damage(ctx, session, dealt)?;
         }
     }
-    let controls = suppress_sprint_control(held_control(ctx, session, runtime.controls), &work);
+    let controls = held_control(ctx, session, runtime.controls);
     write_back(ctx, record, runtime, &work, controls, runtime.peak_y)?;
     Ok(PhaseReport {
         examined: 1,
@@ -793,6 +791,13 @@ fn post_physics(
     }
     let mut work = load_work(record, runtime);
     let held = held_control(ctx, session, runtime.controls);
+    // Sprint eligibility belongs to the motion input, before any exhaustion
+    // debit can consume the hunger point that admitted this step's sprint.
+    let sprinting = held.is_some_and(|control| {
+        control.actions().sprinting
+            && work.hunger >= SPRINT_HUNGER_GATE
+            && !control.actions().sneaking
+    });
     // Noted mining/till/melee charges settle before this tick's fall, closest
     // to the reference earn-time settlement a phased tick allows. Charge order
     // is immaterial: the loop result depends only on the summed charges, never
@@ -804,6 +809,16 @@ fn post_physics(
     // construction: without it (a context built empty) no charge fires, so a
     // missing snapshot never invents exhaustion.
     if let Some((pre, pre_position, pre_fluid)) = pre_step {
+        let movement = held.map(|control| control.movement());
+        // Source settlement order is jump, swim, then sprint. Jump uses the
+        // dry real-ground takeoff edge, not an airborne held jump.
+        if movement.is_some_and(|movement| movement.jump)
+            && pre.on_ground()
+            && !pre_fluid
+            && !record.motion.on_ground()
+        {
+            settle_exhaustion(&mut work, JUMP_EXHAUSTION_MILLI, exhaustion_threshold);
+        }
         // Swimming: body-submerged pre-step steps charge the exact
         // fixed-point horizontal displacement, independent of held input;
         // still water naturally converts to zero with no extra branch.
@@ -815,23 +830,12 @@ fn post_physics(
                 exhaustion_threshold,
             );
         }
-        if let Some(control) = held {
-            let movement = control.movement();
-            // Real-ground jump: jump held, pre-step grounded and dry, post-step
-            // airborne. Airborne holds and probe-tolerance steps charge nothing,
-            // exactly like the reference takeoff rule.
-            if movement.jump && pre.on_ground() && !pre_fluid && !record.motion.on_ground() {
-                settle_exhaustion(&mut work, JUMP_EXHAUSTION_MILLI, exhaustion_threshold);
-            }
-            // Sprint actual: suppressed sprint with forward intent on dry
-            // pre-step ground. The suppression above already applied the
-            // hunger and sneak gates, so this is the accelerated subset.
-            let sprinting = suppress_sprint_control(Some(control), &work)
-                .map(|suppressed| suppressed.actions().sprinting)
-                .unwrap_or(false);
-            if sprinting && movement.move_z > 0 && pre.on_ground() && !pre_fluid {
-                settle_exhaustion(&mut work, SPRINT_EXHAUSTION_MILLI, exhaustion_threshold);
-            }
+        if sprinting
+            && movement.is_some_and(|movement| movement.move_z > 0)
+            && pre.on_ground()
+            && !pre_fluid
+        {
+            settle_exhaustion(&mut work, SPRINT_EXHAUSTION_MILLI, exhaustion_threshold);
         }
     }
     if record.motion.on_ground() && pre_step.is_none_or(|(pre, _, _)| !pre.on_ground()) {
@@ -847,8 +851,7 @@ fn post_physics(
     } else {
         peak_baseline.max(position[1])
     };
-    let controls = suppress_sprint_control(held, &work);
-    write_back(ctx, record, runtime, &work, controls, peak_y)?;
+    write_back(ctx, record, runtime, &work, held, peak_y)?;
     // A fresh kill stays silent for the later settling call, exactly like the
     // reference death settlement running before publication.
     if work.health == 0 {
@@ -895,34 +898,6 @@ fn held_control(
             _ => None,
         },
         None => staged,
-    }
-}
-
-/// Sprint suppression mirror (the two sprint gates in `advanceActivePlayers`):
-/// hunger below 6 or a sneaking held input clears the staged sprint bit. The
-/// crouch edge and collision stay with the accepted native kernels.
-fn suppress_sprint_control(
-    held: Option<PlayerControl>,
-    work: &SurvivalWork,
-) -> Option<PlayerControl> {
-    match held {
-        Some(control)
-            if control.actions().sprinting
-                && (work.hunger < SPRINT_HUNGER_GATE || control.actions().sneaking) =>
-        {
-            let actions = control.actions();
-            Some(PlayerControl::new(PlayerControlParts {
-                movement: control.movement(),
-                look: control.look(),
-                actions: HeldActions {
-                    primary: actions.primary,
-                    eating: actions.eating,
-                    sprinting: false,
-                    sneaking: actions.sneaking,
-                },
-            }))
-        }
-        held => held,
     }
 }
 
