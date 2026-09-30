@@ -23,7 +23,8 @@ use super::*;
 use mornlea_domain::{ChunkPos, ContainerKind, ContainerRef, PlayerId};
 use mornlea_protocol::{LoginStart, admit_login};
 use mornlea_server::contracts::{
-    ContainerRecord, ContainerSlots, RulePhase, SessionKey, TransportKind,
+    ContainerRecord, ContainerSlots, EnvironmentState, RuleEffect, RulePhase, RuleTunables,
+    SessionKey, TransportKind,
 };
 use mornlea_server::rules::furnaces as provider;
 use mornlea_storage::ItemStack;
@@ -139,7 +140,7 @@ fn batch_call() -> RuleCall<'static> {
 fn fuel_1600_smelt_200() {
     let reference = furnace_ref(0, 1);
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
-    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut context = furnace_context(&mut state);
     context.preload_container(furnace_record(
         0,
         1,
@@ -204,7 +205,7 @@ fn full_output_pauses_both() {
         199,
     );
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
-    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut context = furnace_context(&mut state);
     context.preload_container(paused.clone());
     let report = provider::advance(&mut context, &[reference]).expect("paused tick");
     assert_eq!(report.examined, 1);
@@ -240,7 +241,7 @@ fn full_output_pauses_both() {
     // A conflicting output and an unusable input pause the same way in one
     // batch: the burn stays frozen at 17 and the 137/1463 pair survives.
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
-    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut context = furnace_context(&mut state);
     let conflict = furnace_record(
         0,
         1,
@@ -286,7 +287,7 @@ fn full_output_pauses_both() {
         137,
     );
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
-    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut context = furnace_context(&mut state);
     context.preload_container(restored);
     let report = provider::advance(&mut context, &[furnace_ref(0, 1)]).expect("restored tick");
     assert_eq!(report.applied, 1);
@@ -322,7 +323,7 @@ fn shape_and_interest_gates() {
     // The wrong phase, and the batch shape carrying a payload, both refuse
     // without touching the staged record.
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
-    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut context = furnace_context(&mut state);
     context.preload_container(ignition.clone());
     assert!(
         provider::run(
@@ -367,7 +368,7 @@ fn shape_and_interest_gates() {
 
     // Duplicate references advance one furnace exactly once.
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
-    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut context = furnace_context(&mut state);
     context.preload_container(ignition.clone());
     let report = provider::advance(&mut context, &[reference, reference]).expect("batch");
     assert_eq!(report.examined, 1);
@@ -377,7 +378,7 @@ fn shape_and_interest_gates() {
 
     // Two chunk-mates advance together in one call.
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
-    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut context = furnace_context(&mut state);
     context.preload_container(furnace_record(
         0,
         1,
@@ -421,7 +422,7 @@ fn shape_and_interest_gates() {
     // A chest reference in the furnace interest set is a hard shape error
     // with nothing staged.
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
-    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut context = furnace_context(&mut state);
     context.preload_container(ignition.clone());
     context.preload_container(ContainerRecord {
         reference: chest_ref(1),
@@ -444,7 +445,7 @@ fn shape_and_interest_gates() {
 fn one_coal_yields_eight_ingots() {
     let reference = furnace_ref(0, 1);
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
-    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut context = furnace_context(&mut state);
     context.preload_container(furnace_record(
         0,
         1,
@@ -477,4 +478,162 @@ fn one_coal_yields_eight_ingots() {
     );
     assert_eq!(burn, 0);
     assert_eq!(progress, 0);
+}
+
+fn furnace_environment(burn: u16, smelt: u8) -> EnvironmentState {
+    let defaults = RuleTunables::source_defaults();
+    EnvironmentState {
+        seed: 7,
+        next_tick: 0,
+        world_time: 0,
+        day_phase_offset: 0,
+        season_offset: 0,
+        weather: mornlea_domain::Weather::Clear,
+        weather_remaining: 0,
+        difficulty: 0,
+        tunables: RuleTunables::try_new(
+            defaults.physics(),
+            100,
+            40,
+            20,
+            80,
+            18,
+            4000,
+            32,
+            burn,
+            smelt,
+            5,
+            3,
+            50,
+            6.0,
+            1.62,
+            10,
+            40,
+            6000,
+            1.25,
+        )
+        .unwrap(),
+    }
+}
+
+fn furnace_context(state: &mut AuthorityState) -> TickContext<'_> {
+    let mut context = TickContext::harness(state, TickBudget::full());
+    context
+        .stage(RuleEffect::Environment(furnace_environment(1600, 200)))
+        .unwrap();
+    context
+}
+
+#[test]
+fn configured_furnace_timing_uses_current_batch_snapshot() {
+    let mut state = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut context = furnace_context(&mut state);
+    let reference = furnace_ref(0, 1);
+    context.preload_container(furnace_record(
+        0,
+        1,
+        stack(ITEM_RAW_IRON, 4),
+        stack(ITEM_COAL, 1),
+        empty(),
+        0,
+        0,
+    ));
+    context
+        .stage(RuleEffect::Environment(furnace_environment(9, 3)))
+        .unwrap();
+    let snapshot = context.read().environment().unwrap().clone();
+    for (burn, progress, inputs, outputs) in [(8, 1, 4, 0), (7, 2, 4, 0), (6, 0, 3, 1)] {
+        assert_eq!(
+            provider::advance(&mut context, &[reference])
+                .unwrap()
+                .applied,
+            1
+        );
+        let (slots, actual_burn, actual_progress) =
+            furnace_parts(&context.read().container(reference).unwrap());
+        assert_eq!(
+            (actual_burn, actual_progress, slots[0].count, slots[2].count),
+            (burn, progress, inputs, outputs)
+        );
+        assert_eq!(slots[1], empty());
+        assert_eq!(context.read().environment(), Some(&snapshot));
+    }
+    context.preload_container(furnace_record(
+        0,
+        1,
+        stack(ITEM_RAW_IRON, 4),
+        empty(),
+        empty(),
+        20,
+        5,
+    ));
+    context
+        .stage(RuleEffect::Environment(furnace_environment(9, 2)))
+        .unwrap();
+    provider::advance(&mut context, &[reference]).unwrap();
+    let (slots, burn, progress) = furnace_parts(&context.read().container(reference).unwrap());
+    assert_eq!(
+        (burn, progress, slots[0].count, slots[2].count),
+        (19, 0, 3, 1)
+    );
+    assert!(context.events().is_empty());
+}
+
+#[test]
+fn configured_furnace_zero_timing_normalizes_at_consumption() {
+    let mut state = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut context = furnace_context(&mut state);
+    let reference = furnace_ref(0, 1);
+    context.preload_container(furnace_record(
+        0,
+        1,
+        stack(ITEM_RAW_IRON, 4),
+        stack(ITEM_COAL, 1),
+        empty(),
+        0,
+        0,
+    ));
+    context
+        .stage(RuleEffect::Environment(furnace_environment(0, 0)))
+        .unwrap();
+    provider::advance(&mut context, &[reference]).unwrap();
+    let (slots, burn, progress) = furnace_parts(&context.read().container(reference).unwrap());
+    assert_eq!(
+        (burn, progress, slots[0].count, slots[2].count),
+        (0, 0, 3, 1)
+    );
+    assert_eq!(slots[1], empty());
+}
+
+#[test]
+fn active_furnace_missing_snapshot_refuses_before_material_mutation() {
+    let mut state = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let reference = furnace_ref(0, 1);
+    assert_eq!(provider::advance(&mut context, &[]).unwrap().applied, 0);
+    assert_eq!(
+        provider::advance(&mut context, &[reference])
+            .unwrap()
+            .applied,
+        0
+    );
+    let before = furnace_record(
+        0,
+        1,
+        stack(ITEM_RAW_IRON, 4),
+        stack(ITEM_COAL, 1),
+        empty(),
+        0,
+        0,
+    );
+    context.preload_container(before.clone());
+    assert_eq!(
+        provider::advance(&mut context, &[reference]),
+        Err(ServerError::Internal {
+            invariant: "furnace snapshot"
+        })
+    );
+    assert_eq!(context.read().container(reference), Some(before));
+    assert!(context.changed_blocks().is_empty());
+    assert!(context.events().is_empty());
 }

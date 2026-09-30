@@ -15,9 +15,9 @@
 //!   the per-tick step. An input with no product, an empty input, or an
 //!   output that cannot accept the product pauses both timers with nothing
 //!   consumed; a zero burn with a valid input consumes one coal and sets the
-//!   burn to 1600 before the same-tick burn-minus-one and progress-plus-one;
-//!   a progress reaching 200 resets to zero and moves one input into the
-//!   output in that same tick.
+//!   configured burn before the same-tick burn-minus-one and progress-plus-one;
+//!   progress reaching the configured smelt interval resets and moves one
+//!   input into the output in that same tick.
 //! - `packages/shared/core/furnace.go` (`FurnaceBurnTicks` 1600,
 //!   `FurnaceSmeltTicks` 200) and the checked caps in `core/contracts.rs`
 //!   (`MAX_FURNACE_BURN`, `MAX_FURNACE_SMELT`), which pin the same pair as
@@ -31,6 +31,10 @@
 //!   set visits each furnace slot at most once per tick, and a furnace
 //!   outside the interest (no Ready chunk, no player interest) is never
 //!   visited, which pauses it without resetting anything.
+//!
+//! Burn and smelt timing come from one immutable environment snapshot per
+//! active batch. Zero values normalize to one before ignition or settlement,
+//! preserving the source tuning invariant without silently using defaults.
 //!
 //! Deliberate boundaries. The frozen `RuleCall` record cannot carry the
 //! interest set and the read view exposes no container enumeration, so — as
@@ -68,16 +72,6 @@ const ITEM_COAL: u16 = 5;
 /// Furnace stack ceiling (`core.MaxStackCount`,
 /// `packages/shared/core/item.go`).
 const MAX_STACK_COUNT: u8 = 64;
-
-/// Burn ticks one coal lights (`core.FurnaceBurnTicks`,
-/// `packages/shared/core/furnace.go`); also the checked snapshot ceiling in
-/// `core/contracts.rs`.
-const FURNACE_BURN_TICKS: u16 = 1600;
-
-/// Progress ticks one smelt takes (`core.FurnaceSmeltTicks`,
-/// `packages/shared/core/furnace.go`); also the checked snapshot ceiling in
-/// `core/contracts.rs`.
-const FURNACE_SMELT_TICKS: u8 = 200;
 
 /// Material cell positions inside the furnace record: input, fuel cell and
 /// output. The unified view slots `36..38` belong to the container view
@@ -142,9 +136,25 @@ pub fn advance(
             }
         }
     }
+    if present.is_empty() {
+        return Ok(PhaseReport {
+            examined: ordered.len(),
+            applied: 0,
+            carried: 0,
+            rejected: 0,
+        });
+    }
+    let tunables = view
+        .environment()
+        .ok_or(ServerError::Internal {
+            invariant: "furnace snapshot",
+        })?
+        .tunables;
+    let burn_ticks = tunables.furnace_burn_ticks().max(1);
+    let smelt_ticks = tunables.furnace_smelt_ticks().max(1);
     let mut applied = 0usize;
     for before in present {
-        if let Some(after) = advance_furnace(&before)? {
+        if let Some(after) = advance_furnace(&before, burn_ticks, smelt_ticks)? {
             ctx.stage(RuleEffect::Container { before, after })
                 .map_err(|_| ServerError::InvalidInput { field: "furnace" })?;
             applied += 1;
@@ -167,13 +177,16 @@ pub fn advance(
 /// different product or a full same-product stack freezes both timers, so a
 /// burning furnace never loses fuel to an unusable input
 /// (`TestFurnaceMaterialsPauseWithoutWastingFuel`). Ignition consumes one
-/// coal and sets the burn to [`FURNACE_BURN_TICKS`] before the same-tick
-/// burn-minus-one and progress-plus-one, so the first tick after lighting
-/// reads burn 1599 with progress 1
+/// coal and sets the configured burn before the same-tick decrement and
+/// progress increment; the source default first step has burn 1599 and progress 1
 /// (`TestFurnaceMaterialsLightFuelAndAdvanceSameTick`). Completion resets the
 /// progress, consumes one input and mints or increments the product in that
 /// same tick (`TestFurnaceProducesMaterialsAtTwoHundredTicks`).
-fn advance_furnace(record: &ContainerRecord) -> Result<Option<ContainerRecord>, ServerError> {
+fn advance_furnace(
+    record: &ContainerRecord,
+    burn_ticks: u16,
+    smelt_ticks: u8,
+) -> Result<Option<ContainerRecord>, ServerError> {
     let ContainerSlots::Furnace {
         slots: stored,
         fuel: burn,
@@ -202,7 +215,7 @@ fn advance_furnace(record: &ContainerRecord) -> Result<Option<ContainerRecord>, 
     if burn == 0 {
         // Ignition row: one coal goes out and the burn time is set before the
         // same-tick decrement, so the first tick after lighting reads
-        // burn `FURNACE_BURN_TICKS - 1` with progress 1.
+        // configured burn minus one with progress 1.
         if fuel_cell.item != ITEM_COAL || fuel_cell.count == 0 {
             return Ok(None);
         }
@@ -212,13 +225,13 @@ fn advance_furnace(record: &ContainerRecord) -> Result<Option<ContainerRecord>, 
             fuel = ItemStack::default();
         }
         slots[FUEL_CELL] = fuel;
-        burn = u32::from(FURNACE_BURN_TICKS);
+        burn = u32::from(burn_ticks);
     }
     burn -= 1;
     progress = progress
         .checked_add(1)
         .ok_or(ServerError::InvalidInput { field: "progress" })?;
-    if progress >= u32::from(FURNACE_SMELT_TICKS) {
+    if progress >= u32::from(smelt_ticks) {
         // Completion row: the same tick resets the progress, consumes one
         // input and mints or increments the product.
         progress = 0;
