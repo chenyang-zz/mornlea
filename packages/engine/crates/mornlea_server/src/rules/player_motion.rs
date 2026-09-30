@@ -2,10 +2,11 @@
 //!
 //! This provider owns two calls: the `PlayerCommand`-phase control intake for
 //! `PlayerInput` commands, and the per-actor `PlayerMotion`-phase advance. The
-//! intake validates one envelope and defers it to the motion phase through
-//! [`TickContext::defer`]; the advance resolves the latest deferred envelope
-//! per session and steps the actor through the accepted F1 kernels. A tick
-//! without a new envelope retains the runtime's held controls. Intake order
+//! intake validates one envelope, commits held controls and look before action
+//! advancement, and defers it to the motion phase through [`TickContext::defer`].
+//! The advance resolves the latest deferred envelope per session and steps the
+//! actor through the accepted F1 kernels. A tick without a new envelope retains
+//! the runtime's held controls. Intake order
 //! is arrival order, so the first envelope kept at a tied sequence is the
 //! earliest arrival, matching the ordering layer's tie rule (`order_commands`
 //! in `mornlea_domain`).
@@ -45,9 +46,11 @@
 //! [`ActorRuntime::controls`](crate::core::contracts::ActorRuntime::controls) for the
 //! Interaction-phase sneak gate: this provider is the single writer, staging
 //! the resolved control (`Some` for the latest validated input, `None` once
-//! cleared or never held) on every successful advance. The remaining runtime
-//! fields retain the current record unchanged because the shared staging
-//! surface replaces the whole record. A first advance uses the survival
+//! cleared or never held) during intake and on every successful advance. Invalid
+//! input also interrupts eating, bow and mining progress before action providers
+//! run. The remaining runtime fields retain the current record unchanged
+//! because the shared staging surface replaces the whole record. A first
+//! control call uses the survival
 //! initializer to preserve the saved hunger and respawn defaults.
 //!
 //! Deliberate boundaries (later nodes own them): the starvation sprint gate
@@ -135,15 +138,15 @@ const PRISM_MAX_CELLS: u64 = 4096;
 ///
 /// Intake (`RulePhase::PlayerCommand` with a command and no actor) admits the
 /// envelope only above the session's last deferred sequence, then validates
-/// the control: a valid envelope defers and reports applied, a stale or
-/// duplicate envelope reports rejected with nothing deferred, and an invalid
-/// envelope defers its tombstone (so the advance clears) and returns
-/// [`ServerError::InvalidInput`]. Every refusal path stages nothing, so the
-/// observable state hash is untouched.
+/// the control: a valid envelope stages controls and look, then reports applied;
+/// a stale or duplicate envelope reports rejected with nothing deferred, and an invalid
+/// envelope defers its tombstone, clears controls and action progress, and
+/// returns [`ServerError::InvalidInput`]. This admitted cleanup keeps pose and
+/// look unchanged. Malformed shapes and missing sessions stage nothing.
 ///
 /// Advance (`RulePhase::PlayerMotion` with a player actor and no command)
 /// snapshots the tick-start tunables, resolves the latest deferred control for
-/// the session (neutral when absent or cleared), steps the F1 kernels, and
+/// the session (retaining held input when absent), steps the F1 kernels, and
 /// stages the advanced actor plus the held-controls runtime record. Any other
 /// shape refuses without effect.
 pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
@@ -154,8 +157,8 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
     }
 }
 
-/// One intake: validate a `PlayerInput` envelope and defer it to the motion
-/// phase, mirroring the admission half of `ApplyPlayerCommands`
+/// One intake: validate a `PlayerInput` envelope and commit controls and look
+/// before action advancement, mirroring `ApplyPlayerCommands`
 /// (`packages/server/sim/entity/tick.go`).
 fn run_intake(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, ServerError> {
     if call.actor.is_some() || call.internal.is_some() {
@@ -170,10 +173,11 @@ fn run_intake(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
     };
     let session = SessionKey::from_raw(envelope.session())
         .ok_or(ServerError::InvalidInput { field: "session" })?;
-    match ctx.read().actor(ActorKey::Player(session)) {
-        Some(record) if record.lifecycle == ActorLifecycle::Active => {}
+    let actor = ActorKey::Player(session);
+    let mut record = match ctx.read().actor(actor) {
+        Some(record) if record.lifecycle == ActorLifecycle::Active => record.clone(),
         _ => return Err(ServerError::InvalidInput { field: "session" }),
-    }
+    };
     if let Some(latest) = latest_deferred(ctx, session)
         && latest.sequence() >= envelope.sequence()
     {
@@ -184,15 +188,39 @@ fn run_intake(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
             rejected: 1,
         });
     }
-    // The tombstone defers even though the call refuses: the sequence was
-    // admitted (Go records `lastInputSequence` before validating), so the
-    // advance must see the invalid latest and clear rather than reuse older
-    // movement. Deferral touches only the intake queue the refusal probe does
-    // not cover, so staged state stays untouched.
+    // Reserve the admitted sequence before changing state. An invalid latest
+    // is a tombstone, not a release: clear draw progress before BowDraw can
+    // interpret the cleared primary bit as firing an arrow.
     ctx.defer(*envelope, RulePhase::PlayerMotion)?;
+    let mut runtime = merged_runtime(&ctx.read(), &record)?;
     if !valid_control(control) {
+        runtime.controls = None;
+        runtime.eating = None;
+        runtime.bow = None;
+        ctx.stage(RuleEffect::Compound(vec![
+            RuleEffect::Runtime(runtime),
+            RuleEffect::Mining {
+                actor,
+                progress: None,
+            },
+        ]))
+        .map_err(|_| ServerError::Internal {
+            invariant: "player intake staging",
+        })?;
         return Err(ServerError::InvalidInput { field: "control" });
     }
+    runtime.controls = Some(control);
+    record.look = LookAngles::try_new(normalize_yaw(control.look().yaw()), control.look().pitch())
+        .map_err(|_| ServerError::Internal {
+            invariant: "player intake look",
+        })?;
+    ctx.stage(RuleEffect::Compound(vec![
+        RuleEffect::Actor(record),
+        RuleEffect::Runtime(runtime),
+    ]))
+    .map_err(|_| ServerError::Internal {
+        invariant: "player intake staging",
+    })?;
     Ok(PhaseReport {
         examined: 1,
         applied: 1,

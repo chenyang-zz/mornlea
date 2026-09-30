@@ -299,7 +299,7 @@ fn applied(report: PhaseReport) -> bool {
 #[test]
 fn motion_preserves_sibling_runtime() {
     let prior_control = control(-1, 0, false, 0.0, 0.0);
-    let replacement = control(1, 0, false, 0.0, 0.0);
+    let replacement = control(1, 0, false, 3.0 * std::f32::consts::PI, 0.2);
     let neutral = control(0, 0, false, 0.0, 0.0);
     let invalid = control(2, 0, false, 0.0, 0.0);
     for (name, incoming, expected_control) in [
@@ -354,16 +354,57 @@ fn motion_preserves_sibling_runtime() {
         context
             .stage(RuleEffect::Runtime(before.clone()))
             .expect("runtime preimage");
+        let mining = MiningProgress {
+            actor,
+            dimension: Dimension::OVERWORLD,
+            target: BlockPos::new(2, 1, 0),
+            observed_block: STONE,
+            tool_slot: HotbarSlot::new(0).unwrap(),
+            tool: ItemStack::default(),
+            elapsed: 3,
+            required: 10,
+            last_tick: 0,
+        };
+        context
+            .stage(RuleEffect::Mining {
+                actor,
+                progress: Some(mining.clone()),
+            })
+            .unwrap();
+        let mut expected_actor = context.read().actor(actor).unwrap().clone();
+        let interrupted = incoming == Some(invalid);
+        let expected = ActorRuntime {
+            controls: expected_control,
+            eating: if interrupted { None } else { before.eating },
+            bow: if interrupted { None } else { before.bow },
+            ..before
+        };
         if let Some(input) = incoming {
             let envelope = envelope(session, 1, Command::PlayerInput(input));
             let admitted = provider::run(&mut context, intake_call(&envelope));
             assert_eq!(admitted.is_ok(), input != invalid, "{name} admission");
         }
+        if incoming == Some(replacement) {
+            expected_actor.look = LookAngles::try_new(-std::f32::consts::PI, 0.2).unwrap();
+        } else if incoming == Some(neutral) {
+            expected_actor.look = neutral.look();
+        }
+        assert_eq!(
+            context.read().actor(actor),
+            Some(&expected_actor),
+            "{name}: intake preserves pose and body"
+        );
+        assert_eq!(
+            context.read().runtime(actor),
+            Some(&expected),
+            "{name}: intake publishes complete runtime before actions"
+        );
+        assert_eq!(
+            context.read().mining(actor),
+            if interrupted { None } else { Some(&mining) },
+            "{name}: only invalid input interrupts mining"
+        );
         provider::run(&mut context, motion_call(actor)).expect("motion advance");
-        let expected = ActorRuntime {
-            controls: expected_control,
-            ..before
-        };
         assert_eq!(context.read().runtime(actor), Some(&expected), "{name}");
     }
 }
@@ -584,7 +625,7 @@ fn wall_fluid_fall_latest_input() {
 }
 
 /// An invalid latest input clears previous movement and held controls while
-/// the staged state hash stays unchanged, mirroring
+/// pose and observations stay unchanged during intake, mirroring
 /// `TestInvalidLatestInputIsAckedAndNeutral`: position kept, velocity zeroed,
 /// and the following tick without input stays neutral.
 #[test]
@@ -609,7 +650,8 @@ fn invalid_clears_held() {
     );
     provider::run(&mut context, intake_call(&valid)).expect("valid intake staged");
 
-    // The invalid intake itself refuses with actor, cells and events untouched.
+    // The invalid intake interrupts action progress while retaining the pose,
+    // cells and events. Invalid input is an admitted control tombstone.
     let before = probe(&context, actor, &cells);
     let invalid = envelope(
         session,
@@ -623,7 +665,7 @@ fn invalid_clears_held() {
         "invalid intake leaves staged state unchanged"
     );
 
-    // The advance then runs on cleared controls: the staged velocity zeroes
+    // The advance then runs on the controls already cleared at intake: the staged velocity zeroes
     // while the position is kept, and the next advance without new input stays
     // neutral.
     provider::run(&mut context, motion_call(actor)).expect("cleared advance");
@@ -1053,5 +1095,73 @@ fn motion_fluid_minimum_refuses_without_effect_and_nearby_succeeds() {
         } else {
             assert!(applied(result.unwrap()));
         }
+    }
+}
+
+#[test]
+fn malformed_intake_and_missing_session_leave_state_unchanged() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = motion_scene(&mut context, session, [0.5, 1.0, 0.5], [0.0; 3], true);
+    provider::run(&mut context, motion_call(actor)).unwrap();
+    let valid = envelope(
+        session,
+        1,
+        Command::PlayerInput(control(0, 0, false, 0.0, 0.0)),
+    );
+    let foreign = envelope(
+        session,
+        1,
+        Command::SelectHotbar(HotbarSlot::new(0).unwrap()),
+    );
+    let absent = CommandEnvelope::try_new(CommandEnvelopeParts {
+        tick: 0,
+        session: 999,
+        sequence: 1,
+        arrival_index: 0,
+        command: valid.command(),
+    })
+    .unwrap();
+    let zero = CommandEnvelope::try_new(CommandEnvelopeParts {
+        tick: 0,
+        session: 0,
+        sequence: 1,
+        arrival_index: 0,
+        command: valid.command(),
+    })
+    .unwrap();
+    for call in [
+        RuleCall {
+            phase: RulePhase::PlayerCommand,
+            actor: None,
+            command: None,
+            internal: None,
+        },
+        RuleCall {
+            phase: RulePhase::PlayerCommand,
+            actor: Some(actor),
+            command: Some(&valid),
+            internal: None,
+        },
+        intake_call(&foreign),
+        intake_call(&absent),
+        intake_call(&zero),
+    ] {
+        let before = context.resident_snapshot();
+        let events = context.events().to_vec();
+        let deferred = context.deferred(RulePhase::PlayerMotion);
+        assert!(provider::run(&mut context, call).is_err());
+        let after = context.resident_snapshot();
+        assert_eq!(after.actors, before.actors);
+        assert_eq!(after.runtimes, before.runtimes);
+        assert_eq!(after.inventories, before.inventories);
+        assert_eq!(after.mining, before.mining);
+        assert_eq!(after.projectiles, before.projectiles);
+        assert_eq!(after.blocks, before.blocks);
+        assert_eq!(context.events(), events);
+        assert_eq!(context.deferred(RulePhase::PlayerMotion), deferred);
     }
 }

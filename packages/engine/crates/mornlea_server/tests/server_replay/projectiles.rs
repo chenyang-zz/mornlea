@@ -2,15 +2,15 @@
 
 use super::*;
 use mornlea_domain::{
-    BlockPos, ChunkPos, CombatTarget, Dimension, Event, EventRecipient, FiniteVec3, HeldActions,
-    HotbarSlot, LookAngles, MotionState, MotionStateParts, Movement, PlayerControl,
-    PlayerControlParts, ProjectileId, ProjectileKind, Season, SurvivalState, SurvivalStateParts,
-    Weather, WorldState, WorldStateParts,
+    BlockPos, ChunkPos, CombatTarget, Command, CommandEnvelope, CommandEnvelopeParts, Dimension,
+    Event, EventRecipient, FiniteVec3, HeldActions, HotbarSlot, LookAngles, MotionState,
+    MotionStateParts, Movement, PlayerControl, PlayerControlParts, ProjectileId, ProjectileKind,
+    Season, SurvivalState, SurvivalStateParts, Weather, WorldState, WorldStateParts,
 };
 use mornlea_server::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation,
-    BowProgress, ChunkKey, EatingProgress, EnvironmentState, InventoryRecord, ProjectileRecord,
-    RuleEffect, RulePhase, RuleTunables, SessionKey, TransportKind,
+    BowProgress, ChunkKey, EatingProgress, EnvironmentState, InventoryRecord, MiningProgress,
+    ProjectileRecord, RuleEffect, RulePhase, RuleTunables, SessionKey, TransportKind,
 };
 use mornlea_server::rules::projectiles as provider;
 use mornlea_storage::{ItemStack, PlayerLocation, PlayerSave};
@@ -1368,4 +1368,240 @@ fn block_tie_wins_and_stale_target_is_ignored() {
     provider::advance(&mut next, &scopes).expect("stale target step");
     assert_eq!(next.snapshot_state(world()).projectiles.len(), 1);
     assert!(next.read().damage_intents().is_empty());
+}
+
+fn player_input(
+    ctx: &mut TickContext<'_>,
+    session: SessionKey,
+    sequence: u64,
+    input: PlayerControl,
+) -> Result<PhaseReport, ServerError> {
+    let envelope = CommandEnvelope::try_new(CommandEnvelopeParts {
+        tick: 0,
+        session: session.get(),
+        sequence,
+        arrival_index: sequence,
+        command: Command::PlayerInput(input),
+    })
+    .unwrap();
+    mornlea_server::rules::player_motion::run(
+        ctx,
+        RuleCall {
+            phase: RulePhase::PlayerCommand,
+            actor: None,
+            command: Some(&envelope),
+            internal: None,
+        },
+    )
+}
+
+#[test]
+fn intake_primary_advances_bow_before_motion() {
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let session = admit_session(&mut authority);
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = bow_scene(&mut ctx, session, false, None);
+    let before = ctx.read().actor(actor).unwrap().clone();
+    player_input(&mut ctx, session, 1, control(true)).unwrap();
+    provider::run(&mut ctx, bow_call(actor)).unwrap();
+    assert_eq!(
+        ctx.read().runtime(actor).unwrap().bow,
+        Some(BowProgress {
+            slot: HotbarSlot::new(0).unwrap(),
+            ticks: 1
+        })
+    );
+    assert_eq!(
+        ctx.read().actor(actor),
+        Some(&before),
+        "intake and bow never move the actor"
+    );
+    assert_eq!(ctx.read().inventory(actor).unwrap().slots[1].count, 3);
+    assert!(ctx.snapshot_state(world()).projectiles.is_empty());
+}
+
+#[test]
+fn intake_release_fires_with_new_look_before_motion() {
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let session = admit_session(&mut authority);
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = bow_scene(&mut ctx, session, true, Some(20));
+    let before_pose = ctx.read().actor(actor).unwrap().motion;
+    let input = PlayerControl::new(PlayerControlParts {
+        look: LookAngles::try_new(1.234, 0.321).unwrap(),
+        movement: control(false).movement(),
+        actions: control(false).actions(),
+    });
+    player_input(&mut ctx, session, 1, input).unwrap();
+    assert_eq!(
+        ctx.read().runtime(actor).unwrap().bow.unwrap().ticks,
+        20,
+        "valid release leaves progress for BowDraw"
+    );
+    provider::run(&mut ctx, bow_call(actor)).unwrap();
+    let arrows = ctx.snapshot_state(world()).projectiles;
+    assert_eq!(arrows.len(), 1);
+    assert_eq!(
+        arrows[0].velocity.get().map(f32::to_bits),
+        [0xc1d6_f22d, 0x4117_7290, 0xc116_8556]
+    );
+    assert_eq!(ctx.read().actor(actor).unwrap().motion, before_pose);
+    assert_eq!(ctx.read().inventory(actor).unwrap().slots[1].count, 2);
+    assert_eq!(
+        ctx.read().inventory(actor).unwrap().slots[0].durability,
+        119
+    );
+}
+
+#[test]
+fn invalid_intake_interrupts_actions_and_never_releases_bow() {
+    for valid_release_after in [false, true] {
+        let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+        let session = admit_session(&mut authority);
+        let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+        let actor = bow_scene(&mut ctx, session, true, Some(20));
+        let mut runtime = ctx.read().runtime(actor).unwrap().clone();
+        runtime.eating = Some(EatingProgress {
+            slot: HotbarSlot::new(1).unwrap(),
+            item: 36,
+            ticks: 7,
+        });
+        ctx.stage(RuleEffect::Runtime(runtime)).unwrap();
+        ctx.stage(RuleEffect::Mining {
+            actor,
+            progress: Some(MiningProgress {
+                actor,
+                dimension: Dimension::OVERWORLD,
+                target: BlockPos::new(0, 63, 0),
+                observed_block: 2,
+                tool_slot: HotbarSlot::new(0).unwrap(),
+                tool: ItemStack::default(),
+                elapsed: 3,
+                required: 10,
+                last_tick: 0,
+            }),
+        })
+        .unwrap();
+        let inventory = *ctx.read().inventory(actor).unwrap();
+        let before = ctx.read().actor(actor).unwrap().clone();
+        let invalid = PlayerControl::new(PlayerControlParts {
+            movement: Movement {
+                move_x: 2,
+                move_z: 0,
+                jump: false,
+            },
+            look: control(false).look(),
+            actions: control(false).actions(),
+        });
+        assert_eq!(
+            player_input(&mut ctx, session, 1, invalid),
+            Err(ServerError::InvalidInput { field: "control" })
+        );
+        assert_eq!(ctx.read().runtime(actor).unwrap().controls, None);
+        assert_eq!(ctx.read().runtime(actor).unwrap().eating, None);
+        assert_eq!(ctx.read().runtime(actor).unwrap().bow, None);
+        assert_eq!(ctx.read().mining(actor), None);
+        if valid_release_after {
+            player_input(&mut ctx, session, 2, control(false)).unwrap();
+        }
+        provider::run(&mut ctx, bow_call(actor)).unwrap();
+        assert_eq!(
+            ctx.read().runtime(actor).unwrap().bow,
+            None,
+            "a later valid release cannot resurrect invalidated progress"
+        );
+        assert_eq!(
+            ctx.read().inventory(actor),
+            Some(&inventory),
+            "no arrow debit or bow wear"
+        );
+        assert!(ctx.snapshot_state(world()).projectiles.is_empty());
+        assert_eq!(ctx.read().actor(actor), Some(&before));
+    }
+}
+
+#[test]
+fn stale_and_tied_invalid_intake_preserve_winning_draw() {
+    for stale_sequence in [1, 2] {
+        let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+        let session = admit_session(&mut authority);
+        let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+        let actor = bow_scene(&mut ctx, session, true, Some(20));
+        let mut initial = ctx.read().runtime(actor).unwrap().clone();
+        initial.eating = Some(EatingProgress {
+            slot: HotbarSlot::new(1).unwrap(),
+            item: 36,
+            ticks: 7,
+        });
+        ctx.stage(RuleEffect::Runtime(initial)).unwrap();
+        let mining = MiningProgress {
+            actor,
+            dimension: Dimension::OVERWORLD,
+            target: BlockPos::new(0, 63, 0),
+            observed_block: 2,
+            tool_slot: HotbarSlot::new(0).unwrap(),
+            tool: ItemStack::default(),
+            elapsed: 3,
+            required: 10,
+            last_tick: 0,
+        };
+        ctx.stage(RuleEffect::Mining {
+            actor,
+            progress: Some(mining.clone()),
+        })
+        .unwrap();
+        player_input(&mut ctx, session, 2, control(true)).unwrap();
+        let before = ctx.read().runtime(actor).unwrap().clone();
+        let invalid = PlayerControl::new(PlayerControlParts {
+            movement: Movement {
+                move_x: 2,
+                move_z: 0,
+                jump: false,
+            },
+            look: control(false).look(),
+            actions: control(false).actions(),
+        });
+        assert_eq!(
+            player_input(&mut ctx, session, stale_sequence, invalid).unwrap(),
+            PhaseReport {
+                examined: 1,
+                applied: 0,
+                carried: 0,
+                rejected: 1
+            }
+        );
+        assert_eq!(ctx.read().runtime(actor), Some(&before));
+        assert_eq!(ctx.read().mining(actor), Some(&mining));
+        assert_eq!(ctx.deferred(RulePhase::PlayerMotion).len(), 1);
+        provider::run(&mut ctx, bow_call(actor)).unwrap();
+        assert_eq!(ctx.read().runtime(actor).unwrap().bow.unwrap().ticks, 21);
+        assert!(ctx.snapshot_state(world()).projectiles.is_empty());
+    }
+}
+
+#[test]
+fn invalid_then_valid_release_does_not_resurrect_draw() {
+    let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
+    let session = admit_session(&mut authority);
+    let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+    let actor = bow_scene(&mut ctx, session, true, Some(20));
+    let inventory = *ctx.read().inventory(actor).unwrap();
+    let invalid = PlayerControl::new(PlayerControlParts {
+        movement: Movement {
+            move_x: 2,
+            move_z: 0,
+            jump: false,
+        },
+        look: control(false).look(),
+        actions: control(false).actions(),
+    });
+    assert_eq!(
+        player_input(&mut ctx, session, 1, invalid),
+        Err(ServerError::InvalidInput { field: "control" })
+    );
+    player_input(&mut ctx, session, 2, control(false)).unwrap();
+    provider::run(&mut ctx, bow_call(actor)).unwrap();
+    assert_eq!(ctx.read().runtime(actor).unwrap().bow, None);
+    assert_eq!(ctx.read().inventory(actor), Some(&inventory));
+    assert!(ctx.snapshot_state(world()).projectiles.is_empty());
 }
