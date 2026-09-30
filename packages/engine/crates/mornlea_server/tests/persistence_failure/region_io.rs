@@ -11,6 +11,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -95,6 +96,165 @@ impl DiskIo for Fault {
         }
         Ok(())
     }
+}
+
+#[derive(Default)]
+struct ParentFaultState {
+    rename_after: bool,
+    directory_sync: bool,
+    directory_close: bool,
+    directory_sync_attempts: usize,
+}
+
+struct ParentFault(Arc<Mutex<ParentFaultState>>);
+
+impl DiskIo for ParentFault {
+    fn boundary(&mut self, point: IoFaultPoint, phase: IoPhase) -> io::Result<()> {
+        let mut fault = self.0.lock().unwrap();
+        if point == IoFaultPoint::DirectorySync && phase == IoPhase::Before {
+            fault.directory_sync_attempts += 1;
+        }
+        if (fault.rename_after && point == IoFaultPoint::Rename && phase == IoPhase::After)
+            || (fault.directory_sync
+                && point == IoFaultPoint::DirectorySync
+                && phase == IoPhase::Before)
+        {
+            return Err(io::ErrorKind::Other.into());
+        }
+        Ok(())
+    }
+
+    fn close(&mut self, file: File) -> io::Result<()> {
+        let is_directory = file.metadata()?.is_dir();
+        NativeDiskIo.close(file)?;
+        if is_directory && self.0.lock().unwrap().directory_close {
+            Err(io::ErrorKind::Other.into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn parent_barrier_error() -> ServerError {
+    ServerError::Io {
+        operation: Operation::DirectorySync,
+        kind: io::ErrorKind::Other,
+    }
+}
+
+fn assert_parent_retry_after_compaction(rename_after: bool, directory_close: bool) {
+    let temp = TempRegion::new();
+    let fault = Arc::new(Mutex::new(ParentFaultState::default()));
+    let mut region = RegionIo::with_io(
+        &temp.path,
+        region_key(),
+        Box::new(ParentFault(fault.clone())),
+    )
+    .unwrap();
+    assert_eq!(
+        region
+            .save(&[save(0, 1, 1)], &IoCancellation::new())
+            .committed,
+        committed(0, 1)
+    );
+    *fault.lock().unwrap() = ParentFaultState {
+        rename_after,
+        directory_sync: !directory_close,
+        directory_close,
+        directory_sync_attempts: 0,
+    };
+    let expected = if rename_after {
+        ServerError::Io {
+            operation: Operation::Replace,
+            kind: io::ErrorKind::Other,
+        }
+    } else {
+        parent_barrier_error()
+    };
+    assert_eq!(region.compact(&IoCancellation::new()), Err(expected));
+    assert_eq!(fault.lock().unwrap().directory_sync_attempts, 1);
+    fault.lock().unwrap().rename_after = false;
+    for revision in [2, 1] {
+        let refused = region.save(
+            &[save(0, revision, revision as u16)],
+            &IoCancellation::new(),
+        );
+        assert!(
+            refused.committed.is_empty(),
+            "uncertain parent acknowledged a revision"
+        );
+        assert_eq!(refused.error, Some(parent_barrier_error()));
+    }
+    assert_eq!(region.sync(), Err(parent_barrier_error()));
+    assert_eq!(region.close(), Err(parent_barrier_error()));
+    assert_eq!(region.load(chunk_key(0)).unwrap().revision, 1);
+    *fault.lock().unwrap() = ParentFaultState::default();
+    let retried = region.save(&[save(0, 2, 2)], &IoCancellation::new());
+    assert_eq!(retried.error, None);
+    assert_eq!(retried.committed, committed(0, 2));
+    region.close().unwrap();
+    assert_eq!(
+        RegionIo::open(&temp.path, region_key())
+            .unwrap()
+            .load(chunk_key(0))
+            .unwrap()
+            .revision,
+        2
+    );
+}
+
+#[test]
+fn compaction_parent_retry_after_rename_fault() {
+    assert_parent_retry_after_compaction(true, false);
+}
+
+#[test]
+fn compaction_parent_retry_after_directory_sync_fault() {
+    assert_parent_retry_after_compaction(false, false);
+}
+
+#[test]
+fn compaction_parent_retry_after_directory_close_fault() {
+    assert_parent_retry_after_compaction(false, true);
+}
+
+#[test]
+fn creation_parent_retry_on_reopen() {
+    let temp = TempRegion::new();
+    let fault = Arc::new(Mutex::new(ParentFaultState {
+        rename_after: true,
+        directory_sync: true,
+        directory_close: false,
+        directory_sync_attempts: 0,
+    }));
+    assert!(matches!(
+        RegionIo::with_io(
+            &temp.path,
+            region_key(),
+            Box::new(ParentFault(fault.clone()))
+        ),
+        Err(ServerError::Io {
+            operation: Operation::Replace,
+            kind: io::ErrorKind::Other,
+        })
+    ));
+    assert!(temp.path.exists());
+    assert_eq!(fault.lock().unwrap().directory_sync_attempts, 1);
+    fault.lock().unwrap().rename_after = false;
+    let mut region = RegionIo::with_io(
+        &temp.path,
+        region_key(),
+        Box::new(ParentFault(fault.clone())),
+    )
+    .unwrap();
+    let refused = region.save(&[save(0, 1, 1)], &IoCancellation::new());
+    assert!(refused.committed.is_empty());
+    assert_eq!(refused.error, Some(parent_barrier_error()));
+    *fault.lock().unwrap() = ParentFaultState::default();
+    let retried = region.save(&[save(0, 1, 1)], &IoCancellation::new());
+    assert_eq!(retried.error, None);
+    assert_eq!(retried.committed, committed(0, 1));
+    region.close().unwrap();
 }
 
 #[test]
@@ -557,7 +717,12 @@ fn compact_atomic_fault_boundaries() {
             region.load(chunk_key(0)).unwrap().chunk,
             save(0, 4, 4).chunk
         );
-        region.close().unwrap();
+        if point == IoFaultPoint::DirectorySync {
+            assert_eq!(region.close(), Err(parent_barrier_error()));
+            drop(region);
+        } else {
+            region.close().unwrap();
+        }
         assert_eq!(
             RegionIo::open(&temp.path, region_key())
                 .unwrap()

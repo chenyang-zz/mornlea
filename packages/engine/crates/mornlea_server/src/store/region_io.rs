@@ -34,6 +34,7 @@ pub struct RegionIo {
     active: usize,
     copies: [Option<RegionBank>; 2],
     uncertain: bool,
+    parent_uncertain: bool,
     closed: bool,
 }
 
@@ -52,10 +53,16 @@ impl RegionIo {
             active: 0,
             copies: [None, None],
             uncertain: false,
+            parent_uncertain: false,
             closed: false,
         };
         match OpenOptions::new().read(true).write(true).open(path) {
-            Ok(file) => owner.file = Some(file),
+            Ok(file) => {
+                owner.file = Some(file);
+                // A prior owner may have published this name without completing
+                // its directory barrier. Loads remain read-only until an ack.
+                owner.parent_uncertain = true;
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 owner.create()?;
                 owner.file = Some(
@@ -137,6 +144,7 @@ impl RegionIo {
     ) -> Result<(), ServerError> {
         cancel.check()?;
         self.ensure_view()?;
+        self.repair_parent()?;
         // Validation and duplicate arbitration complete before the first payload byte.
         let mut pending: BTreeMap<usize, (ChunkSave, Vec<u8>, bool)> = BTreeMap::new();
         for save in saves {
@@ -339,18 +347,11 @@ impl RegionIo {
             let _ = self.reopen();
             return Err(io_error(Operation::Close, error));
         }
-        let canonical_path = self.path.clone();
-        let renamed = self.at(IoFaultPoint::Rename, Operation::Replace, |_owner| {
-            fs::rename(temp_path, &canonical_path)
-        });
-        if let Err(error) = renamed {
-            let _ = self.reopen();
-            return Err(error);
-        }
-        let synced = self.sync_parent();
+        let renamed = self.publish_temporary(temp_path);
         let reopened = self.reopen();
-        synced?;
+        renamed?;
         reopened?;
+        self.repair_parent()?;
         if self.active != 0 || self.bank.as_ref() != Some(&next) {
             return Err(corrupt());
         }
@@ -359,6 +360,7 @@ impl RegionIo {
 
     pub fn sync(&mut self) -> Result<(), ServerError> {
         self.ensure_view()?;
+        self.repair_parent()?;
         self.file()?
             .sync_all()
             .map_err(|e| io_error(Operation::Sync, e))
@@ -402,6 +404,7 @@ impl RegionIo {
     }
 
     pub fn close(&mut self) -> Result<(), ServerError> {
+        self.repair_parent()?;
         self.closed = true;
         if let Some(file) = self.file.take() {
             self.bank = None;
@@ -431,11 +434,7 @@ impl RegionIo {
             self.io
                 .close(temp)
                 .map_err(|e| io_error(Operation::Close, e))?;
-            let canonical_path = self.path.clone();
-            self.at(IoFaultPoint::Rename, Operation::Replace, |_owner| {
-                fs::rename(&temp_path, &canonical_path)
-            })?;
-            self.sync_parent()
+            self.publish_temporary(&temp_path)
         })();
         if result.is_err() {
             let _ = fs::remove_file(&temp_path);
@@ -446,6 +445,7 @@ impl RegionIo {
     fn reopen(&mut self) -> Result<(), ServerError> {
         self.bank = None;
         self.copies = [None, None];
+        self.parent_uncertain = true;
         self.file = Some(
             OpenOptions::new()
                 .read(true)
@@ -576,7 +576,7 @@ impl RegionIo {
 
     fn sync_parent(&mut self) -> Result<(), ServerError> {
         let parent = self.path.parent().unwrap_or(Path::new(".")).to_owned();
-        self.at(
+        let result = self.at(
             IoFaultPoint::DirectorySync,
             Operation::DirectorySync,
             |owner| {
@@ -586,7 +586,36 @@ impl RegionIo {
                 let closed = owner.io.close(directory);
                 synced.and(closed)
             },
-        )
+        );
+        if result.is_ok() {
+            self.parent_uncertain = false;
+        }
+        result
+    }
+
+    fn repair_parent(&mut self) -> Result<(), ServerError> {
+        if self.parent_uncertain {
+            self.sync_parent()?;
+        }
+        Ok(())
+    }
+
+    fn publish_temporary(&mut self, temporary: &Path) -> Result<(), ServerError> {
+        self.io
+            .boundary(IoFaultPoint::Rename, IoPhase::Before)
+            .map_err(|error| io_error(Operation::Replace, error))?;
+        // Retain the obligation before publication so neither a late fault nor
+        // reopening can turn file durability into directory durability.
+        self.parent_uncertain = true;
+        fs::rename(temporary, &self.path).map_err(|error| io_error(Operation::Replace, error))?;
+        let after = self
+            .io
+            .boundary(IoFaultPoint::Rename, IoPhase::After)
+            .map_err(|error| io_error(Operation::Replace, error));
+        // Publication cannot be undone by an after-hook error. Attempt its
+        // barrier regardless, retaining the original failure precedence.
+        let barrier = self.sync_parent();
+        after.and(barrier)
     }
 }
 
