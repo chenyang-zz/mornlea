@@ -101,6 +101,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9g Reconcile Rust backup compatibility identities and English comment audit.
 - [x] 3.9h Bound activation control requests.
 - [x] 3.9i Correlate save completion ownership and prevent duplicate retries.
+- [ ] 3.9p1 Repair survival damage, fall and boundary semantics.
 - [x] 3.9d1 Enforce Agent HTTP absolute deadlines and close cancellation.
 - [ ] 3.9d2 Bound and reclaim Agent business request ownership.
 
