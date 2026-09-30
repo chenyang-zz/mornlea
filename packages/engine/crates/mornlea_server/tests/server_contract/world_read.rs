@@ -369,3 +369,46 @@ fn checked_random_tunable_endpoints() {
         .is_err()
     );
 }
+
+#[test]
+fn complete_rule_timing_snapshot_preserves_configured_values() {
+    let timing = |t: RuleTunables| {
+        (
+            t.regen_delay_ticks(),
+            t.regen_interval_ticks(),
+            t.drown_interval_ticks(),
+            t.starvation_interval_ticks(),
+            t.regen_hunger_threshold(),
+            t.eating_ticks(),
+            t.furnace_burn_ticks(),
+            t.furnace_smelt_ticks(),
+        )
+    };
+    let defaults = RuleTunables::source_defaults();
+    assert_eq!(timing(defaults), (100, 40, 20, 80, 18, 32, 1600, 200));
+    for values in [(11, 7, 3, 5, 17, 9, 91, 23), (0, 0, 0, 0, 0, 0, 0, 0)] {
+        let tuned = RuleTunables::try_new(
+            defaults.physics(),
+            values.0,
+            values.1,
+            values.2,
+            values.3,
+            values.4,
+            4000,
+            values.5,
+            values.6,
+            values.7,
+            5,
+            3,
+            50,
+            6.0,
+            1.62,
+            10,
+            40,
+            6000,
+            1.25,
+        )
+        .unwrap();
+        assert_eq!(timing(tuned), values);
+    }
+}

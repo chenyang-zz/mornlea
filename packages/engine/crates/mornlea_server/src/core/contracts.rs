@@ -1611,6 +1611,31 @@ impl RuleTunables {
     pub fn physics(self) -> PhysicsTuning {
         self.physics
     }
+    /// Rule providers consume the stored tick snapshot, never source defaults.
+    pub fn regen_delay_ticks(self) -> u32 {
+        self.regen_delay
+    }
+    pub fn regen_interval_ticks(self) -> u32 {
+        self.regen_interval
+    }
+    pub fn drown_interval_ticks(self) -> u32 {
+        self.drown_interval
+    }
+    pub fn starvation_interval_ticks(self) -> u32 {
+        self.starvation_interval
+    }
+    pub fn regen_hunger_threshold(self) -> u8 {
+        self.regen_hunger_threshold
+    }
+    pub fn eating_ticks(self) -> u16 {
+        self.eating_ticks
+    }
+    pub fn furnace_burn_ticks(self) -> u16 {
+        self.furnace_burn_ticks
+    }
+    pub fn furnace_smelt_ticks(self) -> u8 {
+        self.furnace_smelt_ticks
+    }
     pub fn random_attempts(self) -> u8 {
         self.random_attempts
     }
