@@ -117,7 +117,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [ ] 3.9q3 Share first-valid companion mining action and retain held intent.
 - [x] 3.9q4 Correct passive wander angular quantization.
 - [x] 3.9q5 Detect upper hostile body intersections with fluid.
-- [ ] 3.9q6 Filter dead players before hostile target selection.
+- [x] 3.9q6 Filter dead players before hostile target selection.
 - [ ] 3.9q7 Preserve hostile target identity and successful repath cadence.
 - [x] 3.9q8 Compare passive birth neighborhoods in chunks.
 - [ ] 3.9q9 Refuse unrepresentable hostile geometry without partial effects.

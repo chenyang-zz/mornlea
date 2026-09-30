@@ -282,6 +282,136 @@ fn hostile_body(context: &TickContext<'_>, id: u64) -> HostileMob {
     body.clone()
 }
 
+fn stage_target_runtime(context: &mut TickContext<'_>, key: ActorKey) -> ActorRuntime {
+    let runtime = ActorRuntime {
+        key,
+        controls: None,
+        has_view: true,
+        reset: false,
+        attack_cooldown: 13,
+        hurt_cooldown: 17,
+        burn_cooldown: 19,
+        oxygen: 211,
+        peak_y: 77.0,
+        exhaustion_milli: 1250,
+        saturation_milli: 8500,
+        since_damage_ticks: 71,
+        drown_ticks: 23,
+        starvation_ticks: 31,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        },
+    };
+    context.stage(RuleEffect::Runtime(runtime.clone())).unwrap();
+    runtime
+}
+
+#[test]
+fn walker_targets_live_player_past_dead_nearest_and_dead_tie() {
+    // Go `onlineHostileTargets` excludes zero health before `nearestTarget`
+    // compares distance or UUID, so neither nearer nor tied dead players mask.
+    for dead_x in [1.0, -1.0] {
+        let mut state = authority();
+        let dead_session = admit_session(&mut state, 1, "walker-dead");
+        let live_session = admit_session(&mut state, 9, "walker-live");
+        let foreign_session = admit_session(&mut state, 2, "walker-foreign");
+        let mut context = TickContext::harness(&mut state, TickBudget::full());
+        stage_environment(&mut context, NOON);
+        let dead = player_record(dead_session, 1, Dimension::OVERWORLD, [dead_x, 1.0, 0.5], 0);
+        stage_actors(
+            &mut context,
+            &[
+                dead.clone(),
+                player_record(live_session, 9, Dimension::OVERWORLD, [2.0, 1.0, 0.5], 20),
+                player_record(foreign_session, 2, Dimension::DEPTHS, [0.75, 1.0, 0.5], 20),
+                hostile_record(11, [0.5, 1.0, 0.5], NIGHTWALKER, 20, 0),
+            ],
+        );
+        let runtime = stage_target_runtime(&mut context, dead.key);
+        let plan = provider::plan(&context).unwrap();
+        let entries = plan.melee_batch().entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].attacker().get(), 11);
+        assert_eq!(entries[0].target(), live_session);
+        let report = provider::apply(&mut context, plan).unwrap();
+        assert_eq!(report.applied, 1);
+        assert_eq!(context.read().actor(dead.key), Some(&dead));
+        assert_eq!(context.read().runtime(dead.key), Some(&runtime));
+        assert!(context.read().projectiles().is_empty());
+    }
+}
+
+#[test]
+fn hurler_shoots_live_target_past_nearest_dead_player() {
+    let mut state = authority();
+    let dead_session = admit_session(&mut state, 1, "hurler-dead");
+    let live_session = admit_session(&mut state, 9, "hurler-live");
+    let foreign_session = admit_session(&mut state, 2, "hurler-foreign");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, NOON);
+    let dead = player_record(dead_session, 1, Dimension::OVERWORLD, [1.0, 1.0, 0.5], 0);
+    stage_actors(
+        &mut context,
+        &[
+            dead.clone(),
+            player_record(live_session, 9, Dimension::OVERWORLD, [-9.5, 1.0, 0.5], 20),
+            player_record(foreign_session, 2, Dimension::DEPTHS, [0.75, 1.0, 0.5], 20),
+            hostile_record(11, [0.5, 1.0, 0.5], HURLER, 20, 0),
+        ],
+    );
+    let runtime = stage_target_runtime(&mut context, dead.key);
+    observe_corridor(&mut context, -10, 1);
+    let report = provider::run(&mut context, action_call()).unwrap();
+    assert_eq!(report.applied, 1);
+    let shots = context.read().projectiles();
+    assert_eq!(shots.len(), 1);
+    assert_eq!(shots[0].kind, ProjectileKind::Shard);
+    assert_eq!(
+        shots[0].velocity.get(),
+        shard_velocity_mirror([-10.0, 0.0, 0.0], SEED, NOON, 11)
+    );
+    assert!(
+        shots[0].velocity.get()[0] < 0.0,
+        "aim faces the live target"
+    );
+    assert_eq!(context.read().actor(dead.key), Some(&dead));
+    assert_eq!(context.read().runtime(dead.key), Some(&runtime));
+}
+
+#[test]
+fn two_dead_players_produce_no_walker_or_hurler_action() {
+    for kind in [NIGHTWALKER, HURLER] {
+        let mut state = authority();
+        let first = admit_session(&mut state, 1, "dead-only-one");
+        let second = admit_session(&mut state, 2, "dead-only-two");
+        let mut context = TickContext::harness(&mut state, TickBudget::full());
+        stage_environment(&mut context, NOON);
+        let actors = [
+            player_record(first, 1, Dimension::OVERWORLD, [1.0, 1.0, 0.5], 0),
+            player_record(second, 2, Dimension::OVERWORLD, [-9.5, 1.0, 0.5], 0),
+            hostile_record(11, [0.5, 1.0, 0.5], kind, 20, 0),
+        ];
+        stage_actors(&mut context, &actors);
+        let first_runtime = stage_target_runtime(&mut context, actors[0].key);
+        let second_runtime = stage_target_runtime(&mut context, actors[1].key);
+        observe_corridor(&mut context, -10, 1);
+        let plan = provider::plan(&context).unwrap();
+        assert!(plan.melee_batch().entries().is_empty());
+        let report = provider::apply(&mut context, plan).unwrap();
+        assert_eq!(report.examined, 0);
+        assert_eq!(report.applied, 0);
+        assert_eq!(context.read().actors(), actors);
+        assert_eq!(context.read().runtime(actors[0].key), Some(&first_runtime));
+        assert_eq!(context.read().runtime(actors[1].key), Some(&second_runtime));
+        assert!(context.read().projectiles().is_empty());
+        assert!(context.events().is_empty());
+    }
+}
+
 // -----------------------------------------------------------------------
 // Deterministic shot math mirrors (`sampler.HostileShotSpread` and
 // `hostileShardVelocity` in the Go rows cited above). The KAT check below

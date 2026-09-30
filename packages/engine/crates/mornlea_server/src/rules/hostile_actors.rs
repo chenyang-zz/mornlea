@@ -1269,6 +1269,14 @@ pub(crate) fn nearest_target(
         if candidate.dimension != dimension {
             continue;
         }
+        // Target eligibility precedes distance; active dead sessions still
+        // remain available to the separate spawn and distant-anchor lists.
+        if !view
+            .actor(ActorKey::Player(candidate.session))
+            .is_some_and(|actor| actor.survival.health() != 0)
+        {
+            continue;
+        }
         let distance = horizontal_distance_sq(position, candidate.position);
         let better = match &nearest {
             None => true,

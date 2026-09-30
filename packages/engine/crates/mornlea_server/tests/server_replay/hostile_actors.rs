@@ -1191,6 +1191,75 @@ fn preload_band_world(context: &mut TickContext<'_>) {
     }
 }
 
+#[test]
+fn motion_selects_live_path_target_past_nearest_dead_player() {
+    let mut state = authority();
+    let dead_session = admit_session(&mut state, 1, "motion-dead");
+    let live_session = admit_session(&mut state, 9, "motion-live");
+    let foreign_session = admit_session(&mut state, 2, "motion-foreign");
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    let mut dead = player_actor(dead_session, 1, [101.0, 40.0, 100.5]);
+    dead.survival = SurvivalState::try_new(SurvivalStateParts {
+        health: 0,
+        oxygen: 300,
+        hunger: 20,
+        saturation_zero: false,
+        armor_points: 0,
+    })
+    .unwrap();
+    let ActorBody::Player(body) = &mut dead.body else {
+        unreachable!();
+    };
+    body.health = 0;
+    let mut foreign = player_actor(foreign_session, 2, [100.5, 40.0, 100.5]);
+    foreign.dimension = Dimension::DEPTHS;
+    let ActorBody::Player(body) = &mut foreign.body else {
+        unreachable!();
+    };
+    body.current.dimension = i32::from(Dimension::DEPTHS.get());
+    stage_actors(
+        &mut context,
+        &[
+            dead.clone(),
+            player_actor(live_session, 9, [105.5, 40.0, 100.5]),
+            foreign,
+            hostile_actor(21, [100.5, 40.0, 100.5], NIGHTWALKER),
+        ],
+    );
+    let mut dead_runtime = fluid_runtime(dead.key);
+    dead_runtime.aux = ActorAux::Player {
+        respawn: None,
+        workbench: None,
+    };
+    dead_runtime.attack_cooldown = 13;
+    dead_runtime.oxygen = 211;
+    context
+        .stage(RuleEffect::Runtime(dead_runtime.clone()))
+        .unwrap();
+    preload_band_world(&mut context);
+
+    provider::run(&mut context, motion_call()).expect("live-target motion");
+
+    let actor = find_hostile(&context, 21);
+    let ActorBody::Hostile(body) = &actor.body else {
+        unreachable!();
+    };
+    assert!(body.has_target);
+    assert_eq!(body.player_id.to_bytes(), uuid_bytes(9));
+    let path = context
+        .read()
+        .runtime(actor.key)
+        .unwrap()
+        .path
+        .as_ref()
+        .expect("live chase path");
+    assert_eq!(path.target, mornlea_domain::BlockPos::new(105, 40, 100));
+    assert!(actor.motion.position().get()[0] > 100.5);
+    assert_eq!(context.read().actor(dead.key), Some(&dead));
+    assert_eq!(context.read().runtime(dead.key), Some(&dead_runtime));
+}
+
 fn hurler_position(context: &TickContext<'_>, id: u64) -> [f32; 3] {
     let ActorBody::Hostile(body) = &find_hostile(context, id).body else {
         panic!("hostile body");
