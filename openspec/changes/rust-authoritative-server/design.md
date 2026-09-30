@@ -160,3 +160,10 @@ mutual lethal hits, and returns actual damaged player sessions separately from
 attacker-directed hit receipts. Death and cross-phase runtime merging remain
 explicit integration work. The existing exhaustion calculation becomes one
 pure configured-threshold helper shared by survival and melee.
+
+
+## Whole-branch review correction
+
+The activation executable at the review baseline only holds a world lock and a control socket; it neither ticks nor serves gameplay. This does not qualify the Rust authority described by the proposal and delta specification. The prior ledger ruling that deferred production transport, chunk loading, mob recovery and publication until default cutover is withdrawn. Leaving default startup on Go is a deployment constraint, not an exception to F2 behavior or acceptance. Node 3.7 is reopened: identical Rust transcripts, source fingerprints and directly constructed save records do not establish full real-runtime parity or durable mutation. Nodes 3.8 and 4 remain pending until those real paths and the previous-runtime rollback verifier execute.
+
+Bounded review fixes first preserve existing ownership: movement clones the current actor runtime and changes only held controls; the tick-start environment uses committed live state after initial metadata hydration; sleep anchors and eligibility persist with resident state. Terminal transport records release payload ownership while retaining only bounded diagnostic replay. Agent I/O uses one absolute deadline across all reads. Exact tests and file ownership are in the review repair packet. These fixes change no wire/save version or gameplay rule.

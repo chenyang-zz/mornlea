@@ -1465,3 +1465,12 @@ any future default consideration. One isolated implementer owns the binary,
 script, manifest fixture, activation tests, and guide under the controller
 serial edit lease; default Makefile/Go command/product entry untouched.
 Architecture skill: no change.
+
+
+## Whole-branch review started 2026-09-30
+
+User authorizes review, fixes, complete task implementation, scoped commits and merge into dev. Baseline branch 7ff06060; dev 365a0339, fetched origin/dev 538ac3d1. Existing branch worktree /Users/chen/work/mornlea-f2-server is clean and reused; no unrelated edits. Installed brainstorming/writing-plans, architecture/orchestration, review, debugging and verification skills were read. Three isolated read-only reviewers own core/rules, I/O/Agent, and acceptance/activation respectively; GPT-6.1 Sol high is selected per project prohibition on Astra. Isolation keeps their independent long source traces out of the controller context.
+
+Ruling: withdraw the prior opt-in-limitations acceptance waiver. An executable that runs no ticks and accepts no gameplay cannot satisfy F2 even while Go stays default. Reopen 3.7; retain 3.8/4 pending. Source hashes and identical Rust/double runs prove neither full offline Go parity nor production integration. Proposal/design/task status are reconciled before repairs.
+
+Review found movement overwrites sibling ActorRuntime lanes, environment freezes from stale metadata each tick, and sleep state is omitted from residents. Exact bounded repair decisions and tests are in plan29. Transport/storage/Agent/rollback reviews continue; follow-up nodes stay undispatchable until their exact packets are controller-frozen. No new shared contract landing qualifies for these private state-owner corrections. Architecture skill: no change; existing ownership rules already prohibit these defects.
