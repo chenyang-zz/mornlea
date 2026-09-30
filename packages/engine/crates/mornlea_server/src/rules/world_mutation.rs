@@ -23,11 +23,9 @@
 //! - `packages/shared/core/block.go`: the door lower order (south, west,
 //!   north, east, closed before open) and the single upper form.
 //!
-//! Deliberate boundaries. The sneak gate in `executeInteractDoor` reads
-//! the held-controls bit the movement provider stores, and the frozen tick
-//! context exposes no held-controls surface, so this module stages no sneak
-//! branch: a sneaking actor toggles exactly like a non-sneaking one until the
-//! movement-owned surface lands. The bed interaction kind belongs to the sleep
+//! The sneak gate in `executeInteractDoor` reads the held controls committed
+//! during player intake, after ray target classification. A non-door remains
+//! a silent no-op regardless of that bit. The bed interaction kind belongs to the sleep
 //! provider and refuses here without effect. The toggle commits through the
 //! system transaction entry because no actor-transaction resolver covers an
 //! interaction toggle; the frozen producer vocabulary names simulation causes
@@ -157,6 +155,15 @@ fn toggle_write(
     };
     if !is_door(hit.observed.block) {
         return Ok(None);
+    }
+    // Classify the target first: sneaking refuses a door interaction, while
+    // a non-door retains the source's silent no-op result.
+    if view
+        .runtime(actor)
+        .and_then(|runtime| runtime.controls)
+        .is_some_and(|control| control.actions().sneaking)
+    {
+        return Err(REFUSAL);
     }
     // The hit names the pair: a lower hit pairs upward, an upper hit pairs
     // downward. Both halves are re-read so a malformed or unready partner

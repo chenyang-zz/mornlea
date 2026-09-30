@@ -10,10 +10,8 @@
 //!   (`handleInteractDoor`, `executeInteractDoor`): only the lower half flips,
 //!   the upper half stays the single upper form, both halves must be present
 //!   and well formed, an unready partner refuses, and a ray that finds no door
-//!   is a silent no-op. The sneak gate in that file reads the held-controls
-//!   bit owned by the movement provider; the frozen tick context exposes no
-//!   held-controls surface, so this node stages no sneak branch and records
-//!   the deferral in the provider module.
+//!   is a silent no-op. The sneak gate reads held controls committed during
+//!   player intake after target classification and before pair validation.
 //! - Ray reach from the tunables (`engine.tunables.InteractionReach`,
 //!   default 6.0) with the eye-height origin and the `LookDirection` formula
 //!   in `packages/server/sim/entity/command.go`.
@@ -711,6 +709,108 @@ fn door_pair_and_internal_toggle() {
     let toggle = door_interaction(session, std::f32::consts::PI, 0.0, 8);
     assert!(provider::run(&mut context, door_call(&toggle)).is_err());
     assert_eq!(probe(&context, &reach_cells, &[actor]), before);
+}
+
+#[test]
+fn held_sneak_refuses_door_after_target_classification() {
+    for (sneaking, target, expected) in [
+        (true, DOOR_LOWER_NORTH_CLOSED, None),
+        (false, DOOR_LOWER_NORTH_CLOSED, Some(1)),
+        (true, STONE, Some(0)),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let lower = BlockPos::new(0, 65, 1);
+        let upper = BlockPos::new(0, 66, 1);
+        let actor = south_scene(
+            &mut context,
+            session,
+            ItemStack::default(),
+            &[
+                (BlockPos::new(0, 65, 0), AIR),
+                (lower, target),
+                (upper, DOOR_UPPER),
+            ],
+        );
+        let input = envelope(
+            session,
+            1,
+            Command::PlayerInput(PlayerControl::new(PlayerControlParts {
+                movement: Movement {
+                    move_x: 0,
+                    move_z: 0,
+                    jump: false,
+                },
+                look: LookAngles::try_new(std::f32::consts::PI, 0.0).unwrap(),
+                actions: HeldActions {
+                    primary: false,
+                    eating: false,
+                    sprinting: false,
+                    sneaking,
+                },
+            })),
+        );
+        mornlea_server::rules::player_motion::run(
+            &mut context,
+            RuleCall {
+                phase: RulePhase::PlayerCommand,
+                actor: None,
+                command: Some(&input),
+                internal: None,
+            },
+        )
+        .unwrap();
+        let cells = [BlockPos::new(0, 65, 0), lower, upper];
+        let before = probe(&context, &cells, &[actor]);
+        let actor_before = context.read().actor(actor).unwrap().clone();
+        let runtime_before = context.read().runtime(actor).unwrap().clone();
+        let interaction = door_interaction(session, std::f32::consts::PI, 0.0, 2);
+        let result = provider::run(&mut context, door_call(&interaction));
+        match expected {
+            None => {
+                assert_eq!(
+                    result,
+                    Err(ServerError::InvalidInput {
+                        field: "interaction"
+                    })
+                );
+                assert_eq!(probe(&context, &cells, &[actor]), before);
+            }
+            Some(applied) => {
+                assert_eq!(result.unwrap().applied, applied);
+                if applied == 0 {
+                    assert_eq!(probe(&context, &cells, &[actor]), before);
+                } else {
+                    assert_eq!(
+                        context
+                            .read()
+                            .observation(Dimension::OVERWORLD, lower)
+                            .unwrap()
+                            .block,
+                        DOOR_LOWER_NORTH_OPEN
+                    );
+                    assert_eq!(
+                        context
+                            .read()
+                            .observation(Dimension::OVERWORLD, upper)
+                            .unwrap()
+                            .block,
+                        DOOR_UPPER
+                    );
+                    assert_eq!(
+                        probe(&context, &cells, &[actor]).inventories,
+                        before.inventories
+                    );
+                    assert_eq!(context.events().len(), before.events);
+                }
+            }
+        }
+        assert_eq!(context.read().actor(actor), Some(&actor_before));
+        assert_eq!(context.read().runtime(actor), Some(&runtime_before));
+    }
 }
 
 /// Same-tick human place and companion proposal on one cell: the first commits
