@@ -60,6 +60,8 @@ pub struct ResidentTickState {
     pub mining: BTreeMap<ActorKey, MiningProgress>,
     pub projectiles: Vec<ProjectileRecord>,
     pub environment: Option<EnvironmentState>,
+    pub sleep_record: Option<SleepState>,
+    pub sleeping: BTreeSet<SessionKey>,
     pub blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
     ready: BTreeMap<ChunkKey, ReadyChunk>,
     drops: BTreeMap<ChunkKey, DropState>,
@@ -1638,6 +1640,10 @@ impl<'a> TickContext<'a> {
         context.mining = context.authority.residents.mining.clone();
         context.projectiles = context.authority.residents.projectiles.clone();
         context.environment = context.authority.residents.environment.clone();
+        if let Some(record) = &context.authority.residents.sleep_record {
+            context.sleep_record = record.clone();
+        }
+        context.sleeping = context.authority.residents.sleeping.clone();
         context.blocks = context.authority.residents.blocks.clone();
         context.ready = context.authority.residents.ready.clone();
         context.drops = context.authority.residents.drops.clone();
@@ -1650,30 +1656,32 @@ impl<'a> TickContext<'a> {
     }
 
     /// Freezes the tick-start climate snapshot every provider consumes.
-    /// Derived once per tick from authority durability and never re-read
-    /// mid-tick: the seed and tick name the dice stream, world time and the
-    /// display offset come from stored metadata, the season offset is the
-    /// frozen seed derivation, weather maps its stored kind with the source
-    /// illegal-kind normalization to clear, difficulty passes through for
-    /// provider decoding, and tunables are the checked source snapshot. The
-    /// serial reducer calls this once before the first provider row.
+    /// Metadata seeds the first snapshot; later ticks retain committed climate
+    /// progression and sleep display offsets. Only the executing tick and
+    /// checked source tunables refresh at this boundary, before any provider
+    /// runs. The providers share that frozen record without durability reads.
     pub(crate) fn freeze_environment(&mut self, tick: u64) {
-        let metadata = &self.authority.metadata;
-        let seed = self.authority.world_seed;
-        self.environment = Some(EnvironmentState {
-            seed,
-            next_tick: tick,
-            world_time: metadata.world_time_ticks,
-            // The stored offset is the metadata u64; the snapshot carries
-            // the u16 display range with the same wrapping conversion the
-            // source restore boundary applies.
-            day_phase_offset: metadata.day_phase_offset as u16,
-            season_offset: season_offset_from_seed(seed),
-            weather: Weather::try_new(metadata.weather_kind).unwrap_or(Weather::Clear),
-            weather_remaining: metadata.weather_ticks_remaining,
-            difficulty: metadata.difficulty,
-            tunables: RuleTunables::source_defaults(),
+        let mut frozen = self.environment.clone().unwrap_or_else(|| {
+            let metadata = &self.authority.metadata;
+            let seed = self.authority.world_seed;
+            EnvironmentState {
+                seed,
+                next_tick: tick,
+                world_time: metadata.world_time_ticks,
+                // The stored offset is the metadata u64; the snapshot carries
+                // the u16 display range with the same wrapping conversion the
+                // source restore boundary applies.
+                day_phase_offset: metadata.day_phase_offset as u16,
+                season_offset: season_offset_from_seed(seed),
+                weather: Weather::try_new(metadata.weather_kind).unwrap_or(Weather::Clear),
+                weather_remaining: metadata.weather_ticks_remaining,
+                difficulty: metadata.difficulty,
+                tunables: RuleTunables::source_defaults(),
+            }
         });
+        frozen.next_tick = tick;
+        frozen.tunables = RuleTunables::source_defaults();
+        self.environment = Some(frozen);
     }
 
     pub fn from_fixture(
@@ -1884,6 +1892,8 @@ impl<'a> TickContext<'a> {
             mining: self.mining.clone(),
             projectiles: self.projectiles.clone(),
             environment: self.environment.clone(),
+            sleep_record: Some(self.sleep_record.clone()),
+            sleeping: self.sleeping.clone(),
             blocks: self.blocks.clone(),
             ready: self.ready.clone(),
             drops: self.drops.clone(),

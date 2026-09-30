@@ -18,7 +18,7 @@ use mornlea_server::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation,
     ChunkKey, ContainerRecord, ContainerSlots, DropRecord, EnvironmentState, InventoryRecord,
     MiningProgress, ProjectileRecord, RuleEffect, RuleTunables, ServerLimits, SessionKey,
-    TickBudget, TransportKind,
+    SleepState, TickBudget, TransportKind,
 };
 use mornlea_server::core::login_seed::seed_player;
 use mornlea_server::core::world::ReadyChunk;
@@ -382,6 +382,12 @@ fn drop_record(slot: u8, age: u32) -> DropRecord {
 /// Stages one entry per resident map on a harness overlay and commits the
 /// extracted snapshot: the commit-back path every production tick uses.
 fn commit_full_overlay(authority: &mut AuthorityState) {
+    let first = authority
+        .prepare(admitted(254, "Sleeper"), TransportKind::Memory)
+        .unwrap();
+    let second = authority
+        .prepare(admitted(255, "Dozer"), TransportKind::Memory)
+        .unwrap();
     let key = chunk_key(0, 0);
     let mut ctx = TickContext::harness(authority, TickBudget::full());
     ctx.preload_ready_chunk(ReadyChunk::try_new(key, 1, 1, chest_chunk()).unwrap());
@@ -469,6 +475,18 @@ fn commit_full_overlay(authority: &mut AuthorityState) {
         tunables: RuleTunables::source_defaults(),
     }))
     .unwrap();
+    ctx.set_sleep_record(
+        SleepState::try_new(
+            vec![
+                (second, Dimension::DEPTHS, BlockPos::new(16, 64, 32)),
+                (first, Dimension::OVERWORLD, BlockPos::new(0, 65, 0)),
+            ],
+            123,
+            Some(456),
+        )
+        .unwrap(),
+    );
+    ctx.set_sleeping(vec![second, first, second]);
     let snapshot = ctx.resident_snapshot();
     drop(ctx);
     authority.commit_residents(snapshot);
@@ -503,6 +521,18 @@ fn committed_overlay_round_trips_every_map() {
     assert_eq!(
         residents.environment.as_ref().unwrap().weather_remaining,
         100
+    );
+    let sleep = residents.sleep_record.as_ref().unwrap();
+    assert_eq!(sleep.day_phase_offset, 123);
+    assert_eq!(sleep.pending_offset, Some(456));
+    assert_eq!(sleep.beds.len(), 2);
+    assert_eq!(sleep.beds[0].1, Dimension::DEPTHS);
+    assert_eq!(sleep.beds[0].2, BlockPos::new(16, 64, 32));
+    assert_eq!(sleep.beds[1].1, Dimension::OVERWORLD);
+    assert_eq!(sleep.beds[1].2, BlockPos::new(0, 65, 0));
+    assert_eq!(
+        residents.sleeping.iter().copied().collect::<Vec<_>>(),
+        vec![sleep.beds[1].0, sleep.beds[0].0]
     );
     let sparse_key = chunk_key(5, 5);
     let sparse_pos = BlockPos::new(80, 64, 80);
@@ -632,9 +662,8 @@ fn consecutive_live_ticks_carry_residents() {
         record.pickup_delay = record.pickup_delay.saturating_sub(2);
     }
     assert_eq!(after.drop_records(), aged);
-    // The tick-start freeze re-derives the clock, season offset, and weather
-    // dice from metadata and seed every tick, so only the seed, difficulty,
-    // tunables, and display offset carry through the commit.
+    // Each tick advances the carried clock and weather without replacing
+    // the committed environment with its original metadata seed.
     let before_env = before.environment.unwrap();
     let after_env = after.environment.unwrap();
     assert_eq!(after_env.next_tick, before_env.next_tick + 2);
@@ -642,6 +671,12 @@ fn consecutive_live_ticks_carry_residents() {
     assert_eq!(after_env.difficulty, before_env.difficulty);
     assert_eq!(after_env.tunables, before_env.tunables);
     assert_eq!(after_env.day_phase_offset, before_env.day_phase_offset);
+    assert_eq!(after_env.world_time, before_env.world_time + 2);
+    assert_eq!(
+        after_env.weather_remaining,
+        before_env.weather_remaining - 2
+    );
+    assert_eq!(after_env.season_offset, before_env.season_offset);
     assert_eq!(after.projectiles.len(), 1);
     assert_eq!(after.projectiles[0].id, before.projectiles[0].id);
     assert_eq!(after.projectiles[0].owner, before.projectiles[0].owner);
@@ -651,6 +686,91 @@ fn consecutive_live_ticks_carry_residents() {
     );
     assert_eq!(after.projectiles[0].kind, before.projectiles[0].kind);
     assert_eq!(after.projectiles[0].damage, before.projectiles[0].damage);
+}
+
+/// The production tick-start freeze updates execution inputs while retaining
+/// the previously committed climate, including fields distinct from metadata.
+#[test]
+fn live_ticks_advance_committed_environment() {
+    let mut authority = authority();
+    let environment = EnvironmentState {
+        seed: -9,
+        next_tick: 0,
+        world_time: 0,
+        day_phase_offset: 123,
+        season_offset: 45_678,
+        weather: Weather::Rain,
+        weather_remaining: 100,
+        difficulty: 2,
+        tunables: RuleTunables::source_defaults(),
+    };
+    let mut context = TickContext::harness(&mut authority, TickBudget::full());
+    context
+        .stage(RuleEffect::Environment(environment.clone()))
+        .unwrap();
+    let snapshot = context.resident_snapshot();
+    drop(context);
+    authority.commit_residents(snapshot);
+    authority.advance_tick(TickBudget::full()).unwrap();
+    authority.advance_tick(TickBudget::full()).unwrap();
+    let residents = authority.residents();
+    let actual = residents.environment.unwrap();
+    assert_eq!(actual.world_time, 2);
+    assert_eq!(actual.weather_remaining, 98);
+    assert_eq!(
+        actual,
+        EnvironmentState {
+            next_tick: 2,
+            world_time: 2,
+            weather_remaining: 98,
+            ..environment
+        }
+    );
+}
+
+/// An awake eligible player prevents morning settlement while a sleeping
+/// player's bed anchor and eligibility survive every production tick edge.
+#[test]
+fn live_ticks_retain_sleep_anchors_and_eligibility() {
+    let mut authority = authority();
+    let first_login = admitted(1, "Ada");
+    let first_save = customized_save(first_login.player_id()).0;
+    let sleeping = login_session(&mut authority, first_login, first_save);
+    let second_login = admitted(2, "Ben");
+    let second_save = customized_save(second_login.player_id()).0;
+    let awake = login_session(&mut authority, second_login, second_save);
+    let record = SleepState::try_new(
+        vec![
+            (awake, Dimension::DEPTHS, BlockPos::new(16, 64, 32)),
+            (sleeping, Dimension::OVERWORLD, BlockPos::new(0, 65, 0)),
+        ],
+        123,
+        None,
+    )
+    .unwrap();
+    let mut context = TickContext::harness(&mut authority, TickBudget::full());
+    context.set_sleep_record(record.clone());
+    context.set_sleeping(vec![sleeping]);
+    let snapshot = context.resident_snapshot();
+    drop(context);
+    authority.commit_residents(snapshot);
+    assert_eq!(authority.residents().sleep_record, Some(record.clone()));
+    for _ in 0..2 {
+        authority.advance_tick(TickBudget::full()).unwrap();
+        let residents = authority.residents();
+        assert_eq!(residents.sleep_record, Some(record.clone()));
+        assert_eq!(
+            residents.sleeping.into_iter().collect::<Vec<_>>(),
+            vec![sleeping]
+        );
+        assert!(
+            residents
+                .actors
+                .iter()
+                .any(|actor| actor.key == ActorKey::Player(awake)
+                    && actor.lifecycle == ActorLifecycle::Active)
+        );
+    }
 }
 
 /// Empty ticks stay empty: no actor, runtime, inventory, block, chunk, drop,
