@@ -4,10 +4,11 @@
 //! `PlayerInput` commands, and the per-actor `PlayerMotion`-phase advance. The
 //! intake validates one envelope and defers it to the motion phase through
 //! [`TickContext::defer`]; the advance resolves the latest deferred envelope
-//! per session and steps the actor through the accepted F1 kernels. Deferred
-//! envelopes are the only cross-call memory: intake order is arrival order, so
-//! the first envelope kept at a tied sequence is the earliest arrival, matching
-//! the ordering layer's tie rule (`order_commands` in `mornlea_domain`).
+//! per session and steps the actor through the accepted F1 kernels. A tick
+//! without a new envelope retains the runtime's held controls. Intake order
+//! is arrival order, so the first envelope kept at a tied sequence is the
+//! earliest arrival, matching the ordering layer's tie rule (`order_commands`
+//! in `mornlea_domain`).
 //!
 //! Mirrored Go rows, each cited at its site:
 //!
@@ -40,13 +41,14 @@
 //! motion call and never reread mid-tick. Publication motion is the staged
 //! kernel output itself, never a prediction, and this provider emits no events.
 //!
-//! Held controls live in [`ActorRuntime::controls`] for the
+//! Held controls live in
+//! [`ActorRuntime::controls`](crate::core::contracts::ActorRuntime::controls) for the
 //! Interaction-phase sneak gate: this provider is the single writer, staging
 //! the resolved control (`Some` for the latest validated input, `None` once
 //! cleared or never held) on every successful advance. The remaining runtime
-//! fields are reducer-owned transients this context cannot read back, so they
-//! stage neutral; the serial reducer merges per field rather than replacing
-//! the record.
+//! fields retain the current record unchanged because the shared staging
+//! surface replaces the whole record. A first advance uses the survival
+//! initializer to preserve the saved hunger and respawn defaults.
 //!
 //! Deliberate boundaries (later nodes own them): the starvation sprint gate
 //! (`hunger < 6`), the sneak-edge intent clamp, oxygen and fall-damage
@@ -64,10 +66,11 @@ use mornlea_engine::native::contracts::physics::{
 use mornlea_engine::native::physics::NativePhysics;
 
 use crate::core::contracts::{
-    ActorAux, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, PhaseReport, RuleCall,
-    RuleEffect, RulePhase, ServerError, SessionKey,
+    ActorKey, ActorLifecycle, ActorRecord, PhaseReport, RuleCall, RuleEffect, RulePhase,
+    ServerError, SessionKey,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
+use crate::rules::player_survival::merged_runtime;
 
 /// Pitch bound mirror of `validPlayerLook` in
 /// `packages/server/sim/entity/placement.go`: `float32(math.Pi/2 - 0.01)`.
@@ -250,14 +253,16 @@ fn run_motion(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
         return Err(ServerError::InvalidInput { field: "actor" });
     }
 
-    // Latest wins; an invalid latest or no intake at all advances neutrally on
-    // the actor's own yaw, exactly like Go's cleared input keeping
-    // `player.yaw` (`ApplyPlayerCommands`:
-    // `player.input = physics.Input{Yaw: player.yaw}`).
-    let held = latest_deferred(ctx, session).and_then(|envelope| match envelope.command() {
-        Command::PlayerInput(control) if valid_control(control) => Some(control),
-        _ => None,
-    });
+    let mut runtime = merged_runtime(&ctx.read(), &record)?;
+    // Only a new envelope changes held intent: absence retains it, while an
+    // invalid latest explicitly clears it (`ApplyPlayerCommands` in tick.go).
+    let held = match latest_deferred(ctx, session) {
+        Some(envelope) => match envelope.command() {
+            Command::PlayerInput(control) if valid_control(control) => Some(control),
+            _ => None,
+        },
+        None => runtime.controls,
+    };
     let (yaw, pitch, move_x, move_z, jump, sprinting, sneaking) = match held {
         Some(control) => {
             let movement = control.movement();
@@ -360,35 +365,13 @@ fn run_motion(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
         .map_err(|_| ServerError::Internal {
             invariant: "player motion staging",
         })?;
-    // Single-writer held-controls staging for the Interaction-phase sneak
-    // gate; the harness drops runtime effects, so this is the contract the
-    // serial reducer merges per field.
-    ctx.stage(RuleEffect::Runtime(ActorRuntime {
-        key: actor,
-        controls: held,
-        has_view: false,
-        reset: false,
-        attack_cooldown: 0,
-        hurt_cooldown: 0,
-        burn_cooldown: 0,
-        oxygen: record.survival.oxygen(),
-        peak_y: position[1],
-        exhaustion_milli: 0,
-        saturation_milli: 0,
-        since_damage_ticks: 0,
-        drown_ticks: 0,
-        starvation_ticks: 0,
-        eating: None,
-        bow: None,
-        path: None,
-        aux: ActorAux::Player {
-            respawn: None,
-            workbench: None,
-        },
-    }))
-    .map_err(|_| ServerError::Internal {
-        invariant: "player motion staging",
-    })?;
+    // Movement owns only controls; whole-record replacement must preserve
+    // every sibling provider's lanes, including actions staged earlier.
+    runtime.controls = held;
+    ctx.stage(RuleEffect::Runtime(runtime))
+        .map_err(|_| ServerError::Internal {
+            invariant: "player motion staging",
+        })?;
     Ok(PhaseReport {
         examined: 1,
         applied: 1,

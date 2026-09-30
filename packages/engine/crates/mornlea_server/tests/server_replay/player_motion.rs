@@ -294,6 +294,140 @@ fn applied(report: PhaseReport) -> bool {
         })
 }
 
+/// Movement owns controls while survival, combat and action providers retain
+/// their independent lanes through the same whole-record staging surface.
+#[test]
+fn motion_preserves_sibling_runtime() {
+    let prior_control = control(-1, 0, false, 0.0, 0.0);
+    let replacement = control(1, 0, false, 0.0, 0.0);
+    let neutral = control(0, 0, false, 0.0, 0.0);
+    let invalid = control(2, 0, false, 0.0, 0.0);
+    for (name, incoming, expected_control) in [
+        ("valid replacement", Some(replacement), Some(replacement)),
+        ("held without packet", None, Some(prior_control)),
+        ("explicit neutral", Some(neutral), Some(neutral)),
+        ("invalid clears", Some(invalid), None),
+    ] {
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .expect("session");
+        let mut context = harness_context(&mut state);
+        let actor = motion_scene(&mut context, session, [0.5, 1.0, 0.5], [0.0; 3], true);
+        let before = ActorRuntime {
+            key: actor,
+            controls: Some(prior_control),
+            has_view: true,
+            reset: true,
+            attack_cooldown: 13,
+            hurt_cooldown: 17,
+            burn_cooldown: 19,
+            oxygen: 211,
+            peak_y: 9.75,
+            exhaustion_milli: 1_250,
+            saturation_milli: 8_500,
+            since_damage_ticks: 71,
+            drown_ticks: 23,
+            starvation_ticks: 31,
+            eating: Some(EatingProgress {
+                slot: HotbarSlot::new(2).expect("eating slot"),
+                item: 36,
+                ticks: 11,
+            }),
+            bow: Some(BowProgress {
+                slot: HotbarSlot::new(3).expect("bow slot"),
+                ticks: 15,
+            }),
+            path: Some(PathState {
+                generation: 2,
+                target: BlockPos::new(4, 1, 0),
+                revisions: vec![(overworld_key(BlockPos::new(0, 1, 0)), 3)],
+                waypoints: vec![BlockPos::new(2, 1, 0)],
+                cursor: 0,
+                next_repath_tick: 29,
+            }),
+            aux: ActorAux::Player {
+                respawn: Some((Dimension::DEPTHS, BlockPos::new(16, 64, 32))),
+                workbench: Some(BlockPos::new(4, 1, 0)),
+            },
+        };
+        context
+            .stage(RuleEffect::Runtime(before.clone()))
+            .expect("runtime preimage");
+        if let Some(input) = incoming {
+            let envelope = envelope(session, 1, Command::PlayerInput(input));
+            let admitted = provider::run(&mut context, intake_call(&envelope));
+            assert_eq!(admitted.is_ok(), input != invalid, "{name} admission");
+        }
+        provider::run(&mut context, motion_call(actor)).expect("motion advance");
+        let expected = ActorRuntime {
+            controls: expected_control,
+            ..before
+        };
+        assert_eq!(context.read().runtime(actor), Some(&expected), "{name}");
+    }
+}
+
+/// A missing packet retains held movement; an explicit neutral packet clears
+/// the movement intent, matching the Go held-input replay.
+#[test]
+fn live_tick_reuses_held_input_until_neutral_packet() {
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .expect("session");
+    let mut context = harness_context(&mut state);
+    let actor = motion_scene(&mut context, session, [0.5, 1.0, 0.5], [0.0; 3], true);
+    context.preload_inventory(actor, InventoryRecord::empty());
+    let residents = context.resident_snapshot();
+    drop(context);
+    state.commit_residents(residents);
+    let held = control(1, 0, false, 0.0, 0.0);
+    state
+        .submit(
+            session,
+            mornlea_protocol::PlayIntent::Sequenced {
+                sequence: 1,
+                command: Command::PlayerInput(held),
+            },
+        )
+        .expect("held input");
+    state.advance_tick(TickBudget::full()).expect("first tick");
+    let first = state.residents();
+    let first_x = first.actors[0].motion.position().get()[0];
+    assert!(first_x > 0.5, "held input moves on its first tick");
+    state
+        .advance_tick(TickBudget::full())
+        .expect("packet-free tick");
+    let second = state.residents();
+    let second_x = second.actors[0].motion.position().get()[0];
+    assert!(
+        second_x > first_x,
+        "the next tick keeps moving without a packet"
+    );
+    assert_eq!(second.runtimes[&actor].controls, Some(held));
+    let neutral = control(0, 0, false, 0.0, 0.0);
+    state
+        .submit(
+            session,
+            mornlea_protocol::PlayIntent::Sequenced {
+                sequence: 2,
+                command: Command::PlayerInput(neutral),
+            },
+        )
+        .expect("neutral input");
+    state
+        .advance_tick(TickBudget::full())
+        .expect("neutral tick");
+    let third = state.residents();
+    let third_x = third.actors[0].motion.position().get()[0];
+    assert!(
+        third_x - second_x < second_x - first_x,
+        "neutral input reduces the carried motion"
+    );
+    assert_eq!(third.runtimes[&actor].controls, Some(neutral));
+}
+
 /// Wall collision, fluid and fall behavior with latest-input-wins, each leg
 /// compared against the source fixture's clipped pose and grounded state.
 #[test]

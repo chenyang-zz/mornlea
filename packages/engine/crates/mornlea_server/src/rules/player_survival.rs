@@ -261,7 +261,7 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
 /// Runtime lanes with the staged record winning: on the first tick no runtime
 /// exists yet, so the transients default from the actor itself instead of
 /// refusing a normal sequencing.
-fn merged_runtime(
+pub(crate) fn merged_runtime(
     view: &AuthorityReadView<'_>,
     record: &ActorRecord,
 ) -> Result<ActorRuntime, ServerError> {

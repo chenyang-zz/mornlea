@@ -211,16 +211,17 @@ fn login_session_becomes_actor_on_live_tick() {
     assert_eq!(actor.lifecycle, want.lifecycle);
     assert_eq!(actor.dimension, want.dimension);
     assert_eq!(actor.look, want.look);
-    // Health, hunger, oxygen, and armor ride the tick untouched. The
-    // saturation hint flips the first tick because the motion lane stages a
-    // zeroed saturation record before the survival pass derives the hint
-    // from it; that provider-owned evolution predates login seeding, so the
-    // live assertion pins the stable lanes while the unit test above pins
-    // the exact seed.
+    // Movement preserves the restored hunger lanes across the live reducer.
     assert_eq!(actor.survival.health(), want.survival.health());
     assert_eq!(actor.survival.hunger(), want.survival.hunger());
     assert_eq!(actor.survival.oxygen(), want.survival.oxygen());
     assert_eq!(actor.survival.armor_points(), 0);
+    assert_eq!(
+        actor.survival.saturation_zero(),
+        want.survival.saturation_zero()
+    );
+    assert_eq!(residents.runtimes[&actor.key].saturation_milli, 9_000);
+    assert_eq!(residents.runtimes[&actor.key].exhaustion_milli, 250);
     assert_eq!(
         residents.inventories.get(&actor.key),
         Some(&expected_inventory(&save))
@@ -230,6 +231,9 @@ fn login_session_becomes_actor_on_live_tick() {
     let again = authority.residents();
     assert_eq!(again.actors.len(), 1);
     assert_eq!(again.actors[0].key, want.key);
+    assert!(!again.actors[0].survival.saturation_zero());
+    assert_eq!(again.runtimes[&actor.key].saturation_milli, 9_000);
+    assert_eq!(again.runtimes[&actor.key].exhaustion_milli, 250);
     assert_eq!(
         again.inventories.get(&actor.key),
         Some(&expected_inventory(&save))

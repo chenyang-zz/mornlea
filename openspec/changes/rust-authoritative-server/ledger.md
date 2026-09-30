@@ -1482,3 +1482,6 @@ Review audit repair accepted: the existing Go backup marker stays byte-identical
 
 
 Snapshot capability entropy accepted on the audit-repair baseline 75a431b3. Isolated implementer owns provider, dependency edge and snapshot tests; controller inspected the diff and independently reran all seven snapshot cases. RED: production entropy source lacked the OS RNG and used observable process state. GREEN: snapshot7/7 and actual Python Agent4/4 with explicit interpreter; all-target clippy and focused fmt passed. getrandom0.3.4 was already locked; no dependency/toolchain upgrade. Failure refuses registration and retains no slot. Architecture skill: no change.
+
+
+Player motion runtime repair accepted after a290f5cb. Isolated implementer owned four motion/survival/test files; controller reviewed all changed lanes and independently ran player_motion6/6 plus tick_state8/8. RED: full-runtime preservation, held-input live tick and login saturation cases failed. GREEN preserves every sibling lane, retains controls without a new packet, replaces them on neutral input, clears invalid latest input, and carries saturation9000/exhaustion250 through two live ticks. Explicit neutral retains physical inertia but decelerates. Focused formatting, clippy and diff checks passed. No contract or storage scope expansion. Architecture skill: no change.
