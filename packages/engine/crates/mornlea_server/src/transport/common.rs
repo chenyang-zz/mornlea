@@ -65,6 +65,8 @@ const POLL_FRAME_BUDGET: usize = 64;
 /// Byte ceiling one bounded poll processes over frame envelopes before
 /// retaining the suffix. A single larger valid frame is processed alone.
 const POLL_BYTE_BUDGET: usize = 1 << 20;
+/// Terminal diagnostics and queued rejections survive only the newest closes.
+const TERMINAL_CONNECTION_CAP: usize = 64;
 
 /// Checked prelogin reservation limits for one connection core.
 ///
@@ -177,7 +179,7 @@ enum Phase {
     },
     /// Acknowledged handoff committed; play traffic is admissible.
     Play { session: SessionKey },
-    /// Terminal. The final view replays on every later call.
+    /// Terminal. The final view replays while its diagnostic remains retained.
     Closed,
 }
 
@@ -193,7 +195,7 @@ struct OutboundFrame {
 struct Connection {
     kind: TransportKind,
     phase: Phase,
-    codec: ProtocolCodec,
+    codec: Option<ProtocolCodec>,
     inbound: Vec<u8>,
     outbound: VecDeque<OutboundFrame>,
     queued_total: usize,
@@ -210,7 +212,7 @@ impl Connection {
         Self {
             kind,
             phase: Phase::Hello { deadline },
-            codec,
+            codec: Some(codec),
             inbound: Vec::new(),
             outbound: VecDeque::new(),
             queued_total: 0,
@@ -234,7 +236,10 @@ impl Connection {
 
     /// Queues one encoded control packet and returns its absolute index.
     fn queue_packet(&mut self, packet: &ServerPacket) -> Result<usize, ServerError> {
-        let frame = encode_frame(&mut self.codec, packet)?;
+        let codec = self.codec.as_mut().ok_or(ServerError::Internal {
+            invariant: "connection codec",
+        })?;
+        let frame = encode_frame(codec, packet)?;
         self.outbound.push_back(OutboundFrame { frame });
         self.queued_total += 1;
         Ok(self.queued_total - 1)
@@ -247,6 +252,7 @@ impl Connection {
 pub struct ConnectionCore {
     limits: HandshakeLimits,
     connections: BTreeMap<u64, Connection>,
+    closed_order: VecDeque<u64>,
     next_id: u64,
     pending: usize,
 }
@@ -256,6 +262,7 @@ impl ConnectionCore {
         Self {
             limits,
             connections: BTreeMap::new(),
+            closed_order: VecDeque::new(),
             next_id: 0,
             pending: 0,
         }
@@ -469,9 +476,10 @@ impl ConnectionCore {
         taken
     }
 
-    /// Closes one connection. Queued frames stay drainable so a closing
-    /// rejection can still reach the peer. A login whose handoff was never
-    /// acknowledged is cancelled (the prepared session retires); a committed
+    /// Closes one connection. Queued frames stay drainable while its terminal
+    /// diagnostic is among the newest retained closes, so a rejection can
+    /// reach the peer. A login whose handoff was never acknowledged is
+    /// cancelled (the prepared session retires); a committed
     /// connection closes through the ordinary session lane, so a late
     /// cancellation never un-commits a handoff.
     pub fn close(
@@ -481,6 +489,11 @@ impl ConnectionCore {
         endpoint: &mut dyn TransportAuthority,
     ) {
         self.shut(id, reason, None, endpoint);
+    }
+
+    /// Number of live and retained terminal connection records.
+    pub fn retained_connections(&self) -> usize {
+        self.connections.len()
     }
 
     /// Retained unconsumed inbound bytes for one connection.
@@ -575,17 +588,37 @@ impl ConnectionCore {
         class: Option<ServerError>,
     ) -> ConnectionProgress {
         let progress = ConnectionProgress::Closed { reason, class };
-        if let Some(conn) = self.connections.get_mut(&id.get()) {
-            conn.phase = Phase::Closed;
-        } else {
+        let Some(conn) = self.connections.get_mut(&id.get()) else {
             return unknown_connection();
+        };
+        if let Some(closed) = conn.closed {
+            return closed;
         }
+        conn.phase = Phase::Closed;
         self.release_reservation(id);
         let conn = self
             .connections
             .get_mut(&id.get())
             .expect("connection exists");
+        // Terminal replay needs only its diagnostic and queued control frames.
+        // Drop receive capacity and compression contexts before retaining it.
+        conn.inbound = Vec::new();
+        conn.codec.take();
         conn.closed = Some(progress);
+        self.closed_order.push_back(id.get());
+        while self.closed_order.len() > TERMINAL_CONNECTION_CAP {
+            let oldest = self
+                .closed_order
+                .pop_front()
+                .expect("terminal record exists");
+            if self
+                .connections
+                .get(&oldest)
+                .is_some_and(|conn| matches!(conn.phase, Phase::Closed))
+            {
+                self.connections.remove(&oldest);
+            }
+        }
         progress
     }
 

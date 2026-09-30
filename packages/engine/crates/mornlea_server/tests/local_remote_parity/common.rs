@@ -788,6 +788,125 @@ fn sixteenth_seventeenth_reservation() {
 }
 
 #[test]
+fn closed_connection_releases_inbound() {
+    let mut core = new_core();
+    let mut endpoint = new_endpoint();
+    let clock = new_clock();
+    let id = core.open(TransportKind::Tcp, clock.monotonic()).unwrap();
+    let mut incomplete = encode_uvarint(MAX_FRAME_BYTES);
+    incomplete.resize(4096, 0);
+    expect_await(core.ingest(id, incomplete, false, &mut endpoint, &clock));
+    assert_eq!(core.retained_len(id), Some(4096));
+    core.close(id, CloseReason::PeerGone, &mut endpoint);
+    assert_eq!(core.retained_len(id), Some(0));
+}
+
+#[test]
+fn terminal_connection_churn_is_bounded() {
+    let mut core = new_core();
+    let mut endpoint = new_endpoint();
+    let clock = new_clock();
+    let (active, _) = drive_to_play(
+        &mut core,
+        &mut endpoint,
+        &clock,
+        TransportKind::Tcp,
+        1,
+        "Ada",
+    );
+    let waiting = core.open(TransportKind::Memory, clock.monotonic()).unwrap();
+    let mut oldest = None;
+    for index in 0..130 {
+        let id = core.open(TransportKind::Tcp, clock.monotonic()).unwrap();
+        oldest.get_or_insert(id);
+        let progress = if index % 2 == 0 {
+            let mut incomplete = hello_frame(protocol());
+            incomplete.pop();
+            expect_await(core.ingest(id, incomplete, false, &mut endpoint, &clock));
+            core.ingest(id, Vec::new(), true, &mut endpoint, &clock)
+        } else {
+            core.ingest(
+                id,
+                encode_uvarint(MAX_FRAME_BYTES + 1),
+                false,
+                &mut endpoint,
+                &clock,
+            )
+        };
+        expect_closed(progress);
+        assert!(core.retained_connections() <= 66);
+        assert_eq!(core.retained_len(id), Some(0));
+        assert_eq!(core.poll(id, &mut endpoint, &clock), progress);
+        assert_eq!(core.ack_sent(id, 1, &mut endpoint), progress);
+        core.close(id, CloseReason::Capacity, &mut endpoint);
+        assert_eq!(core.poll(id, &mut endpoint, &clock), progress);
+    }
+    assert_eq!(core.retained_connections(), 66);
+    let unknown = ConnectionProgress::Closed {
+        reason: CloseReason::InvalidPlay,
+        class: Some(ServerError::Internal {
+            invariant: "connection",
+        }),
+    };
+    let oldest = oldest.unwrap();
+    assert_eq!(core.retained_len(oldest), None);
+    assert_eq!(core.poll(oldest, &mut endpoint, &clock), unknown);
+    assert_eq!(core.ack_sent(oldest, 1, &mut endpoint), unknown);
+    assert!(core.take_frames(oldest, 8, 1 << 20).is_empty());
+    expect_await(core.poll(active, &mut endpoint, &clock));
+    expect_await(core.poll(waiting, &mut endpoint, &clock));
+    assert!(endpoint.closes.is_empty());
+
+    let newest = core.open(TransportKind::Memory, clock.monotonic()).unwrap();
+    let progress = core.ingest(
+        newest,
+        hello_frame(protocol() - 1),
+        false,
+        &mut endpoint,
+        &clock,
+    );
+    expect_closed(progress);
+    assert_eq!(core.retained_connections(), 66);
+    assert_eq!(core.poll(newest, &mut endpoint, &clock), progress);
+    let frames = core.take_frames(newest, 8, 1 << 20);
+    assert_eq!(frames.len(), 1);
+    let (packet_id, payload) = split_frame(&frames[0]);
+    assert!(matches!(
+        decode_server_payload(State::Handshake, packet_id, &payload),
+        ServerPacket::HandshakeReject(_)
+    ));
+    assert_eq!(core.ack_sent(newest, 1, &mut endpoint), progress);
+    assert!(core.take_frames(newest, 8, 1 << 20).is_empty());
+}
+
+#[test]
+fn terminal_retention_uses_closure_order_once() {
+    let mut core = new_core();
+    let mut endpoint = new_endpoint();
+    let clock = new_clock();
+    let first = core.open(TransportKind::Tcp, clock.monotonic()).unwrap();
+    let second = core.open(TransportKind::Tcp, clock.monotonic()).unwrap();
+    core.close(second, CloseReason::PeerGone, &mut endpoint);
+    core.close(first, CloseReason::PeerGone, &mut endpoint);
+    // Replayed closure must not refresh the old terminal record's position.
+    core.close(second, CloseReason::Capacity, &mut endpoint);
+    for _ in 0..63 {
+        let id = core.open(TransportKind::Memory, clock.monotonic()).unwrap();
+        core.close(id, CloseReason::PeerGone, &mut endpoint);
+    }
+    assert_eq!(core.retained_connections(), 64);
+    assert_eq!(core.retained_len(second), None);
+    assert_eq!(core.retained_len(first), Some(0));
+    assert_eq!(
+        core.poll(first, &mut endpoint, &clock),
+        ConnectionProgress::Closed {
+            reason: CloseReason::PeerGone,
+            class: None
+        }
+    );
+}
+
+#[test]
 fn wrong_version_truncated_expired_refused() {
     // Wrong version: the negotiated mismatch answer is delivered, then the
     // connection closes before any session work.
@@ -877,12 +996,11 @@ fn wrong_version_truncated_expired_refused() {
     // any payload is buffered.
     let id = core.open(TransportKind::Memory, clock.monotonic()).unwrap();
     let oversized = encode_uvarint(MAX_FRAME_BYTES + 1);
-    let refused_bytes = oversized.len();
     let (reason, _) = expect_closed(core.ingest(id, oversized, false, &mut endpoint, &clock));
     assert_eq!(reason, CloseReason::InvalidPlay);
-    // The refused prefix stays retained on the closed connection; no payload
-    // beyond it was ever buffered and no answer is queued.
-    assert_eq!(core.retained_len(id), Some(refused_bytes));
+    // Closure releases the refused prefix; no payload beyond it was buffered
+    // and no answer is queued.
+    assert_eq!(core.retained_len(id), Some(0));
     assert!(core.take_frames(id, 8, 1 << 20).is_empty());
 
     // A structurally valid login start with a non-UUIDv4 identity answers
@@ -1081,8 +1199,8 @@ fn coalesced_then_ingest_cap() {
     assert_eq!(class, None);
     assert_eq!(
         core.retained_len(id),
-        Some(retained),
-        "the refused chunk is not appended"
+        Some(0),
+        "the refused chunk is not appended and closure releases receive storage"
     );
 
     // The boundary itself is legal: a chunk that brings the retained bytes to
@@ -1170,6 +1288,7 @@ fn cancel_before_vs_after_handoff() {
         "Ada",
     );
     core.close(id, CloseReason::PeerGone, &mut endpoint);
+    core.close(id, CloseReason::Capacity, &mut endpoint);
     assert_eq!(endpoint.cancels, vec![early.get()]);
     assert_eq!(endpoint.session_phase(early), SessionPhase::Retired);
     assert_eq!(endpoint.activates, 0);
@@ -1207,6 +1326,7 @@ fn cancel_before_vs_after_handoff() {
     assert_eq!(endpoint.commits, vec![late.get()]);
     assert_eq!(endpoint.session_phase(late), SessionPhase::Active);
     core.close(id, CloseReason::PeerGone, &mut endpoint);
+    core.close(id, CloseReason::Capacity, &mut endpoint);
     assert_eq!(
         endpoint.cancels,
         vec![early.get(), relogin.get()],
