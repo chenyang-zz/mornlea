@@ -2127,18 +2127,14 @@ fn mine_ray_stops_at_closed_door() {
     );
 }
 
-/// A place ray also walks through transparent cells, but the destination rule
-/// still applies: water or an open door cell cannot host the new block, so the
-/// refusal names the occupied destination rather than a missed target.
+/// Ordinary placement replaces water reached through a transparent ray while
+/// preserving the solid hit and publishing exactly one debit and delta.
 #[test]
-fn place_ray_passes_transparent_cells_but_destination_refuses() {
-    const WATER_SOURCE: u16 = 27; // `core.WaterSourceID`
-    const WATER_FLOWING: u16 = 34; // `core.WaterLevel7ID`
-    const DOOR_LOWER_SOUTH_OPEN: u16 = 63; // `core.DoorLowerSouthOpen`
-    for corridor in [WATER_SOURCE, WATER_FLOWING, DOOR_LOWER_SOUTH_OPEN] {
+fn place_ray_passes_water_and_ordinary_block_replaces_it() {
+    for water in [27, 34] {
         fixture_case(
             AIR,
-            corridor,
+            water,
             STONE,
             ItemStack {
                 item: ITEM_DIRT,
@@ -2147,17 +2143,230 @@ fn place_ray_passes_transparent_cells_but_destination_refuses() {
             },
             |context, session| {
                 let actor = ActorKey::Player(session);
-                let cells = [
-                    BlockPos::new(0, 65, 0),
-                    BlockPos::new(0, 65, 1),
-                    BlockPos::new(0, 65, 2),
-                ];
-                let before = probe(context, &cells, &[actor], &[], &[]);
-                let refused = resolve_place(actor, &south_intent(), &context.read());
-                assert_eq!(refused, Err(RuleReject::Wire(RejectReason::Occupied)));
-                assert_eq!(probe(context, &cells, &[actor], &[], &[]), before);
+                let target = BlockPos::new(0, 65, 1);
+                let hit = BlockPos::new(0, 65, 2);
+                let before_inventory = *context.read().inventory(actor).unwrap();
+                let before_hit = context.read().observation(Dimension::OVERWORLD, hit);
+                let resolved = resolve_place(actor, &south_intent(), &context.read())
+                    .expect("water replacement resolves");
+                assert_eq!(*context.read().inventory(actor).unwrap(), before_inventory);
+                assert_eq!(
+                    context
+                        .read()
+                        .observation(Dimension::OVERWORLD, target)
+                        .unwrap()
+                        .block,
+                    water
+                );
+                let outcome = context
+                    .transaction()
+                    .try_place(resolved)
+                    .expect("replacement commits");
+                assert_eq!(outcome.changed.len(), 1);
+                assert_eq!(outcome.changed[0].pos, target);
+                assert_eq!(outcome.changed[0].block, DIRT);
+                assert_eq!(outcome.changed[0].generation, 1);
+                assert_eq!(outcome.changed[0].revision, 2);
+                assert!(outcome.inventory_changed);
+                assert_eq!(outcome.drops_created, 0);
+                let mut expected_inventory = before_inventory;
+                expected_inventory.slots[0].count = 2;
+                assert_eq!(
+                    *context.read().inventory(actor).unwrap(),
+                    expected_inventory
+                );
+                assert_eq!(
+                    context.read().observation(Dimension::OVERWORLD, hit),
+                    before_hit
+                );
+                assert_eq!(
+                    context
+                        .read()
+                        .observation(Dimension::OVERWORLD, target)
+                        .unwrap()
+                        .block,
+                    DIRT
+                );
+                assert!(context.events().is_empty());
             },
         );
+    }
+}
+
+/// An open door is transparent to the ray but remains an occupied destination.
+#[test]
+fn place_ray_passes_open_door_but_destination_refuses() {
+    fixture_case(
+        AIR,
+        63,
+        STONE,
+        ItemStack {
+            item: ITEM_DIRT,
+            count: 3,
+            durability: 0,
+        },
+        |context, session| {
+            let actor = ActorKey::Player(session);
+            let cells = [
+                BlockPos::new(0, 65, 0),
+                BlockPos::new(0, 65, 1),
+                BlockPos::new(0, 65, 2),
+            ];
+            let before = probe(
+                context,
+                &cells,
+                &[actor],
+                &[chest_reference()],
+                &[overworld_key(cells[0])],
+            );
+            assert_eq!(
+                resolve_place(actor, &south_intent(), &context.read()),
+                Err(RuleReject::Wire(RejectReason::Occupied))
+            );
+            assert_eq!(
+                probe(
+                    context,
+                    &cells,
+                    &[actor],
+                    &[chest_reference()],
+                    &[overworld_key(cells[0])]
+                ),
+                before
+            );
+        },
+    );
+}
+
+#[test]
+fn placement_invalid_item_precedes_ray_and_destination_refusals() {
+    for held in [
+        ItemStack::default(),
+        ItemStack {
+            item: ITEM_COAL,
+            count: 1,
+            durability: 0,
+        },
+    ] {
+        for scene in 0..5 {
+            let mut state = authority();
+            let session = state
+                .admit(admitted(1, "Ada"), TransportKind::Memory)
+                .unwrap();
+            let actor = ActorKey::Player(session);
+            let mut context = harness_context(&mut state);
+            context
+                .stage(RuleEffect::Environment(environment()))
+                .unwrap();
+            context
+                .stage(RuleEffect::Actor(player_actor(
+                    session,
+                    [0.5, 64.0, 0.5],
+                    std::f32::consts::PI,
+                    0.0,
+                )))
+                .unwrap();
+            context.preload_inventory(
+                actor,
+                hotbar_inventory(0, held.item, held.count, held.durability),
+            );
+            let cells: Vec<_> = (0..=6).map(|z| BlockPos::new(0, 65, z)).collect();
+            // The unavailable destination is also a traversed ray cell. Other
+            // scenes are observed air, an unavailable origin, a faceless hit,
+            // and an occupied destination behind a transparent open door.
+            for (z, pos) in cells.iter().enumerate() {
+                if (scene == 1 && z == 1) || (scene == 2 && z == 0) {
+                    continue;
+                }
+                let block = match (scene, z) {
+                    (3, 0) | (4, 2) => STONE,
+                    (4, 1) => 63,
+                    _ => AIR,
+                };
+                context.preload_block(observation(*pos, block));
+            }
+            let before = probe(
+                &context,
+                &cells,
+                &[actor],
+                &[chest_reference()],
+                &[overworld_key(cells[0])],
+            );
+            assert_eq!(
+                resolve_place(actor, &south_intent(), &context.read()),
+                Err(RuleReject::Wire(RejectReason::InvalidBlock)),
+                "scene {scene}, held {held:?}"
+            );
+            assert_eq!(
+                probe(
+                    &context,
+                    &cells,
+                    &[actor],
+                    &[chest_reference()],
+                    &[overworld_key(cells[0])]
+                ),
+                before
+            );
+        }
+    }
+}
+
+#[test]
+fn placement_forms_refuse_water_with_source_reason_and_no_effects() {
+    // Seeds, potatoes, carrots, saplings and torches require air. Doors and
+    // beds retain their strict footprint occupancy refusal for water.
+    for (item, reason) in [
+        (34, RejectReason::InvalidBlock),
+        (40, RejectReason::InvalidBlock),
+        (41, RejectReason::InvalidBlock),
+        (57, RejectReason::InvalidBlock),
+        (44, RejectReason::InvalidBlock),
+        (43, RejectReason::Occupied),
+        (ITEM_BED, RejectReason::Occupied),
+    ] {
+        for water in [27, 34] {
+            fixture_case(
+                AIR,
+                water,
+                STONE,
+                ItemStack {
+                    item,
+                    count: 3,
+                    durability: 0,
+                },
+                |context, session| {
+                    let actor = ActorKey::Player(session);
+                    let cells = [
+                        BlockPos::new(0, 65, 0),
+                        BlockPos::new(0, 65, 1),
+                        BlockPos::new(0, 65, 2),
+                        BlockPos::new(0, 64, 1),
+                        BlockPos::new(0, 66, 1),
+                    ];
+                    let before = probe(
+                        context,
+                        &cells,
+                        &[actor],
+                        &[chest_reference()],
+                        &[overworld_key(cells[0])],
+                    );
+                    assert_eq!(
+                        resolve_place(actor, &south_intent(), &context.read()),
+                        Err(RuleReject::Wire(reason)),
+                        "item {item}, water {water}"
+                    );
+                    assert_eq!(
+                        probe(
+                            context,
+                            &cells,
+                            &[actor],
+                            &[chest_reference()],
+                            &[overworld_key(cells[0])]
+                        ),
+                        before
+                    );
+                },
+            );
+        }
     }
 }
 

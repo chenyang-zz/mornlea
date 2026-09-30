@@ -812,18 +812,29 @@ fn mining_writes(
 
 /// Resolves one human placement intent into a complete transaction.
 ///
-/// Preflight order: the actor's pose and reach, the ray with every traversed
-/// cell's observation, the placement target, the held item's placement form
-/// (which fixes the footprint family), every footprint cell with its support,
-/// then the item debit. The resolved transaction carries each write's exact
-/// observed basis; committing it through `MutationTxn::try_place` revalidates
-/// that basis against the context and applies it atomically.
+/// Preflight order: the actor's pose and reach, the held item's eligibility
+/// and a private debit rehearsal, the ray with every traversed cell's
+/// observation, the face-dependent placement form, then the target and every
+/// footprint cell with its support. The resolved transaction carries each
+/// write's exact observed basis and the rehearsed inventory patch; committing
+/// it through `MutationTxn::try_place` revalidates those bases and publishes
+/// all writes atomically.
 pub fn resolve_place(
     actor: ActorKey,
     intent: &PlacementIntent,
     view: &AuthorityReadView<'_>,
 ) -> Result<ResolvedPlacement, RuleReject> {
     let basis = actor_basis(view, actor)?;
+    let inventory = *view.inventory(actor).ok_or(RuleReject::StaleObservation)?;
+    let slot = usize::from(intent.slot().get());
+    let held = inventory.slots[slot];
+    // Item eligibility and the private debit precede ray failures. Torch
+    // eligibility is independent of the face; its form is resolved below.
+    if item_placement(held.item).is_none() && held.item != ITEM_TORCH {
+        return Err(RuleReject::Wire(RejectReason::InvalidBlock));
+    }
+    let after =
+        consume_hotbar_one(&inventory, slot).ok_or(RuleReject::Wire(RejectReason::InvalidBlock))?;
     let look = intent.look();
     let direction = look_direction(look.yaw(), look.pitch());
     let hit = cast_interaction_ray(
@@ -840,28 +851,29 @@ pub fn resolve_place(
         // place against; Go rejects the faceless hit as `Occupied`.
         return Err(RuleReject::Wire(RejectReason::Occupied));
     }
-    let target = adjacent(hit.observed.pos, hit.face);
-    let target_observed = require_air(
-        view,
-        basis.dimension,
-        target,
-        RuleReject::Wire(RejectReason::ChunkNotReady),
-    )?;
-
-    // The held item selects the placement form and with it the footprint
-    // family: single-cell items write the target; door and bed items write
-    // their two-cell footprint per the frozen tables (door: lower cell plus
-    // the cell above, `tryPlaceDoor`, `packages/server/sim/entity/door.go`;
-    // bed: foot cell plus the head cell along the facing, `tryPlaceBed` and
-    // `packages/shared/core/bed.go`). An empty or non-placeable slot refuses
-    // with the reason the Go hotbar oracle pins (`RejectInvalidBlock`,
-    // `packages/server/sim/runtime/hotbar_test.go`). Every footprint cell is
-    // prefetched before any write is built.
-    let inventory = *view.inventory(actor).ok_or(RuleReject::StaleObservation)?;
-    let slot = usize::from(intent.slot().get());
-    let held = inventory.slots[slot];
     let form = placeable_block_at_face(held.item, hit.face)
         .ok_or(RuleReject::Wire(RejectReason::InvalidBlock))?;
+    let target = adjacent(hit.observed.pos, hit.face);
+    let target_observed = view
+        .observation(basis.dimension, target)
+        .ok_or(RuleReject::Wire(RejectReason::ChunkNotReady))?;
+    if target_observed.block != AIR && !is_fluid(target_observed.block) {
+        return Err(RuleReject::Wire(RejectReason::Occupied));
+    }
+    // Ordinary single-cell forms replace fluids. Multi-cell footprints keep
+    // strict occupancy, while plants and torches require an air destination
+    // with the item-specific refusal from the Go placement oracle.
+    if target_observed.block != AIR {
+        if is_door(form) || is_bed(form) {
+            return Err(RuleReject::Wire(RejectReason::Occupied));
+        }
+        if is_crop(form) || is_sapling(form) || is_torch(form) {
+            return Err(RuleReject::Wire(RejectReason::InvalidBlock));
+        }
+    }
+    // Door and bed footprint cells and supports are prefetched before any
+    // write is built (`tryPlaceDoor`, `packages/server/sim/entity/door.go`;
+    // `tryPlaceBed`, `packages/server/sim/entity/bed.go`).
     let facing = yaw_to_facing(look.yaw());
     let mut writes = Vec::with_capacity(2);
     if is_door(form) {
@@ -906,9 +918,6 @@ pub fn resolve_place(
     } else {
         writes.push(BlockWrite::try_new(target_observed, form)?);
     }
-    let after =
-        consume_hotbar_one(&inventory, slot).ok_or(RuleReject::Wire(RejectReason::InvalidBlock))?;
-
     let txn = BlockTxn {
         producer: MutationProducer::Actor(actor),
         tick: view.tick(),
