@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use mornlea_domain::{CommandText, CompanionId};
 use mornlea_server::agent::lease::{
     AgentWire, ControlPhase, ControlRound, HEARTBEAT_EVERY_MS, LeaseConfig, LeaseController,
+    RpcCancellation,
 };
 use mornlea_server::contracts::{
     AgentErrorCode, AgentHandle, AgentPlan, AgentPoll, AgentRequest, AgentRequestId, AgentResponse,
@@ -151,7 +152,15 @@ impl ScriptedWire {
 }
 
 impl AgentWire for ScriptedWire {
-    fn rpc(&self, request: AgentRequest, deadline: Deadline) -> Result<AgentResponse, ServerError> {
+    fn rpc_cancellable(
+        &self,
+        request: AgentRequest,
+        deadline: Deadline,
+        cancellation: &RpcCancellation,
+    ) -> Result<AgentResponse, ServerError> {
+        if cancellation.is_cancelled() {
+            return Err(unavailable());
+        }
         self.state
             .rounds
             .lock()
@@ -162,7 +171,22 @@ impl AgentWire for ScriptedWire {
         let receiver = self.state.gate.lock().unwrap().take();
         if let Some(receiver) = receiver {
             self.state.parked.store(true, Ordering::SeqCst);
-            let _ = receiver.recv();
+            loop {
+                if cancellation.is_cancelled() || self.state.closed.load(Ordering::SeqCst) {
+                    self.state.parked.store(false, Ordering::SeqCst);
+                    return Err(unavailable());
+                }
+                if deadline.expired(Instant::now()) {
+                    self.state.parked.store(false, Ordering::SeqCst);
+                    return Err(ServerError::Timeout {
+                        operation: Operation::AgentRpc,
+                    });
+                }
+                match receiver.recv_timeout(Duration::from_millis(5)) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
             self.state.parked.store(false, Ordering::SeqCst);
         }
         match self.state.script.lock().unwrap().pop_front() {

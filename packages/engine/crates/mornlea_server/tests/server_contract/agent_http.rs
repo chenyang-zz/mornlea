@@ -20,7 +20,7 @@ use mornlea_server::agent::http::{
     USER_AGENT, decode_success, error_failure, request_body, request_body_within_limit,
     response_body_within_limit, schema_decode,
 };
-use mornlea_server::agent::lease::AgentWire;
+use mornlea_server::agent::lease::{AgentWire, RpcCancellation};
 use mornlea_server::contracts::{
     AgentErrorCode, AgentRequest, AgentRequestId, AgentResponse, BaseIdentity, ClientInstanceId,
     Clock, Deadline, LeaseId, LeasedIdentity, NamespaceId, Operation, PlanRequest, RunId,
@@ -783,4 +783,127 @@ fn close_interrupts_blocked_response() {
         elapsed < Duration::from_millis(200),
         "closed wire retained the response socket: {elapsed:?}"
     );
+}
+
+#[test]
+fn cancellation_token_is_shared_and_one_way() {
+    let owner = RpcCancellation::default();
+    let worker = owner.clone();
+    assert!(!owner.is_cancelled());
+    std::thread::spawn(move || worker.cancel()).join().unwrap();
+    assert!(owner.is_cancelled());
+    owner.cancel();
+    assert!(owner.clone().is_cancelled());
+}
+
+#[test]
+fn cancelled_request_opens_no_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let wire = AgentHttpWire::try_new(&endpoint, "secret", clock()).unwrap();
+    let cancellation = RpcCancellation::default();
+    cancellation.cancel();
+    let outcome = wire.rpc_cancellable(
+        acquire_request(),
+        Deadline::at(Instant::now() + Duration::from_millis(80)),
+        &cancellation,
+    );
+    assert_eq!(
+        outcome,
+        Err(ServerError::Agent {
+            code: AgentErrorCode::AgentUnavailable,
+            status: 503,
+        })
+    );
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn cancellation_retires_only_its_response_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (accepted, waiting) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let accept = || {
+            let until = Instant::now() + Duration::from_secs(2);
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        stream
+                            .set_write_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        break stream;
+                    }
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < until =>
+                    {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("bounded fixture accept: {error}"),
+                }
+            }
+        };
+        let mut first = accept();
+        read_request(&mut first).unwrap();
+        accepted.send(()).unwrap();
+        let closed = matches!(first.read(&mut [0]), Ok(0));
+        drop(first);
+        let mut second = accept();
+        read_request(&mut second).unwrap();
+        let body = padded_success_body(1024);
+        let response = raw_response(
+            "HTTP/1.1 200 OK",
+            &[
+                ("Content-Type", "application/json".to_owned()),
+                ("Content-Length", body.len().to_string()),
+            ],
+            &body,
+        );
+        second.write_all(&response).unwrap();
+        closed
+    });
+    let wire = Arc::new(AgentHttpWire::try_new(&endpoint, "secret", clock()).unwrap());
+    let cancellation = RpcCancellation::default();
+    let worker_cancel = cancellation.clone();
+    let worker_wire = wire.clone();
+    let rpc = std::thread::spawn(move || {
+        worker_wire.rpc_cancellable(
+            acquire_request(),
+            Deadline::at(Instant::now() + Duration::from_secs(2)),
+            &worker_cancel,
+        )
+    });
+    waiting.recv_timeout(Duration::from_secs(1)).unwrap();
+    let started = Instant::now();
+    cancellation.cancel();
+    let result = rpc.join().unwrap();
+    let elapsed = started.elapsed();
+    let independent = wire.rpc(
+        acquire_request(),
+        Deadline::at(Instant::now() + Duration::from_secs(1)),
+    );
+    let first_closed = server.join().unwrap();
+    assert_eq!(
+        result,
+        Err(ServerError::Agent {
+            code: AgentErrorCode::AgentUnavailable,
+            status: 503,
+        })
+    );
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "request cancellation retained socket: {elapsed:?}"
+    );
+    assert!(first_closed, "retired request must release its socket");
+    assert!(matches!(independent, Ok(AgentResponse::Acquire(_))));
 }

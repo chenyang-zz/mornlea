@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use mornlea_server::agent::host::{PlanDispatch, PlanHost};
 use mornlea_server::agent::http::AgentHttpWire;
-use mornlea_server::agent::lease::{AgentWire, ControlPhase, LeaseConfig, LeaseController};
+use mornlea_server::agent::lease::{
+    AgentWire, ControlPhase, LeaseConfig, LeaseController, RpcCancellation,
+};
 use mornlea_server::agent::memory::{
     CommitReservation, CommitSettled, MemoryMirror, MemoryOwner, ReconcileSettled,
 };
@@ -513,14 +515,19 @@ impl LoseReleaseOnce {
 }
 
 impl AgentWire for LoseReleaseOnce {
-    fn rpc(&self, request: AgentRequest, deadline: Deadline) -> Result<AgentResponse, ServerError> {
+    fn rpc_cancellable(
+        &self,
+        request: AgentRequest,
+        deadline: Deadline,
+        cancellation: &RpcCancellation,
+    ) -> Result<AgentResponse, ServerError> {
         if matches!(request, AgentRequest::Release(_)) && self.armed.swap(false, Ordering::SeqCst) {
             return Err(ServerError::Agent {
                 code: AgentErrorCode::AgentUnavailable,
                 status: 503,
             });
         }
-        self.inner.rpc(request, deadline)
+        self.inner.rpc_cancellable(request, deadline, cancellation)
     }
 
     fn close(&self) {

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use mornlea_domain::PlayerId;
 
-use crate::agent::lease::AgentWire;
+use crate::agent::lease::{AgentWire, RpcCancellation};
 use crate::contracts::{
     AGENT_CONTRACT_VERSION, AgentErrorCode, AgentPlan, AgentRequest, AgentRequestId, AgentResponse,
     BaseIdentity, CancelRequest, CancelResponse, ClientInstanceId, Clock, CommitRequest,
@@ -733,20 +733,28 @@ impl AgentHttpWire {
 }
 
 impl AgentWire for AgentHttpWire {
-    fn rpc(&self, request: AgentRequest, deadline: Deadline) -> Result<AgentResponse, ServerError> {
-        if self.closed.load(Ordering::SeqCst) {
+    fn rpc_cancellable(
+        &self,
+        request: AgentRequest,
+        deadline: Deadline,
+        cancellation: &RpcCancellation,
+    ) -> Result<AgentResponse, ServerError> {
+        if cancellation.is_cancelled() || self.closed.load(Ordering::SeqCst) {
             return Err(unavailable());
         }
         let route = route_of(&request)?;
         let body = request_body(&request)?;
         let head = self.request_head(route, body.len())?;
-        let timeout = self.timeout_until(deadline)?;
+        // A single loopback connect attempt uses the same short syscall
+        // slice as response I/O, so retirement never waits a business timeout.
+        let timeout = self.timeout_until(deadline)?.min(Duration::from_millis(20));
         let mut stream = TcpStream::connect_timeout(&self.endpoint.socket_address(), timeout)
             .map_err(|_| unavailable())?;
         let mut io = RpcIo {
             wire: self,
             stream: &mut stream,
             deadline,
+            cancellation,
         };
         let mut outbound = head.into_bytes();
         outbound.extend_from_slice(&body);
@@ -779,11 +787,11 @@ impl AgentWire for AgentHttpWire {
         }
         if status == 200 {
             let decoded = decode_success(&request, &response.body)?;
-            self.timeout_until(deadline)?;
+            io.timeout()?;
             return Ok(decoded);
         }
         let expected = identity_request_id(&request);
-        self.timeout_until(deadline)?;
+        io.timeout()?;
         Err(error_failure(route, status, &expected, &response.body))
     }
 
@@ -799,10 +807,14 @@ struct RpcIo<'a> {
     wire: &'a AgentHttpWire,
     stream: &'a mut TcpStream,
     deadline: Deadline,
+    cancellation: &'a RpcCancellation,
 }
 
 impl RpcIo<'_> {
     fn timeout(&self) -> Result<Duration, ServerError> {
+        if self.cancellation.is_cancelled() {
+            return Err(unavailable());
+        }
         Ok(self
             .wire
             .timeout_until(self.deadline)?

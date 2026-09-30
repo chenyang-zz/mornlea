@@ -36,8 +36,31 @@ pub const RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 /// take `&self` with interior mutability so concurrent RPCs stay independent,
 /// like Go's per-call goroutines over one shared client.
 pub trait AgentWire: Send + Sync {
-    fn rpc(&self, request: AgentRequest, deadline: Deadline) -> Result<AgentResponse, ServerError>;
+    fn rpc(&self, request: AgentRequest, deadline: Deadline) -> Result<AgentResponse, ServerError> {
+        self.rpc_cancellable(request, deadline, &RpcCancellation::default())
+    }
+    fn rpc_cancellable(
+        &self,
+        request: AgentRequest,
+        deadline: Deadline,
+        cancellation: &RpcCancellation,
+    ) -> Result<AgentResponse, ServerError>;
     fn close(&self);
+}
+
+/// One request's retirement signal. Clones share a one-way flag; cancelling
+/// an owner must not close the shared wire or another request's connection.
+#[derive(Clone, Default)]
+pub struct RpcCancellation(Arc<AtomicBool>);
+
+impl RpcCancellation {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
 }
 
 /// Control machine phase. `AcquirePending` and `HeartbeatPending` are the
