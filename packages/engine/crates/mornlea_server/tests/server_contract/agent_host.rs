@@ -392,9 +392,8 @@ fn plan_dispatch(request_tag: u8, run_tag: u8, source_tick: u64) -> PlanDispatch
     }
 }
 
-/// A late outcome from the previous attempt must not clear the new gate:
-/// the host still holds the companion, installs the fresh outcome, and
-/// emits nothing for the stale one.
+/// A malformed terminal result releases only its current request's gate;
+/// invalid generation is rejected at install without affecting another companion.
 #[test]
 fn invalid_terminal_releases_only_its_current_gate() {
     let (_, clock) = StepClock::start();
