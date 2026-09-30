@@ -18,7 +18,12 @@ command -v uv >/dev/null 2>&1 || {
   exit 1
 }
 
-runtime_python="${project_root}/addons/py4godot/cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64/python/bin/python3.14"
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) runtime_platform="darwin64" ;;
+  Linux-x86_64) runtime_platform="linux64" ;;
+  *) printf 'unsupported Godot Python development host: %s\n' "$(uname -s)-$(uname -m)" >&2; exit 1 ;;
+esac
+runtime_python="${project_root}/addons/py4godot/cpython-${PY4GODOT_CPYTHON_VERSION}-${runtime_platform}/python/bin/python3.14"
 [[ -x "${runtime_python}" ]] || {
   printf 'embedded Python is missing; run scripts/godot/build-python-runtime.sh --verify --offline first.\n' >&2
   exit 1
@@ -54,6 +59,7 @@ uv_run=(
 
 uv "${uv_run[@]}" python -m unittest "${script_dir}/python_boundary_check_test.py"
 uv "${uv_run[@]}" python -m unittest "${script_dir}/visual_evidence_contract_test.py"
+uv "${uv_run[@]}" python -m unittest "${project_root}/tests/test_visual_capture.py"
 uv "${uv_run[@]}" python "${script_dir}/python_boundary_check.py" --project-root "${project_root}"
 uv "${uv_run[@]}" ruff format --check "${python_sources[@]}"
 uv "${uv_run[@]}" ruff check "${python_sources[@]}"

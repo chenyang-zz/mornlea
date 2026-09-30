@@ -14,6 +14,9 @@ source "${fork_root}/build-inputs.env"
 verify="false"
 offline="false"
 target="${PY4GODOT_BUILD_TARGET}"
+if [[ "$(uname -s)-$(uname -m)" == "Linux-x86_64" ]]; then
+  target="x86_64-unknown-linux-gnu"
+fi
 cache_root="${MORNLEA_PY4GODOT_CACHE_DIR:-/tmp/mornlea-py4godot-cache}"
 partial_path=""
 work_root=""
@@ -25,7 +28,7 @@ fail() {
 
 usage() {
   printf '%s\n' \
-    'usage: scripts/godot/build-python-runtime.sh --verify [--offline] [--target darwin-arm64] [--cache-dir ABSOLUTE_PATH]'
+    'usage: scripts/godot/build-python-runtime.sh --verify [--offline] [--target darwin-arm64|x86_64-unknown-linux-gnu] [--cache-dir ABSOLUTE_PATH]'
 }
 
 safe_remove_generated() {
@@ -79,10 +82,26 @@ while (($# > 0)); do
 done
 
 [[ "${verify}" == "true" ]] || fail "--verify is required"
+# Platform inputs keep native outputs independently pinned; Linux never inherits
+# macOS loader or artifact checksums.
+case "${target}" in
+  darwin-arm64)
+    [[ "$(uname -s)-$(uname -m)" == "Darwin-arm64" ]] || \
+      fail "unsupported Py4Godot build target on host: $(uname -s)-$(uname -m)"
+    runtime_directory="cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64"
+    library_suffix="dylib"
+    ;;
+  x86_64-unknown-linux-gnu)
+    # shellcheck source=py4godot/linux-build-inputs.env
+    source "${fork_root}/linux-build-inputs.env"
+    [[ "$(uname -s)-$(uname -m)" == "Linux-x86_64" ]] || \
+      fail "unsupported Py4Godot build target on host: $(uname -s)-$(uname -m)"
+    runtime_directory="cpython-${PY4GODOT_CPYTHON_VERSION}-linux64"
+    library_suffix="so"
+    ;;
+  *) fail "unsupported Py4Godot build target: ${target}" ;;
+esac
 [[ "${target}" == "${PY4GODOT_BUILD_TARGET}" ]] || fail "unsupported Py4Godot build target: ${target}"
-[[ "${target}" == "darwin-arm64" ]] || fail "unsupported Py4Godot build target: ${target}"
-[[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || \
-  fail "unsupported Py4Godot build target on host: $(uname -s)-$(uname -m)"
 [[ "${cache_root}" == /* ]] || fail "cache directory must be an absolute path outside the repository"
 
 mkdir -p -- "${cache_root}"
@@ -178,12 +197,18 @@ series_digest="$({
 [[ "${series_digest}" == "${PY4GODOT_PATCH_SERIES_SHA256}" ]] || \
   fail "patch-series checksum mismatch: got ${series_digest}, want ${PY4GODOT_PATCH_SERIES_SHA256}"
 
-clang_version="$(clang++ --version | sed -n 's/^Apple clang version \([^ ]*\).*/\1/p')"
-[[ "${clang_version}" == "${PY4GODOT_APPLE_CLANG_VERSION}" ]] || \
-  fail "Apple clang version mismatch: got ${clang_version}, want ${PY4GODOT_APPLE_CLANG_VERSION}"
-sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
-[[ "${sdk_version}" == "${PY4GODOT_MACOS_SDK_VERSION}" ]] || \
-  fail "macOS SDK version mismatch: got ${sdk_version}, want ${PY4GODOT_MACOS_SDK_VERSION}"
+if [[ "${target}" == "darwin-arm64" ]]; then
+  clang_version="$(clang++ --version | sed -n 's/^Apple clang version \([^ ]*\).*/\1/p')"
+  [[ "${clang_version}" == "${PY4GODOT_APPLE_CLANG_VERSION}" ]] || \
+    fail "Apple clang version mismatch: got ${clang_version}, want ${PY4GODOT_APPLE_CLANG_VERSION}"
+  sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+  [[ "${sdk_version}" == "${PY4GODOT_MACOS_SDK_VERSION}" ]] || \
+    fail "macOS SDK version mismatch: got ${sdk_version}, want ${PY4GODOT_MACOS_SDK_VERSION}"
+else
+  gcc_version="$(g++ -dumpfullversion)"
+  [[ "${gcc_version}" == "${PY4GODOT_GCC_VERSION}" ]] || \
+    fail "GCC version mismatch: got ${gcc_version}, want ${PY4GODOT_GCC_VERSION}"
+fi
 
 work_root="$(mktemp -d "${cache_root}/build.XXXXXX")"
 tar -xzf "${source_archive}" -C "${work_root}"
@@ -198,15 +223,15 @@ unzip -q "${release_archive}" \
   "${PY4GODOT_ARCHIVE_ROOT}/Python.svg" \
   "${PY4GODOT_ARCHIVE_ROOT}/python.gdextension" \
   "${PY4GODOT_ARCHIVE_ROOT}/signal_script.py" \
-  "${PY4GODOT_ARCHIVE_ROOT}/cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64/*" \
+  "${PY4GODOT_ARCHIVE_ROOT}/${runtime_directory}/*" \
   -d "${work_root}/materialized"
 
 staged_addon="${work_root}/materialized/${PY4GODOT_ARCHIVE_ROOT}"
-python_root="${staged_addon}/cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64/python"
+python_root="${staged_addon}/${runtime_directory}/python"
 python_stdlib="${python_root}/lib/python${PY4GODOT_CPYTHON_VERSION%.*}"
-loader_path="${python_root}/bin/pythonscript.dylib"
-[[ -f "${loader_path}" ]] || fail "upstream macOS arm64 Python loader is missing"
-[[ -f "${python_root}/bin/main.dylib" ]] || fail "upstream macOS arm64 Python bridge is missing"
+loader_path="${python_root}/bin/pythonscript.${library_suffix}"
+[[ -f "${loader_path}" ]] || fail "upstream ${target} Python loader is missing"
+[[ -f "${python_root}/bin/main.${library_suffix}" ]] || fail "upstream ${target} Python bridge is missing"
 [[ -f "${python_stdlib}/site-packages/py4godot/classes/Node.py" ]] || fail "embedded Py4Godot package is missing"
 
 cp -- "${source_root}/py4godot/utils/smart_cast.py" \
@@ -228,24 +253,37 @@ if grep -R -Eq '^      singleton = [A-Za-z0-9_]+\(\)$' \
   fail "generated singleton rewrite left an owning temporary"
 fi
 
-built_loader="${source_root}/build/mornlea/pythonscript.dylib"
+built_loader="${source_root}/build/mornlea/pythonscript.${library_suffix}"
 mkdir -p -- "${source_root}/build/mornlea" "${source_root}/python_files"
-ln -s -- "${staged_addon}/cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64" \
-  "${source_root}/python_files/cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64"
+ln -s -- "${staged_addon}/${runtime_directory}" \
+  "${source_root}/python_files/${runtime_directory}"
 (
   cd -- "${source_root}"
-  clang++ -dynamiclib -std=c++17 -O3 -DNDEBUG -Werror -Wall -Wextra -Wpedantic -Wno-unused-parameter \
-    -Wl,-install_name,@rpath/pythonscript.dylib \
-    -Wl,-rpath,@loader_path/../lib \
-    -Wl,-rpath,@loader_path/../Resources/addons/py4godot/cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64/python/lib \
-    -DMORNLEA_PYTHON_RUNTIME_DIRECTORY=\"cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64\" \
-    -I. \
-    -Ipy4godot/godot_bindings \
-    -Ipy4godot/gdextension-api \
-    -I"python_files/cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64/python/include/python3.14" \
-    py4godot/godot_bindings/pythonscript.cpp \
-    -L"python_files/cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64/python/lib" -lpython3.14 \
-    -o build/mornlea/pythonscript.dylib
+  if [[ "${target}" == "darwin-arm64" ]]; then
+    clang++ -dynamiclib -std=c++17 -O3 -DNDEBUG -Werror -Wall -Wextra -Wpedantic -Wno-unused-parameter \
+      -Wl,-install_name,@rpath/pythonscript.dylib \
+      -Wl,-rpath,@loader_path/../lib \
+      -Wl,-rpath,@loader_path/../Resources/addons/py4godot/${runtime_directory}/python/lib \
+      -DMORNLEA_PYTHON_RUNTIME_DIRECTORY=\"${runtime_directory}\" \
+      -DMORNLEA_PYTHON_MAIN_LIBRARY=\"main.dylib\" \
+      -I. \
+      -Ipy4godot/godot_bindings \
+      -Ipy4godot/gdextension-api \
+      -I"python_files/${runtime_directory}/python/include/python3.14" \
+      py4godot/godot_bindings/pythonscript.cpp \
+      -L"python_files/${runtime_directory}/python/lib" -lpython3.14 \
+      -o build/mornlea/pythonscript.${library_suffix}
+  else
+    g++ -shared -fPIC -std=c++17 -O3 -DNDEBUG -Werror -Wall -Wextra -Wpedantic -Wno-unused-parameter \
+      -Wl,-soname,pythonscript.so '-Wl,-rpath,$ORIGIN/../lib' \
+      -DMORNLEA_PYTHON_RUNTIME_DIRECTORY=\"${runtime_directory}\" \
+      -DMORNLEA_PYTHON_MAIN_LIBRARY=\"main.so\" \
+      -I. -Ipy4godot/godot_bindings -Ipy4godot/gdextension-api \
+      -I"python_files/${runtime_directory}/python/include/python3.14" \
+      py4godot/godot_bindings/pythonscript.cpp \
+      -L"python_files/${runtime_directory}/python/lib" -lpython3.14 -ldl \
+      -o build/mornlea/pythonscript.so
+  fi
 )
 verify_file "hardened loader" "${built_loader}" "${PY4GODOT_HARDENED_LOADER_SHA256}"
 cp -- "${built_loader}" "${loader_path}"

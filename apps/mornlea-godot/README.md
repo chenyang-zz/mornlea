@@ -2,7 +2,7 @@
 doc_id: godot-client-project
 language: en
 counterpart: README.zh.md
-revision: 2026-09-16.5
+revision: 2026-09-30.1
 ---
 
 # Mornlea Godot Client
@@ -20,8 +20,14 @@ scripts/godot/fetch.sh --verify-only
 Open and import the project without a foreground window:
 
 ```bash
+# Linux x86_64
+scripts/godot/godot.sh --headless --path apps/mornlea-godot --editor --quit-after 120
+
+# macOS
 scripts/godot/godot.sh --headless --path apps/mornlea-godot --editor --quit
 ```
+
+Godot 4.7.2's Linux EditorHelp documentation callback can outlive immediate shutdown after a cold import. The bounded 120-frame import allows that callback to settle before the editor exits.
 
 You may set `MORNLEA_GODOT_BIN` to an absolute path for an exact Godot 4.7.2 executable. The wrapper also accepts the official `/Applications/Godot.app` installation when its version matches the project pin.
 
@@ -40,6 +46,32 @@ Exercise both clean-state diagnostic paths without modifying the project checkou
 scripts/godot/openable-smoke.sh --without-native
 scripts/godot/openable-smoke.sh --without-python
 ```
+
+## Linux x86_64 distribution
+
+Linux builds use the same production feature catalog as the macOS project. The qualified target is `x86_64-unknown-linux-gnu`; the Godot export preset is `Mornlea Linux x86_64`. This packages the existing desktop pilot features and does not establish full game feature parity.
+
+Prepare Go 1.26, Rust 1.97.1, the pinned GNU C++ toolchain from `scripts/godot/py4godot/linux-build-inputs.env`, `patchelf`, `binutils`, `ripgrep`, `unzip`, and `shasum`. Then prepare the host-native Rust libraries, official Godot editor/templates, and embedded Python runtime, and export and verify the production main scene headlessly:
+
+```bash
+make rust
+scripts/godot/fetch.sh --target linux-x86_64
+scripts/godot/build-python-runtime.sh --verify --target x86_64-unknown-linux-gnu
+make godot-build
+make godot-export-linux
+```
+
+The default output is the ignored `build/godot-linux/` directory. Distribute that entire directory: `mornlea.x86_64`, `mornlea.pck`, the colocated Rust/Go shared libraries, and `addons/py4godot/cpython-3.14.4-linux64/` are one unit. CPython loads its standard library from this filesystem tree, so copying only the executable and PCK is insufficient. Production Python scripts also remain at their mapped filesystem paths because Py4Godot executes their classes through its file loader. The current ELF artifacts require glibc 2.34 or newer and a system `libstdc++` providing `GLIBCXX_3.4.32` (GCC 13.2 or newer). Launch the exported executable directly; no system Python, `PYTHONPATH`, `LD_LIBRARY_PATH`, runtime installer, or network download is needed.
+
+The Python loader is compiled with the compiler identified in `scripts/godot/py4godot/linux-build-inputs.env`; its loader, patch series, source archive, and complete runtime checksums are independently pinned. A different compiler or altered runtime is rejected before export. The editor and template archives are SHA-256 checked against `scripts/godot/version.env`; the Linux editor digest was obtained after checking the official release SHA-512 manifest.
+
+`make godot-build` builds debug and release native artifacts from the verified external cache offline. `make godot-export-linux` requires those prepared artifacts, validates source/resource closure and generated assets, restores the clean embedded runtime from its verified offline cache, verifies its checksums, then activates and closes the production catalog from the release bundle. Verification requires Bootstrap readiness, the six active features (session, actors, desktop input, player view, UI, and world), the two explicitly disabled audio/lifecycle skeletons, and clean Python teardown. Run export while no other Godot process uses the project runtime, since it rematerializes the ignored Python add-on. All automated checks run headlessly. To export already prepared artifacts into a different absolute directory:
+
+```bash
+scripts/godot/export-linux.sh --verify --output /absolute/path/mornlea-linux
+```
+
+The exporter stages and verifies the replacement before publishing it. It rejects nonempty output directories without its ownership marker and keeps a previously owned bundle usable if staging or validation fails. `distribution.env` records tool/runtime pins and source revision, including whether local changes were present.
 
 ## Asset synchronization
 

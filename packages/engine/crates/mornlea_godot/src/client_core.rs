@@ -287,7 +287,7 @@ unsafe extern "C" {
     // resolves the colocated producer library at runtime instead of linking
     // it at build time, because the workspace builds from a clean checkout
     // before any producer library exists. A Windows distribution would need
-    // its own loader entry points; the pilot distributes macOS only.
+    // its own loader entry points; the pilot distributes macOS and Linux.
     fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     fn dladdr(address: *const c_void, info: *mut DlInfo) -> c_int;
@@ -307,14 +307,20 @@ struct DlInfo {
 /// `RTLD_NOW | RTLD_LOCAL` for the producer load: resolve every producer
 /// reference eagerly (a missing engine dependency fails the load instead of a
 /// later call) and keep the producer's symbols out of the global namespace so
-/// they cannot collide with Godot or Py4Godot symbols. Values are the darwin
-/// `dlfcn.h` constants.
+/// they cannot collide with Godot or Py4Godot symbols. `RTLD_LOCAL` differs
+/// between the supported POSIX platforms.
 const RTLD_NOW: c_int = 0x2;
+#[cfg(target_os = "macos")]
 const RTLD_LOCAL: c_int = 0x4;
+#[cfg(target_os = "linux")]
+const RTLD_LOCAL: c_int = 0;
 
 /// The file name of the producer library as materialized beside this
 /// extension by `scripts/godot/build-core.sh`.
+#[cfg(target_os = "macos")]
 const PRODUCER_LIBRARY_NAME: &str = "libmornlea_client_core.dylib";
+#[cfg(target_os = "linux")]
+const PRODUCER_LIBRARY_NAME: &str = "libmornlea_client_core.so";
 
 /// A function whose address anchors `dladdr` to this extension image so the
 /// producer library can be resolved relative to the extension's own

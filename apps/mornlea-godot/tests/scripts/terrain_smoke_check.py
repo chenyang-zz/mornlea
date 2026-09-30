@@ -1,7 +1,8 @@
 """Drive the production catalog against the real TCP dedicated server.
 
 This is the real-server terrain smoke: it activates the production feature
-catalog (session plus world), connects the pilot session to a live
+catalog (including session, input, actors, view, HUD, and world), connects
+the pilot session to a live
 `mornlea-server` started by the gate script on loopback, waits for the core
 of the transcript terrain check's initial-snapshot criterion — confirmed
 session phase Play plus at least one live terrain section in the bridge's
@@ -187,12 +188,19 @@ class terrain_smoke_check(Node):
             self._failures.append(f"production catalog activation failed: {result}")
             self._finish(1)
             return
-        if result["order"] != ["session", "world"]:
+        if result["order"] != [
+            "session",
+            "actors",
+            "platform.desktop.input",
+            "player_view",
+            "ui",
+            "world",
+        ]:
             self._failures.append(f"activation order differs: {result['order']}")
         if "world" in result["disabled"]:
             self._failures.append("the world feature was disabled by the plan")
-        if cast(int, host.call("active_count")) != 2:
-            self._failures.append("the session and world features did not stay active")
+        if cast(int, host.call("active_count")) != 6:
+            self._failures.append("the production features did not stay active")
         feature = host.get_node_or_null("WorldFeature")
         if feature is None:
             self._failures.append("the active world feature instance is missing")

@@ -28,7 +28,7 @@ CI_VALIDATE_CANDIDATE_SHA = bash -c '[[ "$$CI_CANDIDATE_SHA" =~ ^([0-9a-f]{40}|[
 # dev-check、vet）显式循环该列表，防止新模块成为 ./... 盲区。
 GO_TEST_MODULES := ./packages/contracts ./packages/shared ./packages/server ./packages/client ./packages/tools ./packages/audit
 
-.PHONY: help run build build-linux-server test test-race test-race-short test-race-changed test-multiplayer bench-multiplayer archcheck comment-language-check ci-preflight fmt clean visual-check visual-update rust rust-check frontend-check frontend-visual-check frontend-visual-update dev-check companion-agent-check companion-agent-integration agent-planner agent-implementer agent-gates agent-dashboard agent-ui-dev godot-build godot-check godot-asset-check godot-project-check godot-python-check godot-input-check godot-camera-check godot-target-check godot-entity-check godot-environment-check godot-hud-check godot-disconnect-check godot-smoke godot-terrain-check godot-capability-check godot-playable-smoke godot-visual-evidence godot-visual-compare godot-benchmark
+.PHONY: help run build build-linux-server test test-race test-race-short test-race-changed test-multiplayer bench-multiplayer archcheck comment-language-check ci-preflight fmt clean visual-check visual-update rust rust-check frontend-check frontend-visual-check frontend-visual-update dev-check companion-agent-check companion-agent-integration agent-planner agent-implementer agent-gates agent-dashboard agent-ui-dev godot-build godot-export-linux godot-check godot-asset-check godot-project-check godot-python-check godot-input-check godot-camera-check godot-target-check godot-entity-check godot-environment-check godot-hud-check godot-disconnect-check godot-smoke godot-terrain-check godot-capability-check godot-playable-smoke godot-visual-evidence godot-visual-compare godot-benchmark
 .PHONY: ci-rust-quality ci-frontend ci-native-linux ci-native-macos ci-verify-linux-artifact ci-verify-macos-artifact ci-linux-quality ci-race-server ci-race-rest ci-race-client ci-integration-server ci-integration-client
 
 run test test-multiplayer bench-multiplayer visual-check visual-update: rust
@@ -69,6 +69,7 @@ help:
 		'  make companion-agent-check 运行伙伴 Agent locked 安装、格式、静态检查、类型检查与 Python 单测' \
 		'  make companion-agent-integration 运行无外网 Go/Python 伙伴 Agent 真进程合同' \
 		'  make godot-build         Optional pilot gate: build the offline desktop distribution unit' \
+		'  make godot-export-linux  Optional pilot gate: export and verify the Linux production catalog' \
 		'  make godot-check         Optional pilot gate: load the Godot project headlessly' \
 		'  make godot-asset-check   Optional pilot gate: verify generated Godot assets match their inputs' \
 		'  make godot-project-check Optional pilot gate: validate the Godot project structure' \
@@ -323,9 +324,13 @@ agent-ui-dev:
 # test, run and friends) must not depend on them or probe scripts/godot.
 godot-build:
 	scripts/godot/build-python-runtime.sh --verify --offline
+	scripts/godot/build-core.sh --profile debug --verify
+	scripts/godot/build-core.sh --profile release --verify
 	scripts/godot/build-extension.sh --profile debug
 	scripts/godot/build-extension.sh --profile release --verify
-	scripts/godot/build-core.sh --profile release --verify
+
+godot-export-linux:
+	scripts/godot/export-linux.sh --verify
 
 godot-check:
 	scripts/godot/godot.sh --headless --path apps/mornlea-godot --editor --quit

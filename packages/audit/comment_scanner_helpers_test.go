@@ -613,6 +613,10 @@ func collectFirstPartyCommentSources(root string) ([]commentScanSource, error) {
 			}
 			relative = filepath.ToSlash(relative)
 			if entry.IsDir() {
+				// The ignored Py4Godot runtime is verified upstream material.
+				if relative == "apps/mornlea-godot/addons/py4godot" {
+					return fs.SkipDir
+				}
 				if _, excluded := commentSourceExcludedDirectories[entry.Name()]; excluded {
 					return fs.SkipDir
 				}

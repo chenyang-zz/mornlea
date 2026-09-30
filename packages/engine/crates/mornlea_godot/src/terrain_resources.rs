@@ -48,7 +48,8 @@
 //! construction inputs owned by the integration that wires the bridge to
 //! the world feature; the table frees only the mesh and instance RIDs it
 //! allocated itself. Instance transforms carry the section world origin
-//! (section coordinates times sixteen blocks per edge); vertex positions
+//! (section coordinates times sixteen blocks per edge, with storage Y
+//! translated by the world's minimum height); vertex positions
 //! stay section-local per the terrain shader contract, so the GPU adds
 //! them.
 //!
@@ -82,7 +83,7 @@ use crate::quad_decode::{SectionGeometry, SurfaceGeometry};
 /// Blocks along one section edge. The mesher's frozen worst case is six
 /// quads per block, so `abi::MAX_SECTION_MESH_QUADS` equals six times this
 /// constant cubed; the pinning tests assert that relationship.
-pub(crate) const SECTION_EDGE_BLOCKS: i32 = 16;
+pub(crate) const SECTION_EDGE_BLOCKS: i32 = abi::SECTION_EDGE_BLOCKS as i32;
 
 /// Surface classes one section can carry: opaque, cutout, and water, in
 /// submission order. Surface submission order is stable (opaque, cutout,
@@ -103,8 +104,8 @@ pub(crate) struct TerrainMaterials {
     pub(crate) water: Rid,
 }
 
-/// The revision-free identity of one world section: dimension plus signed
-/// section X/Y/Z, the world-family record vocabulary of
+/// The revision-free identity of one world section: dimension, signed X/Z
+/// coordinates, and a zero-based storage Y index, the world-family vocabulary of
 /// `core.SectionKey`. The table keys its map on this coordinate; the
 /// presentation revision that rides along in [`SectionId`] is tracked per
 /// entry instead.
@@ -337,13 +338,14 @@ fn slot(array_type: ArrayType) -> usize {
 }
 
 /// The instance transform of one section: identity basis with the section
-/// world origin. Section coordinates are exact integers and the edge is
+/// world origin. Y is a storage index measured from the world's minimum
+/// height. Section coordinates are exact integers and the edge is
 /// sixteen blocks, so float math stays exact for every representable
 /// section coordinate.
 fn section_transform(coord: &SectionCoord) -> Transform3D {
     let origin = Vector3::new(
         (coord.x as f32) * (SECTION_EDGE_BLOCKS as f32),
-        (coord.y as f32) * (SECTION_EDGE_BLOCKS as f32),
+        (coord.y as f32) * (SECTION_EDGE_BLOCKS as f32) - (abi::WORLD_Y_BIAS_BLOCKS as f32),
         (coord.z as f32) * (SECTION_EDGE_BLOCKS as f32),
     );
     Transform3D::new(Basis::IDENTITY, origin)
@@ -978,7 +980,7 @@ mod tests {
         SectionId {
             dimension,
             x,
-            y: -3,
+            y: 3,
             z: 7,
             revision,
         }
@@ -990,10 +992,29 @@ mod tests {
             Basis::IDENTITY,
             Vector3::new(
                 (id.x as f32) * (SECTION_EDGE_BLOCKS as f32),
-                (id.y as f32) * (SECTION_EDGE_BLOCKS as f32),
+                (id.y as f32) * (SECTION_EDGE_BLOCKS as f32) - 64.0,
                 (id.z as f32) * (SECTION_EDGE_BLOCKS as f32),
             ),
         )
+    }
+
+    #[test]
+    fn terrain_resources_maps_storage_section_y_to_world_height() {
+        use super::section_transform;
+
+        for (section_y, world_y) in [(0, -64.0), (4, 0.0), (23, 304.0)] {
+            let coord = SectionCoord {
+                dimension: 0,
+                x: -2,
+                y: section_y,
+                z: 3,
+            };
+            assert_eq!(
+                section_transform(&coord).origin,
+                Vector3::new(-32.0, world_y, 48.0),
+                "section Y is a zero-based storage index"
+            );
+        }
     }
 
     #[test]

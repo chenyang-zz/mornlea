@@ -91,6 +91,8 @@ const (
 	InputVersion       = uint32(C.MORNLEA_CLIENT_INPUT_VERSION)
 	StepVersion        = uint32(C.MORNLEA_CLIENT_STEP_VERSION)
 	WorldVersion       = uint32(C.MORNLEA_CLIENT_WORLD_VERSION)
+	SectionEdgeBlocks  = uint32(C.MORNLEA_CLIENT_SECTION_EDGE_BLOCKS)
+	WorldYBiasBlocks   = uint32(C.MORNLEA_CLIENT_WORLD_Y_BIAS_BLOCKS)
 	FrameVersion       = uint32(C.MORNLEA_CLIENT_FRAME_VERSION)
 	StatusVersion      = uint32(C.MORNLEA_CLIENT_STATUS_VERSION)
 	EnvironmentVersion = uint32(C.MORNLEA_CLIENT_ENVIRONMENT_VERSION)

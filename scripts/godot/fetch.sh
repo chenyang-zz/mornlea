@@ -8,7 +8,10 @@ repository_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 source "${script_dir}/version.env"
 
 mode="fetch"
-target="darwin-universal"
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64) target="linux-x86_64" ;;
+  *) target="darwin-universal" ;;
+esac
 cache_root="${MORNLEA_GODOT_CACHE_DIR:-/tmp/mornlea-godot-cache}"
 partial_path=""
 materialization_dir=""
@@ -21,7 +24,7 @@ fail() {
 
 usage() {
   printf '%s\n' \
-    'usage: scripts/godot/fetch.sh [--verify-only] [--target darwin-universal] [--cache-dir ABSOLUTE_PATH]'
+    'usage: scripts/godot/fetch.sh [--verify-only] [--target darwin-universal|linux-x86_64] [--cache-dir ABSOLUTE_PATH]'
 }
 
 cleanup() {
@@ -31,8 +34,8 @@ cleanup() {
   fi
   if [[ -n "${materialization_dir}" ]]; then
     # A failed publication must leave the previously qualified editor usable.
-    if [[ -n "${previous_editor}" && ! -e "${artifact_dir}/Godot.app" && ! -L "${artifact_dir}/Godot.app" ]]; then
-      if ! mv -- "${previous_editor}" "${artifact_dir}/Godot.app"; then
+    if [[ -n "${previous_editor}" && ! -e "${artifact_dir}/${editor_name}" && ! -L "${artifact_dir}/${editor_name}" ]]; then
+      if ! mv -- "${previous_editor}" "${artifact_dir}/${editor_name}"; then
         printf 'godot fetch: editor recovery remains at %s\n' "${previous_editor}" >&2
         return 1
       fi
@@ -72,7 +75,23 @@ while (($# > 0)); do
   esac
 done
 
-[[ "${target}" == "darwin-universal" ]] || fail "unsupported Godot desktop target: ${target}"
+case "${target}" in
+  darwin-universal)
+    engine_name="Godot_v${GODOT_VERSION}_macos.universal.zip"
+    engine_url="${GODOT_MACOS_UNIVERSAL_URL}"
+    engine_sha256="${GODOT_MACOS_UNIVERSAL_SHA256}"
+    editor_name="Godot.app"
+    editor_relative="Godot.app/Contents/MacOS/Godot"
+    ;;
+  linux-x86_64)
+    engine_name="Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+    engine_url="${GODOT_LINUX_X86_64_URL}"
+    engine_sha256="${GODOT_LINUX_X86_64_SHA256}"
+    editor_name="Godot_v${GODOT_VERSION}_linux.x86_64"
+    editor_relative="${editor_name}"
+    ;;
+  *) fail "unsupported Godot desktop target: ${target}" ;;
+esac
 [[ "${cache_root}" == /* ]] || fail "cache directory must be an absolute path outside the repository"
 
 mkdir -p -- "${cache_root}"
@@ -83,7 +102,7 @@ esac
 
 artifact_dir="${cache_root}/${GODOT_VERSION}/${target}"
 mkdir -p -- "${artifact_dir}"
-engine_path="${artifact_dir}/Godot_v${GODOT_VERSION}_macos.universal.zip"
+engine_path="${artifact_dir}/${engine_name}"
 templates_path="${artifact_dir}/Godot_v${GODOT_VERSION}_export_templates.tpz"
 
 sha256_file() {
@@ -137,23 +156,27 @@ materialize_editor() {
   # Stage beside the destination so only a complete, verified application is
   # published; downloaded bytes alone cannot satisfy headless runtime checks.
   materialization_dir="$(mktemp -d "${artifact_dir}/.godot-extract.XXXXXX")"
-  ditto -x -k "${engine_path}" "${materialization_dir}" || fail "could not extract the verified Godot editor"
-  [[ -d "${materialization_dir}/Godot.app" && ! -L "${materialization_dir}/Godot.app" ]] || fail "verified archive is missing a regular Godot.app directory"
-  local editor="${materialization_dir}/Godot.app/Contents/MacOS/Godot"
-  [[ -f "${editor}" && -x "${editor}" ]] || fail "verified archive is missing an executable Godot.app/Contents/MacOS/Godot"
-  if [[ -e "${artifact_dir}/Godot.app" || -L "${artifact_dir}/Godot.app" ]]; then
-    mv -- "${artifact_dir}/Godot.app" "${materialization_dir}/previous-Godot.app"
-    previous_editor="${materialization_dir}/previous-Godot.app"
+  if [[ "${target}" == "darwin-universal" ]]; then
+    ditto -x -k "${engine_path}" "${materialization_dir}" || fail "could not extract the verified Godot editor"
+    [[ -d "${materialization_dir}/Godot.app" && ! -L "${materialization_dir}/Godot.app" ]] || fail "verified archive is missing a regular Godot.app directory"
+  else
+    unzip -q "${engine_path}" -d "${materialization_dir}" || fail "could not extract the verified Godot editor"
   fi
-  mv -- "${materialization_dir}/Godot.app" "${artifact_dir}/Godot.app"
-  printf 'Godot editor materialized: %s\n' "${artifact_dir}/Godot.app/Contents/MacOS/Godot"
+  local editor="${materialization_dir}/${editor_relative}"
+  [[ -f "${editor}" && -x "${editor}" && ! -L "${editor}" ]] || fail "verified archive is missing an executable ${editor_relative}"
+  if [[ -e "${artifact_dir}/${editor_name}" || -L "${artifact_dir}/${editor_name}" ]]; then
+    mv -- "${artifact_dir}/${editor_name}" "${materialization_dir}/previous-${editor_name}"
+    previous_editor="${materialization_dir}/previous-${editor_name}"
+  fi
+  mv -- "${materialization_dir}/${editor_name}" "${artifact_dir}/${editor_name}"
+  printf 'Godot editor materialized: %s\n' "${artifact_dir}/${editor_relative}"
 }
 
 if [[ "${mode}" == "verify" ]]; then
   if [[ -f "${engine_path}" ]]; then
-    verify_file "Godot Standard" "${engine_path}" "${GODOT_MACOS_UNIVERSAL_SHA256}"
+    verify_file "Godot Standard" "${engine_path}" "${engine_sha256}"
   else
-    verify_remote "Godot Standard" "${GODOT_MACOS_UNIVERSAL_URL}"
+    verify_remote "Godot Standard" "${engine_url}"
   fi
   if [[ -f "${templates_path}" ]]; then
     verify_file "Godot export templates" "${templates_path}" "${GODOT_EXPORT_TEMPLATES_SHA256}"
@@ -164,6 +187,6 @@ if [[ "${mode}" == "verify" ]]; then
   exit 0
 fi
 
-download_artifact "Godot Standard" "${GODOT_MACOS_UNIVERSAL_URL}" "${GODOT_MACOS_UNIVERSAL_SHA256}" "${engine_path}"
+download_artifact "Godot Standard" "${engine_url}" "${engine_sha256}" "${engine_path}"
 download_artifact "Godot export templates" "${GODOT_EXPORT_TEMPLATES_URL}" "${GODOT_EXPORT_TEMPLATES_SHA256}" "${templates_path}"
 materialize_editor

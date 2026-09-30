@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "total_files": 1242,
-  "total_comments": 38478,
+  "total_comments": 38405,
   "files": [
     {
       "path": "packages/audit/armor_domain_test.go",
@@ -1740,8 +1740,8 @@
     },
     {
       "path": "packages/client/render/frame_streams.go",
-      "count": 79,
-      "digest": "2280b6266669e4cb019190df2ddd79a6dea64ee9d0ee547b4dde989c128528ed"
+      "count": 10,
+      "digest": "29849184a82de4aed137014623d8c472eee84738cd7ee2478691d0e49886612c"
     },
     {
       "path": "packages/client/render/hostile_avatar_test.go",
@@ -2030,8 +2030,8 @@
     },
     {
       "path": "packages/client/render/weather_streams_test.go",
-      "count": 6,
-      "digest": "ced8972efabd56681f1f79cb1ff7b5befd7123b7c0fd4fed637d2739d66925c9"
+      "count": 2,
+      "digest": "2bbe6e099c2708cbc4003906644c4376ec53fbc3e48e4598af1523ac3734ad9d"
     },
     {
       "path": "packages/client/render/weather_test.go",

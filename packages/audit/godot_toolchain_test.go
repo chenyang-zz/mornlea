@@ -25,7 +25,11 @@ func TestGodotResolverPrintsCachedExecutablePath(t *testing.T) {
 	resolver := filepath.Join(scriptDir, "godot.sh")
 	writeExecutable(t, resolver, readBaselineDoc(t, sourceRoot, "scripts/godot/godot.sh"))
 	cache := filepath.Join(fixture, "cache")
-	editor := filepath.Join(cache, "4.7.2-stable/darwin-universal/Godot.app/Contents/MacOS/Godot")
+	editorRelative := "4.7.2-stable/darwin-universal/Godot.app/Contents/MacOS/Godot"
+	if runtime.GOOS == "linux" {
+		editorRelative = "4.7.2-stable/linux-x86_64/Godot_v4.7.2-stable_linux.x86_64"
+	}
+	editor := filepath.Join(cache, editorRelative)
 	writeExecutable(t, editor, "#!/bin/sh\ncase \"$1\" in --version) printf '4.7.2.stable.fixture\\n' ;; *) printf 'unexpected editor invocation\\n' ;; esac\n")
 	command := exec.Command(resolver, "--print-path")
 	command.Env = append(os.Environ(), "MORNLEA_GODOT_CACHE_DIR="+cache, "MORNLEA_GODOT_BIN=")
@@ -168,7 +172,7 @@ func TestGodotFetchMaterializesVerifiedEditor(t *testing.T) {
 			if test.previous {
 				writeExecutable(t, installed, "previous editor")
 			}
-			arguments := []string{"--cache-dir", cache}
+			arguments := []string{"--target", "darwin-universal", "--cache-dir", cache}
 			if test.verifyOnly {
 				writeFile(t, filepath.Join(artifact, "Godot_vfixture_macos.universal.zip"), archive.Bytes())
 				writeFile(t, filepath.Join(artifact, "Godot_vfixture_export_templates.tpz"), templates)

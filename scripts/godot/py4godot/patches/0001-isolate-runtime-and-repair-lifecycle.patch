@@ -1,6 +1,6 @@
 Subject: [PATCH] isolate embedded Python and repair loader lifecycle
-Upstream-Defect: The 4.7-alpha21 loader initializes CPython from ambient process state, cannot resolve the exported macOS runtime layout, schedules an invalid editor icon update during language registration, and leaves script and resource-loader references alive at shutdown.
-Deletion-Condition: Remove this patch when an exact upstream artifact uses isolated PyConfig, supports a self-contained macOS export, excludes ambient and working-directory imports, and passes Mornlea editor and lifecycle qualification.
+Upstream-Defect: The 4.7-alpha21 loader initializes CPython from ambient process state, cannot resolve the exported desktop runtime layout, schedules an invalid editor icon update during language registration, and leaves script and resource-loader references alive at shutdown.
+Deletion-Condition: Remove this patch when an exact upstream artifact uses isolated PyConfig, supports self-contained desktop exports, excludes ambient and working-directory imports, and passes Mornlea editor and lifecycle qualification.
 
 --- a/py4godot/godot_bindings/pythonscript.cpp
 +++ b/py4godot/godot_bindings/pythonscript.cpp
@@ -25,7 +25,7 @@ Deletion-Condition: Remove this patch when an exact upstream artifact uses isola
 +#error "MORNLEA_PYTHON_RUNTIME_DIRECTORY must name the pinned embedded runtime directory"
 +#endif
 +
-+#if defined(__APPLE__)
++#if defined(__APPLE__) || defined(__linux__)
 +#include <dlfcn.h>
 +
 +#include <filesystem>
@@ -49,7 +49,7 @@ Deletion-Condition: Remove this patch when an exact upstream artifact uses isola
 -                                                       GDExtensionClassLibraryPtr p_library,
 -                                                       GDExtensionInitialization *r_initialization) {
 -         godot_print_error = (GDExtensionInterfacePrintError)p_get_proc_address("print_error");
-+#if defined(__APPLE__)
++#if defined(__APPLE__) || defined(__linux__)
 +static GDExtensionInitialization upstream_initialization = {};
 +static std::filesystem::path python_home;
 +static bool python_initialized = false;
@@ -378,13 +378,13 @@ Deletion-Condition: Remove this patch when an exact upstream artifact uses isola
 +    godot_print_error = reinterpret_cast<GDExtensionInterfacePrintError>(p_get_proc_address("print_error"));
 +    upstream_get_proc_address = p_get_proc_address;
 +
-+#if defined(__APPLE__)
++#if defined(__APPLE__) || defined(__linux__)
 +    if (!resolve_python_home()) {
 +        return 0;
      }
 -}
 \ No newline at end of file
-+    upstream_handle = dlopen((python_home / "bin" / "main.dylib").c_str(), RTLD_NOW | RTLD_GLOBAL);
++    upstream_handle = dlopen((python_home / "bin" / MORNLEA_PYTHON_MAIN_LIBRARY).c_str(), RTLD_NOW | RTLD_GLOBAL);
 +    if (upstream_handle == nullptr) {
 +        const char *detail = dlerror();
 +        report_error(std::string("Cannot load Py4Godot main library: ") +

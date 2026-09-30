@@ -115,18 +115,20 @@ func TestCodeCommentLanguageScannerMutations(t *testing.T) {
 func TestCommentScannerCollectsFirstPartySourcesAndSkipsDeclaredTrees(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
-		"packages/core/main.go":                      "package core\n",
-		"packages/core/testdata/localized.ts":        "const text = '中文';\n",
-		"scripts/check.mjs":                          "export const ok = true;\n",
-		"apps/game/main.gd":                          "extends Node\n",
-		"packages/core/vendor/copied.go":             "package copied\n",
-		"packages/core/generated/schema.go":          "package generated\n",
-		"packages/engine/target/debug/build.rs":      "fn main() {}\n",
-		"packages/web/node_modules/library/index.ts": "export {};\n",
-		"packages/web/dist/index.js":                 "void 0;\n",
-		"packages/core/licenses/copied_license.c":    "int copied;\n",
-		"apps/game/.godot/imported/cache.gd":         "extends Node\n",
-		"outside/not_first_party.go":                 "package outside\n",
+		"packages/core/main.go":                             "package core\n",
+		"packages/core/testdata/localized.ts":               "const text = '中文';\n",
+		"scripts/check.mjs":                                 "export const ok = true;\n",
+		"apps/mornlea-godot/addons/py4godot/copied.gd":      "# Upstream runtime.\n",
+		"apps/mornlea-godot/addons/mornlea_bridge/owned.gd": "# First-party bridge.\n",
+		"apps/game/main.gd":                                 "extends Node\n",
+		"packages/core/vendor/copied.go":                    "package copied\n",
+		"packages/core/generated/schema.go":                 "package generated\n",
+		"packages/engine/target/debug/build.rs":             "fn main() {}\n",
+		"packages/web/node_modules/library/index.ts":        "export {};\n",
+		"packages/web/dist/index.js":                        "void 0;\n",
+		"packages/core/licenses/copied_license.c":           "int copied;\n",
+		"apps/game/.godot/imported/cache.gd":                "extends Node\n",
+		"outside/not_first_party.go":                        "package outside\n",
 	}
 	for path, content := range files {
 		absolute := filepath.Join(root, filepath.FromSlash(path))
@@ -149,6 +151,7 @@ func TestCommentScannerCollectsFirstPartySourcesAndSkipsDeclaredTrees(t *testing
 	slices.Sort(paths)
 	want := []string{
 		"apps/game/main.gd",
+		"apps/mornlea-godot/addons/mornlea_bridge/owned.gd",
 		"packages/core/main.go",
 		"packages/core/testdata/localized.ts",
 		"scripts/check.mjs",

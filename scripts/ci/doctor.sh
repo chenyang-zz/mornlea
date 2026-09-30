@@ -19,7 +19,14 @@ native-linux) required=(bash cargo cc go ldd make nm readelf rustc rustup shasum
 native-macos) required=(bash cargo codesign go install_name_tool make nm rustc rustup shasum) ;;
 agent) required=(bash go python3 uv) ;;
 godot-static) required=(bash make rg) ;;
-godot-runtime) required=(bash cargo cc clang++ codesign curl ditto git go install_name_tool make nm patch perl pgrep rg rustc rustup sandbox-exec shasum tar unzip uv xcrun) ;;
+godot-runtime)
+  command -v uname >/dev/null 2>&1 || { printf 'missing required executable for godot-runtime: uname\n' >&2; exit 1; }
+  if [[ "$(uname -s)" == Linux ]]; then
+    required=(bash uname cargo cc g++ curl git go make nm patch patchelf perl pgrep rg rustc rustup shasum tar unzip uv)
+  else
+    required=(bash uname cargo cc clang++ codesign curl ditto git go install_name_tool make nm patch perl pgrep rg rustc rustup sandbox-exec shasum tar unzip uv xcrun)
+  fi
+  ;;
 *) usage ;;
 esac
 

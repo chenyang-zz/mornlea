@@ -137,8 +137,8 @@ func TestLinuxQualityPlatformExclusionsAreExact(t *testing.T) {
 	const prefix = "github.com/channing771/mornlea/packages/"
 	excluded := []string{
 		"client/cmd/mornlea", "client/cmd/mornlea/app", "client/cmd/mornlea/benchmark",
-		"client/cmd/mornlea/capture", "client/cmd/mornlea/devcapture", "client/cmd/mornlea-godot-core",
-		"client/render", "client/render/hud", "tools/gfxspike",
+		"client/cmd/mornlea/capture", "client/cmd/mornlea/devcapture",
+		"client/render/hud", "tools/gfxspike",
 	}
 	for _, relative := range excluded {
 		for name, packages := range map[string][]string{"union": all, "client slice": client} {

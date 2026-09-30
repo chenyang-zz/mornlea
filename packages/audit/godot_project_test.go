@@ -430,7 +430,7 @@ func TestGodotLifecycleSmokeContract(t *testing.T) {
 		"build-python-runtime.sh",
 		"build-extension.sh",
 		"sandbox-exec",
-		"(deny network*)",
+		"deny-network.sh",
 		"PYTHONPATH",
 		"--mornlea-smoke-token=",
 		"pgrep -f",

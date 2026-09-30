@@ -9,9 +9,10 @@ project_root="${MORNLEA_GODOT_PROJECT_ROOT:-${repository_root}/apps/mornlea-godo
 profile="debug"
 verify="false"
 
-case "$(uname -m)" in
-  arm64) target="aarch64-apple-darwin" ;;
-  x86_64) target="x86_64-apple-darwin" ;;
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64) target="x86_64-unknown-linux-gnu" ;;
+  Darwin:arm64) target="aarch64-apple-darwin" ;;
+  Darwin:x86_64) target="x86_64-apple-darwin" ;;
   *) target="unsupported" ;;
 esac
 
@@ -121,15 +122,25 @@ if [[ "${verify}" == "true" ]]; then
     printf 'debug GDExtension is required before verification: %s\n' "${debug_library}" >&2
     exit 1
   }
-  nm -gU "${destination_library}" | grep -q 'gdext_rust_init' || {
+  nm_flags=(-gU)
+  [[ "${target}" != x86_64-unknown-linux-gnu ]] || nm_flags=(-D --defined-only)
+  entry_symbols="$(nm "${nm_flags[@]}" "${destination_library}")"
+  grep -q 'gdext_rust_init' <<<"${entry_symbols}" || {
     printf 'GDExtension entry symbol is missing from %s\n' "${destination_library}" >&2
     exit 1
   }
+  editor_exit_args=(--quit)
+  if [[ "${target}" == x86_64-unknown-linux-gnu ]]; then
+    # Godot 4.7.2 can execute deferred EditorHelp extension documentation after
+    # cleanup_doc has freed it during immediate cold editor exit. Let the editor
+    # finish initialization before requesting its bounded, normal shutdown.
+    editor_exit_args=(--quit-after 120)
+  fi
   if ! output="$("${script_dir}/godot.sh" \
     --headless \
     --path "${project_root}" \
     --editor \
-    --quit 2>&1)"; then
+    "${editor_exit_args[@]}" 2>&1)"; then
     printf '%s\n' "${output}" >&2
     exit 1
   fi

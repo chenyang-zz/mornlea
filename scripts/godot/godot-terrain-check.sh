@@ -68,8 +68,10 @@ while (($# > 0)); do
 done
 
 [[ -f "${scenario_path}" ]] || fail "terrain scenario is missing: ${scenario_path}"
-[[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || \
-  fail "unsupported desktop target: $(uname -s)-$(uname -m)"
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64|Linux:x86_64) ;;
+  *) fail "unsupported desktop target: $(uname -s)-$(uname -m)" ;;
+esac
 
 # Build verifies: the core and extension the scene loads must match the
 # committed sources before the run observes anything.
@@ -118,7 +120,7 @@ until grep -q 'listening on 127.0.0.1' "${helper_log}" 2>/dev/null; do
   sleep 0.2
 done
 
-godot_binary="${MORNLEA_GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
+godot_binary="$("${script_dir}/godot.sh" --print-path)"
 [[ -x "${godot_binary}" ]] || fail "Godot executable is unavailable: ${godot_binary}"
 actual_godot_version="$("${godot_binary}" --version)"
 [[ "${actual_godot_version}" == 4.7.2.stable* ]] || \

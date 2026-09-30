@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -136,5 +137,55 @@ func TestGodotPythonIsolationBuildEntryPoint(t *testing.T) {
 		if !strings.Contains(runtimeCheck, required) {
 			t.Errorf("python-runtime-check.sh is missing export qualification marker %q", required)
 		}
+	}
+}
+
+func TestGodotLinuxPythonForkHasIndependentBuildPins(t *testing.T) {
+	root := repositoryRoot(t)
+	values := readGodotVersionEnvironment(t, filepath.Join(root, "scripts", "godot", "py4godot", "linux-build-inputs.env"))
+	for key, expected := range map[string]string{
+		"PY4GODOT_BUILD_TARGET": "x86_64-unknown-linux-gnu",
+		"PY4GODOT_GCC_VERSION":  "14.2.0",
+	} {
+		if got := values[key]; got != expected {
+			t.Errorf("%s = %q, want %q", key, got, expected)
+		}
+	}
+	macValues := readGodotVersionEnvironment(t, filepath.Join(root, "scripts", "godot", "py4godot", "build-inputs.env"))
+	for _, key := range []string{"PY4GODOT_HARDENED_LOADER_SHA256", "PY4GODOT_HARDENED_ARTIFACT_SHA256"} {
+		if !sha256Pattern.MatchString(values[key]) || strings.Trim(values[key], "0") == "" {
+			t.Errorf("%s must independently pin verified Linux bytes", key)
+		}
+		if values[key] == macValues[key] {
+			t.Errorf("%s must not reuse the macOS artifact identity", key)
+		}
+	}
+}
+
+func TestGodotPythonBuilderRejectsForeignHostBeforeMaterialization(t *testing.T) {
+	sourceRoot := repositoryRoot(t)
+	for _, test := range []struct{ target, host, arch string }{
+		{"darwin-arm64", "Linux", "x86_64"},
+		{"x86_64-unknown-linux-gnu", "Darwin", "arm64"},
+	} {
+		t.Run(test.target, func(t *testing.T) {
+			root := t.TempDir()
+			scriptDir := filepath.Join(root, "repository", "scripts", "godot")
+			for _, relative := range []string{"build-python-runtime.sh", "python-version.env", "py4godot/build-inputs.env", "py4godot/linux-build-inputs.env"} {
+				writeFile(t, filepath.Join(scriptDir, relative), []byte(readBaselineDoc(t, sourceRoot, filepath.Join("scripts", "godot", relative))))
+			}
+			bin := filepath.Join(root, "bin")
+			writeExecutable(t, filepath.Join(bin, "uname"), fmt.Sprintf("#!/bin/sh\ncase \"$1\" in -s) echo %s ;; -m) echo %s ;; *) exit 2 ;; esac\n", test.host, test.arch))
+			cache := filepath.Join(root, "cache")
+			command := exec.Command("bash", filepath.Join(scriptDir, "build-python-runtime.sh"), "--verify", "--offline", "--target", test.target, "--cache-dir", cache)
+			command.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+			output, err := command.CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "unsupported Py4Godot build target on host: "+test.host+"-"+test.arch) {
+				t.Fatalf("foreign-host native build was not rejected: %v\n%s", err, output)
+			}
+			if _, err := os.Stat(cache); !os.IsNotExist(err) {
+				t.Fatalf("host rejection must precede cache or artifact materialization: %v", err)
+			}
+		})
 	}
 }

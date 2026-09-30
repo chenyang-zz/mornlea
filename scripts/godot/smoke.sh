@@ -116,21 +116,7 @@ check_lifecycle() {
 }
 
 resolve_godot_binary() {
-  # shellcheck source=version.env
-  source "${script_dir}/version.env"
-  local cache_root="${MORNLEA_GODOT_CACHE_DIR:-/tmp/mornlea-godot-cache}"
-  local cached_binary="${cache_root}/${GODOT_VERSION}/darwin-universal/Godot.app/Contents/MacOS/Godot"
-  local application_binary="/Applications/Godot.app/Contents/MacOS/Godot"
-  if [[ -n "${MORNLEA_GODOT_BIN:-}" ]]; then
-    printf '%s\n' "${MORNLEA_GODOT_BIN}"
-  elif [[ -x "${cached_binary}" ]]; then
-    printf '%s\n' "${cached_binary}"
-  elif [[ -x "${application_binary}" ]]; then
-    printf '%s\n' "${application_binary}"
-  else
-    printf 'Godot %s was not found.\n' "${GODOT_VERSION}" >&2
-    return 1
-  fi
+  "${script_dir}/godot.sh" --print-path
 }
 
 find_crash_reports() {
@@ -191,10 +177,11 @@ for ((iteration = 1; iteration <= iterations; iteration++)); do
     -- "--mornlea-smoke-token=${smoke_token}"
   )
   if [[ "${isolated_python}" == "true" ]]; then
+    # deny-network.sh preserves the sandbox-exec deny network* policy on both platforms.
     # The sandbox denies network access and supplies no executable search path, so the
     # project can succeed only with its checked-in, embedded Python distribution.
     run_command=(
-      sandbox-exec -p '(version 1) (allow default) (deny network*)'
+      "${script_dir}/deny-network.sh"
       /usr/bin/env
       HOME="${isolated_home}"
       TMPDIR="${smoke_root}"

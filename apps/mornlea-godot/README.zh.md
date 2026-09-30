@@ -2,7 +2,7 @@
 doc_id: godot-client-project
 language: zh
 counterpart: README.md
-revision: 2026-09-16.5
+revision: 2026-09-30.1
 ---
 
 # Mornlea Godot 客户端
@@ -20,8 +20,14 @@ scripts/godot/fetch.sh --verify-only
 以下命令在不显示前台窗口的情况下打开并导入项目：
 
 ```bash
+# Linux x86_64
+scripts/godot/godot.sh --headless --path apps/mornlea-godot --editor --quit-after 120
+
+# macOS
 scripts/godot/godot.sh --headless --path apps/mornlea-godot --editor --quit
 ```
+
+Godot 4.7.2 的 Linux EditorHelp 文档回调可能在首次导入后的立即退出时仍未完成。限定 120 帧的导入让该回调在编辑器退出前完成。
 
 可以通过 `MORNLEA_GODOT_BIN` 指定 Godot 4.7.2 可执行文件的绝对路径。如果官方 `/Applications/Godot.app` 安装版本与项目钉定版本一致，包装脚本也会直接使用它。
 
@@ -40,6 +46,32 @@ scripts/godot/build-extension.sh --target aarch64-apple-darwin --profile debug -
 scripts/godot/openable-smoke.sh --without-native
 scripts/godot/openable-smoke.sh --without-python
 ```
+
+## Linux x86_64 发行单元
+
+Linux 构建使用与 macOS 项目相同的生产功能目录。已资格验证的目标为 `x86_64-unknown-linux-gnu`，Godot 导出预设为 `Mornlea Linux x86_64`。此发行单元打包已有桌面试点功能，不代表完整游戏功能已经对齐。
+
+准备 Go 1.26、Rust 1.97.1、`scripts/godot/py4godot/linux-build-inputs.env` 固定的 GNU C++ 工具链，以及 `patchelf`、`binutils`、`ripgrep`、`unzip` 和 `shasum`。然后准备宿主 Rust 库、官方 Godot 编辑器及导出模板和内嵌 Python 运行时，再无窗口导出并验证生产主场景：
+
+```bash
+make rust
+scripts/godot/fetch.sh --target linux-x86_64
+scripts/godot/build-python-runtime.sh --verify --target x86_64-unknown-linux-gnu
+make godot-build
+make godot-export-linux
+```
+
+默认输出为已忽略的 `build/godot-linux/` 目录。分发时必须保留整个目录：`mornlea.x86_64`、`mornlea.pck`、同目录布局中的 Rust/Go 共享库和 `addons/py4godot/cpython-3.14.4-linux64/` 是一个完整单元。CPython 从文件系统中的运行时目录加载标准库，因此仅复制可执行文件和 PCK 不够。生产 Python 脚本也保留在映射的文件系统路径中，以满足 Py4Godot 的类加载契约。当前 ELF 文件要求 glibc 2.34 或更新版本，以及提供 `GLIBCXX_3.4.32` 的系统 `libstdc++`（GCC 13.2 或更新版本）。直接启动导出的可执行文件即可，无需系统 Python、`PYTHONPATH`、`LD_LIBRARY_PATH`、运行时安装器或网络下载。
+
+Python 加载器使用 `scripts/godot/py4godot/linux-build-inputs.env` 标识的编译器构建；加载器、补丁系列、源码归档和完整运行时校验和分别固定。不同编译器或被修改的运行时会在导出前被拒绝。编辑器和模板归档依据 `scripts/godot/version.env` 进行 SHA-256 校验；Linux 编辑器摘要是在核对官方发行 SHA-512 清单后得到的。
+
+`make godot-build` 离线使用经过校验的外部缓存构建 debug 和 release 原生文件。`make godot-export-linux` 要求这些已准备的文件，校验源码与资源闭包和生成资产，从已验证的离线缓存恢复干净的内嵌运行时并校验其摘要，再从 release 发行单元激活并关闭生产功能目录。验证要求 Bootstrap 就绪，六个活跃功能（会话、角色、桌面输入、玩家视角、UI 和世界），两个明确禁用的音频与生命周期骨架，以及 Python 干净退出。导出会重新物化被忽略的 Python 插件，因此应在没有其他 Godot 进程使用项目运行时时执行。所有自动化检查均无窗口运行。已有原生文件准备完毕时，可导出到另一个绝对路径目录：
+
+```bash
+scripts/godot/export-linux.sh --verify --output /absolute/path/mornlea-linux
+```
+
+导出器先在暂存目录中完成导出和验证，再发布替换文件。它拒绝没有自身所有权标记的非空输出目录；暂存或验证失败时保留先前已有发行单元。`distribution.env` 记录工具和运行时版本、源码提交以及是否存在本地修改。
 
 ## 资源同步
 

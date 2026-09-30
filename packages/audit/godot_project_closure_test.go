@@ -133,7 +133,6 @@ func TestGodotExportClosureExcludesDevelopmentResources(t *testing.T) {
 		"typing/**",
 		"pyproject.toml",
 		"uv.lock",
-		"app/bootstrap/setup_required.*",
 		"assets/provenance/**",
 		"addons/mornlea_bridge/bin/linux-x86_64/**",
 		"addons/mornlea_bridge/bin/windows-x86_64/**",
@@ -151,6 +150,14 @@ func TestGodotExportClosureExcludesDevelopmentResources(t *testing.T) {
 	output, err := runGodotProjectValidator(t, fixture)
 	if err == nil || !strings.Contains(output, "export exclusion is missing: tests/**") {
 		t.Fatalf("validator accepted tests in the export closure:\n%s", output)
+	}
+
+	fixture = newGodotClosureFixture(t)
+	presets = strings.ReplaceAll(readGodotFixtureFile(t, filepath.Join(fixture, "export_presets.cfg")), "README*,", "README*,app/bootstrap/setup_required.*,")
+	writeGodotFixtureFile(t, filepath.Join(fixture, "export_presets.cfg"), presets)
+	output, err = runGodotProjectValidator(t, fixture)
+	if err == nil || !strings.Contains(output, "export excludes required Bootstrap dependency") {
+		t.Fatalf("validator accepted missing Bootstrap preload dependencies:\n%s", output)
 	}
 
 	fixture = newGodotClosureFixture(t)
@@ -277,7 +284,7 @@ platform="macOS"
 runnable=true
 export_filter="all_resources"
 include_filter="app/**/*.py,features/**/*.py,platform/desktop/**/*.py,addons/mornlea_bridge/*.py,assets/generated/**"
-exclude_filter="tests/**,typing/**,.venv/**,.ruff_cache/**,pyproject.toml,uv.lock,README*,app/bootstrap/setup_required.*,assets/provenance/**,assets/generated/**/*.provenance.json,assets/generated/**/PROVENANCE.json,addons/mornlea_bridge/bin/linux-x86_64/**,addons/mornlea_bridge/bin/windows-x86_64/**,addons/py4godot/cpython-*-linux*/**,addons/py4godot/cpython-*-windows*/**"
+exclude_filter="tests/**,typing/**,.venv/**,.ruff_cache/**,pyproject.toml,uv.lock,README*,assets/provenance/**,assets/generated/**/*.provenance.json,assets/generated/**/PROVENANCE.json,addons/mornlea_bridge/bin/linux-x86_64/**,addons/mornlea_bridge/bin/windows-x86_64/**,addons/py4godot/cpython-*-linux*/**,addons/py4godot/cpython-*-windows*/**"
 export_path=""
 
 [preset.0.options]
