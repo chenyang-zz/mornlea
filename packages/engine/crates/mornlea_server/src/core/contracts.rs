@@ -2969,6 +2969,8 @@ pub trait MailboxPort {
 
 pub trait PublicationPort {
     fn publish(&mut self, publication: TickPublication) -> Result<(), ServerError>;
+    /// Transfers complete canonical wire frames, including packet identity.
+    /// The byte budget counts the whole frame; adapters never reconstruct IDs.
     fn take_outbox(
         &mut self,
         session: SessionKey,

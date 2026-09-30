@@ -239,7 +239,13 @@ fn all_ports_type_flow() {
     endpoint.authority.publish(publication).unwrap();
     let frames = endpoint.authority.take_outbox(session, 8, 1024).unwrap();
     assert_eq!(frames.len(), 1);
-    assert_eq!(frames[0].len(), 24);
+    assert_eq!(
+        mornlea_protocol::read_frame_ref(&frames[0])
+            .unwrap()
+            .payload
+            .len(),
+        24
+    );
     endpoint
         .authority
         .close_outbox(session, CloseReason::SlowReceiver);
@@ -434,7 +440,7 @@ fn event_publication_reaches_outbox() {
     let mut codec = ProtocolCodec::new().unwrap();
     let mut buffer = vec![0u8; 64];
     let written = codec.encode_server_into(&packet, &mut buffer).unwrap();
-    let expected = buffer[..written].to_vec();
+    let expected = mornlea_protocol::write_frame(packet.key().id, &buffer[..written]).unwrap();
 
     endpoint
         .authority
@@ -458,7 +464,13 @@ fn event_publication_reaches_outbox() {
     assert_eq!(frames.len(), 2);
     assert_eq!(frames[0], expected);
     assert_ne!(frames[0].len(), frames[1].len());
-    assert_eq!(frames[1].len(), 24);
+    assert_eq!(
+        mornlea_protocol::read_frame_ref(&frames[1])
+            .unwrap()
+            .payload
+            .len(),
+        24
+    );
 
     let refused = endpoint.authority.publish(TickPublication {
         tick: 1,

@@ -115,8 +115,8 @@ impl MemoryTransport {
         self.core.retained_len(id)
     }
 
-    /// Drains one session's S1 outbox under explicit budgets in publication
-    /// order; the undelivered suffix stays queued for the next drain. The only
+    /// Drains complete canonical protocol frames under explicit budgets in
+    /// publication order; the undelivered suffix stays queued for the next drain. The only
     /// authority surface touched is the publication port, so delivery observes
     /// frames without mutating world state.
     pub fn drain_session(

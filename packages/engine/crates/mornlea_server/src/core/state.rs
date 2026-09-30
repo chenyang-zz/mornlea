@@ -1232,7 +1232,10 @@ fn encode_packet(codec: &mut ProtocolCodec, packet: &ServerPacket) -> Result<Vec
         match codec.encode_server_into(packet, &mut buffer) {
             Ok(written) => {
                 buffer.truncate(written);
-                return Ok(buffer);
+                // Identity travels with the immutable publication bytes so
+                // every transport consumes the same canonical wire record.
+                return mornlea_protocol::write_frame(packet.key().id, &buffer)
+                    .map_err(|_| ServerError::InvalidInput { field: "packet" });
             }
             Err(ProtocolError::OutputTooSmall { needed, .. }) if needed > buffer.len() => {
                 buffer.resize(needed, 0);

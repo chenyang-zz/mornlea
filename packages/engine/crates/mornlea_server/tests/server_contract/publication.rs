@@ -52,7 +52,7 @@ fn frame_of(event: &Event) -> Vec<u8> {
     let mut codec = ProtocolCodec::new().unwrap();
     let mut buffer = vec![0u8; 64];
     let written = codec.encode_server_into(&packet, &mut buffer).unwrap();
-    buffer[..written].to_vec()
+    mornlea_protocol::write_frame(packet.key().id, &buffer[..written]).unwrap()
 }
 
 /// A locally built Disconnect frame used only for inequality: no closure
@@ -62,7 +62,7 @@ fn disconnect_frame() -> Vec<u8> {
     let mut codec = ProtocolCodec::new().unwrap();
     let mut buffer = vec![0u8; 64];
     let written = codec.encode_server_into(&packet, &mut buffer).unwrap();
-    buffer[..written].to_vec()
+    mornlea_protocol::write_frame(packet.key().id, &buffer[..written]).unwrap()
 }
 
 fn publication(events: Vec<RoutedEvent>) -> TickPublication {
@@ -78,6 +78,50 @@ fn fill_events(target: mornlea_server::contracts::SessionKey, event: &Event) -> 
     (0..OUTBOX_LIMIT)
         .map(|_| RoutedEvent::new(EventRecipient::Session(target.get()), event.clone()))
         .collect()
+}
+
+#[test]
+fn mixed_publication_retains_canonical_packet_identity_and_budgeted_suffix() {
+    use mornlea_protocol::{LoginSuccess, read_frame_ref, write_frame};
+    let mut state = authority();
+    let key = session::admit(&mut state, login(1, "Ada"), TransportKind::Memory).unwrap();
+    let event = rejection(4);
+    let packet = ServerPacket::try_from(event.clone()).unwrap();
+    let event_frame = frame_of(&event);
+    let control =
+        ServerPacket::LoginSuccess(LoginSuccess::new(state.session(key).unwrap().player_id, 7));
+    let mut codec = ProtocolCodec::new().unwrap();
+    let mut payload = vec![0u8; 64];
+    let written = codec.encode_server_into(&control, &mut payload).unwrap();
+    let control_frame = write_frame(control.key().id, &payload[..written]).unwrap();
+    state
+        .publish(TickPublication {
+            tick: 0,
+            events: vec![RoutedEvent::new(EventRecipient::Session(key.get()), event)],
+            control: vec![mornlea_server::contracts::ControlReply {
+                session: key,
+                packet: control.clone(),
+            }],
+            counters: TickCounters::default(),
+        })
+        .unwrap();
+    assert!(state.take_outbox(key, 0, 4096).unwrap().is_empty());
+    let first = state.take_outbox(key, 8, event_frame.len()).unwrap();
+    assert_eq!(first, vec![event_frame]);
+    let parsed = read_frame_ref(&first[0]).unwrap();
+    assert_eq!(
+        (parsed.packet_id, parsed.consumed),
+        (packet.key().id, first[0].len())
+    );
+    // A nonempty outbox transfers one complete frame even under a tiny byte budget.
+    let second = state.take_outbox(key, 8, 1).unwrap();
+    assert_eq!(second, vec![control_frame]);
+    let parsed = read_frame_ref(&second[0]).unwrap();
+    assert_eq!(
+        (parsed.packet_id, parsed.consumed),
+        (control.key().id, second[0].len())
+    );
+    assert!(state.take_outbox(key, 8, 4096).unwrap().is_empty());
 }
 
 #[test]

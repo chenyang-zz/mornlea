@@ -18,10 +18,9 @@
 //! answers, rejects, the login success record) are already complete
 //! envelopes and leave through `flush_out`, which reports them sent through
 //! the core acknowledgment ledger; only the acknowledged success handoff
-//! admits play. Publication payloads the authority holds per session carry
-//! no packet identity on the frozen surface, so the serving loop supplies
-//! one packet id per drained payload from its own publication record and
-//! `forward_outbox` frames the envelopes with the protocol codec directly.
+//! admits play. Publication frames already own their packet identity and
+//! canonical framing. `forward_outbox` transfers them to the committed
+//! session's socket without reconstructing packet IDs or re-encoding bytes.
 //! Both lanes share one per-connection send queue with the same frame bound
 //! the authority applies per session, so a peer that stops reading cannot
 //! grow the adapter without limit.
@@ -343,40 +342,23 @@ impl TcpTransport {
         self.shut_locked(id, CloseReason::SlowReceiver, endpoint)
     }
 
-    /// Forwards one session outbox drain to its connection socket. The drain
-    /// yields raw payloads without packet identity, so the caller supplies
-    /// one packet id per payload from its own publication record; the drain
-    /// takes at most one payload per identity, and a short outbox against
-    /// longer identities reports invalid input without queueing anything.
-    /// Each envelope is framed with the protocol codec directly and bypasses
-    /// the core acknowledgment ledger. The returned envelopes are the exact
-    /// bytes queued for the peer. A drain the session no longer owns, or a
-    /// connection without a socket, reports the peer as gone.
+    /// Transfers complete publication frames to their committed connection.
+    /// Connection identity and send capacity are checked before the authority
+    /// relinquishes ownership; a full socket queue leaves its outbox untouched.
+    /// Returned copies are the exact queued bytes and bypass core acknowledgments.
     pub fn forward_outbox(
         &mut self,
         id: ConnectionId,
         session: SessionKey,
         endpoint: &mut dyn TransportAuthority,
-        packet_ids: &[u32],
         max_frames: usize,
         max_bytes: usize,
     ) -> io::Result<Vec<Vec<u8>>> {
-        let payloads = endpoint
-            .take_outbox(session, max_frames.min(packet_ids.len()), max_bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::NotConnected, "session outbox is gone"))?;
-        if packet_ids.len() != payloads.len() {
+        if self.core.active_session(id) != Some(session) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "packet identities must match the drained payloads",
+                "connection does not own the session",
             ));
-        }
-        let mut envelopes = Vec::with_capacity(payloads.len());
-        for (packet_id, payload) in packet_ids.iter().zip(payloads.iter()) {
-            envelopes.push(
-                mornlea_protocol::write_frame(*packet_id, payload).map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "payload refuses framing")
-                })?,
-            );
         }
         let Some(conn) = self.streams.get_mut(&id.get()) else {
             return Err(io::Error::new(
@@ -384,16 +366,17 @@ impl TcpTransport {
                 "connection has no socket",
             ));
         };
+        let available = MAX_QUEUED_SEND_FRAMES.saturating_sub(conn.queue.len());
+        if available == 0 || max_frames == 0 {
+            return Ok(Vec::new());
+        }
+        let envelopes = endpoint
+            .take_outbox(session, max_frames.min(available), max_bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::NotConnected, "session outbox is gone"))?;
         for envelope in &envelopes {
             conn.queue.push_back(Queued::Outbox(envelope.clone()));
         }
-        if conn.queue.len() > MAX_QUEUED_SEND_FRAMES {
-            self.shut_locked(id, CloseReason::SlowReceiver, endpoint);
-            return Err(io::Error::new(
-                io::ErrorKind::WriteZero,
-                "send queue saturated",
-            ));
-        }
+        debug_assert!(conn.queue.len() <= MAX_QUEUED_SEND_FRAMES);
         let result = conn.drain_queue();
         let progress = self.core.ack_sent(id, result.sent_core, endpoint);
         if let Some(error) = result.fatal {

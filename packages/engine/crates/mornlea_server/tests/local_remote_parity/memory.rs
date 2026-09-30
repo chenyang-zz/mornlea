@@ -291,9 +291,7 @@ fn frame(packet: &ClientPacket) -> Vec<u8> {
     MemoryTransport::encode_frame(packet).unwrap()
 }
 
-/// Independently encodes one server control payload for byte comparison.
-/// The S1 outbox holds bare codec payloads; the length-prefix envelope is the
-/// adapter's delivery job, so no `write_frame` applies here.
+/// Independently encodes the payload used by the complete frame expectation.
 fn control_payload(packet: &ServerPacket) -> Vec<u8> {
     let mut codec = ProtocolCodec::new().unwrap();
     let mut buffer = vec![0u8; 64];
@@ -310,20 +308,7 @@ fn control_payload(packet: &ServerPacket) -> Vec<u8> {
     }
 }
 fn control_frame(packet: &ServerPacket) -> Vec<u8> {
-    let mut codec = ProtocolCodec::new().unwrap();
-    let mut buffer = vec![0u8; 64];
-    let payload = loop {
-        match codec.encode_server_into(packet, &mut buffer) {
-            Ok(written) => break buffer[..written].to_vec(),
-            Err(mornlea_protocol::ProtocolError::OutputTooSmall { needed, .. })
-                if needed > buffer.len() =>
-            {
-                buffer.resize(needed, 0);
-            }
-            Err(other) => panic!("independent encode failed: {other:?}"),
-        }
-    };
-    write_frame(packet.key().id, &payload).unwrap()
+    write_frame(packet.key().id, &control_payload(packet)).unwrap()
 }
 
 fn decode_server(state: State, frame: &[u8]) -> ServerPacket {
@@ -457,7 +442,7 @@ fn outbox_pressure_512_513() {
     let mut replies = Vec::new();
     for seed in 0..512u64 {
         let packet = ServerPacket::LoginSuccess(LoginSuccess::new(player(1), seed));
-        expected.push(control_payload(&packet));
+        expected.push(control_frame(&packet));
         replies.push(ControlReply {
             session: slow,
             packet,
@@ -519,7 +504,7 @@ fn outbox_pressure_512_513() {
         .unwrap();
     assert_eq!(
         MemoryTransport::drain_session(&mut endpoint, peer, 8, 1 << 20).unwrap(),
-        vec![control_payload(&peer_packet)]
+        vec![control_frame(&peer_packet)]
     );
     expect_advanced(
         link.send(peer_id, frame(&play_packet(1)), &mut endpoint, &clock),

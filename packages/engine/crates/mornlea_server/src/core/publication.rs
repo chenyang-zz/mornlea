@@ -33,7 +33,8 @@ pub fn publish_tick(
 
 /// Drains one receiver's outbox under explicit budgets.
 ///
-/// Frames leave in publication order; the drain stops at whichever budget
+/// Complete protocol frames retain their packet IDs and leave in publication
+/// order; the drain stops at whichever budget
 /// bites first, always delivering at least one frame when the outbox is
 /// nonempty, and the undelivered suffix stays queued for the next drain.
 /// Draining a retired receiver returns the frames it already held. Delegates

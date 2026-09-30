@@ -496,6 +496,15 @@ impl ConnectionCore {
         self.connections.len()
     }
 
+    /// Publication belongs to the session whose login handoff this connection
+    /// actually committed, even while a retired slow receiver is being drained.
+    pub(crate) fn active_session(&self, id: ConnectionId) -> Option<SessionKey> {
+        match self.connections.get(&id.get())?.phase {
+            Phase::Play { session } => Some(session),
+            _ => None,
+        }
+    }
+
     /// Retained unconsumed inbound bytes for one connection.
     pub fn retained_len(&self, id: ConnectionId) -> Option<usize> {
         self.connections

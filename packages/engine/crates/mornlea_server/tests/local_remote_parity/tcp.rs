@@ -586,19 +586,6 @@ fn control_frame(packet: &ServerPacket) -> Vec<u8> {
     write_frame(packet.key().id, &payload).unwrap()
 }
 
-/// Packet identity of the rejection envelope, from the serving loop's own
-/// publication record: the outbox drain carries payloads alone, so the
-/// loop supplies the identity the adapter frames with.
-fn rejection_packet_id() -> u32 {
-    ServerPacket::try_from(Event::CommandRejected(CommandRejection::new(
-        0,
-        RejectReason::InvalidRay,
-    )))
-    .expect("rejection converts")
-    .key()
-    .id
-}
-
 /// Blocking test client over loopback. Reads carry a generous timeout so a
 /// stuck server fails the case instead of hanging the suite; the timeout
 /// never drives protocol behavior.
@@ -1155,19 +1142,9 @@ fn slow_receiver_isolated() {
     );
 
     // The held frames stay drainable and reach the slow socket in order.
-    // The drain carries payloads alone; the packet identity comes from the
-    // serving loop's own publication record.
-    let reject_id = rejection_packet_id();
     let forwarded = harness
         .server
-        .forward_outbox(
-            slow_id,
-            slow_session,
-            &mut harness.endpoint,
-            &vec![reject_id; 512],
-            1024,
-            1 << 20,
-        )
+        .forward_outbox(slow_id, slow_session, &mut harness.endpoint, 1024, 1 << 20)
         .expect("outbox drain writes to the live socket");
     assert_eq!(forwarded.len(), 512, "the overflowing frame was dropped");
     // Each send call has a fixed work budget; the serving loop drains the
@@ -1226,13 +1203,154 @@ fn slow_receiver_isolated() {
             healthy_id,
             healthy_session,
             &mut harness.endpoint,
-            &[reject_id],
             8,
             1 << 20,
         )
         .unwrap();
     assert_eq!(forwarded.len(), 1);
     assert_eq!(healthy_client.next_frame(), forwarded[0]);
+}
+
+#[test]
+fn forwarding_into_held_socket_queue_keeps_authority_suffix() {
+    let mut harness = Harness::new();
+    let (id, _ticket, _client, key) = login(&mut harness, 1, "Ada");
+    for (tick, sequence) in [(0, 1), (1, 2)] {
+        let event = Event::CommandRejected(CommandRejection::new(sequence, RejectReason::NoTarget));
+        harness
+            .endpoint
+            .authority
+            .publish(TickPublication {
+                tick,
+                events: (0..512)
+                    .map(|_| RoutedEvent::new(EventRecipient::Session(key.get()), event.clone()))
+                    .collect(),
+                control: Vec::new(),
+                counters: TickCounters::default(),
+            })
+            .unwrap();
+        let transferred = harness
+            .server
+            .forward_outbox(id, key, &mut harness.endpoint, 512, 1 << 20)
+            .unwrap();
+        // The bounded socket drain sends at most 64 frames each turn. After the
+        // first handoff 448 remain queued, so the next handoff can own only 64.
+        assert_eq!(transferred.len(), if tick == 0 { 512 } else { 64 });
+    }
+    let suffix = harness
+        .endpoint
+        .authority
+        .take_outbox(key, 512, 1 << 20)
+        .unwrap();
+    assert_eq!(suffix.len(), 448);
+    let expected = control_frame(
+        &ServerPacket::try_from(Event::CommandRejected(CommandRejection::new(
+            2,
+            RejectReason::NoTarget,
+        )))
+        .unwrap(),
+    );
+    assert!(suffix.iter().all(|frame| *frame == expected));
+    assert_eq!(
+        harness.endpoint.authority.session(key).unwrap().phase,
+        SessionPhase::Active
+    );
+}
+
+#[test]
+fn mixed_publication_has_identical_owned_memory_and_tcp_frames() {
+    use mornlea_protocol::KeepAlive;
+    use mornlea_server::contracts::ControlReply;
+    use mornlea_server::transport::memory::MemoryTransport;
+    let mut harness = Harness::new();
+    let (_ada_id, _ada_ticket, _ada_client, ada) = login(&mut harness, 1, "Ada");
+    let (bea_id, _bea_ticket, mut bea_client, bea) = login(&mut harness, 2, "Bea");
+    let event = Event::CommandRejected(CommandRejection::new(9, RejectReason::NoTarget));
+    let event_id = ServerPacket::try_from(event.clone()).unwrap().key().id;
+    let keep_alive = ServerPacket::KeepAlive(KeepAlive::new(987).unwrap());
+    harness
+        .endpoint
+        .authority
+        .publish(TickPublication {
+            tick: 0,
+            events: vec![RoutedEvent::new(EventRecipient::Broadcast, event)],
+            control: vec![
+                ControlReply {
+                    session: ada,
+                    packet: keep_alive.clone(),
+                },
+                ControlReply {
+                    session: bea,
+                    packet: keep_alive.clone(),
+                },
+            ],
+            counters: TickCounters::default(),
+        })
+        .unwrap();
+    let memory = MemoryTransport::drain_session(&mut harness.endpoint, ada, 8, 4096).unwrap();
+    let forwarded = harness
+        .server
+        .forward_outbox(bea_id, bea, &mut harness.endpoint, 8, 4096)
+        .unwrap();
+    assert_eq!(forwarded, memory);
+    assert_eq!(memory.len(), 2);
+    let event = read_frame_ref(&memory[0]).unwrap();
+    let keep = read_frame_ref(&memory[1]).unwrap();
+    assert_eq!(event.packet_id, event_id);
+    assert_eq!(keep.packet_id, keep_alive.key().id);
+    assert_eq!(keep.payload, 987u64.to_le_bytes());
+    assert_eq!(event.consumed, memory[0].len());
+    assert_eq!(keep.consumed, memory[1].len());
+    assert_eq!(bea_client.next_frame(), memory[0]);
+    assert_eq!(bea_client.next_frame(), memory[1]);
+}
+
+#[test]
+fn forwarding_wrong_connection_preserves_authority_outbox() {
+    let mut harness = Harness::new();
+    let (_ada_id, _ada_ticket, _ada_client, ada) = login(&mut harness, 1, "Ada");
+    let (bea_id, _bea_ticket, _bea_client, _bea) = login(&mut harness, 2, "Bea");
+    harness
+        .endpoint
+        .authority
+        .publish(TickPublication {
+            tick: 0,
+            events: vec![RoutedEvent::new(
+                EventRecipient::Session(ada.get()),
+                Event::CommandRejected(CommandRejection::new(9, RejectReason::NoTarget)),
+            )],
+            control: Vec::new(),
+            counters: TickCounters::default(),
+        })
+        .unwrap();
+    assert!(
+        harness
+            .server
+            .forward_outbox(bea_id, ada, &mut harness.endpoint, 8, 4096,)
+            .is_err(),
+        "another player's connection must refuse before draining"
+    );
+    assert!(
+        harness
+            .server
+            .forward_outbox(
+                ConnectionId::try_from_raw(999).unwrap(),
+                ada,
+                &mut harness.endpoint,
+                8,
+                4096,
+            )
+            .is_err()
+    );
+    assert_eq!(
+        harness
+            .endpoint
+            .authority
+            .take_outbox(ada, 8, 4096)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
