@@ -25,11 +25,21 @@ use super::process::{
     serve_mcp, spawn_helper, target_pos, wall_deadline_ms,
 };
 
+/// Serializes the helper-spawning tests in this binary: each case runs a
+/// full Python gateway whose MCP-over-loopback calls fail transiently under
+/// parallel contention, so concurrent helpers flake each other with fast
+/// 503s. Cross-binary overlap with the single-helper corpus case is
+/// accepted and watched, not synchronized.
+static HELPER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Plans through the real gateway, planner, and model SDK against the real
 /// snapshot tools, then installs the validated mine step through the task
 /// runner and the sessionless ingress authority.
 #[test]
 fn rust_plan_python_mcp_and_authority() {
+    let _serial = HELPER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let token = "plan-child-token";
     let mut child = spawn_helper("plan", token);
     let (_start, clock) = StepClock::start();
@@ -163,6 +173,9 @@ fn reconciles_until(owner: &mut MemoryOwner, timeout: Duration) -> Vec<Reconcile
 /// the exact epoch and revision back.
 #[test]
 fn real_memory_commit_reconcile() {
+    let _serial = HELPER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let token = "memory-child-token";
     let mut child = spawn_helper("memory", token);
     let (_start, clock) = StepClock::start();
@@ -284,6 +297,9 @@ fn cancel_run_until(
 /// lease, registry, model service, and wire down with nothing leaked.
 #[test]
 fn block_cancel_deadline_and_shutdown() {
+    let _serial = HELPER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let token = "block-child-token";
     let mut child = spawn_helper("block", token);
     let (_start, clock) = StepClock::start();
@@ -516,6 +532,9 @@ impl AgentWire for LoseReleaseOnce {
 /// proves expiry still skips without an invented receipt.
 #[test]
 fn release_failure_retains_same_lease() {
+    let _serial = HELPER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let token = "release-child-token";
     let mut child = spawn_helper("release", token);
     let (_start, clock) = StepClock::start();
