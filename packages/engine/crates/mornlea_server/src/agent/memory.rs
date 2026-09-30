@@ -651,7 +651,7 @@ impl MemoryOwner {
         if let Some(retained) = self.delete_intents.get(&companion) {
             if *retained != intent {
                 return Err(ServerError::InvalidInput {
-                    field: "memory_delete_intent",
+                    field: "memory delete intent",
                 });
             }
         } else if self.delete_intents.len() >= 64 {

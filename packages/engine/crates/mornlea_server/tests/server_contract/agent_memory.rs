@@ -825,7 +825,7 @@ fn unresolved_delete_intent_refuses_conflicting_retry() {
     assert_eq!(
         owner.delete(companion(), request_id(51), operation(62)),
         Err(ServerError::InvalidInput {
-            field: "memory_delete_intent"
+            field: "memory delete intent"
         })
     );
     assert_eq!(script.submitted().len(), 1);
