@@ -17,9 +17,10 @@ use mornlea_domain::{
 use mornlea_protocol::{AdmittedLogin, LoginStart, admit_login};
 use mornlea_server::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation,
-    BowProgress, ChunkKey, ContainerRecord, ContainerSlots, DropRecord, EatingProgress,
-    EnvironmentState, InventoryRecord, MiningProgress, ProjectileRecord, RuleEffect, RuleTunables,
-    ServerLimits, SessionKey, SleepState, TickBudget, TransportKind,
+    BowProgress, ChunkKey, CloseReason, ContainerRecord, ContainerSlots, DropRecord,
+    EatingProgress, EnvironmentState, InventoryRecord, MiningProgress, ProjectileRecord,
+    RuleEffect, RuleTunables, ServerError, ServerLimits, SessionKey, SleepState, TickBudget,
+    TransportKind,
 };
 use mornlea_server::core::login_seed::seed_player;
 use mornlea_server::core::world::ReadyChunk;
@@ -973,4 +974,143 @@ fn live_reset_keeps_physics_lanes_while_regen_and_actions_advance() {
         resident.inventories.get(&key),
         Some(&InventoryRecord::empty())
     );
+}
+
+/// Retirement releases transient participation without rewriting durable
+/// respawn anchors or any other committed resident lane.
+#[test]
+fn retirement_prunes_sleep_without_rewriting_residents() {
+    let mut authority = authority();
+    commit_full_overlay(&mut authority);
+    let mut before = authority.residents();
+    let retired = before.sleep_record.as_ref().unwrap().beds[0].0;
+    let player = authority.session(retired).unwrap().player_id;
+    let mut save = customized_save(player).1;
+    save.respawn_present = true;
+    save.respawn_dimension = 1;
+    save.respawn_position = [16.5, 65.0, 32.5];
+    before.actors.push(expected_actor(retired, &save));
+    before
+        .inventories
+        .insert(ActorKey::Player(retired), expected_inventory(&save));
+    let mut runtime = before.runtimes.values().next().unwrap().clone();
+    runtime.key = ActorKey::Player(retired);
+    runtime.aux = ActorAux::Player {
+        respawn: Some((Dimension::DEPTHS, BlockPos::new(16, 64, 32))),
+        workbench: Some(BlockPos::new(2, 65, 3)),
+    };
+    before.runtimes.insert(runtime.key, runtime);
+    authority.commit_residents(before.clone());
+    authority.retire(retired, CloseReason::PeerGone).unwrap();
+    let after = authority.residents();
+    let mut expected_sleep = before.sleep_record.clone().unwrap();
+    expected_sleep
+        .beds
+        .retain(|(session, _, _)| *session != retired);
+    assert_eq!(after.sleep_record, Some(expected_sleep));
+    let mut expected_sleepers = before.sleeping.clone();
+    expected_sleepers.remove(&retired);
+    assert_eq!(after.sleeping, expected_sleepers);
+    assert_eq!(after.actors, before.actors);
+    assert_eq!(after.runtimes, before.runtimes);
+    assert_eq!(after.inventories, before.inventories);
+    assert_eq!(after.mining, before.mining);
+    assert_eq!(after.projectiles, before.projectiles);
+    assert_eq!(after.environment, before.environment);
+    assert_eq!(after.blocks, before.blocks);
+    assert_eq!(after.ready_snapshot(), before.ready_snapshot());
+    assert_eq!(after.drop_records(), before.drop_records());
+    assert_eq!(after.container_records(), before.container_records());
+    assert_eq!(
+        authority.retire(retired, CloseReason::PeerGone),
+        Err(ServerError::StaleSession { session: retired })
+    );
+    let mut other = self::authority();
+    other
+        .prepare(admitted(200, "OtherOne"), TransportKind::Memory)
+        .unwrap();
+    other
+        .prepare(admitted(201, "OtherTwo"), TransportKind::Memory)
+        .unwrap();
+    let unknown = other
+        .prepare(admitted(202, "OtherThree"), TransportKind::Memory)
+        .unwrap();
+    assert_eq!(
+        authority.retire(unknown, CloseReason::PeerGone),
+        Err(ServerError::StaleSession { session: unknown })
+    );
+    let refused = authority.residents();
+    assert_eq!(refused.sleep_record, after.sleep_record);
+    assert_eq!(refused.sleeping, after.sleeping);
+    assert_eq!(refused.actors, after.actors);
+    assert_eq!(refused.runtimes, after.runtimes);
+}
+
+/// A disconnected bed owner frees one of the bounded transient anchors for
+/// a replacement login, and the live tick carries the new set unchanged.
+#[test]
+fn retired_sleep_anchor_frees_replacement_capacity_across_ticks() {
+    let mut authority = authority();
+    let mut sessions = Vec::new();
+    for tag in 1..=8 {
+        let login = admitted(tag, "Sleeper");
+        let stored = customized_save(login.player_id()).0;
+        sessions.push(login_session(&mut authority, login, stored));
+    }
+    let beds = sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| {
+            (
+                *session,
+                Dimension::OVERWORLD,
+                BlockPos::new(index as i32, 65, 0),
+            )
+        })
+        .collect();
+    let mut context = TickContext::harness(&mut authority, TickBudget::full());
+    context.set_sleep_record(SleepState::try_new(beds, 123, None).unwrap());
+    context.set_sleeping(sessions.clone());
+    let before = context.resident_snapshot();
+    drop(context);
+    authority.commit_residents(before);
+    let retired = sessions.remove(0);
+    authority.retire(retired, CloseReason::PeerGone).unwrap();
+    let mut residents = authority.residents();
+    assert_eq!(residents.sleep_record.as_ref().unwrap().beds.len(), 7);
+    assert_eq!(residents.sleeping.len(), 7);
+    let login = admitted(9, "Replacement");
+    let stored = customized_save(login.player_id()).0;
+    let replacement = login_session(&mut authority, login, stored);
+    let mut beds = residents.sleep_record.take().unwrap().beds;
+    beds.push((replacement, Dimension::DEPTHS, BlockPos::new(16, 64, 32)));
+    let record = SleepState::try_new(beds, 123, None).unwrap();
+    let mut context = TickContext::harness(&mut authority, TickBudget::full());
+    context.set_sleep_record(record.clone());
+    context.set_sleeping(sessions.clone());
+    let snapshot = context.resident_snapshot();
+    drop(context);
+    authority.commit_residents(snapshot);
+    for _ in 0..2 {
+        authority.advance_tick(TickBudget::full()).unwrap();
+        let residents = authority.residents();
+        assert_eq!(residents.sleep_record, Some(record.clone()));
+        assert_eq!(
+            residents.sleeping.iter().copied().collect::<Vec<_>>(),
+            sessions
+        );
+        assert_eq!(residents.actors.len(), 8);
+        assert!(
+            !residents
+                .actors
+                .iter()
+                .any(|actor| actor.key == ActorKey::Player(retired))
+        );
+        assert!(
+            residents
+                .actors
+                .iter()
+                .any(|actor| actor.key == ActorKey::Player(replacement))
+        );
+    }
 }

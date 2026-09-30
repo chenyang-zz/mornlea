@@ -476,6 +476,12 @@ impl AuthorityState {
         record.phase = SessionPhase::Retired;
         record.outbox_closed = true;
         self.occupied = self.occupied.saturating_sub(1);
+        // Sleep participation belongs to the live session. Durable respawn
+        // anchors and the other resident lanes keep their persistence owner.
+        if let Some(sleep) = &mut self.residents.sleep_record {
+            sleep.beds.retain(|(session, _, _)| *session != key);
+        }
+        self.residents.sleeping.remove(&key);
         Ok(())
     }
 

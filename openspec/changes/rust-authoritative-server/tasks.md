@@ -110,7 +110,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9t1s Consume configured survival timing from one tick snapshot.
 - [x] 3.9t1f Consume configured furnace timing from one batch snapshot.
 - [x] 3.9s1 Keep sleep refusals atomic and check bed partner coordinates.
-- [ ] 3.9s2 Prune disconnected sleep anchors before admitting replacement sessions.
+- [x] 3.9s2 Prune disconnected sleep anchors before admitting replacement sessions.
 - [x] 3.9w1 Enforce source sneak-door gates after target classification.
 - [x] 3.9q1 Synchronize daylight burn health before hostile death settlement.
 - [ ] 3.9q2 Rehearse cumulative player-death drop capacity across slots.
