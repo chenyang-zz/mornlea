@@ -1651,3 +1651,8 @@ Placement target collision accepted after cumulative death node against support2
 - GREEN: `cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked agent_mcp`: 5 passed. Owned rustfmt and `git diff --check` passed. No generated/hashed runtime corpus source pin names this test; no refresh required.
 - Architecture skill: no change; std socket fixture portability adds no new architectural decision.
 - Pinned `cargo clippy --manifest-path packages/engine/Cargo.toml -p mornlea_server --all-targets --locked -- -D warnings` passed. Controller reviewed the complete three-file diff; scoped portability node is accepted independently of pending authority gates.
+
+## Geometry repair qualification, 2026-09-30
+
+- Fresh read-only entity review verified unchecked spawn/path/light/sweep arithmetic and zero-alias cell conversions; HostileMotion stages earlier actors before a later geometry refusal. Controller freezes checked existing actor refusal and one bounded batch publication in plan30. Path deadline/identity remains a separate serial decision; no new public contract qualifies here.
+- Delegate is an isolated Sol implementer on a separate worktree, exact four provider/replay files only; isolation contains the multi-file geometry trace and prevents shared mutable ownership. Controller owns final review/integration/status and derived-consumer reconciliation.
