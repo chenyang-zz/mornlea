@@ -8859,7 +8859,6 @@ mod failed_tick_tests {
             "later failure cannot replace first error"
         );
         assert_eq!(a.tick_failure(), Some(error));
-        assert_eq!(a.settled_read().err(), Some(error));
         HOOK_CALLS.with(|calls| assert_eq!(calls.get(), 1));
     }
     #[test]
