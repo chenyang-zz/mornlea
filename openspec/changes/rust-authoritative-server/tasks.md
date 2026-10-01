@@ -94,12 +94,13 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7l0c Land checked prepared chunk and load-port contracts ([packet](plans/49-background-load-ports.md)).
 - [x] 3.7l0 Load players and prepared chunks on the sole store owner ([packet](plans/49-background-load-ports.md)).
 - [x] 3.7l1 Install actual prepared chunks at the authoritative acquisition phase ([packet](plans/60-live-prepared-acquisition.md)).
-- [ ] 3.7l2 Drive live chunk requests through the actual borrowed owners ([packet](plans/61-live-chunk-request-driver.md)).
+- [x] 3.7l2 Drive live chunk requests through the actual borrowed owners ([packet](plans/61-live-chunk-request-driver.md)).
 - [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
 - [x] 3.7r0 Move resident ownership through live ticks and finalize changed chunks only ([packet](plans/52-owned-resident-tick.md)).
 - [x] 3.7r1 Bound defensive compound rollback to touched resident keys ([packet](plans/53-bounded-compound-undo.md)).
 - [x] 3.7s1 Hand immutable chunk save views to the actual store owner ([packet](plans/55-immutable-chunk-save-view.md)).
-- [ ] 3.7s2e Cache source-compatible payload estimates for live chunk captures ([packet](plans/62-live-chunk-payload-estimate.md)).
+- [x] 3.7s2e Cache source-compatible payload estimates for live chunk captures ([packet](plans/62-live-chunk-payload-estimate.md)).
+- [ ] 3.7s2 Select current managed dirty targets and apply qualified durability ACKs ([packet](plans/63-live-chunk-durability.md)).
 - [x] 3.7n0c Land the narrow transport session contract ([packet](plans/56-live-transport-login.md)).
 - [x] 3.7n0 Bind actual Memory/TCP login to the background store ([packet](plans/56-live-transport-login.md)).
 - [x] 3.7a1 Retain bounded MCP connections through actual deadline-aware shutdown ([packet](plans/58-owned-mcp-shutdown.md)).
