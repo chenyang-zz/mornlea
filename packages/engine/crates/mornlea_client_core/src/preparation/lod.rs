@@ -16,6 +16,7 @@
 //! would poke through the precise surface at a nearer depth, so the band's
 //! lower edge starts strictly outside it.
 
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use mornlea_domain::{ChunkPos, Dimension};
@@ -127,16 +128,20 @@ impl SelectionReport {
 /// admitted by the port) and retained (current-generation results) tiles,
 /// and owns no generation itself: the port's workers build the geometry.
 /// The state transitions are all-or-nothing per tile — a tile is queued,
-/// dispatched, retained or released, never partially owned.
+/// dispatched, retained or released, never partially owned. A mirrored
+/// hash-set of every tracked tile answers membership in constant time, so
+/// the full-ring scan a center move performs stays linear in the ring even
+/// once tens of thousands of tiles are tracked.
 pub struct LodSelection {
     epoch: SessionEpoch,
     dimension: Dimension,
     config: LodConfig,
     generation: u64,
     next_job_id: u64,
-    pending: Vec<TilePos>,
+    pending: VecDeque<TilePos>,
     in_flight: Vec<TilePos>,
     retained: Vec<TilePos>,
+    members: HashSet<TilePos>,
 }
 
 impl LodSelection {
@@ -166,9 +171,10 @@ impl LodSelection {
             config,
             generation: seed_generation,
             next_job_id: 1,
-            pending: Vec::new(),
+            pending: VecDeque::new(),
             in_flight: Vec::new(),
             retained: Vec::new(),
+            members: HashSet::new(),
         })
     }
 
@@ -216,11 +222,10 @@ impl LodSelection {
         self.retained.len()
     }
 
-    /// Whether any state tracks the tile.
+    /// Whether any state tracks the tile, answered from the mirrored
+    /// membership set in constant time.
     pub fn tracks(&self, tile: TilePos) -> bool {
-        self.pending.contains(&tile)
-            || self.in_flight.contains(&tile)
-            || self.retained.contains(&tile)
+        self.members.contains(&tile)
     }
 
     /// Queues every tile of the closed ring around `center` that no state
@@ -249,10 +254,11 @@ impl LodSelection {
                     continue;
                 };
                 let tile = TilePos::new(x, z);
-                if self.tracks(tile) {
+                if self.members.contains(&tile) {
                     continue;
                 }
-                self.pending.push(tile);
+                self.pending.push_back(tile);
+                self.members.insert(tile);
                 queued += 1;
             }
         }
@@ -276,6 +282,13 @@ impl LodSelection {
         self.pending.retain(|tile| !out_of_band(tile));
         self.in_flight.retain(|tile| !out_of_band(tile));
         self.retained.retain(|tile| !out_of_band(tile));
+        // Rebuild the mirrored membership set from the survivors; the set
+        // mirrors the three owners exactly, so no released tile lingers in
+        // it and a later ring scan cannot skip a re-entering tile.
+        self.members.clear();
+        self.members.extend(self.pending.iter().copied());
+        self.members.extend(self.in_flight.iter().copied());
+        self.members.extend(self.retained.iter().copied());
         before - (self.pending.len() + self.in_flight.len() + self.retained.len())
     }
 
@@ -339,7 +352,10 @@ impl LodSelection {
             let charge = static_charge_bytes(self.config.step());
             let allowance = self.config.bytes_per_frame();
             let mut spent = 0u32;
-            self.pending.sort_by(|left, right| {
+            // The stable sort over the queue's front-to-back order yields
+            // the same total order the scan produced; membership-structure
+            // order never leaks into the dispatch sequence.
+            self.pending.make_contiguous().sort_by(|left, right| {
                 chebyshev_distance(*left, center)
                     .cmp(&chebyshev_distance(*right, center))
                     .then_with(|| left.x().cmp(&right.x()))
@@ -348,10 +364,13 @@ impl LodSelection {
             while !self.pending.is_empty() {
                 // The precharge gate: the remaining allowance must cover the
                 // next job's full static maximum, or the job is retained.
+                // The source pilot's budget admits one over-budget request
+                // per empty frame; that quirk is deliberately not ported —
+                // here a charge that does not fit never dispatches.
                 if allowance.saturating_sub(spent) < charge {
                     break;
                 }
-                let tile = self.pending[0];
+                let tile = *self.pending.front().expect("nonempty");
                 let key = PreparedResourceKey::try_new(
                     self.epoch,
                     self.dimension,
@@ -376,7 +395,7 @@ impl LodSelection {
                             .next_job_id
                             .checked_add(1)
                             .ok_or(ClientError::Capacity)?;
-                        self.pending.remove(0);
+                        self.pending.pop_front();
                         self.in_flight.push(tile);
                         report.dispatched += 1;
                     }
