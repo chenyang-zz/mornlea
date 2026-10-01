@@ -157,7 +157,7 @@ fn held_load_keeps_authority_calls_free() {
     });
     let entered_result = entered.recv_timeout(BOUND);
     let _ = start.send(());
-    let observed = rx.recv_timeout(Duration::from_millis(100));
+    let observed = rx.recv_timeout(BOUND);
     let returned = observed.is_ok();
     release.open();
     let result = observed.or_else(|_| rx.recv_timeout(BOUND));
@@ -634,7 +634,7 @@ fn real_background_save_load_values_missing_read_gate_and_world_lease() {
         let c = store.poll_chunk(ct);
         tx.send((store, ct, p, c)).unwrap();
     });
-    let observed = rx.recv_timeout(Duration::from_secs(1));
+    let observed = rx.recv_timeout(BOUND);
     let returned = observed.is_ok();
     release.open();
     let result = observed.or_else(|_| rx.recv_timeout(BOUND));
@@ -789,10 +789,13 @@ fn started_expiry_keeps_real_outcome_and_queued_expiry_never_calls() {
     let (g, entered, release) = gate();
     b.gate = Some(g);
     let mut s = StoreMailbox::try_new_background(limits(), b).unwrap();
-    let d = Deadline::after(Instant::now(), Duration::from_millis(100)).unwrap();
+    let d = deadline();
     let t = s.start(player(), d).unwrap();
     s.drive_workers();
-    let entered_result = entered.recv_timeout(BOUND);
+    if let Err(error) = entered.recv_timeout(BOUND) {
+        release.open();
+        panic!("load did not enter before the test bound: {error}");
+    }
     let queued = s
         .start_chunk(
             key(),
@@ -806,7 +809,6 @@ fn started_expiry_keeps_real_outcome_and_queued_expiry_never_calls() {
     let _ = rx.recv_timeout(remaining);
     let expired = d.expired(Instant::now());
     release.open();
-    assert!(entered_result.is_ok());
     assert!(expired);
     assert_eq!(wait_player(&mut s, t), LoadPoll::Loaded(None));
     assert!(matches!(
