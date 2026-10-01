@@ -21,6 +21,13 @@ The client core SHALL own login, packet processing, mirrors, reversible predicti
 - **WHEN** the core validates the batch
 - **THEN** it MUST reject the invalid batch without partial input publication or direct world mutation
 
+#### Scenario: Rejected mixed input retains its admission owners
+
+- **GIVEN** a mixed sequenced-input and unsequenced-chat batch contains an invalid action, stale or irrelevant view token, or a valid demand beyond the accepted capacity
+- **WHEN** client input admission validates and attempts to commit the batch
+- **THEN** it MUST reject the whole batch without advancing the local sequence, appending a partial outbound queue or journal, or changing the confirmed mirror
+- **AND** a valid input/chat/input batch SHALL admit exactly two contiguous local sequences and one unsequenced chat
+
 ### Requirement: Frame publication is atomic and bounded
 
 A presentation frame SHALL represent one coherent session epoch and confirmed revision. Capacity, ordering and compatibility validation MUST happen before publication. Unsupported required families MUST fail explicitly; stale data MUST NOT become a newer frame.
@@ -39,6 +46,13 @@ A presentation frame SHALL represent one coherent session epoch and confirmed re
 - **AND** it MUST NOT narrow through an overflowing i32 world coordinate or reject the valid observation
 - **AND** an index98304 MUST fail frame validation without changing the previous frame
 
+#### Scenario: An accepted observation has no source tick
+
+- **GIVEN** a valid ForgetChunks observation that contains no source tick
+- **WHEN** the client accepts the complete observation and projects its semantic removals
+- **THEN** it SHALL preserve the absent source tick and issue exactly one local confirmed revision
+- **AND** it MUST order removal before identity reuse without inventing a tick
+
 #### Scenario: Capacity exhaustion
 
 - **GIVEN** a bounded input or output batch exceeds capacity
@@ -55,6 +69,13 @@ Disconnect, reconnect, reset and teardown SHALL invalidate prior session publica
 - **WHEN** reset and teardown are repeatedly exercised
 - **THEN** no stale frame, resource leak, use-after-free or duplicate event MUST survive into the next session
 
+#### Scenario: Old completion arrives after reset
+
+- **GIVEN** a previous epoch has pending transport, prediction or preparation work
+- **WHEN** that work completes after reset has opened a new epoch
+- **THEN** it MUST NOT enter the new confirmed mirror or presentation frame
+- **AND** stale ownership SHALL be released exactly once and a repeated close MUST NOT release it again
+
 ### Requirement: Rust core parity is independent of rendering
 
 Acceptance SHALL include offline Go transcript comparison and Rust-server integration for both local and remote semantics, without requiring a graphical renderer. A successful pilot screenshot MUST NOT substitute for protocol, prediction, failure-path or lifecycle evidence.
@@ -64,6 +85,14 @@ Acceptance SHALL include offline Go transcript comparison and Rust-server integr
 - **GIVEN** Godot graphics and audio devices are unavailable
 - **WHEN** core contract and replay tests run
 - **THEN** session, correction, ordering and bounded publication tests MUST still execute
+
+#### Scenario: Interim code evidence does not close runtime qualification
+
+- **GIVEN** an explicitly scoped interim implementation batch excludes every Godot process and records engine-free core, adapter-routine, host and static checks
+- **WHEN** its evidence is reviewed for stage acceptance
+- **THEN** those results SHALL be recorded only for the behavior they actually execute
+- **AND** they MUST NOT satisfy missing native marshalling, real process lifecycle, real local/remote server integration or full F3 acceptance
+- **AND** original required qualification gates SHALL remain pending until their actual acceptance evidence exists
 
 ### Requirement: Migration preserves typed host isolation
 

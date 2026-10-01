@@ -4,7 +4,7 @@ The Godot pilot still receives its session, mirror, prediction and presentation 
 
 ## Status and prerequisites
 
-Planning only: F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md). Blocked on completed [F1](../rust-runtime-foundation-acceptance/proposal.md) and the accepted [F2](../rust-authoritative-server/proposal.md) protocol/session contract. F3 final integration acceptance requires the F2 Rust server parity evidence. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
+Planning only: F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md). Implementation entry must re-bind completed [F1](../rust-runtime-foundation-acceptance/proposal.md) and the jointly accepted [F2](../rust-authoritative-server/proposal.md) common/Memory/TCP S2 contract on an actual accepted source; historical pending prose is not current prerequisite evidence. F3 final integration acceptance requires the F2 Rust server parity evidence. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
 
 ## What Changes
 
@@ -38,3 +38,10 @@ Existing wire, save and gameplay requirements remain the compatibility oracle; a
 ## Deferred and abandoned
 
 Production Godot features and visual handoffs remain in P8–P12; distribution and default retirement remain P13–P14. No runtime implementation is claimed by this planning synchronization.
+
+
+## Current code-only implementation batch
+
+The user selected the complete semantic client core, safe Rust producer adapter code, and Python host ownership migration, including all ten families and twenty typed actions. The approved design and [code-only execution packet](plans/07-code-only-implementation-handoff.md) preserve the existing architecture and node identities. Automated core/replay/adapter-routine/host/static checks must not launch Godot in any mode, including headless or an indirect runner. Scenes, models, renderer/resource realization, visual qualification, default switching, and the running F2 server implementation remain outside this batch.
+
+This interim code deliverable is distinct from full F3 acceptance. Actual native Godot marshalling/release qualification, 100 rebuilt real process cycles, real F2/C1/C2/G1 local/remote integration, and full stage closure remain required at their separately authorized gates. A code-only result or documentation push cannot close those gates. Final planning artifacts are English in this active OpenSpec change; the GLM5.3 handoff is portable and does not install, sign in to, submit to, or launch a coding app.

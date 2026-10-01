@@ -58,3 +58,8 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 
 - [ ] 4.1 Reconcile zero-gap inventory, real provider/integration cases and guides.
 - [ ] 4.2 Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA.
+
+
+## Current execution packet and qualification boundary
+
+The approved complete code-only scope is detailed in [07-code-only-implementation-handoff.md](plans/07-code-only-implementation-handoff.md). It refines allowed code-level checks without removing original qualification gates. This file remains the sole checkbox/status source. No task is completed by this planning update. Native Godot marshalling/real bridge checks, 3.3c, 3.4, and full closeout remain pending; any node whose complete prescribed acceptance has not run remains unchecked. The running F2 implementation and P8–P14 product work are separately owned.

@@ -61,3 +61,9 @@ The 1.2 consumer double must run these cases after a behavioral red: a valid `Fo
 ## Supporting declaration authority
 
 [05-supporting-values.md](05-supporting-values.md) completes every supporting owned value, C1 substitution port and source mapping above. The closed payload variants there replace loose optional-field combinations. Contract landing 1.2 executes those exact cases before accepting its SHA. [06-godot-facade.md](06-godot-facade.md) freezes the later actual G1 method/value projection, including InputAction tokens; no consumer invents a dictionary schema.
+
+## Private projection and local admission refinement
+
+The [code-only handoff](07-code-only-implementation-handoff.md) freezes private OrderedRecord/ProjectionOrder envelopes so actor/inventory/world assemblers retain actual ObservationKey and record ordinal even when child headers are rebound to one coherent frame revision. Equal/absent source ticks cannot substitute for source order. The envelope is stripped after serial assembly; no external record field/tag changes.
+
+CloseContainer local admission also consumes the 1.2-declared transactional LocalViewValidity overlay owned with queue/journal/sequence by2.1. The accepted validate_batch signature remains read-only over the confirmed mirror; commit checks a temporary local overlay before reservation, rejects later or subsequent old-view actions, and swaps it only with a successful whole batch. Confirmed contents are not mutated by an unconfirmed close. Fresh validity follows accepted confirmed close/reopen, never an unrelated observation or an implicit old-token revival. Crafting retains its separate token and never fabricates ContainerRef.
