@@ -30,7 +30,7 @@ use mornlea_domain::{
     RemotePlayerDespawn, RemotePlayerSpawn, RemotePlayerSpawnParts, RemotePlayerState,
     RemotePlayerStateParts, RemotePlayerStates, RemotePlayerStatesParts,
 };
-use mornlea_protocol::ServerPacket;
+use mornlea_protocol::{KeepAlive, ServerPacket};
 
 /// The epoch every fixture mirror and observation key carries.
 const EPOCH: u64 = 7;
@@ -616,7 +616,9 @@ fn foreign_velocity_kinds_are_ignored() {
 
 /// Malformed prevalidation doubles reject the whole projection with no
 /// partial output: a despawn without its resolved identity, a despawn whose
-/// resolution names another identity, and an old-epoch observation key.
+/// resolution names another identity, a despawn resolved live in two
+/// dimensions at once, a packet that is not an event publication, and an
+/// old-epoch observation key.
 #[test]
 fn invalid_observations_reject_without_partial_output() {
     let epoch = SessionEpoch::try_new(EPOCH).expect("epoch");
@@ -647,7 +649,7 @@ fn invalid_observations_reject_without_partial_output() {
     let mismatched = AcceptedObservation::try_new(
         ObservationKey::try_new(epoch, ConfirmedRevision::new(1), 0).expect("key"),
         None,
-        despawn,
+        despawn.clone(),
         vec![
             ResolvedActor::try_new(
                 ActorKind::RemotePlayer,
@@ -667,6 +669,55 @@ fn invalid_observations_reject_without_partial_output() {
         )),
         Err(ClientError::InvalidInput),
         "a resolution naming another identity rejects"
+    );
+
+    let ambiguous = AcceptedObservation::try_new(
+        ObservationKey::try_new(epoch, ConfirmedRevision::new(1), 0).expect("key"),
+        None,
+        despawn,
+        vec![
+            ResolvedActor::try_new(
+                ActorKind::RemotePlayer,
+                ActorId::RemotePlayer(id),
+                Dimension::OVERWORLD,
+            )
+            .expect("resolved overworld identity"),
+            ResolvedActor::try_new(
+                ActorKind::RemotePlayer,
+                ActorId::RemotePlayer(id),
+                Dimension::DEPTHS,
+            )
+            .expect("resolved depths identity"),
+        ],
+    )
+    .expect("staged with ambiguous resolution");
+    assert_eq!(
+        project_remote_player(&fixture.view(
+            provider.mirror(),
+            &[ambiguous],
+            epoch,
+            ConfirmedRevision::new(1)
+        )),
+        Err(ClientError::InvalidInput),
+        "the same identity resolved live in two dimensions at once rejects"
+    );
+
+    let non_publication = AcceptedObservation::try_new(
+        ObservationKey::try_new(epoch, ConfirmedRevision::new(1), 0).expect("key"),
+        None,
+        ServerPacket::KeepAlive(KeepAlive::new(1).expect("checked keep-alive token")),
+        Vec::new(),
+    )
+    .expect("staged with a non-publication packet");
+    assert_eq!(
+        project_remote_player(&fixture.view(
+            provider.mirror(),
+            &[non_publication],
+            epoch,
+            ConfirmedRevision::new(1)
+        )),
+        Err(ClientError::InvalidInput),
+        "a packet that is not an event publication rejects without a record"
     );
 
     let stale_epoch = AcceptedObservation::try_new(
