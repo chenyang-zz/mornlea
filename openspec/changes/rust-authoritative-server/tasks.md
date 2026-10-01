@@ -106,6 +106,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7l3p Integrate initial pending player registration and actual Ready restoration ([packet](plans/83-source-player-initial-restore.md)).
 - [x] 3.7l3rc Land the common checked source player reset mapping ([packet](plans/86-source-player-reset-contract.md)).
 - [x] 3.7l3mc Land managed collision-block read semantics ([packet](plans/87-live-collision-read-contract.md)).
+- [ ] 3.7l3mp Integrate managed collision reads in all four actual native actor-grid producers ([packet](plans/88-live-collision-actor-adapters.md)).
 - [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
 - [x] 3.7r0 Move resident ownership through live ticks and finalize changed chunks only ([packet](plans/52-owned-resident-tick.md)).
 - [x] 3.7r1 Bound defensive compound rollback to touched resident keys ([packet](plans/53-bounded-compound-undo.md)).
