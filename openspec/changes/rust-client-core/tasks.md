@@ -22,7 +22,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.3b Implement bounded far-tile LOD preparation and stale completion cancellation.
 - [ ] 2.4 Assemble and atomically publish validated immutable frames.
 - [ ] 2.5 Publish `terrain@1` semantics.
-- [ ] 2.6a Project remote players into `actors@1`.
+- [x] 2.6a Project remote players into `actors@1`.
 - [ ] 2.6c Project hostiles into `actors@1`.
 - [ ] 2.6d Project passives into `actors@1`.
 - [ ] 2.6e Project projectiles into `actors@1`.
