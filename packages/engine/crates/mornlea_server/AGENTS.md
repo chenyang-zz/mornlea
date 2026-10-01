@@ -741,3 +741,14 @@ persistence chunk-encoding topic executes actual disk acquisition, capture,
 CPU framing, authority FIFO and Memory owner transfer. This lane decides no
 Ready/wanted relevance or mirror advancement and accepts no source publisher
 or executable runtime.
+
+`core/chunk_retirement.rs` owns the opaque noncopying detached chunk contract.
+One `RetiredChunk` moves the exact Ready, fixed drop/container and sparse tree
+owners into a private box; metadata identity uses the managed key/generation.
+Every refusal returns that whole owner for exact restoration. The public port
+charges at most eight queued, started and held completions until FIFO scalar
+collection. Close requires disposal, collection, disconnection and explicit CPU
+join; timeout retains charges and handles for retry, and teardown panic remains
+sticky. Its private executing double proves ownership and lifecycle obligations,
+not actual threads, physical unload or authority eligibility. Temporary private
+body/factory dead-code allowances end when the later production consumer lands.

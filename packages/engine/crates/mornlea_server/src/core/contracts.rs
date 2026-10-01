@@ -211,6 +211,7 @@ pub enum Resource {
     ResidentChunks,
     ChunkRequests,
     ChunkEncodes,
+    ChunkRetirements,
     Outbox,
     PendingLogins,
     SaveChunks,
@@ -224,6 +225,7 @@ pub enum Resource {
 pub enum Operation {
     Load,
     Encode,
+    Retire,
     WritePayload,
     SyncPayload,
     WriteBank,
