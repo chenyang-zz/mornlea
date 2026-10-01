@@ -737,6 +737,20 @@ tick clone/materialization counters live with the owning modules; actual disk
 and native-generation consumer cases are registered in the persistence failure
 live-acquisition topic.
 
+`AuthorityReadView::live_collision_block` is the crate-private managed collision
+read. Enabled acquisition returns AIR outside [-64, 320) before horizontal
+readiness, without creating a mutation observation or trace entry. Disabled
+sparse fixtures keep observation lookup at every coordinate. In-height reads
+reuse current writes, Ready gating and the existing bounded trace refusal policy.
+The added height branch allocates nothing; delegated observation retains its
+existing lookup and trace costs. The private `live_collision_read_tests` group
+covers boundaries, dimensions, retained Unloading ownership, actual current
+transactions, read-view agreement and trace overflow. Its grid and geometry
+consumer doubles qualify the input contract only; the four actual actor-grid
+producers and native motion remain separate integration work. Validate this
+group, the full library and the inherited server, persistence, Agent, doctest,
+Clippy and formatting gates before integration.
+
 `core/chunk_driver.rs` borrows the sole scheduler/load owner and independent
 native generation owner. It reserves authority before starting each port and
 retains accepted starts before binding, with eight current records per source

@@ -2392,6 +2392,20 @@ impl<'a> AuthorityReadView<'a> {
         self.observation(dimension, pos)
             .map(|observed| observed.block)
     }
+    /// Managed collision reads normalize out-of-height air without a mutation address.
+    /// In-height reads retain current observations and their trace refusal policy.
+    #[allow(dead_code)]
+    pub(crate) fn live_collision_block(
+        &self,
+        dimension: Dimension,
+        pos: mornlea_domain::BlockPos,
+    ) -> Option<u16> {
+        if self.acquisition.is_some() && !(-64..320).contains(&pos.y()) {
+            return Some(0);
+        }
+        self.observation(dimension, pos)
+            .map(|observed| observed.block)
+    }
     /// Exact chunk/cell indexing observes this tick's writes before the compact
     /// immutable base. Missing data remains unavailable rather than inferred air.
     pub fn observation(
@@ -10607,5 +10621,527 @@ mod source_player_restore_tests {
             })
         );
         assert_eq!(a.next_tick(), tick + 1);
+    }
+}
+
+#[cfg(test)]
+mod live_collision_read_tests {
+    use super::super::{acquisition::LiveChunkPhase, actor_placement, world};
+    use super::*;
+    use mornlea_domain::{BlockPos, ChunkPos};
+    use mornlea_engine::native::contracts::collision::{CollisionCell, CollisionGrid};
+    use mornlea_storage::{ContainerSnapshot, StorageKind};
+
+    fn authority() -> AuthorityState {
+        AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap()
+    }
+
+    fn key(dimension: Dimension) -> ChunkKey {
+        ChunkKey {
+            dimension,
+            pos: ChunkPos::new(0, 0),
+        }
+    }
+
+    fn boundary_chunk(block: u16) -> Chunk {
+        let mut chunk = Chunk {
+            sections: vec![
+                ContainerSnapshot {
+                    kind: StorageKind::Single,
+                    bits: 0,
+                    single: 0,
+                    palette: vec![],
+                    packed: vec![],
+                };
+                24
+            ],
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        };
+        chunk.sections[0].single = block;
+        chunk.sections[23].single = block;
+        chunk
+    }
+
+    // Manual prepared offers qualify the read owner, not disk or driver integration.
+    fn queue(a: &mut AuthorityState, dimension: Dimension, block: u16, request: u64) {
+        let key = key(dimension);
+        let reservation = a.reserve_chunk_load(key).unwrap();
+        let request = ChunkRequestId::try_new(request).unwrap();
+        a.bind_chunk_load(reservation, request).unwrap();
+        let prepared = world::PreparedChunk::try_new(
+            key,
+            reservation.generation(),
+            RecoveredChunk {
+                chunk: boundary_chunk(block),
+                revision: 9,
+                persisted_revision: 9,
+                needs_rewrite: false,
+                recovered: false,
+            },
+        )
+        .unwrap();
+        a.offer_acquired(AcquiredChunkEvent::Load {
+            key,
+            generation: reservation.generation(),
+            request,
+            result: Ok(Some(prepared)),
+        })
+        .unwrap();
+    }
+
+    fn live(dimensions: &[Dimension]) -> AuthorityState {
+        let mut a = authority();
+        a.enable_live_chunks().unwrap();
+        a.replace_chunk_wants(dimensions.iter().copied().map(key).collect())
+            .unwrap();
+        for (index, dimension) in dimensions.iter().copied().enumerate() {
+            queue(&mut a, dimension, index as u16 + 1, index as u64 + 1);
+        }
+        a.advance_tick(TickBudget::full()).unwrap();
+        a
+    }
+
+    fn sample(view: &AuthorityReadView<'_>, dimension: Dimension) -> [Option<u16>; 4] {
+        [-65, -64, 319, 320].map(|y| view.live_collision_block(dimension, BlockPos::new(8, y, 8)))
+    }
+
+    #[test]
+    fn managed_height_precedes_unknown_horizontal_without_changing_owners() {
+        let a = live(&[Dimension::OVERWORLD]);
+        let ready = &a.residents.ready[&key(Dimension::OVERWORLD)];
+        let identity = (
+            std::ptr::from_ref(ready),
+            ready.generation,
+            ready.revision,
+            ready.block(BlockPos::new(8, 319, 8)),
+            ready.height(8, 8),
+        );
+        let metadata = a.metadata.clone();
+        let facts = a.live_chunk_facts(key(Dimension::OVERWORLD));
+        let tick = a.next_tick();
+        world::reset_ready_clones();
+        world::reset_materializations();
+        for _ in 0..50 {
+            let view = a.settled_read().unwrap();
+            for (x, z, known) in [(8, 8, true), (144, -48, false)] {
+                for y in [-65, -64, 319, 320, i32::MIN, i32::MAX] {
+                    let expected = if !(-64..320).contains(&y) {
+                        Some(0)
+                    } else if known {
+                        Some(1)
+                    } else {
+                        None
+                    };
+                    assert_eq!(
+                        view.live_collision_block(Dimension::OVERWORLD, BlockPos::new(x, y, z)),
+                        expected,
+                        "horizontal ({x},{z}), y {y}"
+                    );
+                }
+            }
+        }
+        assert_eq!((world::ready_clones(), world::materializations()), (0, 0));
+        let current = &a.residents.ready[&key(Dimension::OVERWORLD)];
+        assert_eq!(
+            (
+                std::ptr::from_ref(current),
+                current.generation,
+                current.revision,
+                current.block(BlockPos::new(8, 319, 8)),
+                current.height(8, 8)
+            ),
+            identity
+        );
+        assert_eq!(a.metadata, metadata);
+        assert_eq!(a.next_tick(), tick);
+        assert_eq!(a.live_chunk_facts(key(Dimension::OVERWORLD)), facts);
+    }
+
+    #[test]
+    fn managed_loading_ready_dimensions_and_retained_unloading() {
+        let mut a = authority();
+        a.enable_live_chunks().unwrap();
+        a.replace_chunk_wants(BTreeSet::from([
+            key(Dimension::OVERWORLD),
+            key(Dimension::DEPTHS),
+        ]))
+        .unwrap();
+        for (dimension, block, request) in [(Dimension::OVERWORLD, 1, 1), (Dimension::DEPTHS, 2, 2)]
+        {
+            queue(&mut a, dimension, block, request);
+            assert_eq!(
+                a.live_chunk_facts(key(dimension)).unwrap().phase,
+                LiveChunkPhase::Loading
+            );
+            assert_eq!(
+                sample(&a.settled_read().unwrap(), dimension),
+                [Some(0), None, None, Some(0)]
+            );
+        }
+        a.advance_tick(TickBudget::full()).unwrap();
+        for (dimension, block) in [(Dimension::OVERWORLD, 1), (Dimension::DEPTHS, 2)] {
+            assert_eq!(
+                a.live_chunk_facts(key(dimension)).unwrap().phase,
+                LiveChunkPhase::Ready
+            );
+            assert_eq!(
+                sample(&a.settled_read().unwrap(), dimension),
+                [Some(0), Some(block), Some(block), Some(0)]
+            );
+            assert_eq!(
+                a.settled_read()
+                    .unwrap()
+                    .live_collision_block(dimension, BlockPos::new(144, 319, -48)),
+                None
+            );
+        }
+        let retained = &a.residents.ready[&key(Dimension::OVERWORLD)];
+        let before = (
+            std::ptr::from_ref(retained),
+            retained.generation,
+            retained.revision,
+            retained.block(BlockPos::new(8, 319, 8)),
+        );
+        a.replace_chunk_wants(BTreeSet::from([key(Dimension::DEPTHS)]))
+            .unwrap();
+        assert_eq!(
+            a.live_chunk_facts(key(Dimension::OVERWORLD)).unwrap().phase,
+            LiveChunkPhase::Unloading
+        );
+        let retained = &a.residents.ready[&key(Dimension::OVERWORLD)];
+        assert_eq!(
+            (
+                std::ptr::from_ref(retained),
+                retained.generation,
+                retained.revision,
+                retained.block(BlockPos::new(8, 319, 8))
+            ),
+            before
+        );
+        assert_eq!(
+            sample(&a.settled_read().unwrap(), Dimension::OVERWORLD),
+            [Some(0), None, None, Some(0)]
+        );
+        assert_eq!(
+            sample(&a.settled_read().unwrap(), Dimension::DEPTHS),
+            [Some(0), Some(2), Some(2), Some(0)]
+        );
+    }
+
+    fn bounded_current_reads(view: &AuthorityReadView<'_>, pos: BlockPos) {
+        let key = key(Dimension::OVERWORLD);
+        let ready = &view.ready[&key];
+        let observed = view.blocks.get(&(key, pos)).unwrap();
+        let ready_identity = (std::ptr::from_ref(ready), ready.generation, ready.revision);
+        let node_identity = (std::ptr::from_ref(observed), *observed);
+        world::reset_ready_clones();
+        world::reset_materializations();
+        for _ in 0..50 {
+            assert_eq!(
+                view.live_collision_block(Dimension::OVERWORLD, pos),
+                Some(2)
+            );
+            assert_eq!(
+                view.observation(Dimension::OVERWORLD, pos).unwrap().block,
+                2
+            );
+            assert_eq!(view.ready_chunk_revision(key), Some(10));
+            for y in [-65, 320, i32::MIN, i32::MAX] {
+                let outside = BlockPos::new(8, y, 8);
+                assert_eq!(
+                    view.live_collision_block(Dimension::OVERWORLD, outside),
+                    Some(0)
+                );
+                assert_eq!(view.block(Dimension::OVERWORLD, outside), None);
+                assert_eq!(view.observation(Dimension::OVERWORLD, outside), None);
+            }
+        }
+        assert_eq!((world::ready_clones(), world::materializations()), (0, 0));
+        let current = &view.ready[&key];
+        assert_eq!(
+            (
+                std::ptr::from_ref(current),
+                current.generation,
+                current.revision
+            ),
+            ready_identity
+        );
+        let observed = view.blocks.get(&(key, pos)).unwrap();
+        assert_eq!((std::ptr::from_ref(observed), *observed), node_identity);
+    }
+
+    #[test]
+    fn actual_mutation_is_current_before_and_after_retained_commit() {
+        let mut a = live(&[Dimension::OVERWORLD]);
+        let pos = BlockPos::new(8, 319, 8);
+        {
+            let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+            for y in [-65, 320] {
+                let outside = BlockPos::new(8, y, 8);
+                assert_eq!(
+                    context
+                        .read()
+                        .live_collision_block(Dimension::OVERWORLD, outside),
+                    Some(0)
+                );
+                assert_eq!(context.read().block(Dimension::OVERWORLD, outside), None);
+                assert_eq!(
+                    context.read().observation(Dimension::OVERWORLD, outside),
+                    None
+                );
+            }
+            let old = context
+                .read()
+                .observation(Dimension::OVERWORLD, pos)
+                .unwrap();
+            assert_eq!(old.block, 1);
+            context
+                .transaction()
+                .try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(old, 2).unwrap()],
+                )
+                .unwrap();
+            bounded_current_reads(&context.read(), pos);
+            context.commit_carried();
+        }
+        assert_eq!(a.residents.ready[&key(Dimension::OVERWORLD)].revision, 10);
+        bounded_current_reads(&a.settled_read().unwrap(), pos);
+    }
+
+    #[test]
+    fn disabled_sparse_fixtures_and_source_radius_keep_observation_mode() {
+        let mut a = authority();
+        let pos = BlockPos::new(8, 64, 8);
+        let observed = BlockObservation::try_new(key(Dimension::OVERWORLD), 7, 9, pos, 2).unwrap();
+        a.residents.blocks.insert((observed.key, pos), observed);
+        assert!(a.residents.ready.is_empty());
+        let check = |view: AuthorityReadView<'_>| {
+            assert!(view.acquisition.is_none());
+            assert_eq!(view.observation(Dimension::OVERWORLD, pos), Some(observed));
+            assert_eq!(
+                view.live_collision_block(Dimension::OVERWORLD, pos),
+                Some(2)
+            );
+            assert_eq!(
+                view.live_collision_block(Dimension::OVERWORLD, BlockPos::new(9, 64, 8)),
+                None
+            );
+            for y in [-65, 320, i32::MIN, i32::MAX] {
+                assert_eq!(
+                    view.live_collision_block(Dimension::OVERWORLD, BlockPos::new(8, y, 8)),
+                    None
+                );
+            }
+        };
+        check(a.settled_read().unwrap());
+        {
+            let context = TickContext::for_tick(&mut a, TickBudget::full());
+            check(context.read());
+        }
+        let mut radius_only = authority();
+        radius_only.enable_source_player_restoration(1).unwrap();
+        assert_eq!(radius_only.source_player_radius, Some(1));
+        assert!(radius_only.settled_read().unwrap().acquisition.is_none());
+        for y in [-65, 320, i32::MIN, i32::MAX] {
+            assert_eq!(
+                radius_only
+                    .settled_read()
+                    .unwrap()
+                    .live_collision_block(Dimension::OVERWORLD, BlockPos::new(8, y, 8)),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn settled_and_context_reads_agree_with_healthy_closing() {
+        let mut a = live(&[Dimension::OVERWORLD]);
+        let tick = a.next_tick();
+        let time = a.settled_read().unwrap().world_time();
+        let settled = sample(&a.settled_read().unwrap(), Dimension::OVERWORLD);
+        assert_eq!(settled, [Some(0), Some(1), Some(1), Some(0)]);
+        {
+            let context = TickContext::for_tick(&mut a, TickBudget::full());
+            assert_eq!(sample(&context.read(), Dimension::OVERWORLD), settled);
+            assert_eq!(context.read().tick(), tick);
+            assert_eq!(context.read().world_time(), time);
+        }
+        a.phase = ServerPhase::Closing;
+        let closing = a.settled_read().unwrap();
+        assert_eq!(sample(&closing, Dimension::OVERWORLD), settled);
+        assert_eq!(closing.tick(), tick);
+        assert_eq!(closing.world_time(), time);
+        assert_eq!(a.next_tick(), tick);
+    }
+
+    #[test]
+    fn trace_delegation_preserves_entries_and_overflow_outside_bypasses_it() {
+        let a = live(&[Dimension::OVERWORLD]);
+        let view = a.settled_read().unwrap();
+        let outside = BlockPos::new(144, 320, -48);
+        let known = BlockPos::new(8, 319, 8);
+        let missing = BlockPos::new(144, 319, -48);
+        let observed = view.observation(Dimension::OVERWORLD, known).unwrap();
+        let trace = RefCell::new(ObservationTrace::default());
+        let traced = view.with_observation_trace(&trace);
+        assert_eq!(
+            traced.live_collision_block(Dimension::OVERWORLD, outside),
+            Some(0)
+        );
+        assert!(trace.borrow().cells.is_empty());
+        assert!(!trace.borrow().overflow);
+        for _ in 0..2 {
+            assert_eq!(
+                traced.live_collision_block(Dimension::OVERWORLD, known),
+                Some(1)
+            );
+            assert_eq!(
+                traced.live_collision_block(Dimension::OVERWORLD, missing),
+                None
+            );
+        }
+        assert_eq!(
+            trace.borrow().cells,
+            BTreeMap::from([
+                ((Dimension::OVERWORLD, known), Some(observed)),
+                ((Dimension::OVERWORLD, missing), None),
+            ])
+        );
+        assert!(!trace.borrow().overflow);
+        let full = RefCell::new(ObservationTrace::default());
+        let traced = view.with_observation_trace(&full);
+        for x in 0..512 {
+            let pos = BlockPos::new(x, 64, 0);
+            assert_eq!(
+                traced.live_collision_block(Dimension::OVERWORLD, pos),
+                view.observation(Dimension::OVERWORLD, pos).map(|v| v.block)
+            );
+        }
+        assert_eq!(full.borrow().cells.len(), 512);
+        assert!(!full.borrow().overflow);
+        // This new known cell would be stone absent the existing trace refusal.
+        assert_eq!(
+            traced.live_collision_block(Dimension::OVERWORLD, known),
+            None
+        );
+        assert_eq!(full.borrow().cells.len(), 512);
+        assert!(full.borrow().overflow);
+        assert_eq!(
+            traced.live_collision_block(Dimension::OVERWORLD, outside),
+            Some(0)
+        );
+        assert_eq!(full.borrow().cells.len(), 512);
+        assert!(full.borrow().overflow);
+    }
+
+    // Contract double: builds accepted native input, without executing actor motion.
+    fn grid_builder_double(
+        view: &AuthorityReadView<'_>,
+        dimension: Dimension,
+        origin: [i32; 3],
+        dimensions: [u32; 3],
+    ) -> Vec<CollisionCell> {
+        let count = dimensions
+            .into_iter()
+            .try_fold(1u32, u32::checked_mul)
+            .unwrap();
+        assert!((1..=4).contains(&count));
+        let mut cells = Vec::with_capacity(count as usize);
+        for y in 0..dimensions[1] {
+            for x in 0..dimensions[0] {
+                for z in 0..dimensions[2] {
+                    let pos = BlockPos::new(
+                        origin[0].checked_add(x as i32).unwrap(),
+                        origin[1].checked_add(y as i32).unwrap(),
+                        origin[2].checked_add(z as i32).unwrap(),
+                    );
+                    cells.push(match view.live_collision_block(dimension, pos) {
+                        Some(block) => crate::rules::player_motion::collision_cell(block).unwrap(),
+                        None => CollisionCell::default(),
+                    });
+                }
+            }
+        }
+        CollisionGrid::try_new(origin, dimensions, &cells).unwrap();
+        cells
+    }
+
+    #[test]
+    fn grid_builder_double_boundary_cells_use_native_input_contract() {
+        let a = live(&[Dimension::OVERWORLD]);
+        let view = a.settled_read().unwrap();
+        for (origin, expected) in [
+            ([144, 319, -48], [(false, 0), (true, 0)]),
+            ([8, 319, 8], [(true, 1), (true, 0)]),
+        ] {
+            let cells = grid_builder_double(&view, Dimension::OVERWORLD, origin, [1, 2, 1]);
+            let grid = CollisionGrid::try_new(origin, [1, 2, 1], &cells).unwrap();
+            assert_eq!(grid.origin(), origin);
+            assert_eq!(grid.dimensions(), [1, 2, 1]);
+            assert_eq!(
+                grid.cells()
+                    .iter()
+                    .map(|v| (v.loaded(), v.used()))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        let disabled = authority();
+        let cells = grid_builder_double(
+            &disabled.settled_read().unwrap(),
+            Dimension::OVERWORLD,
+            [144, 320, -48],
+            [1, 2, 1],
+        );
+        assert!(cells.iter().all(|v| !v.loaded()));
+    }
+
+    // Contract double: accepted geometry consumes the read adapter, not a motion provider.
+    struct GeometryConsumerDouble<'a, 'b>(&'a AuthorityReadView<'b>);
+    impl actor_placement::PlacementWorld for GeometryConsumerDouble<'_, '_> {
+        fn ready_revision(&self, key: ChunkKey) -> Option<u64> {
+            self.0.ready_chunk_revision(key)
+        }
+        fn block_at(&self, dimension: Dimension, pos: BlockPos) -> Option<u16> {
+            self.0.live_collision_block(dimension, pos)
+        }
+    }
+
+    #[test]
+    fn geometry_consumer_double_body_space_observes_managed_boundaries() {
+        let a = live(&[Dimension::OVERWORLD]);
+        let view = a.settled_read().unwrap();
+        let double = GeometryConsumerDouble(&view);
+        for (pose, free, ready) in [
+            ([144.5, 321., -47.5], true, true),
+            ([144.5, 319., -47.5], false, false),
+            ([8.5, 319., 8.5], false, true),
+        ] {
+            assert_eq!(
+                actor_placement::body_space(&double, Dimension::OVERWORLD, pose).unwrap(),
+                actor_placement::BodySpace { free, ready }
+            );
+        }
+        let disabled = authority();
+        let view = disabled.settled_read().unwrap();
+        assert_eq!(
+            actor_placement::body_space(
+                &GeometryConsumerDouble(&view),
+                Dimension::OVERWORLD,
+                [144.5, 321., -47.5]
+            )
+            .unwrap(),
+            actor_placement::BodySpace {
+                free: false,
+                ready: false
+            }
+        );
     }
 }
