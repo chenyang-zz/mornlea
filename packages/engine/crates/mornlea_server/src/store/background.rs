@@ -43,7 +43,13 @@ impl SaveExecutor {
         mut reservations: Vec<usize>,
     ) -> SaveResult {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            for (index, snapshot) in request.snapshots.iter().enumerate() {
+            let mut normalized = request.clone();
+            for snapshot in &mut normalized.snapshots {
+                if let SaveValue::ChunkView(view) = &snapshot.value {
+                    snapshot.value = SaveValue::Chunk(view.materialize());
+                }
+            }
+            for (index, snapshot) in normalized.snapshots.iter().enumerate() {
                 if let SaveValue::Chunk(save) = &snapshot.value {
                     reservations[index] = self
                         .codec
@@ -53,7 +59,7 @@ impl SaveExecutor {
             }
             // Only the backend owner clones large bodies. Its echoed snapshots
             // never replace the immutable request retained by the authority.
-            let completion = backend.write(ticket, request.clone());
+            let completion = backend.write(ticket, normalized);
             if completion.ticket != ticket {
                 return Err(internal("store completion ticket"));
             }
@@ -347,5 +353,126 @@ fn store_io_error(error: StorageError) -> ServerError {
             operation: Operation::WritePayload,
             kind: std::io::ErrorKind::InvalidData,
         },
+    }
+}
+
+#[cfg(test)]
+mod chunk_view_tests {
+    use super::*;
+    use crate::core::contracts::{
+        LoadedValue, OwnedSnapshot, SaveCompletion, SavePoll, SaveUrgency, StoreHandle, StoreLimits,
+    };
+    use crate::core::world::{ReadyChunk, materializations, reset_materializations};
+    use crate::store::mailbox::StoreMailbox;
+    use mornlea_domain::{ChunkPos, Dimension};
+    use mornlea_storage::{Chunk, ContainerSnapshot, StorageKind};
+
+    struct MeasuredBackend(mpsc::SyncSender<(usize, thread::ThreadId)>);
+    impl DiskBackend for MeasuredBackend {
+        fn write(&mut self, ticket: SaveTicket, request: SaveRequest) -> SaveCompletion {
+            assert!(matches!(request.snapshots[0].value, SaveValue::Chunk(_)));
+            self.0
+                .send((materializations(), thread::current().id()))
+                .unwrap();
+            let submitted = request
+                .snapshots
+                .iter()
+                .map(|s| (s.key.clone(), s.revision))
+                .collect::<Vec<_>>();
+            SaveCompletion {
+                ticket,
+                snapshots: request.snapshots,
+                committed: submitted.clone(),
+                submitted,
+                error: None,
+            }
+        }
+        fn load(&mut self, _: SaveKey) -> Result<LoadedValue, ServerError> {
+            unreachable!()
+        }
+        fn sync(&mut self) -> Result<(), ServerError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), ServerError> {
+            Ok(())
+        }
+    }
+    #[test]
+    fn actual_materialization_runs_only_on_reusable_backend_owner() {
+        let key = crate::core::contracts::ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        };
+        let ready = ReadyChunk::try_new(
+            key,
+            7,
+            5,
+            Chunk {
+                sections: vec![
+                    ContainerSnapshot {
+                        kind: StorageKind::Single,
+                        bits: 0,
+                        single: 2,
+                        palette: vec![],
+                        packed: vec![]
+                    };
+                    24
+                ],
+                drops: vec![Default::default(); 32],
+                furnaces: vec![Default::default(); 32],
+                chests: vec![Default::default(); 16],
+            },
+        )
+        .unwrap();
+        let snapshot = OwnedSnapshot::try_new(
+            SaveKey::Chunk(key),
+            5,
+            CHUNK_MAX_RESERVATION,
+            SaveUrgency::Autosave,
+            SaveValue::ChunkView(ready.capture(None, None)),
+        )
+        .unwrap();
+        let (send, receive) = mpsc::sync_channel(2);
+        let mut store = StoreMailbox::try_new_background(
+            StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap(),
+            MeasuredBackend(send),
+        )
+        .unwrap();
+        reset_materializations();
+        let mut owners = Vec::new();
+        for expected in [1, 2] {
+            let ticket = store
+                .submit(crate::core::contracts::SaveRequest {
+                    snapshots: vec![snapshot.clone()],
+                })
+                .unwrap();
+            let until = Instant::now() + Duration::from_secs(5);
+            let done = loop {
+                store.drive_workers();
+                if let SavePoll::Completed(done) = store.poll(ticket) {
+                    break done;
+                }
+                assert!(Instant::now() < until);
+                thread::yield_now();
+            };
+            assert!(
+                done.error.is_none(),
+                "owner must receive materialized chunk values"
+            );
+            assert_eq!(done.snapshots, vec![snapshot.clone()]);
+            assert_eq!(
+                materializations(),
+                0,
+                "clone, submit and poll cannot expand authority data"
+            );
+            let (count, owner) = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(count, expected);
+            owners.push(owner);
+        }
+        store
+            .close(Deadline::after(Instant::now(), Duration::from_secs(5)).unwrap())
+            .unwrap();
+        assert_eq!(owners[0], owners[1]);
+        assert_ne!(owners[0], thread::current().id());
     }
 }

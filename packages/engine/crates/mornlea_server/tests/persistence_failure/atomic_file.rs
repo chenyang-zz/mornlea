@@ -66,7 +66,7 @@ fn snapshot(value: SaveValue, revision: u64) -> OwnedSnapshot {
         SaveValue::Hostiles(_) => SaveKey::Hostiles,
         SaveValue::Passives(_) => SaveKey::Passives,
         SaveValue::Metadata(_) => SaveKey::Metadata,
-        SaveValue::Chunk(_) => unreachable!(),
+        SaveValue::Chunk(_) | SaveValue::ChunkView(_) => unreachable!(),
     };
     OwnedSnapshot::try_new(key, revision, 1024, SaveUrgency::Autosave, value).unwrap()
 }

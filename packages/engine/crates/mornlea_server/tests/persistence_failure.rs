@@ -23,3 +23,6 @@ mod background;
 
 #[path = "persistence_failure/loads.rs"]
 mod loads;
+
+#[path = "persistence_failure/chunk_view.rs"]
+mod chunk_view;

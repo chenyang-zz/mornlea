@@ -51,7 +51,15 @@ consume its cancellation and error contracts before joining the real backend.
   sparse writes first; missing chunks never become air. Height changes are
   immediate, including transparent blocks. Replay snapshots preserve compact
   unchanged sections and advance each changed chunk's durable revision once;
-  per-cell CAS counters remain tick-local. Drop slot mutations share that one
+  per-cell CAS counters remain tick-local. Current Ready block edits also own
+  a persistent fixed-page tree. `core::world::chunk_view_tests` pins path-copy
+  work, page coverage and bounded current-root occupancy. Undo and save
+  captures share immutable roots.
+  `ChunkSaveView` equality is capture identity, and `capture_chunk_snapshot`
+  copies only fixed slots and shares the base/root; it performs no scheduling.
+  Expansion is explicitly off-tick on the store owner. Counter-only slots may
+  produce distinct captures under the same revision, so revision-only caching
+  is forbidden. Drop slot mutations share that one
   durable increment; counter-only age/delay changes preserve the source dirty
   selection behavior. Actual chunk acquisition and commit
   ownership belongs to the serial reducer.

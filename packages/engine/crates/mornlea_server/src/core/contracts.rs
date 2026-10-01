@@ -2007,6 +2007,7 @@ impl Default for SaveBudget {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SaveValue {
     Chunk(ChunkSave),
+    ChunkView(super::world::ChunkSaveView),
     Player(PlayerSave),
     Companions(CompanionSave),
     Hostiles(HostileMobsSave),
@@ -2036,6 +2037,15 @@ impl OwnedSnapshot {
                 field: "metadata_sequence",
             });
         }
+        if let SaveValue::ChunkView(view) = &value
+            && (key != SaveKey::Chunk(view.key())
+                || revision != view.revision()
+                || view.generation() == 0)
+        {
+            return Err(ServerError::InvalidInput {
+                field: "save_value",
+            });
+        }
         if !key_matches(&key, &value) {
             return Err(ServerError::InvalidInput {
                 field: "save_value",
@@ -2055,6 +2065,7 @@ fn key_matches(key: &SaveKey, value: &SaveValue) -> bool {
     matches!(
         (key, value),
         (SaveKey::Chunk(_), SaveValue::Chunk(_))
+            | (SaveKey::Chunk(_), SaveValue::ChunkView(_))
             | (SaveKey::Player(_), SaveValue::Player(_))
             | (SaveKey::Companions, SaveValue::Companions(_))
             | (SaveKey::Hostiles, SaveValue::Hostiles(_))

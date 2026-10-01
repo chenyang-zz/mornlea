@@ -420,10 +420,23 @@ fn save_rank(key: &SaveKey) -> u8 {
 }
 
 fn select_and_validate(snapshots: &[OwnedSnapshot]) -> Result<Vec<OwnedSnapshot>, ServerError> {
-    for snapshot in snapshots {
+    // Direct callers also normalize on their disk owner. Completions retain
+    // original captures; equal duplicate targets compare codec payload values.
+    let mut selected = snapshots.to_vec();
+    for snapshot in &mut selected {
+        if let SaveValue::ChunkView(view) = &snapshot.value {
+            if snapshot.key != SaveKey::Chunk(view.key())
+                || snapshot.revision != view.revision()
+                || view.generation() == 0
+            {
+                return Err(ServerError::InvalidInput {
+                    field: "save_value",
+                });
+            }
+            snapshot.value = SaveValue::Chunk(view.materialize());
+        }
         validate_snapshot(snapshot)?;
     }
-    let mut selected = snapshots.to_vec();
     selected.sort_by(|a, b| save_order(&a.key, &b.key).then_with(|| b.revision.cmp(&a.revision)));
     let mut result: Vec<OwnedSnapshot> = Vec::new();
     for snapshot in selected {

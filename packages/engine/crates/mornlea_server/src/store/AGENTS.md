@@ -13,6 +13,12 @@ filesystem provider boundary. Save bytes and schema validation remain in
   use only nonblocking channel operations; off-tick lifecycle waits retain one
   result across timeout, and successful close joins before marking closed.
   Inline construction remains available for deterministic non-Send doubles.
+  Immutable chunk views reserve the existing compression maximum using only
+  checked capture identity. The backend owner normalizes its cloned request
+  before materialization, encoding and disk writes; completion returns the
+  original view without expanding it. Partial errors and retries retain that
+  same capture. Direct `DiskStore` writes normalize before semantic duplicate
+  validation and echo original targets. Standalone files reject chunk families.
 - `io.rs` owns per-request monotonic cancellation, codec/I/O error mapping,
   complete-write loops and the native fallible-close adapters. Its only unsafe
   blocks consume a uniquely owned File descriptor/handle once. Do not extend

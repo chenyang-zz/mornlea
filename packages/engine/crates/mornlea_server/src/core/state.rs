@@ -893,6 +893,29 @@ impl AuthorityState {
         self.shutdown.retryable = false;
     }
 
+    /// Captures the current Ready target without materialization or scheduling.
+    /// Call after live commit; physical counter-only slot values remain current
+    /// even when they share a durable revision with an earlier capture.
+    pub fn capture_chunk_snapshot(
+        &self,
+        key: ChunkKey,
+        urgency: SaveUrgency,
+    ) -> Option<OwnedSnapshot> {
+        let chunk = self.residents.ready.get(&key)?;
+        let view = chunk.capture(
+            self.residents.drops.get(&key),
+            self.residents.container_chunks.get(&key),
+        );
+        OwnedSnapshot::try_new(
+            SaveKey::Chunk(key),
+            view.revision(),
+            crate::store::mailbox::CHUNK_MAX_RESERVATION,
+            urgency,
+            SaveValue::ChunkView(view),
+        )
+        .ok()
+    }
+
     pub fn select(&mut self, _mode: SaveMode, budget: SaveBudget) -> Vec<OwnedSnapshot> {
         let mut chosen = Vec::new();
         let mut rest = Vec::new();
@@ -3358,6 +3381,7 @@ impl<'a> TickContext<'a> {
                 .ready
                 .get_mut(&observed.key)
                 .expect("Ready ownership cannot change during a write");
+            chunk.set_block(pos, observed.block);
             chunk.mark_blocks_dirty();
             chunk.set_height(pos.x(), pos.z(), next);
         }
@@ -3673,6 +3697,174 @@ mod owned_resident_tests {
             std::ptr::from_ref(residents.drops.values().next().unwrap()) as usize,
             std::ptr::from_ref(residents.container_chunks.values().next().unwrap()) as usize,
         ]
+    }
+
+    #[test]
+    fn live_commit_captures_all_slots_once_and_pins_old_blocks() {
+        use super::super::world::{materializations, reset_materializations};
+        use mornlea_domain::FiniteVec3;
+        use mornlea_storage::ItemStack;
+        let mut authority = authority(1, false);
+        let old = authority
+            .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
+            .unwrap();
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        for (pos, block) in [
+            (BlockPos::new(1, -64, 1), 4),
+            (BlockPos::new(2, 319, 2), 5),
+            (BlockPos::new(3, 64, 3), 11),
+            (BlockPos::new(4, 80, 4), 9),
+        ] {
+            let observed = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
+            ctx.transaction()
+                .try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(observed, block).unwrap()],
+                )
+                .unwrap();
+        }
+        for reference in ctx.container_chunks[&key(0)].references(key(0)) {
+            let before = ctx.read().container(reference).unwrap();
+            let mut after = before.clone();
+            match &mut after.slots {
+                ContainerSlots::Chest(items) => {
+                    items[0] = ItemStack {
+                        item: 2,
+                        count: 3,
+                        durability: 0,
+                    }
+                }
+                ContainerSlots::Furnace {
+                    slots,
+                    fuel,
+                    progress,
+                } => {
+                    slots[0] = ItemStack {
+                        item: 6,
+                        count: 2,
+                        durability: 0,
+                    };
+                    *fuel = 20;
+                    *progress = 3;
+                }
+            }
+            ctx.stage(RuleEffect::Container { before, after }).unwrap();
+        }
+        let drops = DropBatch::try_new(
+            DropSource::System {
+                rule: SystemRule::Support,
+                tick: ctx.read().tick(),
+                target: BlockPos::new(5, 64, 5),
+            },
+            Dimension::OVERWORLD,
+            FiniteVec3::try_new([5.5, 64.5, 5.5]).unwrap(),
+            vec![ItemStack {
+                item: 2,
+                count: 4,
+                durability: 0,
+            }],
+            5,
+        )
+        .unwrap();
+        ctx.transaction()
+            .try_system_with_drops(SystemRule::Support, Vec::new(), drops)
+            .unwrap();
+        reset_tick_finishes();
+        reset_materializations();
+        ctx.commit_carried();
+        drop(ctx);
+        let new = authority
+            .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
+            .unwrap();
+        assert_eq!(materializations(), 0);
+        assert_eq!(tick_finishes(), 1);
+        assert_eq!(new.revision, 6);
+        let SaveValue::ChunkView(old_view) = &old.value else {
+            unreachable!()
+        };
+        let SaveValue::ChunkView(new_view) = &new.value else {
+            unreachable!()
+        };
+        assert_ne!(old_view, new_view);
+        let saved = new_view.materialize();
+        assert!(saved.chunk.drops[0].active);
+        assert_eq!(saved.chunk.drops[0].stack.count, 4);
+        assert_eq!(saved.chunk.chests[0].items[0].count, 3);
+        assert_eq!(saved.chunk.furnaces[0].input.item, 6);
+        assert_eq!(saved.chunk.furnaces[0].progress_ticks, 3);
+        assert_eq!(saved.chunk.furnaces[0].burn_ticks, 20);
+        assert_eq!(authority.residents.ready_snapshot()[0].3, saved.chunk);
+        assert!(
+            old_view
+                .materialize()
+                .chunk
+                .sections
+                .iter()
+                .all(|section| section.single == 0)
+        );
+        authority.remember_dirty(old.clone());
+        let selected = authority.select(SaveMode::All, SaveBudget::default());
+        let equal_new = authority
+            .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
+            .unwrap();
+        authority.remember_dirty(equal_new.clone());
+        let ack = authority.apply_completion(SaveCompletion {
+            ticket: SaveTicket::try_from_raw(1).unwrap(),
+            snapshots: selected,
+            submitted: vec![(old.key.clone(), old.revision)],
+            committed: vec![(old.key.clone(), old.revision)],
+            error: None,
+        });
+        assert_eq!(ack.acked, 1);
+        assert_eq!(authority.dirty, vec![equal_new]);
+        assert_eq!(new_view.materialize(), saved);
+    }
+
+    #[test]
+    fn chunk_capture_recipe_does_not_materialize_on_authority() {
+        use super::super::world::{materializations, reset_materializations};
+        let authority = authority(1, false);
+        reset_materializations();
+        let captured = authority.residents.ready_snapshot();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            materializations(),
+            1,
+            "explicit off-tick recipe clones the actual Ready base"
+        );
+        reset_materializations();
+        let captured = authority
+            .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
+            .unwrap();
+        let SaveValue::ChunkView(view) = captured.value else {
+            unreachable!()
+        };
+        assert_eq!(view, view.clone());
+        assert_eq!(materializations(), 0);
+    }
+
+    #[test]
+    fn chunk_select_recipe_shares_inflight_body() {
+        let mut authority = authority(1, false);
+        let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut context, 1, 4);
+        context.commit_carried();
+        drop(context);
+        use super::super::world::{materializations, reset_materializations};
+        let captured = authority
+            .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
+            .unwrap();
+        reset_materializations();
+        authority.remember_dirty(captured);
+        let selected = authority.select(SaveMode::All, SaveBudget::default());
+        let SaveValue::ChunkView(chosen) = &selected[0].value else {
+            unreachable!()
+        };
+        let SaveValue::ChunkView(held) = &authority.in_flight[0].value else {
+            unreachable!()
+        };
+        assert_eq!(chosen, held);
+        assert_eq!(materializations(), 0);
     }
 
     #[test]
@@ -4485,6 +4677,10 @@ mod owned_resident_tests {
         };
         let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
         context.preload_ready_chunk(ReadyChunk::try_new(key(0), 7, 5, chunk).unwrap());
+        let old_view = context.ready[&key(0)].capture(
+            context.drops.get(&key(0)),
+            context.container_chunks.get(&key(0)),
+        );
         let before = context.drops[&key(0)].records()[0].clone();
         let mut after = before.clone();
         after.age += 1;
@@ -4503,6 +4699,16 @@ mod owned_resident_tests {
         assert_eq!(tick_finishes(), 0);
         assert_eq!(authority.residents.ready[&key(0)].revision, 5);
         assert_eq!(authority.residents.drops[&key(0)].records(), &[after]);
+        let latest = authority
+            .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
+            .unwrap();
+        let SaveValue::ChunkView(latest) = latest.value else {
+            unreachable!()
+        };
+        assert_eq!(latest.revision(), old_view.revision());
+        assert_ne!(latest, old_view);
+        assert_eq!(old_view.materialize().chunk.drops[0].age_ticks, 10);
+        assert_eq!(latest.materialize().chunk.drops[0].age_ticks, 11);
     }
 
     #[test]
@@ -4745,6 +4951,16 @@ mod ready_commit_tests {
         assert_eq!(ctx.read().ready_chunk_revision(key()), Some(5));
         assert!(ctx.changed_blocks().is_empty());
         assert!(ctx.dirty_chunks.is_empty());
+        let captured =
+            ctx.ready[&key()].capture(ctx.drops.get(&key()), ctx.container_chunks.get(&key()));
+        assert!(
+            captured
+                .materialize()
+                .chunk
+                .sections
+                .iter()
+                .all(|section| section.single == 0)
+        );
         assert!(!ctx.sleep_record_touched);
         assert_eq!(ctx.sleep_record.day_phase_offset, 0);
         reset_tick_finishes();

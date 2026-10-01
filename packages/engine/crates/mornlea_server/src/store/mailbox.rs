@@ -54,7 +54,7 @@ use crate::core::contracts::{
 use mornlea_domain::PlayerId;
 
 /// Reservation held for one owned chunk until encoding completes.
-pub(super) const CHUNK_MAX_RESERVATION: usize =
+pub(crate) const CHUNK_MAX_RESERVATION: usize =
     MAX_COMPRESSED_CHUNK as usize + CHUNK_ENVELOPE_LENGTH;
 
 /// One admitted save job: the caller's untouched request plus the store's
@@ -365,6 +365,19 @@ impl<B: DiskBackend> StoreMailbox<B> {
     /// chunk. A record the codec refuses is rejected here, before enqueue.
     fn reservation(snapshot: &OwnedSnapshot) -> Result<usize, ServerError> {
         match &snapshot.value {
+            SaveValue::ChunkView(view) => {
+                // Immutable identity was checked at capture; recheck public outer
+                // fields without decoding or expanding the shared target.
+                if snapshot.key != SaveKey::Chunk(view.key())
+                    || snapshot.revision != view.revision()
+                    || view.generation() == 0
+                {
+                    return Err(ServerError::InvalidInput {
+                        field: "save_value",
+                    });
+                }
+                Ok(CHUNK_MAX_RESERVATION)
+            }
             SaveValue::Chunk(save) => {
                 chunk_logical_len(save, CHUNK_CURRENT_SCHEMA).map_err(|_| {
                     ServerError::InvalidInput {
