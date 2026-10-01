@@ -107,7 +107,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7r2 Preserve chunk-local sparse observation ownership and CAS history ([packet](plans/72-chunk-owned-observations.md)).
 - [x] 3.7r3c Land noncopying bounded chunk-retirement ownership and port contracts ([packet](plans/74-chunk-retirement-contract.md)).
 - [x] 3.7r3e Dispose whole retired chunk owners on a bounded CPU thread ([packet](plans/76-background-chunk-retirement.md)).
-- [ ] 3.7r3 Reclaim clean unwanted managed chunks and prove real durable reload ([packet](plans/77-live-chunk-retirement.md)).
+- [x] 3.7r3 Reclaim clean unwanted managed chunks and prove real durable reload ([packet](plans/77-live-chunk-retirement.md)).
 - [x] 3.7s1 Hand immutable chunk save views to the actual store owner ([packet](plans/55-immutable-chunk-save-view.md)).
 - [x] 3.7s2e Cache source-compatible payload estimates for live chunk captures ([packet](plans/62-live-chunk-payload-estimate.md)).
 - [x] 3.7s2 Select current managed dirty targets and apply qualified durability ACKs ([packet](plans/63-live-chunk-durability.md)).
