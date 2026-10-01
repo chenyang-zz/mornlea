@@ -93,7 +93,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7p2c Land checked prepared frames and explicit publication receipts ([packet](plans/66-prepared-publication-contract.md)).
 - [x] 3.7p2q Implement the actual prepared FIFO and borrowed Memory delivery ([packet](plans/67-prepared-outbox-owner.md)).
 - [x] 3.7p2t Transfer immutable prepared frames through the actual TCP queue ([packet](plans/68-prepared-tcp-delivery.md)).
-- [ ] 3.7p2ec Land checked captured-chunk encoding ownership and request contracts ([packet](plans/69-chunk-encoding-contract.md)).
+- [x] 3.7p2ec Land checked captured-chunk encoding ownership and request contracts ([packet](plans/69-chunk-encoding-contract.md)).
 - [ ] 3.7p2e Encode immutable chunk captures on bounded background CPU owners ([packet](plans/70-background-chunk-encoding.md)).
 - [x] 3.7g0 Generate production seed-compatible compact chunks ([packet](plans/48-production-worldgen.md)).
 - [x] 3.7g1 Prepare generated chunks on bounded background owners ([packet](plans/51-background-generation-owner.md)).
@@ -123,7 +123,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9l1 Make the MCP serve-failure fixture portable across Unix socket layouts.
 - [x] 3.9l2 Bound loopback delivery waits by real deadlines while preserving protocol clocks.
 - [x] 3.9l3 Recognize proven Linux zombie termination without weakening writer-lock guards ([packet](plans/33-linux-process-termination.md)).
-- [ ] 3.9l4 Drive actual TCP receive progress through asynchronous login readiness ([packet](plans/71-prepared-tcp-receive-progress.md)).
+- [x] 3.9l4 Drive actual TCP receive progress through asynchronous login readiness ([packet](plans/71-prepared-tcp-receive-progress.md)).
 
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.
