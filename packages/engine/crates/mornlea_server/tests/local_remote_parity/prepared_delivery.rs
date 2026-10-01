@@ -176,6 +176,19 @@ impl Fixture {
         let until = Instant::now() + BOUND;
         let mut frames = Vec::new();
         while frames.len() < count {
+            // Readiness observed by the endpoint can precede the core's
+            // handoff; keep every actual owner progressing until delivery.
+            self.scheduler.drive_workers();
+            self.transport.pump_in(
+                self.id,
+                &mut self.driver.bind(&mut self.authority, &mut self.scheduler),
+                &self.clock,
+            );
+            self.transport.poll(
+                self.id,
+                &mut self.driver.bind(&mut self.authority, &mut self.scheduler),
+                &self.clock,
+            );
             self.transport.flush_out(
                 self.id,
                 &mut self.driver.bind(&mut self.authority, &mut self.scheduler),
@@ -301,6 +314,65 @@ fn with_fixture(test: impl FnOnce(&mut Fixture)) {
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
+}
+#[test]
+fn actual_receive_advances_ready_login_before_core_handoff() {
+    with_fixture(|f| {
+        f.send(ClientPacket::ClientHello(
+            ClientHello::decode_inbound(&encode_uvarint(Identities::current().protocol)).unwrap(),
+        ));
+        assert!(matches!(
+            decode(&f.receive(1)[0], State::Handshake),
+            ServerPacket::ServerHello(_)
+        ));
+        let start = LoginStart::new(player(1), "Ada", 8).unwrap();
+        f.send(ClientPacket::LoginStart(
+            LoginStart::decode_inbound(&start.encode().unwrap()).unwrap(),
+        ));
+        let until = Instant::now() + BOUND;
+        while f.driver.pending() == 0 {
+            f.transport.pump_in(
+                f.id,
+                &mut f.driver.bind(&mut f.authority, &mut f.scheduler),
+                &f.clock,
+            );
+            assert!(Instant::now() < until, "actual login input deadline");
+            thread::yield_now();
+        }
+        // The real reply is collected outside the core, fixing the ordering
+        // that can occur between its poll and handoff's endpoint observation.
+        let session = loop {
+            f.scheduler.drive_workers();
+            if let LoginPoll::Ready { session, .. } = f
+                .driver
+                .bind(&mut f.authority, &mut f.scheduler)
+                .poll_login(LoginTicket::try_from_raw(1).unwrap())
+            {
+                break session;
+            }
+            assert!(Instant::now() < until, "actual background login deadline");
+            thread::yield_now();
+        };
+        assert_eq!(
+            f.authority.session(session).unwrap().phase,
+            SessionPhase::Prepared
+        );
+        assert_eq!(
+            f.transport
+                .flush_out(f.id, &mut f.driver.bind(&mut f.authority, &mut f.scheduler))
+                .0,
+            0
+        );
+        assert_eq!(
+            decode(&f.receive(1)[0], State::Login),
+            ServerPacket::LoginSuccess(LoginSuccess::new(player(1), options().create.seed as u64))
+        );
+        assert_eq!(
+            f.authority.session(session).unwrap().phase,
+            SessionPhase::Active
+        );
+        assert_eq!(f.driver.pending(), 0);
+    });
 }
 #[test]
 fn actual_background_store_tcp_and_memory_canonical_fifo_and_budgets() {
