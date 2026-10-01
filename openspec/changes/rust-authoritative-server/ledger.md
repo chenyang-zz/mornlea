@@ -1814,3 +1814,7 @@ Placement target collision accepted after cumulative death node against support2
 ## Previous verifier oracle qualified, 2026-10-01
 
 - Read-only sealed/current diff confirms previous Go storage/core PlayerID/go.mod interfaces identical. Evidence identified that OpenDisk creates files, while explicit existing-file flock and actual region Open/Load/Close are non-writing; selected-bank helper hides a future standby. Root freezes packet54's all-existing-family read inventory, actual decoder/region reads, stricter future-bank refusal, unchanged tree/mode proof and truthful report before script integration. This is packet04's existing offline migration exception, no Go product expansion. A separate isolated worker owns only test oracle+storage guide; root binds sealed source and script later. Architecture skill: no change.
+
+## Immutable chunk save prerequisite qualified, 2026-10-01
+
+- Existing OwnedSnapshot raw Chunk selection clones its body on authority, and explicit Ready snapshot expands sections off-tick; no live chunk producer exists yet. Root freezes packet55's ten-bit persistent128-cell pages, opaque immutable capture identity, exact latest fixed slots and sole OS-store materialization before live acquisition/unload can select durable work. Root distinguishes measured old capture recipe from a production bug, and retains codec semantic equality after normalization. One serial provider/consumer node lands before later independent consumers; no unaccepted parallel boundary. Architecture skill: no change.

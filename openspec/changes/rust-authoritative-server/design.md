@@ -182,3 +182,9 @@ Player death output rehearses candidate chunks in ring order, then inventory and
 ### Frozen lease business classes
 
 Freeze removes the current planner lease and fences late planner outcomes while retaining only the unexpired finalization/release identity. Commit/reconcile/delete/run cleanup may use that identity until successful release or expiry; plan/dialogue cannot. Admission and late-result checks share one private eligibility policy. Terminal transfer and memory finalization retry remain separate acceptance nodes.
+
+### Production resident and durable capture ownership
+
+Packets52/53 replace resident clone-out/full replacement and whole-world defensive rollback with exclusive moved ownership, changed-key commit and initial touched-key undo. Explicit replay/save snapshots remain off-tick. Drop returns retained ownership without inventing successful publication or global rollback. Private compound aggregates cap writes/captures/read bases independently at the existing4096 effect ceiling, preventing cross-component multiplication.
+
+Packet55 uses persistent fixed128-cell pages routed by ten page-index bits for immutable chunk save captures. A write copies one fixed route/page; selection shares one capture Arc; materialization and compression run on the existing store owner. This avoids whole compact/body cloning, unbounded delta layers and a second rebase/compaction state machine on authority. Capture identity is O(1); actual codec equality after off-tick normalization retains existing equal-revision write conflict checks. Fixed current slots accompany block roots so slot age and non-dirty counter semantics remain source-exact. Actual acquisition/durable selection consumes these accepted prerequisites serially; provider acceptance does not close the production executable gate.
