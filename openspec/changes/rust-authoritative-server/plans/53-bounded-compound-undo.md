@@ -2,6 +2,8 @@
 
 Node `3.7r1`, predecessor packet52's accepted exclusive resident commit (exact SHA recorded before dispatch). Root used brainstorming/writing-plans and read-only compound mutation audit. Deliverable: defensive atomic apply restores every affected lane without cloning unrelated resident world state. The existing global transactional tick and lifecycle semantics remain unchanged. No public API or storage/wire version changes; private aggregate effect limits are clarified below. Root owns integration and task status.
 
+Accepted predecessor: `90552dd9bdfd29ebe5e58f026ded0f330d671602`; its exact six-path implementation and936-case integrated gate are recorded in packet52. Worker baseline includes that commit and both prescribed private fields.
+
 ## Exact algorithm and mutation inventory
 
 Add private `CompoundUndo` in core/state.rs (or one private core/compound_undo.rs module if root explicitly revises scope before dispatch; default is state.rs only). Capture once against the compound-entry context before applying any part, then run existing apply_effect in listed order. Any error restores the journal and returns the exact original RuleReject. Successful apply drops the journal. Nested compound refuses ResourceFull(RuleEffects) before capture/apply, matching public validation; empty compound succeeds.

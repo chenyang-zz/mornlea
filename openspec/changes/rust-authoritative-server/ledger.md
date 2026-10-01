@@ -1818,3 +1818,7 @@ Placement target collision accepted after cumulative death node against support2
 ## Immutable chunk save prerequisite qualified, 2026-10-01
 
 - Existing OwnedSnapshot raw Chunk selection clones its body on authority, and explicit Ready snapshot expands sections off-tick; no live chunk producer exists yet. Root freezes packet55's ten-bit persistent128-cell pages, opaque immutable capture identity, exact latest fixed slots and sole OS-store materialization before live acquisition/unload can select durable work. Root distinguishes measured old capture recipe from a production bug, and retains codec semantic equality after normalization. One serial provider/consumer node lands before later independent consumers; no unaccepted parallel boundary. Architecture skill: no change.
+
+## Exclusive resident ownership accepted, 2026-10-01
+
+- Exact90552dd9 passed independent six-path review, actual ownership/finalization witnesses and936 integrated server cases with rebuilt Rust/actual Python/previous Go and27 adopted children reaped. All-target clippy/fmt/diff pass. Packet52 records scope compatibility correction and ownership-recovery limits. Only3.7r0 closes; packet53 names this exact accepted predecessor before serial dispatch. Strict OpenSpec128/128 passed the preceding planning baseline; final plan validation will repeat after next accepted node. Architecture skill: no change.
