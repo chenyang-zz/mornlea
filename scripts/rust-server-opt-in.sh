@@ -15,6 +15,8 @@ set -uo pipefail
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
+RESTORE_HELPER="$(dirname "$SCRIPT_PATH")/rust-server-restore.py"
+
 # Frozen baseline identities from the version matrix. Manifest claims must
 # equal these before any rollback starts the previous runtime.
 BASE_PROTOCOL=45
@@ -1218,115 +1220,15 @@ start_previous_owner() {
     echo "OK previous pid=$pid listen=$listen seed=$seed"
 }
 
-# Installs the verified backup over the world with the resumable two-rename
-# protocol: stage beside the world, retire the current directory, install
-# the staged copy, then verify the installed bytes. Every step fsyncs its
-# parent so a crash resumes from the recorded stage instead of guessing.
+# The offline helper retains the original native lease through copy, atomic
+# exchange, retirement and checkpoint publication; Bash owns later processes.
 restore_backup_world() {
     local manifest="$1"
     local world="$2"
     local backup="$3"
     local nonce="$4"
-    local staged="$world.restore.$nonce"
-    local retired="$world.retired.$nonce"
-    local backup_tree
-    backup_tree="$(manifest_get "$manifest" "backup_tree_sha256")"
-    backup_verify "$backup" "$backup_tree"
-    local stage
-    stage="$(manifest_get "$manifest" "restore_stage")"
-    case "$stage" in
-        "")
-            rm -rf "$staged" "$retired"
-            backup_copy "$backup" "$staged" "$backup_tree" || fail "restore_failed" "staging copy refused"
-            [ "$(tree_hash "$staged" "$BACKUP_SKIP")" = "$backup_tree" ] || fail "restore_failed" "staged copy diverges"
-            manifest_set_field "$manifest" "restore_stage" '"staged"'
-            ;;
-        staged)
-            [ -d "$staged" ] || fail "restore_failed" "staged copy vanished"
-            [ "$(tree_hash "$staged" "$BACKUP_SKIP")" = "$backup_tree" ] || fail "restore_failed" "staged copy diverges"
-            if [ -e "$retired" ]; then
-                if [ -e "$world" ]; then
-                    fail "restore_failed" "retired and current worlds collide"
-                fi
-                manifest_set_field "$manifest" "restore_stage" '"old_retired"'
-            fi
-            ;;
-        old_retired)
-            if [ ! -d "$staged" ]; then
-                [ -d "$retired" ] || fail "restore_failed" "retired world vanished"
-                if [ ! -e "$world" ]; then
-                    mv "$retired" "$world" || fail "restore_failed" "retired world does not reinstall"
-                    py "$(canon "$(dirname "$world")")" <<'EOF' || fail "restore_failed" "parent does not sync"
-import os, sys
-fd = os.open(sys.argv[1], os.O_RDONLY)
-try:
-    os.fsync(fd)
-finally:
-    os.close(fd)
-EOF
-                fi
-                [ -e "$world" ] || fail "restore_failed" "world path never returned"
-                rm -rf "$staged"
-                backup_copy "$backup" "$staged" "$backup_tree" || fail "restore_failed" "staging copy refused"
-                [ "$(tree_hash "$staged" "$BACKUP_SKIP")" = "$backup_tree" ] || fail "restore_failed" "staged copy diverges"
-                manifest_set_field "$manifest" "restore_stage" '"staged"'
-            fi
-            ;;
-        backup_installed)
-            ;;
-        *) fail "invalid_manifest" "manifest names an unknown restore stage" ;;
-    esac
-    stage="$(manifest_get "$manifest" "restore_stage")"
-    if [ "$stage" = "staged" ] || [ "$stage" = "old_retired" ]; then
-        rm -f "$staged/$BACKUP_IDENTITY_BASENAME"
-        py "$staged" <<'EOF' || fail "restore_failed" "staged directory does not sync"
-import os, sys
-fd = os.open(sys.argv[1], os.O_RDONLY)
-try:
-    os.fsync(fd)
-finally:
-    os.close(fd)
-EOF
-    fi
-    if [ "$stage" = "staged" ]; then
-        [ -e "$world" ] || fail "restore_failed" "current world vanished before retire"
-        mv "$world" "$retired" || fail "restore_failed" "current world does not retire"
-        py "$(canon "$(dirname "$world")")" <<'EOF' || fail "restore_failed" "parent does not sync"
-import os, sys
-fd = os.open(sys.argv[1], os.O_RDONLY)
-try:
-    os.fsync(fd)
-finally:
-    os.close(fd)
-EOF
-        manifest_set_field "$manifest" "restore_stage" '"old_retired"'
-    fi
-    stage="$(manifest_get "$manifest" "restore_stage")"
-    if [ "$stage" = "old_retired" ]; then
-        [ -d "$staged" ] || fail "restore_failed" "staged copy vanished"
-        [ -e "$world" ] && fail "restore_failed" "world path returned before install"
-        mv "$staged" "$world" || fail "restore_failed" "staged copy does not install"
-        py "$(canon "$(dirname "$world")")" <<'EOF' || fail "restore_failed" "parent does not sync"
-import os, sys
-fd = os.open(sys.argv[1], os.O_RDONLY)
-try:
-    os.fsync(fd)
-finally:
-    os.close(fd)
-EOF
-        manifest_set_field "$manifest" "restore_stage" '"backup_installed"'
-    fi
-    [ "$(tree_hash "$world" "$LOCK_BASENAME")" = "$backup_tree" ] || fail "restore_failed" "installed world diverges from the backup"
-    local new_lease
-    new_lease="$(py "$world" <<'EOF'
-import os, sys
-info = os.stat(os.path.join(sys.argv[1], "world.lock"))
-print("world.lock:%d:%d" % (info.st_dev, info.st_ino))
-EOF
-)" || fail "restore_failed" "installed lock is unreadable"
-    manifest_set_field "$manifest" "lease_identity" "\"$new_lease\""
-    manifest_set_field "$manifest" "world_tree_sha256" "\"$backup_tree\""
-    RESTORE_RETIRED="$retired"
+    python3 "$RESTORE_HELPER" "$manifest" "$world" "$backup" "$nonce" || exit 1
+    RESTORE_RETIRED="$world.retired.$nonce"
 }
 
 cmd_rollback() {

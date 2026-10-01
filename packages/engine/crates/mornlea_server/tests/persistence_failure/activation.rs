@@ -31,6 +31,9 @@ mod prepare_previous;
 #[path = "activation_verifier.rs"]
 mod activation_verifier;
 
+#[path = "activation_restore_lease.rs"]
+mod activation_restore_lease;
+
 fn previous_package() -> PathBuf {
     let path = std::env::var("MORNLEA_PREVIOUS_PACKAGE")
         .expect("explicit MORNLEA_PREVIOUS_PACKAGE names the sealed previous package");
@@ -439,8 +442,14 @@ fn run_script_functions(scope: &Scope, action: &str, args: &[&str]) -> (i32, Str
         .rsplit_once("\ncase \"${1:-}\" in\n")
         .expect("production script has its final CLI dispatch");
     let script = scope.path("script-functions.sh");
-    fs::write(&script, format!("{definitions}\n{action}\n"))
-        .expect("write exact script definitions fixture");
+    fs::write(
+        &script,
+        format!(
+            "{definitions}\nRESTORE_HELPER=\"{}\"\n{action}\n",
+            repo_root().join("scripts/rust-server-restore.py").display()
+        ),
+    )
+    .expect("write exact script definitions fixture");
     let output = Command::new("bash")
         .arg(script)
         .args(args)
