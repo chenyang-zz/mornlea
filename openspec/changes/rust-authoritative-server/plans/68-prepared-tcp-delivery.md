@@ -4,6 +4,8 @@
 
 **Architecture:** TcpTransport remains the sole nonblocking socket/send-queue owner. Its existing Core and legacy Outbox lanes stay unchanged; one new Prepared lane owns PreparedFrame. The accepted authority outbox and borrowed LiveEndpoint keep their existing ownership. No codec, authority clone, thread, second socket queue or new compound trait is introduced. Node3.7p2t follows root acceptance of packet67 and the exact packet66 contract SHA; root must record both identities before dispatch. Actual source publisher, background encoding, executable integration and terminal authority history remain successors.
 
+Accepted prerequisites: packet66 contract22d6351dd3fd1f72b9611d48d2e1e6bcebc7d4cd integratede2e1a66a; packet67 real provider330386b16a4f2bbee2a06fee32953f31c6ec3f3f integratede1c2e35d15cd42a322c896f9a24e572fc1501e45. Both independent exact-SHA reviews are clean. Root release rebuild and1120 full actual server cases/clippy/fmt pass at the latter source, including actual background-store/Memory consumer and all48activation cases. Dispatch from the documentation acceptance commit that records this evidence; consume these exact accepted APIs and existing error/budget semantics.
+
 Exactly FOUR editable crate paths: src/transport/tcp.rs (production method and private queue tests); AGENTS.md; tests/local_remote_parity.rs (one registration); new tests/local_remote_parity/prepared_delivery.rs. common.rs/live.rs/memory.rs/state.rs/publication.rs, packet66/67 tests, store/domain/protocol/world/rules/executable/Go/OpenSpec/versioned artifacts are read-only. Guide ownership is serial after packet67. No new architectural directory; registered topic follows existing real-adapter test organization.
 
 ## Frozen method and queue representation
