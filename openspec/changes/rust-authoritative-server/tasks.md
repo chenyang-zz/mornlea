@@ -92,8 +92,8 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7g0 Generate production seed-compatible compact chunks ([packet](plans/48-production-worldgen.md)).
 - [ ] 3.7g1 Prepare generated chunks on bounded background owners ([packet](plans/51-background-generation-owner.md)).
 - [x] 3.7l0c Land checked prepared chunk and load-port contracts ([packet](plans/49-background-load-ports.md)).
-- [ ] 3.7l0 Load players and prepared chunks on the sole store owner ([packet](plans/49-background-load-ports.md)).
-- [ ] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
+- [x] 3.7l0 Load players and prepared chunks on the sole store owner ([packet](plans/49-background-load-ports.md)).
+- [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
 - [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)).
 
 ## Review repairs

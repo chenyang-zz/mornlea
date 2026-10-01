@@ -59,3 +59,11 @@ Root added tests before the declarations; the initial missing-import compiler re
 Architecture skill: no change. The checked off-tick base and distinct source durability facts implement the existing ownership rule.
 
 Accepted compile-ready contract SHA: `1fc408e10ee1d7342ae8ea6d5a063dc3edb5386f`. Provider and both later runtime consumers name this exact identity. Before provider dispatch root clarified that first close freezes new load admission across timeout, while retained records still drain; this is provider lifecycle policy and changes no accepted signature.
+
+## Provider acceptance, 2026-10-01
+
+Accepted implementation `34e10e83` (isolated original `458c9f2f`) and test correction `17e7e459` (original `d48667ff`). Fifteen load cases passed, including the delegated actual DiskStore read gate, exact player/chunk reads, lease reacquisition after joined close, and corrupted dual-bank recovery with logical revision9, persisted7, both recovery flags and unchanged files. The causal RED used held synchronous disk load; production background dispatch/poll returned while that same real operation was held. Queued, dispatched, unconsumed and cancelled work stays charged within the frozen caps; only typed load NotFound becomes absence.
+
+Independent review found no production issue. Its test scheduling finding was accepted after root verified the source: started-work deadline now shares the five-second gate bound, and tests establish entry before waiting for actual expiry. Gate release precedes assertions/join; arbitrary short scheduling latency no longer decides success. Re-review of both exact commits found no remaining findings.
+
+Fresh root integration on `17e7e459` passed all909 server cases:48 library,1 binary,5 actual Agent,28 parity,144 persistence,245 contracts and438 replay. The external owned supervisor reaped27 adopted children. All-target server clippy with warnings denied, workspace fmt and diff checks passed. Evidence: `/workspace/scratch/load-metadata-integrated-server.log`, `/workspace/scratch/load-metadata-integrated-clippy.log`, `/workspace/scratch/background-loads-red.log`, `/workspace/scratch/background-loads-review-fix-green.log`. This accepts the actual load provider only; live login/acquisition remains open. Architecture skill: no change.
