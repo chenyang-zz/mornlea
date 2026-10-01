@@ -617,3 +617,22 @@ must preserve this book's ownership and typed load errors. Private bounds and
 tick clone/materialization counters live with the owning modules; actual disk
 and native-generation consumer cases are registered in the persistence failure
 live-acquisition topic.
+
+`core/chunk_driver.rs` borrows the sole scheduler/load owner and independent
+native generation owner. It reserves authority before starting each port and
+retains accepted starts before binding, with eight current records per source
+and at most sixteen polls per pass in source/key order. A current key fences
+both source maps before another start. A duplicate or impossible
+binding quarantines the original request without cancellation or polling an
+ambiguous alias. Failed offers retain the whole original event; successful
+transfers keep authority's staged lane charged until Acquire. Typed source
+failures become authority Failed facts at that phase, never automatic generation.
+
+The driver selects no subscription, priority, retry or backpressure policy.
+`stop_new` leaves bound polling available for a final Closing batch. Its borrower
+still drives the existing scheduler owner and owns stop/cancel/wait/close;
+dropping the driver proves no cancellation, quiescence or native join. The
+persistence failure chunk-driver topic executes actual background DiskStore and
+GenerationPool start/poll/tick recipes without manual successful offers. Held
+load tests gate entry to the actual DiskStore read, not a native read syscall,
+and release gates and explicitly close/join owners before reporting assertions.

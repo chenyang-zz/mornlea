@@ -1,6 +1,7 @@
 //! Private authority state and the checked contracts rule modules consume.
 
 pub mod acquisition;
+pub mod chunk_driver;
 pub mod companion_ingress;
 mod container_store;
 pub mod contracts;

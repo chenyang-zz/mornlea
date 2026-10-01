@@ -29,3 +29,6 @@ mod chunk_view;
 
 #[path = "persistence_failure/live_acquisition.rs"]
 mod live_acquisition;
+
+#[path = "persistence_failure/chunk_driver.rs"]
+mod chunk_driver;
