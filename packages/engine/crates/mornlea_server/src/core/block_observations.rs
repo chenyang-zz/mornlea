@@ -68,8 +68,6 @@ impl ChunkBlockObservations {
         self.chunks.into_values().flat_map(BTreeMap::into_values)
     }
 
-    /// Transfers existing tree nodes without visiting cells. The receiving
-    /// retirement policy owns their eventual destruction.
     /// Refusal returns the original whole tree; exclusive ownership prevents overlap.
     pub(crate) fn restore_chunk(&mut self, key: ChunkKey, owner: InnerMap) {
         debug_assert!(!self.chunks.contains_key(&key));
@@ -80,6 +78,8 @@ impl ChunkBlockObservations {
         self.chunks.insert(key, owner);
     }
 
+    /// Transfers existing tree nodes without visiting cells. The receiving
+    /// retirement policy owns their eventual destruction.
     pub(crate) fn take_chunk(&mut self, key: ChunkKey) -> Option<InnerMap> {
         let owner = self.chunks.remove(&key)?;
         self.len -= owner.len();
