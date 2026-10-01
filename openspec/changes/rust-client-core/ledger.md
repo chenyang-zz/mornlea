@@ -281,3 +281,6 @@ Controller owns the serial prerequisite metadata update. Rollback invalidates th
 - Ruling (ledger deferral confirmed): the worker's report-only evidence this round follows the controller's dispatch instruction; the durable ledger summary lands at node close here.
 - Three minors deferred (per-observation packet clone churn across six providers; stale-epoch double uses newer not older epoch; multi-id despawn ordinals implemented but untested — disclosed).
 - Dispatch-process correction for remaining providers: briefs now state explicitly that the red must come from a COMPILING wrong double (e.g., a `Ok(Vec::new())` body) against the written tests, never from a stub compile failure.
+
+- Task 2.6c fix round 1/5 (1 addressed, 0 open — report-only round: scratch behavioral red reproduced with a compiling wrong double, six per-assertion failures verified against the byte-identical committed test file, control pairing isolating the provider body; commits `9c408c4c` unchanged).
+- Task 2.6c: complete (commits `3a9b7983`..`9c408c4c`; review clean after 1 report-only fix round). Three minors deferred (packet-clone churn; newer-not-older stale-epoch double; multi-id despawn ordinals untested).
