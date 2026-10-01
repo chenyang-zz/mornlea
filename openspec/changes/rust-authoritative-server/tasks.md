@@ -87,7 +87,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7a Implement tick hydration for live adapter flows ([packet](plans/28-tick-hydration.md)).
 - [ ] 3.7 Prove real local/remote, save/restart and Agent integration against the full inventory ([packet](plans/01-server-slices.md)).
 - [x] 3.7p0 Retain canonical packet identity through owned Memory/TCP publication ([packet](plans/44-owned-wire-publication.md)).
-- [ ] 3.7s0 Run durable store work on a bounded background owner ([packet](plans/46-background-store-owner.md)).
+- [x] 3.7s0 Run durable store work on a bounded background owner ([packet](plans/46-background-store-owner.md)).
 - [x] 3.7p1 Publish final authoritative player state each tick ([packet](plans/47-final-player-publication.md)).
 - [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)).
 
