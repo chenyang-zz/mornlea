@@ -66,7 +66,17 @@ consume its cancellation and error contracts before joining the real backend.
   captures share immutable roots.
   `ChunkSaveView` equality is capture identity, and `capture_chunk_snapshot`
   copies only fixed slots and shares the base/root; it performs no scheduling.
-  Expansion is explicitly off-tick on the store owner. Counter-only slots may
+  Disk `materialize` expansion runs off tick on the store owner and retains
+  Direct15 sections covered by pages and fixed physical slots. Off-tick
+  `ChunkSaveView::network_snapshot` returns checked domain sections with exact
+  unchanged loaded storage; genuinely changed sections compact in first-appearance
+  YZX order. Its byte charge counts section payloads only (air is 48 bytes),
+  separately from the persistence estimate (air is 4096 bytes). Captures add only
+  a fixed section-change union and validity bit, sharing the same immutable
+  base/pages without frequency owners or a decoded body. Invalid private edits
+  and zero capture identities refuse before expansion. `network_view_tests`
+  pins these bounds, capture independence, logical codec roundtrips and actual
+  unchanged Go `BuildChunkSnapshot` parity. Counter-only slots may
   produce distinct captures under the same revision, so revision-only caching
   is forbidden. Drop slot mutations share that one
   durable increment; counter-only age/delay changes preserve the source dirty
