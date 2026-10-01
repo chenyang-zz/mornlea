@@ -7,6 +7,7 @@ pub mod chunk_encoding;
 pub mod companion_ingress;
 mod container_store;
 pub mod contracts;
+mod deferred_commands;
 mod drop_store;
 pub mod encoding_worker;
 pub mod generation;

@@ -336,6 +336,140 @@ fn live_player_state_retains_last_input_sequence_after_invalid_controls() {
     assert_eq!(private_player_state(&publication).last_input_sequence(), 7);
 }
 
+/// Full admitted batches must reach the final environment phase and the next tick.
+#[test]
+fn actual_full_open_batch_reaches_environment_end() {
+    let mut clocks = Vec::new();
+    for count in [2_049, 4_096] {
+        let mut authority = authority();
+        let session = authority
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        for sequence in 1..=count {
+            authority
+                .submit(
+                    session,
+                    mornlea_protocol::PlayIntent::Sequenced {
+                        sequence,
+                        command: mornlea_domain::Command::OpenContainer(
+                            LookAngles::try_new(0.0, 0.0).unwrap(),
+                        ),
+                    },
+                )
+                .unwrap();
+        }
+        let publication = authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(publication.counters.commands, count as usize);
+        assert_eq!(authority.next_tick(), 1);
+        assert_eq!(
+            authority.session(session).unwrap().last_applied_sequence,
+            count
+        );
+        let first = authority.residents().environment.unwrap();
+        authority
+            .submit(
+                session,
+                mornlea_protocol::PlayIntent::Sequenced {
+                    sequence: count + 1,
+                    command: mornlea_domain::Command::SelectHotbar(HotbarSlot::new(2).unwrap()),
+                },
+            )
+            .unwrap();
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(authority.next_tick(), 2);
+        assert_eq!(
+            authority.session(session).unwrap().last_applied_sequence,
+            count + 1
+        );
+        let second = authority.residents().environment.unwrap();
+        clocks.push((
+            count,
+            first.world_time,
+            first.next_tick,
+            second.world_time,
+            second.next_tick,
+        ));
+    }
+    assert_eq!(clocks, [(2_049, 1, 1, 2, 2), (4_096, 1, 1, 2, 2)]);
+}
+
+/// Invalid finite controls retain ordinary refusals without skipping final settlement.
+#[test]
+fn actual_full_invalid_control_batch_preserves_both_roles_and_clock() {
+    let mut authority = authority();
+    let login = admitted(1, "Ada");
+    let stored = customized_save(login.player_id()).0;
+    let session = login_session(&mut authority, login, stored);
+    let input = PlayerControl::new(PlayerControlParts {
+        movement: Movement {
+            move_x: 2,
+            move_z: 0,
+            jump: false,
+        },
+        look: LookAngles::try_new(0.0, 0.0).unwrap(),
+        actions: HeldActions {
+            primary: false,
+            eating: false,
+            sprinting: false,
+            sneaking: false,
+        },
+    });
+    for sequence in 1..=4_096 {
+        authority
+            .submit(
+                session,
+                mornlea_protocol::PlayIntent::Sequenced {
+                    sequence,
+                    command: mornlea_domain::Command::PlayerInput(input),
+                },
+            )
+            .unwrap();
+    }
+    let publication = authority.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(publication.counters.commands, 4_096);
+    assert_eq!(authority.next_tick(), 1);
+    assert_eq!(
+        authority.session(session).unwrap().last_applied_sequence,
+        4_096
+    );
+    let last_input_sequence = private_player_state(&publication).last_input_sequence();
+    assert!(
+        authority
+            .residents()
+            .actors
+            .iter()
+            .any(|actor| actor.key == ActorKey::Player(session)
+                && actor.lifecycle == ActorLifecycle::Active)
+    );
+    let first = authority.residents().environment.unwrap();
+    authority
+        .submit(
+            session,
+            mornlea_protocol::PlayIntent::Sequenced {
+                sequence: 4_097,
+                command: mornlea_domain::Command::SelectHotbar(HotbarSlot::new(2).unwrap()),
+            },
+        )
+        .unwrap();
+    authority.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(authority.next_tick(), 2);
+    assert_eq!(
+        authority.session(session).unwrap().last_applied_sequence,
+        4_097
+    );
+    let second = authority.residents().environment.unwrap();
+    assert_eq!(
+        (
+            first.world_time,
+            first.next_tick,
+            second.world_time,
+            second.next_tick
+        ),
+        (1, 1, 2, 2)
+    );
+    assert_eq!(last_input_sequence, 4_096);
+}
+
 #[test]
 fn live_pending_player_observation_is_private_and_retirement_stops_it() {
     let mut authority = authority();

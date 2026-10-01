@@ -26,6 +26,7 @@ use super::acquisition::{
 use super::block_observations::ChunkBlockObservations;
 use super::container_store::ContainerState;
 use super::contracts::*;
+use super::deferred_commands::DeferredCommands;
 use super::drop_store::{self, DropState};
 use super::login_seed::{SeededPlayer, seed_player};
 use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
@@ -2311,7 +2312,7 @@ pub struct TickContext<'a> {
     events: Vec<RoutedEvent>,
     projectiles: Vec<ProjectileRecord>,
     damage_intents: Vec<DamageIntent>,
-    deferred: Vec<(RulePhase, CommandEnvelope)>,
+    deferred: DeferredCommands,
     charges: Vec<(ActorKey, ActionKind)>,
     suppressed_mining: BTreeSet<ActorKey>,
     /// Pre-motion actor poses, snapshotted once at construction from the
@@ -2804,7 +2805,7 @@ impl<'a> TickContext<'a> {
             events: Vec::new(),
             projectiles: Vec::new(),
             damage_intents: Vec::new(),
-            deferred: Vec::new(),
+            deferred: DeferredCommands::default(),
             charges: Vec::new(),
             suppressed_mining: BTreeSet::new(),
             pre_step: BTreeMap::new(),
@@ -3357,23 +3358,11 @@ impl<'a> TickContext<'a> {
     }
 
     pub fn defer(&mut self, command: CommandEnvelope, phase: RulePhase) -> Result<(), ServerError> {
-        if self.deferred.len() >= EFFECT_BUDGET {
-            return Err(ServerError::Capacity {
-                resource: Resource::Commands,
-                limit: EFFECT_BUDGET,
-                observed: self.deferred.len() + 1,
-            });
-        }
-        self.deferred.push((phase, command));
-        Ok(())
+        self.deferred.defer(command, phase)
     }
 
     pub fn deferred(&self, phase: RulePhase) -> Vec<CommandEnvelope> {
-        self.deferred
-            .iter()
-            .filter(|(listed, _)| *listed == phase)
-            .map(|(_, command)| *command)
-            .collect()
+        self.deferred.for_phase(phase)
     }
 
     /// Preflight receipt capacity before a transaction under the same exclusive context.

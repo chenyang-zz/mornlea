@@ -31,6 +31,13 @@ consume its cancellation and error contracts before joining the real backend.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
+- `src/core/deferred_commands.rs` retains at most 4096 immutable command
+  envelopes per tick under their full tick/session/sequence/arrival identity.
+  Each provider phase has a separate ordered list of at most 4096 ordinal
+  references, preserving repeated same-phase delivery and shared roles without
+  extra payload ownership. Conflicting same-key payloads refuse before mutation;
+  reads are nonconsuming and all ownership ends with `TickContext`.
+
 - `AuthorityState::try_new_with_metadata` validates startup save metadata before
   any provider starts. `try_metadata_snapshot` captures only resident world
   time, day display offset and weather; startup seed, anchors, salt and
