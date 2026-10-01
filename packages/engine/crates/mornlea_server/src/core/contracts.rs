@@ -2126,6 +2126,11 @@ pub trait SaveAuthority {
     fn apply_completion(&mut self, completion: SaveCompletion) -> AckReport;
     fn save_stats(&self) -> SaveStats;
     fn metadata_snapshot(&self) -> OwnedSnapshot;
+    /// Captures the current fixed metadata target. Stable doubles may reuse
+    /// their cached snapshot; live producers override this checked boundary.
+    fn try_metadata_snapshot(&mut self) -> Result<OwnedSnapshot, ServerError> {
+        Ok(self.metadata_snapshot())
+    }
 }
 
 pub trait StoreHandle {

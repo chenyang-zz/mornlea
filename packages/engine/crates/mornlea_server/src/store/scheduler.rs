@@ -137,7 +137,7 @@ struct PendingRetry {
 
 /// Fixed metadata schedule: the committed sequence, the pending flag, at most
 /// one in-flight submission, and the failure count with its next retry tick.
-/// The target always comes from [`SaveAuthority::metadata_snapshot`], never
+/// The target always comes from [`SaveAuthority::try_metadata_snapshot`], never
 /// from a wall clock.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct MetadataSchedule {
@@ -555,7 +555,11 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
     /// Runs the fixed metadata schedule: cadence or backoff marks the target
     /// pending, and at most one submission stays in flight with the latest
     /// frozen value. A refused dispatch keeps the pending target untouched.
-    fn schedule_metadata(&mut self, tick: u64, authority: &mut dyn SaveAuthority) {
+    fn schedule_metadata(
+        &mut self,
+        tick: u64,
+        authority: &mut dyn SaveAuthority,
+    ) -> Result<(), ServerError> {
         if tick.is_multiple_of(self.config.autosave_interval) {
             self.metadata.pending = true;
         }
@@ -563,12 +567,16 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
             self.metadata.pending = true;
         }
         if !self.metadata.pending || self.metadata.in_flight {
-            return;
+            return Ok(());
         }
-        let snapshot = authority.metadata_snapshot();
+        // Capture refusal retains the pending target without consuming a
+        // submission or advancing the backend retry attempt.
+        let snapshot = authority.try_metadata_snapshot().inspect_err(|error| {
+            self.last_error = Some(*error);
+        })?;
         if snapshot.revision <= self.metadata.committed {
             self.metadata.pending = false;
-            return;
+            return Ok(());
         }
         let sequence = snapshot.revision;
         match self.store.submit(SaveRequest {
@@ -587,6 +595,7 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
                 // returns dirty; the pending target retries next tick.
             }
         }
+        Ok(())
     }
 }
 
@@ -625,7 +634,7 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
                 self.autosave_active = false;
             }
         }
-        self.schedule_metadata(tick, authority);
+        self.schedule_metadata(tick, authority)?;
         // Hand queued jobs to idle slots without waiting for the background owner.
         self.store.poll_tick(tick, budget, authority)?;
         let stats = authority.save_stats();
@@ -713,7 +722,10 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
             }
         }
         // The final metadata barrier runs after chunk work drains.
-        let snapshot = authority.metadata_snapshot();
+        let snapshot = authority.try_metadata_snapshot().inspect_err(|error| {
+            self.metadata.pending = true;
+            self.last_error = Some(*error);
+        })?;
         if snapshot.revision > self.metadata.committed {
             self.store.check_flush_deadline(deadline, clock)?;
             let sequence = snapshot.revision;

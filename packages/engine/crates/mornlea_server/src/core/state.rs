@@ -175,7 +175,7 @@ impl AuthorityState {
             weather_kind: 0,
             weather_ticks_remaining: 0,
             depths_spawn_anchor: mornlea_storage::MetadataChunkPos { x: 0, z: 0 },
-            depths_seed_salt: 0,
+            depths_seed_salt: 0x9e3779b97f4a7c15,
             difficulty: 0,
         };
         mornlea_storage::world_metadata_encoded_len(&metadata)
@@ -217,6 +217,19 @@ impl AuthorityState {
             farmland_schedule: FarmlandSchedule::new(),
             residents: ResidentTickState::default(),
         })
+    }
+
+    /// Restores a checked fixed record before any tick or provider starts.
+    /// Raw codec fields retain their source fidelity until live climate capture.
+    pub fn try_new_with_metadata(
+        limits: ServerLimits,
+        metadata: Metadata,
+    ) -> Result<Self, ServerError> {
+        mornlea_storage::world_metadata_encoded_len(&metadata)
+            .map_err(|_| ServerError::InvalidInput { field: "metadata" })?;
+        let mut authority = Self::try_new(limits, metadata.seed)?;
+        authority.metadata = metadata;
+        Ok(authority)
     }
 
     /// Replaces committed leases with the tick's complete net viewer set.
@@ -993,6 +1006,40 @@ impl AuthorityState {
         }
     }
 
+    /// Captures only committed climate fields; anchors, salt and difficulty
+    /// remain the startup configuration. Distinct targets advance one checked
+    /// process-local sequence, and refusal leaves the last captured target intact.
+    pub fn try_metadata_snapshot(&mut self) -> Result<OwnedSnapshot, ServerError> {
+        let mut target = self.metadata.clone();
+        if let Some(environment) = &self.residents.environment {
+            target.world_time_ticks = environment.world_time;
+            target.day_phase_offset = u64::from(environment.day_phase_offset);
+            target.weather_kind = environment.weather.wire_id();
+            target.weather_ticks_remaining = environment.weather_remaining;
+        }
+        let estimated_bytes = mornlea_storage::world_metadata_encoded_len(&target)
+            .map_err(|_| ServerError::InvalidInput { field: "metadata" })?;
+        if target != self.metadata {
+            let sequence = self
+                .metadata_sequence
+                .checked_add(1)
+                .ok_or(ServerError::Internal {
+                    invariant: "metadata sequence space",
+                })?;
+            self.metadata = target;
+            self.metadata_sequence = sequence;
+        }
+        Ok(OwnedSnapshot {
+            key: SaveKey::Metadata,
+            revision: self.metadata_sequence,
+            estimated_bytes,
+            urgency: SaveUrgency::Autosave,
+            value: SaveValue::Metadata(self.metadata.clone()),
+        })
+    }
+
+    /// Returns the last captured target. Live persistence producers use
+    /// `try_metadata_snapshot` so current climate and capture failures reach storage.
     pub fn metadata_snapshot(&self) -> OwnedSnapshot {
         let estimated_bytes =
             mornlea_storage::world_metadata_encoded_len(&self.metadata).unwrap_or(0);
@@ -1428,6 +1475,9 @@ impl SaveAuthority for AuthorityState {
     }
     fn metadata_snapshot(&self) -> OwnedSnapshot {
         AuthorityState::metadata_snapshot(self)
+    }
+    fn try_metadata_snapshot(&mut self) -> Result<OwnedSnapshot, ServerError> {
+        AuthorityState::try_metadata_snapshot(self)
     }
 }
 
@@ -3233,6 +3283,32 @@ fn apply_projectile(
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod metadata_capture_tests {
+    use super::*;
+
+    #[test]
+    fn exhausted_metadata_sequence_preserves_last_captured_target() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap();
+        authority.metadata_sequence = u64::MAX;
+        let before = authority.metadata_snapshot();
+        assert_eq!(authority.try_metadata_snapshot().unwrap(), before);
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(
+            authority.try_metadata_snapshot(),
+            Err(ServerError::Internal {
+                invariant: "metadata sequence space",
+            })
+        );
+        assert_eq!(authority.metadata_snapshot(), before);
+        assert_eq!(authority.metadata_sequence, u64::MAX);
     }
 }
 

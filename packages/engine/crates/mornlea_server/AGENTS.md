@@ -22,6 +22,14 @@ consume its cancellation and error contracts before joining the real backend.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
+- `AuthorityState::try_new_with_metadata` validates startup save metadata before
+  any provider starts. `try_metadata_snapshot` captures only resident world
+  time, day display offset and weather; startup seed, anchors, salt and
+  difficulty remain fixed. Distinct targets advance a checked process-local
+  sequence and snapshots own immutable bodies. The scheduler uses the fallible
+  `SaveAuthority` capture for cadence and final flush, retaining pending work
+  on refusal. Legacy `metadata_snapshot` reads only the last captured target.
+
 - `src/core/generation.rs` owns off-tick seed-compatible terrain preparation.
   One `ChunkGenerator` retains independent Overworld/Depths checked parameters,
   native scratch and a fixed dense destination, then returns an owned compact

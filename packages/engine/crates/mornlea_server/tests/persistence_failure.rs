@@ -6,6 +6,8 @@ mod atomic_file;
 mod integration;
 #[path = "persistence_failure/mailbox.rs"]
 mod mailbox;
+#[path = "persistence_failure/metadata_live.rs"]
+mod metadata_live;
 #[path = "persistence_failure/recovery.rs"]
 mod recovery;
 #[path = "persistence_failure/region_io.rs"]
