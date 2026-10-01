@@ -1822,3 +1822,7 @@ Placement target collision accepted after cumulative death node against support2
 ## Exclusive resident ownership accepted, 2026-10-01
 
 - Exact90552dd9 passed independent six-path review, actual ownership/finalization witnesses and936 integrated server cases with rebuilt Rust/actual Python/previous Go and27 adopted children reaped. All-target clippy/fmt/diff pass. Packet52 records scope compatibility correction and ownership-recovery limits. Only3.7r0 closes; packet53 names this exact accepted predecessor before serial dispatch. Strict OpenSpec128/128 passed the preceding planning baseline; final plan validation will repeat after next accepted node. Architecture skill: no change.
+
+## Actual transport login ownership qualified, 2026-10-01
+
+- Repository producer enumeration confirms TransportAuthority has only test implementations. Actual common/Memory/TCP call only submit/close, publication and login methods; requiring complete ServerEndpoint forced tests to invent shutdown methods. Root freezes packet56's narrow session supertrait with compatible old-endpoint blanket delegation, accepts its compile-ready/double gate before dispatching one borrowed actual provider. Driver retains only16 pending aliases; accepted background mailbox stays solely owned by scheduler. Root chose exact error/cancel/activation policy and genuine DiskStore/Memory/TCP evidence. No provider double closes runtime. Architecture skill: no change.
