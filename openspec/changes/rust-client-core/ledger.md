@@ -259,3 +259,6 @@ Controller owns the serial prerequisite metadata update. Rollback invalidates th
 
 - Task 2.3b fix round 1/5 (1 addressed, 0 open — mirrored HashSet membership with rebuilt-survivors invariant verified on all four mutation paths, VecDeque+stable-sort proven order-preserving, precharge-gate note landed; commits `e7b0134a`..`dfc9141d`).
 - Task 2.3b: complete (commits `ee1cf977`..`dfc9141d`; review clean after 1 fix round). Out-of-scope pointer carried to node 2.5: the poll loop's `in_flight.iter().position` is O(in_flight) per drained result — magnitude depends on the real provider's bound; 2.5's integration must check the in-flight bound keeps this non-quadratic at ring scale.
+
+- Task 2.3 fix round 1/5 (1 addressed, 0 open — internal `#[cfg(test)]` overflow tests at both checked points with counter set directly, typed `Capacity`, no-mutation invariants verified; commits `bcd9d945`..`90900f44`).
+- Task 2.3: complete (commits `e7b0134a`..`90900f44`; review clean after 1 fix round; three earlier minors deferred to final review). The byte-charge obligation from the 1.1 freeze is discharged with identity-based accounting proven by discriminating tests.
