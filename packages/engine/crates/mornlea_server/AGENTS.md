@@ -32,6 +32,13 @@ consume its cancellation and error contracts before joining the real backend.
   selection behavior. Actual chunk acquisition and commit
   ownership belongs to the serial reducer.
 
+- `PreparedChunk` in `src/core/world.rs` carries a checked Ready base with
+  independent persisted revision, rewrite and recovery facts. Preparation runs
+  off the tick and installation moves that base. `ChunkLoadPort` and the existing
+  `PlayerLoadPort` describe bounded asynchronous ownership; contract doubles
+  qualify their values and calls, while the store provider and live consumers
+  require separate integration acceptance.
+
 - `src/core/drop_store.rs` owns the 32 persistent drop slots per chunk, including
   inactive generations, and their slot-ordered active view. Batches accept at
   most 36 inputs and rehearse merge/split/capacity on one fixed copy. Ordered

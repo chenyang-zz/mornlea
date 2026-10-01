@@ -16,6 +16,8 @@ mod companion_ingress;
 mod contract_double;
 #[path = "server_contract/inventory.rs"]
 mod inventory;
+#[path = "server_contract/load_ports.rs"]
+mod load_ports;
 #[path = "server_contract/mailbox.rs"]
 mod mailbox;
 #[path = "server_contract/mutation.rs"]

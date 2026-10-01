@@ -2958,6 +2958,30 @@ pub trait PlayerLoadPort {
     fn cancel(&mut self, ticket: LoginTicket) -> Result<(), ServerError>;
 }
 
+/// A chunk load transfers its checked compact base and source durability facts.
+/// Only a typed missing file is absence; failed decoding never means generation.
+// The eight-entry chunk lane transfers prepared records whole; their large
+// compact storage stays shared rather than adding a second payload allocation.
+#[allow(clippy::large_enum_variant)]
+pub enum ChunkLoadPoll {
+    Pending,
+    Loaded(Option<crate::core::world::PreparedChunk>),
+    Failed(ServerError),
+}
+
+/// Nonblocking load ownership; the same disk owner also executes player loads.
+/// Cancellation of started work retains its resources until its reply is drained.
+pub trait ChunkLoadPort {
+    fn start_chunk(
+        &mut self,
+        key: ChunkKey,
+        generation: u64,
+        deadline: Deadline,
+    ) -> Result<ChunkRequestId, ServerError>;
+    fn poll_chunk(&mut self, request: ChunkRequestId) -> ChunkLoadPoll;
+    fn cancel_chunk(&mut self, request: ChunkRequestId) -> Result<(), ServerError>;
+}
+
 pub trait SessionPort {
     fn allocate(
         &mut self,

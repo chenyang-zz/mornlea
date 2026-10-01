@@ -6,7 +6,73 @@ use std::sync::Arc;
 use mornlea_domain::{BlockPos, chunk_block_index};
 use mornlea_storage::{Chunk, ChunkSave, ContainerSnapshot, StorageKind};
 
-use super::contracts::{BlockObservation, ChunkKey, ServerError};
+use super::contracts::{BlockObservation, ChunkKey, RecoveredChunk, ServerError};
+
+/// A load's immutable compact base, prepared entirely away from the tick.
+/// Source revision, persisted revision and recovery flags remain distinct until
+/// the acquisition owner chooses installation, rewrite or unload.
+#[derive(Clone)]
+pub struct PreparedChunk {
+    ready: ReadyChunk,
+    persisted_revision: u64,
+    needs_rewrite: bool,
+    recovered: bool,
+}
+
+impl PreparedChunk {
+    pub fn try_new(
+        key: ChunkKey,
+        generation: u64,
+        loaded: RecoveredChunk,
+    ) -> Result<Self, ServerError> {
+        if generation == 0 {
+            return Err(ServerError::InvalidInput {
+                field: "chunk_generation",
+            });
+        }
+        if loaded.revision == 0 || loaded.persisted_revision > loaded.revision {
+            return Err(ServerError::InvalidInput {
+                field: "chunk_revision",
+            });
+        }
+        Ok(Self {
+            ready: ReadyChunk::try_new(key, generation, loaded.revision, loaded.chunk)?,
+            persisted_revision: loaded.persisted_revision,
+            needs_rewrite: loaded.needs_rewrite,
+            recovered: loaded.recovered,
+        })
+    }
+
+    pub fn key(&self) -> ChunkKey {
+        self.ready.key
+    }
+    pub fn generation(&self) -> u64 {
+        self.ready.generation
+    }
+    pub fn revision(&self) -> u64 {
+        self.ready.revision
+    }
+    pub fn persisted_revision(&self) -> u64 {
+        self.persisted_revision
+    }
+    pub fn needs_rewrite(&self) -> bool {
+        self.needs_rewrite
+    }
+    pub fn recovered(&self) -> bool {
+        self.recovered
+    }
+
+    /// Move the prepared base and facts into their authority owner without
+    /// expanding, decoding or copying a chunk body on the tick.
+    pub fn into_parts(self) -> (ReadyChunk, u64, bool, bool) {
+        (
+            self.ready,
+            self.persisted_revision,
+            self.needs_rewrite,
+            self.recovered,
+        )
+    }
+}
 
 /// Immutable compact storage with a derived, tick-local non-air height cache.
 /// Construction validates save associations and builds heights off the tick;
