@@ -899,7 +899,7 @@ fn prism_cells(
 /// and door uppers carry no box; beds, doors, and farmland carry their reduced
 /// boxes; everything else is a full cube. Local boxes; the kernel offsets by
 /// the cell position.
-fn collision_cell(block: u16) -> Result<CollisionCell, ServerError> {
+pub(crate) fn collision_cell(block: u16) -> Result<CollisionCell, ServerError> {
     if block == AIR
         || (FLUID_FIRST..=FLUID_LAST).contains(&block)
         || (WHEAT_FIRST..=WHEAT_LAST).contains(&block)

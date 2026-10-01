@@ -31,6 +31,16 @@ consume its cancellation and error contracts before joining the real backend.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
+- `src/core/actor_placement.rs` owns bounded borrowed restoration, support and
+  single-column spawn geometry. It reuses the motion collision mapping with
+  source float arithmetic, strict contact, whole-footprint Ready gating and
+  distinct complete/any support. Only its read-view adapter normalizes source
+  out-of-height air. Complete current Ready non-air heights may skip proved air
+  rows; readers without that certificate retain literal source row order.
+  Checked spans and enumeration cap reads and allocation. Private source doubles
+  and actual compact Ready/current-write fixtures qualify geometry alone;
+  lifecycle, subscriptions, full-radius scan cadence and runtime stay caller-owned.
+
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
   inventory/runtime overlays to produce checked existing storage values. Player
   current pose/survival, inventory/armor and hunger/respawn come from their
