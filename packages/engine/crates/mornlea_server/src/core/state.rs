@@ -134,6 +134,13 @@ impl ResidentTickState {
     }
 }
 
+/// Accepted residency transfers and the first refusal, retaining prefix progress.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ChunkRetirementReport {
+    pub retired: usize,
+    pub first_error: Option<ServerError>,
+}
+
 /// Private world, sessions, queues, tick, and publication owner.
 pub struct AuthorityState {
     limits: ServerLimits,
@@ -725,6 +732,83 @@ impl AuthorityState {
             Ok(())
         }
     }
+    /// Transfers clean unwanted bodies; admission is separate from CPU disposal.
+    pub fn retire_unwanted_chunks(
+        &mut self,
+        port: &mut dyn super::chunk_retirement::ChunkRetirementPort,
+        max_chunks: usize,
+    ) -> Result<ChunkRetirementReport, ServerError> {
+        use super::chunk_retirement::{MAX_CHUNK_RETIREMENTS, RetiredChunk};
+        self.require_live_chunks(false)?;
+        if !self.residents.dirty_chunks.is_empty() {
+            return Err(ServerError::Internal {
+                invariant: "uncommitted chunk retirement",
+            });
+        }
+        if !self.residents.containers.is_empty() {
+            return Err(ServerError::Internal {
+                invariant: "managed sparse containers",
+            });
+        }
+        let mut report = ChunkRetirementReport::default();
+        for _ in 0..max_chunks.min(MAX_CHUNK_RETIREMENTS) {
+            if port.occupied() >= MAX_CHUNK_RETIREMENTS {
+                break;
+            }
+            let Some((key, generation)) = self.acquisition.next_retirement() else {
+                break;
+            };
+            if !self
+                .residents
+                .ready
+                .get(&key)
+                .is_some_and(|r| r.key == key && r.generation == generation)
+                || !self.residents.drops.contains_key(&key)
+                || !self.residents.container_chunks.contains_key(&key)
+            {
+                report.first_error = Some(ServerError::Internal {
+                    invariant: "managed chunk ownership",
+                });
+                break;
+            }
+            // Keep scalar eligibility intact until admission accepts all owners.
+            let owner = RetiredChunk::new(
+                self.residents
+                    .ready
+                    .remove(&key)
+                    .expect("validated Ready owner"),
+                self.residents
+                    .drops
+                    .remove(&key)
+                    .expect("validated drop owner"),
+                self.residents
+                    .container_chunks
+                    .remove(&key)
+                    .expect("validated container owner"),
+                self.residents.blocks.take_chunk(key),
+            );
+            match port.submit(owner) {
+                Ok(()) => {
+                    self.acquisition.retired(key, generation);
+                    report.retired += 1;
+                }
+                Err(rejected) => {
+                    // The port returns the same complete body, including tree nodes.
+                    let (ready, drops, containers, observations) = rejected.owner.into_parts();
+                    self.residents.ready.insert(key, ready);
+                    self.residents.drops.insert(key, drops);
+                    self.residents.container_chunks.insert(key, containers);
+                    if let Some(owner) = observations {
+                        self.residents.blocks.restore_chunk(key, owner);
+                    }
+                    report.first_error = Some(rejected.error);
+                    break;
+                }
+            }
+        }
+        Ok(report)
+    }
+
     pub fn replace_chunk_wants(&mut self, wants: BTreeSet<ChunkKey>) -> Result<(), ServerError> {
         self.require_live_chunks(true)?;
         self.acquisition.replace_wants(wants)
@@ -6184,6 +6268,558 @@ mod drop_rehearsal_tests {
 
 #[cfg(test)]
 mod live_acquisition_tests {
+    fn retirement_authority(count: i32, rewrite: bool) -> AuthorityState {
+        retirement_authority_with_body(count, rewrite, chunk())
+    }
+    fn retirement_authority_with_body(
+        count: i32,
+        rewrite: bool,
+        template: Chunk,
+    ) -> AuthorityState {
+        let mut a = live();
+        a.replace_chunk_wants((0..count).map(save_key).collect())
+            .unwrap();
+        for x in 0..count {
+            let k = save_key(x);
+            let r = a.reserve_chunk_load(k).unwrap();
+            let id = request(x as u64 + 1);
+            a.bind_chunk_load(r, id).unwrap();
+            let mut body = template.clone();
+            body.drops[31].generation = 17;
+            body.furnaces[31].generation = 20;
+            body.chests[15].generation = 21;
+            let prepared = PreparedChunk::try_new(
+                k,
+                r.generation(),
+                RecoveredChunk {
+                    chunk: body,
+                    revision: 5,
+                    persisted_revision: 5,
+                    needs_rewrite: rewrite,
+                    recovered: false,
+                },
+            )
+            .unwrap();
+            a.offer_acquired(AcquiredChunkEvent::Load {
+                key: k,
+                generation: r.generation(),
+                request: id,
+                result: Ok(Some(prepared)),
+            })
+            .unwrap();
+            if x % 8 == 7 || x == count - 1 {
+                let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+                ctx.apply_live_acquisition();
+                ctx.commit_carried();
+            }
+        }
+        a
+    }
+    // These prepared-event and scripted-port cases qualify authority ownership,
+    // independently of the actual disk and CPU integration topic.
+    struct RetirementDouble {
+        held: Vec<super::super::chunk_retirement::RetiredChunk>,
+        refusal_at: Option<usize>,
+        occupied: usize,
+        calls: usize,
+    }
+    impl RetirementDouble {
+        fn accepting() -> Self {
+            Self {
+                held: vec![],
+                refusal_at: None,
+                occupied: 0,
+                calls: 0,
+            }
+        }
+    }
+    impl super::super::chunk_retirement::ChunkRetirementPort for RetirementDouble {
+        fn submit(
+            &mut self,
+            owner: super::super::chunk_retirement::RetiredChunk,
+        ) -> Result<(), super::super::chunk_retirement::RejectedRetiredChunk> {
+            self.calls += 1;
+            if self.refusal_at == Some(self.calls) {
+                return Err(super::super::chunk_retirement::RejectedRetiredChunk {
+                    error: ServerError::Disconnected,
+                    owner,
+                });
+            }
+            self.held.push(owner);
+            Ok(())
+        }
+        fn collect(
+            &mut self,
+            _: usize,
+        ) -> Result<Vec<super::super::chunk_retirement::RetiredChunkId>, ServerError> {
+            Ok(vec![])
+        }
+        fn occupied(&self) -> usize {
+            self.occupied + self.held.len()
+        }
+        fn close(&mut self, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+    }
+    #[test]
+    fn retirement_private_rewant_prefix_limits_and_idle_work() {
+        let mut a = retirement_authority(1000, false);
+        let mut port = RetirementDouble::accepting();
+        a.acquisition.reset_retirement_work();
+        assert_eq!(
+            a.retire_unwanted_chunks(&mut port, usize::MAX)
+                .unwrap()
+                .retired,
+            0
+        );
+        assert_eq!(a.acquisition.retirement_work(), (0, 0));
+        let generation = a.live_chunk_facts(save_key(0)).unwrap().generation;
+        a.replace_chunk_wants((1..1000).map(save_key).collect())
+            .unwrap();
+        a.replace_chunk_wants((0..1000).map(save_key).collect())
+            .unwrap();
+        assert_eq!(
+            a.live_chunk_facts(save_key(0)).unwrap().generation,
+            generation
+        );
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 0);
+        a.replace_chunk_wants((10..1000).map(save_key).collect())
+            .unwrap();
+        assert_eq!(
+            a.retire_unwanted_chunks(&mut port, 0).unwrap(),
+            ChunkRetirementReport::default()
+        );
+        assert_eq!(port.calls, 0);
+        port.occupied = 8;
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 0);
+        assert_eq!(port.calls, 0);
+        port.occupied = 0;
+        a.acquisition.reset_retirement_work();
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 1);
+        assert_eq!(a.acquisition.retirement_work(), (1, 1));
+        assert!(a.live_chunk_facts(save_key(0)).is_none());
+        assert!(!a.residents.ready.contains_key(&save_key(0)));
+        port.held.clear();
+        a.acquisition.reset_retirement_work();
+        assert_eq!(
+            a.retire_unwanted_chunks(&mut port, usize::MAX)
+                .unwrap()
+                .retired,
+            8
+        );
+        assert_eq!(a.acquisition.retirement_work(), (8, 8));
+        assert!(a.live_chunk_facts(save_key(9)).is_some());
+        assert_eq!(a.residents.ready.len(), 991);
+        let calls = port.calls;
+        a.acquisition.reset_retirement_work();
+        assert_eq!(
+            a.retire_unwanted_chunks(&mut port, usize::MAX)
+                .unwrap()
+                .retired,
+            0
+        );
+        assert_eq!(port.calls, calls);
+        assert_eq!(a.acquisition.retirement_work(), (0, 0));
+
+        let mut a = retirement_authority(2, false);
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        let mut port = RetirementDouble::accepting();
+        port.refusal_at = Some(2);
+        assert_eq!(
+            a.retire_unwanted_chunks(&mut port, 8).unwrap(),
+            ChunkRetirementReport {
+                retired: 1,
+                first_error: Some(ServerError::Disconnected),
+            }
+        );
+        assert!(a.live_chunk_facts(save_key(0)).is_none());
+        assert!(a.residents.ready.contains_key(&save_key(1)));
+        assert_eq!(port.held.len(), 1);
+    }
+    #[test]
+    fn retirement_private_refusal_restores_every_node_and_capture() {
+        let mut a = retirement_authority(1, false);
+        for index in 0..4096 {
+            let pos = BlockPos::new(index % 16, -64 + index / 256, index / 16 % 16);
+            a.residents.blocks.insert(
+                (key(), pos),
+                BlockObservation::try_new(key(), 1, 7 + index as u64, pos, 0).unwrap(),
+            );
+        }
+        let addresses: BTreeMap<_, _> = (&a.residents.blocks)
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    *k,
+                    (
+                        std::ptr::from_ref(k) as usize,
+                        std::ptr::from_ref(v) as usize,
+                        *v,
+                    ),
+                )
+            })
+            .collect();
+        let old = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap();
+        let old_body = match &old.value {
+            SaveValue::ChunkView(v) => v.materialize(),
+            _ => unreachable!(),
+        };
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        let facts = a.live_chunk_facts(key()).unwrap();
+        let slots = (
+            a.residents.drops[&key()].slots,
+            a.residents.container_chunks[&key()].furnaces,
+            a.residents.container_chunks[&key()].chests,
+        );
+        let stats = a.save_stats();
+        world::reset_ready_clones();
+        let mut port = RetirementDouble::accepting();
+        port.refusal_at = Some(1);
+        assert_eq!(
+            a.retire_unwanted_chunks(&mut port, 1).unwrap().first_error,
+            Some(ServerError::Disconnected)
+        );
+        assert_eq!(world::ready_clones(), 0);
+        assert_eq!(a.live_chunk_facts(key()), Some(facts));
+        assert_eq!(a.residents.blocks.len(), 4096);
+        assert_eq!(a.residents.drops[&key()].slots, slots.0);
+        assert_eq!(a.residents.container_chunks[&key()].furnaces, slots.1);
+        assert_eq!(a.residents.container_chunks[&key()].chests, slots.2);
+        assert_eq!(a.save_stats(), stats);
+        for (k, v) in &a.residents.blocks {
+            assert_eq!(
+                (
+                    std::ptr::from_ref(k) as usize,
+                    std::ptr::from_ref(v) as usize,
+                    *v
+                ),
+                addresses[k]
+            );
+        }
+        let new = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Unload)
+            .unwrap();
+        assert_ne!(new.value, old.value);
+        let SaveValue::ChunkView(new_view) = new.value else {
+            unreachable!()
+        };
+        assert_eq!(
+            (new_view.generation(), new_view.revision()),
+            (facts.generation, facts.revision)
+        );
+        assert_eq!(new_view.materialize(), old_body);
+        let SaveValue::ChunkView(old_view) = old.value else {
+            unreachable!()
+        };
+        assert_eq!(old_view.materialize(), old_body);
+        a.replace_chunk_wants(BTreeSet::from([key()])).unwrap();
+        assert_eq!(
+            a.live_chunk_facts(key()).unwrap().generation,
+            facts.generation
+        );
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        port.refusal_at = None;
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 1);
+        assert_eq!(world::ready_clones(), 0);
+        let (ready, drops, containers, nodes) = port.held.pop().unwrap().into_parts();
+        assert_eq!(
+            (ready.key, ready.generation, ready.revision),
+            (key(), facts.generation, facts.revision)
+        );
+        assert_eq!(drops.slots, slots.0);
+        assert_eq!(containers.furnaces, slots.1);
+        assert_eq!(containers.chests, slots.2);
+        for (k, v) in nodes.unwrap().iter() {
+            assert_eq!(
+                (
+                    std::ptr::from_ref(k) as usize,
+                    std::ptr::from_ref(v) as usize,
+                    *v
+                ),
+                addresses[k]
+            );
+        }
+    }
+    #[test]
+    fn retirement_private_latest_ack_flights_rewrite_and_error_diagnostic() {
+        let mut a = retirement_authority(1, false);
+        // Use genuine accepted transaction writes: cell CAS diverges from the
+        // once-per-commit durable revision, without synthetic book mutation.
+        let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+        for block in [1, 2] {
+            let observed = ctx
+                .read()
+                .observation(Dimension::OVERWORLD, BlockPos::new(0, -64, 0))
+                .unwrap();
+            ctx.transaction()
+                .try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(observed, block).unwrap()],
+                )
+                .unwrap();
+        }
+        ctx.commit_carried();
+        drop(ctx);
+        assert_eq!(a.live_chunk_facts(key()).unwrap().revision, 6);
+        assert_eq!(
+            a.residents
+                .blocks
+                .get(&(key(), BlockPos::new(0, -64, 0)))
+                .unwrap()
+                .revision,
+            7
+        );
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        let old = a.select(SaveMode::Urgent, SaveBudget::default());
+        // A distinct cell raises durability while preserving the first CAS.
+        a.replace_chunk_wants(BTreeSet::from([key()])).unwrap();
+        let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+        let observed = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(1, -64, 0))
+            .unwrap();
+        ctx.transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, 1).unwrap()],
+            )
+            .unwrap();
+        ctx.commit_carried();
+        drop(ctx);
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        assert_eq!(a.live_chunk_facts(key()).unwrap().revision, 7);
+        assert_eq!(
+            a.residents
+                .blocks
+                .get(&(key(), BlockPos::new(0, -64, 0)))
+                .unwrap()
+                .revision,
+            7
+        );
+        let mut port = RetirementDouble::accepting();
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 0);
+        assert_eq!(a.apply_completion(save_completion(old, true)).acked, 1);
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 0);
+        let current = a.select(SaveMode::Urgent, SaveBudget::default());
+        let mut failed = save_completion(current.clone(), false);
+        failed.error = Some(ServerError::Disconnected);
+        a.apply_completion(failed);
+        assert_eq!(a.save_stats().in_flight, 1);
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 0);
+        a.return_dirty(current.into_iter().next().unwrap());
+        assert_eq!(a.save_stats().in_flight, 0);
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 0);
+        let latest = a.select(SaveMode::Urgent, SaveBudget::default());
+        a.acquisition.save_error(key(), ServerError::Disconnected);
+        assert_eq!(a.apply_completion(save_completion(latest, true)).acked, 1);
+        assert_eq!(a.live_chunk_error(key()), Some(&ServerError::Disconnected));
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 1);
+        let mut a = retirement_authority(1, true);
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        let rewrite = a.live_chunk_facts(key()).unwrap();
+        assert_eq!(
+            (
+                rewrite.revision,
+                rewrite.persisted_revision,
+                rewrite.needs_rewrite
+            ),
+            (5, 5, true)
+        );
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 0);
+        let selected = a.select(SaveMode::Urgent, SaveBudget::default());
+        a.apply_completion(save_completion(selected, true));
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 1);
+    }
+    #[test]
+    fn retirement_private_defensive_guards_and_phase() {
+        let mut port = RetirementDouble::accepting();
+        let mut legacy = authority();
+        assert!(legacy.retire_unwanted_chunks(&mut port, 0).is_err());
+        let mut a = retirement_authority(1, false);
+        let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+        let observed = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(0, -64, 0))
+            .unwrap();
+        ctx.transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, 1).unwrap()],
+            )
+            .unwrap();
+        drop(ctx);
+        assert_eq!(
+            a.retire_unwanted_chunks(&mut port, 0),
+            Err(ServerError::Internal {
+                invariant: "uncommitted chunk retirement"
+            })
+        );
+        assert_eq!(port.calls, 0);
+        let mut sparse = retirement_authority(1, false);
+        let reference =
+            ContainerRef::try_new(key().pos, mornlea_domain::ContainerKind::Chest, 0, 1).unwrap();
+        sparse.residents.containers.insert(
+            reference,
+            ContainerRecord {
+                reference,
+                revision: 5,
+                slots: ContainerSlots::Chest([Default::default(); 27]),
+            },
+        );
+        assert_eq!(
+            sparse.retire_unwanted_chunks(&mut port, 0),
+            Err(ServerError::Internal {
+                invariant: "managed sparse containers"
+            })
+        );
+        let mut closing = retirement_authority(1, false);
+        closing.replace_chunk_wants(BTreeSet::new()).unwrap();
+        closing.phase = ServerPhase::Closing;
+        assert_eq!(
+            closing
+                .retire_unwanted_chunks(&mut port, 1)
+                .unwrap()
+                .retired,
+            1
+        );
+        closing.phase = ServerPhase::Closed;
+        assert_eq!(
+            closing.retire_unwanted_chunks(&mut port, 0),
+            Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed
+            })
+        );
+        for missing in 0..5 {
+            let mut a = retirement_authority(1, false);
+            a.replace_chunk_wants(BTreeSet::new()).unwrap();
+            match missing {
+                0 => {
+                    a.residents.ready.remove(&key());
+                }
+                1 => a.residents.ready.get_mut(&key()).unwrap().generation += 1,
+                2 => {
+                    a.residents.drops.remove(&key());
+                }
+                3 => {
+                    a.residents.container_chunks.remove(&key());
+                }
+                _ => a.residents.ready.get_mut(&key()).unwrap().key = save_key(8),
+            }
+            let counts = (
+                a.residents.ready.len(),
+                a.residents.drops.len(),
+                a.residents.container_chunks.len(),
+            );
+            assert_eq!(
+                a.retire_unwanted_chunks(&mut port, 1).unwrap(),
+                ChunkRetirementReport {
+                    retired: 0,
+                    first_error: Some(ServerError::Internal {
+                        invariant: "managed chunk ownership"
+                    })
+                }
+            );
+            assert_eq!(
+                (
+                    a.residents.ready.len(),
+                    a.residents.drops.len(),
+                    a.residents.container_chunks.len()
+                ),
+                counts
+            );
+            assert!(a.live_chunk_facts(key()).is_some());
+        }
+    }
+
+    #[test]
+    fn retirement_private_scalar_schedule_view_and_anchor_survive_detach() {
+        use mornlea_domain::ContainerKind;
+        use mornlea_protocol::{LoginStart, admit_login};
+        let mut body = chunk();
+        body.sections[0].single = 45;
+        body.sections[1].single = 11;
+        body.chests[0].generation = 1;
+        body.chests[0].active = true;
+        body.chests[0].block_index = 4096;
+        let mut a = retirement_authority_with_body(1, false, body);
+        let player =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        let login = LoginStart::new(player, "Ada", 8).unwrap();
+        let admitted =
+            admit_login(LoginStart::decode_inbound(&login.encode().unwrap()).unwrap()).unwrap();
+        let session = a.admit(admitted, TransportKind::Memory).unwrap();
+        let reference = ContainerRef::try_new(key().pos, ContainerKind::Chest, 0, 1).unwrap();
+        // Explicit scalar fixtures preserve existing lifecycle validation; detach
+        // does not eagerly purge references when central Ready reads disappear.
+        assert!(
+            a.residents.container_chunks[&key()]
+                .record(key(), reference)
+                .is_some()
+        );
+        let lease = ViewLease::new(session, reference);
+        a.views.insert(session, lease);
+        let pos = BlockPos::new(0, -64, 0);
+        let other_player =
+            PlayerId::try_from_bytes([2, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 2]).unwrap();
+        let other_login = LoginStart::new(other_player, "Bea", 8).unwrap();
+        let other_admitted =
+            admit_login(LoginStart::decode_inbound(&other_login.encode().unwrap()).unwrap())
+                .unwrap();
+        let anchor_session = a.admit(other_admitted, TransportKind::Memory).unwrap();
+        let actor = ActorKey::Player(anchor_session);
+        let mut inventory = InventoryRecord::empty();
+        inventory.crafting_size = mornlea_domain::CraftingSize::Workbench;
+        a.residents.inventories.insert(actor, inventory);
+        let runtime = ActorRuntime {
+            key: actor,
+            controls: None,
+            has_view: true,
+            reset: false,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 0,
+            oxygen: 300,
+            peak_y: 64.0,
+            exhaustion_milli: 0,
+            saturation_milli: 0,
+            since_damage_ticks: 0,
+            drown_ticks: 0,
+            starvation_ticks: 0,
+            eating: None,
+            bow: None,
+            path: None,
+            aux: ActorAux::Player {
+                respawn: None,
+                workbench: Some(pos),
+            },
+        };
+        a.residents.runtimes.insert(actor, runtime.clone());
+        a.fluid_schedule.enqueue_fluid(key(), pos, 100);
+        a.farmland_schedule.enqueue_candidate(key(), pos, 100);
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        let mut port = RetirementDouble::accepting();
+        assert_eq!(a.retire_unwanted_chunks(&mut port, 1).unwrap().retired, 1);
+        assert_eq!(a.views.get(&session), Some(&lease));
+        assert_eq!(a.residents.inventories.get(&actor), Some(&inventory));
+        assert_eq!(a.residents.runtimes.get(&actor), Some(&runtime));
+        assert_eq!(
+            a.fluid_schedule.fluid_due(Dimension::OVERWORLD, pos),
+            Some(100)
+        );
+        assert_eq!(a.fluid_schedule.pending_fluid(Dimension::OVERWORLD), 1);
+        assert_eq!(
+            a.farmland_schedule.candidate_due(Dimension::OVERWORLD, pos),
+            Some(100)
+        );
+        assert_eq!(
+            a.farmland_schedule.pending_candidates(Dimension::OVERWORLD),
+            1
+        );
+        let ctx = TickContext::for_tick(&mut a, TickBudget::full());
+        assert!(ctx.read().observation(Dimension::OVERWORLD, pos).is_none());
+    }
     #[test]
     fn live_save_actual_owned_commit_old_ack_fresh_refusal_and_settled_cycles() {
         use crate::core::{chunk_driver::ChunkDriver, generation_worker::GenerationPool};

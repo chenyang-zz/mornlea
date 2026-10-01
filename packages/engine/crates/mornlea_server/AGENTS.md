@@ -684,8 +684,18 @@ nor materialize them. Whole completion validation precedes durability updates;
 only an exact held preimage advances current persisted facts, and an older ACK
 leaves newer dirty/rewrite facts intact. Fresh refusal releases that exact flight
 and recaptures the current target. Failed completion retains the original flight
-for the scheduler's existing retry/backoff owner. Clean Unloading bodies remain
-resident until a later reclamation owner. Manual `remember_dirty` injection is
+for the scheduler's existing retry/backoff owner. Clean Unloading bodies enter
+a key-local retirement index. Explicit
+`AuthorityState::retire_unwanted_chunks` admits at most eight whole Ready,
+fixed-slot and sparse-tree owners to the detached disposal port after latest
+durability, unwanted, no-request and no-flight checks. Book erasure follows
+successful admission; refusal restores the exact owner and preserves accepted
+prefix progress. Admission proves residency transfer, while scalar collection
+and explicit worker close prove disposal and join. Rewant before erasure retains
+generation; actual reload after erasure allocates a fresh global generation.
+Future schedule dues, viewer/workbench references and external immutable captures
+remain unchanged. This consumer does not establish a global allocation bound or
+wire the executable caller. Manual `remember_dirty` injection is
 checked and restricted to disabled acquisition fixtures; enabling refuses any
 existing fixture dirty or in-flight ownership.
 
@@ -750,8 +760,9 @@ charges at most eight queued, started and held completions until FIFO scalar
 collection. Close requires disposal, collection, disconnection and explicit CPU
 join; timeout retains charges and handles for retry, and teardown panic remains
 sticky. Its private executing double proves ownership and lifecycle obligations,
-not actual threads, physical unload or authority eligibility. Temporary private
-body/factory dead-code allowances end when the later production consumer lands.
+not actual threads, physical unload or authority eligibility. The production
+managed consumer moves and restores these exact private body
+owners through the authority retirement operation.
 
 `core/retirement_worker.rs` implements the detached-owner port with exactly one
 CPU thread and a worker-side whole-body FIFO. Caller ownership contains only
@@ -762,5 +773,8 @@ timeout retains charges or the join handle for same-owner retry, and worker
 failure stays sticky without releasing lost obligations. Drop only disconnects,
 so queued bodies never run destructors on the caller. Private causal gates and
 panic probes execute actual destruction and remain separate from ordinary
-factory evidence. Authority unload eligibility and durable reload integration
-remain separate owners.
+factory evidence. Authority unload eligibility belongs to the managed consumer;
+the persistence
+failure retirement topic executes actual disk acquisition, qualified durable
+ACK, CPU disposal collection and fresh-generation reload. Executable caller
+coordination remains separate.

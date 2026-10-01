@@ -43,11 +43,9 @@ impl RetiredChunkId {
 pub struct RetiredChunk {
     id: RetiredChunkId,
     // The later live consumer supplies production body access without exposing it.
-    #[allow(dead_code)]
     body: Box<RetiredChunkBody>,
 }
 
-#[allow(dead_code)]
 struct RetiredChunkBody {
     ready: ReadyChunk,
     drops: DropState,
@@ -62,7 +60,6 @@ impl RetiredChunk {
 
     /// Trusted managed preparation supplies a nonzero generation. All existing
     /// owners move into one box; no detached cell traversal runs on the caller.
-    #[allow(dead_code)]
     pub(crate) fn new(
         ready: ReadyChunk,
         drops: DropState,
@@ -88,7 +85,6 @@ impl RetiredChunk {
     /// ends on the caller; returned tree nodes remain owned by the caller.
     // The explicit tuple keeps every whole owner visible at the restoration seam.
     #[allow(clippy::type_complexity)]
-    #[allow(dead_code)]
     pub(crate) fn into_parts(
         self,
     ) -> (

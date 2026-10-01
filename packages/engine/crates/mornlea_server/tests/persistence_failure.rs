@@ -38,3 +38,6 @@ mod live_chunk_saves;
 
 #[path = "persistence_failure/chunk_encoding.rs"]
 mod chunk_encoding;
+
+#[path = "persistence_failure/chunk_retirement.rs"]
+mod chunk_retirement;

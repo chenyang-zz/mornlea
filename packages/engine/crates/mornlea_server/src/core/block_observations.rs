@@ -70,6 +70,16 @@ impl ChunkBlockObservations {
 
     /// Transfers existing tree nodes without visiting cells. The receiving
     /// retirement policy owns their eventual destruction.
+    /// Refusal returns the original whole tree; exclusive ownership prevents overlap.
+    pub(crate) fn restore_chunk(&mut self, key: ChunkKey, owner: InnerMap) {
+        debug_assert!(!self.chunks.contains_key(&key));
+        if owner.is_empty() {
+            return;
+        }
+        self.len += owner.len();
+        self.chunks.insert(key, owner);
+    }
+
     pub(crate) fn take_chunk(&mut self, key: ChunkKey) -> Option<InnerMap> {
         let owner = self.chunks.remove(&key)?;
         self.len -= owner.len();
@@ -195,6 +205,53 @@ mod tests {
     fn missing_index_preserves_map_panic() {
         let observations = ChunkBlockObservations::new();
         let _ = observations[&(key(Dimension::OVERWORLD, 0), BlockPos::new(0, 0, 0))];
+    }
+
+    #[test]
+    fn restore_chunk_preserves_all_addresses_and_totals() {
+        let mut observations = ChunkBlockObservations::new();
+        let target = key(Dimension::OVERWORLD, 0);
+        for owner in [target, key(Dimension::DEPTHS, 0)] {
+            for i in 0..4096 {
+                let pos = BlockPos::new(i % 16, -64 + i / 256, i / 16 % 16);
+                observations.insert((owner, pos), observed(owner, pos, i as u64 + 5));
+            }
+        }
+        let addresses: BTreeMap<_, _> = (&observations)
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    *k,
+                    (
+                        std::ptr::from_ref(k) as usize,
+                        std::ptr::from_ref(v) as usize,
+                        *v,
+                    ),
+                )
+            })
+            .collect();
+        let nodes = observations.take_chunk(target).unwrap();
+        observations.restore_chunk(target, nodes);
+        assert_eq!(observations.len(), 8192);
+        assert_eq!(
+            (&observations)
+                .into_iter()
+                .map(|(k, _)| *k)
+                .collect::<Vec<_>>(),
+            addresses.keys().copied().collect::<Vec<_>>()
+        );
+        for (k, v) in &observations {
+            assert_eq!(
+                (
+                    std::ptr::from_ref(k) as usize,
+                    std::ptr::from_ref(v) as usize,
+                    *v
+                ),
+                addresses[k]
+            );
+        }
+        observations.restore_chunk(key(Dimension::DEPTHS, 9), BTreeMap::new());
+        assert_eq!(observations.chunks.len(), 2);
     }
 
     #[test]

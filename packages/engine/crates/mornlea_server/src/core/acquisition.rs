@@ -146,12 +146,15 @@ pub(crate) struct AcquisitionState {
     last_generation: u64,
     // Current facts and retained captures have separate exact byte charges.
     dirty: BTreeSet<ChunkKey>,
+    retireable: BTreeSet<ChunkKey>,
     eligible: BTreeSet<(bool, ChunkKey)>,
     flights: BTreeMap<ChunkKey, OwnedSnapshot>,
     dirty_bytes: u64,
     flight_bytes: u64,
     #[cfg(test)]
     save_work: std::cell::Cell<(usize, usize)>,
+    #[cfg(test)]
+    retirement_work: std::cell::Cell<(usize, usize)>,
 }
 fn invalid(field: &'static str) -> ServerError {
     ServerError::InvalidInput { field }
@@ -490,6 +493,7 @@ impl AcquisitionState {
     }
     // Key-local refresh removes old contributions before changing current facts.
     fn refresh(&mut self, key: ChunkKey, update: impl FnOnce(&mut Record)) {
+        self.retireable.remove(&key);
         let Some(r) = self.records.get_mut(&key) else {
             return;
         };
@@ -513,6 +517,50 @@ impl AcquisitionState {
                     .insert((r.facts.phase == LiveChunkPhase::Ready, key));
             }
         }
+        if Self::can_retire(r) && !self.flights.contains_key(&key) {
+            self.retireable.insert(key);
+        }
+    }
+    fn can_retire(r: &Record) -> bool {
+        !r.facts.wanted
+            && r.facts.phase == LiveChunkPhase::Unloading
+            && r.request.is_none()
+            && r.facts.revision <= r.facts.persisted_revision
+            && !r.facts.needs_rewrite
+    }
+    /// The ordered index avoids visiting wanted or dirty resident bodies.
+    pub(crate) fn next_retirement(&self) -> Option<(ChunkKey, u64)> {
+        let key = *self.retireable.first()?;
+        #[cfg(test)]
+        self.retirement_work.set((
+            self.retirement_work.get().0 + 1,
+            self.retirement_work.get().1,
+        ));
+        Some((
+            key,
+            self.records
+                .get(&key)
+                .expect("indexed record")
+                .facts
+                .generation,
+        ))
+    }
+    /// Authority holds the exclusive book borrow across whole-owner admission.
+    pub(crate) fn retired(&mut self, key: ChunkKey, generation: u64) {
+        debug_assert!(self.retireable.contains(&key));
+        debug_assert!(
+            self.records
+                .get(&key)
+                .is_some_and(|r| r.facts.generation == generation && Self::can_retire(r))
+        );
+        debug_assert!(!self.flights.contains_key(&key));
+        self.retireable.remove(&key);
+        self.records.remove(&key);
+        #[cfg(test)]
+        self.retirement_work.set((
+            self.retirement_work.get().0,
+            self.retirement_work.get().1 + 1,
+        ));
     }
     pub(crate) fn save_error(&mut self, key: ChunkKey, error: ServerError) {
         self.refresh(key, |r| {
@@ -567,6 +615,7 @@ impl AcquisitionState {
             .set((self.save_work.get().0 + 1, self.save_work.get().1));
         self.flight_bytes += snapshot.estimated_bytes as u64;
         self.flights.insert(key, snapshot);
+        self.retireable.remove(&key);
         self.eligible.remove(&(ready, key));
         Ok(())
     }
@@ -656,6 +705,12 @@ impl AcquisitionState {
 
 #[cfg(test)]
 impl AcquisitionState {
+    pub(crate) fn reset_retirement_work(&self) {
+        self.retirement_work.set((0, 0));
+    }
+    pub(crate) fn retirement_work(&self) -> (usize, usize) {
+        self.retirement_work.get()
+    }
     pub(crate) fn records_test_generation(&mut self, key: ChunkKey, generation: u64) {
         self.records.get_mut(&key).unwrap().facts.generation = generation;
     }
