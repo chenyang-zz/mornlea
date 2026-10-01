@@ -1119,3 +1119,113 @@ impl PreparationPort for PreparationQueue {
             .expect("checked report")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Internal checks for the checked-overflow branches of the byte
+    //! accounting. The frozen limits cap `preparation_bytes` far below
+    //! `usize::MAX`, so an arithmetic overflow of the running charge is
+    //! unreachable through the public surface; these tests drive the counter
+    //! directly to pin that both checked points still reject with the typed
+    //! `Capacity` class and mutate nothing.
+
+    use super::*;
+    use mornlea_engine::native::contracts::world::Materials;
+
+    /// One paired far job with the smallest admitted payload charge.
+    fn far_job_for(job_id: u64) -> PreparationJob {
+        let materials = Materials {
+            air: 0,
+            stone: 1,
+            dirt: 2,
+            grass: 3,
+            bedrock: 4,
+            snow: 5,
+            sand: 6,
+            clay: 7,
+            gravel: 8,
+            iron_ore: 9,
+            coal_ore: 10,
+            oak_log: 11,
+            leaves: 12,
+            water: 13,
+            short_grass: 14,
+        };
+        let mut perm = [0u8; 512];
+        for (index, entry) in perm.iter_mut().enumerate() {
+            *entry = (index % 256) as u8;
+        }
+        let params = Arc::new(WorldgenParams::try_new(1, materials, perm).expect("params"));
+        let key = PreparedResourceKey::try_new(
+            SessionEpoch::try_new(1).expect("epoch"),
+            Dimension::OVERWORLD,
+            TerrainKey::LodTile(TilePos::new(3, 4)),
+            1,
+            1,
+            job_id,
+        )
+        .expect("checked key");
+        let request = OwnedLodRequest::try_new(params, [3, 4], LodStep::Four).expect("request");
+        PreparationJob::try_new(key, PreparationPayload::Far(request)).expect("paired far job")
+    }
+
+    /// The admission-side overflow: `try_submit`'s `checked_add` returns the
+    /// typed `Capacity` rejection with the complete job and leaves the
+    /// counter, the ticket sequence and the shared-identity set untouched.
+    #[test]
+    fn admission_byte_overflow_is_typed_capacity() {
+        let mut port = PreparationQueue::new(ClientLimits::try_new().expect("frozen limits"));
+        // The impossible-through-the-public-surface state: a running charge
+        // one byte away from the address space, set directly instead of
+        // allocating it.
+        port.charge = usize::MAX;
+        let rejection = port
+            .try_submit(far_job_for(1))
+            .expect_err("the charge overflow rejects admission");
+        assert_eq!(rejection.error(), ClientError::Capacity);
+        assert_eq!(
+            rejection.job().key().job_id().get(),
+            1,
+            "the whole job is returned"
+        );
+        assert_eq!(port.tickets_issued(), 0, "no ticket is issued");
+        assert_eq!(port.pending_jobs(), 0, "nothing is queued");
+        assert_eq!(port.charge(), usize::MAX, "the counter is unchanged");
+        assert!(port.shared.is_empty(), "no shared identity is recorded");
+    }
+
+    /// The completion-side overflow: when the running charge cannot own even
+    /// the one-byte empty geometry, `consume_pending`'s `checked_add` rejects
+    /// inside the worker, publishes the typed `Capacity` failure as the
+    /// result, retains nothing and changes the counter by nothing.
+    #[test]
+    fn completion_byte_overflow_is_typed_capacity() {
+        let mut port = PreparationQueue::new(ClientLimits::try_new().expect("frozen limits"));
+        // A queued unit with a zero payload charge, staged directly so the
+        // release step subtracts nothing and the overflow state reaches the
+        // completion-side check exactly.
+        port.charge = usize::MAX;
+        port.pending.push_back(PendingUnit {
+            ticket: PreparationTicket::try_new(1).expect("ticket"),
+            job: far_job_for(1),
+            charge: 0,
+            references: Vec::new(),
+        });
+        let budget = ClientWorkBudget::try_new(0, 1).expect("budget");
+        assert_eq!(port.work(budget), 1, "the unit is consumed");
+        let result = port.poll_ready().expect("the typed failure publishes");
+        assert_eq!(
+            result.outcome(),
+            &Err(ClientError::Capacity),
+            "the overflow is the typed capacity failure"
+        );
+        assert_eq!(result.key().job_id().get(), 1, "exact request identity");
+        assert_eq!(
+            port.charge(),
+            usize::MAX,
+            "the failed geometry charges nothing"
+        );
+        assert_eq!(port.retained_resources(), 0, "nothing is retained");
+        assert!(port.poll_ready().is_none(), "the queue drains exactly");
+    }
+}
