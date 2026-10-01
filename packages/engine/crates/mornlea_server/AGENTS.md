@@ -51,6 +51,20 @@ consume its cancellation and error contracts before joining the real backend.
   qualify this owner; actor lifecycle, reset effects, subscriptions and complete
   runtime workload remain separately owned.
 
+- `src/core/source_player_restore.rs` owns explicit source-mode background-login
+  registration and at most eight live initial player scans. Missing saves retain
+  only metadata fallback; loaded Current precedes supported Safe. Pending actors
+  have an explicit runtime and source-rounded checked respawn coordinates. The
+  central reducer gates ordinary commands before raw input ACK and deferred roles,
+  then advances restoration after Acquire and before player survival. Whole-book
+  move and recovery preserve scan allocations on success, trusted failure and
+  unwind; retirement prunes only that live book. Local readiness/reset follows
+  the existing final projector. Private authority cases and four real disk,
+  background mailbox, Memory handshake/ACK and ChunkDriver Acquire recipes in
+  `tests/persistence_failure/source_player_restore.rs` qualify initial restore
+  with manual wants. Source subscriptions, active restore/death, actor save/cache
+  eligibility and executable runtime acceptance remain separately owned.
+
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
   inventory/runtime overlays to produce checked existing storage values. Player
   current pose/survival, inventory/armor and hunger/respawn come from their
@@ -69,7 +83,7 @@ consume its cancellation and error contracts before joining the real backend.
   once-on-success consumption and endpoint advancement. Hard phase/delivery
   errors and trusted Rust unwinds retain the first error and fence the authority
   in Closing. Exclusive context drop returns partial resident/dirty ownership
-  before both moved schedules return; it provides no whole-tick rollback.
+  before the moved schedules and source player book return; it provides no whole-tick rollback.
   Failed authorities refuse new captures, selection and metadata targets while
   preserving already-selected immutable ownership and completion/return paths.
   Both shutdown entries permanently stop at failed FinalTick, including a

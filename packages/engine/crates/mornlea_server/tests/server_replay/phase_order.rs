@@ -169,6 +169,8 @@ const MAILBOX_CHAIN: &[&str] = &["freeze_eligible", "order_commands"];
 /// The intake admits in envelope order: motion, inventory, containers,
 /// crafting. An open lands in both the container and the workbench bags.
 const ADMIT_CHAIN: &[&str] = &[
+    "source_player_command_ready",
+    "record_player_input",
     "player_motion::run",
     "inventory::run",
     "containers::run",
@@ -190,6 +192,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "admit_command",
     "companions::run",
     "world_acquisition::run",
+    "source_player_restore::advance",
     "player_survival::run",
     "eating::run",
     "projectiles::run",
@@ -660,5 +663,23 @@ fn place_reaches_fluid_and_support_same_tick() {
     assert_eq!(
         context.read().block(Dimension::OVERWORLD, placed),
         Some(DIRT)
+    );
+}
+
+#[test]
+fn dispatch_guard_rejects_pending_restore_before_acquisition() {
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let swapped = swap_markers(
+        body,
+        "world_acquisition::run",
+        "source_player_restore::advance",
+    );
+    assert_eq!(marker_count(&swapped, "world_acquisition::run"), 1);
+    assert_eq!(marker_count(&swapped, "source_player_restore::advance"), 1);
+    let result = std::panic::catch_unwind(|| chain_positions(&swapped, DISPATCH_CHAIN));
+    assert!(
+        result.is_err(),
+        "both markers survive but the acquire-before-restore guard must refuse"
     );
 }

@@ -30,6 +30,7 @@ use super::deferred_commands::DeferredCommands;
 use super::drop_store::{self, DropState};
 use super::login_seed::{SeededPlayer, seed_player};
 use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
+use super::source_player_restore::SourcePlayerBook;
 use super::world::ReadyChunk;
 use crate::rules::farmland::FarmlandSchedule;
 use crate::rules::fluids::FluidSchedule;
@@ -55,6 +56,8 @@ struct SessionRecord {
     last_input_sequence: u64,
     next_arrival: u64,
     body: Option<PlayerSave>,
+    /// A successful stored load, separate from the canonical body for Missing.
+    loaded_current: bool,
     outbox: VecDeque<PreparedFrame>,
     outbox_closed: bool,
 }
@@ -186,6 +189,8 @@ pub struct AuthorityState {
     farmland_schedule: FarmlandSchedule,
     /// Resident tick state the reducer seeds and commits each tick.
     residents: ResidentTickState,
+    source_player_radius: Option<u8>,
+    source_players: SourcePlayerBook,
 }
 
 impl AuthorityState {
@@ -252,6 +257,8 @@ impl AuthorityState {
             fluid_schedule: FluidSchedule::new(),
             farmland_schedule: FarmlandSchedule::new(),
             residents: ResidentTickState::default(),
+            source_player_radius: None,
+            source_players: SourcePlayerBook::default(),
         })
     }
 
@@ -395,6 +402,9 @@ impl AuthorityState {
     /// mapping refusal only means in-memory corruption; skipping leaves the
     /// session for a later tick instead of failing the tick on login staging.
     pub(crate) fn login_seeds(&self) -> Vec<SeededPlayer> {
+        if self.source_player_radius.is_some() {
+            return Vec::new();
+        }
         let mut seeds = Vec::new();
         for (session, record) in &self.sessions {
             if record.phase != SessionPhase::Active {
@@ -567,12 +577,75 @@ impl AuthorityState {
         self.retire(session, reason)
     }
 
+    /// Enables explicit source registration before any player owner exists.
+    pub fn enable_source_player_restoration(&mut self, radius: u8) -> Result<(), ServerError> {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        if let Some(enabled) = self.source_player_radius {
+            return if enabled == radius {
+                Ok(())
+            } else {
+                Err(ServerError::InvalidInput {
+                    field: "source_player_radius",
+                })
+            };
+        }
+        if !self.sessions.is_empty()
+            || !self.residents.actors.is_empty()
+            || !self.residents.inventories.is_empty()
+            || !self.residents.runtimes.is_empty()
+            || !self.residents.mining.is_empty()
+        {
+            return Err(ServerError::InvalidInput {
+                field: "source_player_restoration",
+            });
+        }
+        Dimension::new(u8::try_from(self.metadata.spawn_dimension).map_err(|_| {
+            ServerError::Internal {
+                invariant: "source player spawn metadata",
+            }
+        })?)
+        .map_err(|_| ServerError::Internal {
+            invariant: "source player spawn metadata",
+        })?;
+        super::actor_placement::spawn_columns(
+            mornlea_domain::ChunkPos::new(
+                self.metadata.spawn_anchor.x,
+                self.metadata.spawn_anchor.z,
+            ),
+            radius,
+        )?;
+        self.source_player_radius = Some(radius);
+        Ok(())
+    }
+
+    pub(crate) fn source_players_mut(&mut self) -> &mut SourcePlayerBook {
+        &mut self.source_players
+    }
+
+    pub(crate) fn prune_source_players(&mut self) {
+        self.source_players.entries.retain(|key, _| {
+            self.sessions
+                .get(key)
+                .is_some_and(|record| record.phase == SessionPhase::Active)
+        });
+    }
+
     pub fn allocate(
         &mut self,
         login: AdmittedLogin,
         kind: TransportKind,
     ) -> Result<SessionKey, ServerError> {
         let _ = kind;
+        if self.source_player_radius.is_some() {
+            return Err(ServerError::InvalidInput {
+                field: "background_login_required",
+            });
+        }
         self.reserve(login, SessionPhase::Active)
     }
 
@@ -601,6 +674,7 @@ impl AuthorityState {
             .get(&session)
             .map(|record| record.display_name.clone())
             .unwrap_or_default();
+        let loaded_current = loaded.is_some();
         let save = match loaded {
             None => canonical_player(player_id, &display_name)?,
             Some(stored) => {
@@ -618,18 +692,68 @@ impl AuthorityState {
             return Err(ServerError::InvalidState { phase: self.phase });
         }
         record.body = Some(save);
+        record.loaded_current = loaded_current;
         Ok(())
     }
 
     pub fn activate(&mut self, session: SessionKey) -> Result<(), ServerError> {
         let record = self
             .sessions
-            .get_mut(&session)
+            .get(&session)
             .ok_or(ServerError::StaleSession { session })?;
         if record.phase != SessionPhase::Prepared || record.body.is_none() {
             return Err(ServerError::InvalidState { phase: self.phase });
         }
-        record.phase = SessionPhase::Active;
+        if let Some(radius) = self.source_player_radius {
+            if let Some(error) = self.tick_failure {
+                return Err(error);
+            }
+            if self.phase != ServerPhase::Running {
+                return Err(ServerError::InvalidState { phase: self.phase });
+            }
+            let dimension = mornlea_domain::Dimension::new(
+                u8::try_from(self.metadata.spawn_dimension).map_err(|_| ServerError::Internal {
+                    invariant: "source player spawn metadata",
+                })?,
+            )
+            .map_err(|_| ServerError::Internal {
+                invariant: "source player spawn metadata",
+            })?;
+            let anchor = mornlea_domain::ChunkPos::new(
+                self.metadata.spawn_anchor.x,
+                self.metadata.spawn_anchor.z,
+            );
+            let prepared = super::source_player_restore::prepare(
+                session,
+                record.body.as_ref().unwrap(),
+                record.loaded_current,
+                dimension,
+                anchor,
+                radius,
+                &self.settled_read()?,
+            )?;
+            let key = ActorKey::Player(session);
+            if self.residents.actors.iter().any(|actor| actor.key == key)
+                || self.residents.inventories.contains_key(&key)
+                || self.residents.runtimes.contains_key(&key)
+                || self.source_players.entries.contains_key(&session)
+                || self.source_players.entries.len() >= 8
+            {
+                return Err(ServerError::Internal {
+                    invariant: "source player registration",
+                });
+            }
+            // All checked construction precedes the owner transfer and Active handoff.
+            let slot = self.residents.actors.len();
+            self.residents.actors.push(prepared.seeded.actor);
+            self.residents
+                .inventories
+                .insert(key, prepared.seeded.inventory);
+            self.residents.runtimes.insert(key, prepared.runtime);
+            self.residents.player_slots.insert(session, slot);
+            self.source_players.entries.insert(session, prepared.entry);
+        }
+        self.sessions.get_mut(&session).unwrap().phase = SessionPhase::Active;
         Ok(())
     }
 
@@ -661,6 +785,7 @@ impl AuthorityState {
         }
         self.residents.sleeping.remove(&key);
         self.residents.player_slots.remove(&key);
+        self.source_players.entries.remove(&key);
         Ok(())
     }
 
@@ -1783,6 +1908,7 @@ impl AuthorityState {
                 last_input_sequence: 0,
                 next_arrival: 0,
                 body: None,
+                loaded_current: false,
                 outbox: VecDeque::new(),
                 outbox_closed: false,
             },
@@ -3211,6 +3337,41 @@ impl<'a> TickContext<'a> {
             dirty_chunks: std::mem::take(&mut self.dirty_chunks),
             sleep_record,
         };
+    }
+
+    pub(crate) fn source_player_session_active(&self, session: SessionKey) -> bool {
+        self.authority
+            .sessions
+            .get(&session)
+            .is_some_and(|record| record.phase == SessionPhase::Active)
+    }
+
+    /// Pending source actors admit only the source's unconditional exceptions.
+    pub(crate) fn source_player_command_ready(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<bool, ServerError> {
+        if self.authority.source_player_radius.is_none() {
+            return Ok(true);
+        }
+        if matches!(
+            envelope.command(),
+            mornlea_domain::Command::CloseContainer
+                | mornlea_domain::Command::Resync(_)
+                | mornlea_domain::Command::MoveContainer(_)
+        ) {
+            return Ok(true);
+        }
+        let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+            invariant: "source player registration",
+        })?;
+        let actor = self
+            .read()
+            .actor(ActorKey::Player(session))
+            .ok_or(ServerError::Internal {
+                invariant: "source player registration",
+            })?;
+        Ok(actor.lifecycle == ActorLifecycle::Active)
     }
 
     /// Input acknowledgment precedes semantic validation and survives idle ticks.
@@ -4774,6 +4935,7 @@ mod owned_resident_tests {
                     last_input_sequence: 0,
                     next_arrival: 0,
                     body: None,
+                    loaded_current: false,
                     outbox: VecDeque::new(),
                     outbox_closed: false,
                 },
@@ -9603,5 +9765,847 @@ mod settled_read_tests {
         empty_lanes(a.settled_read().unwrap());
         assert_eq!(a.commands.as_ptr(), pointer);
         assert_eq!(a.commands, queued);
+    }
+}
+
+#[cfg(test)]
+mod source_player_restore_tests {
+    use super::super::{
+        step::{AuthoritativeFinalReducer, set_dispatch_hook},
+        world::PreparedChunk,
+    };
+    use super::*;
+    use mornlea_domain::{BlockPos, ChunkPos, HotbarSlot};
+    use mornlea_protocol::{LoginStart, PlayerInput, SelectHotbar, admit_login};
+    use mornlea_storage::{ContainerSnapshot, StorageKind};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    fn fresh() -> AuthorityState {
+        AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap()
+    }
+    fn login(tag: u8) -> AdmittedLogin {
+        let mut id = [0; 16];
+        id[0] = tag;
+        id[6] = 64;
+        id[8] = 128;
+        let start = LoginStart::new(PlayerId::try_from_bytes(id).unwrap(), "Ada", 8).unwrap();
+        admit_login(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap()).unwrap()
+    }
+    fn saved(tag: u8) -> PlayerSave {
+        let mut save = canonical_player(login(tag).player_id(), "Ada").unwrap();
+        save.current = PlayerLocation {
+            dimension: 0,
+            position: [8.5, 65., 8.5],
+        };
+        save.safe = Some(PlayerLocation {
+            dimension: 1,
+            position: [56.5, 64., 8.5],
+        });
+        save.yaw = 0.1;
+        save.pitch = 0.2;
+        save.health = 15;
+        save.hunger = 17;
+        save.saturation_milli = 9000;
+        save.exhaustion_milli = 250;
+        save.inventory.hotbar.selected = 3;
+        save.inventory.hotbar.slots[3] = mornlea_storage::ItemStack {
+            item: 1,
+            count: 7,
+            durability: 0,
+        };
+        save.respawn_present = true;
+        save.respawn_dimension = 1;
+        save.respawn_position = [-0.5, 1.5, 0.49];
+        save
+    }
+    fn stored(s: PlayerSave) -> StoredPlayer {
+        StoredPlayer {
+            player_id: s.player_id,
+            revision: s.revision,
+            display_name: s.display_name,
+            current: s.current,
+            yaw: s.yaw,
+            pitch: s.pitch,
+            safe: s.safe,
+            inventory: s.inventory,
+            health: s.health,
+            hunger: s.hunger,
+            saturation_milli: s.saturation_milli,
+            exhaustion_milli: s.exhaustion_milli,
+            respawn_present: s.respawn_present,
+            respawn_position: s.respawn_position,
+            respawn_dimension: s.respawn_dimension,
+            armor: s.armor,
+            needs_rewrite: false,
+        }
+    }
+    fn register(a: &mut AuthorityState, tag: u8, save: Option<PlayerSave>) -> SessionKey {
+        let s = a.prepare(login(tag), TransportKind::Memory).unwrap();
+        a.install(s, save.map(stored)).unwrap();
+        a.activate(s).unwrap();
+        s
+    }
+    fn key(dimension: Dimension, x: i32, z: i32) -> ChunkKey {
+        ChunkKey {
+            dimension,
+            pos: ChunkPos::new(x, z),
+        }
+    }
+    fn compact(kind: u8) -> Chunk {
+        let mut chunk = Chunk {
+            sections: vec![
+                ContainerSnapshot {
+                    kind: StorageKind::Single,
+                    bits: 0,
+                    single: 0,
+                    palette: vec![],
+                    packed: vec![]
+                };
+                24
+            ],
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        };
+        if kind == 1 {
+            chunk.sections[7].single = 1;
+        }
+        if kind == 2 {
+            for section in &mut chunk.sections {
+                section.single = 1;
+            }
+        }
+        if kind == 3 {
+            chunk.sections[1].single = 11;
+            chunk.chests[0].generation = 1;
+            chunk.chests[0].active = true;
+            chunk.chests[0].block_index = 4096;
+            chunk.chests[0].items[0] = mornlea_storage::ItemStack {
+                item: 1,
+                count: 3,
+                durability: 0,
+            };
+        }
+        chunk
+    }
+    fn offer(a: &mut AuthorityState, key: ChunkKey, kind: u8) {
+        let mut wants = a.residents.ready.keys().copied().collect::<BTreeSet<_>>();
+        wants.extend(
+            a.source_players
+                .entries
+                .values()
+                .flat_map(|entry| entry.restore.pending_keys()),
+        );
+        wants.insert(key);
+        a.replace_chunk_wants(wants).unwrap();
+        let r = a.reserve_chunk_load(key).unwrap();
+        let request = ChunkRequestId::try_new(r.generation()).unwrap();
+        a.bind_chunk_load(r, request).unwrap();
+        let prepared = PreparedChunk::try_new(
+            key,
+            r.generation(),
+            RecoveredChunk {
+                chunk: compact(kind),
+                revision: 9,
+                persisted_revision: 9,
+                needs_rewrite: false,
+                recovered: false,
+            },
+        )
+        .unwrap();
+        a.offer_acquired(AcquiredChunkEvent::Load {
+            key,
+            generation: r.generation(),
+            request,
+            result: Ok(Some(prepared)),
+        })
+        .unwrap();
+    }
+    fn fixture() -> (AuthorityState, SessionKey) {
+        let mut a = fresh();
+        a.metadata.spawn_anchor = mornlea_storage::MetadataChunkPos { x: 2, z: 0 };
+        a.enable_source_player_restoration(1).unwrap();
+        a.enable_live_chunks().unwrap();
+        let s = register(&mut a, 1, Some(saved(1)));
+        (a, s)
+    }
+    fn player(a: &AuthorityState, s: SessionKey) -> &ActorRecord {
+        a.residents
+            .actors
+            .iter()
+            .find(|a| a.key == ActorKey::Player(s))
+            .unwrap()
+    }
+    fn local(p: &TickPublication) -> &mornlea_domain::PlayerState {
+        p.events
+            .iter()
+            .find_map(|e| {
+                if let mornlea_domain::Event::PlayerState(s) = e.event() {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .unwrap()
+    }
+    #[test]
+    fn explicit_mode_radius_health_anchor_and_idempotence() {
+        for radius in [1, 16, 64] {
+            let mut a = fresh();
+            a.enable_source_player_restoration(radius).unwrap();
+            assert_eq!(a.source_player_radius, Some(radius));
+        }
+        for radius in [0, 65] {
+            let mut a = fresh();
+            assert_eq!(
+                a.enable_source_player_restoration(radius),
+                Err(ServerError::InvalidInput {
+                    field: "spawn_radius"
+                })
+            );
+            assert_eq!(a.source_player_radius, None);
+        }
+        for x in [-134_217_724, 134_217_723] {
+            let mut a = fresh();
+            a.metadata.spawn_anchor.x = x;
+            a.enable_source_player_restoration(64).unwrap();
+        }
+        for x in [i32::MIN, i32::MAX] {
+            let mut a = fresh();
+            a.metadata.spawn_anchor.x = x;
+            assert_eq!(
+                a.enable_source_player_restoration(1),
+                Err(ServerError::InvalidInput {
+                    field: "spawn_anchor"
+                })
+            );
+        }
+        let mut a = fresh();
+        a.enable_source_player_restoration(16).unwrap();
+        a.prepare(login(1), TransportKind::Memory).unwrap();
+        a.enable_source_player_restoration(16).unwrap();
+        assert_eq!(
+            a.enable_source_player_restoration(1),
+            Err(ServerError::InvalidInput {
+                field: "source_player_radius"
+            })
+        );
+        for phase in [ServerPhase::Closing, ServerPhase::Closed] {
+            let mut a = fresh();
+            a.phase = phase;
+            assert_eq!(
+                a.enable_source_player_restoration(1),
+                Err(ServerError::InvalidState { phase })
+            );
+            let error = ServerError::Internal {
+                invariant: "injected failure",
+            };
+            a.tick_failure = Some(error);
+            assert_eq!(a.enable_source_player_restoration(1), Err(error));
+        }
+        let mut a = fresh();
+        a.metadata.spawn_dimension = 2;
+        assert_eq!(
+            a.enable_source_player_restoration(1),
+            Err(ServerError::Internal {
+                invariant: "source player spawn metadata"
+            })
+        );
+    }
+    #[test]
+    fn enable_refuses_existing_player_owners_and_history_without_mutation() {
+        for lane in 0..6 {
+            let mut a = fresh();
+            let s = a.prepare(login(1), TransportKind::Memory).unwrap();
+            let seeded = seed_player(s, &saved(1)).unwrap();
+            let runtime = crate::rules::player_survival::merged_runtime(
+                &a.settled_read().unwrap(),
+                &seeded.actor,
+            )
+            .unwrap();
+            if lane == 1 {
+                a.retire(s, CloseReason::PeerGone).unwrap();
+            }
+            if lane >= 2 {
+                a.sessions.clear();
+                a.current_sessions.clear();
+                a.occupied = 0;
+            }
+            match lane {
+                2 => a.residents.actors.push(seeded.actor),
+                3 => {
+                    a.residents
+                        .inventories
+                        .insert(ActorKey::Player(s), seeded.inventory);
+                }
+                4 => {
+                    a.residents.runtimes.insert(ActorKey::Player(s), runtime);
+                }
+                5 => {
+                    a.residents.mining.insert(
+                        ActorKey::Player(s),
+                        MiningProgress {
+                            actor: ActorKey::Player(s),
+                            dimension: Dimension::OVERWORLD,
+                            target: BlockPos::new(0, 0, 0),
+                            observed_block: 1,
+                            tool_slot: HotbarSlot::new(0).unwrap(),
+                            tool: Default::default(),
+                            elapsed: 0,
+                            required: 1,
+                            last_tick: 0,
+                        },
+                    );
+                }
+                _ => {}
+            }
+            let before = (
+                a.sessions.len(),
+                a.residents.actors.len(),
+                a.residents.inventories.len(),
+                a.residents.runtimes.len(),
+                a.residents.mining.len(),
+                a.next_session,
+            );
+            assert_eq!(
+                a.enable_source_player_restoration(1),
+                Err(ServerError::InvalidInput {
+                    field: "source_player_restoration"
+                })
+            );
+            assert_eq!(a.source_player_radius, None);
+            assert_eq!(
+                before,
+                (
+                    a.sessions.len(),
+                    a.residents.actors.len(),
+                    a.residents.inventories.len(),
+                    a.residents.runtimes.len(),
+                    a.residents.mining.len(),
+                    a.next_session
+                )
+            );
+        }
+    }
+    #[test]
+    fn source_direct_allocation_refuses_before_reservation() {
+        let mut a = fresh();
+        a.enable_source_player_restoration(1).unwrap();
+        assert_eq!(
+            a.allocate(login(1), TransportKind::Memory),
+            Err(ServerError::InvalidInput {
+                field: "background_login_required"
+            })
+        );
+        assert_eq!((a.next_session, a.occupied, a.sessions.len()), (1, 0, 0));
+    }
+    #[test]
+    fn missing_registration_separates_canonical_body_and_explicit_runtime() {
+        let mut a = fresh();
+        a.metadata.spawn_dimension = 1;
+        a.metadata.spawn_anchor = mornlea_storage::MetadataChunkPos { x: -2, z: 3 };
+        a.enable_source_player_restoration(1).unwrap();
+        let s = register(&mut a, 1, None);
+        let p = player(&a, s);
+        assert_eq!(p.lifecycle, ActorLifecycle::Pending);
+        assert_eq!(p.dimension, Dimension::DEPTHS);
+        assert_eq!(p.motion.position().get(), [-31.5, 321., 48.5]);
+        assert_eq!(p.motion.velocity().get(), [0.; 3]);
+        assert!(!p.motion.on_ground());
+        let ActorBody::Player(body) = &p.body else {
+            panic!("body")
+        };
+        assert_eq!(body.current.position, [0., 64., 0.]);
+        assert_eq!(body.current.dimension, 0);
+        assert_eq!(
+            (
+                p.survival.health(),
+                p.survival.hunger(),
+                p.survival.oxygen()
+            ),
+            (20, 20, 300)
+        );
+        let runtime = &a.residents.runtimes[&p.key];
+        assert_eq!(
+            (
+                runtime.saturation_milli,
+                runtime.exhaustion_milli,
+                runtime.oxygen,
+                runtime.peak_y
+            ),
+            (5000, 0, 300, 321.)
+        );
+        assert_eq!(runtime.controls, None);
+        assert!(!runtime.has_view && !runtime.reset);
+        assert_eq!(
+            runtime.aux,
+            ActorAux::Player {
+                respawn: None,
+                workbench: None
+            }
+        );
+        assert_eq!(
+            a.residents.inventories[&p.key].slots,
+            [Default::default(); 36]
+        );
+        assert_eq!(
+            a.residents.inventories[&p.key].armor,
+            [Default::default(); 4]
+        );
+        assert_eq!(
+            a.residents.inventories[&p.key].crafting,
+            [Default::default(); 9]
+        );
+        let entry = &a.source_players.entries[&s];
+        assert!(!entry.ever_spawned);
+        assert_eq!(
+            entry.restore.pending_keys(),
+            vec![key(Dimension::DEPTHS, -2, 3)]
+        );
+        assert!(!a.sessions[&s].loaded_current);
+        assert!(a.login_seeds().is_empty());
+    }
+    #[test]
+    fn loaded_registration_preserves_source_fields_and_rounds_bed() {
+        let (a, s) = fixture();
+        let p = player(&a, s);
+        assert_eq!(p.lifecycle, ActorLifecycle::Pending);
+        assert_eq!(p.motion.position().get(), [32.5, 321., 0.5]);
+        assert_eq!(
+            (
+                p.look.yaw(),
+                p.look.pitch(),
+                p.survival.health(),
+                p.survival.hunger()
+            ),
+            (0.1, 0.2, 15, 17)
+        );
+        let r = &a.residents.runtimes[&p.key];
+        assert_eq!((r.saturation_milli, r.exhaustion_milli), (9000, 250));
+        assert_eq!(
+            r.aux,
+            ActorAux::Player {
+                respawn: Some((Dimension::DEPTHS, BlockPos::new(-1, 2, 0))),
+                workbench: None
+            }
+        );
+        assert_eq!(a.residents.inventories[&p.key].selected.get(), 3);
+        assert_eq!(a.residents.inventories[&p.key].slots[3].count, 7);
+        assert!(a.sessions[&s].loaded_current);
+        assert!(
+            format!("{:?}", a.source_players.entries[&s].restore)
+                .contains("require_support: false")
+        );
+        assert!(
+            format!("{:?}", a.source_players.entries[&s].restore).contains("require_support: true")
+        );
+    }
+    #[test]
+    fn failed_install_and_registration_leave_prepared_owners_intact() {
+        let mut a = fresh();
+        a.enable_source_player_restoration(1).unwrap();
+        let s = a.prepare(login(1), TransportKind::Memory).unwrap();
+        a.install(s, None).unwrap();
+        let old = a.sessions[&s].body.clone();
+        assert_eq!(
+            a.install(s, Some(stored(saved(2)))),
+            Err(ServerError::InvalidInput { field: "player_id" })
+        );
+        assert_eq!(a.sessions[&s].body, old);
+        assert!(!a.sessions[&s].loaded_current);
+        let mut invalid = saved(1);
+        invalid.current.dimension = 2;
+        assert!(a.install(s, Some(stored(invalid))).is_err());
+        assert_eq!(a.sessions[&s].body, old);
+        assert!(!a.sessions[&s].loaded_current);
+        a.residents.inventories.insert(
+            ActorKey::Player(s),
+            seed_player(s, &saved(1)).unwrap().inventory,
+        );
+        assert_eq!(
+            a.activate(s),
+            Err(ServerError::Internal {
+                invariant: "source player registration"
+            })
+        );
+        assert_eq!(a.sessions[&s].phase, SessionPhase::Prepared);
+        assert_eq!(a.sessions[&s].body, old);
+        assert!(
+            a.residents.actors.is_empty()
+                && a.residents.runtimes.is_empty()
+                && a.source_players.entries.is_empty()
+        );
+    }
+    fn envelope(s: SessionKey, command: mornlea_domain::Command) -> CommandEnvelope {
+        CommandEnvelope::try_new(CommandEnvelopeParts {
+            tick: 0,
+            session: s.get(),
+            sequence: 1,
+            arrival_index: 0,
+            command,
+        })
+        .unwrap()
+    }
+    #[test]
+    fn source_pending_gate_keeps_only_close_resync_and_whole_move_exceptions() {
+        use mornlea_domain::{
+            Command, ContainerKind, ContainerMove, PartialMove, ResyncIntent, StackSource,
+            StackView,
+        };
+        let (mut a, s) = fixture();
+        let reference =
+            ContainerRef::try_new(ChunkPos::new(0, 0), ContainerKind::Chest, 0, 1).unwrap();
+        let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+        for command in [
+            Command::SelectHotbar(HotbarSlot::new(5).unwrap()),
+            Command::DropSelectedItem,
+            Command::TakeCraftingOutput,
+            Command::EquipArmor,
+            Command::MovePartial(
+                PartialMove::try_new(StackView::Container(reference), 0, 1, false).unwrap(),
+            ),
+            Command::QuickMove(StackSource::try_new(StackView::Container(reference), 0).unwrap()),
+            Command::DropStack(StackSource::try_new(StackView::Container(reference), 0).unwrap()),
+        ] {
+            assert_eq!(
+                context.source_player_command_ready(&envelope(s, command)),
+                Ok(false)
+            );
+        }
+        for command in [
+            Command::CloseContainer,
+            Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(0, 0), 0).unwrap()),
+            Command::MoveContainer(
+                ContainerMove::try_new(ChunkPos::new(0, 0), ContainerKind::Chest, 0, 1, 0, 1)
+                    .unwrap(),
+            ),
+        ] {
+            assert_eq!(
+                context.source_player_command_ready(&envelope(s, command)),
+                Ok(true)
+            );
+        }
+        context.actors.clear();
+        assert_eq!(
+            context.source_player_command_ready(&envelope(s, Command::DropSelectedItem)),
+            Err(ServerError::Internal {
+                invariant: "source player registration"
+            })
+        );
+    }
+    #[test]
+    fn current_acquire_activates_after_pending_admission_and_keeps_scan() {
+        let (mut a, s) = fixture();
+        offer(&mut a, key(Dimension::DEPTHS, 3, 0), 1);
+        let waiting = a.advance_tick(TickBudget::full()).unwrap();
+        assert!(!local(&waiting).ready());
+        assert!(!local(&waiting).reset());
+        let node = &a.source_players.entries[&s] as *const _;
+        for packet in [
+            mornlea_protocol::ClientPacket::PlayerInput(
+                PlayerInput::new(1, 1, 0, false, 1.2, 0.3, false, false, false, false).unwrap(),
+            ),
+            mornlea_protocol::ClientPacket::SelectHotbar(SelectHotbar::new(2, 5).unwrap()),
+        ] {
+            a.accept(s, PlayIntent::try_from(packet).unwrap()).unwrap();
+        }
+        offer(&mut a, key(Dimension::OVERWORLD, 0, 0), 0);
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        assert!(local(&p).ready() && local(&p).reset());
+        assert_eq!(local(&p).last_input_sequence(), 0);
+        assert_eq!(player(&a, s).motion.position().get(), [8.5, 65., 8.5]);
+        assert_eq!(player(&a, s).motion.velocity().get(), [0.; 3]);
+        assert!(!player(&a, s).motion.on_ground());
+        assert_eq!(
+            a.residents.inventories[&ActorKey::Player(s)].selected.get(),
+            3
+        );
+        assert_eq!(
+            (player(&a, s).look.yaw(), player(&a, s).look.pitch()),
+            (0.1, 0.2)
+        );
+        assert!(!a.residents.runtimes[&ActorKey::Player(s)].reset);
+        assert_eq!(&a.source_players.entries[&s] as *const _, node);
+        assert!(a.source_players.entries[&s].ever_spawned);
+        assert!(
+            a.source_players.entries[&s]
+                .restore
+                .pending_keys()
+                .is_empty()
+        );
+        assert!(format!("{:?}", a.source_players.entries[&s].restore).contains("completed: true"));
+        a.advance_tick(TickBudget::full()).unwrap();
+    }
+    #[test]
+    fn solid_current_uses_safe_and_missing_uses_only_anchor() {
+        let (mut a, s) = fixture();
+        offer(&mut a, key(Dimension::OVERWORLD, 0, 0), 2);
+        a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(player(&a, s).lifecycle, ActorLifecycle::Pending);
+        offer(&mut a, key(Dimension::DEPTHS, 3, 0), 1);
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        assert!(local(&p).reset());
+        assert_eq!(player(&a, s).dimension, Dimension::DEPTHS);
+        assert_eq!(player(&a, s).motion.position().get(), [56.5, 64., 8.5]);
+        let ActorBody::Player(body) = &player(&a, s).body else {
+            panic!("body")
+        };
+        assert_eq!(body.safe, saved(1).safe);
+        let mut a = fresh();
+        a.metadata.spawn_dimension = 1;
+        a.metadata.spawn_anchor = mornlea_storage::MetadataChunkPos { x: 2, z: 0 };
+        a.enable_source_player_restoration(1).unwrap();
+        a.enable_live_chunks().unwrap();
+        for (x, z) in [(-1, -1), (-1, 0), (0, -1), (0, 0)] {
+            offer(&mut a, key(Dimension::OVERWORLD, x, z), 0);
+        }
+        a.advance_tick(TickBudget::full()).unwrap();
+        let s = register(&mut a, 1, None);
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        assert!(!local(&p).ready());
+        offer(&mut a, key(Dimension::DEPTHS, 2, 0), 1);
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        assert!(local(&p).ready() && local(&p).reset());
+        assert_eq!(player(&a, s).motion.position().get(), [32.5, 64., 0.5]);
+        assert!(player(&a, s).motion.on_ground());
+    }
+    #[test]
+    fn pending_whole_container_move_defers_but_initial_viewer_is_absent() {
+        use mornlea_domain::{Command, ContainerKind, ContainerMove, ResyncIntent};
+        let (mut a, s) = fixture();
+        let movement =
+            ContainerMove::try_new(ChunkPos::new(0, 0), ContainerKind::Chest, 0, 1, 0, 1).unwrap();
+        let command = envelope(s, Command::MoveContainer(movement));
+        {
+            let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+            assert_eq!(context.source_player_command_ready(&command), Ok(true));
+            crate::rules::containers::run(
+                &mut context,
+                RuleCall {
+                    phase: RulePhase::PlayerCommand,
+                    actor: None,
+                    command: Some(&command),
+                    internal: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(context.deferred(RulePhase::ContainerMove), vec![command]);
+            assert!(context.read().viewer(s).is_none());
+        }
+        a.accept(
+            s,
+            PlayIntent::Sequenced {
+                sequence: 1,
+                command: Command::MoveContainer(movement),
+            },
+        )
+        .unwrap();
+        a.accept(
+            s,
+            PlayIntent::Sequenced {
+                sequence: 2,
+                command: Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(0, 0), 0).unwrap()),
+            },
+        )
+        .unwrap();
+        offer(&mut a, key(Dimension::OVERWORLD, 0, 0), 3);
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        assert!(local(&p).ready() && local(&p).reset());
+        let view = a.settled_read().unwrap();
+        let chest = view.container(movement.container()).unwrap();
+        let ContainerSlots::Chest(slots) = chest.slots else {
+            panic!("chest")
+        };
+        assert_eq!(slots[0].count, 3);
+        assert_eq!(slots[1].count, 0);
+        assert_eq!(
+            view.inventory(ActorKey::Player(s)).unwrap().slots[3].count,
+            7
+        );
+        assert!(view.viewer(s).is_none());
+        let mut a = fresh();
+        a.enable_source_player_restoration(1).unwrap();
+        let s = register(&mut a, 1, None);
+        // A private stale-view injection pins the existing unconditional close leg.
+        a.views.insert(s, ViewLease::new(s, movement.container()));
+        a.accept(
+            s,
+            PlayIntent::Sequenced {
+                sequence: 1,
+                command: Command::CloseContainer,
+            },
+        )
+        .unwrap();
+        a.advance_tick(TickBudget::full()).unwrap();
+        assert!(a.views.is_empty());
+    }
+    #[test]
+    fn source_book_is_live_bounded_and_retirement_preserves_durable_history() {
+        let mut a = fresh();
+        a.enable_source_player_restoration(1).unwrap();
+        let sessions: Vec<_> = (1..=8).map(|tag| register(&mut a, tag, None)).collect();
+        let next = a.next_session;
+        assert!(matches!(
+            a.prepare(login(9), TransportKind::Memory),
+            Err(ServerError::Capacity {
+                resource: Resource::Players,
+                ..
+            })
+        ));
+        assert_eq!(a.next_session, next);
+        a.retire(sessions[0], CloseReason::PeerGone).unwrap();
+        assert_eq!(a.source_players.entries.len(), 7);
+        assert_eq!(a.residents.actors.len(), 8);
+        assert_eq!(a.residents.runtimes.len(), 8);
+        assert_eq!(a.sessions.len(), 8);
+        register(&mut a, 9, None);
+        assert_eq!(a.source_players.entries.len(), 8);
+        assert_eq!(a.residents.actors.len(), 9);
+        assert_eq!(a.sessions.len(), 9);
+    }
+    fn error() -> ServerError {
+        ServerError::Capacity {
+            resource: Resource::Commands,
+            limit: 4096,
+            observed: 4097,
+        }
+    }
+    fn partial(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        let old = context
+            .read()
+            .observation(Dimension::DEPTHS, BlockPos::new(56, 64, 8))
+            .unwrap();
+        context
+            .transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(old, 1).unwrap()],
+            )
+            .unwrap();
+        Ok(())
+    }
+    fn fault(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        partial(context)?;
+        Err(error())
+    }
+    fn unwind(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        partial(context)?;
+        panic!("trusted source ownership fault")
+    }
+    fn moved_book_and_schedules(panic: bool) {
+        let (mut a, s) = fixture();
+        offer(&mut a, key(Dimension::DEPTHS, 3, 0), 1);
+        a.advance_tick(TickBudget::full()).unwrap();
+        let entry = &a.source_players.entries[&s];
+        let node = entry as *const _;
+        let progress = format!("{:?}", entry.restore);
+        let keys = entry.restore.pending_keys();
+        assert!(!keys.is_empty());
+        assert_eq!(player(&a, s).lifecycle, ActorLifecycle::Pending);
+        let key = key(Dimension::DEPTHS, 3, 0);
+        let pos = BlockPos::new(63, 200, 15);
+        a.fluid_schedule.enqueue_fluid(key, pos, 100);
+        a.farmland_schedule.enqueue_candidate(key, pos, 100);
+        let tick = a.next_tick();
+        set_dispatch_hook(Some(if panic { unwind } else { fault }));
+        let result = catch_unwind(AssertUnwindSafe(|| a.advance_tick(TickBudget::full())));
+        if panic {
+            assert_eq!(
+                result.unwrap(),
+                Err(ServerError::Internal {
+                    invariant: "authoritative tick panic"
+                })
+            );
+        } else {
+            assert_eq!(result.unwrap(), Err(error()));
+        }
+        set_dispatch_hook(None);
+        assert_eq!(&a.source_players.entries[&s] as *const _, node);
+        assert_eq!(
+            format!("{:?}", a.source_players.entries[&s].restore),
+            progress
+        );
+        assert_eq!(a.source_players.entries[&s].restore.pending_keys(), keys);
+        assert_eq!(a.next_tick(), tick);
+        assert_eq!(
+            a.residents.ready[&key].block(BlockPos::new(56, 64, 8)),
+            Some(1)
+        );
+        assert!(a.settled_read().is_err());
+        assert_eq!(a.phase, ServerPhase::Closing);
+        assert_eq!(
+            a.advance_tick(TickBudget::full()).unwrap_err(),
+            a.tick_failure.unwrap()
+        );
+        assert_eq!(a.fluid_schedule.pending_fluid(Dimension::DEPTHS), 1);
+        assert_eq!(a.farmland_schedule.pending_candidates(Dimension::DEPTHS), 1);
+        assert_eq!(
+            a.fluid_schedule.fluid_due(Dimension::DEPTHS, pos),
+            Some(100)
+        );
+        assert_eq!(
+            a.farmland_schedule.candidate_due(Dimension::DEPTHS, pos),
+            Some(100)
+        );
+    }
+    #[test]
+    fn moved_book_and_schedules_return_after_error() {
+        moved_book_and_schedules(false);
+    }
+    #[test]
+    fn moved_book_and_schedules_return_after_unwind() {
+        moved_book_and_schedules(true);
+    }
+    fn retire_during(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        let s = context
+            .read()
+            .actors()
+            .iter()
+            .find_map(|a| {
+                if let ActorKey::Player(s) = a.key {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        context.authority.retire(s, CloseReason::PeerGone)
+    }
+    #[test]
+    fn post_context_retirement_prunes_returned_book() {
+        let (mut a, s) = fixture();
+        a.advance_tick(TickBudget::full()).unwrap();
+        set_dispatch_hook(Some(retire_during));
+        a.advance_tick(TickBudget::full()).unwrap();
+        set_dispatch_hook(None);
+        assert_eq!(a.sessions[&s].phase, SessionPhase::Retired);
+        assert!(a.source_players.entries.is_empty());
+        assert!(player(&a, s).body == ActorBody::Player(saved(1)));
+    }
+    #[test]
+    fn manual_session_actual_final_restores_once_without_delivery() {
+        let (mut a, s) = fixture();
+        offer(&mut a, key(Dimension::OVERWORLD, 0, 0), 0);
+        let tick = a.next_tick();
+        let frames = a.sessions[&s].outbox.len();
+        a.begin_close();
+        assert_eq!(a.run_final(&mut AuthoritativeFinalReducer).unwrap(), tick);
+        assert_eq!(a.next_tick(), tick + 1);
+        assert_eq!(a.sessions[&s].outbox.len(), frames);
+        assert_eq!(player(&a, s).lifecycle, ActorLifecycle::Active);
+        assert!(a.source_players.entries[&s].ever_spawned);
+        assert!(format!("{:?}", a.source_players.entries[&s].restore).contains("completed: true"));
+        assert!(!a.residents.runtimes[&ActorKey::Player(s)].reset);
+        assert_eq!(
+            a.run_final(&mut AuthoritativeFinalReducer),
+            Err(ServerError::InvalidState {
+                phase: ServerPhase::Closing
+            })
+        );
+        assert_eq!(a.next_tick(), tick + 1);
     }
 }

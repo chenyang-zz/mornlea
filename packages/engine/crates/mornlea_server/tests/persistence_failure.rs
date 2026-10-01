@@ -44,3 +44,6 @@ mod chunk_retirement;
 
 #[path = "persistence_failure/actor_projection.rs"]
 mod actor_projection;
+
+#[path = "persistence_failure/source_player_restore.rs"]
+mod source_player_restore;

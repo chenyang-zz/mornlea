@@ -34,6 +34,7 @@ use super::contracts::{
     SessionPhase, TickBudget, TickCounters, TickPublication,
 };
 use super::publication;
+use super::source_player_restore::{self, SourcePlayerBook};
 use super::state::{AuthorityState, TickContext};
 use crate::rules::{
     companions, containers, crafting, crops, drops, eating, environment, farmland, fluids,
@@ -222,6 +223,7 @@ fn reduce_tick_inner(
         state.farmland_schedule_mut(),
         farmland::FarmlandSchedule::new(),
     );
+    let mut source_players = std::mem::take(state.source_players_mut());
     let mut context = TickContext::for_tick(state, budget);
     let result = catch_unwind(AssertUnwindSafe(|| {
         // Seeded logins land before the first provider row, so this tick's own
@@ -239,6 +241,7 @@ fn reduce_tick_inner(
             &drained.dispatched,
             &mut fluid_schedule,
             &mut farmland_schedule,
+            &mut source_players,
         )?;
         let overlay = context.viewer_leases();
         // Private observations are projected after every settlement. Provider
@@ -266,10 +269,12 @@ fn reduce_tick_inner(
         context.commit_carried();
         Ok::<_, ServerError>((overlay, hits, events, counters))
     }));
-    // Drop returns partial resident and dirty ownership before either schedule is restored.
+    // Context recovery precedes restoration of all three exclusively moved owners.
     drop(context);
     *state.fluid_schedule_mut() = fluid_schedule;
     *state.farmland_schedule_mut() = farmland_schedule;
+    *state.source_players_mut() = source_players;
+    state.prune_source_players();
     let (mut overlay, hits, mut events, counters) = match result {
         Ok(result) => result?,
         Err(panic) => std::panic::resume_unwind(panic),
@@ -375,6 +380,7 @@ fn dispatch_rows(
     dispatched: &[CommandEnvelope],
     fluid_schedule: &mut fluids::FluidSchedule,
     farmland_schedule: &mut farmland::FarmlandSchedule,
+    source_players: &mut SourcePlayerBook,
 ) -> Result<(), ServerError> {
     for envelope in dispatched {
         admit_command(context, envelope)?;
@@ -400,6 +406,7 @@ fn dispatch_rows(
         .collect();
     companions::run(context, batch_call(RulePhase::CompanionIntent))?;
     world_acquisition::run(context, batch_call(RulePhase::Acquire))?;
+    source_player_restore::advance(source_players, context)?;
     for session in active_players(context) {
         let actor = ActorKey::Player(session);
         per_actor(
@@ -562,6 +569,9 @@ fn admit_command(
     context: &mut TickContext<'_>,
     envelope: &CommandEnvelope,
 ) -> Result<(), ServerError> {
+    if !context.source_player_command_ready(envelope)? {
+        return Ok(());
+    }
     context.record_player_input(envelope);
     let admits: [ProviderCall; 4] = [
         player_motion::run,
