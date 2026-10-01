@@ -103,6 +103,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)).
 - [x] 3.8v0 Qualify the actual previous Go read-only save verifier ([packet](plans/54-previous-runtime-verifier.md)).
 - [x] 3.8v1 Rebuild and bind the sealed previous runtime package ([packet](plans/57-prepare-previous-package.md)).
+- [ ] 3.8v2 Invoke the actual sealed verifier before starting the previous runtime ([packet](plans/59-previous-verifier-consumer.md)).
 
 ## Review repairs
 
