@@ -33,13 +33,21 @@
 //! Bounds and failure policy: the assembled vector is checked against the
 //! frozen family-record count and against the measured frame byte bound
 //! (through the accepted frame validator's own accounting over a minimal
-//! terrain-only frame) before anything commits. A rejected publication
-//! preserves the previous output and the previous resource-reference set
-//! in full; only the successful path applies the staged arena releases and
-//! swaps the reference set. The preparation owners themselves still advance
-//! their own state on a failed frame — their port semantics are
-//! non-transactional by contract — but nothing they retain is released or
-//! published by a rejected vector.
+//! terrain-only frame) before the reference set commits. A rejected
+//! publication preserves the previous output and the previous
+//! resource-reference set in full, per the retry-owned model: an upsert the
+//! frame rejected stays eligible for the next publication — its geometry
+//! is neither consumed nor forgotten — while every drained geometry whose
+//! key was never published releases through `forget` on every exit path,
+//! before any cap decision, so the arena never retains a geometry the
+//! prior output does not reference. The preparation owners themselves
+//! still advance their own state on a failed frame — their port semantics
+//! are non-transactional by contract — but nothing they retain is released
+//! or published by a rejected vector. The admission-summary store is
+//! bounded alongside: a slot survives only while its exact admission is
+//! live in publication, still in flight, or retry-owned through the retry
+//! list's own copy, so removed sections and reset epochs stop holding
+//! slots and a re-admitted section records its summary again.
 
 use std::sync::Arc;
 
@@ -74,6 +82,16 @@ fn far_shell_light() -> LightSummary {
 /// values the checked constructor admits.
 fn removal_light() -> LightSummary {
     LightSummary::try_new(0, 0).expect("checked removal summary")
+}
+
+/// The far-shell admission summary: the same neutral class a fresh far
+/// upsert carries, kept beside the retry entry so a re-attempt needs no
+/// other state.
+fn far_shell_summary() -> SectionSummary {
+    SectionSummary {
+        material: TerrainMaterial::Opaque,
+        light: far_shell_light(),
+    }
 }
 
 /// The material class and light channels of one near payload, recorded once
@@ -128,15 +146,19 @@ fn summarize_payload(payload: &OwnedMeshView) -> SectionSummary {
 
 /// The terrain family publication owner.
 ///
-/// It owns exactly two pieces of family state: the complete resource keys
+/// It owns exactly three pieces of family state: the complete resource keys
 /// the last accepted output referenced (its release obligations toward the
-/// arena) and the admission-time material/light summaries of the near jobs
-/// it admitted (one slot per terrain key; a newer identity of the same
-/// section replaces it). Every world, ring and arena fact is borrowed from
-/// the real owners at publication time.
+/// arena), the admission-time material/light summaries of the near jobs it
+/// admitted (one slot per terrain key; a newer identity of the same section
+/// replaces it, and slots leaving publication or reset across epochs are
+/// pruned), and the retry list of upserts a rejected frame did not publish
+/// (each entry carries its own summary, so a re-attempt depends on nothing
+/// else). Every world, ring and arena fact is borrowed from the real owners
+/// at publication time.
 pub struct TerrainPublisher {
     published: Vec<PreparedResourceKey>,
     summaries: Vec<(PreparedResourceKey, SectionSummary)>,
+    retry: Vec<(PreparedResourceKey, SectionSummary)>,
 }
 
 impl TerrainPublisher {
@@ -144,6 +166,7 @@ impl TerrainPublisher {
         Ok(Self {
             published: Vec::new(),
             summaries: Vec::new(),
+            retry: Vec::new(),
         })
     }
 
@@ -151,6 +174,18 @@ impl TerrainPublisher {
     /// publication order. A rejected publication leaves this unchanged.
     pub fn published_resources(&self) -> &[PreparedResourceKey] {
         &self.published
+    }
+
+    /// The number of live admission-summary slots. Bounded by the sections
+    /// currently published, still in flight, or just dropped this frame.
+    pub fn summary_slots(&self) -> usize {
+        self.summaries.len()
+    }
+
+    /// The number of upserts a rejected frame left retry-owned. Zero after
+    /// every accepted publication.
+    pub fn retry_owned(&self) -> usize {
+        self.retry.len()
     }
 
     /// Admits one near preparation job through the real queue while
@@ -179,11 +214,12 @@ impl TerrainPublisher {
     /// The step order is fixed: far-ring maintenance around the center
     /// tile, removal derivation against the mirror and the ring, the real
     /// work step under the demanded budget, then the real selection frame
-    /// drained through the port probe. Results completed by this frame's
-    /// work step are therefore drained by the next frame's dispatch, which
-    /// is the owners' own pipelined discipline; the probe keeps every
-    /// drained identity, including the ones the selection drops, so no
-    /// retained geometry is ever lost to the drop channel.
+    /// drained through the port probe with every drained identity captured
+    /// before any error propagates. Results completed by this frame's work
+    /// step are therefore drained by the next frame's dispatch, which is
+    /// the owners' own pipelined discipline. Retry-owned upserts from a
+    /// previously rejected frame re-attempt first, so rejected work never
+    /// strands behind fresher work.
     pub fn publish(
         &mut self,
         view: &ProjectionView<'_>,
@@ -209,13 +245,17 @@ impl TerrainPublisher {
         // the mirror or fell behind the confirmed chunk revision, or when
         // the ring no longer tracks its tile at the current generation. A
         // key of another epoch is the cross-epoch reset: released without
-        // a record, because the old frame was dropped wholesale.
+        // a record, because the old frame was dropped wholesale. These
+        // releases retire references the prior output still holds, so they
+        // apply only on the successful path.
         let mut removes: Vec<TerrainRecord> = Vec::new();
         let mut kept: Vec<PreparedResourceKey> = Vec::new();
-        let mut release: Vec<PreparedResourceKey> = Vec::new();
+        let mut retire: Vec<PreparedResourceKey> = Vec::new();
+        let mut leaving: Vec<PreparedResourceKey> = Vec::new();
         for key in &self.published {
             if key.epoch() != view.frame_epoch() {
-                release.push(*key);
+                retire.push(*key);
+                leaving.push(*key);
                 continue;
             }
             let current = match key.key() {
@@ -233,83 +273,143 @@ impl TerrainPublisher {
                 kept.push(*key);
             } else {
                 removes.push(removal_record(view, *key)?);
-                release.push(*key);
+                retire.push(*key);
+                leaving.push(*key);
             }
+        }
+        // Summary bounding: an admission slot survives only while its exact
+        // admission is live in publication, still in flight toward a drain,
+        // or retry-owned through the retry list's own copy — a key that
+        // just left publication or crossed an epoch boundary stops holding
+        // a slot, and a re-admitted section records its summary again.
+        if !leaving.is_empty() {
+            self.summaries.retain(|(held, _)| !leaving.contains(held));
         }
 
         // The real work step, then the real selection frame over the same
-        // real queue through the recording probe.
+        // real queue through the recording probe. The drained identities
+        // are captured before any dispatch error propagates, so every exit
+        // path below handles them.
         queue.work(budget);
-        let drained = {
+        let (drained, dispatch_error) = {
             let mut probe = PortProbe {
                 queue,
                 drained: Vec::new(),
             };
-            selection.dispatch_frame(&mut probe, center_tile, params)?;
-            probe.drained
+            let outcome = selection.dispatch_frame(&mut probe, center_tile, params);
+            let drained = probe.drained;
+            (drained, outcome.err())
         };
 
-        // Classification of everything the frame drained. A failed build
-        // retained nothing; a result of another epoch, a far result of
-        // another generation or an untracked tile, and a near result that
-        // no longer matches the confirmed chunk revision never publish and
-        // release their retained geometry exactly once. The freshest
-        // delivery of one full key wins the upsert slot.
+        // Classification shared by every exit path from here on: upserts
+        // this frame attempts (retry-owned entries first, then the fresh
+        // drain) and the never-published keys that must release.
         let mut near_upserts: Vec<TerrainRecord> = Vec::new();
         let mut far_upserts: Vec<TerrainRecord> = Vec::new();
+        let mut attempted: Vec<(PreparedResourceKey, SectionSummary)> = Vec::new();
+        let mut dropped: Vec<PreparedResourceKey> = Vec::new();
+
+        // Retry-owned re-attempts: an upsert a previously rejected frame
+        // did not publish retries first. It survives only while its
+        // identity is still current and the real arena still retains its
+        // geometry; anything else releases as never-published.
+        let retrying = std::mem::take(&mut self.retry);
+        for (key, summary) in retrying {
+            if !self.retry_current(view, selection, queue, &key) {
+                dropped.push(key);
+                continue;
+            }
+            let record = upsert_record(view, key, summary.material, summary.light)?;
+            push_upsert(&mut near_upserts, &mut far_upserts, record);
+            attempted.push((key, summary));
+        }
+
+        // The fresh drain. A failed build retained nothing; a result of
+        // another epoch, a far result of another generation or an untracked
+        // tile, a near result that no longer matches the confirmed chunk
+        // revision or was never admitted through this publisher, and a
+        // result the arena no longer retains never publish — each releases
+        // as never-published. The freshest delivery of one full key wins
+        // the upsert slot.
         for (key, delivered) in drained {
             if !delivered {
                 continue;
             }
             if key.epoch() != view.frame_epoch() {
-                release.push(key);
+                dropped.push(key);
                 continue;
             }
-            match key.key() {
+            let summary = match key.key() {
                 TerrainKey::Section(section) => {
                     if held_revision(view, key.dimension(), section.chunk())
                         != Some(key.content_revision())
                     {
                         // A stale mesh resets: it never publishes and its
-                        // arena slot returns through the staged release.
-                        release.push(key);
+                        // arena slot returns through the release below.
+                        dropped.push(key);
+                        self.forget_summary(&key);
                         continue;
                     }
-                    let Some((_, summary)) = self.summaries.iter().find(|(held, _)| held == &key)
-                    else {
-                        // Only a job this publisher admitted carries the
-                        // attribution a record needs; anything else is not
-                        // this family's work and releases.
-                        release.push(key);
-                        continue;
-                    };
-                    replace_or_push(
-                        &mut near_upserts,
-                        upsert_record(view, key, summary.material, summary.light)?,
-                    );
+                    match self.summaries.iter().find(|(held, _)| held == &key) {
+                        Some((_, summary)) => *summary,
+                        None => {
+                            // Only a job this publisher admitted carries the
+                            // attribution a record needs.
+                            dropped.push(key);
+                            continue;
+                        }
+                    }
                 }
                 TerrainKey::LodTile(tile) => {
                     if key.generation() != selection.generation() || !selection.tracks(*tile) {
-                        release.push(key);
+                        dropped.push(key);
                         continue;
                     }
-                    replace_or_push(
-                        &mut far_upserts,
-                        upsert_record(view, key, TerrainMaterial::Opaque, far_shell_light())?,
-                    );
+                    far_shell_summary()
                 }
+            };
+            // A record publishes only while the real arena still retains
+            // its geometry: a later delivery of the same terrain key
+            // supersedes the retained entry out from under an earlier
+            // candidate of the same drain.
+            if queue.prepared_resource(&key).is_err() {
+                dropped.push(key);
+                self.forget_summary(&key);
+                continue;
             }
+            let record = upsert_record(view, key, summary.material, summary.light)?;
+            push_upsert(&mut near_upserts, &mut far_upserts, record);
+            attempted.push((key, summary));
         }
 
-        // Assemble and check the complete vector before anything commits:
-        // the frozen per-family record count, then the measured frame byte
-        // bound through the accepted frame validator's own accounting over
-        // a minimal terrain-only frame, so a family that could never fit a
-        // legal frame rejects here instead of at publication.
+        // Never-published releases apply on every exit path from here,
+        // before any cap decision: the arena retains nothing the prior
+        // output does not reference, exactly as the retry-owned model
+        // requires — the dropped keys were never referenced.
+        for key in &dropped {
+            let _ = queue.forget(key);
+        }
+
+        if let Some(error) = dispatch_error {
+            // The frame failed inside the real selection dispatch after it
+            // drained: the attempted upserts stay retry-owned, the dropped
+            // geometries released above, and the prior output and its
+            // references are untouched.
+            self.retry = attempted;
+            return Err(error);
+        }
+
+        // Assemble and check the complete vector before the reference set
+        // commits: the frozen per-family record count, then the measured
+        // frame byte bound through the accepted frame validator's own
+        // accounting over a minimal terrain-only frame, so a family that
+        // could never fit a legal frame rejects here instead of at
+        // publication. A rejected vector leaves its upserts retry-owned.
         let mut records = removes;
         records.append(&mut near_upserts);
         records.append(&mut far_upserts);
         if records.len() > view.limits().family_records() {
+            self.retry = attempted;
             return Err(ClientError::Capacity);
         }
         let candidate = PresentationFrame::try_new(
@@ -322,14 +422,18 @@ impl TerrainPublisher {
             )?],
         )?;
         if candidate.validated_size()? > view.limits().frame_bytes() {
+            self.retry = attempted;
             return Err(ClientError::Capacity);
         }
 
-        // The single commit: apply the staged arena releases exactly once
-        // (a late or repeated forget after a supersede or an invalidation
+        // The single commit: apply the staged retirements exactly once (a
+        // late or repeated forget after a supersede or an invalidation
         // releases nothing), then swap the reference set to the survivors
-        // plus this frame's upserts.
-        for key in &release {
+        // plus this frame's upserts. Every attempted upsert published or
+        // was superseded inside the same vector by a fresher identity of
+        // its terrain key, whose delivery already released the older
+        // geometry, so the retry list empties.
+        for key in &retire {
             let _ = queue.forget(key);
         }
         kept.extend(
@@ -338,7 +442,41 @@ impl TerrainPublisher {
                 .filter_map(|record| record.resource().copied()),
         );
         self.published = kept;
+        self.retry = Vec::new();
         Ok(records)
+    }
+
+    /// Whether one retry-owned identity may still publish: its epoch is the
+    /// frame's, the real arena still retains its geometry, and its section
+    /// or tile is still current against the mirror and the ring.
+    fn retry_current(
+        &self,
+        view: &ProjectionView<'_>,
+        selection: &LodSelection,
+        queue: &PreparationQueue,
+        key: &PreparedResourceKey,
+    ) -> bool {
+        if key.epoch() != view.frame_epoch() {
+            return false;
+        }
+        if queue.prepared_resource(key).is_err() {
+            return false;
+        }
+        match key.key() {
+            TerrainKey::Section(section) => {
+                held_revision(view, key.dimension(), section.chunk())
+                    == Some(key.content_revision())
+            }
+            TerrainKey::LodTile(tile) => {
+                selection.tracks(*tile) && key.generation() == selection.generation()
+            }
+        }
+    }
+
+    /// Drops one exact admission-summary slot whose candidate just left the
+    /// publishable set.
+    fn forget_summary(&mut self, key: &PreparedResourceKey) {
+        self.summaries.retain(|(held, _)| held != key);
     }
 }
 
@@ -414,14 +552,18 @@ fn upsert_record(
     )
 }
 
-/// The freshest delivery of one full key wins its upsert slot: a later
-/// result of the same terrain key replaces the earlier record in place, so
-/// one frame publishes at most one current record per full key.
-fn replace_or_push(records: &mut Vec<TerrainRecord>, record: TerrainRecord) {
-    if let Some(slot) = records.iter_mut().find(|held| held.key() == record.key()) {
+/// Routes one upsert into its class vector: the freshest delivery of one
+/// full key wins the slot, so one frame publishes at most one current
+/// record per full key.
+fn push_upsert(near: &mut Vec<TerrainRecord>, far: &mut Vec<TerrainRecord>, record: TerrainRecord) {
+    let target = match record.key() {
+        TerrainKey::Section(_) => near,
+        TerrainKey::LodTile(_) => far,
+    };
+    if let Some(slot) = target.iter_mut().find(|held| held.key() == record.key()) {
         *slot = record;
     } else {
-        records.push(record);
+        target.push(record);
     }
 }
 

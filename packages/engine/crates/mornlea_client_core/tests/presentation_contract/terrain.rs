@@ -928,3 +928,250 @@ fn record_and_byte_caps_preserve_prior_output() {
         assert_eq!(two.len(), 2, "the prior output stays the caller's vector");
     }
 }
+
+/// `terrain::rejected_upserts_retry_and_dropped_release`: a frame rejected
+/// by the record cap preserves the prior output and references, forgets
+/// every drained geometry whose key was never published (the arena returns
+/// to its prior state for those keys), keeps the rejected upserts
+/// retry-owned — neither consumed nor forgotten — and publishes them on the
+/// next frame once capacity frees.
+#[test]
+fn rejected_upserts_retry_and_dropped_release() {
+    // An eight-tile band, a four-job frame allowance and a record cap of
+    // four: the first two frames publish the first four tiles.
+    let mut h = new_harness(
+        1,
+        7,
+        far_config(true, 2, 2, 4 * charge()),
+        limits_with(4, frozen_limits().frame_bytes()),
+    );
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 5)]);
+    let center = ChunkPos::new(0, 0);
+    let center_tile = lod::tile_from_chunk(center);
+    publish(&mut h, center, full_budget()).expect("selection frame");
+    let four = publish(&mut h, center, full_budget()).expect("four records admit");
+    assert_eq!(four.len(), 4);
+    let references = h.publisher.published_resources().to_vec();
+    assert_eq!(references.len(), 4);
+
+    // The accepted frame's tail dispatches the remaining four tiles; a
+    // rogue far job inside the near disk and one water near section join
+    // them in the queue, and the frame that drains all six is rejected:
+    // five valid upserts over a cap of four.
+    let near = near_job(&mut h, center, 0, 5, 2);
+    let near_key = *near.key();
+    admit_near(&mut h, near).expect("near admission");
+    let rogue = far_job(&mut h, center_tile, 7);
+    let rogue_key = *rogue.key();
+    h.queue.try_submit(rogue).expect("rogue admission");
+
+    let error = publish(&mut h, center, full_budget()).expect_err("five upserts reject");
+    assert_eq!(error, ClientError::Capacity);
+    assert_eq!(four.len(), 4, "the prior output stays the caller's vector");
+    assert_eq!(
+        h.publisher.published_resources(),
+        references,
+        "the prior references are preserved"
+    );
+    // The never-published rogue released at rejection; the rejected valid
+    // upserts stay retry-owned with their geometries retained.
+    assert!(
+        h.queue.prepared_resource(&rogue_key).is_err(),
+        "a never-published drained geometry is forgotten at rejection"
+    );
+    assert!(
+        h.queue.prepared_resource(&near_key).is_ok(),
+        "the rejected near mesh is retained"
+    );
+    assert_eq!(
+        h.publisher.retry_owned(),
+        5,
+        "four far tiles and one near section"
+    );
+    for record in &four {
+        let key = record.resource().expect("far resource");
+        assert!(
+            h.queue.prepared_resource(key).is_ok(),
+            "the prior output still resolves"
+        );
+    }
+
+    // Capacity frees and the next frame publishes the retry-owned upserts.
+    h.limits = limits_with(6, frozen_limits().frame_bytes());
+    let records = publish(&mut h, center, full_budget()).expect("the retry frame publishes");
+    assert_eq!(
+        records.len(),
+        5,
+        "the rejected upserts publish after capacity frees"
+    );
+    let near = records
+        .iter()
+        .find(|record| *record.key() == *near_key.key())
+        .expect("the rejected near section publishes");
+    assert_eq!(
+        *near.material(),
+        TerrainMaterial::Water,
+        "the retry carries its own summary"
+    );
+    assert!(
+        records
+            .iter()
+            .all(|record| *record.key() != *rogue_key.key())
+    );
+    assert_eq!(
+        h.publisher.retry_owned(),
+        0,
+        "an accepted publication consumes the retries"
+    );
+    assert_eq!(
+        h.publisher.published_resources().len(),
+        9,
+        "four kept plus five published"
+    );
+    assert_resources_resolve(&h, &records);
+
+    // A stale retry entry never resurrects: the mirror advanced past the
+    // rejected sections' revision after the rejection.
+    let mut h = new_harness(
+        1,
+        7,
+        far_config(false, 2, 3, 24 * charge()),
+        limits_with(1, frozen_limits().frame_bytes()),
+    );
+    let chunk = ChunkPos::new(3, 3);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 3, 3, 5)]);
+    let job = near_job(&mut h, chunk, 1, 5, 2);
+    let stale_key = *job.key();
+    admit_near(&mut h, job).expect("first admission");
+    admit_section(&mut h, chunk, 2, 5, 1, "second admission");
+    let error = publish(&mut h, chunk, full_budget()).expect_err("two upserts reject");
+    assert_eq!(error, ClientError::Capacity);
+    assert_eq!(h.publisher.retry_owned(), 2);
+    assert!(
+        h.queue.prepared_resource(&stale_key).is_ok(),
+        "the rejected geometry stays retry-owned"
+    );
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 3, 3, 6)]);
+    let records = publish(&mut h, chunk, full_budget()).expect("the stale retry frame publishes");
+    assert!(
+        records
+            .iter()
+            .all(|record| *record.key() != *stale_key.key()),
+        "a retry the mirror moved past never publishes"
+    );
+    assert!(
+        h.queue.prepared_resource(&stale_key).is_err(),
+        "the stale retry geometry is forgotten"
+    );
+    assert_eq!(h.publisher.retry_owned(), 0);
+}
+
+/// `terrain::summary_slots_stay_bounded`: admission-summary slots exist only
+/// while their exact admission is live in publication, in flight, or
+/// retry-owned — sections removed by the mirror, replaced by a newer
+/// revision, or reset across an epoch stop holding slots, and a re-admitted
+/// section records its summary again.
+#[test]
+fn summary_slots_stay_bounded() {
+    let mut h = new_harness(
+        1,
+        7,
+        far_config(false, 2, 3, 24 * charge()),
+        frozen_limits(),
+    );
+    let a = ChunkPos::new(0, 0);
+    let b = ChunkPos::new(1, 0);
+    let c = ChunkPos::new(2, 0);
+    set_mirror(
+        &mut h,
+        &[
+            (Dimension::OVERWORLD, 0, 0, 5),
+            (Dimension::OVERWORLD, 1, 0, 5),
+            (Dimension::OVERWORLD, 2, 0, 5),
+        ],
+    );
+
+    // Three admissions record three slots before anything publishes.
+    assert_eq!(h.publisher.summary_slots(), 0);
+    admit_section(&mut h, a, 0, 5, 1, "a admission");
+    admit_section(&mut h, b, 0, 5, 1, "b admission");
+    admit_section(&mut h, c, 0, 5, 1, "c admission");
+    assert_eq!(
+        h.publisher.summary_slots(),
+        3,
+        "one slot per live admission"
+    );
+    let records = publish(&mut h, a, full_budget()).expect("three upserts publish");
+    assert_eq!(records.len(), 3);
+    assert_eq!(
+        h.publisher.summary_slots(),
+        3,
+        "published sections keep their slots"
+    );
+
+    // A chunk the mirror dropped releases its slot with its removal record.
+    set_mirror(
+        &mut h,
+        &[
+            (Dimension::OVERWORLD, 0, 0, 5),
+            (Dimension::OVERWORLD, 2, 0, 5),
+        ],
+    );
+    let records = publish(&mut h, a, full_budget()).expect("the forget frame publishes");
+    assert_eq!(records.len(), 1, "one ordered removal");
+    assert_eq!(records[0].header().operation(), FamilyOperation::Remove);
+    assert_eq!(
+        h.publisher.summary_slots(),
+        2,
+        "the removed section releases its slot"
+    );
+
+    // A revision the mirror advanced past releases its slot too, even
+    // though no replacement was admitted yet.
+    set_mirror(
+        &mut h,
+        &[
+            (Dimension::OVERWORLD, 0, 0, 5),
+            (Dimension::OVERWORLD, 2, 0, 6),
+        ],
+    );
+    publish(&mut h, a, full_budget()).expect("the replacement frame publishes");
+    assert_eq!(
+        h.publisher.summary_slots(),
+        1,
+        "the superseded section releases its slot"
+    );
+
+    // A cross-epoch reset releases the last slot without a record, and a
+    // re-admitted section records its summary again.
+    let epoch = SessionEpoch::try_new(2).expect("epoch");
+    h.epoch = epoch;
+    h.selection = LodSelection::try_new(
+        epoch,
+        Dimension::OVERWORLD,
+        far_config(false, 2, 3, 24 * charge()),
+        7,
+    )
+    .expect("fresh selection");
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 5)]);
+    let records = publish(&mut h, a, full_budget()).expect("the reset frame publishes");
+    assert!(records.is_empty());
+    assert_eq!(
+        h.publisher.summary_slots(),
+        0,
+        "the cross-epoch reset releases its slot"
+    );
+    admit_section(&mut h, a, 0, 5, 2, "re-admission");
+    assert_eq!(
+        h.publisher.summary_slots(),
+        1,
+        "a re-admitted section records again"
+    );
+    let records = publish(&mut h, a, full_budget()).expect("the re-admission publishes");
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        *records[0].material(),
+        TerrainMaterial::Water,
+        "the re-recorded summary is real"
+    );
+}
