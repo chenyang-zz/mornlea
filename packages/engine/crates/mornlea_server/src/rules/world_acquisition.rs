@@ -2,16 +2,14 @@
 //!
 //! The managed entry transfers prepared owners at the actual acquisition row.
 //! The legacy fixture helpers below retain their identity-only ledger and
-//! completion gate. Their source mirrors follow:
+//! completion gate. The managed source behavior is:
 //!
 //! - `packages/server/sim/runtime/engine_subscription.go` (`applyAcquired`,
-//!   `applyGenerated`): a completion installs only while its key is still in
-//!   the expected in-flight state for a still-wanted key; a completion for a
-//!   forgotten key never installs and never publishes. The Go engine passes
-//!   its `wanted` union into both apply functions as a parameter, and this
-//!   ledger mirrors that shape: `ChunkWants` is a caller-owned value, because
-//!   the frozen `RuleCall` record cannot carry chunk results and
-//!   `TickContext` exposes no mailbox port for the rule to drain.
+//!   `applyGenerated`): an expected successful body installs even after its
+//!   key is forgotten, then requests unload without a Ready publication. A
+//!   forgotten missing load removes its loading record without generation.
+//!   The legacy `ChunkWants` helper keeps its historical NotWanted refusal;
+//!   that identity-only fixture is not the managed installation consumer.
 //! - `packages/server/sim/runtime/engine_step.go` (`StepWithTunables`): the
 //!   acquire work sits after companion actions and before physics, the seam
 //!   position `RulePhase::Acquire` holds in the frozen phase order.
