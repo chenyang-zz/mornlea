@@ -18,6 +18,12 @@ Authority must already have live chunks enabled; existing reservations enforce R
 
 `stop_new` is idempotent and prevents new port starts, while poll still drains bound requests into authority during Closing for a final retained batch. Forgotten started work is not cancelled; saved success must reach Unloading, missing success removes the forgotten record, and generated success likewise installs Unloading according to accepted source behavior. Dropping the driver makes no cancellation, quiescence or join claim. Actual runtime owns provider stop/cancel/wait/close; its later composition must prove native owners joined before releasing the borrowed runtime. This node adds no WorkerLifecycle implementation or invented quiescence token.
 
+## Current-key and store-progress rulings
+
+Duplicate current key means present in either driver source map, even if a defensive negative fixture prematurely settles external authority state while a stale source record remains. Reject before reservation/provider calls with InvalidInput("chunk_driver_request"); retain the stated own-source capacity/error ordering. Equal numeric aliases in different sources remain legal for different keys.
+
+The accepted ChunkLoadPort poll only collects its load lane; AutosaveScheduler::drive_workers remains the actual sole backend handoff driver. Real-provider proofs call that scheduler method externally before driver polling, then ordinary ticks acquire the delivered body. This is actual owner progress without manual offer_acquired; the new driver neither exposes StoreHandle nor claims to drive the backend through dyn ChunkLoadPort. Production scheduler progress is a later runtime-composition responsibility.
+
 ## Scope and implementation
 
 Editable exactly five paths under packages/engine/crates/mornlea_server: new src/core/chunk_driver.rs, src/core/mod.rs (export only), tests/persistence_failure.rs (one registration), new tests/persistence_failure/chunk_driver.rs, crate AGENTS.md (English bounded borrowed driver lifecycle guide). Acquisition/state/world/rules/store/generation providers, transports, Agent, executable, codecs, Go, OpenSpec and fixtures remain read-only. Tests use existing actual disk hook constructors and native generation, and narrow private driver doubles only for impossible correlation/error cases. No public fault hooks or new important directory. Root owns source goals, call priority/backpressure, eventual actual runtime/shutdown, review/integration/rollback.
