@@ -44,11 +44,14 @@ use mornlea_storage::{
     world_metadata_encoded_len,
 };
 
+use super::loads::Loads;
 use crate::core::contracts::{
-    Clock, Deadline, DiskBackend, FlushReport, Operation, OwnedSnapshot, SaveAuthority, SaveBudget,
-    SaveCompletion, SaveKey, SaveOccupancy, SavePoll, SaveRequest, SaveScheduleReport, SaveTicket,
-    SaveValue, ServerError, ServerPhase, StoreHandle, StoreLimits, SubmitSaveError,
+    ChunkKey, ChunkLoadPoll, ChunkLoadPort, ChunkRequestId, Clock, Deadline, DiskBackend,
+    FlushReport, LoadPoll, LoginTicket, Operation, OwnedSnapshot, PlayerLoadPort, SaveAuthority,
+    SaveBudget, SaveCompletion, SaveKey, SaveOccupancy, SavePoll, SaveRequest, SaveScheduleReport,
+    SaveTicket, SaveValue, ServerError, ServerPhase, StoreHandle, StoreLimits, SubmitSaveError,
 };
+use mornlea_domain::PlayerId;
 
 /// Reservation held for one owned chunk until encoding completes.
 pub(super) const CHUNK_MAX_RESERVATION: usize =
@@ -92,6 +95,9 @@ pub struct StoreMailbox<B: DiskBackend> {
     completions: Vec<StoredCompletion>,
     occupancy: SaveOccupancy,
     closed: bool,
+    loads: Loads,
+    loads_frozen: bool,
+    saves_first: bool,
 }
 
 impl<B: DiskBackend> StoreMailbox<B> {
@@ -135,6 +141,9 @@ impl<B: DiskBackend> StoreMailbox<B> {
             completions: Vec::new(),
             occupancy: SaveOccupancy::default(),
             closed: false,
+            loads: Loads::new(),
+            loads_frozen: false,
+            saves_first: true,
         }
     }
 
@@ -193,6 +202,24 @@ impl<B: DiskBackend> StoreMailbox<B> {
 
     /// Nonblocking handoff leaves a full channel's original job queued.
     fn dispatch(&mut self) {
+        if !self.saves_first {
+            self.dispatch_loads();
+        }
+        self.dispatch_saves();
+        if self.saves_first {
+            self.dispatch_loads();
+        }
+        self.saves_first = !self.saves_first;
+    }
+
+    fn dispatch_loads(&mut self) {
+        if let Owner::Background(owner) = &self.owner {
+            self.loads
+                .drive(Some(owner), None::<&mut B>, self.limits.workers());
+        }
+    }
+
+    fn dispatch_saves(&mut self) {
         for index in 0..self.workers.len() {
             if self.workers[index].is_some() {
                 continue;
@@ -312,6 +339,9 @@ impl<B: DiskBackend> StoreMailbox<B> {
             );
             self.finish(slot.job, result);
             completed += 1;
+        }
+        if let Owner::Inline { backend, .. } = &mut self.owner {
+            completed += self.loads.drive(None, Some(backend), self.limits.workers());
         }
         completed
     }
@@ -559,11 +589,65 @@ impl<B: DiskBackend> StoreHandle for StoreMailbox<B> {
                 phase: ServerPhase::Closed,
             });
         }
+        self.loads_frozen = true;
+        self.loads.collect();
+        if self.loads.retained() {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closing,
+            });
+        }
         match &mut self.owner {
             Owner::Inline { backend, .. } => backend.close()?,
             Owner::Background(owner) => owner.lifecycle(LifecycleKind::Close, deadline)?,
         }
         self.closed = true;
+        Ok(())
+    }
+}
+
+impl<B: DiskBackend> StoreMailbox<B> {
+    fn check_load_admission(&self) -> Result<(), ServerError> {
+        if self.closed || self.loads_frozen {
+            Err(ServerError::InvalidState {
+                phase: if self.closed {
+                    ServerPhase::Closed
+                } else {
+                    ServerPhase::Closing
+                },
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+impl<B: DiskBackend> PlayerLoadPort for StoreMailbox<B> {
+    fn start(&mut self, player: PlayerId, deadline: Deadline) -> Result<LoginTicket, ServerError> {
+        self.check_load_admission()?;
+        self.loads.start_player(player, deadline)
+    }
+    fn poll(&mut self, ticket: LoginTicket) -> LoadPoll {
+        self.loads.poll_player(ticket)
+    }
+    fn cancel(&mut self, ticket: LoginTicket) -> Result<(), ServerError> {
+        self.loads.cancel_player(ticket);
+        Ok(())
+    }
+}
+impl<B: DiskBackend> ChunkLoadPort for StoreMailbox<B> {
+    fn start_chunk(
+        &mut self,
+        key: ChunkKey,
+        generation: u64,
+        deadline: Deadline,
+    ) -> Result<ChunkRequestId, ServerError> {
+        self.check_load_admission()?;
+        self.loads.start_chunk(key, generation, deadline)
+    }
+    fn poll_chunk(&mut self, request: ChunkRequestId) -> ChunkLoadPoll {
+        self.loads.poll_chunk(request)
+    }
+    fn cancel_chunk(&mut self, request: ChunkRequestId) -> Result<(), ServerError> {
+        self.loads.cancel_chunk(request);
         Ok(())
     }
 }

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use mornlea_storage::{ChunkCodec, StorageError};
 
+use super::loads::{self, LoadHandoff, LoadKey, LoadResult};
 use super::mailbox::CHUNK_MAX_RESERVATION;
 use crate::core::contracts::{
     Deadline, DiskBackend, Operation, SaveKey, SaveRequest, SaveTicket, SaveValue, ServerError,
@@ -87,6 +88,11 @@ impl LifecycleKind {
 }
 
 enum Command {
+    Load {
+        key: LoadKey,
+        deadline: Deadline,
+        reply: mpsc::SyncSender<LoadResult>,
+    },
     Save {
         ticket: SaveTicket,
         request: Arc<SaveRequest>,
@@ -131,6 +137,14 @@ impl Background {
             .spawn(move || {
                 while let Ok(command) = receive.recv() {
                     match command {
+                        Command::Load {
+                            key,
+                            deadline,
+                            reply,
+                        } => {
+                            let result = loads::execute(&mut backend, key, deadline);
+                            let _ = reply.send(result);
+                        }
                         Command::Save {
                             ticket,
                             request,
@@ -177,6 +191,19 @@ impl Background {
             thread: Some(thread),
             lifecycle: None,
         })
+    }
+
+    pub fn try_load(&self, key: LoadKey, deadline: Deadline) -> LoadHandoff {
+        let (reply, receive) = mpsc::sync_channel(1);
+        match self.commands.try_send(Command::Load {
+            key,
+            deadline,
+            reply,
+        }) {
+            Ok(()) => LoadHandoff::Sent(receive),
+            Err(mpsc::TrySendError::Full(_)) => LoadHandoff::Full,
+            Err(mpsc::TrySendError::Disconnected(_)) => LoadHandoff::Disconnected,
+        }
     }
 
     pub fn try_save(

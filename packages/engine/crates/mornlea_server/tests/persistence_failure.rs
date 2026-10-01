@@ -20,3 +20,6 @@ mod io;
 
 #[path = "persistence_failure/background.rs"]
 mod background;
+
+#[path = "persistence_failure/loads.rs"]
+mod loads;

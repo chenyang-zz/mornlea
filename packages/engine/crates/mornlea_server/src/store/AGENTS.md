@@ -63,3 +63,11 @@ and fallible close. Metadata's sequence is process-local: an uncertain published
 candidate still prevents a stale overwrite, but cannot be acknowledged before
 its retry barrier. The world owner creates and leases the root; this provider
 establishes players and makes that directory entry durable before returning.
+
+Private `loads.rs` retains at most sixteen player and eight chunk requests,
+including unconsumed results and started cancellations. Player and chunk load
+ports use the existing background command channel and sole backend thread;
+validation, decoding and PreparedChunk construction stay on that owner. Inline
+non-Send doubles execute loads only in `drive_workers`. Only Load/NotFound is
+absence. First close freezes new load admission; retained loads must be consumed
+or cancelled and drained before backend close. Save occupancy stays independent.
