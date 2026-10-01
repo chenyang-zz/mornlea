@@ -55,10 +55,16 @@ consume its cancellation and error contracts before joining the real backend.
   for prepared Active player pairs and completed Player scans. It changes only
   fixed actor/runtime fields, preserves health/hunger and live bed/workbench,
   and leaves durable body and public path allocations untouched in constant work
-  with zero allocation. Local recovery/death consumer doubles and preserved-owner
-  pointer tests qualify this mapping alone. Actual recovery, death settlement,
-  scan restart, transient cleanup, subscriptions, save eligibility and executable
-  runtime acceptance remain separately owned serial work.
+  with zero allocation. `TickContext::begin_source_player_reset` checks retained
+  health, phase, actual source session and indexed pair ownership before mapping,
+  then removes only that player's mining/sleep/suppression participation. Earned
+  receipts, raw input ACK, durable beds, viewers and the separately borrowed book
+  stay untouched. Context point operations are logarithmic; live production
+  admission is at most eight, but resident maps may retain history or stale private
+  hook keys. Prepared recovery/death doubles, refusal snapshots and allocation/drop
+  tests qualify this unused context boundary. Actual recovery, death settlement,
+  scan restart, late successful-action settlement, subscriptions, save eligibility
+  and executable runtime acceptance remain separately owned serial work.
 
 - `src/core/source_player_restore.rs` owns explicit source-mode background-login
   registration and at most eight live initial player scans. Missing saves retain

@@ -3352,6 +3352,47 @@ impl<'a> TickContext<'a> {
         };
     }
 
+    /// Resets a live source player in place; the caller selects its completed scan.
+    /// Refusals precede mutation, and earned receipts stay with their settlement owner.
+    /// Keyed lookups and removals are logarithmic; resident maps may retain history.
+    #[allow(dead_code)] // Narrow temporary allowance until actual serial callers land.
+    pub(crate) fn begin_source_player_reset(
+        &mut self,
+        session: SessionKey,
+        restore: &super::pending_restore::PendingRestore,
+    ) -> Result<(), ServerError> {
+        if let Some(error) = &self.authority.tick_failure {
+            return Err(*error);
+        }
+        if self.authority.phase == ServerPhase::Closed {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed,
+            });
+        }
+        let invalid = ServerError::InvalidInput {
+            field: "source_player_reset",
+        };
+        if self.authority.source_player_radius.is_none()
+            || !self.source_player_session_active(session)
+        {
+            return Err(invalid);
+        }
+        let slot = self.player_slots.get(&session).ok_or(invalid)?;
+        let actor = self.actors.get_mut(*slot).ok_or(invalid)?;
+        let key = ActorKey::Player(session);
+        if actor.key != key {
+            return Err(invalid);
+        }
+        let runtime = self.runtimes.get_mut(&key).ok_or(invalid)?;
+        super::source_player_reset::begin_reset(actor, runtime, restore)?;
+
+        // Cleanup cannot refuse after mapping, and leaves durable sleep/view owners intact.
+        self.mining.remove(&key);
+        self.sleeping.remove(&session);
+        self.suppressed_mining.remove(&key);
+        Ok(())
+    }
+
     pub(crate) fn source_player_session_active(&self, session: SessionKey) -> bool {
         self.authority
             .sessions
@@ -10620,6 +10661,703 @@ mod source_player_restore_tests {
             })
         );
         assert_eq!(a.next_tick(), tick + 1);
+    }
+    // Actual acquisition qualifies successful scans; subsequent preparation is off tick.
+    fn ctx_fixture(two: bool) -> (AuthorityState, SessionKey, Option<SessionKey>) {
+        let (mut a, s) = fixture();
+        let other = two.then(|| register(&mut a, 2, Some(saved(2))));
+        offer(&mut a, key(Dimension::OVERWORLD, 0, 0), 0);
+        a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(player(&a, s).lifecycle, ActorLifecycle::Active);
+        assert!(a.source_players.entries[&s].ever_spawned);
+        assert!(
+            a.source_players.entries[&s]
+                .restore
+                .player_reset_anchor()
+                .is_ok()
+        );
+        let slot = a.residents.player_slots[&s];
+        let actor = &mut a.residents.actors[slot];
+        actor.dimension = Dimension::DEPTHS;
+        actor.motion = MotionState::new(mornlea_domain::MotionStateParts {
+            position: mornlea_domain::FiniteVec3::try_new([6., 90., 7.]).unwrap(),
+            velocity: mornlea_domain::FiniteVec3::try_new([1., 2., 3.]).unwrap(),
+            on_ground: true,
+        });
+        actor.look = mornlea_domain::LookAngles::try_new(0.1, 0.2).unwrap();
+        actor.survival = ctx_survival(7, 9, 3);
+        let r = a.residents.runtimes.get_mut(&ActorKey::Player(s)).unwrap();
+        r.controls = Some(mornlea_domain::PlayerControl::new(
+            mornlea_domain::PlayerControlParts {
+                movement: mornlea_domain::Movement {
+                    move_x: 1,
+                    move_z: -1,
+                    jump: true,
+                },
+                look: actor.look,
+                actions: mornlea_domain::HeldActions {
+                    primary: true,
+                    eating: true,
+                    sprinting: true,
+                    sneaking: true,
+                },
+            },
+        ));
+        r.reset = true;
+        r.has_view = true;
+        r.attack_cooldown = 11;
+        r.hurt_cooldown = 12;
+        r.burn_cooldown = 13;
+        r.oxygen = 3;
+        r.peak_y = 90.;
+        r.exhaustion_milli = 250;
+        r.saturation_milli = 9000;
+        r.since_damage_ticks = 17;
+        r.drown_ticks = 18;
+        r.starvation_ticks = 19;
+        r.eating = Some(EatingProgress {
+            slot: HotbarSlot::new(2).unwrap(),
+            item: 5,
+            ticks: 6,
+        });
+        r.bow = Some(BowProgress {
+            slot: HotbarSlot::new(3).unwrap(),
+            ticks: 8,
+        });
+        r.aux = ActorAux::Player {
+            respawn: Some((Dimension::DEPTHS, BlockPos::new(-1, 2, 0))),
+            workbench: Some(BlockPos::new(2, 3, 4)),
+        };
+        (a, s, other)
+    }
+    fn ctx_survival(health: u8, hunger: u8, oxygen: u16) -> mornlea_domain::SurvivalState {
+        mornlea_domain::SurvivalState::try_new(mornlea_domain::SurvivalStateParts {
+            health,
+            oxygen,
+            hunger,
+            saturation_zero: false,
+            armor_points: 4,
+        })
+        .unwrap()
+    }
+    fn ctx_expected(c: &TickContext<'_>, s: SessionKey) -> (ActorRecord, ActorRuntime) {
+        let mut actor = c.actors[c.player_slots[&s]].clone();
+        let mut runtime = c.runtimes[&ActorKey::Player(s)].clone();
+        actor.lifecycle = ActorLifecycle::Pending;
+        actor.motion = MotionState::new(mornlea_domain::MotionStateParts {
+            position: mornlea_domain::FiniteVec3::try_new([32.5, 321., 0.5]).unwrap(),
+            velocity: mornlea_domain::FiniteVec3::try_new([0.; 3]).unwrap(),
+            on_ground: false,
+        });
+        actor.survival = ctx_survival(actor.survival.health(), actor.survival.hunger(), 300);
+        runtime.controls = None;
+        runtime.reset = false;
+        runtime.attack_cooldown = 0;
+        runtime.hurt_cooldown = 0;
+        runtime.oxygen = 300;
+        runtime.peak_y = 321.;
+        runtime.drown_ticks = 0;
+        runtime.eating = None;
+        runtime.bow = None;
+        (actor, runtime)
+    }
+    fn ctx_assert_pair(c: &TickContext<'_>, s: SessionKey, want: &(ActorRecord, ActorRuntime)) {
+        assert_eq!(
+            (
+                &c.actors[c.player_slots[&s]],
+                &c.runtimes[&ActorKey::Player(s)]
+            ),
+            (&want.0, &want.1)
+        );
+    }
+    fn ctx_seed_transients(c: &mut TickContext<'_>, sessions: &[SessionKey]) {
+        for &s in sessions {
+            let actor = ActorKey::Player(s);
+            c.mining.insert(
+                actor,
+                MiningProgress {
+                    actor,
+                    dimension: Dimension::DEPTHS,
+                    target: BlockPos::new(2, 3, 4),
+                    observed_block: 1,
+                    tool_slot: HotbarSlot::new(3).unwrap(),
+                    tool: mornlea_storage::ItemStack::default(),
+                    elapsed: 2,
+                    required: 9,
+                    last_tick: 7,
+                },
+            );
+            c.sleeping.insert(s);
+            c.suppressed_mining.insert(actor);
+        }
+    }
+    fn ctx_snapshot(c: &TickContext<'_>) -> String {
+        format!(
+            "{:?}",
+            (
+                (&c.actors, &c.player_slots, &c.runtimes, &c.inventories),
+                (
+                    &c.mining,
+                    &c.sleeping,
+                    &c.suppressed_mining,
+                    &c.sleep_record,
+                    c.sleep_record_touched
+                ),
+                (
+                    &c.viewers,
+                    &c.charges,
+                    &c.pre_step,
+                    &c.damage_intents,
+                    &c.events
+                ),
+                (
+                    c.spent_commands,
+                    c.spent_fluid,
+                    c.spent_rescan,
+                    c.spent_farmland_checks,
+                    c.spent_farmland_reads,
+                    c.spent_effects,
+                    c.spent_snapshot_chunks,
+                    c.spent_snapshot_bytes
+                ),
+                (
+                    c.authority
+                        .sessions
+                        .iter()
+                        .map(|(key, record)| (
+                            *key,
+                            record.player_id,
+                            &record.display_name,
+                            record.phase,
+                            record.last_applied_sequence,
+                            record.last_input_sequence,
+                            record.next_arrival,
+                            &record.body,
+                            record.loaded_current,
+                            &record.outbox,
+                            record.outbox_closed
+                        ))
+                        .collect::<Vec<_>>(),
+                    c.authority.source_player_radius,
+                    c.authority.phase,
+                    &c.authority.tick_failure
+                ),
+            )
+        )
+    }
+    fn ctx_refuse(
+        c: &mut TickContext<'_>,
+        s: SessionKey,
+        scan: &super::super::pending_restore::PendingRestore,
+        error: ServerError,
+    ) {
+        let before = ctx_snapshot(c);
+        let scan_before = format!("{scan:?}");
+        assert_eq!(c.begin_source_player_reset(s, scan), Err(error));
+        assert_eq!(ctx_snapshot(c), before);
+        assert_eq!(format!("{scan:?}"), scan_before);
+    }
+    fn ctx_error() -> ServerError {
+        ServerError::InvalidInput {
+            field: "source_player_reset",
+        }
+    }
+    #[test]
+    fn ctx_reset_recovery_preserves_durable_owners() {
+        let (mut a, s, _) = ctx_fixture(false);
+        let book = std::mem::take(&mut a.source_players);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        let want = ctx_expected(&c, s);
+        let inventories = c.inventories.clone();
+        c.begin_source_player_reset(s, &book.entries[&s].restore)
+            .unwrap();
+        ctx_assert_pair(&c, s, &want);
+        assert_eq!(c.inventories, inventories);
+    }
+    #[test]
+    fn ctx_reset_death_prepared_pair_reuses_mapping() {
+        let (mut a, s, _) = ctx_fixture(false);
+        // Prepared death caller fills survival before the common context operation.
+        a.residents.actors[a.residents.player_slots[&s]].survival = ctx_survival(20, 20, 3);
+        let r = a.residents.runtimes.get_mut(&ActorKey::Player(s)).unwrap();
+        r.saturation_milli = 5000;
+        r.exhaustion_milli = 0;
+        r.since_damage_ticks = 0;
+        r.starvation_ticks = 0;
+        let book = std::mem::take(&mut a.source_players);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        let want = ctx_expected(&c, s);
+        let inventories = c.inventories.clone();
+        c.begin_source_player_reset(s, &book.entries[&s].restore)
+            .unwrap();
+        ctx_assert_pair(&c, s, &want);
+        assert_eq!(c.inventories, inventories);
+    }
+    #[test]
+    fn ctx_reset_clears_only_owned_transients() {
+        let (mut a, s, other) = ctx_fixture(true);
+        let other = other.unwrap();
+        let book = std::mem::take(&mut a.source_players);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        ctx_seed_transients(&mut c, &[s, other]);
+        c.sleep_record = SleepState::try_new(
+            vec![
+                (s, Dimension::DEPTHS, BlockPos::new(-1, 2, 0)),
+                (other, Dimension::OVERWORLD, BlockPos::new(2, 3, 4)),
+            ],
+            55,
+            Some(66),
+        )
+        .unwrap();
+        let reference = ContainerRef::try_new(
+            ChunkPos::new(0, 0),
+            mornlea_domain::ContainerKind::Chest,
+            0,
+            1,
+        )
+        .unwrap();
+        c.viewers.insert(s, ViewLease::new(s, reference));
+        c.viewers.insert(other, ViewLease::new(other, reference));
+        let want = ctx_expected(&c, s);
+        let before = (
+            c.actors.clone(),
+            c.runtimes.clone(),
+            c.inventories.clone(),
+            c.mining.clone(),
+            c.sleeping.clone(),
+            c.suppressed_mining.clone(),
+            c.sleep_record.clone(),
+            c.sleep_record_touched,
+            c.viewers.clone(),
+        );
+        c.begin_source_player_reset(s, &book.entries[&s].restore)
+            .unwrap();
+        ctx_assert_pair(&c, s, &want);
+        let mut expected_actors = before.0;
+        expected_actors[c.player_slots[&s]] = want.0;
+        let mut expected_runtimes = before.1;
+        expected_runtimes.insert(ActorKey::Player(s), want.1);
+        let mut mining = before.3;
+        mining.remove(&ActorKey::Player(s));
+        let mut sleeping = before.4;
+        sleeping.remove(&s);
+        let mut suppressed = before.5;
+        suppressed.remove(&ActorKey::Player(s));
+        assert_eq!(
+            (
+                c.actors.clone(),
+                c.runtimes.clone(),
+                c.inventories.clone(),
+                c.mining.clone(),
+                c.sleeping.clone(),
+                c.suppressed_mining.clone(),
+                c.sleep_record.clone(),
+                c.sleep_record_touched,
+                c.viewers.clone()
+            ),
+            (
+                expected_actors,
+                expected_runtimes,
+                before.2,
+                mining,
+                sleeping,
+                suppressed,
+                before.6,
+                before.7,
+                before.8
+            )
+        );
+    }
+    #[test]
+    fn ctx_reset_preserves_earned_charges_and_input_ack() {
+        let (mut a, s, other) = ctx_fixture(true);
+        let other = other.unwrap();
+        a.sessions.get_mut(&s).unwrap().last_input_sequence = 3;
+        let book = std::mem::take(&mut a.source_players);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        // Prepared receipts do not qualify actual mining or late action producers.
+        c.charges = vec![
+            (ActorKey::Player(s), ActionKind::Till),
+            (ActorKey::Player(s), ActionKind::Mining),
+            (ActorKey::Player(other), ActionKind::Mining),
+            (ActorKey::Player(s), ActionKind::Melee),
+            (ActorKey::Player(other), ActionKind::Melee),
+        ];
+        c.damage_intents.push(DamageIntent {
+            source: ActorKey::Player(other),
+            target: ActorKey::Player(s),
+            dimension: Dimension::DEPTHS,
+            amount: 2,
+            cause: DamageCause::Melee,
+            projectile: None,
+            tick: 7,
+        });
+        let want = ctx_expected(&c, s);
+        let before = (
+            c.charges.clone(),
+            c.pre_step.clone(),
+            c.damage_intents.clone(),
+            c.events.clone(),
+            c.spent_commands,
+            c.spent_fluid,
+            c.spent_rescan,
+            c.spent_farmland_checks,
+            c.spent_farmland_reads,
+            c.spent_effects,
+            c.spent_snapshot_chunks,
+            c.spent_snapshot_bytes,
+        );
+        c.begin_source_player_reset(s, &book.entries[&s].restore)
+            .unwrap();
+        ctx_assert_pair(&c, s, &want);
+        assert_eq!(c.authority.sessions[&s].last_input_sequence, 3);
+        assert_eq!(
+            (
+                c.charges.clone(),
+                c.pre_step.clone(),
+                c.damage_intents.clone(),
+                c.events.clone(),
+                c.spent_commands,
+                c.spent_fluid,
+                c.spent_rescan,
+                c.spent_farmland_checks,
+                c.spent_farmland_reads,
+                c.spent_effects,
+                c.spent_snapshot_chunks,
+                c.spent_snapshot_bytes
+            ),
+            before
+        );
+    }
+    fn ctx_add_allocations(a: &mut AuthorityState, s: SessionKey) {
+        let ActorBody::Player(body) = &mut a.residents.actors[a.residents.player_slots[&s]].body
+        else {
+            unreachable!()
+        };
+        let mut name = String::with_capacity(65536);
+        name.push_str("Ada");
+        body.display_name = name;
+        let mut revisions = Vec::with_capacity(65536);
+        revisions.extend((0..9).map(|n| (key(Dimension::DEPTHS, n, -n), n as u64)));
+        let mut waypoints = Vec::with_capacity(65536);
+        waypoints.extend((0..17).map(|n| BlockPos::new(n, 64, -n)));
+        a.residents
+            .runtimes
+            .get_mut(&ActorKey::Player(s))
+            .unwrap()
+            .path = Some(PathState {
+            generation: 7,
+            target: BlockPos::new(1, 2, 3),
+            revisions,
+            waypoints,
+            cursor: 2,
+            next_repath_tick: 900,
+        });
+    }
+    fn ctx_allocations(
+        actor: &ActorRecord,
+        r: &ActorRuntime,
+    ) -> (
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+    ) {
+        let ActorBody::Player(body) = &actor.body else {
+            unreachable!()
+        };
+        let p = r.path.as_ref().unwrap();
+        (
+            body.display_name.as_ptr() as usize,
+            body.display_name.len(),
+            body.display_name.capacity(),
+            p.revisions.as_ptr() as usize,
+            p.revisions.len(),
+            p.revisions.capacity(),
+            p.waypoints.as_ptr() as usize,
+            p.waypoints.len(),
+            p.waypoints.capacity(),
+        )
+    }
+    fn ctx_book_snapshot(book: &SourcePlayerBook, s: SessionKey) -> String {
+        let entry = &book.entries[&s];
+        format!(
+            "{:p}/{:?}/{:?}/{:?}",
+            entry,
+            entry.restore.pending_keys(),
+            entry.restore,
+            entry.ever_spawned
+        )
+    }
+    #[test]
+    fn ctx_reset_preserves_public_allocations_and_book_scan() {
+        let (mut a, s, _) = ctx_fixture(false);
+        ctx_add_allocations(&mut a, s);
+        let book = std::mem::take(&mut a.source_players);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        let want = ctx_expected(&c, s);
+        let allocations = ctx_allocations(
+            &c.actors[c.player_slots[&s]],
+            &c.runtimes[&ActorKey::Player(s)],
+        );
+        let scan = ctx_book_snapshot(&book, s);
+        c.begin_source_player_reset(s, &book.entries[&s].restore)
+            .unwrap();
+        ctx_assert_pair(&c, s, &want);
+        assert_eq!(
+            ctx_allocations(
+                &c.actors[c.player_slots[&s]],
+                &c.runtimes[&ActorKey::Player(s)]
+            ),
+            allocations
+        );
+        assert_eq!(ctx_book_snapshot(&book, s), scan);
+    }
+    #[test]
+    fn ctx_reset_rejects_disabled_or_retired_owner() {
+        for case in 0..3 {
+            let (mut a, s, other) = ctx_fixture(true);
+            let other = other.unwrap();
+            match case {
+                0 => a.source_player_radius = None,
+                1 => {
+                    a.sessions.remove(&s);
+                }
+                2 => a.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired,
+                _ => unreachable!(),
+            }
+            let book = std::mem::take(&mut a.source_players);
+            let before_book = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_seed_transients(&mut c, &[s, other]);
+            ctx_refuse(&mut c, s, &book.entries[&s].restore, ctx_error());
+            assert_eq!(ctx_book_snapshot(&book, s), before_book);
+        }
+    }
+    #[test]
+    fn ctx_reset_rejects_missing_or_mismatched_pair() {
+        for case in 0..10 {
+            let (mut a, s, other) = ctx_fixture(true);
+            let other = other.unwrap();
+            let book = std::mem::take(&mut a.source_players);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_seed_transients(&mut c, &[s, other]);
+            let slot = c.player_slots[&s];
+            match case {
+                0 => {
+                    c.player_slots.remove(&s);
+                }
+                1 => {
+                    c.player_slots.insert(s, c.actors.len());
+                }
+                2 => c.actors[slot].key = ActorKey::Player(other),
+                3 => {
+                    c.runtimes.remove(&ActorKey::Player(s));
+                }
+                4 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().key = ActorKey::Player(other)
+                }
+                5 => {
+                    c.actors[slot].body = ActorBody::Passive(mornlea_storage::PassiveMob {
+                        id: 1,
+                        dimension: 0,
+                        position: [0., 64., 0.],
+                        velocity: [0.; 3],
+                        on_ground: true,
+                        yaw: 0.,
+                        health: 7,
+                    })
+                }
+                6 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().aux = ActorAux::Hostile {
+                        distant_ticks: 1,
+                        shoot_cooldown: 2,
+                        fresh: true,
+                    }
+                }
+                7 => c.actors[slot].lifecycle = ActorLifecycle::Pending,
+                8 => c.actors[slot].lifecycle = ActorLifecycle::Respawning,
+                9 => c.actors[slot].lifecycle = ActorLifecycle::Dead,
+                _ => unreachable!(),
+            }
+            let incomplete = ctx_scan(super::super::pending_restore::RestoreKind::Player, false);
+            let scan = if case == 4 {
+                &incomplete
+            } else {
+                &book.entries[&s].restore
+            };
+            let before_book = ctx_book_snapshot(&book, s);
+            ctx_refuse(&mut c, s, scan, ctx_error());
+            assert_eq!(ctx_book_snapshot(&book, s), before_book);
+        }
+    }
+    // AIR/Ready is used only to construct scan-kind guard doubles.
+    struct ContextAirReady;
+    impl super::super::actor_placement::PlacementWorld for ContextAirReady {
+        fn ready_revision(&self, k: ChunkKey) -> Option<u64> {
+            (k == key(Dimension::OVERWORLD, 0, 0)).then_some(9)
+        }
+        fn block_at(&self, dimension: Dimension, pos: BlockPos) -> Option<u16> {
+            self.ready_revision(key(dimension, pos.x() >> 4, pos.z() >> 4))?;
+            Some(0)
+        }
+    }
+    fn ctx_scan(
+        kind: super::super::pending_restore::RestoreKind,
+        complete: bool,
+    ) -> super::super::pending_restore::PendingRestore {
+        use super::super::pending_restore::{PendingRestore, RestoreKind, RestoreProgress};
+        let mut scan = PendingRestore::try_new(
+            kind,
+            Dimension::DEPTHS,
+            ChunkPos::new(2, 0),
+            if kind == RestoreKind::Companion {
+                16
+            } else {
+                1
+            },
+            vec![super::super::actor_placement::RestoreCandidate {
+                dimension: Dimension::OVERWORLD,
+                position: [8.5, 65., 8.5],
+                require_support: false,
+            }],
+        )
+        .unwrap();
+        if complete {
+            assert!(matches!(
+                scan.advance(&ContextAirReady, 1.62).unwrap(),
+                RestoreProgress::Activated(_)
+            ));
+        }
+        scan
+    }
+    #[test]
+    fn ctx_reset_rejects_incomplete_or_companion_scan() {
+        use super::super::pending_restore::RestoreKind;
+        for scan in [
+            ctx_scan(RestoreKind::Player, false),
+            ctx_scan(RestoreKind::Companion, true),
+        ] {
+            let (mut a, s, other) = ctx_fixture(true);
+            let book = std::mem::take(&mut a.source_players);
+            let before_book = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_seed_transients(&mut c, &[s, other.unwrap()]);
+            ctx_refuse(
+                &mut c,
+                s,
+                &scan,
+                ServerError::InvalidInput {
+                    field: "restore_restart",
+                },
+            );
+            assert_eq!(ctx_book_snapshot(&book, s), before_book);
+        }
+    }
+    #[test]
+    fn ctx_reset_health_and_closed_guard_precedence() {
+        for case in 0..4 {
+            let (mut a, s, _) = ctx_fixture(false);
+            let failure = ServerError::Internal {
+                invariant: "retained context failure",
+            };
+            match case {
+                0 => {
+                    a.tick_failure = Some(failure);
+                    a.phase = ServerPhase::Closed;
+                }
+                1 => {
+                    a.tick_failure = Some(failure);
+                    a.source_player_radius = None;
+                }
+                2 => {
+                    a.phase = ServerPhase::Closed;
+                    a.residents.player_slots.remove(&s);
+                }
+                3 => a.phase = ServerPhase::Closing,
+                _ => unreachable!(),
+            }
+            let book = std::mem::take(&mut a.source_players);
+            let before_book = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_seed_transients(&mut c, &[s]);
+            if case == 3 {
+                let want = ctx_expected(&c, s);
+                c.begin_source_player_reset(s, &book.entries[&s].restore)
+                    .unwrap();
+                ctx_assert_pair(&c, s, &want);
+                assert!(!c.mining.contains_key(&ActorKey::Player(s)));
+                assert!(!c.sleeping.contains(&s));
+                assert!(!c.suppressed_mining.contains(&ActorKey::Player(s)));
+            } else {
+                ctx_refuse(
+                    &mut c,
+                    s,
+                    &book.entries[&s].restore,
+                    if case < 2 {
+                        failure
+                    } else {
+                        ServerError::InvalidState {
+                            phase: ServerPhase::Closed,
+                        }
+                    },
+                );
+            }
+            assert_eq!(ctx_book_snapshot(&book, s), before_book);
+        }
+    }
+    #[test]
+    fn ctx_reset_partial_mutation_returns_after_context_drop() {
+        let (mut a, s, other) = ctx_fixture(true);
+        let other = other.unwrap();
+        ctx_add_allocations(&mut a, s);
+        let book = std::mem::take(&mut a.source_players);
+        let book_before = ctx_book_snapshot(&book, s);
+        let allocations =
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]);
+        let other_pair = (
+            player(&a, other).clone(),
+            a.residents.runtimes[&ActorKey::Player(other)].clone(),
+        );
+        let inventories = a.residents.inventories.clone();
+        let want;
+        let other_mining;
+        {
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_seed_transients(&mut c, &[s, other]);
+            other_mining = c.mining[&ActorKey::Player(other)].clone();
+            want = ctx_expected(&c, s);
+            c.begin_source_player_reset(s, &book.entries[&s].restore)
+                .unwrap();
+            // Deliberately drop the resident loan without commit or publication.
+        }
+        a.source_players = book;
+        assert_eq!(
+            (player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]),
+            (&want.0, &want.1)
+        );
+        assert_eq!(
+            (
+                player(&a, other),
+                &a.residents.runtimes[&ActorKey::Player(other)]
+            ),
+            (&other_pair.0, &other_pair.1)
+        );
+        assert!(!a.residents.mining.contains_key(&ActorKey::Player(s)));
+        assert!(!a.residents.sleeping.contains(&s));
+        assert_eq!(a.residents.mining[&ActorKey::Player(other)], other_mining);
+        assert!(a.residents.sleeping.contains(&other));
+        assert_eq!(a.residents.inventories, inventories);
+        assert_eq!(
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]),
+            allocations
+        );
+        assert_eq!(ctx_book_snapshot(&a.source_players, s), book_before);
     }
 }
 
