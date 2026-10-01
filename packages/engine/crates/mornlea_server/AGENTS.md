@@ -575,10 +575,22 @@ untouched; the script self-test and the activation suite assert that.
   consideration: mob disk seeding, chunk streaming, despawn projection, and
   the production gameplay transport (the binary reserves the game port and
   serves only the control plane with `final_tick` zero). The script requires
-  a Unix host. Wiring the offline previous-runtime verifier binary into the
-  compatible policy is separate controller-owned work; until it lands, that
-  policy checks manifest identities and hashes, preserves current bytes, and
-  proves compatibility through the previous binary's own load plus verified
-  login, seed continuity, and sole lock. A crash between the previous start
-  and its manifest record refuses as `writer_live`; clear the orphan owner
+  a Unix host. Compatible rollback runs the actual sealed Go all-family
+  read-only verifier against current quiescent saves, so valid Rust storage
+  mutations need not equal activation-time bytes. Restore verifies the installed
+  backup through the same oracle before Go starts. Package identity is checked
+  before stopping Rust; an already live previous owner is only probed. The
+  control-only executable and storage-consumer proof do not qualify gameplay
+  restart or repair the outstanding lock-span handoff boundary. A crash between
+  the previous start and its manifest record refuses as `writer_live`; clear the orphan owner
   and re-run rollback.
+
+The activation suite requires explicit `MORNLEA_PREVIOUS_PACKAGE` pointing to the
+accepted sealed `previous-runtime.json` and `MORNLEA_PREVIOUS_SERVER_BIN` equal
+to that record's `previous_executable`. Missing or empty fixtures fail, with no
+build, PATH discovery or skip. `CARGO_BIN_EXE_mornlea-server` selects the actual
+freshly compiled Rust binary; `MORNLEA_RUST_SERVER_BIN` is the explicit fallback
+and is required by the script self-test. Set an isolated `CARGO_TARGET_DIR` for
+focused work, and use an owned child supervisor on Linux when executing the
+activation suite or self-test. `activation_verifier.rs` covers real current-save,
+unloaded-family, restore/resume, immutable-package and unsafe-output consumers.

@@ -22,3 +22,14 @@ Hook、gate、发布和 agent 自动化脚本改变的是仓库开发契约，�
 actual native/Go builds, streamed artifact identities, and atomic package
 record. It never starts a runtime or opens a world. Failed partial packages
 remain for inspection; activation and rollback consume packages separately.
+
+Activation requires an explicit `--previous-manifest` package record as well as
+independently checked previous binary/hash inputs. The package stays disjoint
+from mutable run, world and backup trees. Every resume revalidates its exact
+record, source, oracle, binary and native bindings before stopping a writer.
+Rollback runs the actual sealed Go all-family verifier only after quiescence,
+with a 60-second owned-child timeout, bounded strict report and independent
+before/after world hashes. It verifies current compatible saves or the installed
+backup before starting Go; failures retain diagnostic logs/reports and restored
+artifacts for inspection. An already live previous writer is probed idempotently
+without offline verification.

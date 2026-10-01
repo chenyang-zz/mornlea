@@ -2,13 +2,13 @@
 
 //! Opt-in activation and rollback qualification.
 //!
-//! The four named cases drive the real opt-in script and a rebuilt Rust
+//! The topic cases drive the real opt-in script and a rebuilt Rust
 //! binary against the real previous Go binary on disposable world copies.
 //! Every flow asserts single-writer ownership through the OS world lock,
 //! never through PID liveness alone, and no case launches a graphical
 //! client. The previous binary arrives only through the explicit
-//! `MORNLEA_PREVIOUS_SERVER_BIN` fixture; a missing fixture fails instead
-//! of skipping.
+//! `MORNLEA_PREVIOUS_SERVER_BIN` and `MORNLEA_PREVIOUS_PACKAGE` fixtures;
+//! missing input fails instead of skipping.
 
 use mornlea_domain::PlayerId;
 use mornlea_protocol::{
@@ -27,6 +27,21 @@ use std::time::{Duration, Instant};
 
 #[path = "prepare_previous.rs"]
 mod prepare_previous;
+
+#[path = "activation_verifier.rs"]
+mod activation_verifier;
+
+fn previous_package() -> PathBuf {
+    let path = std::env::var("MORNLEA_PREVIOUS_PACKAGE")
+        .expect("explicit MORNLEA_PREVIOUS_PACKAGE names the sealed previous package");
+    assert!(!path.is_empty(), "package fixture must not be empty");
+    let path = PathBuf::from(path);
+    assert_eq!(
+        read_manifest(&path)["previous_executable"],
+        previous_bin().to_string_lossy().as_ref()
+    );
+    path
+}
 
 /// Basename of the world lock file, excluded from every tree hash because
 /// lock ownership churns across runtimes while durable bytes stay fixed.
@@ -704,6 +719,8 @@ fn script_activate(
     let run_dir_text = run_dir.to_string_lossy();
     let rust_path = rust.to_string_lossy();
     let previous_path = previous.to_string_lossy();
+    let previous_package_path = previous_package();
+    let previous_package_text = previous_package_path.to_string_lossy();
     let mut args: Vec<&str> = vec![
         "activate",
         "--world",
@@ -718,6 +735,8 @@ fn script_activate(
         &previous_path,
         "--previous-sha256",
         &previous_hash,
+        "--previous-manifest",
+        &previous_package_text,
     ];
     args.extend_from_slice(extra);
     let (code, output) = run_script(&args);
@@ -1382,6 +1401,9 @@ fn resume_from_prepared(previous: &Path) {
         "executable_sha256": sha256_file(&rust),
         "previous_executable": previous.to_string_lossy(),
         "previous_sha256": previous_hash,
+        "previous_manifest": previous_package().to_string_lossy(),
+        "previous_manifest_sha256": sha256_file(&previous_package()),
+        "previous_runtime": read_manifest(&previous_package()),
         "protocol_version": 45,
         "save_schemas": {"player": 9, "chunk": 9, "world_metadata": 6,
                          "companions_ai": 5, "hostile_mobs": 2, "passive_mobs": 1},
@@ -1532,6 +1554,8 @@ fn live_writer_and_bad_previous_identity() {
         &previous.to_string_lossy(),
         "--previous-sha256",
         &previous_hash,
+        "--previous-manifest",
+        &previous_package().to_string_lossy(),
     ]);
     assert_eq!(code, 0, "repeat activate resumes idempotently: {output}");
     let manifest = read_manifest(&manifest_path);
@@ -1559,6 +1583,8 @@ fn live_writer_and_bad_previous_identity() {
         &previous.to_string_lossy(),
         "--previous-sha256",
         &previous_hash,
+        "--previous-manifest",
+        &previous_package().to_string_lossy(),
     ]);
     assert_ne!(
         code, 0,
@@ -1656,6 +1682,8 @@ fn live_writer_and_bad_previous_identity() {
         &previous.to_string_lossy(),
         "--previous-sha256",
         &previous_hash,
+        "--previous-manifest",
+        &previous_package().to_string_lossy(),
     ]);
     assert_ne!(
         code, 0,

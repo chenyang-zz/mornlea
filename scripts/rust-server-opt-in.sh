@@ -48,7 +48,7 @@ fail() {
 
 usage() {
     cat >&2 <<'USAGE'
-usage: rust-server-opt-in.sh activate --world <disposable-copy> --backup <named-copy> --run-dir <explicit> --rust-bin <path> --previous-bin <path> --previous-sha256 <hex> [--dry-run]
+usage: rust-server-opt-in.sh activate --world <disposable-copy> --backup <named-copy> --run-dir <explicit> --rust-bin <path> --previous-bin <path> --previous-sha256 <hex> --previous-manifest <absolute previous-runtime.json> [--dry-run]
        rust-server-opt-in.sh prepare-previous --source <full-sha> --run-dir <absolute-disposable-root>
        rust-server-opt-in.sh rollback --manifest <path> --data-policy compatible|restore-backup
        rust-server-opt-in.sh --self-test
@@ -148,8 +148,11 @@ EOF
 sha256_file() {
     py "$1" <<'EOF'
 import hashlib, sys
+digest = hashlib.sha256()
 with open(sys.argv[1], "rb") as handle:
-    print(hashlib.sha256(handle.read()).hexdigest())
+    for block in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(block)
+print(digest.hexdigest())
 EOF
 }
 
@@ -540,14 +543,272 @@ check_baseline_identities() {
         py "$schemas" "$family" "$version" <<'EOF' || fail "incompatible_save" "save schema diverges"
 import json, sys
 schemas = json.loads(sys.argv[1])
-if schemas.get(sys.argv[2]) != int(sys.argv[3]):
+if type(schemas) is not dict or type(schemas.get(sys.argv[2])) is not int or schemas.get(sys.argv[2]) != int(sys.argv[3]):
     sys.exit(1)
 EOF
     done
 }
 
+# The sealed package remains independent of every mutable activation tree.
+# Paths and hashes bind accepted producer provenance; they are not signatures.
+previous_package_validate() {
+    py "$@" <<'EOF'
+import hashlib, json, os, re, stat, sys
+package_path, previous_bin, previous_hash, world, backup, run = sys.argv[1:]
+source = "d042982d33bb1694d768b75b01c297bd02534a08"
+oracle = "193cc6abae4918f9376e5943717a5c6d7ad84ecc0476b740d3cd9bb5ee926020"
+schemas = {"player": 9, "chunk": 9, "world_metadata": 6, "companions_ai": 5, "hostile_mobs": 2, "passive_mobs": 1}
+
+class Refusal(Exception):
+    def __init__(self, code, message):
+        self.code, self.message = code, message
+
+def refuse(code, message):
+    raise Refusal(code, message)
+
+def pairs(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            refuse("invalid_manifest", "duplicate package field: " + key)
+        result[key] = value
+    return result
+
+def exact_object(value, keys):
+    if type(value) is not dict or set(value) != set(keys):
+        refuse("invalid_manifest", "package object has incorrect fields")
+
+def hash_string(value):
+    if type(value) is not str or re.fullmatch("[0-9a-f]{64}", value) is None:
+        refuse("invalid_manifest", "package hash is not lowercase sha256")
+
+def canonical(path):
+    if type(path) is not str or not os.path.isabs(path) or path.startswith("//") or os.path.normpath(path) != path:
+        refuse("identity_mismatch", "package path is not absolute and clean")
+    cursor = path
+    while True:
+        info = os.lstat(cursor)
+        if stat.S_ISLNK(info.st_mode):
+            refuse("invalid_manifest", "symlink in package path")
+        parent = os.path.dirname(cursor)
+        if parent == cursor:
+            break
+        cursor = parent
+    if os.path.realpath(path) != path:
+        refuse("identity_mismatch", "package path is not canonical")
+
+def artifact(path, expected, executable=False):
+    if path != expected:
+        refuse("identity_mismatch", "package artifact has incorrect location")
+    canonical(path)
+    info = os.lstat(path)
+    if not stat.S_ISREG(info.st_mode) or (executable and not os.access(path, os.X_OK)):
+        refuse("identity_mismatch", "package artifact is not regular/executable")
+
+def digest(path):
+    result = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
+
+try:
+    if type(package_path) is not str or os.path.basename(package_path) != "previous-runtime.json":
+        refuse("identity_mismatch", "package record has incorrect location")
+    canonical(package_path)
+    root = os.path.dirname(package_path)
+    for mutable in (world, backup, run):
+        mutable = os.path.realpath(mutable)
+        if os.path.commonpath([root, mutable]) in (root, mutable):
+            refuse("invalid_manifest", "package overlaps mutable activation trees")
+    artifact(package_path, os.path.join(root, "previous-runtime.json"))
+    with open(package_path, "rb") as handle:
+        data = handle.read(1024 * 1024 + 1)
+    if len(data) > 1024 * 1024:
+        refuse("invalid_manifest", "package record exceeds limit")
+    record = json.loads(data, object_pairs_hook=pairs)
+    exact_object(record, ("schema_version", "previous_source_sha", "oracle_sha256", "previous_executable", "previous_sha256", "verifier_executable", "verifier_sha256", "protocol_version", "save_schemas", "native_dependencies"))
+    if type(record["schema_version"]) is not int or record["schema_version"] != 1:
+        refuse("invalid_manifest", "package schema must be integer 1")
+    if type(record["protocol_version"]) is not int:
+        refuse("invalid_manifest", "protocol must be an integer")
+    exact_object(record["save_schemas"], schemas)
+    if any(type(value) is not int for value in record["save_schemas"].values()):
+        refuse("invalid_manifest", "save schemas must be integers")
+    if record["protocol_version"] != 45 or record["save_schemas"] != schemas:
+        refuse("incompatible_save", "package baseline protocol/save schemas diverge")
+    if any(type(record[field]) is not str for field in ("previous_source_sha", "previous_executable", "verifier_executable")):
+        refuse("invalid_manifest", "package identities and paths must be strings")
+    if record["previous_source_sha"] != source:
+        refuse("identity_mismatch", "package source diverges from the seal")
+    for field in ("oracle_sha256", "previous_sha256", "verifier_sha256"):
+        hash_string(record[field])
+    if record["oracle_sha256"] != oracle:
+        refuse("identity_mismatch", "package oracle diverges from the accepted oracle")
+    native = record["native_dependencies"]
+    if type(native) is not list or len(native) != 1:
+        refuse("invalid_manifest", "package needs exactly one native dependency")
+    exact_object(native[0], ("path", "sha256"))
+    hash_string(native[0]["sha256"])
+    if type(native[0]["path"]) is not str:
+        refuse("invalid_manifest", "native path must be a string")
+    extension = "dylib" if sys.platform == "darwin" else "so"
+    oracle_path = os.path.join(root, "previous-source/packages/server/storage/runtime_migration_verify_test.go")
+    native_path = os.path.join(root, "previous-source/packages/engine/target/release/libmornlea_engine." + extension)
+    for path, expected, executable, expected_hash in (
+        (record["previous_executable"], os.path.join(root, "previous-server"), True, record["previous_sha256"]),
+        (record["verifier_executable"], os.path.join(root, "previous-verifier"), True, record["verifier_sha256"]),
+        (native[0]["path"], native_path, False, native[0]["sha256"]),
+        (oracle_path, oracle_path, False, oracle),
+    ):
+        artifact(path, expected, executable)
+        if digest(path) != expected_hash:
+            refuse("identity_mismatch", "package artifact bytes diverge: " + path)
+    if previous_bin != record["previous_executable"] or previous_hash != record["previous_sha256"]:
+        refuse("identity_mismatch", "previous inputs diverge from the package")
+    print(json.dumps(record, separators=(",", ":"), sort_keys=True))
+except Refusal as error:
+    print("FAIL %s %s" % (error.code, error.message), file=sys.stderr)
+    sys.exit(1)
+except (ValueError, TypeError, UnicodeError, RecursionError) as error:
+    print("FAIL invalid_manifest package decode: " + str(error), file=sys.stderr)
+    sys.exit(1)
+except OSError as error:
+    print("FAIL identity_mismatch package artifact: " + str(error), file=sys.stderr)
+    sys.exit(1)
+EOF
+}
+
+# Resume must bind the exact package record before any existing writer stops.
+previous_binding_validate() {
+    local manifest="$1" world="$2" backup="$3" run="$4"
+    local package_path current
+    package_path="$(manifest_get "$manifest" "previous_manifest")"
+    current="$(previous_package_validate "$package_path" "$(manifest_get "$manifest" "previous_executable")" "$(manifest_get "$manifest" "previous_sha256")" "$world" "$backup" "$run")" || exit 1
+    py "$manifest" "$package_path" "$current" <<'EOF'
+import hashlib, json, sys
+try:
+    path, package_path, current = sys.argv[1:]
+    with open(path) as handle:
+        manifest = json.load(handle)
+    with open(package_path, "rb") as handle:
+        digest = hashlib.sha256(handle.read(1024 * 1024 + 1)).hexdigest()
+    if (manifest.get("previous_manifest") != package_path or
+            manifest.get("previous_manifest_sha256") != digest or
+            json.dumps(manifest.get("previous_runtime"), sort_keys=True) != json.dumps(json.loads(current), sort_keys=True)):
+        raise ValueError("activation package binding diverges")
+except (OSError, ValueError, TypeError, RecursionError) as error:
+    print("FAIL identity_mismatch " + str(error), file=sys.stderr)
+    sys.exit(1)
+EOF
+}
+
+# The actual offline oracle reads current bytes only while no writer owns them.
+# The bounded child is killed and collected by subprocess.run on timeout.
+verify_previous_world() {
+    local manifest="$1" world="$2" run="$3"
+    [ "$(lock_probe "$world")" = "FREE" ] || fail "writer_live" "verifier requires an unowned world"
+    local verified_manifest
+    verified_manifest="$(py "$manifest" "$world" "$run" <<'EOF'
+import hashlib, json, os, re, stat, struct, subprocess, sys
+manifest_path, world, run = sys.argv[1:]
+report_path = os.path.join(run, "previous-verifier-report.json")
+log_path = os.path.join(run, "previous-verifier.log")
+
+# Reports are small closed records; duplicate fields must never override identity.
+def pairs(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("duplicate verifier report field")
+        result[key] = value
+    return result
+
+def digest(path):
+    result = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
+
+def tree():
+    entries = []
+    for current, dirs, files in os.walk(world):
+        for name in dirs + files:
+            path = os.path.join(current, name)
+            info = os.lstat(path)
+            if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                raise ValueError("unsafe world tree entry")
+        for name in files:
+            if name != "world.lock":
+                path = os.path.join(current, name)
+                entries.append((os.path.relpath(path, world).replace(os.sep, "/"), path))
+    result = hashlib.sha256()
+    for relative, path in sorted(entries):
+        result.update(relative.encode("utf-8"))
+        result.update(b"\0")
+        result.update(struct.pack("<Q", os.stat(path).st_size))
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                result.update(block)
+    return result.hexdigest()
+
+try:
+    if os.path.realpath(world) != world or os.path.commonpath([world, report_path]) == world:
+        raise ValueError("verifier output must be outside the canonical world")
+    with open(manifest_path) as handle:
+        manifest = json.load(handle)
+    package = manifest["previous_runtime"]
+    before = tree()
+    verifier = package["verifier_executable"]
+    verifier_hash = digest(verifier)
+    if verifier_hash != package["verifier_sha256"] or any(digest(item["path"]) != item["sha256"] for item in package["native_dependencies"]):
+        print("FAIL identity_mismatch verifier/native bytes diverge", file=sys.stderr)
+        sys.exit(1)
+    # Never truncate a log alias into durable world data. The Go oracle itself
+    # owns the stronger report-output alias, hardlink and symlink checks.
+    descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as log:
+        info = os.fstat(log.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("unsafe verifier log output")
+        os.ftruncate(log.fileno(), 0)
+        env = {key: value for key, value in os.environ.items() if not key.startswith("MORNLEA_VERIFY_")}
+        env["MORNLEA_VERIFY_WORLD"] = world
+        env["MORNLEA_VERIFY_OUTPUT"] = report_path
+        outcome = subprocess.run([verifier, "-test.run=^TestRuntimeMigrationVerifyWorld$", "-test.count=1", "-test.timeout=55s"], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=60)
+    if outcome.returncode != 0:
+        raise ValueError("actual previous verifier refused; see previous-verifier.log")
+    with open(report_path, "rb") as handle:
+        raw = handle.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise ValueError("verifier report exceeds limit")
+    report = json.loads(raw, object_pairs_hook=pairs)
+    keys = {"schema_version", "source_sha", "executable_sha256", "world_tree_sha256", "read_files", "errors", "compatible"}
+    if type(report) is not dict or set(report) != keys:
+        raise ValueError("verifier report fields diverge")
+    if (type(report["schema_version"]) is not int or report["schema_version"] != 1 or
+            report["source_sha"] != package["previous_source_sha"] or
+            report["executable_sha256"] != verifier_hash or
+            type(report["world_tree_sha256"]) is not str or re.fullmatch("[0-9a-f]{64}", report["world_tree_sha256"]) is None or
+            type(report["read_files"]) is not int or report["read_files"] <= 0 or
+            report["errors"] != [] or report["compatible"] is not True):
+        raise ValueError("previous verifier report is incompatible or has incorrect identity")
+    if before != tree() or before != report["world_tree_sha256"]:
+        raise ValueError("world changed during read-only verification")
+    manifest["world_tree_sha256"] = before
+    manifest["phase"] = "DataVerified"
+    print(json.dumps(manifest, sort_keys=True))
+except (OSError, ValueError, TypeError, KeyError, UnicodeError, RecursionError, subprocess.SubprocessError) as error:
+    print("FAIL incompatible_save " + str(error), file=sys.stderr)
+    sys.exit(1)
+EOF
+)" || exit 1
+    manifest_put "$manifest" "$verified_manifest" || fail "incompatible_save" "verified manifest publication refused"
+}
+
 cmd_activate() {
-    local world="" backup="" run_dir="" rust_bin="" previous_bin="" previous_sha256="" dry_run=0
+    local world="" backup="" run_dir="" rust_bin="" previous_bin="" previous_sha256="" previous_manifest="" dry_run=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --world) world="$2"; shift 2 ;;
@@ -556,15 +817,19 @@ cmd_activate() {
             --rust-bin) rust_bin="$2"; shift 2 ;;
             --previous-bin) previous_bin="$2"; shift 2 ;;
             --previous-sha256) previous_sha256="$2"; shift 2 ;;
+            --previous-manifest)
+                [ $# -ge 2 ] && [ -n "$2" ] && [ "${2#--}" = "$2" ] || usage
+                [ -z "$previous_manifest" ] || usage
+                previous_manifest="$2"; shift 2 ;;
             --dry-run) dry_run=1; shift ;;
             -h|--help) usage ;;
             *) usage ;;
         esac
     done
-    [ -n "$world" ] && [ -n "$backup" ] && [ -n "$run_dir" ] && [ -n "$rust_bin" ] && [ -n "$previous_bin" ] && [ -n "$previous_sha256" ] || usage
+    [ -n "$world" ] && [ -n "$backup" ] && [ -n "$run_dir" ] && [ -n "$rust_bin" ] && [ -n "$previous_bin" ] && [ -n "$previous_sha256" ] && [ -n "$previous_manifest" ] || usage
     need_python
     [ -f "$rust_bin" ] && [ -x "$rust_bin" ] || fail "invalid_manifest" "rust binary is absent"
-    [ -f "$previous_bin" ] || fail "invalid_manifest" "previous binary is absent"
+    [ -f "$previous_bin" ] || fail "identity_mismatch" "previous binary is absent"
     confine_paths "$world" "$backup" "$run_dir"
     [ -d "$world" ] || fail "invalid_manifest" "world directory is absent"
     [ -f "$world/world.meta" ] || fail "invalid_manifest" "world carries no stored metadata"
@@ -574,6 +839,15 @@ cmd_activate() {
     local rust_hash
     rust_hash="$(sha256_file "$rust_bin")" || fail "invalid_manifest" "rust binary does not hash"
 
+    local previous_runtime
+    previous_runtime="$(previous_package_validate "$previous_manifest" "$previous_bin" "$previous_sha256" "$world" "$backup" "$run_dir")" || exit 1
+    local previous_manifest_hash
+    previous_manifest_hash="$(sha256_file "$previous_manifest")" || fail "identity_mismatch" "package record does not hash"
+    local existing_manifest="$(canon "$run_dir")/$MANIFEST_BASENAME"
+    if [ -f "$existing_manifest" ]; then
+        previous_binding_validate "$existing_manifest" "$world" "$backup" "$run_dir" || exit 1
+        [ "$(manifest_get "$existing_manifest" "previous_manifest")" = "$previous_manifest" ] || fail "identity_mismatch" "activation names another package"
+    fi
     mkdir -p "$run_dir" || fail "invalid_manifest" "run directory is not writable"
     rust_bin="$(canon "$rust_bin")"
     previous_bin="$(canon "$previous_bin")"
@@ -685,9 +959,9 @@ EOF
     world_tree="$(tree_hash "$world_canon" "$LOCK_BASENAME")" || fail "invalid_manifest" "world does not hash"
 
     if [ ! -f "$manifest" ]; then
-        py "$manifest" "$world_canon" "$backup_canon" "$socket" "$nonce" "$rust_hash" "$previous_bin" "$previous_sha256" "$world_tree" "$backup_tree" <<'EOF'
+        py "$manifest" "$world_canon" "$backup_canon" "$socket" "$nonce" "$rust_hash" "$previous_bin" "$previous_sha256" "$world_tree" "$backup_tree" "$previous_manifest" "$previous_manifest_hash" "$previous_runtime" <<'EOF'
 import json, sys, time
-(path, world, backup, socket, nonce, rust_hash, prev_bin, prev_hash, world_tree, backup_tree) = sys.argv[1:11]
+(path, world, backup, socket, nonce, rust_hash, prev_bin, prev_hash, world_tree, backup_tree, package_path, package_hash, package) = sys.argv[1:]
 manifest = {
     "schema_version": 1,
     "runtime": "rust",
@@ -695,6 +969,9 @@ manifest = {
     "executable_sha256": rust_hash,
     "previous_executable": prev_bin,
     "previous_sha256": prev_hash,
+    "previous_manifest": package_path,
+    "previous_manifest_sha256": package_hash,
+    "previous_runtime": json.loads(package),
     "protocol_version": 45,
     "save_schemas": {"player": 9, "chunk": 9, "world_metadata": 6,
                      "companions_ai": 5, "hostile_mobs": 2, "passive_mobs": 1},
@@ -1071,6 +1348,7 @@ cmd_rollback() {
     local run_canon
     run_canon="$(canon "$(dirname "$manifest_canon")")"
     confine_paths "$world" "$backup" "$run_canon"
+    previous_binding_validate "$manifest" "$world" "$backup" "$run_canon" || exit 1
     local previous recorded_previous
     previous="$(manifest_get "$manifest" "previous_executable")"
     recorded_previous="$(manifest_get "$manifest" "previous_sha256")"
@@ -1096,11 +1374,9 @@ cmd_rollback() {
         resumed_previous=1
     else
         stop_rust_owner "$manifest" "$world" "$socket" "$nonce" >/dev/null
-        # The lease and tree bindings prove an untouched world for the
-        # compatible policy. Restore replaces the world directory itself,
-        # so it verifies the backup and the installed bytes instead; the
-        # previous runtime's own lock acquisition is the final ownership
-        # proof on that path.
+        # Compatible saves retain their lease identity while current bytes
+        # are checked by the actual offline verifier. Restore binds the newly
+        # installed backup tree and lease before that same verification.
         if [ "$policy" = "compatible" ]; then
             verify_lease_identity "$manifest" "$world"
         fi
@@ -1111,11 +1387,6 @@ cmd_rollback() {
         case "$policy" in
             compatible)
                 check_baseline_identities "$manifest"
-                local expect_tree actual_tree
-                expect_tree="$(manifest_get "$manifest" "world_tree_sha256")"
-                [ -n "$expect_tree" ] || fail "incompatible_save" "manifest names no world bytes"
-                actual_tree="$(tree_hash "$world" "$LOCK_BASENAME")" || fail "incompatible_save" "world does not hash"
-                [ "$actual_tree" = "$expect_tree" ] || fail "incompatible_save" "world bytes diverge from the manifest"
                 ;;
             restore-backup)
                 RESTORE_RETIRED=""
@@ -1124,6 +1395,11 @@ cmd_rollback() {
                 ;;
         esac
     fi
+    check_baseline_identities "$manifest"
+    if [ "$policy" = "compatible" ]; then
+        verify_lease_identity "$manifest" "$world"
+    fi
+    verify_previous_world "$manifest" "$world" "$run_canon" || exit 1
     start_previous_owner "$manifest" "$world" "$run_canon" "$previous"
     if [ -n "$retired" ] && [ -d "$retired" ]; then
         rm -rf "$retired"
@@ -1135,6 +1411,7 @@ cmd_rollback() {
 cmd_self_test() {
     need_python
     [ -n "${MORNLEA_RUST_SERVER_BIN:-}" ] || fail "activation_failed" "MORNLEA_RUST_SERVER_BIN names the rebuilt Rust binary"
+    [ -n "${MORNLEA_PREVIOUS_PACKAGE:-}" ] || fail "activation_failed" "MORNLEA_PREVIOUS_PACKAGE names the accepted sealed package"
     [ -n "${MORNLEA_PREVIOUS_SERVER_BIN:-}" ] || fail "activation_failed" "MORNLEA_PREVIOUS_SERVER_BIN names the previous Go binary"
     [ -f "$MORNLEA_RUST_SERVER_BIN" ] || fail "activation_failed" "rust binary is absent"
     [ -f "$MORNLEA_PREVIOUS_SERVER_BIN" ] || fail "activation_failed" "previous binary is absent"
@@ -1183,7 +1460,7 @@ EOF
     world_before="$(tree_hash "$world" "$LOCK_BASENAME")" || fail "activation_failed" "prepared world does not hash"
     echo "SELFTEST prepared world seed=$seed_before tree=$world_before"
 
-    bash "$SCRIPT_PATH" activate --world "$world" --backup "$backup" --run-dir "$run" --rust-bin "$MORNLEA_RUST_SERVER_BIN" --previous-bin "$MORNLEA_PREVIOUS_SERVER_BIN" --previous-sha256 "$previous_sha" || fail "activation_failed" "self-test activate refused"
+    bash "$SCRIPT_PATH" activate --world "$world" --backup "$backup" --run-dir "$run" --rust-bin "$MORNLEA_RUST_SERVER_BIN" --previous-bin "$MORNLEA_PREVIOUS_SERVER_BIN" --previous-sha256 "$previous_sha" --previous-manifest "$MORNLEA_PREVIOUS_PACKAGE" || fail "activation_failed" "self-test activate refused"
     local manifest="$run/$MANIFEST_BASENAME"
     [ "$(manifest_get "$manifest" "phase")" = "RustRunning" ] || fail "activation_failed" "self-test never reached RustRunning"
     local nonce
@@ -1230,7 +1507,7 @@ EOF
     mkdir -p "$dry_run/run"
     cp -R "$world" "$dry_run/run/world"
     local dry_output
-    dry_output="$(bash "$SCRIPT_PATH" activate --world "$dry_run/run/world" --backup "$dry_run/run/backup" --run-dir "$dry_run/run" --rust-bin "$MORNLEA_RUST_SERVER_BIN" --previous-bin "$MORNLEA_PREVIOUS_SERVER_BIN" --previous-sha256 "$previous_sha" --dry-run)" || fail "activation_failed" "self-test dry-run refused"
+    dry_output="$(bash "$SCRIPT_PATH" activate --world "$dry_run/run/world" --backup "$dry_run/run/backup" --run-dir "$dry_run/run" --rust-bin "$MORNLEA_RUST_SERVER_BIN" --previous-bin "$MORNLEA_PREVIOUS_SERVER_BIN" --previous-sha256 "$previous_sha" --previous-manifest "$MORNLEA_PREVIOUS_PACKAGE" --dry-run)" || fail "activation_failed" "self-test dry-run refused"
     case "$dry_output" in
         *"$rust_hash"*) ;;
         *) fail "activation_failed" "dry-run never reports the selected rust hash" ;;
