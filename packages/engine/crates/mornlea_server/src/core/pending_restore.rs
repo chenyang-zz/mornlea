@@ -68,10 +68,13 @@ impl PendingRestore {
             });
         }
         let columns = spawn_columns(anchor, radius)?;
-        let column_chunk_positions = spawn_chunk_keys(spawn_dimension, &columns)?
-            .into_iter()
-            .map(|k| k.pos)
-            .collect();
+        let keys = spawn_chunk_keys(spawn_dimension, &columns)?;
+        // A consuming map can reuse the square-sized key buffer after deduplication.
+        // Retain a fresh allocation sized only to the sorted unique positions.
+        let mut column_chunk_positions = Vec::with_capacity(keys.len());
+        for key in keys {
+            column_chunk_positions.push(key.pos);
+        }
         // Bound retained allocation independently of the caller's spare capacity.
         let mut owned_candidates = Vec::with_capacity(maximum);
         owned_candidates.extend_from_slice(&candidates);
@@ -684,6 +687,68 @@ mod tests {
         );
         assert_eq!(format!("{p:?}"), before);
     }
+    #[test]
+    fn retained_spawn_positions_use_unique_count_allocation() {
+        let cases = [
+            (RestoreKind::Player, 1, 4),
+            (RestoreKind::Player, 64, 81),
+            (RestoreKind::Companion, 16, 9),
+        ];
+        let current = candidate(D, [8.5, 65.25, 8.5], false);
+        let mut owners: Vec<_> = cases
+            .iter()
+            .map(|(kind, radius, count)| {
+                let p =
+                    PendingRestore::try_new(*kind, D, ChunkPos::new(0, 0), *radius, vec![current])
+                        .unwrap();
+                let expected: Vec<_> = spawn_chunk_keys(D, &p.columns)
+                    .unwrap()
+                    .iter()
+                    .map(|key| key.pos)
+                    .collect();
+                assert_eq!(p.column_chunk_positions, expected);
+                assert_eq!(p.column_chunk_positions.len(), *count);
+                p
+            })
+            .collect();
+        let actual: Vec<_> = owners
+            .iter()
+            .map(|p| {
+                (
+                    p.column_chunk_positions.len(),
+                    p.column_chunk_positions.capacity(),
+                )
+            })
+            .collect();
+        assert_eq!(actual, vec![(4, 4), (81, 81), (9, 9)]);
+        let w = CountingWorld::square();
+        for p in &mut owners {
+            let positions = p.column_chunk_positions.clone();
+            let allocation = p.column_chunk_positions.as_ptr();
+            let capacity = p.column_chunk_positions.capacity();
+            assert_eq!(
+                p.advance(&w, 1.62),
+                Ok(activation(D, current.position, false))
+            );
+            assert_eq!(p.column_chunk_positions, positions);
+            assert_eq!(p.column_chunk_positions.as_ptr(), allocation);
+            assert_eq!(p.column_chunk_positions.capacity(), capacity);
+            if p.kind == RestoreKind::Player {
+                p.restart_player(DEPTHS, vec![]).unwrap();
+                assert!(!p.completed);
+            } else {
+                assert_eq!(
+                    p.restart_player(DEPTHS, vec![]),
+                    Err(invalid("restore_restart"))
+                );
+                assert!(p.completed);
+            }
+            assert_eq!(p.column_chunk_positions, positions);
+            assert_eq!(p.column_chunk_positions.as_ptr(), allocation);
+            assert_eq!(p.column_chunk_positions.capacity(), capacity);
+        }
+    }
+
     #[test]
     fn constructor_discards_caller_spare_candidate_allocation() {
         for (kind, radius, capacity, count) in [
