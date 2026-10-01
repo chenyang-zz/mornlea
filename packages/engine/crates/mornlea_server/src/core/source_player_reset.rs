@@ -1,4 +1,4 @@
-//! Fixed-field reset mapping for future serial recovery and death consumers.
+//! Fixed-field reset mapping for serial recovery and death consumers.
 
 use super::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, ServerError,
@@ -11,7 +11,6 @@ use mornlea_domain::{
 /// Maps a prepared Active player pair in place; callers own restart and transient cleanup.
 /// All checked construction precedes mutation. Body, path and live aux ownership stay
 /// untouched, so work and allocation do not depend on public String or Vec capacities.
-#[allow(dead_code)] // Retained until the separately qualified serial recovery consumer lands.
 pub(crate) fn begin_reset(
     actor: &mut ActorRecord,
     runtime: &mut ActorRuntime,

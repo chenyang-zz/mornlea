@@ -426,6 +426,9 @@ fn dispatch_rows(
         {
             continue;
         }
+        if source_player_restore::recover(source_players, context, session)? {
+            continue;
+        }
         per_actor(
             context,
             RulePhase::PlayerPrePhysicsOxygen,

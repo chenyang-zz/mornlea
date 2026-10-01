@@ -1,4 +1,4 @@
-//! Source login registration and exclusive initial scan ownership.
+//! Source login registration and exclusive initial/recovery scan ownership.
 use super::actor_placement::RestoreCandidate;
 use super::contracts::{
     ActorAux, ActorKey, ActorLifecycle, ActorRuntime, RuleEffect, ServerError, SessionKey,
@@ -179,6 +179,31 @@ pub(crate) fn advance(
         entry.ever_spawned = true;
     }
     Ok(())
+}
+
+/// Restarts the same captured scan only after the indexed pair enters Pending.
+/// Advancement already ran this tick; recovery never activates immediately.
+pub(crate) fn recover(
+    book: &mut SourcePlayerBook,
+    context: &mut TickContext<'_>,
+    session: SessionKey,
+) -> Result<bool, ServerError> {
+    let Some(entry) = book.entries.get_mut(&session) else {
+        return Ok(false);
+    };
+    if !context.source_player_session_active(session) {
+        return Ok(false);
+    }
+    if !entry.ever_spawned {
+        return Err(ServerError::Internal {
+            invariant: "source player registration",
+        });
+    }
+    let Some(dimension) = context.recover_source_player(session, &entry.restore)? else {
+        return Ok(false);
+    };
+    entry.restore.restart_player(dimension, Vec::new())?;
+    Ok(true)
 }
 
 #[cfg(test)]

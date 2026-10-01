@@ -62,9 +62,11 @@ consume its cancellation and error contracts before joining the real backend.
   stay untouched. Context point operations are logarithmic; live production
   admission is at most eight, but resident maps may retain history or stale private
   hook keys. Prepared recovery/death doubles, refusal snapshots and allocation/drop
-  tests qualify this unused context boundary. Actual recovery, death settlement,
-  scan restart, late successful-action settlement, subscriptions, save eligibility
-  and executable runtime acceptance remain separately owned serial work.
+  tests qualify this common context boundary. Active source recovery consumes
+  it before oxygen/native motion and restarts the same captured scan in the
+  current dimension. Positional lifts change only position and rebase the existing
+  pre-step owner. Death settlement, late successful-action settlement, subscriptions,
+  save eligibility and executable runtime acceptance remain separately owned.
 
 - `src/core/source_player_restore.rs` owns explicit source-mode background-login
   registration and at most eight live initial player scans. Missing saves retain
@@ -77,7 +79,11 @@ consume its cancellation and error contracts before joining the real backend.
   the existing final projector. Private authority cases and four real disk,
   background mailbox, Memory handshake/ACK and ChunkDriver Acquire recipes in
   `tests/persistence_failure/source_player_restore.rs` qualify initial restore
-  with manual wants. Source subscriptions, active restore/death, actor save/cache
+  with manual wants. Four additional actual disk/login/Acquire/native recipes
+  qualify active recovery: native fall and current-dimension captured-anchor
+  reacquisition, first free positional lift, blocked search and unknown footprint.
+  Recovery preserves nondeath state and retains the same scan until next-tick
+  advancement. Source subscriptions, unified death, Safe/publication, actor save/cache
   eligibility and executable runtime acceptance remain separately owned.
 
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed

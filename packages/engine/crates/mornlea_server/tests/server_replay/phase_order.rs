@@ -196,6 +196,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "player_survival::run",
     "eating::run",
     "projectiles::run",
+    "source_player_restore::recover",
     "player_survival::run",
     "player_motion::run",
     "player_survival::run",
@@ -682,4 +683,23 @@ fn dispatch_guard_rejects_pending_restore_before_acquisition() {
         result.is_err(),
         "both markers survive but the acquire-before-restore guard must refuse"
     );
+}
+
+#[test]
+fn recovery_precedes_oxygen_and_swapped_order_fails() {
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let probe = [
+        "projectiles::run",
+        "source_player_restore::recover",
+        "RulePhase::PlayerPrePhysicsOxygen",
+        "player_motion::run",
+    ];
+    chain_positions(body, &probe);
+    let swapped = swap_markers(
+        body,
+        "source_player_restore::recover",
+        "RulePhase::PlayerPrePhysicsOxygen",
+    );
+    assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &probe)).is_err());
 }

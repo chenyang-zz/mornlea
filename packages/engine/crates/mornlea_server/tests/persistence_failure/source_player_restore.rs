@@ -1195,3 +1195,261 @@ fn height_disabled_passive_controls() {
 fn height_disabled_hostile_controls() {
     height_disabled_provider(Some(HeightKind::Hostile));
 }
+
+fn recovery_observed(
+    state: &AuthorityState,
+    session: SessionKey,
+) -> (ActorRecord, ActorRuntime, InventoryRecord) {
+    let view = state.settled_read().unwrap();
+    let actor_key = ActorKey::Player(session);
+    (
+        view.actor(actor_key).unwrap().clone(),
+        view.runtime(actor_key).unwrap().clone(),
+        *view.inventory(actor_key).unwrap(),
+    )
+}
+fn recovery_rich_preserved(
+    before: &(ActorRecord, ActorRuntime, InventoryRecord),
+    after: &(ActorRecord, ActorRuntime, InventoryRecord),
+) {
+    assert_eq!(after.0.body, before.0.body);
+    assert_eq!(after.0.look, before.0.look);
+    assert_eq!(after.2, before.2);
+    assert_eq!(after.0.survival.health(), before.0.survival.health());
+    assert_eq!(after.0.survival.hunger(), before.0.survival.hunger());
+    assert_eq!(after.1.exhaustion_milli, before.1.exhaustion_milli);
+    assert_eq!(after.1.saturation_milli, before.1.saturation_milli);
+}
+// External resident preparation uses checked off-tick values, not an online command API.
+fn recovery_off_tick_pose(state: &mut AuthorityState, session: SessionKey, position: [f32; 3]) {
+    let mut residents = state.residents();
+    let actor = residents
+        .actors
+        .iter_mut()
+        .find(|actor| actor.key == ActorKey::Player(session))
+        .unwrap();
+    actor.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new(position).unwrap(),
+        velocity: FiniteVec3::try_new([0.; 3]).unwrap(),
+        on_ground: true,
+    });
+    state.commit_residents(residents);
+}
+#[test]
+fn recovery_actual_native_fall_reactivates_captured_anchor() {
+    let mut save = saved_player();
+    save.current.position = [8.5, -63., 8.5];
+    save.health = 7;
+    save.hunger = 9;
+    let current = key(Dimension::OVERWORLD, 0, 0);
+    let anchor = key(Dimension::OVERWORLD, -2, 3);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save.clone()),
+        Dimension::DEPTHS,
+        ChunkPos::new(-2, 3),
+        vec![(current, air()), (anchor, height_floor(64))],
+    );
+    let (mut login, mut transport, connection, session, clock) =
+        handshake(&mut fixture, &mut state);
+    let initial_publication = fixture.acquire(&mut state, current);
+    let initial = recovery_observed(&state, session);
+    let packet = ClientPacket::PlayerInput(
+        PlayerInput::new(
+            3, 0, 0, false, save.yaw, save.pitch, false, false, false, false,
+        )
+        .unwrap(),
+    );
+    let input_progress = transport.send(
+        connection,
+        MemoryTransport::encode_frame(&packet).unwrap(),
+        &mut login.bind(&mut state, &mut fixture.store),
+        &clock,
+    );
+    let mut fall = Vec::new();
+    for _ in 0..100 {
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        let observed = recovery_observed(&state, session);
+        let crossed = observed.0.motion.position().get()[1] < -80.;
+        fall.push((observed, *local(&publication)));
+        if crossed {
+            break;
+        }
+    }
+    let before_recovery = recovery_observed(&state, session);
+    let reset_publication = state.advance_tick(TickBudget::full()).unwrap();
+    let reset = recovery_observed(&state, session);
+    let reset_local = *local(&reset_publication);
+    let waiting_publication = state.advance_tick(TickBudget::full()).unwrap();
+    let waiting = recovery_observed(&state, session);
+    let waiting_local = *local(&waiting_publication);
+    let reacquired_publication = fixture.acquire(&mut state, anchor);
+    let reacquired = recovery_observed(&state, session);
+    let reacquired_local = *local(&reacquired_publication);
+    let next_publication = state.advance_tick(TickBudget::full()).unwrap();
+    let next_local = *local(&next_publication);
+    fixture.close();
+    assert!(!matches!(input_progress, ConnectionProgress::Closed { .. }));
+    assert_eq!(initial.0.lifecycle, ActorLifecycle::Active);
+    assert_eq!(initial.0.dimension, Dimension::OVERWORLD);
+    assert_eq!(initial.0.motion.position().get(), save.current.position);
+    assert!(local(&initial_publication).ready() && local(&initial_publication).reset());
+    assert!(fall.len() <= 100);
+    assert!(before_recovery.0.motion.position().get()[1] < -80.);
+    assert!(before_recovery.0.motion.velocity().get()[1] < 0.);
+    for (observed, local) in &fall {
+        assert_eq!(observed.0.lifecycle, ActorLifecycle::Active);
+        assert!(local.ready() && !local.reset());
+        assert_eq!(local.last_input_sequence(), 3);
+    }
+    assert_eq!(reset.0.lifecycle, ActorLifecycle::Pending);
+    assert_eq!(reset.0.dimension, Dimension::OVERWORLD);
+    assert_eq!(reset.0.motion.position().get(), [-31.5, 321., 48.5]);
+    assert_eq!(reset.0.motion.velocity().get(), [0.; 3]);
+    assert!(!reset.0.motion.on_ground());
+    assert_eq!(reset.0.survival.oxygen(), 300);
+    assert_eq!(reset.1.peak_y, 321.);
+    assert!(!reset.1.reset && !reset_local.ready() && !reset_local.reset());
+    assert_eq!(reset_local.last_input_sequence(), 3);
+    recovery_rich_preserved(&before_recovery, &reset);
+    recovery_rich_preserved(&initial, &reset);
+    assert_eq!(
+        (reset.0.survival.health(), reset.0.survival.hunger()),
+        (7, 9)
+    );
+    assert_eq!(waiting.0.lifecycle, ActorLifecycle::Pending);
+    assert_eq!(waiting.0.motion, reset.0.motion);
+    assert!(!waiting_local.ready() && !waiting_local.reset());
+    assert_eq!(waiting_local.last_input_sequence(), 3);
+    assert_eq!(reacquired.0.lifecycle, ActorLifecycle::Active);
+    assert_eq!(reacquired.0.dimension, Dimension::OVERWORLD);
+    assert_eq!(reacquired.0.motion.position().get(), [-31.5, 65., 48.5]);
+    assert_eq!(reacquired.0.motion.velocity().get(), [0.; 3]);
+    assert!(reacquired.0.motion.on_ground());
+    assert!(reacquired_local.ready() && reacquired_local.reset());
+    assert_eq!(reacquired_local.last_input_sequence(), 3);
+    recovery_rich_preserved(&initial, &reacquired);
+    assert!(next_local.ready() && !next_local.reset());
+    assert_eq!(next_local.last_input_sequence(), 3);
+}
+#[test]
+fn recovery_actual_embedded_pose_lifts_before_native() {
+    let save = saved_player();
+    let column = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save),
+        Dimension::OVERWORLD,
+        ChunkPos::new(2, 0),
+        vec![(column, height_floor(64))],
+    );
+    let (_, _, _, session, _) = handshake(&mut fixture, &mut state);
+    fixture.acquire(&mut state, column);
+    let before = recovery_observed(&state, session);
+    recovery_off_tick_pose(&mut state, session, [8.5, 64.75, 8.5]);
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let after = recovery_observed(&state, session);
+    let local = *local(&publication);
+    fixture.close();
+    assert_eq!(after.0.lifecycle, ActorLifecycle::Active);
+    assert_eq!(after.0.motion.position().get(), [8.5, 65., 8.5]);
+    assert_eq!(after.0.motion.velocity().get(), [0.; 3]);
+    assert!(after.0.motion.on_ground());
+    assert!(local.ready() && !local.reset());
+    assert_eq!(local.last_input_sequence(), 0);
+    recovery_rich_preserved(&before, &after);
+}
+#[test]
+fn recovery_actual_blocked_pose_enters_pending() {
+    let column = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(saved_player()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(2, 0),
+        vec![(column, air())],
+    );
+    let (_, _, _, session, _) = handshake(&mut fixture, &mut state);
+    fixture.acquire(&mut state, column);
+    let before = recovery_observed(&state, session);
+    // This checked off-tick transaction prepares the obstruction against actual Ready AIR.
+    let prepared = state.residents();
+    let mut context = mornlea_server::state::TickContext::harness(&mut state, TickBudget::full());
+    for (key, generation, revision, chunk) in prepared.ready_snapshot() {
+        context.preload_ready_chunk(
+            mornlea_server::core::world::ReadyChunk::try_new(key, generation, revision, chunk)
+                .unwrap(),
+        );
+    }
+    for actor in prepared.actors {
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+    }
+    for runtime in prepared.runtimes.into_values() {
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+    }
+    for (key, inventory) in prepared.inventories {
+        context.preload_inventory(key, inventory);
+    }
+    if let Some(environment) = prepared.environment {
+        context.stage(RuleEffect::Environment(environment)).unwrap();
+    }
+    if let Some(sleep) = prepared.sleep_record {
+        context.stage(RuleEffect::Sleep(sleep)).unwrap();
+    }
+    for y in 64..=67 {
+        let observed = context
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(8, y, 8))
+            .unwrap();
+        context
+            .transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, 2).unwrap()],
+            )
+            .unwrap();
+    }
+    let residents = context.resident_snapshot();
+    drop(context);
+    state.commit_residents(residents);
+    recovery_off_tick_pose(&mut state, session, [8.5, 64.75, 8.5]);
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let after = recovery_observed(&state, session);
+    let local = *local(&publication);
+    fixture.close();
+    assert_eq!(after.0.lifecycle, ActorLifecycle::Pending);
+    assert_eq!(after.0.motion.position().get(), [32.5, 321., 0.5]);
+    assert_eq!(after.0.motion.velocity().get(), [0.; 3]);
+    assert!(!after.0.motion.on_ground());
+    assert!(!local.ready() && !local.reset());
+    assert_eq!(local.last_input_sequence(), 0);
+    recovery_rich_preserved(&before, &after);
+}
+#[test]
+fn recovery_actual_unknown_footprint_enters_pending() {
+    let mut save = saved_player();
+    save.current.position = [15.5, 65., 8.5];
+    let column = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save),
+        Dimension::OVERWORLD,
+        ChunkPos::new(2, 0),
+        vec![(column, height_floor(64))],
+    );
+    let (_, _, _, session, _) = handshake(&mut fixture, &mut state);
+    fixture.acquire(&mut state, column);
+    let before = recovery_observed(&state, session);
+    recovery_off_tick_pose(&mut state, session, [15.85, 65., 8.5]);
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let after = recovery_observed(&state, session);
+    let local = *local(&publication);
+    let unknown = state
+        .settled_read()
+        .unwrap()
+        .observation(Dimension::OVERWORLD, BlockPos::new(16, 65, 8));
+    fixture.close();
+    assert_eq!(after.0.lifecycle, ActorLifecycle::Pending);
+    assert_eq!(after.0.motion.position().get(), [32.5, 321., 0.5]);
+    assert_eq!(after.0.motion.velocity().get(), [0.; 3]);
+    assert!(!local.ready() && !local.reset());
+    assert_eq!(local.last_input_sequence(), 0);
+    assert_eq!(unknown, None);
+    recovery_rich_preserved(&before, &after);
+}

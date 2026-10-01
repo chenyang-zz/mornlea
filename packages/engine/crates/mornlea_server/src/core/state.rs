@@ -2619,12 +2619,10 @@ pub struct TickContext<'a> {
     deferred: DeferredCommands,
     charges: Vec<(ActorKey, ActionKind)>,
     suppressed_mining: BTreeSet<ActorKey>,
-    /// Pre-motion actor poses, snapshotted once at construction from the
-    /// loaded actors and never written after. The reducer constructs one
-    /// context per tick from pre-motion authority, so the snapshot is
-    /// pre-step by construction; providers that need the step-start pose
-    /// (jump takeoffs, swim displacement) read it here instead of
-    /// re-deriving physics. No rollback entry: compounds never touch it.
+    /// Pre-motion actor poses captured at construction. Only source recovery
+    /// may rebase an existing pose after its positional lift, before motion.
+    /// Jump takeoffs and swimming displacement consume this step-start owner
+    /// instead of re-deriving physics. Compounds never touch it; no rollback entry.
     pre_step: BTreeMap<ActorKey, MotionState>,
 }
 
@@ -3352,10 +3350,98 @@ impl<'a> TickContext<'a> {
         };
     }
 
+    /// Recovers one indexed Active source player before native motion.
+    /// Geometry retains bounded read-trace bookkeeping; restart belongs to the book owner.
+    pub(crate) fn recover_source_player(
+        &mut self,
+        session: SessionKey,
+        restore: &super::pending_restore::PendingRestore,
+    ) -> Result<Option<Dimension>, ServerError> {
+        if let Some(error) = &self.authority.tick_failure {
+            return Err(*error);
+        }
+        if self.authority.phase == ServerPhase::Closed {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed,
+            });
+        }
+        let invalid = ServerError::InvalidInput {
+            field: "source_player_reset",
+        };
+        if self.authority.source_player_radius.is_none()
+            || !self.source_player_session_active(session)
+        {
+            return Err(invalid);
+        }
+        let slot = *self.player_slots.get(&session).ok_or(invalid)?;
+        let actor = self.actors.get(slot).ok_or(invalid)?;
+        let key = ActorKey::Player(session);
+        if actor.key != key {
+            return Err(invalid);
+        }
+        // Earlier legacy death may have settled this originally Active roster entry.
+        if actor.lifecycle != ActorLifecycle::Active {
+            return Ok(None);
+        }
+        if !matches!(actor.body, ActorBody::Player(_)) {
+            return Err(invalid);
+        }
+        let runtime = self.runtimes.get(&key).ok_or(invalid)?;
+        if runtime.key != key || !matches!(runtime.aux, ActorAux::Player { .. }) {
+            return Err(invalid);
+        }
+        restore.player_reset_anchor()?;
+        let dimension = actor.dimension;
+        let original = actor.motion;
+        let position = original.position().get();
+        if position[1] < -80.0 {
+            self.begin_source_player_reset(session, restore)?;
+            return Ok(Some(dimension));
+        }
+        let space = super::actor_placement::body_space(&self.read(), dimension, position)?;
+        if !space.ready {
+            self.begin_source_player_reset(session, restore)?;
+            return Ok(Some(dimension));
+        }
+        if space.free {
+            return Ok(None);
+        }
+        for step in 1..=16 {
+            // Every lift starts at the original pose, preserving source float arithmetic.
+            let mut candidate = position;
+            candidate[1] = position[1] + (step as f32) / 16.0;
+            let space = super::actor_placement::body_space(&self.read(), dimension, candidate)?;
+            if !space.ready {
+                self.begin_source_player_reset(session, restore)?;
+                return Ok(Some(dimension));
+            }
+            if space.free {
+                let position = mornlea_domain::FiniteVec3::try_new(candidate).map_err(|_| {
+                    ServerError::Internal {
+                        invariant: "source player recovery",
+                    }
+                })?;
+                let pre_step = self.pre_step.get_mut(&key).ok_or(ServerError::Internal {
+                    invariant: "source player recovery",
+                })?;
+                let lifted = MotionState::new(mornlea_domain::MotionStateParts {
+                    position,
+                    velocity: original.velocity(),
+                    on_ground: original.on_ground(),
+                });
+                // Rebase the existing owner so swimming never charges recovery displacement.
+                self.actors[slot].motion = lifted;
+                *pre_step = lifted;
+                return Ok(None);
+            }
+        }
+        self.begin_source_player_reset(session, restore)?;
+        Ok(Some(dimension))
+    }
+
     /// Resets a live source player in place; the caller selects its completed scan.
     /// Refusals precede mutation, and earned receipts stay with their settlement owner.
     /// Keyed lookups and removals are logarithmic; resident maps may retain history.
-    #[allow(dead_code)] // Narrow temporary allowance until actual serial callers land.
     pub(crate) fn begin_source_player_reset(
         &mut self,
         session: SessionKey,
@@ -11358,6 +11444,380 @@ mod source_player_restore_tests {
             allocations
         );
         assert_eq!(ctx_book_snapshot(&a.source_players, s), book_before);
+    }
+    // These checked preparations are off tick; Ready AIR came from the actual fixture.
+    fn ctx_recovery_pose(
+        a: &mut AuthorityState,
+        s: SessionKey,
+        dimension: Dimension,
+        position: [f32; 3],
+    ) {
+        let actor = &mut a.residents.actors[a.residents.player_slots[&s]];
+        actor.dimension = dimension;
+        actor.motion = MotionState::new(mornlea_domain::MotionStateParts {
+            position: mornlea_domain::FiniteVec3::try_new(position).unwrap(),
+            velocity: actor.motion.velocity(),
+            on_ground: actor.motion.on_ground(),
+        });
+        a.residents
+            .runtimes
+            .get_mut(&ActorKey::Player(s))
+            .unwrap()
+            .reset = false;
+    }
+    fn ctx_recovery_stone(c: &mut TickContext<'_>, x: i32, ys: std::ops::RangeInclusive<i32>) {
+        for y in ys {
+            let observed = c
+                .read()
+                .observation(Dimension::OVERWORLD, BlockPos::new(x, y, 8))
+                .unwrap();
+            assert_eq!(observed.block, 0);
+            c.transaction()
+                .try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(observed, 2).unwrap()],
+                )
+                .unwrap();
+        }
+    }
+    fn ctx_recovery_restart(book: &SourcePlayerBook, s: SessionKey, dimension: Dimension) {
+        let entry = &book.entries[&s];
+        assert!(entry.ever_spawned);
+        assert_eq!(
+            entry.restore.player_reset_anchor(),
+            Err(ServerError::InvalidInput {
+                field: "restore_restart"
+            })
+        );
+        assert!(entry.restore.pending_keys().contains(&key(dimension, 2, 0)));
+    }
+    #[test]
+    fn ctx_recover_below_world_restarts_same_captured_scan() {
+        let (mut a, s, other) = ctx_fixture(true);
+        let other = other.unwrap();
+        ctx_add_allocations(&mut a, s);
+        ctx_recovery_pose(&mut a, s, Dimension::DEPTHS, [6., -80.0625, 7.]);
+        a.sessions.get_mut(&s).unwrap().last_input_sequence = 3;
+        let mut book = std::mem::take(&mut a.source_players);
+        let allocations =
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]);
+        let want;
+        {
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_seed_transients(&mut c, &[s, other]);
+            c.charges.push((ActorKey::Player(s), ActionKind::Mining));
+            let retained = (
+                c.pre_step.clone(),
+                c.inventories.clone(),
+                c.charges.clone(),
+                c.viewers.clone(),
+            );
+            let other_pair = (
+                c.actors[c.player_slots[&other]].clone(),
+                c.runtimes[&ActorKey::Player(other)].clone(),
+            );
+            want = ctx_expected(&c, s);
+            assert_eq!(
+                super::super::source_player_restore::recover(&mut book, &mut c, s),
+                Ok(true)
+            );
+            ctx_assert_pair(&c, s, &want);
+            assert_eq!(
+                (
+                    c.pre_step.clone(),
+                    c.inventories.clone(),
+                    c.charges.clone(),
+                    c.viewers.clone()
+                ),
+                retained
+            );
+            ctx_assert_pair(&c, other, &other_pair);
+            assert!(
+                !c.mining.contains_key(&ActorKey::Player(s))
+                    && !c.sleeping.contains(&s)
+                    && !c.suppressed_mining.contains(&ActorKey::Player(s))
+            );
+            assert!(
+                c.mining.contains_key(&ActorKey::Player(other))
+                    && c.sleeping.contains(&other)
+                    && c.suppressed_mining.contains(&ActorKey::Player(other))
+            );
+            assert_eq!(c.authority.sessions[&s].last_input_sequence, 3);
+            ctx_recovery_restart(&book, s, Dimension::DEPTHS);
+            // Deliberately return mapped residents through Drop without commit.
+        }
+        a.source_players = book;
+        assert_eq!(
+            (player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]),
+            (&want.0, &want.1)
+        );
+        assert_eq!(
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]),
+            allocations
+        );
+        ctx_recovery_restart(&a.source_players, s, Dimension::DEPTHS);
+        let (mut a, s, _) = ctx_fixture(false);
+        ctx_recovery_pose(&mut a, s, Dimension::OVERWORLD, [8.5, -80., 8.5]);
+        let mut book = std::mem::take(&mut a.source_players);
+        let before_book = ctx_book_snapshot(&book, s);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        let before = ctx_snapshot(&c);
+        assert_eq!(
+            super::super::source_player_restore::recover(&mut book, &mut c, s),
+            Ok(false)
+        );
+        assert_eq!(ctx_snapshot(&c), before);
+        assert_eq!(ctx_book_snapshot(&book, s), before_book);
+    }
+    #[test]
+    fn ctx_recover_lifts_first_free_sixteenth_and_rebases_pre_step() {
+        for y in [64.75, 64.] {
+            let (mut a, s, _) = ctx_fixture(false);
+            ctx_add_allocations(&mut a, s);
+            ctx_recovery_pose(&mut a, s, Dimension::OVERWORLD, [8.5, y, 8.5]);
+            let mut book = std::mem::take(&mut a.source_players);
+            let before_book = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_recovery_stone(&mut c, 8, 64..=64);
+            ctx_seed_transients(&mut c, &[s]);
+            let slot = c.player_slots[&s];
+            let allocations = ctx_allocations(&c.actors[slot], &c.runtimes[&ActorKey::Player(s)]);
+            let mut want = (
+                c.actors[slot].clone(),
+                c.runtimes[&ActorKey::Player(s)].clone(),
+            );
+            want.0.motion = MotionState::new(mornlea_domain::MotionStateParts {
+                position: mornlea_domain::FiniteVec3::try_new([8.5, 65., 8.5]).unwrap(),
+                velocity: want.0.motion.velocity(),
+                on_ground: want.0.motion.on_ground(),
+            });
+            let before = ctx_snapshot(&c);
+            assert_eq!(
+                super::super::source_player_restore::recover(&mut book, &mut c, s),
+                Ok(false)
+            );
+            ctx_assert_pair(&c, s, &want);
+            assert_eq!(c.pre_step[&ActorKey::Player(s)], want.0.motion);
+            assert_eq!(
+                ctx_allocations(&c.actors[slot], &c.runtimes[&ActorKey::Player(s)]),
+                allocations
+            );
+            assert_eq!(ctx_book_snapshot(&book, s), before_book);
+            // Restore only the two expected differences to compare every other owned value.
+            c.actors[slot].motion = MotionState::new(mornlea_domain::MotionStateParts {
+                position: mornlea_domain::FiniteVec3::try_new([8.5, y, 8.5]).unwrap(),
+                velocity: want.0.motion.velocity(),
+                on_ground: want.0.motion.on_ground(),
+            });
+            *c.pre_step.get_mut(&ActorKey::Player(s)).unwrap() = c.actors[slot].motion;
+            assert_eq!(ctx_snapshot(&c), before);
+        }
+    }
+    #[test]
+    fn ctx_recover_all_sixteenths_blocked_enter_pending() {
+        let (mut a, s, _) = ctx_fixture(false);
+        ctx_recovery_pose(&mut a, s, Dimension::OVERWORLD, [8.5, 64.75, 8.5]);
+        let mut book = std::mem::take(&mut a.source_players);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        ctx_recovery_stone(&mut c, 8, 64..=67);
+        let want = ctx_expected(&c, s);
+        assert_eq!(
+            super::super::source_player_restore::recover(&mut book, &mut c, s),
+            Ok(true)
+        );
+        ctx_assert_pair(&c, s, &want);
+        ctx_recovery_restart(&book, s, Dimension::OVERWORLD);
+    }
+    #[test]
+    fn ctx_recover_unknown_stops_initial_and_later_attempts() {
+        for blocked in [false, true] {
+            let (mut a, s, _) = ctx_fixture(false);
+            ctx_recovery_pose(&mut a, s, Dimension::OVERWORLD, [15.85, 64.75, 8.5]);
+            let mut book = std::mem::take(&mut a.source_players);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            if blocked {
+                ctx_recovery_stone(&mut c, 15, 64..=64);
+            }
+            let space = super::super::actor_placement::body_space(
+                &c.read(),
+                Dimension::OVERWORLD,
+                [15.85, 64.75, 8.5],
+            )
+            .unwrap();
+            assert_eq!(space.ready, blocked);
+            assert!(!space.free);
+            let want = ctx_expected(&c, s);
+            assert_eq!(
+                super::super::source_player_restore::recover(&mut book, &mut c, s),
+                Ok(true)
+            );
+            ctx_assert_pair(&c, s, &want);
+            ctx_recovery_restart(&book, s, Dimension::OVERWORLD);
+        }
+    }
+    #[test]
+    fn ctx_recover_free_inactive_and_absent_book_are_quiet() {
+        for case in 0..8 {
+            let (mut a, s, _) = ctx_fixture(false);
+            ctx_recovery_pose(&mut a, s, Dimension::OVERWORLD, [8.5, 65., 8.5]);
+            match case {
+                1 => {
+                    a.residents.actors[a.residents.player_slots[&s]].lifecycle =
+                        ActorLifecycle::Pending
+                }
+                2 => {
+                    a.residents.actors[a.residents.player_slots[&s]].lifecycle =
+                        ActorLifecycle::Respawning
+                }
+                3 => {
+                    a.residents.actors[a.residents.player_slots[&s]].lifecycle =
+                        ActorLifecycle::Dead
+                }
+                4 => {
+                    a.source_players.entries.remove(&s);
+                }
+                5 => a.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired,
+                6 => {
+                    a.source_player_radius = None;
+                    a.source_players.entries.clear();
+                }
+                7 => {
+                    a.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired;
+                    a.residents.player_slots.remove(&s);
+                }
+                _ => {}
+            }
+            let mut book = std::mem::take(&mut a.source_players);
+            let before_book = format!(
+                "{:?}",
+                book.entries
+                    .iter()
+                    .map(|(s, e)| (*s, format!("{:?}", e.restore), e.ever_spawned))
+                    .collect::<Vec<_>>()
+            );
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            let before = ctx_snapshot(&c);
+            assert_eq!(
+                super::super::source_player_restore::recover(&mut book, &mut c, s),
+                Ok(false)
+            );
+            assert_eq!(ctx_snapshot(&c), before);
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    book.entries
+                        .iter()
+                        .map(|(s, e)| (*s, format!("{:?}", e.restore), e.ever_spawned))
+                        .collect::<Vec<_>>()
+                ),
+                before_book
+            );
+        }
+    }
+    #[test]
+    fn ctx_recover_refusals_preserve_owned_state() {
+        for case in 0..14 {
+            let (mut a, s, other) = ctx_fixture(true);
+            let other = other.unwrap();
+            ctx_recovery_pose(&mut a, s, Dimension::OVERWORLD, [8.5, 64.75, 8.5]);
+            let failure = ServerError::Internal {
+                invariant: "retained context failure",
+            };
+            if case == 0 {
+                a.tick_failure = Some(failure);
+                a.phase = ServerPhase::Closed;
+            }
+            if case == 1 {
+                a.phase = ServerPhase::Closed;
+            }
+            if case == 2 {
+                a.source_player_radius = None;
+            }
+            let mut book = std::mem::take(&mut a.source_players);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_seed_transients(&mut c, &[s, other]);
+            let slot = c.player_slots[&s];
+            match case {
+                3 => {
+                    c.player_slots.remove(&s);
+                }
+                4 => {
+                    c.player_slots.insert(s, c.actors.len());
+                }
+                5 => c.actors[slot].key = ActorKey::Player(other),
+                7 => {
+                    c.runtimes.remove(&ActorKey::Player(s));
+                }
+                8 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().key = ActorKey::Player(other);
+                    book.entries.get_mut(&s).unwrap().restore =
+                        ctx_scan(super::super::pending_restore::RestoreKind::Player, false);
+                }
+                9 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().aux = ActorAux::Hostile {
+                        distant_ticks: 1,
+                        shoot_cooldown: 2,
+                        fresh: true,
+                    }
+                }
+                10 => {
+                    book.entries.get_mut(&s).unwrap().restore =
+                        ctx_scan(super::super::pending_restore::RestoreKind::Player, false)
+                }
+                11 => book.entries.get_mut(&s).unwrap().ever_spawned = false,
+                12 => {
+                    c.actors[slot].motion = MotionState::new(mornlea_domain::MotionStateParts {
+                        position: mornlea_domain::FiniteVec3::try_new([1e30, 65., 8.5]).unwrap(),
+                        velocity: c.actors[slot].motion.velocity(),
+                        on_ground: true,
+                    })
+                }
+                13 => {
+                    ctx_recovery_stone(&mut c, 8, 64..=64);
+                    c.pre_step.remove(&ActorKey::Player(s));
+                }
+                _ => {}
+            }
+            if case == 6 {
+                c.actors[slot].body = ActorBody::Passive(mornlea_storage::PassiveMob {
+                    id: 1,
+                    dimension: 0,
+                    position: [0., 64., 0.],
+                    velocity: [0.; 3],
+                    on_ground: true,
+                    yaw: 0.,
+                    health: 7,
+                });
+            }
+            let expected = match case {
+                0 => failure,
+                1 => ServerError::InvalidState {
+                    phase: ServerPhase::Closed,
+                },
+                10 => ServerError::InvalidInput {
+                    field: "restore_restart",
+                },
+                11 => ServerError::Internal {
+                    invariant: "source player registration",
+                },
+                12 => ServerError::InvalidInput {
+                    field: "actor_geometry",
+                },
+                13 => ServerError::Internal {
+                    invariant: "source player recovery",
+                },
+                _ => ctx_error(),
+            };
+            let before = ctx_snapshot(&c);
+            let before_book = ctx_book_snapshot(&book, s);
+            assert_eq!(
+                super::super::source_player_restore::recover(&mut book, &mut c, s),
+                Err(expected),
+                "case {case}"
+            );
+            assert_eq!(ctx_snapshot(&c), before, "case {case}");
+            assert_eq!(ctx_book_snapshot(&book, s), before_book, "case {case}");
+        }
     }
 }
 
