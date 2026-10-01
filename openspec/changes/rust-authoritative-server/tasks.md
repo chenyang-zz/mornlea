@@ -111,6 +111,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7s1 Hand immutable chunk save views to the actual store owner ([packet](plans/55-immutable-chunk-save-view.md)).
 - [x] 3.7s2e Cache source-compatible payload estimates for live chunk captures ([packet](plans/62-live-chunk-payload-estimate.md)).
 - [x] 3.7s2 Select current managed dirty targets and apply qualified durability ACKs ([packet](plans/63-live-chunk-durability.md)).
+- [ ] 3.7s3p Project settled actor fields into source-compatible durable records ([packet](plans/79-settled-actor-save-projection.md)).
 - [x] 3.7n0c Land the narrow transport session contract ([packet](plans/56-live-transport-login.md)).
 - [x] 3.7n0 Bind actual Memory/TCP login to the background store ([packet](plans/56-live-transport-login.md)).
 - [x] 3.7a1 Retain bounded MCP connections through actual deadline-aware shutdown ([packet](plans/58-owned-mcp-shutdown.md)).
