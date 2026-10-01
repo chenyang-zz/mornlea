@@ -41,3 +41,6 @@ mod chunk_encoding;
 
 #[path = "persistence_failure/chunk_retirement.rs"]
 mod chunk_retirement;
+
+#[path = "persistence_failure/actor_projection.rs"]
+mod actor_projection;

@@ -31,6 +31,18 @@ consume its cancellation and error contracts before joining the real backend.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
+- `src/core/actor_projection.rs` borrows one settled actor and optional fixed
+  inventory/runtime overlays to produce checked existing storage values. Player
+  current pose/survival, inventory/armor and hunger/respawn come from their
+  current owners; safe and identity stay in the body. Companion projection
+  mirrors the private body codec checks without fabricating lifecycle aggregates.
+  Hostile/passive body health and hostile combat/target fields stay canonical;
+  only hostile burn/distance use runtime. Every refusal is `actor_save`, and no
+  input changes. It owns no lifecycle selection, revision allocation, target
+  retention, ACK, bootstrap or runtime flush. Private field tests and the actual
+  Memory login/native tick/background disk recipe in the persistence actor
+  projection topic qualify this helper, not live actor save acceptance.
+
 - `src/core/step.rs` shares one fallible phase engine between `reduce_tick`
   and `AuthoritativeFinalReducer`. The final adapter uses full budgets and
   commits successful resident/viewer work without delivery; `run_final` owns
