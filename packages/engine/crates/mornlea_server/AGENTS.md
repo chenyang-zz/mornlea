@@ -752,3 +752,15 @@ join; timeout retains charges and handles for retry, and teardown panic remains
 sticky. Its private executing double proves ownership and lifecycle obligations,
 not actual threads, physical unload or authority eligibility. Temporary private
 body/factory dead-code allowances end when the later production consumer lands.
+
+`core/retirement_worker.rs` implements the detached-owner port with exactly one
+CPU thread and a worker-side whole-body FIFO. Caller ownership contains only
+eight scalar identity/completion records; queued, started and held reports stay
+charged until actual destruction and FIFO collection. Refusal returns the whole
+incoming body. Deadline-aware close drains, disconnects and explicitly joins;
+timeout retains charges or the join handle for same-owner retry, and worker
+failure stays sticky without releasing lost obligations. Drop only disconnects,
+so queued bodies never run destructors on the caller. Private causal gates and
+panic probes execute actual destruction and remain separate from ordinary
+factory evidence. Authority unload eligibility and durable reload integration
+remain separate owners.

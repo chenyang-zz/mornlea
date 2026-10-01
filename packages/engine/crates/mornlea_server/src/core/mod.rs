@@ -20,6 +20,7 @@ pub mod mailbox;
 pub mod mutation;
 mod player_publication;
 pub mod publication;
+pub mod retirement_worker;
 pub mod session;
 pub mod shutdown;
 pub mod state;
