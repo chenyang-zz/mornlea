@@ -213,17 +213,23 @@ impl PendingRestore {
         Ok(RestoreProgress::Exhausted)
     }
 
+    /// Borrows only the captured anchor of a completed Player scan, without reassessment.
+    pub(crate) fn player_reset_anchor(&self) -> Result<ChunkPos, ServerError> {
+        if self.kind != RestoreKind::Player || !self.completed {
+            return Err(ServerError::InvalidInput {
+                field: "restore_restart",
+            });
+        }
+        Ok(self.anchor)
+    }
+
     /// Restarts only a completed player, preserving captured geometry and wanted positions.
     pub fn restart_player(
         &mut self,
         spawn_dimension: Dimension,
         candidates: Vec<RestoreCandidate>,
     ) -> Result<(), ServerError> {
-        if self.kind != RestoreKind::Player || !self.completed {
-            return Err(ServerError::InvalidInput {
-                field: "restore_restart",
-            });
-        }
+        self.player_reset_anchor()?;
         if candidates.len() > 1 {
             return Err(ServerError::InvalidInput {
                 field: "restore_candidates",
@@ -379,6 +385,100 @@ mod tests {
             )
         }
     }
+    fn retained_buffers(p: &PendingRestore) -> [(usize, usize, usize); 4] {
+        [
+            (
+                p.candidates.as_ptr() as usize,
+                p.candidates.len(),
+                p.candidates.capacity(),
+            ),
+            (
+                p.columns.as_ptr() as usize,
+                p.columns.len(),
+                p.columns.capacity(),
+            ),
+            (
+                p.column_chunk_positions.as_ptr() as usize,
+                p.column_chunk_positions.len(),
+                p.column_chunk_positions.capacity(),
+            ),
+            p.exhausted_revisions
+                .as_ref()
+                .map_or((0, 0, 0), |v| (v.as_ptr() as usize, v.len(), v.capacity())),
+        ]
+    }
+    #[test]
+    fn reset_anchor_repeated_success_preserves_completed_scan() {
+        let anchor = ChunkPos::new(-2, 3);
+        let mut p = PendingRestore::try_new(
+            RestoreKind::Player,
+            DEPTHS,
+            anchor,
+            1,
+            vec![candidate(D, [8.5, 65., 8.5], false)],
+        )
+        .unwrap();
+        let mut w = CountingWorld::default();
+        w.ready.insert(key(D, 0, 0), 9);
+        assert_eq!(
+            p.advance(&w, 1.62),
+            Ok(activation(D, [8.5, 65., 8.5], false))
+        );
+        assert_eq!(p.spawn_dimension, D);
+        let debug = format!("{p:?}");
+        let keys = p.pending_keys();
+        let buffers = retained_buffers(&p);
+        for _ in 0..3 {
+            assert_eq!(p.player_reset_anchor(), Ok(anchor));
+            assert_eq!(format!("{p:?}"), debug);
+            assert_eq!(p.pending_keys(), keys);
+            assert_eq!(retained_buffers(&p), buffers);
+        }
+    }
+    #[test]
+    fn reset_anchor_refuses_incomplete_player_without_mutation() {
+        let mut p = player(vec![candidate(DEPTHS, [160.5, 64., 160.5], false)]);
+        assert_eq!(
+            p.advance(&CountingWorld::default(), 1.62),
+            Ok(RestoreProgress::Waiting)
+        );
+        let before = format!("{p:?}");
+        let keys = p.pending_keys();
+        let buffers = retained_buffers(&p);
+        assert_eq!(p.player_reset_anchor(), Err(invalid("restore_restart")));
+        assert_eq!(format!("{p:?}"), before);
+        assert_eq!(p.pending_keys(), keys);
+        assert_eq!(retained_buffers(&p), buffers);
+    }
+    #[test]
+    fn reset_anchor_refuses_companion_before_and_after_completion() {
+        let mut p = PendingRestore::try_new(
+            RestoreKind::Companion,
+            DEPTHS,
+            ChunkPos::new(-2, 3),
+            16,
+            vec![candidate(D, [8.5, 65., 8.5], false)],
+        )
+        .unwrap();
+        let mut w = CountingWorld::default();
+        w.ready.insert(key(D, 0, 0), 9);
+        for complete in [false, true] {
+            if complete {
+                assert_eq!(
+                    p.advance(&w, 1.62),
+                    Ok(activation(D, [8.5, 65., 8.5], false))
+                );
+            }
+            let before = format!("{p:?}");
+            let keys = p.pending_keys();
+            let buffers = retained_buffers(&p);
+            assert_eq!(p.player_reset_anchor(), Err(invalid("restore_restart")));
+            assert_eq!(format!("{p:?}"), before);
+            assert_eq!(p.pending_keys(), keys);
+            assert_eq!(retained_buffers(&p), buffers);
+        }
+    }
+
     #[test]
     fn initial_and_current_wait() {
         let mut p = player(vec![

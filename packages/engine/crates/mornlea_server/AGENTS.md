@@ -51,6 +51,15 @@ consume its cancellation and error contracts before joining the real backend.
   qualify this owner; actor lifecycle, reset effects, subscriptions and complete
   runtime workload remain separately owned.
 
+- `src/core/source_player_reset.rs` owns the private checked in-place mapping
+  for prepared Active player pairs and completed Player scans. It changes only
+  fixed actor/runtime fields, preserves health/hunger and live bed/workbench,
+  and leaves durable body and public path allocations untouched in constant work
+  with zero allocation. Local recovery/death consumer doubles and preserved-owner
+  pointer tests qualify this mapping alone. Actual recovery, death settlement,
+  scan restart, transient cleanup, subscriptions, save eligibility and executable
+  runtime acceptance remain separately owned serial work.
+
 - `src/core/source_player_restore.rs` owns explicit source-mode background-login
   registration and at most eight live initial player scans. Missing saves retain
   only metadata fallback; loaded Current precedes supported Safe. Pending actors
