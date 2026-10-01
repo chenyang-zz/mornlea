@@ -1804,3 +1804,7 @@ Placement target collision accepted after cumulative death node against support2
 ## Generation owners accepted, 2026-10-01
 
 - Exact implementation2fbbd26f passed independent six-file review and actual-provider cases. Root rebuilt the release binary; all923 integrated server cases and all-target clippy/fmt/diff passed,27 adopted service children reaped. Packet51 records exact original SHA, causal operation and retained lifecycle evidence. Only3.7g1 closes. Root dispatched packet52 in isolated worktree9ca710ba, then read-only compound mutation evidence gathering for the next controller-owned journal design; no worker chooses missing architecture. Architecture skill: no change.
+
+## Bounded compound undo qualified, 2026-10-01
+
+- Read-only mutation audit enumerated every actual apply arm, initial-preimage/ordinal hazards and the existing two direct defensive rollback cases. Root freezes packet53's touched-key journal and separate4096 aggregate writes/captures/basis ceilings before implementation. Existing public cumulative rehearsals and deferred fixed-slot publication stay intact; Runtime path payload and historical actor search bounds are explicitly outside this acceptance. Packet53 waits for accepted packet52 and serially owns the same state/world paths. Architecture skill: no change.
