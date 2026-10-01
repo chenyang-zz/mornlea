@@ -46,8 +46,9 @@
 //! or published by a rejected vector. The admission-summary store is
 //! bounded alongside: a slot survives only while its exact admission is
 //! live in publication, still in flight, or retry-owned through the retry
-//! list's own copy, so removed sections and reset epochs stop holding
-//! slots and a re-admitted section records its summary again.
+//! list's own copy — removed sections, reset epochs, dead retries and
+//! dropped drains all release their slots in the same step that releases
+//! their geometry — and a re-admitted section records its summary again.
 
 use std::sync::Arc;
 
@@ -150,8 +151,9 @@ fn summarize_payload(payload: &OwnedMeshView) -> SectionSummary {
 /// the last accepted output referenced (its release obligations toward the
 /// arena), the admission-time material/light summaries of the near jobs it
 /// admitted (one slot per terrain key; a newer identity of the same section
-/// replaces it, and slots leaving publication or reset across epochs are
-/// pruned), and the retry list of upserts a rejected frame did not publish
+/// replaces it, and every admission that leaves publication, resets across
+/// an epoch, dies as a stale retry or is dropped from a drain releases its
+/// slot), and the retry list of upserts a rejected frame did not publish
 /// (each entry carries its own summary, so a re-attempt depends on nothing
 /// else). Every world, ring and arena fact is borrowed from the real owners
 /// at publication time.
@@ -177,7 +179,9 @@ impl TerrainPublisher {
     }
 
     /// The number of live admission-summary slots. Bounded by the sections
-    /// currently published, still in flight, or just dropped this frame.
+    /// currently published, still in flight, or retry-owned — every other
+    /// admission (removed, reset, dead retry, dropped drain) releases its
+    /// slot in the same step that releases its geometry.
     pub fn summary_slots(&self) -> usize {
         self.summaries.len()
     }
@@ -347,7 +351,6 @@ impl TerrainPublisher {
                         // A stale mesh resets: it never publishes and its
                         // arena slot returns through the release below.
                         dropped.push(key);
-                        self.forget_summary(&key);
                         continue;
                     }
                     match self.summaries.iter().find(|(held, _)| held == &key) {
@@ -374,7 +377,6 @@ impl TerrainPublisher {
             // candidate of the same drain.
             if queue.prepared_resource(&key).is_err() {
                 dropped.push(key);
-                self.forget_summary(&key);
                 continue;
             }
             let record = upsert_record(view, key, summary.material, summary.light)?;
@@ -385,9 +387,16 @@ impl TerrainPublisher {
         // Never-published releases apply on every exit path from here,
         // before any cap decision: the arena retains nothing the prior
         // output does not reference, exactly as the retry-owned model
-        // requires — the dropped keys were never referenced.
-        for key in &dropped {
-            let _ = queue.forget(key);
+        // requires — the dropped keys were never referenced. Each death of
+        // a never-published admission also drops its summary slot: a
+        // dropped key never appears in `leaving` (it was never published)
+        // and never drains again (its result was already consumed), so this
+        // loop is the only prune that class gets — idempotent for repeated
+        // deaths of one key and a no-op for far or foreign keys with no
+        // slot.
+        for key in dropped {
+            let _ = queue.forget(&key);
+            self.forget_summary(&key);
         }
 
         if let Some(error) = dispatch_error {

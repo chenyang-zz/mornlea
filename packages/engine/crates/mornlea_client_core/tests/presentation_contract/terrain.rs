@@ -1064,13 +1064,19 @@ fn rejected_upserts_retry_and_dropped_release() {
         "the stale retry geometry is forgotten"
     );
     assert_eq!(h.publisher.retry_owned(), 0);
+    assert_eq!(
+        h.publisher.summary_slots(),
+        0,
+        "a dead retry releases its admission-summary slot with its geometry"
+    );
 }
 
 /// `terrain::summary_slots_stay_bounded`: admission-summary slots exist only
 /// while their exact admission is live in publication, in flight, or
 /// retry-owned — sections removed by the mirror, replaced by a newer
-/// revision, or reset across an epoch stop holding slots, and a re-admitted
-/// section records its summary again.
+/// revision, reset across an epoch, dead as stale retries, or dropped from
+/// a rebased drain stop holding slots, and a re-admitted section records
+/// its summary again.
 #[test]
 fn summary_slots_stay_bounded() {
     let mut h = new_harness(
@@ -1173,5 +1179,50 @@ fn summary_slots_stay_bounded() {
         *records[0].material(),
         TerrainMaterial::Water,
         "the re-recorded summary is real"
+    );
+
+    // An old-epoch in-flight admission whose result only drains after the
+    // epoch rebased dies as a never-published drain drop: it releases both
+    // its geometry and its summary slot, even though it never appeared in
+    // the published set.
+    let mut h = new_harness(
+        1,
+        7,
+        far_config(false, 2, 3, 24 * charge()),
+        frozen_limits(),
+    );
+    let chunk = ChunkPos::new(5, 5);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 5, 5, 3)]);
+    let job = near_job(&mut h, chunk, 0, 3, 2);
+    let old_key = *job.key();
+    admit_near(&mut h, job).expect("old-epoch admission");
+    assert_eq!(
+        h.publisher.summary_slots(),
+        1,
+        "the in-flight admission holds its slot"
+    );
+    let epoch = SessionEpoch::try_new(2).expect("epoch");
+    h.epoch = epoch;
+    h.selection = LodSelection::try_new(
+        epoch,
+        Dimension::OVERWORLD,
+        far_config(false, 2, 3, 24 * charge()),
+        7,
+    )
+    .expect("fresh selection");
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 5, 5, 3)]);
+    let records = publish(&mut h, chunk, full_budget()).expect("the rebased frame publishes");
+    assert!(
+        records.iter().all(|record| *record.key() != *old_key.key()),
+        "an old-epoch result never publishes"
+    );
+    assert!(
+        h.queue.prepared_resource(&old_key).is_err(),
+        "the old-epoch geometry released"
+    );
+    assert_eq!(
+        h.publisher.summary_slots(),
+        0,
+        "the cross-epoch drain drop releases its admission-summary slot"
     );
 }
