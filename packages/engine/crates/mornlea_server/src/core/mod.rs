@@ -2,6 +2,7 @@
 
 pub mod acquisition;
 pub mod chunk_driver;
+pub mod chunk_encoding;
 pub mod companion_ingress;
 mod container_store;
 pub mod contracts;

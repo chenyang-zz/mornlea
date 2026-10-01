@@ -55,3 +55,6 @@ mod prepared_publication;
 
 #[path = "server_contract/prepared_delivery.rs"]
 mod prepared_delivery;
+
+#[path = "server_contract/chunk_encoding.rs"]
+mod chunk_encoding;

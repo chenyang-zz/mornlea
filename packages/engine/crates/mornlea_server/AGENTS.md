@@ -47,6 +47,16 @@ consume its cancellation and error contracts before joining the real backend.
   Generation owns no authority, storage, request identity or publication;
   acquisition supplies revisions and validates Ready preparation separately.
 
+- `src/core/chunk_encoding.rs` owns the checked off-tick network factory and
+  narrow `ChunkEncodePort`. `EncodedChunkSnapshot` retains the exact supplied
+  `ChunkSaveView` token, its section-only payload charge and one canonical
+  `PreparedFrame`; equal numeric revisions cannot correlate captures. The port
+  fixes eight total queued/started/held requests across one or two CPU owners,
+  started-cancellation retention and retryable explicit join obligations.
+  Factory and executing contract doubles do not qualify actual threads or a
+  source publisher. Ready/wanted/current-capture eligibility stays with the
+  later publication consumer; supplied Unloading captures are not filtered.
+
 - `src/core/generation_worker.rs` owns at most eight queued, started or held
   generation requests across one or two OS owners. Each retains independent
   native scratch and prepares Ready bases off the tick. `GenerationPort`

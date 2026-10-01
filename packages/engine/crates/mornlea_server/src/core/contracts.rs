@@ -210,6 +210,7 @@ pub enum Resource {
     ChunkWants,
     ResidentChunks,
     ChunkRequests,
+    ChunkEncodes,
     Outbox,
     PendingLogins,
     SaveChunks,
@@ -222,6 +223,7 @@ pub enum Resource {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Operation {
     Load,
+    Encode,
     WritePayload,
     SyncPayload,
     WriteBank,
