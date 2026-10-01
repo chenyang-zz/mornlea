@@ -112,7 +112,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7s1 Hand immutable chunk save views to the actual store owner ([packet](plans/55-immutable-chunk-save-view.md)).
 - [x] 3.7s2e Cache source-compatible payload estimates for live chunk captures ([packet](plans/62-live-chunk-payload-estimate.md)).
 - [x] 3.7s2 Select current managed dirty targets and apply qualified durability ACKs ([packet](plans/63-live-chunk-durability.md)).
-- [ ] 3.7s3p Project settled actor fields into source-compatible durable records ([packet](plans/79-settled-actor-save-projection.md)).
+- [x] 3.7s3p Project settled actor fields into source-compatible durable records ([packet](plans/79-settled-actor-save-projection.md)).
 - [x] 3.7n0c Land the narrow transport session contract ([packet](plans/56-live-transport-login.md)).
 - [x] 3.7n0 Bind actual Memory/TCP login to the background store ([packet](plans/56-live-transport-login.md)).
 - [x] 3.7a1 Retain bounded MCP connections through actual deadline-aware shutdown ([packet](plans/58-owned-mcp-shutdown.md)).
@@ -131,7 +131,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9l3 Recognize proven Linux zombie termination without weakening writer-lock guards ([packet](plans/33-linux-process-termination.md)).
 - [x] 3.9l4 Drive actual TCP receive progress through asynchronous login readiness ([packet](plans/71-prepared-tcp-receive-progress.md)).
 - [x] 3.9l5 Mint distinct admitted identities in actual two-container-viewer fixtures ([packet](plans/75-distinct-container-viewer-fixture.md)).
-- [ ] 3.9l6 Recognize EOF or peer reset as control connection retirement without accepting a timeout ([packet](plans/82-control-retirement-fixture.md)).
+- [x] 3.9l6 Recognize EOF or peer reset as control connection retirement without accepting a timeout ([packet](plans/82-control-retirement-fixture.md)).
 
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.

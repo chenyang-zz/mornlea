@@ -6,7 +6,7 @@
 
 **Architecture:** A read-only core module consumes existing checked Dimension/ChunkKey/BlockPos values and one narrow borrowed world interface. The existing player-motion collision mapping supplies the same block shapes through a crate-private visibility change only. This module does not own actors, schedules, requests, publication or disk work; later serial consumers name its accepted implementation identity.
 
-**Tech stack:** Pinned Rust1.97.1, std fixed AABB calculations, accepted AuthorityReadView and native CollisionCell getters. **Spec:** ../design.md and ../specs/rust-authoritative-server/spec.md. Sealed Go source d042982d33bb1694d768b75b01c297bd02534a08 is the compatibility authority. This packet is not worker-ready until controller source-readiness criticism and accepted79 source identity are recorded. No implementation overlaps state/guide/mod ownership of78/79.
+**Tech stack:** Pinned Rust1.97.1, std fixed AABB calculations, accepted AuthorityReadView and native CollisionCell getters. **Spec:** ../design.md and ../specs/rust-authoritative-server/spec.md. Sealed Go source d042982d33bb1694d768b75b01c297bd02534a08 is the compatibility authority. Serial accepted79 source849b2949aa1b13d481265a6ff90f344f7addc01a is the module/guide predecessor. Independent source-readiness criticism at a61fe108 resolves all stated blockers; controller acceptance baseline at dispatch includes separate82 test-only repair66d6c446d7c96ee5f6adb00115496f9af7be89d7. No implementation overlaps state/guide/mod ownership of78/79.
 
 ## Scope and interfaces
 
