@@ -9,7 +9,9 @@
 //! only then advances sequence, journal, queue, overlay and local cue-source
 //! metadata in one critical section. A rejected batch leaves every owner
 //! unchanged. Chat is never sequenced and a local receipt is admission, not
-//! server confirmation.
+//! server confirmation. The admission owner's own epoch — not a validate-time
+//! snapshot's — governs commit, so a reset can never mix one epoch's journal
+//! entries into another epoch's restarted sequences.
 
 use mornlea_domain::{
     ChatIntent, Command, ContainerMove, ContainerRef, CraftingMove, CraftingSize, DomainError,
@@ -439,11 +441,24 @@ pub(crate) struct JournalEntry {
 
 /// A pending local cue-source event emitted by an accepted semantic UI
 /// action. The audio projection reads these without consuming them until a
-/// successful publication commits them.
+/// successful publication commits them. The local event sequence is native to
+/// the admission owner's epoch — it is not the input sequence and never
+/// claims server confirmation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LocalCueSource {
     pub local_event_sequence: u64,
     pub kind: ClientIntentKind,
+}
+
+/// The measured source cue inventory's closed local cue-source set. Exactly
+/// one semantic UI action is identified there with a local audio source — the
+/// bucket action's row carries the local water-splash fixture — so an
+/// accepted `CollectWater` emits one pending local cue-source event and every
+/// other admitted action emits none. The audio family derives the concrete
+/// cue from this attribution; no cue id, device handle or ingestion path
+/// exists on this owner.
+fn is_local_cue_source(intent: &ClientIntent) -> bool {
+    matches!(intent, ClientIntent::CollectWater(_))
 }
 
 /// The bounded epoch-scoped tombstone of locally closed external container
@@ -505,9 +520,10 @@ impl LocalViewValidity {
 
 /// The C1-owned single-owner admission state: outbound queue, prediction
 /// journal, next sequence, the local view-validity overlay and the pending
-/// local cue-source metadata, beside the frozen `ClientLimits` it was
-/// constructed with. No projection or host callback obtains this owner;
-/// `commit` is its only writer.
+/// local cue-source metadata beside its native local event sequence, all
+/// epoch-scoped beside the frozen `ClientLimits` it was constructed with. No
+/// projection or host callback obtains this owner; `commit` is its only
+/// writer.
 pub struct InputAdmissionState {
     limits: ClientLimits,
     outbound: Vec<OutboundRecord>,
@@ -516,12 +532,14 @@ pub struct InputAdmissionState {
     next_sequence: u64,
     overlay: LocalViewValidity,
     pending_local_cues: Vec<LocalCueSource>,
+    next_local_event_sequence: u64,
 }
 
 impl InputAdmissionState {
     /// Publishes the empty owner for one epoch under the frozen limits. The
     /// sequence space starts at one so every sequenced packet's
-    /// nonzero-sequence gate holds.
+    /// nonzero-sequence gate holds; the native local cue event sequence
+    /// starts at one the same way.
     pub fn try_new(epoch: SessionEpoch, limits: ClientLimits) -> Result<Self, ClientError> {
         Ok(Self {
             limits,
@@ -531,6 +549,7 @@ impl InputAdmissionState {
             next_sequence: 1,
             overlay: LocalViewValidity::try_new(epoch)?,
             pending_local_cues: Vec::new(),
+            next_local_event_sequence: 1,
         })
     }
 
@@ -571,8 +590,9 @@ impl InputAdmissionState {
     }
 
     /// Clears every epoch-scoped owner and re-freezes the limits. Reset
-    /// calls this; old sequences, journal entries and tombstones cannot cross
-    /// into the new epoch.
+    /// calls this; old sequences, journal entries, tombstones and local cue
+    /// attributions cannot cross into the new epoch, whose native local cue
+    /// sequence restarts at one.
     pub fn reset_epoch(
         &mut self,
         epoch: SessionEpoch,
@@ -585,6 +605,7 @@ impl InputAdmissionState {
         self.next_sequence = 1;
         self.overlay = LocalViewValidity::try_new(epoch)?;
         self.pending_local_cues.clear();
+        self.next_local_event_sequence = 1;
         Ok(())
     }
 }
@@ -661,13 +682,14 @@ impl InputTranslator {
     /// The validated batch carries the mirror snapshot it was validated
     /// against and the admission owner carries its frozen limits, so no other
     /// argument exists on this surface. Commit re-checks the snapshot's epoch
-    /// and phase, then rechecks every capacity (outbound records and bytes,
-    /// journal, checked contiguous sequence range), simulates the local
-    /// view-validity overlay over a temporary copy, encodes all actions into
-    /// owned reserved temporary buffers, and only then appends records,
-    /// journal entries and local cue metadata, advances the sequence and
-    /// swaps the overlay in one critical section. Any earlier failure leaves
-    /// every owner unchanged.
+    /// and phase, then re-checks the owner's own current epoch against the
+    /// batch's, rechecks every capacity (outbound records and bytes, journal,
+    /// pending local cue sources, checked contiguous sequence range),
+    /// simulates the local view-validity overlay over a temporary copy,
+    /// encodes all actions into owned reserved temporary buffers, and only
+    /// then appends records, journal entries and local cue metadata, advances
+    /// the sequence and swaps the overlay in one critical section. Any
+    /// earlier failure leaves every owner unchanged.
     pub fn commit(
         batch: ValidatedInputBatch,
         admission: &mut InputAdmissionState,
@@ -680,11 +702,18 @@ impl InputTranslator {
         if batch.mirror().epoch() != batch.epoch() {
             return Err(ClientError::StaleEpoch);
         }
+        // The owner's CURRENT epoch governs, not the validate-time
+        // snapshot's: a batch validated in a previous epoch must never enter
+        // an owner a reset moved to a new epoch, or its journal entries would
+        // ride the new epoch's restarted sequence space.
+        if admission.overlay.epoch != batch.epoch() {
+            return Err(ClientError::StaleEpoch);
+        }
         if batch.actions().is_empty() {
             return Ok(InputReceipt::Noop);
         }
         let limits = admission.limits();
-        let new_records = usize::from(batch.sequenced_count) + usize::from(batch.chat_count);
+        let new_records = usize::from(batch.sequenced_count()) + usize::from(batch.chat_count());
         if admission.outbound.len() + new_records > limits.outbound_commands() {
             return Err(ClientError::Capacity);
         }
@@ -698,19 +727,28 @@ impl InputTranslator {
         if admission.journal.len() + batch.required_journal() > limits.prediction_journal() {
             return Err(ClientError::Capacity);
         }
-        let first_sequence = if batch.sequenced_count() == 0 {
-            None
-        } else {
-            let span = u64::from(batch.sequenced_count()) - 1;
-            let last = admission
-                .next_sequence
-                .checked_add(span)
-                .ok_or(ClientError::Capacity)?;
-            if last == 0 {
-                return Err(ClientError::Capacity);
-            }
-            Some(admission.next_sequence)
-        };
+        // The pending local cue-source queue is an input-side pending-event
+        // owner, bounded by the measured per-batch input-event ceiling: the
+        // bound admits that many unconsumed cue events and rejects the next
+        // whole batch with `Capacity` before any sequence advance. A
+        // successful publication consumes the queue.
+        let new_cues = batch
+            .actions()
+            .iter()
+            .filter(|action| is_local_cue_source(&action.intent))
+            .count();
+        if admission.pending_local_cues.len() + new_cues > limits.queued_input_events() {
+            return Err(ClientError::Capacity);
+        }
+        // The sequence span is checked as one contiguous range whose end must
+        // not wrap: an exhausted sequence space rejects the whole batch with
+        // `Capacity` instead of issuing a zero or reused sequence.
+        let sequenced = u64::from(batch.sequenced_count());
+        let sequence_end = admission
+            .next_sequence
+            .checked_add(sequenced)
+            .ok_or(ClientError::Capacity)?;
+        let first_sequence = (sequenced > 0).then_some(admission.next_sequence);
 
         // The temporary overlay simulation: a locally closed external view
         // rejects any later external-view action in this batch, and an
@@ -729,7 +767,9 @@ impl InputTranslator {
         // (not the validator's placeholder) are part of the frame.
         let mut records = Vec::with_capacity(new_records);
         let mut entries = Vec::with_capacity(batch.required_journal());
+        let mut cues = Vec::with_capacity(new_cues);
         let mut sequence = admission.next_sequence;
+        let mut next_cue = admission.next_local_event_sequence;
         let mut actual_bytes = 0usize;
         let mut scratch = Vec::new();
         for action in batch.actions() {
@@ -762,6 +802,13 @@ impl InputTranslator {
                         sequence,
                         kind: action.intent.kind(),
                     });
+                    if is_local_cue_source(&action.intent) {
+                        cues.push(LocalCueSource {
+                            local_event_sequence: next_cue,
+                            kind: action.intent.kind(),
+                        });
+                        next_cue = next_cue.checked_add(1).ok_or(ClientError::Capacity)?;
+                    }
                     sequence += 1;
                 }
             }
@@ -772,12 +819,15 @@ impl InputTranslator {
             .ok_or(ClientError::Capacity)?;
         if final_bytes > limits.outbound_bytes() {
             return Err(ClientError::Capacity);
-        } // The critical section: all owners change together or not at all.
+        }
+        // The critical section: all owners change together or not at all.
         admission.outbound.extend(records);
         admission.outbound_bytes = final_bytes;
         admission.journal.extend(entries);
-        admission.next_sequence = sequence;
+        admission.next_sequence = sequence_end;
         admission.overlay = simulated;
+        admission.pending_local_cues.extend(cues);
+        admission.next_local_event_sequence = next_cue;
         Ok(InputReceipt::Queued {
             epoch: batch.epoch(),
             first_sequence,
@@ -974,5 +1024,53 @@ impl InputProjectionState {
 
     pub fn pending_local_cues(&self) -> &[LocalCueSource] {
         &self.pending_local_cues
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::session::{ConfirmedMirror, ConfirmedMirrorParts};
+
+    /// Sequence exhaustion is unreachable through the public surface — the
+    /// journal bound caps one epoch at 256 issued sequences — so this guard
+    /// drives the private counter directly: a batch whose sequence span would
+    /// wrap returns `Capacity` and leaves every owner unchanged, never a
+    /// wrapped zero sequence or an overflow.
+    #[test]
+    fn sequence_exhaustion_returns_capacity_without_mutation() {
+        let epoch = SessionEpoch::try_new(1).expect("nonzero epoch");
+        let limits = ClientLimits::try_new().expect("frozen limits");
+        let mirror = ConfirmedMirror::try_new(ConfirmedMirrorParts {
+            epoch,
+            revision: ConfirmedRevision::new(0),
+            phase: crate::contracts::SessionPhase::Admitted,
+            world: None,
+            actors: None,
+            inventory: None,
+            world_ui: None,
+        })
+        .expect("admitted mirror");
+        let mut admission = InputAdmissionState::try_new(epoch, limits).expect("owner");
+        admission.next_sequence = u64::MAX;
+        let action = InputAction {
+            intent: ClientIntent::DropSelectedItem,
+            container: None,
+            crafting: None,
+        };
+        let batch = InputBatch::try_new(epoch, vec![action]).expect("batch");
+        let validated =
+            InputTranslator::validate_batch(&batch, &mirror, &limits).expect("validated");
+        assert_eq!(
+            InputTranslator::commit(validated, &mut admission),
+            Err(ClientError::Capacity),
+            "the exhausted sequence space rejects the whole batch"
+        );
+        assert_eq!(admission.next_sequence, u64::MAX, "sequence unchanged");
+        assert_eq!(admission.outbound_records(), 0, "no partial send");
+        assert_eq!(admission.outbound_bytes(), 0, "no queued bytes");
+        assert_eq!(admission.journal_entries(), 0, "no journal entry");
+        assert!(admission.overlay.tombstones().is_empty(), "no tombstone");
     }
 }
