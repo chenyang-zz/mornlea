@@ -2987,6 +2987,28 @@ pub trait ChunkLoadPort {
     fn cancel_chunk(&mut self, request: ChunkRequestId) -> Result<(), ServerError>;
 }
 
+/// Generation transfers one prepared base whole from an independent CPU owner.
+// The eight-entry generation lane follows the compact load lane's whole-record
+// convention without another payload allocation on the tick.
+#[allow(clippy::large_enum_variant)]
+pub enum GenerationPoll {
+    Pending,
+    Ready(crate::core::world::PreparedChunk),
+    Failed(ServerError),
+}
+
+/// Nonblocking generation ownership; cancellation suppresses publication while
+/// retaining started CPU work until its real completion has been collected.
+pub trait GenerationPort {
+    fn start_generation(
+        &mut self,
+        key: ChunkKey,
+        generation: u64,
+    ) -> Result<ChunkRequestId, ServerError>;
+    fn poll_generation(&mut self, request: ChunkRequestId) -> GenerationPoll;
+    fn cancel_generation(&mut self, request: ChunkRequestId) -> Result<(), ServerError>;
+}
+
 pub trait SessionPort {
     fn allocate(
         &mut self,

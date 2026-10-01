@@ -38,6 +38,14 @@ consume its cancellation and error contracts before joining the real backend.
   Generation owns no authority, storage, request identity or publication;
   acquisition supplies revisions and validates Ready preparation separately.
 
+- `src/core/generation_worker.rs` owns at most eight queued, started or held
+  generation requests across one or two OS owners. Each retains independent
+  native scratch and prepares Ready bases off the tick. `GenerationPort`
+  transfers results whole; started cancellation retains the charge until the
+  real reply is collected. Deadlines preserve work and join handles for retry;
+  only explicit successful close proves every owner joined. No disk, authority
+  or transport handle crosses this boundary; live acquisition remains separate.
+
 - `src/core/world.rs` validates compact Ready chunk bases and derives non-air
   heights off the tick. Read views use exact chunk/cell indexing and observe
   sparse writes first; missing chunks never become air. Height changes are

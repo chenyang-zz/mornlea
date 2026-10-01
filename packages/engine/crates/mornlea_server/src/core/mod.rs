@@ -5,6 +5,7 @@ mod container_store;
 pub mod contracts;
 mod drop_store;
 pub mod generation;
+pub mod generation_worker;
 mod go_random;
 pub mod interaction;
 pub mod login_seed;

@@ -27,6 +27,8 @@ mod full_corpus;
 mod furnaces;
 #[path = "server_replay/generation.rs"]
 mod generation;
+#[path = "server_replay/generation_worker.rs"]
+mod generation_worker;
 #[path = "server_replay/hostile_actions.rs"]
 mod hostile_actions;
 #[path = "server_replay/hostile_actors.rs"]
