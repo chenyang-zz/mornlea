@@ -1024,6 +1024,13 @@ impl AuthorityState {
             return None;
         }
         let chunk = self.residents.ready.get(&key)?;
+        // Live captures use the source scheduling metric; mailbox admission
+        // independently reserves its compression maximum. Legacy fixtures keep it.
+        let estimate = if self.acquisition.enabled() {
+            chunk.payload_estimate()?
+        } else {
+            crate::store::mailbox::CHUNK_MAX_RESERVATION
+        };
         let view = chunk.capture(
             self.residents.drops.get(&key),
             self.residents.container_chunks.get(&key),
@@ -1031,7 +1038,7 @@ impl AuthorityState {
         OwnedSnapshot::try_new(
             SaveKey::Chunk(key),
             view.revision(),
-            crate::store::mailbox::CHUNK_MAX_RESERVATION,
+            estimate,
             urgency,
             SaveValue::ChunkView(view),
         )
@@ -4087,6 +4094,36 @@ mod owned_resident_tests {
     }
 
     #[test]
+    fn disabled_legacy_payload_capture_retains_maximum_reservation() {
+        let authority = authority(1, false);
+        assert_eq!(
+            authority
+                .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
+                .unwrap()
+                .estimated_bytes,
+            crate::store::mailbox::CHUNK_MAX_RESERVATION
+        );
+    }
+
+    #[test]
+    fn disabled_legacy_payload_capture_retains_private_unregistered_body() {
+        let mut authority = authority(1, false);
+        let ready = authority.residents.ready.get_mut(&key(0)).unwrap();
+        ready.set_block(BlockPos::new(0, -64, 0), 90);
+        ready.mark_blocks_dirty();
+        ready.finish_tick(false);
+        assert_eq!(ready.payload_estimate(), None);
+        let captured = authority
+            .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
+            .unwrap();
+        assert_eq!(captured.revision, 6);
+        assert_eq!(
+            captured.estimated_bytes,
+            crate::store::mailbox::CHUNK_MAX_RESERVATION
+        );
+    }
+
+    #[test]
     fn chunk_select_recipe_shares_inflight_body() {
         let mut authority = authority(1, false);
         let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
@@ -5903,6 +5940,93 @@ mod live_acquisition_tests {
         )
         .unwrap()
     }
+    #[test]
+    fn live_capture_refuses_unavailable_private_payload_estimate() {
+        let mut a = live();
+        queue(&mut a, chunk());
+        a.advance_tick(TickBudget::full()).unwrap();
+        let r = a.residents.ready.get_mut(&key()).unwrap();
+        r.set_block(BlockPos::new(0, -64, 0), 90);
+        r.finish_tick(false);
+        assert!(
+            a.capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn live_payload_estimate_commit_and_capture_use_only_fixed_metadata() {
+        let mut a = live();
+        queue(&mut a, chunk());
+        world::reset_payload_work();
+        world::reset_ready_clones();
+        world::reset_materializations();
+        a.advance_tick(TickBudget::full()).unwrap();
+        let old = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap();
+        assert_eq!(world::payload_work(), (0, 0, 0, 0));
+        let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+        let observed = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(0, -64, 0))
+            .unwrap();
+        ctx.transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, 1).unwrap()],
+            )
+            .unwrap();
+        ctx.commit_carried();
+        drop(ctx);
+        let changed = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap();
+        assert_eq!(changed.estimated_bytes, 6164);
+        assert_eq!(old.estimated_bytes, 4096);
+        assert_eq!(changed.revision, old.revision + 1);
+        assert_eq!(world::payload_work(), (0, 1, 0, 90));
+        assert_eq!((world::ready_clones(), world::materializations()), (0, 0));
+        let SaveValue::ChunkView(old_view) = old.value else {
+            unreachable!()
+        };
+        let SaveValue::ChunkView(new_view) = changed.value else {
+            unreachable!()
+        };
+        assert_eq!(world::payload_work(), (0, 1, 0, 90));
+        assert_ne!(old_view, new_view);
+        assert_eq!(old_view.materialize().chunk.sections[0].single, 0);
+        assert_eq!(new_view.materialize().revision, old.revision + 1);
+    }
+
+    #[test]
+    fn live_payload_estimate_uses_source_air_metric_and_retains_unloading_identity() {
+        let mut a = live();
+        queue(&mut a, chunk());
+        a.advance_tick(TickBudget::full()).unwrap();
+        let before = a.live_chunk_facts(key()).unwrap();
+        let first = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap();
+        let second = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap();
+        assert_eq!(first.estimated_bytes, 4096);
+        assert_eq!(second.estimated_bytes, 4096);
+        assert_eq!(first.revision, before.revision);
+        assert_ne!(first.value, second.value);
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        let unloading = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Unload)
+            .unwrap();
+        assert_eq!(unloading.estimated_bytes, 4096);
+        assert_eq!(unloading.revision, before.revision);
+        assert_eq!(
+            a.live_chunk_facts(key()).unwrap().persisted_revision,
+            before.persisted_revision
+        );
+    }
+
     #[test]
     fn offer_and_actual_tick_installation_clone_and_materialize_no_ready_body() {
         let mut a = live();

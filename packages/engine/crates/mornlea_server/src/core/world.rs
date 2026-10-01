@@ -12,10 +12,22 @@ use super::drop_store::DropState;
 
 #[cfg(test)]
 thread_local! {
+    // Logical prepared cells, differing updates, copied counts, recounted entries.
+    static PAYLOAD_WORK: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
     static PAGE_WORK: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
     static MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static READY_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TICK_FINISHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_payload_work() {
+    PAYLOAD_WORK.with(|count| count.set((0, 0, 0, 0)));
+}
+
+#[cfg(test)]
+pub(crate) fn payload_work() -> (usize, usize, usize, usize) {
+    PAYLOAD_WORK.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -334,6 +346,25 @@ impl PreparedChunk {
     }
 }
 
+// Frequencies belong only to Ready/undo owners, never to immutable save views.
+// The registered block sentinel bounds each copy independently of section cells.
+struct SectionFrequencies {
+    counts: [u16; 90],
+}
+
+impl Clone for SectionFrequencies {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        PAYLOAD_WORK.with(|count| {
+            let (prepared, updates, copied, scans) = count.get();
+            count.set((prepared, updates, copied + 90, scans));
+        });
+        Self {
+            counts: self.counts,
+        }
+    }
+}
+
 /// Immutable compact storage with a derived, tick-local non-air height cache.
 /// Construction validates save associations and builds heights off the tick;
 /// installing or cloning the value never expands or decodes its block storage.
@@ -345,6 +376,11 @@ pub struct ReadyChunk {
     pages: Option<Arc<PageNode>>,
     heights: [i16; 256],
     blocks_dirty: bool,
+    frequencies: [Arc<SectionFrequencies>; 24],
+    section_estimates: [usize; 24],
+    changed_sections: u32,
+    estimated_payload: usize,
+    estimate_valid: bool,
 }
 
 impl Clone for ReadyChunk {
@@ -359,6 +395,11 @@ impl Clone for ReadyChunk {
             pages: self.pages.clone(),
             heights: self.heights,
             blocks_dirty: self.blocks_dirty,
+            frequencies: self.frequencies.clone(),
+            section_estimates: self.section_estimates,
+            changed_sections: self.changed_sections,
+            estimated_payload: self.estimated_payload,
+            estimate_valid: self.estimate_valid,
         }
     }
 }
@@ -384,6 +425,35 @@ impl ReadyChunk {
                 field: "ready_chunk",
             },
         )?;
+        // Preserve the loaded representation, including unused palette entries.
+        // Physical slots cost the source fixed amount regardless of active flags.
+        let section_estimates = std::array::from_fn(|index| {
+            let section = &save.chunk.sections[index];
+            match section.kind {
+                StorageKind::Single => 0,
+                StorageKind::Indexed => section.packed.len() * 8 + section.palette.len() * 10,
+                StorageKind::Direct => section.packed.len() * 8,
+            }
+        });
+        let frequencies = std::array::from_fn(|index| {
+            let section = &save.chunk.sections[index];
+            let mut counts = [0u16; 90];
+            if section.kind == StorageKind::Single {
+                counts[usize::from(section.single)] = 4096;
+            } else {
+                for cell in 0..4096 {
+                    counts[usize::from(section_block(section, cell))] += 1;
+                }
+            }
+            #[cfg(test)]
+            PAYLOAD_WORK.with(|count| {
+                let (prepared, updates, copied, scans) = count.get();
+                count.set((prepared + 4096, updates, copied, scans));
+            });
+            Arc::new(SectionFrequencies { counts })
+        });
+        let estimated_payload =
+            512 + 32 * 19 + 32 * 21 + 16 * 144 + section_estimates.iter().sum::<usize>();
         let mut ready = Self {
             key,
             generation,
@@ -392,6 +462,11 @@ impl ReadyChunk {
             pages: None,
             heights: [-65; 256],
             blocks_dirty: false,
+            frequencies,
+            section_estimates,
+            changed_sections: 0,
+            estimated_payload,
+            estimate_valid: true,
         };
         for z in 0..16 {
             for x in 0..16 {
@@ -435,6 +510,26 @@ impl ReadyChunk {
 
     pub(crate) fn set_block(&mut self, position: BlockPos, block: u16) {
         let index = chunk_block_index(position) as usize;
+        let previous = self.block_index(index);
+        if self.estimate_valid && previous != block {
+            if mornlea_domain::registered_block(previous) && mornlea_domain::registered_block(block)
+            {
+                let section = index / 4096;
+                let frequencies = Arc::make_mut(&mut self.frequencies[section]);
+                frequencies.counts[usize::from(previous)] -= 1;
+                frequencies.counts[usize::from(block)] += 1;
+                self.changed_sections |= 1 << section;
+                #[cfg(test)]
+                PAYLOAD_WORK.with(|count| {
+                    let (prepared, updates, copied, scans) = count.get();
+                    count.set((prepared, updates + 1, copied, scans));
+                });
+            } else {
+                // Private fixtures can write outside the checked production domain.
+                // Retain their pages, but never publish a fabricated source estimate.
+                self.estimate_valid = false;
+            }
+        }
         write_page(
             &mut self.pages,
             &self.base,
@@ -461,13 +556,47 @@ impl ReadyChunk {
         }
     }
 
-    /// Commits only revision metadata; compact data stays shared and overlays
-    /// remain owned by the resident maps until an explicit save materializes them.
+    /// Commits durable identity and recounts only changed fixed frequency records.
+    /// Persistent pages already contain writes; body expansion stays off tick.
     pub(crate) fn finish_tick(&mut self, slots_dirty: bool) {
         #[cfg(test)]
         TICK_FINISHES.with(|count| count.set(count.get() + 1));
         self.revision = self.pending_revision(slots_dirty);
+        if self.estimate_valid {
+            while self.changed_sections != 0 {
+                let section = self.changed_sections.trailing_zeros() as usize;
+                self.changed_sections &= !(1 << section);
+                let used = self.frequencies[section]
+                    .counts
+                    .iter()
+                    .filter(|count| **count != 0)
+                    .count();
+                #[cfg(test)]
+                PAYLOAD_WORK.with(|count| {
+                    let (prepared, updates, copied, scans) = count.get();
+                    count.set((prepared, updates, copied, scans + 90));
+                });
+                // Source `Compact` rebuilds only modified sections at commit.
+                let estimate = match used {
+                    1 => 0,
+                    2..=16 => 2048 + used * 10,
+                    17..=90 => 4096 + used * 10,
+                    _ => unreachable!("validated frequencies cover one section"),
+                };
+                self.estimated_payload =
+                    self.estimated_payload - self.section_estimates[section] + estimate;
+                self.section_estimates[section] = estimate;
+            }
+        }
+        self.changed_sections = 0;
         self.blocks_dirty = false;
+    }
+
+    /// Source logical scheduling metric, independent of RSS and store reservation.
+    /// Checked production writes preserve validity; private unregistered writes
+    /// make this cache unavailable for the remainder of that Ready owner's life.
+    pub(crate) fn payload_estimate(&self) -> Option<usize> {
+        self.estimate_valid.then_some(self.estimated_payload)
     }
 
     pub(crate) fn container_state(&self) -> super::container_store::ContainerState {
@@ -685,5 +814,336 @@ mod chunk_view_tests {
         assert_eq!(saved.chunk.sections[0].bits, 15);
         assert_eq!(saved.chunk.sections[0].packed.len(), 1024);
         assert_eq!(section_block(&saved.chunk.sections[0], 0), 32767);
+    }
+}
+
+#[cfg(test)]
+mod payload_estimate_tests {
+    use super::*;
+    use mornlea_domain::{ChunkPos, Dimension};
+
+    fn key() -> ChunkKey {
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        }
+    }
+    fn single(block: u16) -> ContainerSnapshot {
+        ContainerSnapshot {
+            kind: StorageKind::Single,
+            bits: 0,
+            single: block,
+            palette: vec![],
+            packed: vec![],
+        }
+    }
+    fn chunk(section: ContainerSnapshot) -> Chunk {
+        let mut sections = vec![single(0); 24];
+        sections[0] = section;
+        Chunk {
+            sections,
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        }
+    }
+    fn ready(section: ContainerSnapshot) -> ReadyChunk {
+        ReadyChunk::try_new(key(), 7, 5, chunk(section)).unwrap()
+    }
+    fn position(index: usize) -> BlockPos {
+        BlockPos::new(
+            (index % 16) as i32,
+            -64 + (index / 256) as i32,
+            ((index % 256) / 16) as i32,
+        )
+    }
+    fn indexed(bits: u8, n: u16) -> ContainerSnapshot {
+        ContainerSnapshot {
+            kind: StorageKind::Indexed,
+            bits,
+            single: 0,
+            palette: (0..n).collect(),
+            packed: vec![0; 4096 / (64 / usize::from(bits))],
+        }
+    }
+    fn direct() -> ContainerSnapshot {
+        ContainerSnapshot {
+            kind: StorageKind::Direct,
+            bits: 15,
+            single: 0,
+            palette: vec![],
+            packed: vec![0; 1024],
+        }
+    }
+
+    #[test]
+    fn initial_source_formula_preserves_unused_palette_and_direct_storage() {
+        for (section, expected) in [
+            (single(89), 4096),
+            (indexed(4, 16), 6304),
+            (indexed(8, 90), 9092),
+            (direct(), 12288),
+        ] {
+            let mut r = ready(section);
+            assert_eq!(r.payload_estimate(), Some(expected));
+            r.finish_tick(false);
+            r.finish_tick(true);
+            assert_eq!(r.payload_estimate(), Some(expected));
+            r.set_block(position(0), r.block(position(0)).unwrap());
+            r.finish_tick(false);
+            assert_eq!(r.payload_estimate(), Some(expected));
+        }
+        assert!(ReadyChunk::try_new(key(), 7, 5, chunk(single(90))).is_err());
+        let mut invalid = indexed(4, 2);
+        invalid.palette[1] = 90;
+        assert!(ReadyChunk::try_new(key(), 7, 5, chunk(invalid)).is_err());
+        let mut invalid = direct();
+        invalid.packed[0] = 90;
+        assert!(ReadyChunk::try_new(key(), 7, 5, chunk(invalid)).is_err());
+    }
+
+    #[test]
+    fn compact_formula_recounts_only_changed_sections_and_preserves_pinned_metadata() {
+        reset_payload_work();
+        let mut r = ready(direct());
+        assert_eq!(payload_work(), (24 * 4096, 0, 0, 0));
+        assert!(
+            r.frequencies
+                .iter()
+                .all(|f| f.counts.iter().map(|n| usize::from(*n)).sum::<usize>() == 4096)
+        );
+        let pinned = r.clone();
+        let save = r.capture(None, None);
+        reset_payload_work();
+        reset_ready_clones();
+        reset_materializations();
+        r.set_block(position(0), 1);
+        r.set_block(position(1), 1);
+        r.set_block(position(1), 1);
+        assert_eq!(payload_work(), (0, 2, 90, 0));
+        for section in 0..24 {
+            assert_eq!(
+                Arc::ptr_eq(&r.frequencies[section], &pinned.frequencies[section]),
+                section != 0
+            );
+        }
+        r.mark_blocks_dirty();
+        r.finish_tick(false);
+        assert_eq!(payload_work(), (0, 2, 90, 90));
+        assert_eq!(r.payload_estimate(), Some(6164));
+        assert_eq!(pinned.payload_estimate(), Some(12288));
+        assert_eq!(pinned.frequencies[0].counts[0], 4096);
+        assert_eq!((ready_clones(), materializations()), (0, 0));
+        assert_eq!(Arc::strong_count(&r.frequencies[0]), 1);
+        reset_payload_work();
+        r.finish_tick(false);
+        r.finish_tick(true);
+        r.set_block(position(1), 1);
+        r.finish_tick(false);
+        assert_eq!(payload_work(), (0, 0, 0, 0));
+        drop(pinned);
+        r.set_block(position(4096), 89);
+        r.finish_tick(false);
+        assert_eq!(payload_work(), (0, 1, 0, 90));
+        assert_eq!(r.payload_estimate(), Some(8232));
+        assert_eq!(save.revision(), 5);
+    }
+
+    #[test]
+    fn all_changed_sections_scan_at_most_fixed_frequency_records() {
+        let mut r = ready(single(0));
+        reset_payload_work();
+        for section in 0..24 {
+            r.set_block(position(section * 4096), 89);
+        }
+        r.finish_tick(false);
+        assert_eq!(payload_work(), (0, 24, 0, 24 * 90));
+        assert_eq!(r.payload_estimate(), Some(4096 + 24 * 2068));
+    }
+
+    #[test]
+    fn physical_slot_values_do_not_change_fixed_source_estimate() {
+        let mut c = chunk(single(0));
+        c.drops[31].generation = 19;
+        c.furnaces[31].generation = 20;
+        c.chests[15].generation = 21;
+        assert_eq!(
+            ReadyChunk::try_new(key(), 7, 5, c)
+                .unwrap()
+                .payload_estimate(),
+            Some(4096)
+        );
+        let mut r = ready(single(0));
+        r.set_block(position(0), 11);
+        r.set_block(position(1), 9);
+        r.finish_tick(true);
+        let mut containers = r.container_state();
+        containers.chests[0].generation = 1;
+        containers.chests[0].active = true;
+        containers.chests[0].block_index = 0;
+        containers.furnaces[0].generation = 1;
+        containers.furnaces[0].active = true;
+        containers.furnaces[0].block_index = 1;
+        let mut drops = DropState::new(key(), [Default::default(); 32]);
+        drops.slots[31] = mornlea_storage::DropSlot {
+            generation: 19,
+            active: true,
+            stack: mornlea_storage::ItemStack {
+                item: 2,
+                count: 1,
+                durability: 0,
+            },
+            block_index: 4095,
+            age_ticks: 7,
+            pickup_delay_ticks: 5,
+        };
+        let capture = r.capture(Some(&drops), Some(&containers));
+        assert_eq!(r.payload_estimate(), Some(6174));
+        assert!(capture.materialize().chunk.drops[31].active);
+        assert!(capture.materialize().chunk.chests[0].active);
+        assert!(capture.materialize().chunk.furnaces[0].active);
+    }
+
+    #[test]
+    fn unregistered_private_writes_refuse_estimates_without_breaking_pages() {
+        let mut r = ready(single(0));
+        reset_payload_work();
+        r.set_block(position(1), 1);
+        r.set_block(position(0), 32767);
+        r.mark_blocks_dirty();
+        r.finish_tick(false);
+        assert_eq!(r.revision, 6);
+        assert_eq!(r.changed_sections, 0);
+        assert_eq!(payload_work(), (0, 1, 0, 0));
+        assert_eq!(r.payload_estimate(), None);
+        assert_eq!(r.block(position(0)), Some(32767));
+        assert_eq!(
+            section_block(&r.capture(None, None).materialize().chunk.sections[0], 0),
+            32767
+        );
+        reset_payload_work();
+        r.set_block(position(0), 1);
+        r.mark_blocks_dirty();
+        r.finish_tick(false);
+        assert_eq!(r.revision, 7);
+        assert_eq!(r.block(position(0)), Some(1));
+        assert_eq!(payload_work(), (0, 0, 0, 0));
+        assert_eq!(r.payload_estimate(), None);
+    }
+
+    #[test]
+    fn actual_unchanged_go_new_chunk_set_compact_matches_ready_sequence() {
+        use std::{
+            fs,
+            io::Read,
+            process::{Child, Command, Stdio},
+            time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+        };
+        struct Root(std::path::PathBuf);
+        impl Drop for Root {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        struct OwnedChild(Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let root = Root(std::env::temp_dir().join(format!(
+                "mornlea-payload-go-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )));
+        fs::create_dir(&root.0).unwrap();
+        let source = root.0.join("main.go");
+        fs::write(
+            &source,
+            r#"package main
+import (
+ "fmt"
+ "github.com/channing771/mornlea/packages/shared/core"
+ "github.com/channing771/mornlea/packages/shared/world"
+)
+func main() {
+ c := world.NewChunk(core.ChunkPos{})
+ b := c.Section(0).Blocks
+ fmt.Println(c.PayloadBytes())
+ b.Set(0, 0, 0, 1); b.Compact(); fmt.Println(c.PayloadBytes())
+ for i := 1; i < 15; i++ { b.Set(i, 0, 0, world.BlockID(i+1)) }
+ b.Compact(); fmt.Println(c.PayloadBytes())
+ b.Set(15, 0, 0, 16); b.Compact(); fmt.Println(c.PayloadBytes())
+ for i := 0; i < 4096; i++ { b.Set(i%16, i/256, (i%256)/16, 1) }
+ b.Compact(); fmt.Println(c.PayloadBytes())
+}
+"#,
+        )
+        .unwrap();
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+        let stdout = root.0.join("stdout");
+        let stderr = root.0.join("stderr");
+        let mut child = OwnedChild(
+            Command::new("go")
+                .arg("run")
+                .arg(&source)
+                .current_dir(repository)
+                .stdin(Stdio::null())
+                .stdout(fs::File::create(&stdout).unwrap())
+                .stderr(fs::File::create(&stderr).unwrap())
+                .spawn()
+                .expect("actual Go compiler is required"),
+        );
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let status = loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "actual Go helper timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let bounded_text = |path: &std::path::Path| {
+            let mut text = String::new();
+            fs::File::open(path)
+                .unwrap()
+                .take(4097)
+                .read_to_string(&mut text)
+                .unwrap();
+            assert!(text.len() <= 4096, "Go report exceeded its bound");
+            text
+        };
+        assert!(
+            status.success(),
+            "Go helper failed: {}",
+            bounded_text(&stderr)
+        );
+        let actual: Vec<usize> = bounded_text(&stdout)
+            .split_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        assert_eq!(actual, [4096, 6164, 6304, 8362, 4096]);
+        let mut r = ready(single(0));
+        let mut estimates = vec![r.payload_estimate().unwrap()];
+        r.set_block(position(0), 1);
+        r.finish_tick(false);
+        estimates.push(r.payload_estimate().unwrap());
+        for i in 1..15 {
+            r.set_block(position(i), (i + 1) as u16);
+        }
+        r.finish_tick(false);
+        estimates.push(r.payload_estimate().unwrap());
+        r.set_block(position(15), 16);
+        r.finish_tick(false);
+        estimates.push(r.payload_estimate().unwrap());
+        for i in 0..4096 {
+            r.set_block(position(i), 1);
+        }
+        r.finish_tick(false);
+        estimates.push(r.payload_estimate().unwrap());
+        assert_eq!(estimates, actual);
     }
 }
