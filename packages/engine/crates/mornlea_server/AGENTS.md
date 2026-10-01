@@ -31,15 +31,19 @@ consume its cancellation and error contracts before joining the real backend.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
-- `src/core/actor_placement.rs` owns bounded borrowed restoration, support and
-  single-column spawn geometry. It reuses the motion collision mapping with
-  source float arithmetic, strict contact, whole-footprint Ready gating and
+- `src/core/actor_placement.rs` owns bounded borrowed restoration, support,
+  Safe checkpoint and single-column spawn geometry. It reuses the motion
+  collision mapping with source float arithmetic, strict contact, whole-footprint Ready gating and
   distinct complete/any support. Only its read-view adapter normalizes source
   out-of-height air. Complete current Ready non-air heights may skip proved air
   rows; readers without that certificate retain literal source row order.
   Checked spans and enumeration cap reads and allocation. Private source doubles
   and actual compact Ready/current-write fixtures qualify geometry alone;
   lifecycle, subscriptions, full-radius scan cadence and runtime stay caller-owned.
+  Private Safe geometry performs at most four horizontal Ready checks before
+  at most twelve body and four complete-support cells, with no retained owner
+  or heap allocation. It preserves source float collapse, outside-height AIR
+  and supported fluid eligibility independently of restore height limits.
 
 - `src/core/pending_restore.rs` retains bounded candidate, wanted-key, nearest
   column, fallback and exhausted-revision progress over borrowed placement reads.
@@ -105,9 +109,15 @@ consume its cancellation and error contracts before joining the real backend.
   advancement. Actual source death settles serially after all five damage
   producers and before passive advancement, preserving the captured anchor and
   current dimension for next-tick restoration. The same entry owns its restarted
-  scan; waiting ticks never repeat inventory drops or survival refill. Source
-  subscriptions, Safe/publication, actor save/cache eligibility and executable
-  runtime acceptance remain separately owned.
+  scan; waiting ticks never repeat inventory drops or survival refill. One keyed
+  ever-spawned lookup qualifies Safe immediately after each player's native
+  motion and fall settlement, before later players and late death. The indexed
+  context updates only the existing heap-free Safe field, preserving body/path
+  allocations and the same scan; prior accepted checkpoints survive later
+  context abandonment. Actual healthy/lethal landing and top-floor native
+  recipes qualify this owner. Source subscriptions, later footprint timing,
+  publication, automatic actor save/cache eligibility and executable runtime
+  acceptance remain separately owned.
 
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
   inventory/runtime overlays to produce checked existing storage values. Player

@@ -442,6 +442,8 @@ fn dispatch_rows(
             actor,
             player_survival::run,
         )?;
+        // Sample landed pose after fall settlement, before later players or death can reset it.
+        source_player_restore::checkpoint_safe(source_players, context, session)?;
     }
     companions::run(context, batch_call(RulePhase::CompanionMotion))?;
     let plan = hostile_actions::plan(context)?;

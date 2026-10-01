@@ -1,4 +1,4 @@
-//! Bounded borrowed source geometry for restoration and single-column spawn reads.
+//! Bounded borrowed source geometry for restoration, Safe checkpoints and single-column spawn reads.
 //! Actor lifecycle, subscriptions and scan cadence remain caller-owned.
 
 use super::contracts::{ChunkKey, ServerError};
@@ -221,6 +221,32 @@ pub fn support_contact(
         }
     }
     Ok(contact)
+}
+
+/// Safe writing checks source geometry independently of restore height eligibility.
+/// Whole-footprint readiness precedes every cell read; complete support may be fluid-covered.
+pub(crate) fn safe_location(
+    world: &impl PlacementWorld,
+    dimension: Dimension,
+    position: [f32; 3],
+) -> Result<bool, ServerError> {
+    let shape = geometry(position)?;
+    for x in shape.x.lower..=shape.x.upper {
+        for z in shape.z.lower..=shape.z.upper {
+            if world
+                .ready_revision(ChunkKey {
+                    dimension,
+                    pos: ChunkPos::new((x as i32) >> 4, (z as i32) >> 4),
+                })
+                .is_none()
+            {
+                return Ok(false);
+            }
+        }
+    }
+    let space = body_space(world, dimension, position)?;
+    let contact = support_contact(world, dimension, position)?;
+    Ok(space.ready && space.free && contact.complete)
 }
 
 /// Checked source enumeration is bounded before allocation and nearest-first.
@@ -1458,5 +1484,106 @@ mod tests {
         unchanged_owners();
         drop(ctx);
         empty_schedules(&a);
+    }
+
+    #[test]
+    fn safe_checkpoint_requires_ready_free_complete_support() {
+        for row in 0..6 {
+            let mut w = CountingWorld::known();
+            let mut pose = [8.5, 64., 8.5];
+            w.put(8, 63, 8, 1);
+            match row {
+                0 => {}
+                1 => w.put(8, 64, 8, 27),
+                2 => {
+                    w.put(8, 63, 8, 76);
+                    pose[1] = 63.5625;
+                }
+                3 => w.put(8, 63, 8, 0),
+                4 => w.put(8, 64, 8, 1),
+                5 => {
+                    pose[0] = 15.9;
+                    w.ready.insert(key(D, 1, 0), 9);
+                    w.put(15, 63, 8, 1);
+                    let contact = support_contact(&w, D, pose).unwrap();
+                    assert!(contact.any && !contact.complete);
+                    w.reset();
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(safe_location(&w, D, pose), Ok(row < 3), "row {row}");
+        }
+    }
+
+    #[test]
+    fn safe_checkpoint_checks_all_ready_before_cells() {
+        let mut w = CountingWorld::known();
+        let pose = [15.9, 64., 8.5];
+        w.put(15, 64, 8, 1);
+        assert_eq!(safe_location(&w, D, pose), Ok(false));
+        assert_eq!(w.counts(), (2, 0, 0));
+        w.ready.insert(key(D, 1, 0), 9);
+        w.reset();
+        assert_eq!(safe_location(&w, D, pose), Ok(false));
+        assert!(w.counts().1 > 0);
+        for missing in [BlockPos::new(8, 64, 8), BlockPos::new(8, 63, 8)] {
+            let mut w = CountingWorld::known();
+            w.put(8, 63, 8, 1);
+            w.missing_cells.insert((D, missing));
+            assert_eq!(safe_location(&w, D, [8.5, 64., 8.5]), Ok(false));
+        }
+        let mut w = CountingWorld::known();
+        for (x, z) in [(0, 1), (1, 0), (1, 1)] {
+            w.ready.insert(key(D, x, z), 9);
+        }
+        assert_eq!(safe_location(&w, D, [15.9, 64.25, 15.9]), Ok(false));
+        assert_eq!(w.counts(), (4, 16, 0));
+        let mut trace = Vec::new();
+        for y in 64..=66 {
+            for x in 15..=16 {
+                for z in 15..=16 {
+                    trace.push(BlockPos::new(x, y, z));
+                }
+            }
+        }
+        for x in 15..=16 {
+            for z in 15..=16 {
+                trace.push(BlockPos::new(x, 64, z));
+            }
+        }
+        assert_eq!(*w.trace.borrow(), trace);
+    }
+
+    #[test]
+    fn safe_checkpoint_preserves_height_and_float_edges() {
+        let mut w = CountingWorld::known();
+        w.put(8, 318, 8, 1);
+        assert_eq!(safe_location(&w, D, [8.5, 319., 8.5]), Ok(true));
+        w.reset();
+        assert!(
+            !validate_restore(&w, candidate([8.5, 319., 8.5], true))
+                .unwrap()
+                .valid
+        );
+        assert_eq!(w.counts(), (0, 0, 0));
+        w.reset();
+        w.put(8, -65, 8, 1);
+        assert_eq!(safe_location(&w, D, [8.5, -64., 8.5]), Ok(false));
+        let w = CountingWorld::default();
+        let collapsed = [16777216., 64., 8.5];
+        assert_eq!(safe_location(&w, D, collapsed), Ok(true));
+        assert_eq!(w.counts(), (0, 0, 0));
+        w.reset();
+        assert_eq!(
+            support_contact(&w, D, collapsed),
+            Ok(SupportContact {
+                complete: true,
+                any: false
+            })
+        );
+        assert_eq!(w.counts(), (0, 0, 0));
+        w.reset();
+        assert_eq!(safe_location(&w, D, [f32::MAX, 64., 8.5]), Err(INVALID));
+        assert_eq!(w.counts(), (0, 0, 0));
     }
 }

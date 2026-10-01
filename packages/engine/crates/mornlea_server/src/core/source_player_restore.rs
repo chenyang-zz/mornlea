@@ -1,4 +1,4 @@
-//! Source login registration and exclusive initial, recovery and next-tick death scan ownership.
+//! Source login registration, exclusive restore scans and keyed per-player Safe qualification.
 use super::actor_placement::RestoreCandidate;
 use super::contracts::{
     ActorAux, ActorKey, ActorLifecycle, ActorRuntime, RuleEffect, ServerError, SessionKey,
@@ -223,6 +223,22 @@ pub(crate) fn settle_deaths(
         }
     }
     Ok(())
+}
+
+/// Qualifies the existing per-player Safe sample without moving its retained scan owner.
+pub(crate) fn checkpoint_safe(
+    book: &SourcePlayerBook,
+    context: &mut TickContext<'_>,
+    session: SessionKey,
+) -> Result<(), ServerError> {
+    if !book
+        .entries
+        .get(&session)
+        .is_some_and(|entry| entry.ever_spawned)
+    {
+        return Ok(());
+    }
+    context.checkpoint_source_player_safe(session)
 }
 
 #[cfg(test)]

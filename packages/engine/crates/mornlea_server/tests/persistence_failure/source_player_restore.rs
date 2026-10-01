@@ -1,4 +1,4 @@
-//! Actual disk, Memory login and Acquire restoration, recovery and five-producer death recipes.
+//! Actual disk, Memory login, Acquire and native restoration, recovery, death and Safe recipes.
 //! Manual wants qualify the caller without accepting a source subscription producer.
 use mornlea_domain::{
     BlockPos, ChunkPos, CompanionId, Dimension, FiniteVec3, HostileId, Identities, LookAngles,
@@ -1355,7 +1355,16 @@ fn recovery_actual_embedded_pose_lifts_before_native() {
     assert!(after.0.motion.on_ground());
     assert!(local.ready() && !local.reset());
     assert_eq!(local.last_input_sequence(), 0);
-    recovery_rich_preserved(&before, &after);
+    // Successful recovery proceeds through native motion and records its supported Safe pose.
+    let mut expected = before;
+    let ActorBody::Player(body) = &mut expected.0.body else {
+        unreachable!()
+    };
+    body.safe = Some(PlayerLocation {
+        dimension: 0,
+        position: [8.5, 65., 8.5],
+    });
+    recovery_rich_preserved(&expected, &after);
 }
 #[test]
 fn recovery_actual_blocked_pose_enters_pending() {
@@ -2007,4 +2016,153 @@ fn death_actual_impossible_repack_fences_partial_tick() {
             .iter()
             .all(|(_, _, _, chunk)| chunk.drops.iter().all(|d| !d.active))
     );
+}
+
+fn safe_actual_value(
+    state: &AuthorityState,
+    session: SessionKey,
+) -> Option<mornlea_storage::PlayerLocation> {
+    let observed = recovery_observed(state, session);
+    let ActorBody::Player(body) = observed.0.body else {
+        unreachable!()
+    };
+    body.safe
+}
+fn safe_actual_expect(state: &AuthorityState, session: SessionKey, position: [f32; 3]) {
+    assert_eq!(
+        safe_actual_value(state, session),
+        Some(mornlea_storage::PlayerLocation {
+            dimension: 0,
+            position
+        })
+    );
+}
+
+#[test]
+fn safe_actual_native_landing_updates_current_dimension() {
+    let (mut fixture, mut state, session) = death_fixture(DeathProducer::LandingControl, false);
+    let mut residents = state.residents();
+    let actor = residents
+        .actors
+        .iter_mut()
+        .find(|a| a.key == ActorKey::Player(session))
+        .unwrap();
+    let ActorBody::Player(body) = &mut actor.body else {
+        unreachable!()
+    };
+    body.safe = Some(mornlea_storage::PlayerLocation {
+        dimension: 1,
+        position: [56.5, 64., 8.5],
+    });
+    state.commit_residents(residents);
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let (actor, _, inventory) = recovery_observed(&state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.survival.health(), 1);
+    assert_eq!(actor.motion.position().get(), [8.5, 64., 8.5]);
+    assert!(actor.motion.on_ground());
+    assert_eq!(inventory.slots[3].count, 7);
+    assert!(death_ground(&state).is_empty());
+    death_no_hit(&publication);
+    assert_eq!(local(&publication).last_input_sequence(), 3);
+    safe_actual_expect(&state, session, [8.5, 64., 8.5]);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    safe_actual_expect(&state, session, [8.5, 64., 8.5]);
+    death_no_hit(&following);
+    assert!(death_ground(&state).is_empty());
+    assert_eq!(recovery_observed(&state, session).2.slots[3].count, 7);
+    fixture.close();
+}
+
+#[test]
+fn safe_actual_killing_landing_precedes_death() {
+    let (mut fixture, mut state, session) = death_fixture(DeathProducer::Landing, false);
+    let tick = state.next_tick();
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let hits = publication
+        .events
+        .iter()
+        .filter(|e| matches!(e.event(), mornlea_domain::Event::CombatHit(_)))
+        .collect::<Vec<_>>();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].recipient(),
+        mornlea_domain::EventRecipient::Session(session.get())
+    );
+    let mornlea_domain::Event::CombatHit(hit) = hits[0].event() else {
+        unreachable!()
+    };
+    assert_eq!(hit.damage(), 1);
+    assert_eq!(hit.server_tick(), tick);
+    death_pending(&state, session, &publication);
+    safe_actual_expect(&state, session, [8.5, 64., 8.5]);
+    let waiting = state.advance_tick(TickBudget::full()).unwrap();
+    death_pending(&state, session, &waiting);
+    death_no_hit(&waiting);
+    safe_actual_expect(&state, session, [8.5, 64., 8.5]);
+    let acquired = fixture.acquire(&mut state, key(Dimension::OVERWORLD, -2, 3));
+    death_activated(&state, session, &acquired, [-31.5, 65., 48.5]);
+    safe_actual_expect(&state, session, [8.5, 64., 8.5]);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(local(&following).ready() && !local(&following).reset());
+    assert_eq!(local(&following).last_input_sequence(), 3);
+    let actor = recovery_observed(&state, session).0;
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.motion.position().get(), [-31.5, 65., 48.5]);
+    assert!(actor.motion.on_ground());
+    safe_actual_expect(&state, session, [-31.5, 65., 48.5]);
+    death_no_hit(&following);
+    death_conserved(&state, session);
+    fixture.close();
+}
+
+#[test]
+fn safe_actual_top_floor_accepts_out_of_height_head() {
+    let mut save = height_player_save([8.5, 318., 8.5]);
+    save.safe = None;
+    let current = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save),
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(current, height_floor(318))],
+    );
+    let (mut login, mut transport, connection, session, clock) =
+        handshake(&mut fixture, &mut state);
+    let acquired = fixture.acquire(&mut state, current);
+    let (actor, runtime, _) = recovery_observed(&state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.motion.position().get(), [0.5, 319., 0.5]);
+    assert!(actor.motion.on_ground());
+    assert!(local(&acquired).ready() && local(&acquired).reset());
+    assert!(!runtime.reset);
+    assert_eq!(safe_actual_value(&state, session), None);
+    let input = mornlea_protocol::ClientPacket::PlayerInput(
+        mornlea_protocol::PlayerInput::new(3, 0, 0, false, 0., 0., false, false, false, false)
+            .unwrap(),
+    );
+    assert!(!matches!(
+        transport.send(
+            connection,
+            MemoryTransport::encode_frame(&input).unwrap(),
+            &mut login.bind(&mut state, &mut fixture.store),
+            &clock
+        ),
+        ConnectionProgress::Closed { .. }
+    ));
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let (actor, runtime, _) = recovery_observed(&state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), [0.5, 319., 0.5]);
+    assert!(actor.motion.on_ground());
+    assert!(actor.motion.position().get()[1] + 1.8 > 320.);
+    assert!(local(&publication).ready() && !local(&publication).reset());
+    assert!(!runtime.reset);
+    assert_eq!(local(&publication).last_input_sequence(), 3);
+    death_no_hit(&publication);
+    assert!(death_ground(&state).is_empty());
+    safe_actual_expect(&state, session, [0.5, 319., 0.5]);
+    fixture.close();
 }

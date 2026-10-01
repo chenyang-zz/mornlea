@@ -3439,6 +3439,62 @@ impl<'a> TickContext<'a> {
         Ok(Some(dimension))
     }
 
+    /// Updates only the indexed player's heap-free Safe value after ordinary native motion.
+    /// Refusal preserves every owner, and an earlier player's accepted write survives abandonment.
+    pub(crate) fn checkpoint_source_player_safe(
+        &mut self,
+        session: SessionKey,
+    ) -> Result<(), ServerError> {
+        if let Some(error) = self.authority.tick_failure {
+            return Err(error);
+        }
+        if self.authority.phase == ServerPhase::Closed {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed,
+            });
+        }
+        if self.authority.source_player_radius.is_none()
+            || !self.source_player_session_active(session)
+        {
+            return Ok(());
+        }
+        let invalid = ServerError::InvalidInput {
+            field: "source_player_safe",
+        };
+        let slot = *self.player_slots.get(&session).ok_or(invalid)?;
+        let actor = self.actors.get(slot).ok_or(invalid)?;
+        let key = ActorKey::Player(session);
+        if actor.key != key {
+            return Err(invalid);
+        }
+        if actor.lifecycle != ActorLifecycle::Active || !actor.motion.on_ground() {
+            return Ok(());
+        }
+        if !matches!(actor.body, ActorBody::Player(_)) {
+            return Err(invalid);
+        }
+        let runtime = self.runtimes.get(&key).ok_or(invalid)?;
+        if runtime.key != key || !matches!(runtime.aux, ActorAux::Player { .. }) {
+            return Err(invalid);
+        }
+        if runtime.reset {
+            return Ok(());
+        }
+        let dimension = actor.dimension;
+        let position = actor.motion.position().get();
+        if !super::actor_placement::safe_location(&self.read(), dimension, position)? {
+            return Ok(());
+        }
+        let ActorBody::Player(body) = &mut self.actors[slot].body else {
+            return Err(invalid);
+        };
+        body.safe = Some(mornlea_storage::PlayerLocation {
+            dimension: i32::from(dimension.get()),
+            position,
+        });
+        Ok(())
+    }
+
     /// Identifies source sessions whose death routing belongs to the serial consumer.
     pub(crate) fn source_player_death_deferred(&self, session: SessionKey) -> bool {
         self.authority.source_player_radius.is_some() && self.source_player_session_active(session)
@@ -13056,6 +13112,348 @@ mod source_player_restore_tests {
                 scans
             );
         }
+    }
+
+    fn ctx_safe_fixture(two: bool) -> (AuthorityState, SessionKey, Option<SessionKey>) {
+        let (mut a, s, other) = ctx_fixture(two);
+        offer(&mut a, key(Dimension::DEPTHS, 0, 0), 1);
+        a.advance_tick(TickBudget::full()).unwrap();
+        for session in std::iter::once(s).chain(other) {
+            let actor = &mut a.residents.actors[a.residents.player_slots[&session]];
+            actor.lifecycle = ActorLifecycle::Active;
+            actor.dimension = Dimension::DEPTHS;
+            actor.motion = MotionState::new(mornlea_domain::MotionStateParts {
+                position: mornlea_domain::FiniteVec3::try_new([8.5, 64., 8.5]).unwrap(),
+                velocity: mornlea_domain::FiniteVec3::try_new([0.; 3]).unwrap(),
+                on_ground: true,
+            });
+            a.residents
+                .runtimes
+                .get_mut(&ActorKey::Player(session))
+                .unwrap()
+                .reset = false;
+        }
+        (a, s, other)
+    }
+    fn ctx_safe_value(c: &TickContext<'_>, s: SessionKey) -> Option<PlayerLocation> {
+        let ActorBody::Player(body) = &c.actors[c.player_slots[&s]].body else {
+            unreachable!()
+        };
+        body.safe.as_ref().map(|v| PlayerLocation {
+            dimension: v.dimension,
+            position: v.position,
+        })
+    }
+    fn ctx_safe_set(c: &mut TickContext<'_>, s: SessionKey, safe: Option<PlayerLocation>) {
+        let slot = c.player_slots[&s];
+        let ActorBody::Player(body) = &mut c.actors[slot].body else {
+            unreachable!()
+        };
+        body.safe = safe;
+    }
+    fn ctx_safe_error() -> ServerError {
+        ServerError::InvalidInput {
+            field: "source_player_safe",
+        }
+    }
+    fn ctx_safe_refuse(c: &mut TickContext<'_>, s: SessionKey, error: ServerError) {
+        let before = ctx_death_snapshot(c);
+        assert_eq!(c.checkpoint_source_player_safe(s), Err(error));
+        assert_eq!(ctx_death_snapshot(c), before);
+    }
+
+    #[test]
+    fn ctx_safe_checkpoint_updates_in_place() {
+        for row in 0..4 {
+            let (mut a, s, _) = ctx_safe_fixture(false);
+            ctx_add_allocations(&mut a, s);
+            let book = std::mem::take(&mut a.source_players);
+            let scan = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            c.environment = None;
+            ctx_seed_transients(&mut c, &[s]);
+            let want = Some(PlayerLocation {
+                dimension: 1,
+                position: [8.5, 64., 8.5],
+            });
+            let old = match row {
+                0 | 3 => None,
+                1 => Some(PlayerLocation {
+                    dimension: 0,
+                    position: [56.5, 65., 8.5],
+                }),
+                2 => want.clone(),
+                _ => unreachable!(),
+            };
+            ctx_safe_set(&mut c, s, old.clone());
+            if row == 3 {
+                let slot = c.player_slots[&s];
+                c.actors[slot].survival = ctx_survival(0, 9, 3);
+                c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().has_view = false;
+            }
+            let allocations = ctx_allocations(
+                &c.actors[c.player_slots[&s]],
+                &c.runtimes[&ActorKey::Player(s)],
+            );
+            let before = ctx_death_snapshot(&c);
+            assert_eq!(
+                super::super::source_player_restore::checkpoint_safe(&book, &mut c, s),
+                Ok(())
+            );
+            let observed = ctx_safe_value(&c, s);
+            assert_eq!(observed, want, "row {row}");
+            assert_eq!(
+                ctx_allocations(
+                    &c.actors[c.player_slots[&s]],
+                    &c.runtimes[&ActorKey::Player(s)]
+                ),
+                allocations
+            );
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+            // Normalize only the checked fixed Safe field to compare every other owner.
+            ctx_safe_set(&mut c, s, old);
+            assert_eq!(ctx_death_snapshot(&c), before);
+            ctx_safe_set(&mut c, s, observed);
+            let accepted = ctx_death_snapshot(&c);
+            assert_eq!(
+                super::super::source_player_restore::checkpoint_safe(&book, &mut c, s),
+                Ok(())
+            );
+            assert_eq!(ctx_death_snapshot(&c), accepted);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+            assert_eq!(
+                ctx_allocations(
+                    &c.actors[c.player_slots[&s]],
+                    &c.runtimes[&ActorKey::Player(s)]
+                ),
+                allocations
+            );
+        }
+    }
+
+    #[test]
+    fn ctx_safe_checkpoint_ineligible_is_quiet() {
+        for row in 0..10 {
+            let (mut a, s) = if row == 1 {
+                fixture()
+            } else {
+                let (a, s, _) = ctx_safe_fixture(false);
+                (a, s)
+            };
+            if row == 2 {
+                a.source_player_radius = None;
+            }
+            if row == 3 {
+                a.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired;
+            }
+            if row == 4 {
+                a.sessions.remove(&s);
+            }
+            let mut book = std::mem::take(&mut a.source_players);
+            if row == 0 {
+                book.entries.remove(&s);
+            }
+            if row == 1 {
+                assert!(!book.entries[&s].ever_spawned);
+            }
+            let scans = book
+                .entries
+                .keys()
+                .map(|s| ctx_book_snapshot(&book, *s))
+                .collect::<Vec<_>>();
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            let slot = c.player_slots[&s];
+            match row {
+                5 => c.actors[slot].lifecycle = ActorLifecycle::Pending,
+                6 => c.actors[slot].lifecycle = ActorLifecycle::Respawning,
+                7 => c.actors[slot].lifecycle = ActorLifecycle::Dead,
+                8 => {
+                    let m = c.actors[slot].motion;
+                    c.actors[slot].motion = MotionState::new(mornlea_domain::MotionStateParts {
+                        position: m.position(),
+                        velocity: m.velocity(),
+                        on_ground: false,
+                    });
+                }
+                9 => c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().reset = true,
+                _ => {}
+            }
+            c.environment = None;
+            if row != 9 {
+                c.runtimes.remove(&ActorKey::Player(s));
+            }
+            let before = ctx_death_snapshot(&c);
+            assert_eq!(
+                super::super::source_player_restore::checkpoint_safe(&book, &mut c, s),
+                Ok(()),
+                "row {row}"
+            );
+            assert_eq!(ctx_death_snapshot(&c), before, "row {row}");
+            assert_eq!(
+                book.entries
+                    .keys()
+                    .map(|s| ctx_book_snapshot(&book, *s))
+                    .collect::<Vec<_>>(),
+                scans
+            );
+        }
+    }
+
+    #[test]
+    fn ctx_safe_checkpoint_refusals_and_abandonment() {
+        for row in 0..10 {
+            let (mut a, s, other) = ctx_safe_fixture(true);
+            let other = other.unwrap();
+            let book = std::mem::take(&mut a.source_players);
+            let scan = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            let slot = c.player_slots[&s];
+            match row {
+                0 => {
+                    c.player_slots.remove(&s);
+                }
+                1 => {
+                    c.player_slots.insert(s, c.actors.len());
+                }
+                2 => c.actors[slot].key = ActorKey::Player(other),
+                3 => {
+                    c.actors[slot].body = ActorBody::Passive(mornlea_storage::PassiveMob {
+                        id: 1,
+                        dimension: 0,
+                        position: [0., 64., 0.],
+                        velocity: [0.; 3],
+                        on_ground: true,
+                        yaw: 0.,
+                        health: 7,
+                    })
+                }
+                4 => {
+                    c.runtimes.remove(&ActorKey::Player(s));
+                }
+                5 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().key = ActorKey::Player(other)
+                }
+                6 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().aux = ActorAux::Hostile {
+                        distant_ticks: 1,
+                        shoot_cooldown: 2,
+                        fresh: true,
+                    }
+                }
+                7 => {
+                    c.actors[slot].motion = MotionState::new(mornlea_domain::MotionStateParts {
+                        position: mornlea_domain::FiniteVec3::try_new([f32::MAX, 64., 8.5])
+                            .unwrap(),
+                        velocity: mornlea_domain::FiniteVec3::try_new([0.; 3]).unwrap(),
+                        on_ground: true,
+                    })
+                }
+                8 | 9 => {
+                    c.authority.source_player_radius = None;
+                    c.authority.phase = ServerPhase::Closed;
+                    if row == 9 {
+                        c.authority.tick_failure = Some(ServerError::Disconnected);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let error = match row {
+                7 => ServerError::InvalidInput {
+                    field: "actor_geometry",
+                },
+                8 => ServerError::InvalidState {
+                    phase: ServerPhase::Closed,
+                },
+                9 => ServerError::Disconnected,
+                _ => ctx_safe_error(),
+            };
+            ctx_safe_refuse(&mut c, s, error);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+        }
+        for row in 0..3 {
+            let (mut a, s, _) = ctx_safe_fixture(false);
+            let book = std::mem::take(&mut a.source_players);
+            let scan = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            let slot = c.player_slots[&s];
+            let pose = match row {
+                0 => [15.9, 64., 8.5],
+                1 => [8.5, 63., 8.5],
+                _ => [8.5, 65., 8.5],
+            };
+            c.actors[slot].motion = MotionState::new(mornlea_domain::MotionStateParts {
+                position: mornlea_domain::FiniteVec3::try_new(pose).unwrap(),
+                velocity: mornlea_domain::FiniteVec3::try_new([0.; 3]).unwrap(),
+                on_ground: true,
+            });
+            let before = ctx_death_snapshot(&c);
+            assert_eq!(c.checkpoint_source_player_safe(s), Ok(()));
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+        }
+        let (mut a, s, other) = ctx_safe_fixture(true);
+        let other = other.unwrap();
+        ctx_add_allocations(&mut a, s);
+        let book = std::mem::take(&mut a.source_players);
+        let scans = [ctx_book_snapshot(&book, s), ctx_book_snapshot(&book, other)];
+        let allocations =
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]);
+        let other_before;
+        {
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            c.runtimes.get_mut(&ActorKey::Player(other)).unwrap().key = ActorKey::Player(s);
+            other_before = (
+                c.actors[c.player_slots[&other]].clone(),
+                c.runtimes[&ActorKey::Player(other)].clone(),
+            );
+            assert_eq!(
+                super::super::source_player_restore::checkpoint_safe(&book, &mut c, s),
+                Ok(())
+            );
+            assert_eq!(
+                ctx_safe_value(&c, s),
+                Some(PlayerLocation {
+                    dimension: 1,
+                    position: [8.5, 64., 8.5]
+                })
+            );
+            let accepted = ctx_death_snapshot(&c);
+            assert_eq!(
+                super::super::source_player_restore::checkpoint_safe(&book, &mut c, other),
+                Err(ctx_safe_error())
+            );
+            assert_eq!(ctx_death_snapshot(&c), accepted);
+            // Abandon the actual exclusive loan without committing or publishing.
+        }
+        a.source_players = book;
+        let ActorBody::Player(body) = &player(&a, s).body else {
+            unreachable!()
+        };
+        assert_eq!(
+            body.safe,
+            Some(PlayerLocation {
+                dimension: 1,
+                position: [8.5, 64., 8.5]
+            })
+        );
+        assert_eq!(
+            (
+                player(&a, other),
+                &a.residents.runtimes[&ActorKey::Player(other)]
+            ),
+            (&other_before.0, &other_before.1)
+        );
+        assert_eq!(
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]),
+            allocations
+        );
+        assert_eq!(
+            [
+                ctx_book_snapshot(&a.source_players, s),
+                ctx_book_snapshot(&a.source_players, other)
+            ],
+            scans
+        );
     }
 }
 

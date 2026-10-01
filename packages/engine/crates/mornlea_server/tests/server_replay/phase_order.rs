@@ -12,8 +12,10 @@
 //! The four named row tests assert the exact provider subsequence each row
 //! depends on. Actual source-player death recipes in persistence failure
 //! execute five damage producers and the consumer between projectile and
-//! passive advancement. These source guards separately qualify call order;
-//! other provider integration coverage retains its existing owners.
+//! passive advancement. Actual native landing and top-floor Safe recipes qualify
+//! the per-player checkpoint after fall settlement and before late death. These
+//! source guards separately qualify call order; other provider integration
+//! coverage retains its existing owners.
 //!
 //! The closing case is different: a placement and a tilling stage real dirt
 //! through providers the test drives directly on a seeded context, and the
@@ -200,6 +202,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "player_survival::run",
     "player_motion::run",
     "player_survival::run",
+    "source_player_restore::checkpoint_safe",
     "companions::run",
     "hostile_actions::plan",
     "hostile_actions::apply",
@@ -723,6 +726,32 @@ fn death_consumer_rejects_early_or_repeated_dispatch() {
             swap_markers(body, swap, marker)
         } else {
             swap_markers(body, marker, swap)
+        };
+        assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
+    }
+    let repeated = format!("{body}\n{marker}");
+    assert!(std::panic::catch_unwind(|| assert_eq!(marker_count(&repeated, marker), 1)).is_err());
+}
+
+#[test]
+fn safe_checkpoint_rejects_early_or_repeated_dispatch() {
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let marker = "source_player_restore::checkpoint_safe";
+    assert_eq!(marker_count(body, marker), 1);
+    let chain = [
+        "player_motion::run",
+        "RulePhase::PlayerPostPhysics",
+        marker,
+        "RulePhase::CompanionMotion",
+        "source_player_restore::settle_deaths",
+    ];
+    chain_positions(body, &chain);
+    for other in ["player_motion::run", "RulePhase::CompanionMotion"] {
+        let swapped = if other == "player_motion::run" {
+            swap_markers(body, other, marker)
+        } else {
+            swap_markers(body, marker, other)
         };
         assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
     }
