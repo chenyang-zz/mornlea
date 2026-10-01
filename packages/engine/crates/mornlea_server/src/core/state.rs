@@ -1654,7 +1654,10 @@ enum PendingFrame {
 /// Encodes one packet with the protocol codec. A short buffer is resized to
 /// the length the codec reports. Any other codec refusal is the existing
 /// packet input error; this function does not choose a wire layout.
-fn encode_packet(codec: &mut ProtocolCodec, packet: &ServerPacket) -> Result<Vec<u8>, ServerError> {
+pub(crate) fn encode_packet(
+    codec: &mut ProtocolCodec,
+    packet: &ServerPacket,
+) -> Result<Vec<u8>, ServerError> {
     let mut buffer = vec![0u8; 64];
     loop {
         match codec.encode_server_into(packet, &mut buffer) {

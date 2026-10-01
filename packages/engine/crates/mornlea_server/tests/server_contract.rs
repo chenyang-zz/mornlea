@@ -49,3 +49,6 @@ mod combat_input;
 
 #[path = "server_contract/interaction.rs"]
 mod interaction;
+
+#[path = "server_contract/prepared_publication.rs"]
+mod prepared_publication;

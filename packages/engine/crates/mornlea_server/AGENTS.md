@@ -661,3 +661,21 @@ for the scheduler's existing retry/backoff owner. Clean Unloading bodies remain
 resident until a later reclamation owner. Manual `remember_dirty` injection is
 checked and restricted to disabled acquisition fixtures; enabling refuses any
 existing fixture dirty or in-flight ownership.
+
+## Prepared publication contract
+
+`core::publication::PreparedFrame` owns one checked canonical protocol key and
+immutable encoded bytes in an Arc. Its existing-encoder factory runs off tick;
+clones and prepared transfers share the allocation without retaining a codec,
+decoded body or authority borrow. Debug exposes metadata only. The crate-private
+legacy-byte observation is off tick and transfers a unique allocation or copies
+a shared allocation; actual prepared publication and transport must not call it.
+
+`PreparedPublicationPort` declares explicit Queued/Closed receipts and whole-frame
+FIFO budgets. Only Queued permits a caller to advance its source mirror revision;
+it acknowledges queue admission alone. The first whole frame may exceed the byte
+budget, while a zero frame budget takes none. Current-session membership, bounded
+outbox capacity and retirement remain with the later actual provider. The
+`server_contract::prepared_publication` executing double proves consumer semantics
+and owned transfer; it does not accept the actual authority outbox or transport.
+Factory tests separately execute the real protocol codec and family decoders.
