@@ -126,6 +126,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9l2 Bound loopback delivery waits by real deadlines while preserving protocol clocks.
 - [x] 3.9l3 Recognize proven Linux zombie termination without weakening writer-lock guards ([packet](plans/33-linux-process-termination.md)).
 - [x] 3.9l4 Drive actual TCP receive progress through asynchronous login readiness ([packet](plans/71-prepared-tcp-receive-progress.md)).
+- [ ] 3.9l5 Mint distinct admitted identities in actual two-container-viewer fixtures ([packet](plans/75-distinct-container-viewer-fixture.md)).
 
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.
