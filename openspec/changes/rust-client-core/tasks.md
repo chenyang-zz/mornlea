@@ -9,7 +9,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 ## 1. C1 contract and session
 
 - [x] 1.1 Bind F1/F2 accepted prerequisites and enumerate all client semantic families.
-- [ ] 1.2 Land compiling C1/C2 contract, typed family schema, frame validator and executing consumer double.
+- [x] 1.2 Land compiling C1/C2 contract, typed family schema, frame validator and executing consumer double.
 - [ ] 1.3 Implement login/session observation state machine.
 - [ ] 1.4 Implement confirmed mirror and atomic observation order.
 - [ ] 1.5 Implement bounded shared Memory/TCP I/O queues.
