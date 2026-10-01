@@ -94,6 +94,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7l0c Land checked prepared chunk and load-port contracts ([packet](plans/49-background-load-ports.md)).
 - [x] 3.7l0 Load players and prepared chunks on the sole store owner ([packet](plans/49-background-load-ports.md)).
 - [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
+- [ ] 3.7r0 Move resident ownership through live ticks and finalize changed chunks only ([packet](plans/52-owned-resident-tick.md)).
 - [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)).
 
 ## Review repairs
