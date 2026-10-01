@@ -135,6 +135,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9c1 Reclaim terminal common transport ownership with bounded diagnostics.
 - [x] 3.9c2 Reap terminal TCP sockets and bound send work.
 - [x] 3.9c3 Share bounded deferred command ownership across provider phase roles ([packet](plans/73-shared-deferred-command-ownership.md)).
+- [ ] 3.9e0 Fence hard tick failures and execute one actual unpublished final reduction ([packet](plans/78-failed-tick-and-final-reducer.md)).
 - [x] 3.9e Repair retained region parent durability barriers.
 - [x] 3.9f Use OS entropy for snapshot bearer capabilities.
 - [x] 3.9g Reconcile Rust backup compatibility identities and English comment audit.
