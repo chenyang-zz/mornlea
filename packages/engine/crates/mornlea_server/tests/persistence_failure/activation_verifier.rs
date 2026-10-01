@@ -783,3 +783,115 @@ fn rejected_restore_retains_installed_backup_and_retired_world() {
     assert!(!run.join("previous-listen.addr").exists());
     drop(mornlea_server::store::lease::WorldLease::acquire(&world).unwrap());
 }
+
+/// Owns the rollback process group so a blocked pre-spawn log open can be
+/// collected without leaving its Python helper or affecting another fixture.
+struct RollbackGroup(Option<Child>);
+
+impl RollbackGroup {
+    fn collect(mut self, returned: bool) -> std::process::Output {
+        if !returned {
+            self.stop_group();
+        }
+        self.0.take().unwrap().wait_with_output().unwrap()
+    }
+
+    fn stop_group(&mut self) {
+        if let Some(child) = &mut self.0 {
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", &format!("-{}", child.id())])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for RollbackGroup {
+    fn drop(&mut self) {
+        self.stop_group();
+    }
+}
+
+fn fifo_log_refuses_with_bounded_cli(held_reader: bool) {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::process::CommandExt;
+
+    let scope = Scope::fresh(if held_reader {
+        "fifo-reader"
+    } else {
+        "fifo-alone"
+    });
+    let run = scope.path("run");
+    let world = run.join("world");
+    prepare_fixture(&world, false);
+    let manifest = script_activate(&scope, &world, &run.join("backup"), &run, &[]);
+    quiesce_rust(&manifest);
+    let original = read_manifest(&manifest);
+    let before = tree_hash(&world, &[LOCK_BASENAME]);
+    let log = run.join("previous-verifier.log");
+    assert!(Command::new("mkfifo").arg(&log).status().unwrap().success());
+    // A nonblocking reader is held by this test, never by an unjoined thread.
+    // It makes a FIFO writer open succeed so descriptor validation is exercised.
+    let reader = held_reader.then(|| {
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(&log)
+            .unwrap()
+    });
+    let mut rollback = RollbackGroup(Some(
+        Command::new("bash")
+            .arg(optin_script())
+            .args([
+                "rollback",
+                "--manifest",
+                &manifest.to_string_lossy(),
+                "--data-policy",
+                "compatible",
+            ])
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    ));
+    let returned = wait_until(Duration::from_secs(5), || {
+        rollback.0.as_mut().unwrap().try_wait().unwrap().is_some()
+    });
+    // Release the reader and collect the complete owned group before any
+    // observation assertion, including the expected failure on the old script.
+    drop(reader);
+    let output = rollback.collect(returned);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        returned,
+        "FIFO log must refuse before the verifier deadline: {text}"
+    );
+    assert!(!output.status.success(), "FIFO log is incompatible: {text}");
+    assert!(
+        text.contains("incompatible_save"),
+        "typed FIFO refusal: {text}"
+    );
+    assert_eq!(read_manifest(&manifest), original);
+    assert_eq!(tree_hash(&world, &[LOCK_BASENAME]), before);
+    assert!(!run.join("previous-listen.addr").exists());
+    assert!(!run.join("previous-verifier-report.json").exists());
+    drop(mornlea_server::store::lease::WorldLease::acquire(&world).unwrap());
+}
+
+#[test]
+fn fifo_log_without_reader_refuses_before_verifier_spawn() {
+    fifo_log_refuses_with_bounded_cli(false);
+}
+
+#[test]
+fn fifo_log_with_held_reader_refuses_before_verifier_spawn() {
+    fifo_log_refuses_with_bounded_cli(true);
+}

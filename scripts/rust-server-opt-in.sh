@@ -767,16 +767,24 @@ try:
         sys.exit(1)
     # Never truncate a log alias into durable world data. The Go oracle itself
     # owns the stronger report-output alias, hardlink and symlink checks.
-    descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "wb") as log:
-        info = os.fstat(log.fileno())
+    # A FIFO must never wait for a reader before the child deadline begins.
+    # Validate the nonblocking descriptor before truncation and transfer its
+    # close ownership only after fdopen succeeds.
+    descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
+    try:
+        info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError("unsafe verifier log output")
-        os.ftruncate(log.fileno(), 0)
-        env = {key: value for key, value in os.environ.items() if not key.startswith("MORNLEA_VERIFY_")}
-        env["MORNLEA_VERIFY_WORLD"] = world
-        env["MORNLEA_VERIFY_OUTPUT"] = report_path
-        outcome = subprocess.run([verifier, "-test.run=^TestRuntimeMigrationVerifyWorld$", "-test.count=1", "-test.timeout=55s"], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=60)
+        os.ftruncate(descriptor, 0)
+        with os.fdopen(descriptor, "wb") as log:
+            descriptor = None
+            env = {key: value for key, value in os.environ.items() if not key.startswith("MORNLEA_VERIFY_")}
+            env["MORNLEA_VERIFY_WORLD"] = world
+            env["MORNLEA_VERIFY_OUTPUT"] = report_path
+            outcome = subprocess.run([verifier, "-test.run=^TestRuntimeMigrationVerifyWorld$", "-test.count=1", "-test.timeout=55s"], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=60)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     if outcome.returncode != 0:
         raise ValueError("actual previous verifier refused; see previous-verifier.log")
     with open(report_path, "rb") as handle:
