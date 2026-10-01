@@ -247,3 +247,9 @@ Controller owns the serial prerequisite metadata update. Rollback invalidates th
 - Ruling (pending cue-queue bound): `queued_input_events` (128) deliberately double-books as the cumulative pending local-cue ceiling, drained only at 2.4 publication; bounded and never silent. Accepted provisionally — node 2.4 owns the drain and must escalate as a contract conflict if the ceiling proves too tight for cross-batch accumulation, not silently widen it.
 - Ruling (control text bounds): `PlayerControl` is a fixed checked struct; variable 256-byte/scalar text bounds belong to the excluded raw-device ingress. Out of scope as reviewed.
 - Task 2.1: complete (commit `98e990dd`, review clean, no fix rounds needed).
+
+## 2026-10-02 node 2.3b/2.3 review dispatch (interim record)
+
+- Nodes 2.3b (`e7b0134a`) and 2.3 (`bcd9d945`) landed; independent reviews dispatched. Ledger append ownership this round: none assigned to in-flight workers (report-only); the controller records durable summaries at each close.
+- Node 2.3 review verdict: spec ❌ with one Important — the mandated "checked-byte overflow" table row has no test and the omission was not acknowledged (black-box infeasible because `ClientLimits` caps `preparation_bytes` at 64 MiB, but an internal `#[cfg(test)]` construction near `usize::MAX` can pin the typed rejections). Three minors deferred (admission-block slack; overclaiming payload-identity assertion message; single-entry registry-charge helper hardcode). Byte-charge obligation itself verified GENUINE: identity-based shared-Arc accounting (`Arc::as_ptr`), queue+worker sum with independent test-side formulas, all-or-nothing admission, exact single-release totals.
+- Fix round 1/5 dispatched to the original 2.3 implementer with the reviewer's concrete remedy.
