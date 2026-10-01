@@ -106,6 +106,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7n0 Bind actual Memory/TCP login to the background store ([packet](plans/56-live-transport-login.md)).
 - [x] 3.7a1 Retain bounded MCP connections through actual deadline-aware shutdown ([packet](plans/58-owned-mcp-shutdown.md)).
 - [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)).
+- [ ] 3.8r0 Retain the exclusive world lease throughout actual backup restoration ([packet](plans/65-restore-world-lease.md)).
 - [x] 3.8v0 Qualify the actual previous Go read-only save verifier ([packet](plans/54-previous-runtime-verifier.md)).
 - [x] 3.8v1 Rebuild and bind the sealed previous runtime package ([packet](plans/57-prepare-previous-package.md)).
 - [x] 3.8v2 Invoke the actual sealed verifier before starting the previous runtime ([packet](plans/59-previous-verifier-consumer.md)).
