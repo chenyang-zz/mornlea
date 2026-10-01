@@ -240,6 +240,14 @@ consume its cancellation and error contracts before joining the real backend.
   `TransportSessionPort` limits borrowed transport authority to submit/close;
   full endpoints retain those calls through explicit blanket delegation.
   Tick and shutdown ownership remain with the complete runtime.
+  `src/transport/live.rs` supplies the actual borrowed endpoint over one
+  `AuthorityState` and its existing `PlayerLoadPort`. `LoginDriver` retains
+  at most sixteen uncommitted aliases, never save bodies or committed history.
+  Ready installs once; only the common core's acknowledged success activates.
+  A refused cancellation retires Prepared capacity while retaining its alias
+  for bounded same-owner retry. `cancel_pending` freezes admission, visits the
+  original aliases in ticket order, and preserves independent successes.
+  Runtime shutdown and store close remain with their complete owners.
   Play-frame wire envelopes and connection reaping
   belong to the adapter nodes.
 - `src/rules/world_mutation.rs` owns placement geometry on the

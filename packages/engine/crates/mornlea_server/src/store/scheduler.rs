@@ -25,10 +25,12 @@
 //! [`SaveAuthority::return_dirty`], matching the Go full-queue release. A
 //! refused retry dispatch keeps its cohort untouched with no attempt advance.
 
+use mornlea_domain::PlayerId;
 use std::collections::HashMap;
 
 use crate::core::contracts::{
-    AckReport, Clock, Deadline, DiskBackend, FlushReport, OwnedSnapshot, SaveAuthority, SaveBudget,
+    AckReport, ChunkKey, ChunkLoadPoll, ChunkLoadPort, ChunkRequestId, Clock, Deadline,
+    DiskBackend, FlushReport, LoadPoll, LoginTicket, OwnedSnapshot, SaveAuthority, SaveBudget,
     SaveCompletion, SaveMode, SavePoll, SaveRequest, SaveScheduleReport, SaveTicket, ServerError,
     StoreHandle, SubmitSaveError,
 };
@@ -772,5 +774,34 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
 
     fn close(&mut self, deadline: Deadline) -> Result<(), ServerError> {
         self.store.close(deadline)
+    }
+}
+
+/// Load operations preserve the mailbox's sole backend and bounded ledgers.
+impl<B: DiskBackend> crate::core::contracts::PlayerLoadPort for AutosaveScheduler<B> {
+    fn start(&mut self, player: PlayerId, deadline: Deadline) -> Result<LoginTicket, ServerError> {
+        crate::core::contracts::PlayerLoadPort::start(&mut self.store, player, deadline)
+    }
+    fn poll(&mut self, ticket: LoginTicket) -> LoadPoll {
+        crate::core::contracts::PlayerLoadPort::poll(&mut self.store, ticket)
+    }
+    fn cancel(&mut self, ticket: LoginTicket) -> Result<(), ServerError> {
+        crate::core::contracts::PlayerLoadPort::cancel(&mut self.store, ticket)
+    }
+}
+impl<B: DiskBackend> ChunkLoadPort for AutosaveScheduler<B> {
+    fn start_chunk(
+        &mut self,
+        key: ChunkKey,
+        generation: u64,
+        deadline: Deadline,
+    ) -> Result<ChunkRequestId, ServerError> {
+        ChunkLoadPort::start_chunk(&mut self.store, key, generation, deadline)
+    }
+    fn poll_chunk(&mut self, request: ChunkRequestId) -> ChunkLoadPoll {
+        ChunkLoadPort::poll_chunk(&mut self.store, request)
+    }
+    fn cancel_chunk(&mut self, request: ChunkRequestId) -> Result<(), ServerError> {
+        ChunkLoadPort::cancel_chunk(&mut self.store, request)
     }
 }

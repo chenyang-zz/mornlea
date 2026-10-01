@@ -71,3 +71,9 @@ validation, decoding and PreparedChunk construction stay on that owner. Inline
 non-Send doubles execute loads only in `drive_workers`. Only Load/NotFound is
 absence. First close freezes new load admission; retained loads must be consumed
 or cancelled and drained before backend close. Save occupancy stays independent.
+
+`AutosaveScheduler` delegates all player and chunk load operations directly to
+its private mailbox. Runtime transport and acquisition borrow that existing
+owner between tick polls; they receive no mutable store accessor or alternate
+backend. A cancelled started load must still drain its real reply before the
+runtime closes and joins the scheduler's sole owner.
