@@ -746,8 +746,12 @@ The added height branch allocates nothing; delegated observation retains its
 existing lookup and trace costs. The private `live_collision_read_tests` group
 covers boundaries, dimensions, retained Unloading ownership, actual current
 transactions, read-view agreement and trace overflow. Its grid and geometry
-consumer doubles qualify the input contract only; the four actual actor-grid
-producers and native motion remain separate integration work. Validate this
+consumer doubles qualify the input contract only. The player, companion, passive
+and hostile actor-grid producers consume this read for actual native motion.
+Sixteen height cases in the persistence source-player-restore topic qualify real
+player login/acquisition, checked non-player provider admission, missing-column
+blocking and disabled sparse controls. Player recovery, actor bootstrap and
+physical terminal retirement remain separate integration work. Validate this
 group, the full library and the inherited server, persistence, Agent, doctest,
 Clippy and formatting gates before integration.
 

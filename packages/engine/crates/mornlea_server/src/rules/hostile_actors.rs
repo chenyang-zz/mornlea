@@ -1924,6 +1924,7 @@ fn step_prism(
 
 /// Staged grid cells in y/x/z order (`encodeStepInput` loop): unobserved
 /// cells stay unloaded, which the collision kernel treats as blocking.
+/// Managed height planes are air; unavailable in-height and disabled cells stay blocking.
 fn prism_cells(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
@@ -1943,9 +1944,9 @@ fn prism_cells(
                     origin[1] + y as i32,
                     origin[2] + z as i32,
                 );
-                match view.observation(dimension, pos) {
+                match view.live_collision_block(dimension, pos) {
                     None => cells.push(CollisionCell::default()),
-                    Some(observed) => cells.push(collision_cell(observed.block)?),
+                    Some(block) => cells.push(collision_cell(block)?),
                 }
             }
         }

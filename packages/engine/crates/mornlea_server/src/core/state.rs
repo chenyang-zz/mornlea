@@ -2394,7 +2394,6 @@ impl<'a> AuthorityReadView<'a> {
     }
     /// Managed collision reads normalize out-of-height air without a mutation address.
     /// In-height reads retain current observations and their trace refusal policy.
-    #[allow(dead_code)]
     pub(crate) fn live_collision_block(
         &self,
         dimension: Dimension,

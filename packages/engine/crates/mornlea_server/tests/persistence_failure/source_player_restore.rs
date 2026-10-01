@@ -1,6 +1,9 @@
-//! Actual background disk, Memory login and Acquire initial restoration recipes.
+//! Actual background disk, Memory login and Acquire restoration and height motion recipes.
 //! Manual wants qualify the caller without accepting a source subscription producer.
-use mornlea_domain::{ChunkPos, Dimension, Identities, PlayerId};
+use mornlea_domain::{
+    BlockPos, ChunkPos, CompanionId, Dimension, FiniteVec3, HostileId, Identities, LookAngles,
+    MotionState, MotionStateParts, PassiveId, PlayerId, SurvivalState, SurvivalStateParts,
+};
 use mornlea_protocol::{
     ClientHello, ClientPacket, LoginStart, PlayerInput, ProtocolCodec, SelectHotbar, ServerPacket,
     State, encode_uvarint, read_frame_ref,
@@ -18,8 +21,9 @@ use mornlea_server::transport::{
 };
 use mornlea_server::{contracts::*, state::AuthorityState};
 use mornlea_storage::{
-    Chunk, ChunkSave, ContainerSnapshot, Inventory, ItemStack, Metadata, MetadataChunkPos,
-    PlayerLocation, PlayerSave, StorageKind, player_encoded_len,
+    Chunk, ChunkSave, CompanionBody, ContainerSnapshot, HostileMob, Inventory, ItemStack, Metadata,
+    MetadataChunkPos, PassiveMob, PlayerLocation, PlayerSave, StorageKind, StoredCompanionTask,
+    player_encoded_len,
 };
 use std::{
     collections::BTreeSet,
@@ -647,4 +651,547 @@ fn actual_solid_current_and_finite_invalid_safe_fall_back_to_anchor() {
         Some(&save),
     );
     fixture.close();
+}
+
+fn height_floor(y: i32) -> Chunk {
+    assert!((-64..320).contains(&y));
+    let mut chunk = air();
+    let row = ((y + 64) % 16) as usize;
+    let mut packed = vec![0; 256];
+    packed[row * 16..(row + 1) * 16].fill(0x1111111111111111);
+    chunk.sections[((y + 64) / 16) as usize] = ContainerSnapshot {
+        kind: StorageKind::Indexed,
+        bits: 4,
+        single: 0,
+        palette: vec![0, 1],
+        packed,
+    };
+    chunk
+}
+
+fn height_player_save(position: [f32; 3]) -> PlayerSave {
+    let mut save = saved_player();
+    save.current.position = position;
+    save.yaw = 0.;
+    save.pitch = 0.;
+    save.health = 20;
+    save.hunger = 20;
+    save.saturation_milli = 5000;
+    save.exhaustion_milli = 0;
+    save.armor = [ItemStack::default(); 4];
+    save.inventory = Inventory::default();
+    save
+}
+
+#[test]
+fn height_actual_player_lower_uses_live_native_air() {
+    let save = height_player_save([8.5, -63., 8.5]);
+    let column = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save.clone()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(column, air())],
+    );
+    let (_, _, _, session, _) = handshake(&mut fixture, &mut state);
+    let publication = fixture.acquire(&mut state, column);
+    activated(
+        &state,
+        session,
+        &publication,
+        Dimension::OVERWORLD,
+        save.current.position,
+        false,
+        Some(&save),
+    );
+    let mut crossed = false;
+    for _ in 0..100 {
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        let view = state.settled_read().unwrap();
+        let actor = view.actor(ActorKey::Player(session)).unwrap();
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+        assert!(local(&publication).ready());
+        assert!(!local(&publication).reset());
+        crossed |= actor.motion.position().get()[1] < -64.;
+        if actor.motion.position().get()[1] < -80. {
+            break;
+        }
+    }
+    let actor = state
+        .settled_read()
+        .unwrap()
+        .actor(ActorKey::Player(session))
+        .unwrap()
+        .clone();
+    fixture.close();
+    assert!(crossed, "actual native motion must cross the lower plane");
+    assert!(actor.motion.position().get()[1] < -80.);
+    assert!(actor.motion.velocity().get()[1] < 0.);
+}
+
+#[test]
+fn height_actual_player_upper_uses_live_native_air() {
+    let save = height_player_save([8.5, 318., 8.5]);
+    let column = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save.clone()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(column, height_floor(317))],
+    );
+    let (mut login, mut transport, connection, session, clock) =
+        handshake(&mut fixture, &mut state);
+    let publication = fixture.acquire(&mut state, column);
+    activated(
+        &state,
+        session,
+        &publication,
+        Dimension::OVERWORLD,
+        save.current.position,
+        true,
+        Some(&save),
+    );
+    let packet = ClientPacket::PlayerInput(
+        PlayerInput::new(1, 0, 0, true, 0., 0., false, false, false, false).unwrap(),
+    );
+    assert!(!matches!(
+        transport.send(
+            connection,
+            MemoryTransport::encode_frame(&packet).unwrap(),
+            &mut login.bind(&mut state, &mut fixture.store),
+            &clock
+        ),
+        ConnectionProgress::Closed { .. }
+    ));
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let actor = state
+        .settled_read()
+        .unwrap()
+        .actor(ActorKey::Player(session))
+        .unwrap()
+        .clone();
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert!(local(&publication).ready());
+    assert!(!local(&publication).reset());
+    assert_eq!(local(&publication).last_input_sequence(), 1);
+    assert_eq!(local(&publication).motion(), actor.motion);
+    fixture.close();
+    assert!(
+        actor.motion.position().get()[1] > 318.3,
+        "actual body head must cross the upper plane"
+    );
+    assert!(actor.motion.velocity().get()[1] > 0.);
+}
+
+#[test]
+fn height_actual_player_missing_column_stays_blocking() {
+    let save = height_player_save([15.5, 65., 8.5]);
+    let column = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save.clone()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(column, height_floor(64))],
+    );
+    let (mut login, mut transport, connection, session, clock) =
+        handshake(&mut fixture, &mut state);
+    let publication = fixture.acquire(&mut state, column);
+    activated(
+        &state,
+        session,
+        &publication,
+        Dimension::OVERWORLD,
+        save.current.position,
+        true,
+        Some(&save),
+    );
+    let packet = ClientPacket::PlayerInput(
+        PlayerInput::new(1, 1, 0, false, 0., 0., false, false, false, false).unwrap(),
+    );
+    assert!(!matches!(
+        transport.send(
+            connection,
+            MemoryTransport::encode_frame(&packet).unwrap(),
+            &mut login.bind(&mut state, &mut fixture.store),
+            &clock
+        ),
+        ConnectionProgress::Closed { .. }
+    ));
+    for _ in 0..40 {
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        let view = state.settled_read().unwrap();
+        let actor = view.actor(ActorKey::Player(session)).unwrap();
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+        assert!(local(&publication).ready());
+        assert!(!local(&publication).reset());
+        assert_eq!(local(&publication).last_input_sequence(), 1);
+    }
+    let view = state.settled_read().unwrap();
+    let actor = view.actor(ActorKey::Player(session)).unwrap();
+    let position = actor.motion.position().get();
+    assert!(position[0] > 15.5 && position[0] < 15.71);
+    assert_eq!(position[1], 65.);
+    assert_eq!(
+        view.observation(Dimension::OVERWORLD, BlockPos::new(16, 65, 8)),
+        None
+    );
+    assert_eq!(
+        state.live_chunk_facts(column).unwrap().phase,
+        LiveChunkPhase::Ready
+    );
+    assert!(
+        state
+            .live_chunk_facts(key(Dimension::OVERWORLD, 1, 0))
+            .is_none()
+    );
+    assert!(!fixture.wanted.contains(&key(Dimension::OVERWORLD, 1, 0)));
+    fixture.close();
+}
+
+#[derive(Clone, Copy)]
+enum HeightKind {
+    Player(SessionKey),
+    Companion,
+    Passive,
+    Hostile,
+}
+#[derive(Clone, Copy)]
+enum HeightScenario {
+    Lower,
+    Upper,
+    Missing,
+}
+impl HeightScenario {
+    fn motion(self) -> ([f32; 3], [f32; 3]) {
+        match self {
+            Self::Lower => ([8.5, -63.9, 8.5], [0., -10., 0.]),
+            Self::Upper => ([8.5, 318., 8.5], [0., 10., 0.]),
+            Self::Missing => ([144.5, 65., -47.5], [0., -10., 0.]),
+        }
+    }
+}
+
+// Off-tick checked replay admission qualifies native providers, not actor bootstrap.
+fn height_actor(
+    kind: HeightKind,
+    position: [f32; 3],
+    velocity: [f32; 3],
+) -> (ActorRecord, ActorRuntime) {
+    let mut companion_bytes = [0; 16];
+    companion_bytes[0] = 2;
+    companion_bytes[6] = 0x40;
+    companion_bytes[8] = 0x80;
+    let companion_id = CompanionId::try_from_bytes(companion_bytes).unwrap();
+    let (key, body, aux) = match kind {
+        HeightKind::Player(session) => (
+            ActorKey::Player(session),
+            ActorBody::Player(height_player_save(position)),
+            ActorAux::Player {
+                respawn: None,
+                workbench: None,
+            },
+        ),
+        HeightKind::Companion => (
+            ActorKey::Companion(companion_id),
+            ActorBody::Companion(CompanionBody {
+                id: mornlea_storage::PlayerId::from_bytes(companion_id.bytes()),
+                dimension: 0,
+                position,
+                yaw: 0.,
+                pitch: 0.,
+                inventory: Inventory::default(),
+            }),
+            ActorAux::Companion {
+                generation: 1,
+                attempt: 1,
+                task: StoredCompanionTask::default(),
+                mining_target: None,
+            },
+        ),
+        HeightKind::Passive => (
+            ActorKey::Passive(PassiveId::try_new(1).unwrap()),
+            ActorBody::Passive(PassiveMob {
+                id: 1,
+                dimension: 0,
+                position,
+                velocity,
+                on_ground: false,
+                yaw: 0.,
+                health: 20,
+            }),
+            ActorAux::Passive {
+                home: BlockPos::new(
+                    position[0].floor() as i32,
+                    position[1].floor() as i32,
+                    position[2].floor() as i32,
+                ),
+                flee_ticks: 0,
+                flee_from: None,
+                graze_ticks: 0,
+                graze_at: None,
+                fresh: false,
+            },
+        ),
+        HeightKind::Hostile => (
+            ActorKey::Hostile(HostileId::try_new(1).unwrap()),
+            ActorBody::Hostile(HostileMob {
+                id: 1,
+                dimension: 0,
+                position,
+                velocity,
+                on_ground: false,
+                yaw: 0.,
+                health: 20,
+                attack_cooldown: 0,
+                hurt_cooldown: 0,
+                burn_cooldown: 20,
+                has_target: false,
+                player_id: mornlea_storage::PlayerId::from_bytes([0; 16]),
+                next_repath_ticks: 0,
+                distant_ticks: 0,
+                kind: 0,
+            }),
+            ActorAux::Hostile {
+                distant_ticks: 0,
+                shoot_cooldown: 0,
+                fresh: false,
+            },
+        ),
+    };
+    let actor = ActorRecord::try_new(
+        key,
+        ActorLifecycle::Active,
+        Dimension::OVERWORLD,
+        MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new(velocity).unwrap(),
+            on_ground: false,
+        }),
+        LookAngles::try_new(0., 0.).unwrap(),
+        SurvivalState::try_new(SurvivalStateParts {
+            health: 20,
+            oxygen: 300,
+            hunger: 20,
+            saturation_zero: false,
+            armor_points: 0,
+        })
+        .unwrap(),
+        body,
+    )
+    .unwrap();
+    let runtime = ActorRuntime {
+        key,
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 20,
+        oxygen: 300,
+        peak_y: position[1],
+        exhaustion_milli: 0,
+        saturation_milli: 5000,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux,
+    };
+    (actor, runtime)
+}
+
+fn height_insert(
+    state: &mut AuthorityState,
+    kind: HeightKind,
+    scenario: HeightScenario,
+    sparse: bool,
+) -> ActorKey {
+    let (position, velocity) = scenario.motion();
+    let (actor, runtime) = height_actor(kind, position, velocity);
+    let actor_key = actor.key;
+    let mut residents = state.residents();
+    if sparse {
+        let ys = match scenario {
+            HeightScenario::Lower => -64..=-59,
+            HeightScenario::Upper => 314..=319,
+            HeightScenario::Missing => unreachable!(),
+        };
+        let column = key(Dimension::OVERWORLD, 0, 0);
+        for y in ys {
+            for x in 4..=12 {
+                for z in 4..=12 {
+                    let pos = BlockPos::new(x, y, z);
+                    residents.blocks.insert(
+                        (column, pos),
+                        BlockObservation::try_new(column, 1, 1, pos, 0).unwrap(),
+                    );
+                }
+            }
+        }
+    }
+    residents.actors.push(actor);
+    residents.runtimes.insert(actor_key, runtime);
+    if matches!(kind, HeightKind::Player(_)) {
+        residents
+            .inventories
+            .insert(actor_key, InventoryRecord::empty());
+    }
+    state.commit_residents(residents);
+    actor_key
+}
+
+fn height_managed_provider(kind: HeightKind, scenario: HeightScenario) {
+    let column = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(column, air())],
+    );
+    fixture.acquire(&mut state, column);
+    let actor_key = height_insert(&mut state, kind, scenario, false);
+    if matches!(scenario, HeightScenario::Missing) {
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .observation(Dimension::OVERWORLD, BlockPos::new(144, 65, -48)),
+            None
+        );
+        assert!(
+            state
+                .live_chunk_facts(key(Dimension::OVERWORLD, 9, -3))
+                .is_none()
+        );
+    }
+    state.advance_tick(TickBudget::full()).unwrap();
+    let actor = state
+        .settled_read()
+        .unwrap()
+        .actor(actor_key)
+        .unwrap()
+        .clone();
+    fixture.close();
+    match scenario {
+        HeightScenario::Lower if matches!(kind, HeightKind::Passive | HeightKind::Hostile) => {
+            // Existing source floor removal retains the pre-removal pose.
+            assert_eq!(actor.lifecycle, ActorLifecycle::Dead);
+        }
+        HeightScenario::Lower => {
+            assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+            assert!(actor.motion.position().get()[1] < -64.);
+            assert!(actor.motion.velocity().get()[1] < 0.);
+        }
+        HeightScenario::Upper => {
+            assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+            assert!(actor.motion.position().get()[1] > 318.3);
+            assert!(actor.motion.velocity().get()[1] > 0.);
+        }
+        HeightScenario::Missing => {
+            assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+            assert!(actor.motion.position().get()[1] >= 65.);
+            assert_eq!(actor.motion.velocity().get()[1], 0.);
+        }
+    }
+}
+
+// Sparse disabled controls exercise full ticks without live acquisition owners.
+fn height_disabled_provider(kind: Option<HeightKind>) {
+    for scenario in [HeightScenario::Lower, HeightScenario::Upper] {
+        let mut state = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap();
+        let kind = kind.unwrap_or_else(|| {
+            let start = LoginStart::new(player(), "Ada", 8).unwrap();
+            let inbound = LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
+            HeightKind::Player(
+                state
+                    .allocate(
+                        mornlea_protocol::admit_login(inbound).unwrap(),
+                        TransportKind::Memory,
+                    )
+                    .unwrap(),
+            )
+        });
+        let actor_key = height_insert(&mut state, kind, scenario, true);
+        state.advance_tick(TickBudget::full()).unwrap();
+        let view = state.settled_read().unwrap();
+        let actor = view.actor(actor_key).unwrap();
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+        match scenario {
+            HeightScenario::Lower => assert!(actor.motion.position().get()[1] >= -64.),
+            HeightScenario::Upper => assert!(actor.motion.position().get()[1] < 318.3),
+            HeightScenario::Missing => unreachable!(),
+        }
+        assert_eq!(actor.motion.velocity().get()[1], 0.);
+    }
+}
+
+#[test]
+fn height_actual_companion_lower() {
+    height_managed_provider(HeightKind::Companion, HeightScenario::Lower);
+}
+
+#[test]
+fn height_actual_companion_upper() {
+    height_managed_provider(HeightKind::Companion, HeightScenario::Upper);
+}
+
+#[test]
+fn height_actual_companion_missing_column() {
+    height_managed_provider(HeightKind::Companion, HeightScenario::Missing);
+}
+
+#[test]
+fn height_actual_passive_lower() {
+    height_managed_provider(HeightKind::Passive, HeightScenario::Lower);
+}
+
+#[test]
+fn height_actual_passive_upper() {
+    height_managed_provider(HeightKind::Passive, HeightScenario::Upper);
+}
+
+#[test]
+fn height_actual_passive_missing_column() {
+    height_managed_provider(HeightKind::Passive, HeightScenario::Missing);
+}
+
+#[test]
+fn height_actual_hostile_lower() {
+    height_managed_provider(HeightKind::Hostile, HeightScenario::Lower);
+}
+
+#[test]
+fn height_actual_hostile_upper() {
+    height_managed_provider(HeightKind::Hostile, HeightScenario::Upper);
+}
+
+#[test]
+fn height_actual_hostile_missing_column() {
+    height_managed_provider(HeightKind::Hostile, HeightScenario::Missing);
+}
+
+#[test]
+fn height_disabled_player_controls() {
+    height_disabled_provider(None);
+}
+
+#[test]
+fn height_disabled_companion_controls() {
+    height_disabled_provider(Some(HeightKind::Companion));
+}
+
+#[test]
+fn height_disabled_passive_controls() {
+    height_disabled_provider(Some(HeightKind::Passive));
+}
+
+#[test]
+fn height_disabled_hostile_controls() {
+    height_disabled_provider(Some(HeightKind::Hostile));
 }

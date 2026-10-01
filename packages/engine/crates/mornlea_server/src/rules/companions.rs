@@ -763,6 +763,7 @@ fn step_prism(
 /// Grid mirror (`encodeStepInput` cell loop, y/x/z order): staged blocks map
 /// through the collision shapes while unobserved cells stay unloaded, the
 /// kernel's unknown-as-blocking policy.
+/// Managed height planes are air; unavailable in-height and disabled cells stay blocking.
 fn prism_cells(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
@@ -782,9 +783,9 @@ fn prism_cells(
                     origin[1] + y as i32,
                     origin[2] + z as i32,
                 );
-                match view.observation(dimension, pos) {
+                match view.live_collision_block(dimension, pos) {
                     None => cells.push(CollisionCell::default()),
-                    Some(observed) => cells.push(collision_cell(observed.block)?),
+                    Some(block) => cells.push(collision_cell(block)?),
                 }
             }
         }
