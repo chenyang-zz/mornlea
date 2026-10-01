@@ -700,6 +700,7 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
             // unused by the mailbox, so the flush passes zero.
             self.store.poll_tick(0, SaveBudget::default(), authority)?;
             self.store.drive_workers();
+            let durable_before_drain = report.durable;
             if let Some(error) =
                 self.drain_ready(authority, 0, &mut report.durable, &mut report.failed)
             {
@@ -710,7 +711,9 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
                 if stats.dirty == 0 && stats.in_flight == 0 {
                     break;
                 }
-                if !submitted {
+                // A qualified ACK can make a newer dirty target eligible;
+                // that progress permits another selection before a stall check.
+                if !submitted && report.durable == durable_before_drain {
                     // The store refuses everything while nothing is in
                     // flight, so no progress is possible; report the refusal
                     // instead of spinning.

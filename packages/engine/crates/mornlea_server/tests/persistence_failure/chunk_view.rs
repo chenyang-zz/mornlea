@@ -135,7 +135,7 @@ fn committed(snapshot: OwnedSnapshot, ticket: u64) -> SaveCompletion {
     }
 }
 fn select_capture(state: &mut AuthorityState, snapshot: &OwnedSnapshot) {
-    state.remember_dirty(snapshot.clone());
+    state.remember_dirty(snapshot.clone()).unwrap();
     assert_eq!(
         state.select(SaveMode::All, SaveBudget::default()),
         vec![snapshot.clone()]
@@ -536,7 +536,7 @@ fn held_real_io_preserves_lazy_ownership_and_reuses_one_backend_thread() {
     mutate(&mut state, 4, true);
     let old = capture(&state);
     let old_value = view(&old).materialize();
-    state.remember_dirty(old.clone());
+    state.remember_dirty(old.clone()).unwrap();
     let selected = state.select(SaveMode::All, SaveBudget::default());
     assert_eq!(selected, vec![old.clone()]);
     let mut store = StoreMailbox::try_new_background(
@@ -631,8 +631,8 @@ fn failure_retry_keeps_exact_capture_and_newer_authority_target() {
         let other = authority_at(other_key)
             .capture_chunk_snapshot(other_key, SaveUrgency::Autosave)
             .unwrap();
-        state.remember_dirty(old.clone());
-        state.remember_dirty(other.clone());
+        state.remember_dirty(old.clone()).unwrap();
+        state.remember_dirty(other.clone()).unwrap();
         let selected = state.select(SaveMode::All, SaveBudget::default());
         assert_eq!(selected, vec![old.clone(), other.clone()]);
         let disk = DiskStore::open(&root.0, options()).unwrap();

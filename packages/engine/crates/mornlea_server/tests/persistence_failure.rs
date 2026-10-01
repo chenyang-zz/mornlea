@@ -32,3 +32,6 @@ mod live_acquisition;
 
 #[path = "persistence_failure/chunk_driver.rs"]
 mod chunk_driver;
+
+#[path = "persistence_failure/live_chunk_saves.rs"]
+mod live_chunk_saves;

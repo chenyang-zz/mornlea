@@ -636,3 +636,18 @@ persistence failure chunk-driver topic executes actual background DiskStore and
 GenerationPool start/poll/tick recipes without manual successful offers. Held
 load tests gate entry to the actual DiskStore read, not a native read syscall,
 and release gates and explicitly close/join owners before reporting assertions.
+
+
+Managed live saves use the acquisition book's ordered dirty index and eight
+exact immutable flights. Unloading targets precede Ready autosaves; the first
+candidate retains the source budget exception. Current dirty estimates and
+held capture estimates remain separately charged when a tick commits newer
+state. Selection, stats and qualified acknowledgments neither scan clean bodies
+nor materialize them. Whole completion validation precedes durability updates;
+only an exact held preimage advances current persisted facts, and an older ACK
+leaves newer dirty/rewrite facts intact. Fresh refusal releases that exact flight
+and recaptures the current target. Failed completion retains the original flight
+for the scheduler's existing retry/backoff owner. Clean Unloading bodies remain
+resident until a later reclamation owner. Manual `remember_dirty` injection is
+checked and restricted to disabled acquisition fixtures; enabling refuses any
+existing fixture dirty or in-flight ownership.

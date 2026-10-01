@@ -695,6 +695,8 @@ impl AuthorityState {
             || !self.residents.container_chunks.is_empty()
             || !self.residents.dirty_chunks.is_empty()
             || !self.chunk_results.is_empty()
+            || !self.dirty.is_empty()
+            || !self.in_flight.is_empty()
         {
             return Err(ServerError::InvalidState { phase: self.phase });
         }
@@ -982,7 +984,11 @@ impl AuthorityState {
     }
 
     pub fn freeze(&mut self) -> FrozenAuthority {
-        let mut save_keys = Vec::new();
+        let mut save_keys = if self.acquisition.enabled() {
+            self.acquisition.save_keys()
+        } else {
+            Vec::new()
+        };
         for snapshot in self.dirty.iter().chain(self.in_flight.iter()) {
             if !save_keys.contains(&snapshot.key) {
                 save_keys.push(snapshot.key.clone());
@@ -1045,7 +1051,13 @@ impl AuthorityState {
         .ok()
     }
 
-    pub fn select(&mut self, _mode: SaveMode, budget: SaveBudget) -> Vec<OwnedSnapshot> {
+    pub fn select(&mut self, mode: SaveMode, budget: SaveBudget) -> Vec<OwnedSnapshot> {
+        if self.phase == ServerPhase::Closed {
+            return Vec::new();
+        }
+        if self.acquisition.enabled() {
+            return self.select_live(mode, budget);
+        }
         let mut chosen = Vec::new();
         let mut rest = Vec::new();
         let mut bytes = 0usize;
@@ -1066,7 +1078,44 @@ impl AuthorityState {
         chosen
     }
 
+    // Selection consults only the ordered dirty index and captures admitted keys.
+    fn select_live(&mut self, mode: SaveMode, budget: SaveBudget) -> Vec<OwnedSnapshot> {
+        let mut chosen = Vec::new();
+        let mut bytes = 0usize;
+        while self.acquisition.stats().in_flight < 8 && chosen.len() < 8 {
+            let Some((key, estimate, urgency)) = self.acquisition.next_save(mode) else {
+                break;
+            };
+            if !chosen.is_empty()
+                && (chosen.len() >= budget.chunks
+                    || bytes.saturating_add(estimate) > budget.estimated_bytes)
+            {
+                break;
+            }
+            let Some(snapshot) = self.capture_chunk_snapshot(key, urgency) else {
+                self.acquisition.save_error(
+                    key,
+                    ServerError::Internal {
+                        invariant: "chunk payload estimate",
+                    },
+                );
+                break;
+            };
+            if let Err(error) = self.acquisition.selected(snapshot.clone()) {
+                self.acquisition.save_error(key, error);
+                break;
+            }
+            bytes = bytes.saturating_add(estimate);
+            chosen.push(snapshot);
+        }
+        chosen
+    }
+
     pub fn return_dirty(&mut self, snapshot: OwnedSnapshot) {
+        if self.acquisition.enabled() {
+            self.acquisition.release(&snapshot);
+            return;
+        }
         if let Some(position) = self.in_flight.iter().position(|held| held == &snapshot) {
             self.in_flight.remove(position);
         }
@@ -1074,6 +1123,9 @@ impl AuthorityState {
     }
 
     pub fn apply_completion(&mut self, completion: SaveCompletion) -> AckReport {
+        if self.acquisition.enabled() {
+            return self.apply_live_completion(completion);
+        }
         // The scheduler owns ticket correlation; this owner verifies the
         // echoed immutable preimages before touching any selected token.
         let identities_match = completion.submitted.len() == completion.snapshots.len()
@@ -1148,7 +1200,110 @@ impl AuthorityState {
         }
     }
 
+    fn apply_live_completion(&mut self, completion: SaveCompletion) -> AckReport {
+        let mut errors: Vec<_> = completion.error.into_iter().collect();
+        let observed = completion
+            .snapshots
+            .len()
+            .max(completion.submitted.len())
+            .max(completion.committed.len());
+        if observed > 8 {
+            errors.push(ServerError::Capacity {
+                resource: Resource::SaveChunks,
+                limit: 8,
+                observed,
+            });
+            return AckReport {
+                acked: 0,
+                released: 0,
+                retry: Vec::new(),
+                errors,
+            };
+        }
+        let mut keys = BTreeSet::new();
+        let mut committed_keys = BTreeSet::new();
+        let identity = completion.committed.iter().all(|(key, _)| match key {
+            SaveKey::Chunk(key) => committed_keys.insert(*key),
+            _ => true,
+        }) && completion.submitted.len() == completion.snapshots.len()
+            && completion
+                .submitted
+                .iter()
+                .zip(&completion.snapshots)
+                .all(|((key, revision), s)| key == &s.key && *revision == s.revision)
+            && completion
+                .committed
+                .iter()
+                .all(|id| completion.submitted.contains(id))
+            && completion.snapshots.iter().all(|s| match s.key {
+                SaveKey::Chunk(key) => {
+                    keys.insert(key)
+                        && (!self.acquisition.has_target(key, s.revision)
+                            || self.acquisition.matches(s))
+                }
+                _ => true,
+            });
+        let validation = if !identity {
+            Err(ServerError::Internal {
+                invariant: "save completion identity",
+            })
+        } else {
+            completion
+                .snapshots
+                .iter()
+                .try_for_each(|s| self.acquisition.validate_saved(s))
+        };
+        if let Err(error) = validation {
+            errors.push(error);
+            return AckReport {
+                acked: 0,
+                released: 0,
+                retry: Vec::new(),
+                errors,
+            };
+        }
+        let mut acked = 0;
+        let mut released = 0;
+        let mut retry = Vec::new();
+        for snapshot in completion.snapshots {
+            let held = self.acquisition.matches(&snapshot);
+            if !held && !matches!(snapshot.key, SaveKey::Metadata) {
+                continue;
+            }
+            if completion
+                .committed
+                .contains(&(snapshot.key.clone(), snapshot.revision))
+            {
+                if held {
+                    // Whole-batch validation above makes this key-local update infallible.
+                    self.acquisition
+                        .saved(&snapshot)
+                        .expect("validated live save preimage");
+                }
+                acked += 1;
+            } else {
+                released += 1;
+                // The scheduler retries this exact capture while the flight stays charged.
+                retry.push(snapshot);
+            }
+        }
+        if !retry.is_empty() && errors.is_empty() {
+            errors.push(ServerError::Internal {
+                invariant: "incomplete save completion",
+            });
+        }
+        AckReport {
+            acked,
+            released,
+            retry,
+            errors,
+        }
+    }
+
     pub fn save_stats(&self) -> SaveStats {
+        if self.acquisition.enabled() {
+            return self.acquisition.stats();
+        }
         let estimated_unsaved_bytes = self
             .dirty
             .iter()
@@ -1209,8 +1364,14 @@ impl AuthorityState {
         }
     }
 
-    pub fn remember_dirty(&mut self, snapshot: OwnedSnapshot) {
+    pub fn remember_dirty(&mut self, snapshot: OwnedSnapshot) -> Result<(), ServerError> {
+        if self.acquisition.enabled() {
+            return Err(ServerError::InvalidInput {
+                field: "manual_live_snapshot",
+            });
+        }
         self.dirty.push(snapshot);
+        Ok(())
     }
 
     pub fn drive_shutdown(
@@ -2366,6 +2527,7 @@ impl<'a> TickContext<'a> {
                         persisted,
                         rewrite,
                         recovered,
+                        ready.payload_estimate(),
                     );
                     self.ready.insert(key, ready);
                     self.drops.insert(key, drops);
@@ -2743,9 +2905,12 @@ impl<'a> TickContext<'a> {
         }
         for key in &self.dirty_chunks {
             if let Some(chunk) = self.ready.get(key) {
-                self.authority
-                    .acquisition
-                    .committed(*key, chunk.generation, chunk.revision);
+                self.authority.acquisition.committed(
+                    *key,
+                    chunk.generation,
+                    chunk.revision,
+                    chunk.payload_estimate(),
+                );
             }
         }
         self.dirty_chunks.clear();
@@ -4052,12 +4217,12 @@ mod owned_resident_tests {
                 .iter()
                 .all(|section| section.single == 0)
         );
-        authority.remember_dirty(old.clone());
+        authority.remember_dirty(old.clone()).unwrap();
         let selected = authority.select(SaveMode::All, SaveBudget::default());
         let equal_new = authority
             .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
             .unwrap();
-        authority.remember_dirty(equal_new.clone());
+        authority.remember_dirty(equal_new.clone()).unwrap();
         let ack = authority.apply_completion(SaveCompletion {
             ticket: SaveTicket::try_from_raw(1).unwrap(),
             snapshots: selected,
@@ -4135,7 +4300,7 @@ mod owned_resident_tests {
             .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
             .unwrap();
         reset_materializations();
-        authority.remember_dirty(captured);
+        authority.remember_dirty(captured).unwrap();
         let selected = authority.select(SaveMode::All, SaveBudget::default());
         let SaveValue::ChunkView(chosen) = &selected[0].value else {
             unreachable!()
@@ -5842,6 +6007,662 @@ mod drop_rehearsal_tests {
 
 #[cfg(test)]
 mod live_acquisition_tests {
+    #[test]
+    fn live_save_actual_owned_commit_old_ack_fresh_refusal_and_settled_cycles() {
+        use crate::core::{chunk_driver::ChunkDriver, generation_worker::GenerationPool};
+        use crate::store::{
+            disk::{DiskOptions, DiskStore},
+            mailbox::StoreMailbox,
+            scheduler::{AutosaveScheduler, SchedulerConfig},
+        };
+        use mornlea_storage::{
+            BANK_A_START_SECTOR, BANK_B_START_SECTOR, BANK_SIZE, RegionKey, SECTOR_SIZE,
+            decode_region_bank,
+        };
+        use std::{
+            fs, thread,
+            time::{Duration, Instant},
+        };
+        struct Root(std::path::PathBuf);
+        impl Drop for Root {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        fn deadline() -> Deadline {
+            Deadline::after(Instant::now(), Duration::from_secs(10)).unwrap()
+        }
+        fn complete(
+            store: &mut AutosaveScheduler<DiskStore>,
+            ticket: SaveTicket,
+        ) -> SaveCompletion {
+            let until = deadline();
+            loop {
+                store.drive_workers();
+                if let SavePoll::Completed(c) = StoreHandle::poll(store, ticket) {
+                    return c;
+                }
+                assert!(!until.expired(Instant::now()));
+                thread::yield_now();
+            }
+        }
+        fn scheduler(disk: DiskStore, bytes: usize) -> AutosaveScheduler<DiskStore> {
+            AutosaveScheduler::try_new(
+                SchedulerConfig::default(),
+                StoreMailbox::try_new_background(
+                    StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, bytes).unwrap(),
+                    disk,
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        }
+        let root = Root(std::env::temp_dir().join(
+            format!("mornlea-owned-live-save-{}-{}",std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()),
+        ));
+        let mut a = authority();
+        let metadata = a.metadata.clone();
+        let options = || DiskOptions {
+            region_handle_cap: 1,
+            create: metadata.clone(),
+        };
+        let mut disk = DiskStore::open(&root.0, options()).unwrap();
+        let expected = chunk();
+        for revision in [7, 8] {
+            let mut value = expected.clone();
+            if revision == 8 {
+                value.sections[0].single = 3;
+            }
+            let snapshot = OwnedSnapshot::try_new(
+                SaveKey::Chunk(key()),
+                revision,
+                4096,
+                SaveUrgency::Autosave,
+                SaveValue::Chunk(mornlea_storage::ChunkSave {
+                    key: mornlea_storage::ChunkKey {
+                        dimension: 0,
+                        x: 0,
+                        z: 0,
+                    },
+                    revision,
+                    chunk: value,
+                }),
+            )
+            .unwrap();
+            let c = disk.write(
+                SaveTicket::try_from_raw(revision).unwrap(),
+                SaveRequest {
+                    snapshots: vec![snapshot],
+                },
+            );
+            assert!(c.error.is_none());
+        }
+        disk.close().unwrap();
+        let path = root.0.join("dimensions/0/regions/r.0.0.region");
+        let mut bytes = fs::read(&path).unwrap();
+        let rk = RegionKey {
+            dimension: 0,
+            x: 0,
+            z: 0,
+        };
+        let banks: Vec<_> = [BANK_A_START_SECTOR, BANK_B_START_SECTOR]
+            .into_iter()
+            .map(|sector| {
+                let at = sector as usize * SECTOR_SIZE as usize;
+                decode_region_bank(rk, &bytes[at..at + BANK_SIZE], bytes.len() as i64).unwrap()
+            })
+            .collect();
+        let active = banks.iter().max_by_key(|b| b.generation).unwrap();
+        bytes[active.entries[0].offset_sector as usize * SECTOR_SIZE as usize] ^= 0xff;
+        fs::write(path, bytes).unwrap();
+        let mut store = scheduler(DiskStore::open(&root.0, options()).unwrap(), 4_194_304);
+        a.enable_live_chunks().unwrap();
+        a.replace_chunk_wants(BTreeSet::from([key()])).unwrap();
+        let mut driver = ChunkDriver::new();
+        let mut pool = GenerationPool::try_new(42, false, 1).unwrap();
+        driver
+            .start_load(&mut a, &mut store, key(), deadline())
+            .unwrap();
+        let until = deadline();
+        loop {
+            store.drive_workers();
+            let r = driver.poll(&mut a, &mut store, &mut pool);
+            if r.retained == 0 {
+                assert!(r.first_error.is_none());
+                break;
+            }
+            assert!(!until.expired(Instant::now()));
+            thread::yield_now();
+        }
+        a.advance_tick(TickBudget::full()).unwrap();
+        pool.close(deadline()).unwrap();
+        let old = a.select(SaveMode::All, SaveBudget::default());
+        let SaveValue::ChunkView(old_view) = &old[0].value else {
+            panic!("view");
+        };
+        assert_eq!(old_view.materialize().chunk, expected);
+        let old_ticket = store.submit(SaveRequest { snapshots: old }).unwrap();
+        save_mutate(&mut a);
+        let now = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap();
+        assert_eq!((now.revision, now.estimated_bytes), (10, 6164));
+        world::reset_payload_work();
+        world::reset_ready_clones();
+        world::reset_materializations();
+        assert_eq!(
+            a.apply_completion(complete(&mut store, old_ticket)).acked,
+            1
+        );
+        assert_eq!(
+            (
+                world::payload_work(),
+                world::ready_clones(),
+                world::materializations()
+            ),
+            ((0, 0, 0, 0), 0, 0)
+        );
+        let f = a.live_chunk_facts(key()).unwrap();
+        assert_eq!(
+            (
+                f.revision,
+                f.persisted_revision,
+                f.needs_rewrite,
+                f.recovered
+            ),
+            (10, 9, true, true)
+        );
+        store.close(deadline()).unwrap();
+        let mut refusing = scheduler(DiskStore::open(&root.0, options()).unwrap(), 1);
+        let selected = a.select(SaveMode::All, SaveBudget::default());
+        let exact = selected[0].clone();
+        let refusal = refusing
+            .submit(SaveRequest {
+                snapshots: selected,
+            })
+            .unwrap_err();
+        assert_eq!(refusal.request.snapshots, vec![exact]);
+        save_write(&mut a, 2);
+        a.return_dirty(refusal.request.snapshots.into_iter().next().unwrap());
+        let latest = a.select(SaveMode::All, SaveBudget::default());
+        assert_eq!(latest[0].revision, 11);
+        let SaveValue::ChunkView(view) = &latest[0].value else {
+            panic!("view");
+        };
+        let latest_body = view.materialize().chunk;
+        refusing.close(deadline()).unwrap();
+        use crate::store::io::{DiskIo, IoPhase};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct FailWrite(Arc<AtomicBool>);
+        impl DiskIo for FailWrite {
+            fn boundary(&mut self, point: IoFaultPoint, phase: IoPhase) -> std::io::Result<()> {
+                if point == IoFaultPoint::PayloadWrite
+                    && phase == IoPhase::Before
+                    && self.0.swap(false, Ordering::SeqCst)
+                {
+                    return Err(std::io::ErrorKind::Other.into());
+                }
+                Ok(())
+            }
+        }
+        let failure = Arc::new(AtomicBool::new(false));
+        let hook_failure = failure.clone();
+        let disk = DiskStore::with_io(
+            &root.0,
+            options(),
+            Box::new(move || Box::new(FailWrite(hook_failure.clone()))),
+        )
+        .unwrap();
+        let mut store = scheduler(disk, 4_194_304);
+        a.return_dirty(latest.into_iter().next().unwrap());
+        failure.store(true, Ordering::SeqCst);
+        store
+            .poll_tick(6000, SaveBudget::default(), &mut a)
+            .unwrap();
+        save_write(&mut a, 3);
+        let until = deadline();
+        while store.pending_retry_jobs() == 0 {
+            store.drive_workers();
+            store
+                .poll_tick(6001, SaveBudget::default(), &mut a)
+                .unwrap();
+            assert!(!until.expired(Instant::now()));
+            thread::yield_now();
+        }
+        assert_eq!(store.pending_retry_state(), vec![(1, 6021)]);
+        assert_eq!(a.save_stats().in_flight, 1);
+        assert_eq!(a.save_stats().dirty, 1);
+        assert_eq!(a.live_chunk_facts(key()).unwrap().persisted_revision, 9);
+        assert_eq!(a.live_chunk_facts(key()).unwrap().revision, 12);
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+        struct RealClock;
+        impl Clock for RealClock {
+            fn monotonic(&self) -> Instant {
+                Instant::now()
+            }
+            fn unix_ms(&self) -> i64 {
+                0
+            }
+        }
+        store.flush(deadline(), &mut a, &RealClock).unwrap();
+        assert_eq!(a.save_stats(), SaveStats::default());
+        assert_eq!(a.live_chunk_facts(key()).unwrap().persisted_revision, 12);
+        // Every cycle commits a real owned write and settles an actual disk reply.
+        for cycle in 0..64 {
+            save_write(&mut a, if cycle % 2 == 0 { 1 } else { 2 });
+            world::reset_payload_work();
+            world::reset_ready_clones();
+            world::reset_materializations();
+            let target = a
+                .select(SaveMode::All, SaveBudget::default())
+                .pop()
+                .unwrap();
+            a.return_dirty(target);
+            let selected = a.select(SaveMode::All, SaveBudget::default());
+            let t = store
+                .submit(SaveRequest {
+                    snapshots: selected,
+                })
+                .unwrap();
+            assert_eq!(a.apply_completion(complete(&mut store, t)).acked, 1);
+            assert_eq!(a.save_stats(), SaveStats::default());
+            assert_eq!(
+                (
+                    world::payload_work(),
+                    world::ready_clones(),
+                    world::materializations()
+                ),
+                ((0, 0, 0, 0), 0, 0)
+            );
+        }
+        store.close(deadline()).unwrap();
+        let mut reopened = DiskStore::open(&root.0, options()).unwrap();
+        let LoadedValue::Chunk(reopened_body) = reopened.load(SaveKey::Chunk(key())).unwrap()
+        else {
+            panic!("chunk");
+        };
+        reopened.close().unwrap();
+        assert_eq!(reopened_body.revision, 76);
+        assert_eq!(reopened_body.chunk, latest_body);
+        assert!(a.freeze().save_keys.is_empty());
+        assert_eq!(a.acquisition.ownership_counts().0, 1);
+        assert!(a.live_chunk_facts(key()).unwrap().recovered);
+    }
+    #[test]
+    fn live_save_invalid_private_estimate_is_conservative_and_never_eligible() {
+        let mut a = save_authority(1, 1);
+        let r = a.residents.ready.get_mut(&key()).unwrap();
+        r.set_block(BlockPos::new(0, -64, 0), 90);
+        r.finish_tick(false);
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+        assert_eq!(
+            a.live_chunk_error(key()),
+            Some(&ServerError::Internal {
+                invariant: "chunk payload estimate"
+            })
+        );
+        assert_eq!(
+            a.save_stats(),
+            SaveStats {
+                dirty: 1,
+                in_flight: 0,
+                estimated_unsaved_bytes: crate::store::mailbox::CHUNK_MAX_RESERVATION
+            }
+        );
+        a.acquisition.reset_save_work();
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+        assert_eq!(a.acquisition.save_work(), (0, 0));
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        assert_eq!(a.save_stats().dirty, 1);
+        assert_eq!(a.freeze().save_keys, vec![SaveKey::Chunk(key())]);
+    }
+    fn save_key(x: i32) -> ChunkKey {
+        ChunkKey {
+            pos: ChunkPos::new(x, 0),
+            ..key()
+        }
+    }
+    fn save_authority(n: i32, dirty: i32) -> AuthorityState {
+        let mut a = live();
+        a.replace_chunk_wants((0..n).map(save_key).collect())
+            .unwrap();
+        for x in 0..n {
+            let k = save_key(x);
+            let r = a.reserve_chunk_load(k).unwrap();
+            let id = request(x as u64 + 1);
+            a.bind_chunk_load(r, id).unwrap();
+            let p = PreparedChunk::try_new(
+                k,
+                r.generation(),
+                RecoveredChunk {
+                    chunk: chunk(),
+                    revision: 9,
+                    persisted_revision: if x < dirty { 7 } else { 9 },
+                    needs_rewrite: x < dirty,
+                    recovered: x < dirty,
+                },
+            )
+            .unwrap();
+            a.offer_acquired(AcquiredChunkEvent::Load {
+                key: k,
+                generation: r.generation(),
+                request: id,
+                result: Ok(Some(p)),
+            })
+            .unwrap();
+            if x % 8 == 7 || x == n - 1 {
+                a.advance_tick(TickBudget::full()).unwrap();
+            }
+        }
+        a
+    }
+    // Synthetic completions exercise contract defenses, not disk durability.
+    fn save_completion(snapshots: Vec<OwnedSnapshot>, committed: bool) -> SaveCompletion {
+        let submitted: Vec<_> = snapshots
+            .iter()
+            .map(|s| (s.key.clone(), s.revision))
+            .collect();
+        SaveCompletion {
+            ticket: SaveTicket::try_from_raw(1).unwrap(),
+            snapshots,
+            committed: if committed { submitted.clone() } else { vec![] },
+            submitted,
+            error: None,
+        }
+    }
+    fn save_mutate(a: &mut AuthorityState) {
+        save_write(a, 1);
+    }
+    fn save_write(a: &mut AuthorityState, block: u16) {
+        let mut ctx = TickContext::for_tick(a, TickBudget::full());
+        let observed = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(0, -64, 0))
+            .unwrap();
+        ctx.transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, block).unwrap()],
+            )
+            .unwrap();
+        ctx.commit_carried();
+    }
+    #[test]
+    fn live_save_priority_budget_and_eight_flights_span_repeated_selections() {
+        let mut a = save_authority(10, 10);
+        a.replace_chunk_wants((0..8).map(save_key).collect())
+            .unwrap();
+        let urgent = a.select(
+            SaveMode::Urgent,
+            SaveBudget {
+                chunks: 0,
+                estimated_bytes: 0,
+            },
+        );
+        assert_eq!(urgent.len(), 1);
+        assert_eq!(urgent[0].key, SaveKey::Chunk(save_key(8)));
+        assert_eq!(urgent[0].urgency, SaveUrgency::Unload);
+        let urgent2 = a.select(SaveMode::Urgent, SaveBudget::default());
+        assert_eq!(urgent2[0].key, SaveKey::Chunk(save_key(9)));
+        assert!(a.select(SaveMode::Urgent, SaveBudget::default()).is_empty());
+        let selected = a.select(SaveMode::All, SaveBudget::default());
+        assert_eq!(selected.len(), 6);
+        assert_eq!(selected[0].key, SaveKey::Chunk(save_key(0)));
+        assert_eq!(
+            a.save_stats(),
+            SaveStats {
+                dirty: 10,
+                in_flight: 8,
+                estimated_unsaved_bytes: 18 * 4096
+            }
+        );
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+        a.return_dirty(urgent[0].clone());
+        let again = a.select(
+            SaveMode::All,
+            SaveBudget {
+                chunks: 3,
+                estimated_bytes: 1,
+            },
+        );
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].key, urgent[0].key);
+        assert_ne!(again[0], urgent[0]);
+        let frozen = a.freeze();
+        assert_eq!(frozen.save_keys.len(), 10);
+        a.begin_close();
+        a.return_dirty(again[0].clone());
+        assert_eq!(a.select(SaveMode::All, SaveBudget::default()).len(), 1);
+        a.mark_closed();
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+    }
+    #[test]
+    fn live_save_stops_at_first_nonfit_without_skipping_a_smaller_later_key() {
+        let mut a = save_authority(3, 3);
+        let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+        let observed = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(16, -64, 0))
+            .unwrap();
+        ctx.transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, 1).unwrap()],
+            )
+            .unwrap();
+        ctx.commit_carried();
+        drop(ctx);
+        let selected = a.select(
+            SaveMode::All,
+            SaveBudget {
+                chunks: 3,
+                estimated_bytes: 8192,
+            },
+        );
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].key, SaveKey::Chunk(save_key(0)));
+        assert_eq!(a.save_stats().in_flight, 1);
+        a.return_dirty(selected.into_iter().next().unwrap());
+        let counted = a.select(
+            SaveMode::All,
+            SaveBudget {
+                chunks: 2,
+                estimated_bytes: usize::MAX,
+            },
+        );
+        assert_eq!(counted.len(), 2);
+        assert_eq!(counted[1].key, SaveKey::Chunk(save_key(1)));
+        assert_eq!(counted[1].estimated_bytes, 6164);
+        assert_eq!(a.save_stats().in_flight, 2);
+    }
+    #[test]
+    fn live_save_current_estimate_old_ack_and_exact_fresh_refusal() {
+        let mut a = save_authority(1, 1);
+        let old = a
+            .select(SaveMode::All, SaveBudget::default())
+            .pop()
+            .unwrap();
+        save_mutate(&mut a);
+        assert_eq!(a.save_stats().estimated_unsaved_bytes, 4096 + 6164);
+        let sibling = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap();
+        a.return_dirty(sibling);
+        assert_eq!(a.save_stats().in_flight, 1);
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+        let ack = a.apply_completion(save_completion(vec![old.clone()], true));
+        assert_eq!(ack.acked, 1);
+        let f = a.live_chunk_facts(key()).unwrap();
+        assert_eq!(
+            (
+                f.revision,
+                f.persisted_revision,
+                f.needs_rewrite,
+                f.recovered
+            ),
+            (10, 9, true, true)
+        );
+        assert_eq!(a.save_stats().estimated_unsaved_bytes, 6164);
+        let current = a
+            .select(SaveMode::All, SaveBudget::default())
+            .pop()
+            .unwrap();
+        a.return_dirty(old);
+        assert_eq!(a.save_stats().in_flight, 1);
+        let report = a.apply_completion(save_completion(vec![current], true));
+        assert_eq!(report.acked, 1);
+        assert_eq!(a.save_stats(), SaveStats::default());
+        assert!(a.live_chunk_facts(key()).unwrap().recovered);
+        assert!(!a.live_chunk_facts(key()).unwrap().needs_rewrite);
+    }
+    #[test]
+    fn live_save_failure_keeps_exact_capture_and_current_target_charged() {
+        let mut a = save_authority(1, 1);
+        let old = a
+            .select(SaveMode::All, SaveBudget::default())
+            .pop()
+            .unwrap();
+        save_mutate(&mut a);
+        let before = a.save_stats();
+        let mut c = save_completion(vec![old.clone()], false);
+        c.error = Some(ServerError::Cancelled);
+        let report = a.apply_completion(c);
+        assert_eq!((report.acked, report.released), (0, 1));
+        assert_eq!(report.retry, vec![old.clone()]);
+        assert_eq!(report.errors, vec![ServerError::Cancelled]);
+        assert_eq!(a.save_stats(), before);
+        a.return_dirty(old);
+        let latest = a
+            .select(SaveMode::All, SaveBudget::default())
+            .pop()
+            .unwrap();
+        assert_eq!((latest.revision, latest.estimated_bytes), (10, 6164));
+    }
+    #[test]
+    fn live_save_completion_defenses_validate_whole_batch_before_mutation() {
+        let mut a = save_authority(2, 2);
+        let selected = a.select(SaveMode::All, SaveBudget::default());
+        let before = a.save_stats();
+        let sibling = a
+            .capture_chunk_snapshot(save_key(1), SaveUrgency::Autosave)
+            .unwrap();
+        let mut wrong = selected.clone();
+        wrong[1] = sibling;
+        let mut duplicate_committed = save_completion(selected.clone(), true);
+        duplicate_committed.committed = vec![(selected[0].key.clone(), selected[0].revision); 2];
+        for c in [
+            duplicate_committed,
+            save_completion(wrong, true),
+            save_completion(vec![selected[0].clone(), selected[0].clone()], true),
+        ] {
+            let report = a.apply_completion(c);
+            assert_eq!(
+                report.errors,
+                vec![ServerError::Internal {
+                    invariant: "save completion identity"
+                }]
+            );
+            assert_eq!((report.acked, report.released), (0, 0));
+            assert_eq!(a.save_stats(), before);
+            assert_eq!(a.live_chunk_facts(key()).unwrap().persisted_revision, 7);
+        }
+        for lane in 0..3 {
+            let mut c = save_completion(selected.clone(), true);
+            match lane {
+                0 => c.snapshots = vec![selected[0].clone(); 9],
+                1 => c.submitted = vec![(selected[0].key.clone(), 9); 10],
+                _ => c.committed = vec![(selected[0].key.clone(), 9); 11],
+            }
+            assert_eq!(
+                a.apply_completion(c).errors,
+                vec![ServerError::Capacity {
+                    resource: Resource::SaveChunks,
+                    limit: 8,
+                    observed: 9 + lane
+                }]
+            );
+            assert_eq!(a.save_stats(), before);
+        }
+        a.acquisition.records_test_generation(save_key(1), 99);
+        assert_eq!(
+            a.apply_completion(save_completion(selected.clone(), true))
+                .errors,
+            vec![ServerError::Internal {
+                invariant: "chunk save identity"
+            }]
+        );
+        assert_eq!(a.save_stats(), before);
+        a.acquisition.records_test_generation(save_key(1), 2);
+        a.acquisition.committed(save_key(1), 2, 8, Some(4096));
+        assert_eq!(
+            a.apply_completion(save_completion(selected, true)).errors,
+            vec![ServerError::Internal {
+                invariant: "chunk save identity"
+            }]
+        );
+        assert_eq!(a.live_chunk_facts(key()).unwrap().persisted_revision, 7);
+    }
+    #[test]
+    fn live_save_unknown_target_metadata_lane_and_manual_isolation() {
+        let mut a = save_authority(1, 1);
+        let unknown = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap();
+        assert_eq!(
+            a.remember_dirty(unknown.clone()),
+            Err(ServerError::InvalidInput {
+                field: "manual_live_snapshot"
+            })
+        );
+        assert_eq!(
+            a.apply_completion(save_completion(vec![unknown], true))
+                .acked,
+            0
+        );
+        let metadata = a.try_metadata_snapshot().unwrap();
+        assert_eq!(
+            a.apply_completion(save_completion(vec![metadata], true))
+                .acked,
+            1
+        );
+        assert_eq!(a.save_stats().dirty, 1);
+        let mut legacy = authority();
+        let metadata = legacy.metadata_snapshot();
+        legacy.remember_dirty(metadata).unwrap();
+        assert!(legacy.enable_live_chunks().is_err());
+        let _ = legacy.select(SaveMode::All, SaveBudget::default());
+        assert!(legacy.enable_live_chunks().is_err());
+    }
+    #[test]
+    fn live_save_thousand_clean_records_have_bounded_work() {
+        let mut a = save_authority(1000, 1);
+        world::reset_payload_work();
+        world::reset_ready_clones();
+        world::reset_materializations();
+        a.acquisition.reset_save_work();
+        assert_eq!(a.save_stats().dirty, 1);
+        assert_eq!(a.acquisition.save_work(), (0, 0));
+        let first = a.select(SaveMode::All, SaveBudget::default());
+        assert_eq!(first.len(), 1);
+        assert_eq!(a.acquisition.save_work(), (1, 0));
+        assert_eq!(a.apply_completion(save_completion(first, true)).acked, 1);
+        assert_eq!(a.acquisition.save_work(), (1, 2));
+        assert_eq!(
+            (
+                world::ready_clones(),
+                world::materializations(),
+                world::payload_work()
+            ),
+            (0, 0, (0, 0, 0, 0))
+        );
+        assert_eq!(a.acquisition.ownership_counts().0, 1000);
+        assert!(a.freeze().save_keys.is_empty());
+    }
+
     use super::super::world::{self, PreparedChunk};
     use super::*;
     use mornlea_domain::{BlockPos, ChunkPos, FiniteVec3};

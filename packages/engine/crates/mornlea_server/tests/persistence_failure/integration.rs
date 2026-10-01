@@ -211,7 +211,7 @@ fn select_family(state: &mut AuthorityState, key: SaveKey, revision: u64) -> Vec
         SaveValue::Metadata(_) => {}
         _ => unreachable!("standalone family fixture"),
     }
-    state.remember_dirty(snapshot);
+    state.remember_dirty(snapshot).unwrap();
     state.select(SaveMode::All, SaveBudget::default())
 }
 
@@ -381,10 +381,10 @@ fn metadata_completion_keeps_current_revision_and_other_jobs() {
 fn real_save_restart_round_trip_through_store() {
     let root = Root::new("roundtrip");
     let mut state = authority();
-    state.remember_dirty(chunk_snapshot());
-    state.remember_dirty(player_snapshot());
+    state.remember_dirty(chunk_snapshot()).unwrap();
+    state.remember_dirty(player_snapshot()).unwrap();
     for snapshot in family_snapshots() {
-        state.remember_dirty(snapshot);
+        state.remember_dirty(snapshot).unwrap();
     }
     let selected = state.select(SaveMode::All, SaveBudget::default());
     assert_eq!(selected.len(), 6, "every family is pending exactly once");

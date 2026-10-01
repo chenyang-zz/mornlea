@@ -371,7 +371,7 @@ fn slots_cancellation_partial_results_and_occupancy_are_retained() {
             started.recv().unwrap();
             let workers = store.worker_jobs();
             let queued = store.queued_jobs();
-            state.remember_dirty(snapshot(20));
+            state.remember_dirty(snapshot(20)).unwrap();
             let dirty = store
                 .poll_tick(2, SaveBudget::default(), &mut state)
                 .unwrap()
@@ -771,7 +771,7 @@ fn real_payload_write_keeps_tick_free_and_lease_until_close_join() {
             .unwrap();
         store.drive_workers();
         started.recv().unwrap();
-        state.remember_dirty(snapshot(30));
+        state.remember_dirty(snapshot(30)).unwrap();
         let dirty = store
             .poll_tick(2, SaveBudget::default(), &mut state)
             .unwrap()
@@ -838,38 +838,42 @@ fn scheduler_flush_waits_for_real_final_metadata_and_all_families() {
     let store = StoreMailbox::try_new_background(limits(), disk).unwrap();
     let mut scheduler = AutosaveScheduler::try_new(SchedulerConfig::default(), store).unwrap();
     let mut state = authority();
-    state.remember_dirty(chunk_snapshot());
-    state.remember_dirty(player_snapshot());
-    state.remember_dirty(snapshot(9));
-    state.remember_dirty(
-        OwnedSnapshot::try_new(
-            SaveKey::Passives,
-            9,
-            1,
-            SaveUrgency::Autosave,
-            Value::Passives(PassiveMobsSave {
-                revision: 9,
-                records: vec![],
-            }),
+    state.remember_dirty(chunk_snapshot()).unwrap();
+    state.remember_dirty(player_snapshot()).unwrap();
+    state.remember_dirty(snapshot(9)).unwrap();
+    state
+        .remember_dirty(
+            OwnedSnapshot::try_new(
+                SaveKey::Passives,
+                9,
+                1,
+                SaveUrgency::Autosave,
+                Value::Passives(PassiveMobsSave {
+                    revision: 9,
+                    records: vec![],
+                }),
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    );
-    state.remember_dirty(
-        OwnedSnapshot::try_new(
-            SaveKey::Companions,
-            9,
-            1,
-            SaveUrgency::Autosave,
-            Value::Companions(CompanionSave {
-                revision: 9,
-                agent_namespace_id: mornlea_storage::PlayerId::from_bytes(player_id()),
-                records: vec![],
-                lifecycles: vec![],
-                queues: vec![],
-            }),
+        .unwrap();
+    state
+        .remember_dirty(
+            OwnedSnapshot::try_new(
+                SaveKey::Companions,
+                9,
+                1,
+                SaveUrgency::Autosave,
+                Value::Companions(CompanionSave {
+                    revision: 9,
+                    agent_namespace_id: mornlea_storage::PlayerId::from_bytes(player_id()),
+                    records: vec![],
+                    lifecycles: vec![],
+                    queues: vec![],
+                }),
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    );
+        .unwrap();
     let expected_metadata = state.metadata_snapshot();
     let (finished, receive) = mpsc::sync_channel(1);
     let driver = thread::spawn(move || {

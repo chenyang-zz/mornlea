@@ -5,7 +5,10 @@
 //! Unloading preserves resident facts for a later durable/reclamation owner;
 //! this book never performs I/O, prepares bodies or records request history.
 use super::{
-    contracts::{ChunkKey, ChunkRequestId, Resource, ServerError},
+    contracts::{
+        ChunkKey, ChunkRequestId, OwnedSnapshot, Resource, SaveKey, SaveMode, SaveStats,
+        SaveUrgency, SaveValue, ServerError,
+    },
     world::PreparedChunk,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -128,6 +131,7 @@ struct Record {
     facts: LiveChunkFacts,
     request: Option<ChunkRequestId>,
     error: Option<ServerError>,
+    estimate: Option<usize>,
 }
 #[derive(Default)]
 pub(crate) struct AcquisitionState {
@@ -140,6 +144,14 @@ pub(crate) struct AcquisitionState {
     generation_count: usize,
     staged: Vec<AcquiredChunkEvent>,
     last_generation: u64,
+    // Current facts and retained captures have separate exact byte charges.
+    dirty: BTreeSet<ChunkKey>,
+    eligible: BTreeSet<(bool, ChunkKey)>,
+    flights: BTreeMap<ChunkKey, OwnedSnapshot>,
+    dirty_bytes: u64,
+    flight_bytes: u64,
+    #[cfg(test)]
+    save_work: std::cell::Cell<(usize, usize)>,
 }
 fn invalid(field: &'static str) -> ServerError {
     ServerError::InvalidInput { field }
@@ -176,16 +188,26 @@ impl AcquisitionState {
     }
     pub(crate) fn replace_wants(&mut self, wants: BTreeSet<ChunkKey>) -> Result<(), ServerError> {
         capacity(Resource::ChunkWants, wants.len(), MAX_WANTS)?;
-        self.records.retain(|key, r| {
-            r.facts.wanted = wants.contains(key);
-            match (r.facts.phase, r.facts.wanted) {
-                (LiveChunkPhase::Ready, false) => r.facts.phase = LiveChunkPhase::Unloading,
-                (LiveChunkPhase::Unloading, true) => r.facts.phase = LiveChunkPhase::Ready,
-                (LiveChunkPhase::Failed | LiveChunkPhase::NeedsGeneration, false) => return false,
-                _ => (),
+        let keys: Vec<_> = self.records.keys().copied().collect();
+        for key in keys {
+            self.refresh(key, |r| {
+                r.facts.wanted = wants.contains(&key);
+                match (r.facts.phase, r.facts.wanted) {
+                    (LiveChunkPhase::Ready, false) => r.facts.phase = LiveChunkPhase::Unloading,
+                    (LiveChunkPhase::Unloading, true) => r.facts.phase = LiveChunkPhase::Ready,
+                    _ => (),
+                }
+            });
+            if self.records.get(&key).is_some_and(|r| {
+                !r.facts.wanted
+                    && matches!(
+                        r.facts.phase,
+                        LiveChunkPhase::Failed | LiveChunkPhase::NeedsGeneration
+                    )
+            }) {
+                self.records.remove(&key);
             }
-            true
-        });
+        }
         self.wants = wants;
         Ok(())
     }
@@ -225,6 +247,7 @@ impl AcquisitionState {
                 },
                 request: None,
                 error: None,
+                estimate: None,
             },
         );
         self.last_generation = generation;
@@ -427,31 +450,220 @@ impl AcquisitionState {
         persisted_revision: u64,
         needs_rewrite: bool,
         recovered: bool,
+        estimate: Option<usize>,
     ) {
-        let r = self
-            .records
-            .get_mut(&key)
-            .expect("settled live reservation");
-        r.facts.revision = revision;
-        r.facts.persisted_revision = persisted_revision;
-        r.facts.needs_rewrite = needs_rewrite;
-        r.facts.recovered = recovered;
-        r.facts.phase = if r.facts.wanted {
-            LiveChunkPhase::Ready
-        } else {
-            LiveChunkPhase::Unloading
-        };
+        self.refresh(key, |r| {
+            r.facts.revision = revision;
+            r.facts.persisted_revision = persisted_revision;
+            r.facts.needs_rewrite = needs_rewrite;
+            r.facts.recovered = recovered;
+            r.estimate = estimate;
+            r.facts.phase = if r.facts.wanted {
+                LiveChunkPhase::Ready
+            } else {
+                LiveChunkPhase::Unloading
+            };
+        });
     }
-    pub(crate) fn committed(&mut self, key: ChunkKey, generation: u64, revision: u64) {
-        if let Some(r) = self.records.get_mut(&key) {
+    pub(crate) fn committed(
+        &mut self,
+        key: ChunkKey,
+        generation: u64,
+        revision: u64,
+        estimate: Option<usize>,
+    ) {
+        self.refresh(key, |r| {
             debug_assert_eq!(r.facts.generation, generation);
             r.facts.revision = revision;
+            r.estimate = estimate;
+        });
+    }
+    fn contribution(r: &Record) -> Option<u64> {
+        (matches!(
+            r.facts.phase,
+            LiveChunkPhase::Ready | LiveChunkPhase::Unloading
+        ) && (r.facts.revision > r.facts.persisted_revision || r.facts.needs_rewrite))
+            .then_some(
+                r.estimate
+                    .unwrap_or(crate::store::mailbox::CHUNK_MAX_RESERVATION) as u64,
+            )
+    }
+    // Key-local refresh removes old contributions before changing current facts.
+    fn refresh(&mut self, key: ChunkKey, update: impl FnOnce(&mut Record)) {
+        let Some(r) = self.records.get_mut(&key) else {
+            return;
+        };
+        if let Some(bytes) = Self::contribution(r) {
+            self.dirty.remove(&key);
+            self.eligible
+                .remove(&(r.facts.phase == LiveChunkPhase::Ready, key));
+            self.dirty_bytes -= bytes;
         }
+        update(r);
+        if let Some(bytes) = Self::contribution(r) {
+            self.dirty.insert(key);
+            self.dirty_bytes += bytes;
+            if r.estimate.is_none() {
+                r.error = Some(ServerError::Internal {
+                    invariant: "chunk payload estimate",
+                });
+            } else if !self.flights.contains_key(&key) {
+                self.eligible
+                    .insert((r.facts.phase == LiveChunkPhase::Ready, key));
+            }
+        }
+    }
+    pub(crate) fn save_error(&mut self, key: ChunkKey, error: ServerError) {
+        self.refresh(key, |r| {
+            r.estimate = None;
+            r.error = Some(error);
+        });
+    }
+    pub(crate) fn next_save(&self, mode: SaveMode) -> Option<(ChunkKey, usize, SaveUrgency)> {
+        let &(ready, key) = self.eligible.first()?;
+        if mode == SaveMode::Urgent && ready {
+            return None;
+        }
+        Some((
+            key,
+            self.records.get(&key)?.estimate?,
+            if ready {
+                SaveUrgency::Autosave
+            } else {
+                SaveUrgency::Unload
+            },
+        ))
+    }
+    pub(crate) fn selected(&mut self, snapshot: OwnedSnapshot) -> Result<(), ServerError> {
+        capacity(Resource::SaveChunks, self.flights.len() + 1, MAX_ATTEMPTS)?;
+        let SaveKey::Chunk(key) = snapshot.key else {
+            return Err(invalid("chunk_save_target"));
+        };
+        let Some(r) = self.records.get(&key) else {
+            return Err(invalid("chunk_save_target"));
+        };
+        let ready = r.facts.phase == LiveChunkPhase::Ready;
+        let valid_view = matches!(&snapshot.value, SaveValue::ChunkView(v)
+            if v.key() == key && v.generation() == r.facts.generation && v.revision() == r.facts.revision);
+        if !valid_view
+            || snapshot.revision != r.facts.revision
+            || Some(snapshot.estimated_bytes) != r.estimate
+            || snapshot.urgency
+                != if ready {
+                    SaveUrgency::Autosave
+                } else {
+                    SaveUrgency::Unload
+                }
+            || !self.eligible.contains(&(ready, key))
+            || self.flights.contains_key(&key)
+        {
+            return Err(ServerError::Internal {
+                invariant: "chunk save identity",
+            });
+        }
+        #[cfg(test)]
+        self.save_work
+            .set((self.save_work.get().0 + 1, self.save_work.get().1));
+        self.flight_bytes += snapshot.estimated_bytes as u64;
+        self.flights.insert(key, snapshot);
+        self.eligible.remove(&(ready, key));
+        Ok(())
+    }
+    pub(crate) fn has_target(&self, key: ChunkKey, revision: u64) -> bool {
+        self.flights
+            .get(&key)
+            .is_some_and(|s| s.revision == revision)
+    }
+    pub(crate) fn matches(&self, snapshot: &OwnedSnapshot) -> bool {
+        let SaveKey::Chunk(key) = snapshot.key else {
+            return false;
+        };
+        self.flights.get(&key) == Some(snapshot)
+    }
+    // Validate every exact preimage before a batch mutates any durability fact.
+    pub(crate) fn validate_saved(&self, snapshot: &OwnedSnapshot) -> Result<(), ServerError> {
+        #[cfg(test)]
+        self.save_work
+            .set((self.save_work.get().0, self.save_work.get().1 + 1));
+        if !self.matches(snapshot) {
+            return Ok(());
+        }
+        let SaveKey::Chunk(key) = snapshot.key else {
+            unreachable!();
+        };
+        let SaveValue::ChunkView(view) = &snapshot.value else {
+            unreachable!();
+        };
+        if !self.records.get(&key).is_some_and(|r| {
+            r.facts.generation == view.generation() && snapshot.revision <= r.facts.revision
+        }) {
+            return Err(ServerError::Internal {
+                invariant: "chunk save identity",
+            });
+        }
+        Ok(())
+    }
+    pub(crate) fn saved(&mut self, snapshot: &OwnedSnapshot) -> Result<bool, ServerError> {
+        self.validate_saved(snapshot)?;
+        if !self.matches(snapshot) {
+            return Ok(false);
+        }
+        let SaveKey::Chunk(key) = snapshot.key else {
+            unreachable!();
+        };
+        self.release(snapshot);
+        self.refresh(key, |r| {
+            r.facts.persisted_revision = r.facts.persisted_revision.max(snapshot.revision);
+            if snapshot.revision == r.facts.revision {
+                r.facts.needs_rewrite = false;
+            }
+        });
+        Ok(true)
+    }
+    pub(crate) fn release(&mut self, snapshot: &OwnedSnapshot) -> bool {
+        if !self.matches(snapshot) {
+            return false;
+        }
+        let SaveKey::Chunk(key) = snapshot.key else {
+            unreachable!();
+        };
+        self.flights.remove(&key);
+        self.flight_bytes -= snapshot.estimated_bytes as u64;
+        self.refresh(key, |_| {});
+        true
+    }
+    pub(crate) fn stats(&self) -> SaveStats {
+        SaveStats {
+            dirty: self.dirty.len(),
+            in_flight: self.flights.len(),
+            estimated_unsaved_bytes: usize::try_from(self.dirty_bytes + self.flight_bytes)
+                .unwrap_or(usize::MAX),
+        }
+    }
+    // This explicit enumeration belongs to off-tick freeze, never selection.
+    pub(crate) fn save_keys(&self) -> Vec<SaveKey> {
+        self.dirty
+            .iter()
+            .copied()
+            .chain(self.flights.keys().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(SaveKey::Chunk)
+            .collect()
     }
 }
 
 #[cfg(test)]
 impl AcquisitionState {
+    pub(crate) fn records_test_generation(&mut self, key: ChunkKey, generation: u64) {
+        self.records.get_mut(&key).unwrap().facts.generation = generation;
+    }
+    pub(crate) fn reset_save_work(&self) {
+        self.save_work.set((0, 0));
+    }
+    pub(crate) fn save_work(&self) -> (usize, usize) {
+        self.save_work.get()
+    }
     pub(crate) fn ownership_counts(&self) -> (usize, usize, usize, usize, usize, usize) {
         (
             self.records.len(),
@@ -628,6 +840,7 @@ mod tests {
                     },
                     request: None,
                     error: None,
+                    estimate: Some(4096),
                 },
             );
         }

@@ -815,7 +815,7 @@ fn tcp_disconnect_during_pending_save_keeps_save_in_flight() {
         }),
     )
     .unwrap();
-    harness.endpoint.authority.remember_dirty(snapshot);
+    harness.endpoint.authority.remember_dirty(snapshot).unwrap();
     let selected = harness.endpoint.authority.select(
         SaveMode::All,
         SaveBudget {

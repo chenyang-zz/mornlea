@@ -254,7 +254,7 @@ fn all_ports_type_flow() {
     let snapshot = endpoint.authority.metadata_snapshot();
     assert_eq!(snapshot.revision, 1);
     assert!(matches!(snapshot.key, SaveKey::Metadata));
-    endpoint.authority.remember_dirty(snapshot);
+    endpoint.authority.remember_dirty(snapshot).unwrap();
     let selected = endpoint
         .authority
         .select(SaveMode::Urgent, SaveBudget::default());
