@@ -86,6 +86,17 @@ consume its cancellation and error contracts before joining the real backend.
   extra payload ownership. Conflicting same-key payloads refuse before mutation;
   reads are nonconsuming and all ownership ends with `TickContext`.
 
+- `AuthorityState::settled_read` borrows the existing read view from healthy
+  committed owners in constant construction work, without resident copies or
+  pending ingress. The first retained tick failure fences new reads before
+  Closed validation; healthy Running and Closing remain readable. Its tick is
+  the next executable endpoint, while absolute time selects an explicit World
+  mirror, committed environment, then startup metadata. The immutable loan
+  excludes exclusive tick execution. Enumeration retains its existing costs
+  and eligibility semantics. Private identity/clock/health tests and the actual
+  Memory login/native motion/save/reopen projection case qualify this boundary;
+  Agent, source publication and actor-target ownership remain separate.
+
 - `AuthorityState::try_new_with_metadata` validates startup save metadata before
   any provider starts. `try_metadata_snapshot` captures only resident world
   time, day display offset and weather; startup seed, anchors, salt and

@@ -358,11 +358,14 @@ fn actual_player_pose_and_inventory_projection_survive_disk_reopen() {
     );
     assert_eq!(state.live_chunk_facts(key()).unwrap().persisted_revision, 9);
     let actor_key = ActorKey::Player(session);
-    // This off-tick test observation never becomes a production world capture.
-    let before = state.residents();
-    let pre = before.actors.iter().find(|a| a.key == actor_key).unwrap();
-    assert_eq!((pre.look.yaw(), pre.look.pitch()), (0.1, 0.2));
-    assert_eq!(before.inventories[&actor_key].selected.get(), 0);
+    // End the immutable authority loan before transport intake and tick execution.
+    let old = {
+        let before = state.settled_read().unwrap();
+        let pre = before.actor(actor_key).unwrap();
+        assert_eq!((pre.look.yaw(), pre.look.pitch()), (0.1, 0.2));
+        assert_eq!(before.inventory(actor_key).unwrap().selected.get(), 0);
+        pre.motion.position().get()
+    };
     let frames = transport.receive(connection, 64, 1 << 20);
     transport.acknowledge(
         connection,
@@ -399,68 +402,76 @@ fn actual_player_pose_and_inventory_projection_survive_disk_reopen() {
     let publication = state.advance_tick(TickBudget::full()).unwrap();
     assert_eq!(publication.counters.commands, 2);
     assert_eq!(state.session(session).unwrap().last_applied_sequence, 2);
-    let settled = state.residents();
-    let actor = settled.actors.iter().find(|a| a.key == actor_key).unwrap();
-    let inventory = &settled.inventories[&actor_key];
-    let runtime = &settled.runtimes[&actor_key];
-    let position = actor.motion.position().get();
-    let old = pre.motion.position().get();
-    assert!(
-        position[0] != old[0] || position[2] != old[2],
-        "PlayerInput must cause native horizontal motion beyond PRE-COMMAND pose"
-    );
-    assert_eq!((actor.look.yaw(), actor.look.pitch()), (1.2, 0.3));
-    assert_eq!(inventory.selected.get(), 5);
-    let ActorBody::Player(stale) = &actor.body else {
-        panic!("actual player body")
-    };
-    assert_eq!(stale.current, original.current);
-    assert_eq!(stale.inventory.hotbar.selected, 0);
-    let projected =
-        project_player(actor, Some(inventory), Some(runtime), original.revision + 1).unwrap();
-    assert_eq!(
-        projected.current.dimension,
-        i32::from(actor.dimension.get())
-    );
-    assert_eq!(projected.current.position, position);
-    assert_eq!((projected.yaw, projected.pitch), (1.2, 0.3));
-    assert_eq!(projected.inventory.hotbar.selected, 5);
-    assert_eq!(projected.inventory.hotbar.slots, inventory.slots[..9]);
-    assert_eq!(projected.inventory.backpack, inventory.slots[9..]);
-    assert_eq!(projected.armor, inventory.armor);
-    assert_eq!(projected.health, actor.survival.health());
-    assert_eq!(projected.hunger, actor.survival.hunger());
-    assert_eq!(
-        projected.saturation_milli,
-        u16::try_from(runtime.saturation_milli).unwrap()
-    );
-    assert_eq!(
-        projected.exhaustion_milli,
-        u16::try_from(runtime.exhaustion_milli).unwrap()
-    );
-    assert_eq!(projected.player_id, original.player_id);
-    assert_eq!(projected.display_name, original.display_name);
-    assert_eq!(projected.safe, original.safe);
-    let ActorAux::Player { respawn, .. } = &runtime.aux else {
-        panic!("actual player aux")
-    };
-    let expected_respawn = respawn
-        .map(|(dim, pos)| {
+    // Project current owners while the healthy committed authority is borrowed.
+    let projected = {
+        let settled = state.settled_read().unwrap();
+        assert_eq!(
+            settled.world_time(),
+            settled.environment().unwrap().world_time
+        );
+        assert_eq!(settled.tick(), state.next_tick());
+        let actor = settled.actor(actor_key).unwrap();
+        let inventory = settled.inventory(actor_key).unwrap();
+        let runtime = settled.runtime(actor_key).unwrap();
+        let position = actor.motion.position().get();
+        assert!(
+            position[0] != old[0] || position[2] != old[2],
+            "PlayerInput must cause native horizontal motion beyond PRE-COMMAND pose"
+        );
+        assert_eq!((actor.look.yaw(), actor.look.pitch()), (1.2, 0.3));
+        assert_eq!(inventory.selected.get(), 5);
+        let ActorBody::Player(stale) = &actor.body else {
+            panic!("actual player body")
+        };
+        assert_eq!(stale.current, original.current);
+        assert_eq!(stale.inventory.hotbar.selected, 0);
+        let projected =
+            project_player(actor, Some(inventory), Some(runtime), original.revision + 1).unwrap();
+        assert_eq!(
+            projected.current.dimension,
+            i32::from(actor.dimension.get())
+        );
+        assert_eq!(projected.current.position, position);
+        assert_eq!((projected.yaw, projected.pitch), (1.2, 0.3));
+        assert_eq!(projected.inventory.hotbar.selected, 5);
+        assert_eq!(projected.inventory.hotbar.slots, inventory.slots[..9]);
+        assert_eq!(projected.inventory.backpack, inventory.slots[9..]);
+        assert_eq!(projected.armor, inventory.armor);
+        assert_eq!(projected.health, actor.survival.health());
+        assert_eq!(projected.hunger, actor.survival.hunger());
+        assert_eq!(
+            projected.saturation_milli,
+            u16::try_from(runtime.saturation_milli).unwrap()
+        );
+        assert_eq!(
+            projected.exhaustion_milli,
+            u16::try_from(runtime.exhaustion_milli).unwrap()
+        );
+        assert_eq!(projected.player_id, original.player_id);
+        assert_eq!(projected.display_name, original.display_name);
+        assert_eq!(projected.safe, original.safe);
+        let ActorAux::Player { respawn, .. } = &runtime.aux else {
+            panic!("actual player aux")
+        };
+        let expected_respawn = respawn
+            .map(|(dim, pos)| {
+                (
+                    true,
+                    i32::from(dim.get()),
+                    [pos.x() as f32, pos.y() as f32, pos.z() as f32],
+                )
+            })
+            .unwrap_or((false, 0, [0.0; 3]));
+        assert_eq!(
             (
-                true,
-                i32::from(dim.get()),
-                [pos.x() as f32, pos.y() as f32, pos.z() as f32],
-            )
-        })
-        .unwrap_or((false, 0, [0.0; 3]));
-    assert_eq!(
-        (
-            projected.respawn_present,
-            projected.respawn_dimension,
-            projected.respawn_position
-        ),
-        expected_respawn
-    );
+                projected.respawn_present,
+                projected.respawn_dimension,
+                projected.respawn_position
+            ),
+            expected_respawn
+        );
+        projected
+    };
     let snapshot = OwnedSnapshot::try_new(
         SaveKey::Player(player()),
         projected.revision,

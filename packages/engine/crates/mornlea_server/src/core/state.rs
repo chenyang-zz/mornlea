@@ -36,6 +36,8 @@ use crate::rules::fluids::FluidSchedule;
 
 const COMPANION_INBOX: usize = 4;
 
+static SETTLED_PRE_STEP: BTreeMap<ActorKey, MotionState> = BTreeMap::new();
+
 #[cfg(test)]
 thread_local! {
     // Private work observations count current-key lookups without changing decisions.
@@ -339,6 +341,53 @@ impl AuthorityState {
     /// Cloned resident tick state for inspection and replay assertions.
     pub fn residents(&self) -> ResidentTickState {
         self.residents.clone()
+    }
+
+    /// Borrows healthy committed owners without copying residents or pending ingress.
+    /// The tick names the next executable endpoint; absolute time comes from climate.
+    /// A retained hard failure fences new reads before terminal phase validation.
+    ///
+    /// The loan must end before an exclusive tick can execute:
+    /// ```compile_fail,E0502
+    /// use mornlea_server::contracts::{ServerLimits, TickBudget};
+    /// use mornlea_server::state::AuthorityState;
+    /// let limits = ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap();
+    /// let mut authority = AuthorityState::try_new(limits, 42).unwrap();
+    /// let view = authority.settled_read().unwrap();
+    /// authority.advance_tick(TickBudget::full()).unwrap();
+    /// assert_eq!(view.tick(), 0);
+    /// ```
+    pub fn settled_read(&self) -> Result<AuthorityReadView<'_>, ServerError> {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
+        if self.phase == ServerPhase::Closed {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        Ok(AuthorityReadView {
+            acquisition: self.acquisition.enabled().then_some(&self.acquisition),
+            tick: self.next_tick,
+            world: None,
+            commands: &[],
+            companions: &[],
+            interactions: &[],
+            inventories: &self.residents.inventories,
+            blocks: &self.residents.blocks,
+            ready: &self.residents.ready,
+            actors: &self.residents.actors,
+            runtimes: &self.residents.runtimes,
+            mining: &self.residents.mining,
+            pre_step: &SETTLED_PRE_STEP,
+            environment: self.residents.environment.as_ref(),
+            containers: &self.residents.containers,
+            container_chunks: &self.residents.container_chunks,
+            viewers: &self.views,
+            drops: &self.residents.drops,
+            projectiles: &self.residents.projectiles,
+            damage_intents: &[],
+            metadata: &self.metadata,
+            observation_trace: None,
+        })
     }
 
     /// Login seeds for Active sessions with a save body and no player actor,
@@ -2195,7 +2244,8 @@ impl<'a> AuthorityReadView<'a> {
     pub fn world_time(&self) -> u64 {
         self.world
             .map(|world| world.world_time_ticks())
-            .unwrap_or(0)
+            .or_else(|| self.environment.map(|environment| environment.world_time))
+            .unwrap_or(self.metadata.world_time_ticks)
     }
     pub fn world(&self) -> Option<WorldState> {
         self.world
@@ -8742,6 +8792,7 @@ mod failed_tick_tests {
         );
         assert_eq!(a.phase(), ServerPhase::Closing);
         assert_eq!(a.tick_failure(), Some(error));
+        assert_eq!(a.settled_read().err(), Some(error));
         assert_eq!(&a.residents.environment, environment);
         assert_eq!(a.residents.ready[&key()].block(pos()), Some(1));
         assert_eq!(
@@ -8808,6 +8859,7 @@ mod failed_tick_tests {
             "later failure cannot replace first error"
         );
         assert_eq!(a.tick_failure(), Some(error));
+        assert_eq!(a.settled_read().err(), Some(error));
         HOOK_CALLS.with(|calls| assert_eq!(calls.get(), 1));
     }
     #[test]
@@ -9212,5 +9264,345 @@ mod failed_tick_tests {
             assert_no_shutdown_io(&mut a, error, scaffold);
             HOOK_CALLS.with(|calls| assert_eq!(calls.get(), 1));
         }
+    }
+}
+
+#[cfg(test)]
+mod settled_read_tests {
+    use super::super::{step::AuthoritativeFinalReducer, world};
+    use super::*;
+    use mornlea_domain::{BlockPos, ChunkPos, Command, Season, WorldStateParts};
+    use mornlea_storage::{ContainerSnapshot, StorageKind};
+
+    fn authority(time: u64) -> AuthorityState {
+        let limits = ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap();
+        let mut metadata = AuthorityState::try_new(limits, 42).unwrap().metadata;
+        metadata.world_time_ticks = time;
+        AuthorityState::try_new_with_metadata(limits, metadata).unwrap()
+    }
+
+    fn key() -> ChunkKey {
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        }
+    }
+
+    fn session(a: &mut AuthorityState) -> (SessionKey, PlayerId) {
+        let mut bytes = [0; 16];
+        bytes[0] = 51;
+        bytes[6] = 0x40;
+        bytes[8] = 0x80;
+        let player = PlayerId::try_from_bytes(bytes).unwrap();
+        let start = mornlea_protocol::LoginStart::new(player, "Settled", 8).unwrap();
+        let admitted = mornlea_protocol::admit_login(
+            mornlea_protocol::LoginStart::decode_inbound(&start.encode().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let session = a.prepare(admitted, TransportKind::Memory).unwrap();
+        a.install(session, None).unwrap();
+        a.activate(session).unwrap();
+        (session, player)
+    }
+
+    fn empty_lanes(view: AuthorityReadView<'_>) {
+        assert!(view.commands().is_empty());
+        assert!(view.companion_actions().is_empty());
+        assert!(view.interactions().is_empty());
+        assert!(view.damage_intents().is_empty());
+        assert!(view.pre_step.is_empty());
+        assert!(view.observation_trace.is_none());
+    }
+
+    #[test]
+    fn cold_metadata_clock() {
+        let mut a = authority(1200);
+        assert!(a.residents.environment.is_none());
+        let view = a.settled_read().unwrap();
+        assert_eq!(view.tick(), 0);
+        assert_eq!(view.world(), None);
+        assert_eq!(view.world_time(), 1200);
+        assert_eq!(
+            view.spawn_anchor(),
+            Some((Dimension::OVERWORLD, ChunkPos::new(0, 0)))
+        );
+        assert_eq!(view.metadata.seed, 42);
+        empty_lanes(view);
+        let context = TickContext::harness(&mut a, TickBudget::full());
+        assert_eq!(context.read().world_time(), 1200);
+    }
+
+    fn owner_addresses(resident: &ResidentTickState, a: &AuthorityState) -> [usize; 12] {
+        [
+            std::ptr::from_ref(&resident.inventories) as usize,
+            std::ptr::from_ref(&resident.blocks) as usize,
+            std::ptr::from_ref(&resident.ready) as usize,
+            std::ptr::from_ref(&resident.runtimes) as usize,
+            std::ptr::from_ref(&resident.mining) as usize,
+            std::ptr::from_ref(resident.environment.as_ref().unwrap()) as usize,
+            std::ptr::from_ref(&resident.containers) as usize,
+            std::ptr::from_ref(&resident.container_chunks) as usize,
+            std::ptr::from_ref(&a.views) as usize,
+            std::ptr::from_ref(&resident.drops) as usize,
+            std::ptr::from_ref(&a.metadata) as usize,
+            std::ptr::from_ref(&resident.ready[&key()]) as usize,
+        ]
+    }
+
+    #[test]
+    fn committed_borrow_identity_and_current_write() {
+        let mut a = authority(0);
+        let (session, player) = session(&mut a);
+        let actor_key = ActorKey::Player(session);
+        let pos = BlockPos::new(8, 63, 8);
+        {
+            let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+            let chunk = Chunk {
+                sections: vec![
+                    ContainerSnapshot {
+                        kind: StorageKind::Single,
+                        bits: 0,
+                        single: 0,
+                        palette: vec![],
+                        packed: vec![],
+                    };
+                    24
+                ],
+                drops: vec![Default::default(); 32],
+                furnaces: vec![Default::default(); 32],
+                chests: vec![Default::default(); 16],
+            };
+            context.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 9, chunk).unwrap());
+            let mut save = canonical_player(player, "Settled").unwrap();
+            save.current.position = [8.5, 64.0, 8.5];
+            context.stage_login(seed_player(session, &save).unwrap());
+            context.freeze_environment(0);
+            let actor = context.read().actor(actor_key).unwrap().clone();
+            let runtime =
+                crate::rules::player_survival::merged_runtime(&context.read(), &actor).unwrap();
+            context.stage(RuleEffect::Runtime(runtime)).unwrap();
+            let observed = context
+                .read()
+                .observation(Dimension::OVERWORLD, pos)
+                .unwrap();
+            context
+                .transaction()
+                .try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(observed, 2).unwrap()],
+                )
+                .unwrap();
+            context.commit_carried();
+        }
+        let resident = &a.residents;
+        let owners_before = owner_addresses(resident, &a);
+        let ready = &resident.ready[&key()];
+        let ready_before = (
+            ready.generation,
+            ready.revision,
+            ready.block(pos),
+            ready.height(8, 8),
+        );
+        let actor_before = resident.actors[0].clone();
+        let actors_ptr = resident.actors.as_ptr();
+        let projectiles_ptr = resident.projectiles.as_ptr();
+        let capacities = (resident.actors.capacity(), resident.projectiles.capacity());
+        world::reset_ready_clones();
+        world::reset_materializations();
+        for _ in 0..8 {
+            let view = a.settled_read().unwrap();
+            assert!(view.acquisition.is_none());
+            assert!(std::ptr::eq(view.inventories, &resident.inventories));
+            assert!(std::ptr::eq(view.blocks, &resident.blocks));
+            assert!(std::ptr::eq(view.ready, &resident.ready));
+            assert!(std::ptr::eq(view.actors, resident.actors.as_slice()));
+            assert_eq!(view.actors.as_ptr(), actors_ptr);
+            assert!(std::ptr::eq(view.runtimes, &resident.runtimes));
+            assert!(std::ptr::eq(view.mining, &resident.mining));
+            assert!(std::ptr::eq(
+                view.environment.unwrap(),
+                resident.environment.as_ref().unwrap()
+            ));
+            assert!(std::ptr::eq(view.containers, &resident.containers));
+            assert!(std::ptr::eq(
+                view.container_chunks,
+                &resident.container_chunks
+            ));
+            assert!(std::ptr::eq(view.viewers, &a.views));
+            assert!(std::ptr::eq(view.drops, &resident.drops));
+            assert!(std::ptr::eq(
+                view.projectiles,
+                resident.projectiles.as_slice()
+            ));
+            assert_eq!(view.projectiles.as_ptr(), projectiles_ptr);
+            assert!(std::ptr::eq(view.metadata, &a.metadata));
+            assert!(std::ptr::eq(
+                view.inventory(actor_key).unwrap(),
+                &resident.inventories[&actor_key]
+            ));
+            assert!(std::ptr::eq(
+                view.runtime(actor_key).unwrap(),
+                &resident.runtimes[&actor_key]
+            ));
+            assert!(std::ptr::eq(
+                view.actor(actor_key).unwrap(),
+                &resident.actors[0]
+            ));
+            assert_eq!(view.tick(), 0);
+            assert_eq!(view.world(), None);
+            assert_eq!(view.block(Dimension::OVERWORLD, pos), Some(2));
+            assert_eq!(view.ready_chunk_revision(key()), Some(10));
+            assert_eq!(view.highest_non_air(Dimension::OVERWORLD, 8, 8), Some(63));
+            empty_lanes(view);
+        }
+        assert_eq!((world::ready_clones(), world::materializations()), (0, 0));
+        assert_eq!(ready_before, (1, 10, Some(2), 63));
+        assert_eq!(
+            (
+                ready.generation,
+                ready.revision,
+                ready.block(pos),
+                ready.height(8, 8)
+            ),
+            ready_before
+        );
+        assert_eq!(owner_addresses(resident, &a), owners_before);
+        assert_eq!(resident.actors[0], actor_before);
+        assert_eq!(resident.actors.as_ptr(), actors_ptr);
+        assert_eq!(resident.projectiles.as_ptr(), projectiles_ptr);
+        assert_eq!(
+            (resident.actors.capacity(), resident.projectiles.capacity()),
+            capacities
+        );
+    }
+
+    #[test]
+    fn actual_clock_progress_and_final() {
+        let mut a = authority(1200);
+        {
+            let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+            context.freeze_environment(0);
+            assert_eq!(context.read().world(), None);
+            assert_eq!(context.read().environment().unwrap().world_time, 1200);
+            assert_eq!(context.read().world_time(), 1200);
+        }
+        assert_eq!(a.residents.environment.as_ref().unwrap().world_time, 1200);
+        for tick in 0..2 {
+            let publication = a.advance_tick(TickBudget::full()).unwrap();
+            assert_eq!(publication.tick, tick);
+            let view = a.settled_read().unwrap();
+            assert_eq!(view.tick(), tick + 1);
+            assert_eq!(view.world_time(), 1201 + tick);
+            assert_eq!(view.world(), None);
+        }
+        let outbox_prefix: usize = a
+            .sessions
+            .values()
+            .map(|session| session.outbox.len())
+            .sum();
+        assert!(a.begin_close());
+        assert_eq!(a.run_final(&mut AuthoritativeFinalReducer).unwrap(), 2);
+        assert_eq!(
+            a.sessions
+                .values()
+                .map(|session| session.outbox.len())
+                .sum::<usize>(),
+            outbox_prefix
+        );
+        let view = a.settled_read().unwrap();
+        assert_eq!(view.tick(), 3);
+        assert_eq!(view.world_time(), 1203);
+        assert_eq!(view.environment().unwrap().world_time, 1203);
+        assert_eq!(view.world(), None);
+    }
+
+    #[test]
+    fn fixture_world_override() {
+        let mut a = authority(1200);
+        let mut context = TickContext::harness(&mut a, TickBudget::full());
+        context.freeze_environment(0);
+        context.world = Some(
+            WorldState::try_new(WorldStateParts {
+                day_phase_offset: 0,
+                world_time_ticks: 999,
+                weather: Weather::Clear,
+                season: Season::Spring,
+                season_progress: 0,
+                temperature: 11,
+            })
+            .unwrap(),
+        );
+        assert_eq!(context.read().world_time(), 999);
+        context.world = None;
+        assert_eq!(context.read().world_time(), 1200);
+        crate::rules::environment::run(
+            &mut context,
+            RuleCall {
+                phase: RulePhase::EnvironmentEnd,
+                actor: None,
+                command: None,
+                internal: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(context.read().world_time(), 1201);
+        assert_eq!(context.read().tick(), 0);
+    }
+
+    #[test]
+    fn phases_and_first_error() {
+        let mut a = authority(0);
+        assert!(a.settled_read().is_ok());
+        assert!(a.begin_close());
+        assert!(a.settled_read().is_ok());
+        a.phase = ServerPhase::Closed;
+        assert_eq!(
+            a.settled_read().err(),
+            Some(ServerError::InvalidState {
+                phase: ServerPhase::Closed
+            })
+        );
+        let mut failed = authority(1200);
+        let error = ServerError::Internal {
+            invariant: "settled read test failure",
+        };
+        failed.fail_tick(error);
+        failed.fail_tick(ServerError::Disconnected);
+        let before = (
+            failed.next_tick,
+            failed.metadata.clone(),
+            failed.residents.environment.clone(),
+        );
+        assert_eq!(failed.settled_read().err(), Some(error));
+        failed.phase = ServerPhase::Closed;
+        assert_eq!(failed.settled_read().err(), Some(error));
+        assert_eq!(
+            (
+                failed.next_tick,
+                failed.metadata.clone(),
+                failed.residents.environment.clone()
+            ),
+            before
+        );
+    }
+
+    #[test]
+    fn pending_ingress_is_not_settled() {
+        let mut a = authority(0);
+        let (session, _) = session(&mut a);
+        a.submit(
+            session,
+            PlayIntent::Sequenced {
+                sequence: 1,
+                command: Command::CloseContainer,
+            },
+        )
+        .unwrap();
+        let pointer = a.commands.as_ptr();
+        let queued = a.commands.clone();
+        assert!(!queued.is_empty());
+        empty_lanes(a.settled_read().unwrap());
+        assert_eq!(a.commands.as_ptr(), pointer);
+        assert_eq!(a.commands, queued);
     }
 }
