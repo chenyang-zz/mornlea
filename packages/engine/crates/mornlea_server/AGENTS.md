@@ -686,3 +686,17 @@ acknowledgment remains the shared connection core's distinct lifecycle step. The
 `server_contract::prepared_publication` executing double proves consumer semantics
 and owned transfer; it does not accept the actual authority outbox or transport.
 Factory tests separately execute the real protocol codec and family decoders.
+
+Prepared TCP delivery uses `TcpTransport::forward_prepared_outbox` on the same
+concrete borrowed `LiveEndpoint`. Committed connection identity and the existing
+512 shared send slots are checked before taking authority owners. The returned
+count records whole-owner transfer, never peer receipt or mirror advancement.
+The Prepared lane borrows canonical bytes and bypasses core acknowledgments;
+partial writes retain the exact owner under the existing 64-attempt/1 MiB drain
+budgets. Completed core acknowledgments settle before a later fatal write closes
+the socket and returns its original error. No codec or compatibility byte copy
+runs in this transfer. The local/remote prepared-delivery topic executes the real
+background DiskStore, login driver and socket. Private queue tests label their
+injected writers and immediate load fixture separately from that actual-store
+evidence. These bounds are per authority FIFO and socket, not a bound on retained
+historical sessions or acceptance of a source publisher/background encoder.
