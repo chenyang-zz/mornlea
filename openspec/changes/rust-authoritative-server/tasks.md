@@ -94,7 +94,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7p2q Implement the actual prepared FIFO and borrowed Memory delivery ([packet](plans/67-prepared-outbox-owner.md)).
 - [x] 3.7p2t Transfer immutable prepared frames through the actual TCP queue ([packet](plans/68-prepared-tcp-delivery.md)).
 - [x] 3.7p2ec Land checked captured-chunk encoding ownership and request contracts ([packet](plans/69-chunk-encoding-contract.md)).
-- [ ] 3.7p2e Encode immutable chunk captures on bounded background CPU owners ([packet](plans/70-background-chunk-encoding.md)).
+- [x] 3.7p2e Encode immutable chunk captures on bounded background CPU owners ([packet](plans/70-background-chunk-encoding.md)).
 - [x] 3.7g0 Generate production seed-compatible compact chunks ([packet](plans/48-production-worldgen.md)).
 - [x] 3.7g1 Prepare generated chunks on bounded background owners ([packet](plans/51-background-generation-owner.md)).
 - [x] 3.7l0c Land checked prepared chunk and load-port contracts ([packet](plans/49-background-load-ports.md)).
