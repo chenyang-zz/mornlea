@@ -49,6 +49,7 @@ fail() {
 usage() {
     cat >&2 <<'USAGE'
 usage: rust-server-opt-in.sh activate --world <disposable-copy> --backup <named-copy> --run-dir <explicit> --rust-bin <path> --previous-bin <path> --previous-sha256 <hex> [--dry-run]
+       rust-server-opt-in.sh prepare-previous --source <full-sha> --run-dir <absolute-disposable-root>
        rust-server-opt-in.sh rollback --manifest <path> --data-policy compatible|restore-backup
        rust-server-opt-in.sh --self-test
        rust-server-opt-in.sh --help
@@ -1252,7 +1253,168 @@ EOF
     cleanup_self_test
 }
 
+# Builds one sealed, offline previous-runtime package without opening a world.
+# The final durable record is the only success publication; partial exports
+# and failed build outputs remain available for inspection.
+cmd_prepare_previous() {
+    local source="" run_dir=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --source)
+                [ $# -ge 2 ] && [ -n "$2" ] && [ "${2#--}" = "$2" ] || usage
+                [ -z "$source" ] || usage
+                source="$2"; shift 2 ;;
+            --run-dir)
+                [ $# -ge 2 ] && [ -n "$2" ] && [ "${2#--}" = "$2" ] || usage
+                [ -z "$run_dir" ] || usage
+                run_dir="$2"; shift 2 ;;
+            *) usage ;;
+        esac
+    done
+    [ -n "$source" ] && [ -n "$run_dir" ] || usage
+    [ "$source" = "d042982d33bb1694d768b75b01c297bd02534a08" ] || fail "incompatible_save" "source must equal sealed previous runtime"
+    need_python
+    py "$source" "$run_dir" "$SCRIPT_PATH" <<'EOF'
+import hashlib, io, json, os, posixpath, shutil, stat, subprocess, sys, tarfile, tempfile
+
+source, root, script = sys.argv[1:]
+repo = os.path.dirname(os.path.dirname(script))
+oracle_relative = "packages/server/storage/runtime_migration_verify_test.go"
+operation = "source checks"
+
+class Refusal(Exception):
+    def __init__(self, code, message):
+        self.code, self.message = code, message
+
+def checked(args, **kwargs):
+    return subprocess.run(args, check=True, **kwargs)
+
+def below(path, parent):
+    return path != parent and os.path.commonpath([path, parent]) == parent
+
+def regular(path, executable=False):
+    info = os.lstat(path)
+    if not stat.S_ISREG(info.st_mode) or os.path.realpath(path) != path or not below(path, root):
+        raise OSError("artifact is not a confined canonical regular file: " + path)
+    if executable and not os.access(path, os.X_OK):
+        raise OSError("artifact is not executable: " + path)
+
+def digest(path):
+    result = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
+
+try:
+    # Read only commit objects from this script checkout, never worktree Go.
+    checked(["git", "-C", repo, "cat-file", "-e", source + "^{commit}"], stdout=subprocess.DEVNULL)
+    oracle = checked(["git", "-C", repo, "show", "HEAD:" + oracle_relative], stdout=subprocess.PIPE).stdout
+    operation = "run directory validation"
+    if not os.path.isabs(root) or os.path.normpath(root) != root or root.startswith("//"):
+        raise Refusal("invalid_manifest", "run directory must be absolute and clean")
+    cursor = root
+    while True:
+        if os.path.islink(cursor):
+            raise Refusal("invalid_manifest", "symlink in run directory: " + cursor)
+        parent = os.path.dirname(cursor)
+        if parent == cursor:
+            break
+        cursor = parent
+    if not any(below(root, os.path.realpath(candidate)) for candidate in [os.environ.get("TMPDIR") or "/tmp", "/tmp", "/var/tmp"]):
+        raise Refusal("invalid_manifest", "run directory escapes the disposable root")
+    if root == repo or below(repo, root) or os.path.lexists(os.path.join(root, ".git")):
+        raise Refusal("invalid_manifest", "run directory is a repository root")
+    if os.path.lexists(root) and (not os.path.isdir(root) or os.listdir(root)):
+        raise Refusal("invalid_manifest", "run directory must be absent or empty")
+    operation = "source export"
+    archive = checked(["git", "-C", repo, "archive", "--format=tar", source], stdout=subprocess.PIPE).stdout
+    # Validate every member before extracting anything. Git archives contain
+    # tracked regular files, directories and symlinks, never device entries.
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
+        members = bundle.getmembers()
+        for member in members:
+            name = member.name.rstrip("/")
+            if not name or name.startswith("/") or posixpath.normpath(name) != name or any(part in (".", "..") for part in name.split("/")):
+                raise OSError("unsafe source archive member: " + member.name)
+            if not (member.isfile() or member.isdir() or member.issym()):
+                raise OSError("unsupported source archive member: " + member.name)
+            if member.issym():
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(name), member.linkname))
+                if member.linkname.startswith("/") or target == ".." or target.startswith("../"):
+                    raise OSError("source symlink escapes export: " + name)
+        os.makedirs(root, exist_ok=True)
+        exported = os.path.join(root, "previous-source")
+        os.mkdir(exported)
+        bundle.extractall(exported, members=members, filter="data")
+    operation = "oracle insertion"
+    oracle_path = os.path.join(exported, oracle_relative)
+    regular(oracle_path) if os.path.lexists(oracle_path) else None
+    if not below(os.path.realpath(oracle_path), exported):
+        raise OSError("oracle path escapes sealed source")
+    with open(oracle_path, "wb") as handle:
+        handle.write(oracle)
+
+    operation = "make rust"
+    if shutil.which("make") is None:
+        raise OSError("make is required")
+    env = os.environ.copy()
+    env["CARGO_TARGET_DIR"] = env.get("CARGO_TARGET_DIR") or os.path.join(root, "native-target")
+    # The sealed Makefile accepts this provenance input instead of discovering
+    # Git metadata, which is deliberately absent from the tracked export.
+    env["CI_CANDIDATE_SHA"] = source
+    checked(["make", "-C", exported, "rust"], env=env)
+    operation = "native dependency"
+    extension = "dylib" if sys.platform == "darwin" else "so"
+    native = os.path.join(exported, "packages/engine/target/release/libmornlea_engine." + extension)
+    regular(native)
+    operation = "go build previous server"
+    server = os.path.join(root, "previous-server")
+    checked(["go", "build", "-buildvcs=false", "-o", server, "./packages/server/cmd/mornlea-server"], cwd=exported)
+    regular(server, executable=True)
+    operation = "go test compile previous verifier"
+    verifier = os.path.join(root, "previous-verifier")
+    checked(["go", "test", "-c", "-buildvcs=false", "./packages/server/storage", "-o", verifier], cwd=exported)
+    regular(verifier, executable=True)
+    operation = "package hashes"
+    record = {
+        "schema_version": 1,
+        "previous_source_sha": source,
+        "oracle_sha256": digest(oracle_path),
+        "previous_executable": server,
+        "previous_sha256": digest(server),
+        "verifier_executable": verifier,
+        "verifier_sha256": digest(verifier),
+        "protocol_version": 45,
+        "save_schemas": {"player": 9, "chunk": 9, "world_metadata": 6, "companions_ai": 5, "hostile_mobs": 2, "passive_mobs": 1},
+        "native_dependencies": [{"path": native, "sha256": digest(native)}],
+    }
+    operation = "package record publication"
+    manifest = os.path.join(root, "previous-runtime.json")
+    fd, staged = tempfile.mkstemp(prefix=".previous-runtime-", dir=root)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(record, handle, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(staged, manifest)
+    parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+    print("OK prepared previous_manifest=%s source=%s" % (manifest, source))
+except Refusal as error:
+    print("FAIL %s %s" % (error.code, error.message), file=sys.stderr)
+    sys.exit(1)
+except (OSError, ValueError, tarfile.TarError, subprocess.SubprocessError) as error:
+    print("FAIL activation_failed %s: %s" % (operation, error), file=sys.stderr)
+    sys.exit(1)
+EOF
+}
+
 case "${1:-}" in
+    prepare-previous) shift; cmd_prepare_previous "$@" ;;
     activate) shift; cmd_activate "$@" ;;
     rollback) shift; cmd_rollback "$@" ;;
     --self-test) shift; [ $# -eq 0 ] || usage; cmd_self_test ;;

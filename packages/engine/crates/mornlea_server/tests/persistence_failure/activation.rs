@@ -25,6 +25,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+#[path = "prepare_previous.rs"]
+mod prepare_previous;
+
 /// Basename of the world lock file, excluded from every tree hash because
 /// lock ownership churns across runtimes while durable bytes stay fixed.
 const LOCK_BASENAME: &str = "world.lock";
