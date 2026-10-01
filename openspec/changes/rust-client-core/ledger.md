@@ -262,3 +262,9 @@ Controller owns the serial prerequisite metadata update. Rollback invalidates th
 
 - Task 2.3 fix round 1/5 (1 addressed, 0 open — internal `#[cfg(test)]` overflow tests at both checked points with counter set directly, typed `Capacity`, no-mutation invariants verified; commits `bcd9d945`..`90900f44`).
 - Task 2.3: complete (commits `e7b0134a`..`90900f44`; review clean after 1 fix round; three earlier minors deferred to final review). The byte-charge obligation from the 1.1 freeze is discharged with identity-based accounting proven by discriminating tests.
+
+## 2026-10-02 node 2.2 review verdict and closure
+
+- Node 2.2 landed at `6bfefb79` (`feat(client-core): implement correction replay`; report-file evidence, controller ledgers the durable summary per the round ownership split). Independent review: spec ✅, quality Approved, zero Critical/Important. Both named risks verified: the Go predictor's 256-cap suspension is mapped to a typed `Capacity` rejection BEFORE any mutation with no drop/truncate path (below-cap demands replay fully); `StepEnvironment` facts are caller-owned inputs only. F1-kernel reuse verified against the engine's actual exports (no local integrator; the caller-half sweep envelope compared branch-for-branch against the frozen Go `stepSweepBounds`); no new epsilon (the cited `1e-5` matches both accepted kernel sources).
+- Deferred minors (final-review triage): fluid branches of the sweep envelope unexecuted by tests (add an in-fluid row before submersion wiring); mid-replay kernel error can leave `predicted`/`correction` stale after owner writes (practically unreachable; compute-then-commit would close it); Go-suspension mapping cross-reference lives in report not code; table-row wording drift (four-controls-second-acked vs "three controls", behaviorally equivalent); two infallible `try_new` shapers.
+- Task 2.2: complete (commit `6bfefb79`, review clean, no fix rounds needed).
