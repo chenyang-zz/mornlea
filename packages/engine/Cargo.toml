@@ -7,6 +7,7 @@ members = [
     "crates/mornlea_protocol",
     "crates/mornlea_storage",
     "crates/mornlea_server",
+    "crates/mornlea_client_core",
 ]
 resolver = "3"
 

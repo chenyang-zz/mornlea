@@ -955,6 +955,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mornlea_client_core"
+version = "0.1.0"
+dependencies = [
+ "mornlea_domain",
+ "mornlea_engine",
+ "mornlea_protocol",
+]
+
+[[package]]
 name = "mornlea_domain"
 version = "0.1.0"
 dependencies = [

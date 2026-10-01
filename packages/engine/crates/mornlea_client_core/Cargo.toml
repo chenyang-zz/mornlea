@@ -1,0 +1,23 @@
+[package]
+name = "mornlea_client_core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+mornlea_domain = { path = "../mornlea_domain" }
+mornlea_engine = { path = "../mornlea_engine" }
+mornlea_protocol = { path = "../mornlea_protocol" }
+
+[lints.rust]
+# The contract landing declares checked constructors and state owners whose
+# first consumer is a later provider node; unused-until-consumed items are
+# therefore expected instead of a defect.
+dead_code = "allow"
+
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
