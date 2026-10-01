@@ -7,6 +7,7 @@ pub mod companion_ingress;
 mod container_store;
 pub mod contracts;
 mod drop_store;
+pub mod encoding_worker;
 pub mod generation;
 pub mod generation_worker;
 mod go_random;

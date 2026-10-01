@@ -710,3 +710,17 @@ background DiskStore, login driver and socket. Private queue tests label their
 injected writers and immediate load fixture separately from that actual-store
 evidence. These bounds are per authority FIFO and socket, not a bound on retained
 historical sessions or acceptance of a source publisher/background encoder.
+
+`core/encoding_worker.rs` owns the bounded off-tick chunk framing lane: at most
+eight queued, started and held-complete captures across one or two independent
+protocol codecs on OS threads. Replies preserve exact capture identity; started
+cancellation suppresses delivery but remains charged until real collection.
+Caller start/poll/drive only transfer bounded owners. Explicit close cancels,
+drains, disconnects and joins; a timeout retains handles for same-pool retry,
+and an owner teardown panic remains a sticky join failure. Drop disconnects
+without claiming quiescence. Private causal gates and fault wrappers execute
+the actual codec and are separate from ordinary encoding evidence; the
+persistence chunk-encoding topic executes actual disk acquisition, capture,
+CPU framing, authority FIFO and Memory owner transfer. This lane decides no
+Ready/wanted relevance or mirror advancement and accepts no source publisher
+or executable runtime.
