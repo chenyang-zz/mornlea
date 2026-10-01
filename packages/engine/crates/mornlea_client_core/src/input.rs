@@ -373,10 +373,15 @@ impl ContainerOperation {
 }
 
 /// The outcome of the read-only validator: everything `commit` needs,
-/// precomputed, with no owner mutated and no owner borrowed.
+/// precomputed, with no owner mutated and no owner borrowed. It carries the
+/// validate-time confirmed mirror snapshot it was validated against — the
+/// checked token/shape view — so the frozen two-argument
+/// `InputTranslator::commit(ValidatedInputBatch, &mut InputAdmissionState)`
+/// form stays self-sufficient.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedInputBatch {
     epoch: SessionEpoch,
+    mirror: ConfirmedMirror,
     actions: Vec<InputAction>,
     required_encoded_bytes: usize,
     sequenced_count: u16,
@@ -387,6 +392,12 @@ pub struct ValidatedInputBatch {
 impl ValidatedInputBatch {
     pub fn epoch(&self) -> SessionEpoch {
         self.epoch
+    }
+
+    /// The validate-time confirmed mirror snapshot this batch was validated
+    /// against. Commit reads it read-only; no path mutates it.
+    pub fn mirror(&self) -> &ConfirmedMirror {
+        &self.mirror
     }
 
     pub fn actions(&self) -> &[InputAction] {
@@ -494,9 +505,11 @@ impl LocalViewValidity {
 
 /// The C1-owned single-owner admission state: outbound queue, prediction
 /// journal, next sequence, the local view-validity overlay and the pending
-/// local cue-source metadata. No projection or host callback obtains this
-/// owner; `commit` is its only writer.
+/// local cue-source metadata, beside the frozen `ClientLimits` it was
+/// constructed with. No projection or host callback obtains this owner;
+/// `commit` is its only writer.
 pub struct InputAdmissionState {
+    limits: ClientLimits,
     outbound: Vec<OutboundRecord>,
     outbound_bytes: usize,
     journal: Vec<JournalEntry>,
@@ -506,10 +519,12 @@ pub struct InputAdmissionState {
 }
 
 impl InputAdmissionState {
-    /// Publishes the empty owner for one epoch. The sequence space starts at
-    /// one so every sequenced packet's nonzero-sequence gate holds.
-    pub fn try_new(epoch: SessionEpoch) -> Result<Self, ClientError> {
+    /// Publishes the empty owner for one epoch under the frozen limits. The
+    /// sequence space starts at one so every sequenced packet's
+    /// nonzero-sequence gate holds.
+    pub fn try_new(epoch: SessionEpoch, limits: ClientLimits) -> Result<Self, ClientError> {
         Ok(Self {
+            limits,
             outbound: Vec::new(),
             outbound_bytes: 0,
             journal: Vec::new(),
@@ -517,6 +532,11 @@ impl InputAdmissionState {
             overlay: LocalViewValidity::try_new(epoch)?,
             pending_local_cues: Vec::new(),
         })
+    }
+
+    /// The frozen limits this owner validates its capacity demands against.
+    pub fn limits(&self) -> &ClientLimits {
+        &self.limits
     }
 
     pub fn overlay(&self) -> &LocalViewValidity {
@@ -550,9 +570,15 @@ impl InputAdmissionState {
         self.outbound.first().map(|record| record.frame.as_slice())
     }
 
-    /// Clears every epoch-scoped owner. Reset calls this; old sequences,
-    /// journal entries and tombstones cannot cross into the new epoch.
-    pub fn reset_epoch(&mut self, epoch: SessionEpoch) -> Result<(), ClientError> {
+    /// Clears every epoch-scoped owner and re-freezes the limits. Reset
+    /// calls this; old sequences, journal entries and tombstones cannot cross
+    /// into the new epoch.
+    pub fn reset_epoch(
+        &mut self,
+        epoch: SessionEpoch,
+        limits: ClientLimits,
+    ) -> Result<(), ClientError> {
+        self.limits = limits;
         self.outbound.clear();
         self.outbound_bytes = 0;
         self.journal.clear();
@@ -621,6 +647,7 @@ impl InputTranslator {
         }
         Ok(ValidatedInputBatch {
             epoch: batch.epoch(),
+            mirror: mirror.clone(),
             actions: batch.actions().to_vec(),
             required_encoded_bytes,
             sequenced_count,
@@ -629,23 +656,34 @@ impl InputTranslator {
         })
     }
 
-    /// The single-owner atomic commit.
+    /// The single-owner atomic commit, in the frozen two-argument form.
     ///
-    /// Rechecks every capacity (outbound records and bytes, journal, checked
-    /// contiguous sequence range), simulates the local view-validity overlay
-    /// over a temporary copy, encodes all actions into owned reserved
-    /// temporary buffers, and only then appends records, journal entries and
-    /// local cue metadata, advances the sequence and swaps the overlay in one
-    /// critical section. Any earlier failure leaves every owner unchanged.
+    /// The validated batch carries the mirror snapshot it was validated
+    /// against and the admission owner carries its frozen limits, so no other
+    /// argument exists on this surface. Commit re-checks the snapshot's epoch
+    /// and phase, then rechecks every capacity (outbound records and bytes,
+    /// journal, checked contiguous sequence range), simulates the local
+    /// view-validity overlay over a temporary copy, encodes all actions into
+    /// owned reserved temporary buffers, and only then appends records,
+    /// journal entries and local cue metadata, advances the sequence and
+    /// swaps the overlay in one critical section. Any earlier failure leaves
+    /// every owner unchanged.
     pub fn commit(
         batch: ValidatedInputBatch,
         admission: &mut InputAdmissionState,
-        mirror: &ConfirmedMirror,
-        limits: &ClientLimits,
     ) -> Result<InputReceipt, ClientError> {
+        // The admission owner re-checks epoch and phase against the
+        // validate-time snapshot before any owner changes.
+        if batch.mirror().phase() != &crate::contracts::SessionPhase::Admitted {
+            return Err(ClientError::InvalidState);
+        }
+        if batch.mirror().epoch() != batch.epoch() {
+            return Err(ClientError::StaleEpoch);
+        }
         if batch.actions().is_empty() {
             return Ok(InputReceipt::Noop);
         }
+        let limits = admission.limits();
         let new_records = usize::from(batch.sequenced_count) + usize::from(batch.chat_count);
         if admission.outbound.len() + new_records > limits.outbound_commands() {
             return Err(ClientError::Capacity);
@@ -677,10 +715,10 @@ impl InputTranslator {
         // The temporary overlay simulation: a locally closed external view
         // rejects any later external-view action in this batch, and an
         // already-committed close rejects every subsequent batch until the
-        // confirmed close/reopen retires it. The confirmed mirror is never
-        // mutated here.
+        // confirmed close/reopen retires it. The validated mirror snapshot is
+        // read-only here and is never mutated.
         let mut simulated = admission.overlay.clone();
-        simulated.retire_confirmed(mirror);
+        simulated.retire_confirmed(batch.mirror());
         for action in batch.actions() {
             simulate_local_close(&action, &mut simulated)?;
         }
@@ -734,9 +772,7 @@ impl InputTranslator {
             .ok_or(ClientError::Capacity)?;
         if final_bytes > limits.outbound_bytes() {
             return Err(ClientError::Capacity);
-        }
-
-        // The critical section: all owners change together or not at all.
+        } // The critical section: all owners change together or not at all.
         admission.outbound.extend(records);
         admission.outbound_bytes = final_bytes;
         admission.journal.extend(entries);

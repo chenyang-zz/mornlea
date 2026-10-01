@@ -26,10 +26,9 @@ use mornlea_client_core::presentation::frame::{
     FamilyFrame, FamilyRecords, PresentationFrame, SessionRecord,
 };
 use mornlea_client_core::presentation::{
-    ActorDetail, ActorDimension, ActorId, ActorKind, AudioDedupDelta, AudioDedupKey,
-    AudioProjectionState, BoundedText, CueId, FinitePositive, FiniteRay, FiniteUnit, OrderedRecord,
-    Pose, ProjectionOrder, StableRecordKey, TaskView, TextKind, UiOutcome, WorldUiRecord,
-    WorldUiView,
+    ActorDetail, ActorDimension, ActorId, ActorKind, AudioDedupDelta, AudioDedupKey, BoundedText,
+    CueId, FinitePositive, FiniteRay, FiniteUnit, OrderedRecord, Pose, ProjectionOrder,
+    StableRecordKey, TaskView, TextKind, UiOutcome, WorldUiRecord, WorldUiView,
 };
 use mornlea_domain::{
     ChunkPos, CommandText, CompanionId, CompanionName, CompanionSpeaker, ContainerKind,
@@ -663,7 +662,6 @@ fn ordered_projection_and_commit() {
         .expect("staged");
     let pending_before = harness.double.pending_observations();
     assert_eq!(pending_before, 1);
-    let removals_before = harness.double.pending_removals().len();
 
     let key = AudioDedupKey::Confirmed {
         epoch,
@@ -672,14 +670,22 @@ fn ordered_projection_and_commit() {
         cue: CueId::try_new(5).expect("cue"),
     };
     let delta = AudioDedupDelta::try_new(vec![key], Vec::new()).expect("delta");
-    let mut committed = AudioProjectionState::try_new().expect("audio state");
-    let before_committed = committed.committed().len();
+    harness.double.stage_dedup_proposal(delta);
+    assert_eq!(harness.double.committed_dedup().len(), 0);
+    assert_eq!(
+        harness.double.pending_dedup_proposal().insertions().len(),
+        1
+    );
 
-    // The publication fails (candidate validation), so no consumption, no
-    // removal consumption and no dedup commit may happen.
-    let candidate = broken_mixed_frame(epoch);
-    assert!(candidate.validate(harness.double.limits()).is_err());
-    let _ = delta;
+    // Drive a real failed publication through the double: the configured
+    // frame cap is one byte under the next candidate, so `step` returns
+    // `Err(Capacity)` and every owner stays unchanged.
+    let hint = harness.double.candidate_size_hint();
+    harness.double.set_frame_cap_for_test(hint - 1);
+    let error = harness
+        .step(epoch, ClientWorkBudget::try_new(4, 0).expect("budget"))
+        .expect_err("failed publication");
+    assert_eq!(error, ClientError::Capacity);
     assert_eq!(
         harness.double.pending_observations(),
         pending_before,
@@ -687,13 +693,18 @@ fn ordered_projection_and_commit() {
     );
     assert_eq!(
         harness.double.pending_removals().len(),
-        removals_before,
-        "removal retained"
+        0,
+        "removal retained: the proposal stays inside the retained observation"
     );
     assert_eq!(
-        committed.committed().len(),
-        before_committed,
+        harness.double.committed_dedup().len(),
+        0,
         "dedup not committed"
+    );
+    assert_eq!(
+        harness.double.pending_dedup_proposal().insertions().len(),
+        1,
+        "the dedup proposal stays retry-owned"
     );
 
     // A retry publishes once and then commits the dedup proposal exactly once.
@@ -714,11 +725,15 @@ fn ordered_projection_and_commit() {
         0,
         "the removal is consumed once"
     );
-    committed = committed.with_committed(vec![key]);
     assert_eq!(
-        committed.committed().len(),
-        before_committed + 1,
-        "dedup commits once"
+        harness.double.committed_dedup(),
+        &[key],
+        "the dedup proposal commits exactly once"
+    );
+    assert_eq!(
+        harness.double.pending_dedup_proposal().insertions().len(),
+        0,
+        "the proposal is consumed with the publication"
     );
 }
 

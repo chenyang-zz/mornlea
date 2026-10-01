@@ -18,10 +18,13 @@ use mornlea_client_core::ClientIdentity;
 use mornlea_client_core::contracts::{
     ClientConfig, ClientError, ClientLimits, ClientWorkBudget, ConfirmedRevision, Connector,
     ConnectorRegistry, Endpoint, FAMILY_SESSION, FAMILY_TERRAIN, FamilyKey, InputReceipt,
-    MonotonicClock, ObservationKey, RecordHeader, SessionEpoch, SessionPhase, StepReport,
-    TransportLaunch, TransportPoll, TransportTicket,
+    MonotonicClock, ObservationKey, PreparationPort, RecordHeader, SessionEpoch, SessionPhase,
+    StepReport, TransportLaunch, TransportPoll, TransportTicket,
 };
 use mornlea_client_core::input::{InputAdmissionState, InputBatch, InputTranslator};
+use mornlea_client_core::preparation::{
+    InvalidationReport, PreparationJob, PreparationResult, PreparationTicket, RejectedPreparation,
+};
 use mornlea_client_core::presentation::frame::{
     FamilyFrame, FamilyRecords, LifecycleRecord, LifecycleTransition, PresentationFrame,
     SessionRecord, TerrainRecord,
@@ -291,6 +294,8 @@ pub struct ContractDouble {
     terminal: Option<mornlea_client_core::contracts::CloseReason>,
     frame_cap_override: Option<usize>,
     broken_sequence: u64,
+    pending_dedup: mornlea_client_core::presentation::AudioDedupDelta,
+    committed_dedup: Vec<mornlea_client_core::presentation::AudioDedupKey>,
 }
 
 impl ContractDouble {
@@ -318,6 +323,12 @@ impl ContractDouble {
             terminal: None,
             frame_cap_override: None,
             broken_sequence: 1,
+            pending_dedup: mornlea_client_core::presentation::AudioDedupDelta::try_new(
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("empty delta"),
+            committed_dedup: Vec::new(),
         }
     }
 
@@ -345,7 +356,7 @@ impl ContractDouble {
         let epoch = SessionEpoch::try_new(self.epoch_counter)?;
         self.phase = SessionPhase::Connecting;
         self.revision = 0;
-        self.admission = Some(InputAdmissionState::try_new(epoch)?);
+        self.admission = Some(InputAdmissionState::try_new(epoch, self.limits)?);
         self.mirror = Some(ConfirmedMirror::try_new(ConfirmedMirrorParts::pending(
             epoch,
         ))?);
@@ -468,13 +479,15 @@ impl ContractDouble {
             candidate.validate(&effective)?;
         }
         // The single atomic commit: staged state becomes visible exactly once
-        // and every proposal the candidate carried is consumed exactly once.
+        // and every proposal the candidate carried is consumed exactly once,
+        // including the proposed audio dedup delta.
         self.mirror = Some(staged_mirror);
         self.revision = staged_revision;
         self.pending.drain(..processed as usize);
         self.pending_removals.clear();
         self.pending_input.clear();
         self.lifecycle_open_pending = false;
+        self.commit_dedup_proposal();
         self.visible = Some(Arc::new(candidate));
         self.frame_index += 1;
         Ok(StepReport::try_new(
@@ -522,8 +535,10 @@ impl ContractDouble {
             InputTranslator::validate_batch(&batch, &mirror, &self.limits).and_then(|validated| {
                 let sequenced = u64::from(validated.sequenced_count());
                 let admission = self.admission.as_mut().expect("connected");
-                InputTranslator::commit(validated, admission, &mirror, &self.limits)
-                    .map(|receipt| (receipt, sequenced))
+                // The frozen two-argument commit: the validated batch carries
+                // its validate-time mirror snapshot and the admission owner
+                // carries its frozen limits.
+                InputTranslator::commit(validated, admission).map(|receipt| (receipt, sequenced))
             });
         match admitted {
             Ok((receipt, sequenced)) => {
@@ -554,7 +569,7 @@ impl ContractDouble {
         self.epoch_counter += 1;
         self.phase = SessionPhase::Connecting;
         self.revision = 0;
-        self.admission = Some(InputAdmissionState::try_new(next)?);
+        self.admission = Some(InputAdmissionState::try_new(next, self.limits)?);
         self.mirror = Some(ConfirmedMirror::try_new(ConfirmedMirrorParts::pending(
             next,
         ))?);
@@ -659,6 +674,39 @@ impl ContractDouble {
     /// a copy of the frozen limits whose frame byte cap is `cap`.
     pub fn set_frame_cap_for_test(&mut self, cap: usize) {
         self.frame_cap_override = Some(cap);
+    }
+
+    /// Stages one proposed audio dedup delta. A failed publication retains it
+    /// unchanged; a successful publication commits its insertions exactly
+    /// once and consumes the proposal.
+    pub fn stage_dedup_proposal(
+        &mut self,
+        delta: mornlea_client_core::presentation::AudioDedupDelta,
+    ) {
+        self.pending_dedup = delta;
+    }
+
+    /// The staged, not yet committed, dedup proposal.
+    pub fn pending_dedup_proposal(&self) -> &mornlea_client_core::presentation::AudioDedupDelta {
+        &self.pending_dedup
+    }
+
+    /// The committed epoch-scoped dedup keys.
+    pub fn committed_dedup(&self) -> &[mornlea_client_core::presentation::AudioDedupKey] {
+        &self.committed_dedup
+    }
+
+    fn commit_dedup_proposal(&mut self) {
+        let delta = std::mem::replace(
+            &mut self.pending_dedup,
+            mornlea_client_core::presentation::AudioDedupDelta::try_new(Vec::new(), Vec::new())
+                .expect("empty delta"),
+        );
+        for key in delta.cancellations() {
+            self.committed_dedup.retain(|committed| committed != key);
+        }
+        self.committed_dedup
+            .extend(delta.insertions().iter().copied());
     }
 
     /// Stages one confirmed container view at the current revision, the
@@ -982,6 +1030,172 @@ fn apply_observation(
     Ok(())
 }
 
+/// The deterministic delayed-completion preparation double.
+///
+/// A submitted job is admitted with the same charge accounting as the port
+/// double, but it completes only when the harness advances it: `advance`
+/// moves up to `count` FIFO pending jobs into the completed results queue, so
+/// a test scripts the exact completion timing with no sleeps and no
+/// scheduling dependence. `poll_ready` transfers one FIFO completed result
+/// and debits its queue ownership; `invalidate` releases stale work exactly
+/// once.
+pub struct PreparationFaucet {
+    limits: ClientLimits,
+    pending: std::collections::VecDeque<(PreparationTicket, PreparationJob, usize)>,
+    completed: std::collections::VecDeque<(PreparationResult, usize)>,
+    next_ticket: u64,
+    tickets_issued: u64,
+    charge: usize,
+    seen_registries: Vec<usize>,
+}
+
+impl PreparationFaucet {
+    pub fn new(limits: ClientLimits) -> Self {
+        Self {
+            limits,
+            pending: std::collections::VecDeque::new(),
+            completed: std::collections::VecDeque::new(),
+            next_ticket: 1,
+            tickets_issued: 0,
+            charge: 0,
+            seen_registries: Vec::new(),
+        }
+    }
+
+    pub fn pending_preparations(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn completed_preparations(&self) -> usize {
+        self.completed.len()
+    }
+
+    pub fn tickets_issued(&self) -> u64 {
+        self.tickets_issued
+    }
+
+    pub fn charge(&self) -> usize {
+        self.charge
+    }
+
+    fn job_charge(&mut self, job: &PreparationJob) -> usize {
+        match job.payload() {
+            mornlea_client_core::preparation::PreparationPayload::Near(near) => {
+                let identity = Arc::as_ptr(near.registry()) as *const () as usize;
+                let shared = if self.seen_registries.contains(&identity) {
+                    0
+                } else {
+                    self.seen_registries.push(identity);
+                    near.registry().entries().len()
+                        * std::mem::size_of::<
+                            mornlea_engine::native::contracts::mesh::MeshRegistryEntry,
+                        >()
+                        + near.registry().visibility().len() * 8
+                        + 4
+                };
+                near.owned_bytes() + shared
+            }
+            mornlea_client_core::preparation::PreparationPayload::Far(far) => {
+                far.owned_bytes()
+                    + std::mem::size_of::<mornlea_engine::native::contracts::world::WorldgenParams>(
+                    )
+            }
+        }
+    }
+
+    /// The delayed-completion operation: moves up to `count` FIFO pending
+    /// jobs into the completed results queue. Until this runs, an admitted
+    /// job has no result at all.
+    pub fn advance(&mut self, count: usize) -> usize {
+        let mut advanced = 0usize;
+        while advanced < count {
+            let Some((ticket, job, charge)) = self.pending.pop_front() else {
+                break;
+            };
+            let key = *job.key();
+            let geometry = match job.payload() {
+                mornlea_client_core::preparation::PreparationPayload::Near(_) => {
+                    mornlea_client_core::preparation::PreparedGeometry::Near(Vec::new())
+                }
+                mornlea_client_core::preparation::PreparationPayload::Far(_) => {
+                    mornlea_client_core::preparation::PreparedGeometry::Far(Vec::new())
+                }
+            };
+            let outcome =
+                mornlea_client_core::preparation::PreparedGeometry::try_new(geometry).map(Arc::new);
+            let result =
+                mornlea_client_core::preparation::PreparationResult::try_new(ticket, key, outcome)
+                    .expect("checked result");
+            self.completed.push_back((result, charge));
+            advanced += 1;
+        }
+        advanced
+    }
+}
+
+impl PreparationPort for PreparationFaucet {
+    fn try_submit(
+        &mut self,
+        job: PreparationJob,
+    ) -> Result<PreparationTicket, RejectedPreparation> {
+        let held = self.pending.len() + self.completed.len();
+        if held + 1 > self.limits.preparation_results() {
+            return Err(
+                RejectedPreparation::try_new(ClientError::Capacity, job).expect("rejection")
+            );
+        }
+        let extra = self.job_charge(&job);
+        let new_charge = self.charge.saturating_add(extra);
+        if new_charge > self.limits.preparation_bytes() {
+            return Err(
+                RejectedPreparation::try_new(ClientError::Capacity, job).expect("rejection")
+            );
+        }
+        let ticket = PreparationTicket::try_new(self.next_ticket).expect("nonzero ticket");
+        self.next_ticket += 1;
+        self.tickets_issued += 1;
+        self.charge = new_charge;
+        self.pending.push_back((ticket, job, extra));
+        Ok(ticket)
+    }
+
+    fn poll_ready(&mut self) -> Option<PreparationResult> {
+        let (result, _charge) = self.completed.pop_front()?;
+        Some(result)
+    }
+
+    fn invalidate(&mut self, epoch: SessionEpoch) -> InvalidationReport {
+        let mut jobs_cancelled = 0u32;
+        let mut results_stale = 0u32;
+        let mut bytes_released = 0u64;
+        let remaining = self.pending.len();
+        for _ in 0..remaining {
+            let (ticket, job, charge) = self.pending.pop_front().expect("queued job");
+            if job.key().epoch() == epoch {
+                jobs_cancelled += 1;
+                bytes_released += charge as u64;
+            } else {
+                self.pending.push_back((ticket, job, charge));
+            }
+        }
+        let remaining = self.completed.len();
+        for _ in 0..remaining {
+            let (result, charge) = self.completed.pop_front().expect("held result");
+            if result.key().epoch() == epoch {
+                results_stale += 1;
+                bytes_released += charge as u64;
+            } else {
+                self.completed.push_back((result, charge));
+            }
+        }
+        self.charge -= usize::try_from(bytes_released)
+            .unwrap_or(self.charge)
+            .min(self.charge);
+        InvalidationReport::try_new(jobs_cancelled, results_stale, bytes_released)
+            .expect("checked report")
+    }
+}
+
 /// Harness combining the deterministic clock, transport and consumer double
 /// with the checked configuration. Fixture-driven operations follow the
 /// contract: connect/submit/step/snapshot/reset/close, clock advance,
@@ -990,6 +1204,7 @@ pub struct ReplayHarness {
     pub clock: Arc<DeterministicClock>,
     pub connector: Arc<MemoryConnectorDouble>,
     pub double: ContractDouble,
+    pub preparations: PreparationFaucet,
     limits: ClientLimits,
 }
 
@@ -1004,6 +1219,7 @@ impl ReplayHarness {
             clock: Arc::new(DeterministicClock::new()),
             connector: Arc::clone(&connector),
             double: ContractDouble::new(mode, limits).with_connector(connector),
+            preparations: PreparationFaucet::new(limits),
             limits,
         })
     }
@@ -1056,5 +1272,40 @@ impl ReplayHarness {
     /// Direct transport polling for ticket contract checks.
     pub fn connector_poll(&self, ticket: TransportTicket) -> TransportPoll {
         self.connector.poll(ticket)
+    }
+
+    /// Admits one preparation job into the delayed-completion facility.
+    pub fn submit_preparation(
+        &mut self,
+        job: PreparationJob,
+    ) -> Result<PreparationTicket, RejectedPreparation> {
+        self.preparations.try_submit(job)
+    }
+
+    /// The delayed preparation completion operation: advances up to `count`
+    /// FIFO admitted jobs into completed results. A job completes only when
+    /// this runs, so completion timing is scripted and deterministic.
+    pub fn advance_preparations(&mut self, count: usize) -> usize {
+        self.preparations.advance(count)
+    }
+
+    /// Transfers one FIFO completed preparation result.
+    pub fn poll_preparation(&mut self) -> Option<PreparationResult> {
+        self.preparations.poll_ready()
+    }
+
+    /// Releases stale preparation work by epoch, exactly once.
+    pub fn invalidate_preparations(&mut self, epoch: SessionEpoch) -> InvalidationReport {
+        self.preparations.invalidate(epoch)
+    }
+
+    /// Read-only preparation inspection: pending jobs not yet advanced.
+    pub fn pending_preparations(&self) -> usize {
+        self.preparations.pending_preparations()
+    }
+
+    /// Read-only preparation inspection: completed results not yet polled.
+    pub fn completed_preparations(&self) -> usize {
+        self.preparations.completed_preparations()
     }
 }
