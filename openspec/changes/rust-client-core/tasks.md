@@ -16,7 +16,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 
 ## 2. Parallel input, prediction, preparation and family providers
 
-- [ ] 2.1 Implement semantic typed input, UI token and local sequence validation.
+- [x] 2.1 Implement semantic typed input, UI token and local sequence validation.
 - [ ] 2.2 Implement reversible prediction and authoritative correction replay.
 - [ ] 2.3 Implement bounded preparation scheduling and stale-result rejection.
 - [ ] 2.3b Implement bounded far-tile LOD preparation and stale completion cancellation.
