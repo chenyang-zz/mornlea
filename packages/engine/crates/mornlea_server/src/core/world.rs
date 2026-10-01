@@ -8,6 +8,21 @@ use mornlea_storage::{Chunk, ChunkSave, ContainerSnapshot, StorageKind};
 
 use super::contracts::{BlockObservation, ChunkKey, RecoveredChunk, ServerError};
 
+#[cfg(test)]
+thread_local! {
+    static TICK_FINISHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_tick_finishes() {
+    TICK_FINISHES.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn tick_finishes() -> usize {
+    TICK_FINISHES.with(std::cell::Cell::get)
+}
+
 /// A load's immutable compact base, prepared entirely away from the tick.
 /// Source revision, persisted revision and recovery flags remain distinct until
 /// the acquisition owner chooses installation, rewrite or unload.
@@ -172,6 +187,8 @@ impl ReadyChunk {
     /// Commits only revision metadata; compact data stays shared and overlays
     /// remain owned by the resident maps until an explicit save materializes them.
     pub(crate) fn finish_tick(&mut self, slots_dirty: bool) {
+        #[cfg(test)]
+        TICK_FINISHES.with(|count| count.set(count.get() + 1));
         self.revision = self.pending_revision(slots_dirty);
         self.blocks_dirty = false;
     }

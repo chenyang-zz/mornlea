@@ -149,6 +149,8 @@ fn reads_162_163() {
         Some(FARMLAND_DRY)
     );
 
+    drop(ctx);
+
     // Second tick: the rebuilt budget settles the dry worst case. A waterless
     // Ready neighborhood reads as dry and the cell stays dry — the 30%
     // dry-revert roll of the random-rules node is out of scope here; moisture

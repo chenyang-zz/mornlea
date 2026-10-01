@@ -49,11 +49,10 @@ struct QueuedCompanion {
 
 /// Resident tick state carried across production ticks.
 ///
-/// The serial reducer seeds the tick overlay from these maps at tick start
-/// and commits the worked overlay back with a full replace at tick end, the
-/// same clone-out/replace shape as the viewer commit with no merge logic.
-/// Costs stay inside the existing caps because every map populates through
-/// the same bounded staging the overlay already enforces.
+/// The serial reducer exclusively moves these maps into its tick context and
+/// returns them after finalizing accepted dirty keys. Explicit replay and save
+/// observations may clone residents off the tick; production never clones the
+/// complete resident set.
 #[derive(Clone, Default)]
 pub struct ResidentTickState {
     pub actors: Vec<ActorRecord>,
@@ -71,6 +70,8 @@ pub struct ResidentTickState {
     drops: BTreeMap<ChunkKey, DropState>,
     containers: BTreeMap<ContainerRef, ContainerRecord>,
     container_chunks: BTreeMap<ChunkKey, ContainerState>,
+    /// Accepted writes retained until a successful tick finalizes their keys.
+    dirty_chunks: BTreeSet<ChunkKey>,
 }
 
 impl ResidentTickState {
@@ -238,8 +239,8 @@ impl AuthorityState {
         self.views = overlay;
     }
 
-    /// Replaces every resident map with the tick's complete net overlay. The
-    /// serial reducer owns the only call; providers only stage the overlay.
+    /// Installs a detached replay or harness snapshot. Production resident
+    /// ownership returns through the exclusive tick context instead.
     pub fn commit_residents(&mut self, next: ResidentTickState) {
         self.residents = next;
     }
@@ -1833,6 +1834,10 @@ impl<'a> AuthorityReadView<'a> {
 /// Isolated staging context. Only the step module and the test harness construct it.
 pub struct TickContext<'a> {
     authority: &'a mut AuthorityState,
+    /// Some records an exclusive resident loan and its original sleep presence.
+    resident_loan: Option<bool>,
+    sleep_record_touched: bool,
+    dirty_chunks: BTreeSet<ChunkKey>,
     inventories: BTreeMap<ActorKey, InventoryRecord>,
     blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
     /// Successful block mutations only, keyed in source chunk/index order.
@@ -1905,6 +1910,7 @@ impl<'a> TickContext<'a> {
     pub fn preload_ready_chunk(&mut self, chunk: ReadyChunk) {
         self.blocks.retain(|(key, _), _| *key != chunk.key);
         self.changed.retain(|(key, _), _| *key != chunk.key);
+        self.dirty_chunks.remove(&chunk.key);
         self.drops.insert(
             chunk.key,
             DropState::new(
@@ -1929,25 +1935,27 @@ impl<'a> TickContext<'a> {
     /// constructor.
     pub(crate) fn for_tick(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
         let mut context = Self::from_parts(authority, budget);
-        // Tick-start seeding clones every resident map into the overlay, so
-        // providers read last tick's committed state. The pre-step snapshot
-        // covers the seeded actors by the same construction rule as fixtures.
-        context.actors = context.authority.residents.actors.clone();
-        context.player_slots = context.authority.residents.player_slots.clone();
-        context.runtimes = context.authority.residents.runtimes.clone();
-        context.inventories = context.authority.residents.inventories.clone();
-        context.mining = context.authority.residents.mining.clone();
-        context.projectiles = context.authority.residents.projectiles.clone();
-        context.environment = context.authority.residents.environment.clone();
-        if let Some(record) = &context.authority.residents.sleep_record {
-            context.sleep_record = record.clone();
+        // The exclusive authority borrow prevents observers from reading an
+        // incomplete resident set while providers own and mutate these maps.
+        let residents = std::mem::take(&mut context.authority.residents);
+        context.resident_loan = Some(residents.sleep_record.is_some());
+        context.actors = residents.actors;
+        context.player_slots = residents.player_slots;
+        context.runtimes = residents.runtimes;
+        context.inventories = residents.inventories;
+        context.mining = residents.mining;
+        context.projectiles = residents.projectiles;
+        context.environment = residents.environment;
+        context.sleeping = residents.sleeping;
+        context.blocks = residents.blocks;
+        context.ready = residents.ready;
+        context.drops = residents.drops;
+        context.containers = residents.containers;
+        context.container_chunks = residents.container_chunks;
+        context.dirty_chunks = residents.dirty_chunks;
+        if let Some(record) = residents.sleep_record {
+            context.sleep_record = record;
         }
-        context.sleeping = context.authority.residents.sleeping.clone();
-        context.blocks = context.authority.residents.blocks.clone();
-        context.ready = context.authority.residents.ready.clone();
-        context.drops = context.authority.residents.drops.clone();
-        context.containers = context.authority.residents.containers.clone();
-        context.container_chunks = context.authority.residents.container_chunks.clone();
         for actor in &context.actors {
             context.pre_step.insert(actor.key, actor.motion);
         }
@@ -2026,6 +2034,9 @@ impl<'a> TickContext<'a> {
         let viewers = authority.views.clone();
         Self {
             authority,
+            resident_loan: None,
+            sleep_record_touched: false,
+            dirty_chunks: BTreeSet::new(),
             inventories: BTreeMap::new(),
             blocks: BTreeMap::new(),
             changed: BTreeMap::new(),
@@ -2182,9 +2193,8 @@ impl<'a> TickContext<'a> {
         self.viewers.clone()
     }
 
-    /// Clones the complete net overlay for the reducer's full-replacement
-    /// resident commit. Login staging lands before this read, so seeded
-    /// actors commit exactly like carried ones.
+    /// Clones and finalizes a detached replay or harness observation.
+    /// Production uses `commit_carried` to return ownership without a census.
     pub fn resident_snapshot(&self) -> ResidentTickState {
         let mut ready = self.ready.clone();
         let mut drops = self.drops.clone();
@@ -2218,7 +2228,73 @@ impl<'a> TickContext<'a> {
             drops,
             containers: self.containers.clone(),
             container_chunks,
+            dirty_chunks: BTreeSet::new(),
         }
+    }
+
+    /// Finalizes only accepted dirty keys before returning the exclusive loan.
+    /// Explicit commit preserves the reducer's successful Some sleep record.
+    pub(crate) fn commit_carried(&mut self) {
+        if self.resident_loan.is_none() {
+            return;
+        }
+        for key in &self.dirty_chunks {
+            let Some(chunk) = self.ready.get_mut(key) else {
+                continue;
+            };
+            chunk.finish_tick(
+                self.drops.get(key).is_some_and(|state| state.dirty)
+                    || self
+                        .container_chunks
+                        .get(key)
+                        .is_some_and(|state| state.dirty),
+            );
+            if let Some(state) = self.drops.get_mut(key) {
+                state.dirty = false;
+            }
+            if let Some(state) = self.container_chunks.get_mut(key) {
+                state.finish_tick(chunk.revision);
+            }
+        }
+        self.dirty_chunks.clear();
+        self.return_carried(true);
+    }
+
+    /// Ownership recovery performs no finalization or provider work. Accepted
+    /// writes and dirty identity survive abandonment for a later successful tick.
+    fn return_carried(&mut self, committed: bool) {
+        let Some(original_sleep) = self.resident_loan.take() else {
+            return;
+        };
+        let sleep_record = if committed || original_sleep || self.sleep_record_touched {
+            Some(std::mem::replace(
+                &mut self.sleep_record,
+                SleepState {
+                    beds: Vec::new(),
+                    day_phase_offset: 0,
+                    pending_offset: None,
+                },
+            ))
+        } else {
+            None
+        };
+        self.authority.residents = ResidentTickState {
+            actors: std::mem::take(&mut self.actors),
+            player_slots: std::mem::take(&mut self.player_slots),
+            runtimes: std::mem::take(&mut self.runtimes),
+            inventories: std::mem::take(&mut self.inventories),
+            mining: std::mem::take(&mut self.mining),
+            projectiles: std::mem::take(&mut self.projectiles),
+            environment: std::mem::take(&mut self.environment),
+            sleeping: std::mem::take(&mut self.sleeping),
+            blocks: std::mem::take(&mut self.blocks),
+            ready: std::mem::take(&mut self.ready),
+            drops: std::mem::take(&mut self.drops),
+            containers: std::mem::take(&mut self.containers),
+            container_chunks: std::mem::take(&mut self.container_chunks),
+            dirty_chunks: std::mem::take(&mut self.dirty_chunks),
+            sleep_record,
+        };
     }
 
     /// Input acknowledgment precedes semantic validation and survives idle ticks.
@@ -2292,6 +2368,7 @@ impl<'a> TickContext<'a> {
     /// Persists the threaded sleep record: the entered copy after each bed
     /// entry, the settled copy after the settlement batch.
     pub fn set_sleep_record(&mut self, record: SleepState) {
+        self.sleep_record_touched = true;
         self.sleep_record = record;
     }
 
@@ -2424,6 +2501,16 @@ impl<'a> TickContext<'a> {
         )?;
         self.apply_effect(effect)?;
         // Publish only the affected fixed slot copies after every other arm succeeds.
+        self.dirty_chunks.extend(
+            pending_drops
+                .iter()
+                .filter_map(|(key, state)| state.dirty.then_some(*key)),
+        );
+        self.dirty_chunks.extend(
+            pending_containers
+                .iter()
+                .filter_map(|(key, state)| state.dirty.then_some(*key)),
+        );
         self.drops.extend(pending_drops);
         self.container_chunks.extend(pending_containers);
         Ok(())
@@ -2874,6 +2961,8 @@ impl<'a> TickContext<'a> {
                 let damage_len = self.damage_intents.len();
                 let environment = self.environment.clone();
                 let sleep_record = self.sleep_record.clone();
+                let sleep_record_touched = self.sleep_record_touched;
+                let dirty_chunks = self.dirty_chunks.clone();
                 // Defensive enforcement of the seam rule that a rejected
                 // atomic effect leaves all components unchanged: actor
                 // records became effect-mutable with the `Actor` staging arm,
@@ -2899,6 +2988,8 @@ impl<'a> TickContext<'a> {
                         self.damage_intents.truncate(damage_len);
                         self.environment = environment;
                         self.sleep_record = sleep_record;
+                        self.sleep_record_touched = sleep_record_touched;
+                        self.dirty_chunks = dirty_chunks;
                         self.actors = actors;
                         self.player_slots = player_slots;
                         self.runtimes = runtimes;
@@ -3020,6 +3111,7 @@ impl<'a> TickContext<'a> {
                 // Latest-wins overlay replace, mirroring the environment
                 // arm: the settlement stages the threaded record and the
                 // reducer persists the settled copy after the batch.
+                self.sleep_record_touched = true;
                 self.sleep_record = record;
                 Ok(())
             }
@@ -3036,6 +3128,7 @@ impl<'a> TickContext<'a> {
             observed.block = write.replacement;
             observed.revision = observed.revision.saturating_add(1);
             self.blocks.insert((observed.key, observed.pos), observed);
+            self.dirty_chunks.insert(observed.key);
             self.changed.insert(
                 (
                     observed.key,
@@ -3072,6 +3165,12 @@ impl<'a> TickContext<'a> {
             chunk.mark_blocks_dirty();
             chunk.set_height(pos.x(), pos.z(), next);
         }
+    }
+}
+
+impl Drop for TickContext<'_> {
+    fn drop(&mut self) {
+        self.return_carried(false);
     }
 }
 
@@ -3313,7 +3412,369 @@ mod metadata_capture_tests {
 }
 
 #[cfg(test)]
+mod owned_resident_tests {
+    use super::super::world::{reset_tick_finishes, tick_finishes};
+    use super::*;
+    use mornlea_domain::{BlockPos, ChunkPos};
+    use mornlea_storage::{ContainerSnapshot, StorageKind};
+
+    fn key(x: i32) -> ChunkKey {
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(x, 0),
+        }
+    }
+
+    fn authority(chunks: i32, actor: bool) -> AuthorityState {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            0,
+        )
+        .unwrap();
+        let mut context = TickContext::harness(&mut authority, TickBudget::full());
+        for x in 0..chunks {
+            let chunk = Chunk {
+                sections: vec![
+                    ContainerSnapshot {
+                        kind: StorageKind::Single,
+                        bits: 0,
+                        single: 0,
+                        palette: Vec::new(),
+                        packed: Vec::new()
+                    };
+                    24
+                ],
+                drops: vec![Default::default(); 32],
+                furnaces: vec![Default::default(); 32],
+                chests: vec![Default::default(); 16],
+            };
+            context.preload_ready_chunk(ReadyChunk::try_new(key(x), 7, 5, chunk).unwrap());
+        }
+        if actor {
+            let player =
+                PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1])
+                    .unwrap();
+            let mut seeded = seed_player(
+                SessionKey::from_raw(1).unwrap(),
+                &canonical_player(player, "Ada").unwrap(),
+            )
+            .unwrap();
+            seeded.actor.lifecycle = ActorLifecycle::Pending;
+            context.stage_login(seeded);
+        }
+        let residents = context.resident_snapshot();
+        drop(context);
+        authority.commit_residents(residents);
+        authority.residents.sleep_record = None;
+        authority
+    }
+
+    fn addresses(residents: &ResidentTickState) -> [usize; 5] {
+        [
+            residents.actors.as_ptr() as usize,
+            std::ptr::from_ref(residents.inventories.values().next().unwrap()) as usize,
+            std::ptr::from_ref(residents.ready.values().next().unwrap()) as usize,
+            std::ptr::from_ref(residents.drops.values().next().unwrap()) as usize,
+            std::ptr::from_ref(residents.container_chunks.values().next().unwrap()) as usize,
+        ]
+    }
+
+    #[test]
+    fn for_tick_carries_existing_resident_allocations() {
+        let mut authority = authority(1, true);
+        let pointers = addresses(&authority.residents);
+        let actors = authority.residents.actors.clone();
+        let inventories = authority.residents.inventories.clone();
+        let context = TickContext::for_tick(&mut authority, TickBudget::full());
+        assert_eq!(context.actors.as_ptr() as usize, pointers[0]);
+        assert_eq!(
+            std::ptr::from_ref(context.inventories.values().next().unwrap()) as usize,
+            pointers[1]
+        );
+        assert_eq!(
+            std::ptr::from_ref(context.ready.values().next().unwrap()) as usize,
+            pointers[2]
+        );
+        assert_eq!(
+            std::ptr::from_ref(context.drops.values().next().unwrap()) as usize,
+            pointers[3]
+        );
+        assert_eq!(
+            std::ptr::from_ref(context.container_chunks.values().next().unwrap()) as usize,
+            pointers[4]
+        );
+        assert_eq!(context.actors, actors);
+        assert_eq!(context.inventories, inventories);
+    }
+
+    #[test]
+    fn live_idle_tick_preserves_resident_allocations_and_values() {
+        let mut authority = authority(1, true);
+        let pointers = addresses(&authority.residents);
+        let actors = authority.residents.actors.clone();
+        let inventories = authority.residents.inventories.clone();
+        let chunks = authority.residents.ready_snapshot();
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(addresses(&authority.residents), pointers);
+        assert_eq!(authority.residents.actors, actors);
+        assert_eq!(authority.residents.inventories, inventories);
+        assert_eq!(authority.residents.ready_snapshot(), chunks);
+    }
+
+    fn write(context: &mut TickContext<'_>, x: i32, block: u16) {
+        let observed = context
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(x, 64, 1))
+            .unwrap();
+        context
+            .transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, block).unwrap()],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn abandoned_read_only_loan_restores_allocations_values_and_absent_sleep() {
+        let mut authority = authority(1, true);
+        let pointers = addresses(&authority.residents);
+        let actors = authority.residents.actors.clone();
+        let inventories = authority.residents.inventories.clone();
+        let chunks = authority.residents.ready_snapshot();
+        reset_tick_finishes();
+        drop(TickContext::for_tick(&mut authority, TickBudget::full()));
+        assert_eq!(addresses(&authority.residents), pointers);
+        assert_eq!(authority.residents.actors, actors);
+        assert_eq!(authority.residents.inventories, inventories);
+        assert_eq!(authority.residents.ready_snapshot(), chunks);
+        assert!(authority.residents.sleep_record.is_none());
+        assert_eq!(tick_finishes(), 0);
+    }
+
+    #[test]
+    fn detached_harness_drop_preserves_authority_residents() {
+        let mut authority = authority(1, true);
+        let pointers = addresses(&authority.residents);
+        let context = TickContext::harness(&mut authority, TickBudget::full());
+        drop(context);
+        assert_eq!(addresses(&authority.residents), pointers);
+        assert!(authority.residents.sleep_record.is_none());
+    }
+
+    #[test]
+    fn unwind_recovers_accepted_write_for_next_live_commit() {
+        let mut authority = authority(1, true);
+        let pointers = addresses(&authority.residents);
+        reset_tick_finishes();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
+            write(&mut context, 1, 4);
+            panic!("abandon the exclusive resident loan");
+        }));
+        assert!(result.is_err());
+        assert_eq!(addresses(&authority.residents), pointers);
+        assert_eq!(authority.residents.ready[&key(0)].revision, 5);
+        assert_eq!(
+            authority.residents.blocks[&(key(0), BlockPos::new(1, 64, 1))].block,
+            4
+        );
+        assert_eq!(tick_finishes(), 0);
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(tick_finishes(), 1);
+        assert_eq!(authority.residents.ready[&key(0)].revision, 6);
+        reset_tick_finishes();
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(tick_finishes(), 0);
+    }
+
+    #[test]
+    fn abandoned_sleep_writes_restore_some_record() {
+        for staged in [false, true] {
+            let mut authority = authority(1, false);
+            let record = SleepState::try_new(Vec::new(), 23, None).unwrap();
+            let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
+            if staged {
+                context.stage(RuleEffect::Sleep(record.clone())).unwrap();
+            } else {
+                context.set_sleep_record(record.clone());
+            }
+            drop(context);
+            assert_eq!(authority.residents.sleep_record, Some(record));
+        }
+    }
+
+    #[test]
+    fn one_changed_chunk_finishes_once_among_many_ready_chunks() {
+        let mut authority = authority(128, false);
+        reset_tick_finishes();
+        let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut context, 1, 4);
+        write(&mut context, 2, 4);
+        assert_eq!(context.dirty_chunks, BTreeSet::from([key(0)]));
+        context.commit_carried();
+        drop(context);
+        assert_eq!(tick_finishes(), 1);
+        assert_eq!(authority.residents.ready[&key(0)].revision, 6);
+        assert!(
+            authority
+                .residents
+                .ready
+                .iter()
+                .filter(|(key, _)| **key != self::key(0))
+                .all(|(_, chunk)| chunk.revision == 5)
+        );
+        assert!(authority.residents.dirty_chunks.is_empty());
+        reset_tick_finishes();
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(tick_finishes(), 0);
+    }
+
+    #[test]
+    fn explicit_commit_repeated_commit_and_drop_preserve_returned_state() {
+        let mut authority = authority(1, true);
+        let pointers = addresses(&authority.residents);
+        let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut context, 1, 4);
+        reset_tick_finishes();
+        context.commit_carried();
+        assert_eq!(tick_finishes(), 1);
+        assert_eq!(addresses(&context.authority.residents), pointers);
+        assert!(context.authority.residents.sleep_record.is_some());
+        context.authority.residents.actors[0].lifecycle = ActorLifecycle::Dead;
+        context.commit_carried();
+        drop(context);
+        assert_eq!(tick_finishes(), 1);
+        assert_eq!(
+            authority.residents.actors[0].lifecycle,
+            ActorLifecycle::Dead
+        );
+        assert_eq!(authority.residents.ready[&key(0)].revision, 6);
+    }
+
+    #[test]
+    fn abandoned_read_only_loan_preserves_existing_sleep_allocation() {
+        let mut authority = authority(1, false);
+        let record = SleepState::try_new(
+            vec![(
+                SessionKey::from_raw(1).unwrap(),
+                Dimension::OVERWORLD,
+                BlockPos::new(1, 64, 1),
+            )],
+            23,
+            None,
+        )
+        .unwrap();
+        authority.residents.sleep_record = Some(record.clone());
+        let pointer = authority
+            .residents
+            .sleep_record
+            .as_ref()
+            .unwrap()
+            .beds
+            .as_ptr() as usize;
+        let context = TickContext::for_tick(&mut authority, TickBudget::full());
+        assert_eq!(context.sleep_record.beds.as_ptr() as usize, pointer);
+        drop(context);
+        assert_eq!(authority.residents.sleep_record, Some(record));
+        assert_eq!(
+            authority
+                .residents
+                .sleep_record
+                .as_ref()
+                .unwrap()
+                .beds
+                .as_ptr() as usize,
+            pointer
+        );
+    }
+
+    #[test]
+    fn no_op_block_write_finishes_no_chunks() {
+        let mut authority = authority(1, false);
+        reset_tick_finishes();
+        let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut context, 1, 0);
+        assert!(context.dirty_chunks.is_empty());
+        context.commit_carried();
+        drop(context);
+        assert_eq!(tick_finishes(), 0);
+        assert_eq!(authority.residents.ready[&key(0)].revision, 5);
+    }
+
+    #[test]
+    fn ready_fixture_replacement_clears_pending_dirty_key() {
+        let mut authority = authority(1, false);
+        let chunk = authority.residents.ready_snapshot()[0].3.clone();
+        reset_tick_finishes();
+        let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut context, 1, 4);
+        assert_eq!(context.dirty_chunks, BTreeSet::from([key(0)]));
+        context.preload_ready_chunk(ReadyChunk::try_new(key(0), 8, 17, chunk).unwrap());
+        assert!(context.dirty_chunks.is_empty());
+        context.commit_carried();
+        drop(context);
+        assert_eq!(tick_finishes(), 0);
+        assert_eq!(authority.residents.ready[&key(0)].revision, 17);
+    }
+
+    #[test]
+    fn counter_only_drop_patch_preserves_revision_without_finish() {
+        let mut authority = authority(1, false);
+        let mut chunk = authority.residents.ready_snapshot()[0].3.clone();
+        chunk.drops[0] = mornlea_storage::DropSlot {
+            generation: 1,
+            active: true,
+            stack: mornlea_storage::ItemStack {
+                item: 2,
+                count: 3,
+                durability: 0,
+            },
+            block_index: mornlea_domain::chunk_block_index(BlockPos::new(1, 64, 1)),
+            age_ticks: 10,
+            pickup_delay_ticks: 5,
+        };
+        let mut context = TickContext::for_tick(&mut authority, TickBudget::full());
+        context.preload_ready_chunk(ReadyChunk::try_new(key(0), 7, 5, chunk).unwrap());
+        let before = context.drops[&key(0)].records()[0].clone();
+        let mut after = before.clone();
+        after.age += 1;
+        after.pickup_delay -= 1;
+        context
+            .stage(RuleEffect::DropPatch {
+                before,
+                after: Some(after.clone()),
+            })
+            .unwrap();
+        assert!(context.dirty_chunks.is_empty());
+        assert!(!context.drops[&key(0)].dirty);
+        reset_tick_finishes();
+        context.commit_carried();
+        drop(context);
+        assert_eq!(tick_finishes(), 0);
+        assert_eq!(authority.residents.ready[&key(0)].revision, 5);
+        assert_eq!(authority.residents.drops[&key(0)].records(), &[after]);
+    }
+
+    #[test]
+    fn live_idle_tick_finishes_no_ready_chunks() {
+        let mut authority = authority(128, false);
+        reset_tick_finishes();
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(tick_finishes(), 0);
+        assert!(
+            authority
+                .residents
+                .ready
+                .values()
+                .all(|chunk| chunk.revision == 5)
+        );
+    }
+}
+
+#[cfg(test)]
 mod ready_commit_tests {
+    use super::super::world::{reset_tick_finishes, tick_finishes};
     use super::*;
     use mornlea_domain::{BlockPos, ChunkPos, FiniteVec3};
     use mornlea_storage::{ContainerSnapshot, ItemStack, StorageKind};
@@ -3366,9 +3827,8 @@ mod ready_commit_tests {
         )
     }
 
-    fn commit(ctx: TickContext<'_>) {
-        let residents = ctx.resident_snapshot();
-        ctx.authority.commit_residents(residents);
+    fn commit(mut ctx: TickContext<'_>) {
+        ctx.commit_carried();
     }
 
     #[test]
@@ -3471,6 +3931,7 @@ mod ready_commit_tests {
             Err(RuleReject::StaleObservation)
         );
         assert_eq!(ctx.read().container(reference), Some(before));
+        assert!(ctx.dirty_chunks.is_empty());
         assert_eq!(ctx.resident_snapshot().ready_snapshot(), snapshot);
         assert_eq!(ctx.read().ready_chunk_revision(key()), Some(u64::MAX));
     }
@@ -3506,6 +3967,7 @@ mod ready_commit_tests {
         );
         assert_eq!(ctx.read().ready_chunk_revision(key()), Some(u64::MAX));
         assert_eq!(ctx.resident_snapshot().ready_snapshot(), before);
+        assert!(ctx.dirty_chunks.is_empty());
     }
 
     #[test]
@@ -3515,6 +3977,7 @@ mod ready_commit_tests {
         let pos = BlockPos::new(1, 64, 1);
         let observed = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
         let compound = RuleEffect::Compound(vec![
+            RuleEffect::Sleep(SleepState::try_new(Vec::new(), 23, None).unwrap()),
             RuleEffect::Blocks(BlockTxn::system(
                 SystemRule::Support,
                 ctx.read().tick(),
@@ -3532,6 +3995,12 @@ mod ready_commit_tests {
         assert_eq!(ctx.read().block(Dimension::OVERWORLD, pos), Some(0));
         assert_eq!(ctx.read().ready_chunk_revision(key()), Some(5));
         assert!(ctx.changed_blocks().is_empty());
+        assert!(ctx.dirty_chunks.is_empty());
+        assert!(!ctx.sleep_record_touched);
+        assert_eq!(ctx.sleep_record.day_phase_offset, 0);
+        reset_tick_finishes();
+        commit(ctx);
+        assert_eq!(tick_finishes(), 0);
     }
 
     #[test]
@@ -3572,8 +4041,12 @@ mod ready_commit_tests {
         ctx.transaction()
             .try_system_with_drops(SystemRule::Support, Vec::new(), drops)
             .unwrap();
+        assert_eq!(ctx.dirty_chunks, BTreeSet::from([key()]));
+        reset_tick_finishes();
         commit(ctx);
+        assert_eq!(tick_finishes(), 1);
         let residents = authority.residents();
+        assert!(residents.dirty_chunks.is_empty());
         let saved = &residents.ready_snapshot()[0];
         assert_eq!(saved.2, 6);
         assert_eq!(saved.3.chests[0].items[0].count, 3);
@@ -3877,9 +4350,8 @@ mod player_publication_tests {
         context
             .stage_login(seed_player(session, &canonical_player(player, "Ada").unwrap()).unwrap());
         context.stage(RuleEffect::Environment(fixture().1)).unwrap();
-        let residents = context.resident_snapshot();
+        context.commit_carried();
         drop(context);
-        authority.commit_residents(residents);
         session
     }
 

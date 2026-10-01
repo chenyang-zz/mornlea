@@ -647,6 +647,7 @@ fn long_ray_observes_early_wall_and_unknown() {
     provider::advance(&mut wall, &scopes).expect("early wall");
     assert!(wall.snapshot_state(world()).projectiles.is_empty());
 
+    drop(wall);
     let mut unknown = TickContext::harness(&mut authority, TickBudget::full());
     unknown
         .stage(RuleEffect::Projectile {
@@ -743,6 +744,7 @@ fn wall_hit_and_unknown_ray() {
     .expect("wall step");
     assert!(ctx.snapshot_state(world()).projectiles.is_empty());
 
+    drop(ctx);
     let mut second = TickContext::harness(&mut authority, TickBudget::full());
     second
         .stage(RuleEffect::Projectile {
@@ -1352,6 +1354,7 @@ fn block_tie_wins_and_stale_target_is_ignored() {
     assert!(ctx.snapshot_state(world()).projectiles.is_empty());
     assert!(ctx.read().damage_intents().is_empty());
 
+    drop(ctx);
     let mut next = TickContext::harness(&mut authority, TickBudget::full());
     next.stage(RuleEffect::Actor(hostile(
         21,

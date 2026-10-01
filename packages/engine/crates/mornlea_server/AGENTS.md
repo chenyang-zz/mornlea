@@ -88,6 +88,17 @@ consume its cancellation and error contracts before joining the real backend.
   miss. Inventory/container transfers use one compound to conserve items when
   a durable write refuses.
 
+- Production `TickContext::for_tick` exclusively moves resident maps out of
+  authority for the serial reducer. `commit_carried` finalizes only keys with
+  accepted block/drop/container changes and moves residents back; one key shares
+  one durable revision. An abandoned loan restores current ownership and dirty
+  identity without finalization or publication, including the original absent
+  sleep record unless touched. This is recovery, not global tick rollback.
+  Detached harnesses and explicit `resident_snapshot` observations keep their
+  clone/finalize behavior. Defensive compound snapshots remain until a separate
+  bounded journal replaces them; this change does not bound all tick work.
+  `owned_resident_tests` and `ready_commit_tests` enforce these invariants.
+
 - `ServerLimits`, `TickBudget`, and `StoreLimits` reject an over-ceiling
   constructor before they reserve command storage. `AuthorityState` keeps
   world, sessions, queues, tick, and publication private to `src/core/state.rs`.

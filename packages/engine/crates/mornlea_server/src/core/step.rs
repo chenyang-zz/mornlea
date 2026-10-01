@@ -175,7 +175,6 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
         &mut farmland_schedule,
     );
     let overlay = context.viewer_leases();
-    let residents = context.resident_snapshot();
     // Private observations are projected after every settlement. Provider
     // observations remain useful to fixtures but cannot publish an early pose.
     let (hits, mut events): (Vec<_>, Vec<_>) = context
@@ -198,6 +197,7 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
         carried: drained.carried,
         stale: drained.stale,
     };
+    context.commit_carried();
     drop(context);
     *state.fluid_schedule_mut() = fluid_schedule;
     *state.farmland_schedule_mut() = farmland_schedule;
@@ -206,7 +206,6 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
         |key, _| matches!(state.session(*key), Some(facts) if facts.phase == SessionPhase::Active),
     );
     state.commit_viewers(overlay);
-    state.commit_residents(residents);
     events.extend(state.project_player_updates(tick));
     events.extend(hits);
     let publication = TickPublication {
