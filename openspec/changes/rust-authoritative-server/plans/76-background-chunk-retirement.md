@@ -6,7 +6,7 @@
 
 **Architecture:** BackgroundChunkRetirement implements accepted ChunkRetirementPort with one worker-side FIFO channel carrying entire noncopyable owners. The caller retains only eight scalar identity/completion records, so caller Drop cannot destroy queued bodies. This actual-provider node is separate from live unload eligibility and disk unload/reload integration.
 
-**Tech stack:** Pinned Rust1.97.1, std mpsc/thread/VecDeque/Instant. **Spec:** ../design.md and ../specs/rust-authoritative-server/spec.md; exact contract in74. Dispatch requires accepted74 source SHA, which root records first, and uses that acceptance documentation baseline for serial core/mod.rs/guide ownership. No planned-only port consumption.
+**Tech stack:** Pinned Rust1.97.1, std mpsc/thread/VecDeque/Instant. **Spec:** ../design.md and ../specs/rust-authoritative-server/spec.md; exact contract in74. Accepted74 source is2dfc6c1dfbc12c5f63bf20a11991134ba18b3de8 (original8fe6a97687617eb76b1489bc1b9a5519bba16709), qualified by clean independent984-case review and root1174 actual release cases/two doctests. Dispatch uses that root acceptance documentation baseline for serial core/mod.rs/guide ownership. No planned-only port consumption.
 
 ## Exact ownership and scope
 
@@ -36,4 +36,4 @@ close sets closing first and remains idempotent after success. A recorded failed
 
 Independent read-only readiness criticism found no source-backed blocker; evidence /workspace/scratch/background-chunk-retirement-readiness.log. No compiler/test/provider acceptance is inferred.
 
-Readiness: exact accepted-port consumer signatures, caller/worker ownership,8charge/FIFO/error/drop/close algorithms and real versus injected evidence fixed. Provider dispatch remains blocked solely by accepted74 contract. Root self-review and read-only source criticism settle any conflict before implementation; workers do not choose lifecycle policy.
+Readiness: exact accepted-port consumer signatures, caller/worker ownership,8charge/FIFO/error/drop/close algorithms and real versus injected evidence fixed. The accepted74 prerequisite above is now available; dispatch uses its root acceptance documentation baseline. Root self-review and read-only source criticism settle any conflict before implementation; workers do not choose lifecycle policy.
