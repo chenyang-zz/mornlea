@@ -1,7 +1,6 @@
 //! Fixed preparation for one source player death; scan ownership remains external.
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[allow(dead_code)] // Temporary until the qualified serial restart consumer lands.
 pub(crate) struct SourceDeathReset {
     pub(crate) dimension: mornlea_domain::Dimension,
     pub(crate) candidate: Option<super::actor_placement::RestoreCandidate>,

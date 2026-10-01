@@ -10,10 +10,10 @@
 //! dispatch in sequence and budget pressure carries across ticks.
 //!
 //! The four named row tests assert the exact provider subsequence each row
-//! depends on. Their full-fixture behavioral layer (real kills settling
-//! between projectile and passive phases, real hunger settling before motion)
-//! needs actor and world seeding the frozen reducer surface does not supply;
-//! that layer is recorded for the integration owner, not invented here.
+//! depends on. Actual source-player death recipes in persistence failure
+//! execute five damage producers and the consumer between projectile and
+//! passive advancement. These source guards separately qualify call order;
+//! other provider integration coverage retains its existing owners.
 //!
 //! The closing case is different: a placement and a tilling stage real dirt
 //! through providers the test drives directly on a seeded context, and the
@@ -208,6 +208,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "hostile_actors::run",
     "projectiles::advance",
     "hostile_outcomes::run",
+    "source_player_restore::settle_deaths",
     "passives::run",
     "companions::run",
     "route_interaction",
@@ -702,4 +703,29 @@ fn recovery_precedes_oxygen_and_swapped_order_fails() {
         "RulePhase::PlayerPrePhysicsOxygen",
     );
     assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &probe)).is_err());
+}
+
+#[test]
+fn death_consumer_rejects_early_or_repeated_dispatch() {
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let marker = "source_player_restore::settle_deaths";
+    assert_eq!(marker_count(body, marker), 1);
+    let chain = [
+        "projectiles::advance",
+        "hostile_outcomes::run",
+        marker,
+        "passives::run",
+    ];
+    chain_positions(body, &chain);
+    for swap in ["projectiles::advance", "passives::run"] {
+        let swapped = if swap == "projectiles::advance" {
+            swap_markers(body, swap, marker)
+        } else {
+            swap_markers(body, marker, swap)
+        };
+        assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
+    }
+    let repeated = format!("{body}\n{marker}");
+    assert!(std::panic::catch_unwind(|| assert_eq!(marker_count(&repeated, marker), 1)).is_err());
 }

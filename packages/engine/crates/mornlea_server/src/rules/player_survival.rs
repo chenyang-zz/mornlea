@@ -1,4 +1,4 @@
-//! Player survival authority: regen, starvation, oxygen, fall and respawn.
+//! Player survival authority: regen, starvation, oxygen, fall and legacy respawn.
 //!
 //! This provider owns three per-actor calls: `PlayerRegenStarvation` (pre-motion
 //! regen and starvation), `PlayerPrePhysicsOxygen` (pre-physics eye-submersion
@@ -28,9 +28,9 @@
 //!   `applyFallDamage`, `applyDamage`, `beginReset`): the sprint gates, the
 //!   fall curve through the shared damage entry, the damage side effects, and
 //!   the transient half of the reset this provider replays.
-//! - `packages/server/sim/entity/death.go` (`settleDeath`): death settled
-//!   after advancement, exactly once, restoring full health and fixed hunger
-//!   while keeping the unverified bed record.
+//! - `packages/server/sim/entity/death.go` (`settleDeath`): legacy death restores
+//!   full health and fixed hunger while keeping the unverified bed record.
+//!   Actual source death belongs to the serial consumer after all damage.
 //! - `packages/server/sim/entity/placement.go` (`validPlayerInput`,
 //!   `validPlayerLook`): the held-input validity this provider reuses to pick
 //!   the suppressed control.
@@ -54,9 +54,9 @@
 //! motion snapshot the context takes at construction (held controls plus
 //! pre-step ground, fluid and displacement — no physics re-derivation);
 //! waking sleepers is consumed by the sleep node via the damage events below,
-//! and this provider never writes sleep state; spatial restore to the spawn
-//! anchor or bed needs the pending restore scan, so death keeps the position
-//! and the unverified bed record; the mining lane has no read port, so the
+//! and this provider never writes sleep state. Legacy death keeps the position
+//! and unverified bed; the source consumer owns spatial reset and next-tick
+//! captured-scan advancement. The mining lane has no read port, so the
 //! emitted pose carries idle mining for the serial reducer to merge.
 
 use mornlea_domain::{
@@ -189,14 +189,25 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
     let ActorKey::Player(session) = actor else {
         return Err(ServerError::InvalidInput { field: "actor" });
     };
-    let record = ctx
-        .read()
-        .actor(actor)
-        .cloned()
-        .ok_or(ServerError::InvalidInput { field: "actor" })?;
-    if record.lifecycle != ActorLifecycle::Active {
-        return Err(ServerError::InvalidInput { field: "actor" });
-    }
+    let record = {
+        let view = ctx.read();
+        let record = view
+            .actor(actor)
+            .ok_or(ServerError::InvalidInput { field: "actor" })?;
+        if record.lifecycle != ActorLifecycle::Active {
+            return Err(ServerError::InvalidInput { field: "actor" });
+        }
+        // Source deaths retain the borrowed pair until the sole late consumer runs.
+        if record.survival.health() == 0 && ctx.source_player_death_deferred(session) {
+            return Ok(PhaseReport {
+                examined: 1,
+                applied: 0,
+                carried: 0,
+                rejected: 0,
+            });
+        }
+        record.clone()
+    };
     let environment = ctx
         .read()
         .environment()
@@ -215,10 +226,8 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
         }
     };
     let runtime = merged_runtime(&ctx.read(), &record)?;
-    // Death settles before phase work, mirroring `settleDeaths` running after
-    // advancement and before publication: the zero-health record never reaches
-    // another settlement, and the lifecycle flip keeps a second call from
-    // settling again.
+    // Legacy death settles before phase work and its lifecycle flip prevents
+    // repetition. Actual source death waits for the serial late consumer.
     if record.survival.health() == 0 {
         return settle_death(ctx, &record, &runtime);
     }

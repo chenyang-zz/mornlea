@@ -453,6 +453,8 @@ fn dispatch_rows(
     let scopes = projectile_scopes(context);
     let flight = projectiles::advance(context, &scopes)?;
     hostile_outcomes::run(context, batch_call(RulePhase::HostilePlayerDeaths))?;
+    // The sole source book consumer settles after all damage and defers scan advancement.
+    source_player_restore::settle_deaths(source_players, context)?;
     let mut victims: Vec<SessionKey> = combat
         .damaged_players
         .iter()

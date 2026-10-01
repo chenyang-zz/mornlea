@@ -65,9 +65,11 @@ consume its cancellation and error contracts before joining the real backend.
   tests qualify this common context boundary. Active source recovery consumes
   it before oxygen/native motion and restarts the same captured scan in the
   current dimension. Positional lifts change only position and rebase the existing
-  pre-step owner. Prepared death fills survival and hunger before this same mapping,
-  while actual death routing, late successful-action settlement, subscriptions,
-  save eligibility and executable runtime acceptance remain separately owned.
+  pre-step owner. Actual source death fills survival and hunger through this
+  same mapping after all five damage producers; the serial book consumer restarts
+  the retained scan for the next tick. Late successful-action settlement,
+  subscriptions, save eligibility and executable runtime acceptance remain
+  separately owned.
 
 - `src/core/source_player_death.rs` prepares bounded fixed inventory and live-bed
   values for one indexed zero-health Active source player. The context guards the
@@ -77,9 +79,13 @@ consume its cancellation and error contracts before joining the real backend.
   Inventory/drop staging precedes survival refill, own receipt removal and common
   Pending mapping. Durable body/path allocations and independent bed/view owners
   remain retained. The Copy payload leaves completed scan restart with its caller.
-  Eight private prepared cases qualify this boundary and abandonment semantics;
-  actual phase routing, damage producers, scan restart and executable acceptance
-  remain separately owned.
+  Eight private prepared cases qualify this boundary and abandonment semantics.
+  The serial source book consumer excludes early and late legacy death, settles
+  after starvation, drowning, native fall, melee and projectile damage, then
+  restarts each same captured scan for next-tick advancement. Three private
+  consumer cases and seven actual disk/login/native death recipes qualify this
+  routing, including live beds and the retained hard-failure fence. Executable
+  acceptance remains separately owned.
 
 - `src/core/source_player_restore.rs` owns explicit source-mode background-login
   registration and at most eight live initial player scans. Missing saves retain
@@ -96,8 +102,12 @@ consume its cancellation and error contracts before joining the real backend.
   qualify active recovery: native fall and current-dimension captured-anchor
   reacquisition, first free positional lift, blocked search and unknown footprint.
   Recovery preserves nondeath state and retains the same scan until next-tick
-  advancement. Source subscriptions, unified death, Safe/publication, actor save/cache
-  eligibility and executable runtime acceptance remain separately owned.
+  advancement. Actual source death settles serially after all five damage
+  producers and before passive advancement, preserving the captured anchor and
+  current dimension for next-tick restoration. The same entry owns its restarted
+  scan; waiting ticks never repeat inventory drops or survival refill. Source
+  subscriptions, Safe/publication, actor save/cache eligibility and executable
+  runtime acceptance remain separately owned.
 
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
   inventory/runtime overlays to produce checked existing storage values. Player

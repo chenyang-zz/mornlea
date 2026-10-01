@@ -890,9 +890,9 @@ enum Settlement {
 }
 
 /// Settles zero-health hostiles in hostile-ID ascending order, then zero-health
-/// players in session order (`tick.go`): one-time gates admit only
-/// still-`Active` records, so already-`Dead` hostiles and already-reset
-/// `Respawning` players are never double-settled.
+/// legacy players in session order (`tick.go`). Actual source players wait for
+/// the following serial consumer. One-time gates admit only still-`Active`
+/// records, excluding already-`Dead` hostiles and reset `Respawning` players.
 fn settle_deaths(ctx: &mut TickContext<'_>) -> Result<PhaseReport, ServerError> {
     let mut dying_hostiles = Vec::new();
     let mut dying_players = Vec::new();
@@ -902,7 +902,9 @@ fn settle_deaths(ctx: &mut TickContext<'_>) -> Result<PhaseReport, ServerError> 
         }
         match actor.key {
             ActorKey::Hostile(_) => dying_hostiles.push(actor.key),
-            ActorKey::Player(_) => dying_players.push(actor.key),
+            ActorKey::Player(session) if !ctx.source_player_death_deferred(session) => {
+                dying_players.push(actor.key);
+            }
             _ => {}
         }
     }

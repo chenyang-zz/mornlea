@@ -1,4 +1,4 @@
-//! Actual background disk, Memory login and Acquire restoration and height motion recipes.
+//! Actual disk, Memory login and Acquire restoration, recovery and five-producer death recipes.
 //! Manual wants qualify the caller without accepting a source subscription producer.
 use mornlea_domain::{
     BlockPos, ChunkPos, CompanionId, Dimension, FiniteVec3, HostileId, Identities, LookAngles,
@@ -1452,4 +1452,559 @@ fn recovery_actual_unknown_footprint_enters_pending() {
     assert_eq!(local.last_input_sequence(), 0);
     assert_eq!(unknown, None);
     recovery_rich_preserved(&before, &after);
+}
+
+// Off-tick palette edits preserve every untargeted cell and the persisted floor.
+fn death_chunk_cell(chunk: &mut Chunk, pos: BlockPos, form: u16) {
+    assert!((0..16).contains(&pos.x()) && (0..16).contains(&pos.z()));
+    assert!((-64..320).contains(&pos.y()));
+    let section = &mut chunk.sections[((pos.y() + 64) / 16) as usize];
+    if section.kind == StorageKind::Single {
+        let old = section.single;
+        *section = ContainerSnapshot {
+            kind: StorageKind::Indexed,
+            bits: 4,
+            single: 0,
+            palette: vec![old],
+            packed: vec![0; 256],
+        };
+    }
+    assert_eq!(section.kind, StorageKind::Indexed);
+    assert_eq!(section.bits, 4);
+    assert_eq!(section.packed.len(), 256);
+    let palette = match section.palette.iter().position(|value| *value == form) {
+        Some(index) => index,
+        None => {
+            assert!(section.palette.len() < 16);
+            section.palette.push(form);
+            section.palette.len() - 1
+        }
+    };
+    let index = ((pos.y() + 64) % 16) as usize * 256 + pos.z() as usize * 16 + pos.x() as usize;
+    let shift = (index % 16) * 4;
+    section.packed[index / 16] =
+        (section.packed[index / 16] & !(0xf_u64 << shift)) | ((palette as u64) << shift);
+}
+#[derive(Clone, Copy, Debug)]
+enum DeathProducer {
+    Starvation,
+    Drowning,
+    Landing,
+    LandingControl,
+    Melee,
+    Projectile,
+}
+fn death_fixture_hostile(id: u64, position: [f32; 3]) -> (ActorRecord, ActorRuntime) {
+    let key = ActorKey::Hostile(HostileId::try_new(id).unwrap());
+    let record = ActorRecord::try_new(
+        key,
+        ActorLifecycle::Active,
+        Dimension::OVERWORLD,
+        MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new([0.; 3]).unwrap(),
+            on_ground: true,
+        }),
+        LookAngles::try_new(0., 0.).unwrap(),
+        SurvivalState::try_new(SurvivalStateParts {
+            health: 20,
+            oxygen: 300,
+            hunger: 20,
+            saturation_zero: false,
+            armor_points: 0,
+        })
+        .unwrap(),
+        ActorBody::Hostile(HostileMob {
+            id,
+            dimension: 0,
+            position,
+            velocity: [0.; 3],
+            on_ground: true,
+            yaw: 0.,
+            health: 20,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 20,
+            has_target: false,
+            player_id: mornlea_storage::PlayerId::from_bytes([0; 16]),
+            next_repath_ticks: u64::MAX,
+            distant_ticks: 0,
+            kind: 0,
+        }),
+    )
+    .unwrap();
+    let runtime = ActorRuntime {
+        key,
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 20,
+        oxygen: 0,
+        peak_y: 0.,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Hostile {
+            distant_ticks: 0,
+            shoot_cooldown: 0,
+            fresh: false,
+        },
+    };
+    (record, runtime)
+}
+// Actual login and acquisition complete the original scan before retained producer inputs change.
+fn death_fixture(producer: DeathProducer, bed: bool) -> (Fixture, AuthorityState, SessionKey) {
+    let position = [if bed { 10.5 } else { 8.5 }, 65., 8.5];
+    let mut save = height_player_save(position);
+    save.health = 1;
+    save.inventory.hotbar.selected = 3;
+    save.inventory.hotbar.slots[3] = ItemStack {
+        item: 1,
+        count: 7,
+        durability: 0,
+    };
+    assert!(!save.respawn_present);
+    let current = key(Dimension::OVERWORLD, 0, 0);
+    let anchor = key(Dimension::OVERWORLD, -2, 3);
+    let mut chunk = height_floor(63);
+    if matches!(producer, DeathProducer::Drowning) {
+        death_chunk_cell(&mut chunk, BlockPos::new(8, 66, 8), 27);
+    }
+    if bed {
+        death_chunk_cell(&mut chunk, BlockPos::new(8, 64, 8), 76);
+        death_chunk_cell(&mut chunk, BlockPos::new(8, 64, 9), 80);
+    }
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save),
+        Dimension::DEPTHS,
+        ChunkPos::new(-2, 3),
+        vec![(current, chunk), (anchor, height_floor(64))],
+    );
+    let (mut login, mut transport, connection, session, clock) =
+        handshake(&mut fixture, &mut state);
+    let publication = fixture.acquire(&mut state, current);
+    assert!(local(&publication).ready() && local(&publication).reset());
+    assert_eq!(
+        recovery_observed(&state, session).0.lifecycle,
+        ActorLifecycle::Active
+    );
+    let mut residents = state.residents();
+    let player_key = ActorKey::Player(session);
+    let actor = residents
+        .actors
+        .iter_mut()
+        .find(|a| a.key == player_key)
+        .unwrap();
+    actor.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new(position).unwrap(),
+        velocity: FiniteVec3::try_new([
+            0.,
+            if matches!(
+                producer,
+                DeathProducer::Landing | DeathProducer::LandingControl
+            ) {
+                -40.
+            } else {
+                0.
+            },
+            0.,
+        ])
+        .unwrap(),
+        on_ground: false,
+    });
+    actor.survival = SurvivalState::try_new(SurvivalStateParts {
+        health: 1,
+        hunger: if matches!(producer, DeathProducer::Starvation) {
+            0
+        } else {
+            20
+        },
+        oxygen: if matches!(producer, DeathProducer::Drowning) {
+            0
+        } else {
+            300
+        },
+        saturation_zero: matches!(producer, DeathProducer::Starvation),
+        armor_points: 0,
+    })
+    .unwrap();
+    let runtime = residents.runtimes.get_mut(&player_key).unwrap();
+    runtime.controls = None;
+    runtime.reset = false;
+    runtime.attack_cooldown = 0;
+    runtime.hurt_cooldown = 0;
+    runtime.burn_cooldown = 0;
+    runtime.oxygen = if matches!(producer, DeathProducer::Drowning) {
+        0
+    } else {
+        300
+    };
+    runtime.peak_y = match producer {
+        DeathProducer::Landing => 68.,
+        DeathProducer::LandingControl => 67.,
+        _ => 65.,
+    };
+    runtime.saturation_milli = if matches!(producer, DeathProducer::Starvation) {
+        0
+    } else {
+        5000
+    };
+    runtime.exhaustion_milli = 0;
+    runtime.since_damage_ticks = if matches!(producer, DeathProducer::Starvation) {
+        10
+    } else {
+        0
+    };
+    runtime.starvation_ticks = if matches!(producer, DeathProducer::Starvation) {
+        79
+    } else {
+        0
+    };
+    runtime.drown_ticks = if matches!(producer, DeathProducer::Drowning) {
+        19
+    } else {
+        0
+    };
+    runtime.eating = None;
+    runtime.bow = None;
+    runtime.aux = ActorAux::Player {
+        respawn: bed.then_some((Dimension::OVERWORLD, BlockPos::new(8, 64, 8))),
+        workbench: None,
+    };
+    residents.environment.as_mut().unwrap().difficulty =
+        if matches!(producer, DeathProducer::Starvation) {
+            2
+        } else {
+            0
+        };
+    if matches!(producer, DeathProducer::Melee | DeathProducer::Projectile) {
+        let position = if matches!(producer, DeathProducer::Melee) {
+            [9.5, 65., 8.5]
+        } else {
+            [12.5, 65., 12.5]
+        };
+        let (walker, runtime) = death_fixture_hostile(11, position);
+        residents.runtimes.insert(walker.key, runtime);
+        residents.actors.push(walker);
+    }
+    if matches!(producer, DeathProducer::Projectile) {
+        residents.projectiles.push(ProjectileRecord {
+            id: mornlea_domain::ProjectileId::try_new(1).unwrap(),
+            owner: ActorKey::Hostile(HostileId::try_new(11).unwrap()),
+            dimension: Dimension::OVERWORLD,
+            position: FiniteVec3::try_new([8.5, 65.9, 8.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.; 3]).unwrap(),
+            kind: mornlea_domain::ProjectileKind::Shard,
+            damage: 1,
+            age: 0,
+        });
+    }
+    state.commit_residents(residents);
+    let input = ClientPacket::PlayerInput(
+        PlayerInput::new(3, 0, 0, false, 0., 0., false, false, false, false).unwrap(),
+    );
+    assert!(!matches!(
+        transport.send(
+            connection,
+            MemoryTransport::encode_frame(&input).unwrap(),
+            &mut login.bind(&mut state, &mut fixture.store),
+            &clock
+        ),
+        ConnectionProgress::Closed { .. }
+    ));
+    (fixture, state, session)
+}
+fn death_ground(state: &AuthorityState) -> Vec<DropRecord> {
+    state
+        .settled_read()
+        .unwrap()
+        .drops(key(Dimension::OVERWORLD, 0, 0))
+        .to_vec()
+}
+fn death_conserved(state: &AuthorityState, session: SessionKey) {
+    let (_, _, inv) = recovery_observed(state, session);
+    let ground = death_ground(state);
+    assert!(ground.iter().all(|d| d.stack.item == 1));
+    assert_eq!(
+        inv.slots
+            .iter()
+            .chain(inv.armor.iter())
+            .chain(inv.crafting.iter())
+            .map(|s| u32::from(s.count))
+            .sum::<u32>()
+            + ground.iter().map(|d| u32::from(d.stack.count)).sum::<u32>(),
+        7
+    );
+    assert!(inv.slots.iter().all(|s| *s == ItemStack::default()));
+    assert_eq!(inv.selected.get(), 3);
+    assert_eq!(
+        ground.iter().map(|d| u32::from(d.stack.count)).sum::<u32>(),
+        7
+    );
+}
+fn death_no_hit(publication: &TickPublication) {
+    assert!(
+        !publication
+            .events
+            .iter()
+            .any(|e| matches!(e.event(), mornlea_domain::Event::CombatHit(_)))
+    );
+}
+fn death_pending(state: &AuthorityState, session: SessionKey, publication: &TickPublication) {
+    pending(state, session, Dimension::OVERWORLD, [-31.5, 321., 48.5]);
+    let (actor, runtime, _) = recovery_observed(state, session);
+    assert_eq!(
+        (
+            actor.survival.health(),
+            actor.survival.hunger(),
+            actor.survival.oxygen()
+        ),
+        (20, 20, 300)
+    );
+    assert_eq!(
+        (runtime.saturation_milli, runtime.exhaustion_milli),
+        (5000, 0)
+    );
+    assert_eq!(local(publication).last_input_sequence(), 3);
+    let ActorBody::Player(body) = &actor.body else {
+        unreachable!()
+    };
+    assert_eq!(body.current.dimension, 0);
+    assert!(!body.respawn_present);
+    assert!(!local(publication).ready() && !local(publication).reset());
+    death_conserved(state, session);
+}
+fn death_activated(
+    state: &AuthorityState,
+    session: SessionKey,
+    publication: &TickPublication,
+    position: [f32; 3],
+) {
+    let (actor, runtime, _) = recovery_observed(state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), position);
+    assert_eq!(actor.motion.velocity().get(), [0.; 3]);
+    assert_eq!(
+        (
+            actor.survival.health(),
+            actor.survival.hunger(),
+            actor.survival.oxygen()
+        ),
+        (20, 20, 300)
+    );
+    assert!(local(publication).ready() && local(publication).reset());
+    assert!(!runtime.reset);
+    assert_eq!(local(publication).last_input_sequence(), 3);
+    death_no_hit(publication);
+    death_conserved(state, session);
+}
+fn death_actual_producer(producer: DeathProducer) {
+    let (mut fixture, mut state, session) = death_fixture(producer, false);
+    let tick = state.next_tick();
+    let result = state.advance_tick(TickBudget::full());
+    assert!(
+        result.is_ok(),
+        "{producer:?} intended full-tick early-death boundary: {result:?}"
+    );
+    let publication = result.unwrap();
+    if matches!(
+        producer,
+        DeathProducer::Starvation | DeathProducer::Drowning | DeathProducer::Landing
+    ) {
+        let hits: Vec<_> = publication
+            .events
+            .iter()
+            .filter(|e| matches!(e.event(), mornlea_domain::Event::CombatHit(_)))
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].recipient(),
+            mornlea_domain::EventRecipient::Session(session.get())
+        );
+        let mornlea_domain::Event::CombatHit(hit) = hits[0].event() else {
+            unreachable!()
+        };
+        assert_eq!(hit.damage(), 1);
+        assert_eq!(hit.server_tick(), tick);
+    } else {
+        death_no_hit(&publication);
+    }
+    if matches!(producer, DeathProducer::Melee | DeathProducer::Projectile) {
+        let view = state.settled_read().unwrap();
+        let ActorBody::Hostile(body) = &view
+            .actor(ActorKey::Hostile(HostileId::try_new(11).unwrap()))
+            .unwrap()
+            .body
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            body.attack_cooldown,
+            if matches!(producer, DeathProducer::Melee) {
+                20
+            } else {
+                0
+            }
+        );
+        assert_eq!(
+            body.position[0],
+            if matches!(producer, DeathProducer::Melee) {
+                9.5
+            } else {
+                12.5
+            }
+        );
+        assert!(view.projectiles().is_empty());
+    }
+    death_pending(&state, session, &publication);
+    if matches!(producer, DeathProducer::Landing) {
+        assert!(
+            death_ground(&state)
+                .iter()
+                .all(|d| d.position.get()[1] == 64.5)
+        );
+    }
+    let waiting = state.advance_tick(TickBudget::full()).unwrap();
+    death_pending(&state, session, &waiting);
+    death_no_hit(&waiting);
+    let acquired = fixture.acquire(&mut state, key(Dimension::OVERWORLD, -2, 3));
+    death_activated(&state, session, &acquired, [-31.5, 65., 48.5]);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(local(&following).ready() && !local(&following).reset());
+    assert_eq!(local(&following).last_input_sequence(), 3);
+    assert_eq!(
+        recovery_observed(&state, session).0.lifecycle,
+        ActorLifecycle::Active
+    );
+    death_no_hit(&following);
+    death_conserved(&state, session);
+    fixture.close();
+}
+#[test]
+fn death_actual_starvation_restarts_current_dimension() {
+    death_actual_producer(DeathProducer::Starvation);
+}
+#[test]
+fn death_actual_drowning_restarts_current_dimension() {
+    death_actual_producer(DeathProducer::Drowning);
+}
+#[test]
+fn death_actual_native_landing_restarts_current_dimension() {
+    let (mut fixture, mut state, session) = death_fixture(DeathProducer::LandingControl, false);
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let (actor, _, inventory) = recovery_observed(&state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.survival.health(), 1);
+    assert_eq!(actor.motion.position().get(), [8.5, 64., 8.5]);
+    assert!(actor.motion.on_ground());
+    assert_eq!(inventory.slots[3].count, 7);
+    assert!(death_ground(&state).is_empty());
+    death_no_hit(&publication);
+    fixture.close();
+    death_actual_producer(DeathProducer::Landing);
+}
+#[test]
+fn death_actual_melee_restarts_current_dimension() {
+    death_actual_producer(DeathProducer::Melee);
+}
+#[test]
+fn death_actual_projectile_restarts_current_dimension() {
+    death_actual_producer(DeathProducer::Projectile);
+}
+#[test]
+fn death_actual_live_bed_activates_on_following_tick() {
+    let (mut fixture, mut state, session) = death_fixture(DeathProducer::Starvation, true);
+    let tick = state.next_tick();
+    let result = state.advance_tick(TickBudget::full());
+    assert!(
+        result.is_ok(),
+        "live bed intended full-tick early-death boundary: {result:?}"
+    );
+    let publication = result.unwrap();
+    let hits: Vec<_> = publication
+        .events
+        .iter()
+        .filter(|e| matches!(e.event(), mornlea_domain::Event::CombatHit(_)))
+        .collect();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].recipient(),
+        mornlea_domain::EventRecipient::Session(session.get())
+    );
+    let mornlea_domain::Event::CombatHit(hit) = hits[0].event() else {
+        unreachable!()
+    };
+    assert_eq!((hit.damage(), hit.server_tick()), (1, tick));
+    death_pending(&state, session, &publication);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    death_activated(&state, session, &following, [8.5, 64.5625, 8.5]);
+    let next = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(local(&next).ready() && !local(&next).reset());
+    assert_eq!(local(&next).last_input_sequence(), 3);
+    death_no_hit(&next);
+    death_conserved(&state, session);
+    fixture.close();
+}
+#[test]
+fn death_actual_impossible_repack_fences_partial_tick() {
+    let (mut fixture, mut state, session) = death_fixture(DeathProducer::Starvation, false);
+    let mut residents = state.residents();
+    let inv = residents
+        .inventories
+        .get_mut(&ActorKey::Player(session))
+        .unwrap();
+    inv.slots = [ItemStack {
+        item: 1,
+        count: 64,
+        durability: 0,
+    }; 36];
+    inv.crafting[0] = ItemStack {
+        item: 1,
+        count: 1,
+        durability: 0,
+    };
+    inv.crafting_size = mornlea_domain::CraftingSize::Workbench;
+    let expected = *inv;
+    state.commit_residents(residents);
+    let tick = state.next_tick();
+    let error = ServerError::Internal {
+        invariant: "source player death crafting",
+    };
+    let result = state.advance_tick(TickBudget::full());
+    fixture.close();
+    assert_eq!(result, Err(error));
+    assert_eq!(state.next_tick(), tick);
+    assert_eq!(state.phase(), ServerPhase::Closing);
+    assert_eq!(state.advance_tick(TickBudget::full()), Err(error));
+    assert!(matches!(state.settled_read(), Err(e) if e == error));
+    assert_eq!(
+        state.capture_chunk_snapshot(key(Dimension::OVERWORLD, 0, 0), SaveUrgency::Autosave),
+        None
+    );
+    assert_eq!(state.try_metadata_snapshot(), Err(error));
+    let residents = state.residents();
+    let actor = residents
+        .actors
+        .iter()
+        .find(|a| a.key == ActorKey::Player(session))
+        .unwrap();
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.survival.health(), 0);
+    assert_eq!(actor.survival.hunger(), 0);
+    assert_eq!(residents.inventories[&ActorKey::Player(session)], expected);
+    assert!(!residents.runtimes[&ActorKey::Player(session)].reset);
+    assert!(
+        residents
+            .ready_snapshot()
+            .iter()
+            .all(|(_, _, _, chunk)| chunk.drops.iter().all(|d| !d.active))
+    );
 }

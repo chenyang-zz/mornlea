@@ -3440,14 +3440,12 @@ impl<'a> TickContext<'a> {
     }
 
     /// Identifies source sessions whose death routing belongs to the serial consumer.
-    #[allow(dead_code)] // Temporary until the qualified serial death consumer lands.
     pub(crate) fn source_player_death_deferred(&self, session: SessionKey) -> bool {
         self.authority.source_player_radius.is_some() && self.source_player_session_active(session)
     }
 
     /// Prepares one indexed death and returns fixed data for the caller's retained scan.
     /// The Ready guard bounds rehearsal; staging precedes fixed mapping and own cleanup.
-    #[allow(dead_code)] // Temporary until the qualified serial death consumer lands.
     pub(crate) fn settle_source_player_death(
         &mut self,
         session: SessionKey,
@@ -12754,6 +12752,310 @@ mod source_player_restore_tests {
             allocations
         );
         assert_eq!(ctx_book_snapshot(&a.source_players, s), before_book);
+    }
+    fn ctx_death_consumer_call(s: SessionKey, phase: RulePhase) -> RuleCall<'static> {
+        RuleCall {
+            phase,
+            actor: Some(ActorKey::Player(s)),
+            command: None,
+            internal: None,
+        }
+    }
+    #[test]
+    fn ctx_death_consumer_defers_both_legacy_entries() {
+        let (mut a, s, _) = ctx_fixture(false);
+        ctx_death_zero(&mut a, s);
+        ctx_add_allocations(&mut a, s);
+        let book = std::mem::take(&mut a.source_players);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        c.environment = None;
+        let runtime = c.runtimes.remove(&ActorKey::Player(s)).unwrap();
+        let body_ptr = match &c.actors[c.player_slots[&s]].body {
+            ActorBody::Player(b) => b.display_name.as_ptr(),
+            _ => unreachable!(),
+        };
+        let before = ctx_death_snapshot(&c);
+        let scan = ctx_book_snapshot(&book, s);
+        for phase in [
+            RulePhase::PlayerRegenStarvation,
+            RulePhase::PlayerPrePhysicsOxygen,
+            RulePhase::PlayerPostPhysics,
+        ] {
+            assert_eq!(
+                crate::rules::player_survival::run(&mut c, ctx_death_consumer_call(s, phase)),
+                Ok(PhaseReport {
+                    examined: 1,
+                    applied: 0,
+                    carried: 0,
+                    rejected: 0
+                })
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+            let ActorBody::Player(body) = &c.actors[c.player_slots[&s]].body else {
+                unreachable!()
+            };
+            assert_eq!(body.display_name.as_ptr(), body_ptr);
+        }
+        assert_eq!(
+            crate::rules::hostile_outcomes::run(
+                &mut c,
+                RuleCall {
+                    phase: RulePhase::HostilePlayerDeaths,
+                    actor: None,
+                    command: None,
+                    internal: None
+                }
+            ),
+            Ok(PhaseReport {
+                examined: 0,
+                applied: 0,
+                carried: 0,
+                rejected: 0
+            })
+        );
+        assert_eq!(ctx_death_snapshot(&c), before);
+        assert_eq!(ctx_book_snapshot(&book, s), scan);
+        assert_eq!(
+            c.actors[c.player_slots[&s]].lifecycle,
+            ActorLifecycle::Active
+        );
+        assert_eq!(c.actors[c.player_slots[&s]].survival.health(), 0);
+        let command =
+            mornlea_domain::CommandEnvelope::try_new(mornlea_domain::CommandEnvelopeParts {
+                tick: 0,
+                session: s.get(),
+                sequence: 1,
+                arrival_index: 0,
+                command: mornlea_domain::Command::CloseContainer,
+            })
+            .unwrap();
+        let internal = AuthorityInteraction {
+            session: s,
+            look: c.actors[c.player_slots[&s]].look,
+            kind: InteractionKind::Bed,
+            sequence: 1,
+        };
+        for row in 0..4 {
+            if row == 3 {
+                c.actors[c.player_slots[&s]].lifecycle = ActorLifecycle::Pending;
+            }
+            let mut call = ctx_death_consumer_call(s, RulePhase::PlayerPostPhysics);
+            match row {
+                0 => call.phase = RulePhase::Publish,
+                1 => call.command = Some(&command),
+                2 => call.internal = Some(&internal),
+                _ => {}
+            }
+            let before = ctx_death_snapshot(&c);
+            assert_eq!(
+                crate::rules::player_survival::run(&mut c, call),
+                Err(ServerError::InvalidInput {
+                    field: if row == 3 { "actor" } else { "phase" }
+                })
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+        }
+        assert!(runtime.path.is_some());
+        drop(c);
+        let (mut legacy, s, _) = ctx_fixture(false);
+        ctx_death_zero(&mut legacy, s);
+        legacy.source_player_radius = None;
+        let mut c = TickContext::for_tick(&mut legacy, TickBudget::full());
+        let result = crate::rules::hostile_outcomes::run(
+            &mut c,
+            RuleCall {
+                phase: RulePhase::HostilePlayerDeaths,
+                actor: None,
+                command: None,
+                internal: None,
+            },
+        )
+        .unwrap();
+        assert_eq!((result.examined, result.applied), (1, 1));
+        assert_eq!(
+            c.actors[c.player_slots[&s]].lifecycle,
+            ActorLifecycle::Respawning
+        );
+        assert_eq!(c.actors[c.player_slots[&s]].survival.health(), 20);
+    }
+    #[test]
+    fn ctx_death_consumer_sorted_restart_is_once() {
+        let (mut a, s, other) = ctx_fixture(true);
+        let other = other.unwrap();
+        assert!(s < other);
+        for session in [s, other] {
+            ctx_death_zero(&mut a, session);
+            ctx_add_allocations(&mut a, session);
+            let actor = &mut a.residents.actors[a.residents.player_slots[&session]];
+            actor.dimension = Dimension::OVERWORLD;
+            actor.motion = MotionState::new(mornlea_domain::MotionStateParts {
+                position: mornlea_domain::FiniteVec3::try_new([8.5, 65., 8.5]).unwrap(),
+                velocity: mornlea_domain::FiniteVec3::try_new([0.; 3]).unwrap(),
+                on_ground: false,
+            });
+            let mut inventory = InventoryRecord::empty();
+            inventory.slots[0] = mornlea_storage::ItemStack {
+                item: if session == s { 1 } else { 2 },
+                count: 1,
+                durability: 0,
+            };
+            a.residents
+                .inventories
+                .insert(ActorKey::Player(session), inventory);
+        }
+        let mut book = std::mem::take(&mut a.source_players);
+        let addresses: Vec<_> = [s, other]
+            .into_iter()
+            .map(|s| &book.entries[&s] as *const _ as usize)
+            .collect();
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        for session in [s, other] {
+            ctx_death_live_bed(&mut c, session, None);
+        }
+        ctx_seed_transients(&mut c, &[s, other]);
+        let outsider = ActorKey::Hostile(mornlea_domain::HostileId::try_new(99).unwrap());
+        c.charges = vec![
+            (ActorKey::Player(s), ActionKind::Mining),
+            (outsider, ActionKind::Melee),
+            (ActorKey::Player(other), ActionKind::Till),
+        ];
+        let allocations: Vec<_> = [s, other]
+            .into_iter()
+            .map(|s| {
+                ctx_allocations(
+                    &c.actors[c.player_slots[&s]],
+                    &c.runtimes[&ActorKey::Player(s)],
+                )
+            })
+            .collect();
+        let current = key(Dimension::OVERWORLD, 0, 0);
+        let mut drops = ctx_death_full_drops(current);
+        drops.slots[31] = mornlea_storage::DropSlot::default();
+        c.drops.insert(current, drops);
+        assert_eq!(
+            super::super::source_player_restore::settle_deaths(&mut book, &mut c),
+            Ok(())
+        );
+        for (index, session) in [s, other].into_iter().enumerate() {
+            let actor = &c.actors[c.player_slots[&session]];
+            assert_eq!(actor.lifecycle, ActorLifecycle::Pending);
+            assert_eq!(
+                (
+                    actor.survival.health(),
+                    actor.survival.hunger(),
+                    actor.survival.oxygen()
+                ),
+                (20, 20, 300)
+            );
+            assert_eq!(
+                ctx_allocations(actor, &c.runtimes[&actor.key]),
+                allocations[index]
+            );
+            assert!(!c.mining.contains_key(&actor.key));
+            assert!(!c.sleeping.contains(&session));
+            assert!(!c.suppressed_mining.contains(&actor.key));
+            assert_eq!(
+                &book.entries[&session] as *const _ as usize,
+                addresses[index]
+            );
+            assert!(book.entries[&session].ever_spawned);
+            assert_eq!(
+                book.entries[&session].restore.player_reset_anchor(),
+                Err(ServerError::InvalidInput {
+                    field: "restore_restart"
+                })
+            );
+            assert!(book.entries[&session].restore.pending_keys().contains(&key(
+                Dimension::OVERWORLD,
+                2,
+                0
+            )));
+            assert!(
+                format!("{:?}", book.entries[&session].restore)
+                    .contains("anchor: ChunkPos { x: 2, z: 0 }")
+            );
+        }
+        assert_eq!(c.charges, vec![(outsider, ActionKind::Melee)]);
+        assert_eq!(
+            c.inventories[&ActorKey::Player(s)].slots[0],
+            mornlea_storage::ItemStack::default()
+        );
+        assert_eq!(
+            c.inventories[&ActorKey::Player(other)].slots[0],
+            ctx_death_stack(1)
+        );
+        let ground: u32 = c
+            .drops
+            .values()
+            .flat_map(|d| d.records())
+            .map(|d| u32::from(d.stack.count))
+            .sum();
+        assert_eq!(ground, 31 * 64 + 1);
+        assert_eq!(
+            ctx_death_total(&c, s)
+                + u32::from(c.inventories[&ActorKey::Player(other)].slots[0].count),
+            31 * 64 + 2
+        );
+        let before = ctx_death_snapshot(&c);
+        let scans = [ctx_book_snapshot(&book, s), ctx_book_snapshot(&book, other)];
+        assert_eq!(
+            super::super::source_player_restore::settle_deaths(&mut book, &mut c),
+            Ok(())
+        );
+        assert_eq!(ctx_death_snapshot(&c), before);
+        assert_eq!(
+            [ctx_book_snapshot(&book, s), ctx_book_snapshot(&book, other)],
+            scans
+        );
+    }
+    #[test]
+    fn ctx_death_consumer_ineligible_is_quiet() {
+        for row in 0..7 {
+            let (mut a, s) = if row == 3 {
+                fixture()
+            } else {
+                let (a, s, _) = ctx_fixture(false);
+                (a, s)
+            };
+            match row {
+                0 => a.source_player_radius = None,
+                1 => a.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired,
+                2 => {
+                    a.sessions.remove(&s);
+                }
+                4 => {
+                    a.residents.actors[a.residents.player_slots[&s]].lifecycle =
+                        ActorLifecycle::Pending
+                }
+                6 => a.source_players.entries.clear(),
+                _ => {}
+            }
+            a.residents.runtimes.remove(&ActorKey::Player(s));
+            let mut book = std::mem::take(&mut a.source_players);
+            let scans: Vec<_> = book
+                .entries
+                .keys()
+                .map(|s| ctx_book_snapshot(&book, *s))
+                .collect();
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            c.environment = None;
+            let before = ctx_death_snapshot(&c);
+            assert_eq!(
+                super::super::source_player_restore::settle_deaths(&mut book, &mut c),
+                Ok(()),
+                "row {row}"
+            );
+            assert_eq!(ctx_death_snapshot(&c), before, "row {row}");
+            assert_eq!(
+                book.entries
+                    .keys()
+                    .map(|s| ctx_book_snapshot(&book, *s))
+                    .collect::<Vec<_>>(),
+                scans
+            );
+        }
     }
 }
 

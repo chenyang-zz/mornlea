@@ -1,4 +1,4 @@
-//! Source login registration and exclusive initial/recovery scan ownership.
+//! Source login registration and exclusive initial, recovery and next-tick death scan ownership.
 use super::actor_placement::RestoreCandidate;
 use super::contracts::{
     ActorAux, ActorKey, ActorLifecycle, ActorRuntime, RuleEffect, ServerError, SessionKey,
@@ -204,6 +204,25 @@ pub(crate) fn recover(
     };
     entry.restore.restart_player(dimension, Vec::new())?;
     Ok(true)
+}
+
+/// Settles live source deaths in session order and restarts each same captured scan.
+/// Advancement already ran; accepted prefix mutations survive the first typed failure.
+pub(crate) fn settle_deaths(
+    book: &mut SourcePlayerBook,
+    context: &mut TickContext<'_>,
+) -> Result<(), ServerError> {
+    for (session, entry) in &mut book.entries {
+        if !entry.ever_spawned || !context.source_player_death_deferred(*session) {
+            continue;
+        }
+        if let Some(reset) = context.settle_source_player_death(*session, &entry.restore)? {
+            entry
+                .restore
+                .restart_player(reset.dimension, reset.candidate.into_iter().collect())?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
