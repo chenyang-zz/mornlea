@@ -102,7 +102,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7l1 Install actual prepared chunks at the authoritative acquisition phase ([packet](plans/60-live-prepared-acquisition.md)).
 - [x] 3.7l2 Drive live chunk requests through the actual borrowed owners ([packet](plans/61-live-chunk-request-driver.md)).
 - [x] 3.7l3g Qualify shared source restoration, support and spawn-column geometry ([packet](plans/80-source-actor-placement.md)).
-- [ ] 3.7l3s Retain bounded pending restore scan, wanted keys and exhausted revisions ([packet](plans/81-pending-restore-scan.md)).
+- [x] 3.7l3s Retain bounded pending restore scan, wanted keys and exhausted revisions ([packet](plans/81-pending-restore-scan.md)).
 - [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
 - [x] 3.7r0 Move resident ownership through live ticks and finalize changed chunks only ([packet](plans/52-owned-resident-tick.md)).
 - [x] 3.7r1 Bound defensive compound rollback to touched resident keys ([packet](plans/53-bounded-compound-undo.md)).
@@ -134,7 +134,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9l4 Drive actual TCP receive progress through asynchronous login readiness ([packet](plans/71-prepared-tcp-receive-progress.md)).
 - [x] 3.9l5 Mint distinct admitted identities in actual two-container-viewer fixtures ([packet](plans/75-distinct-container-viewer-fixture.md)).
 - [x] 3.9l6 Recognize EOF or peer reset as control connection retirement without accepting a timeout ([packet](plans/82-control-retirement-fixture.md)).
-- [ ] 3.9l7 Count retained semantic and cancellation-join memory obligations after timeout ([packet](plans/85-memory-timeout-obligation-fixture.md)).
+- [x] 3.9l7 Count retained semantic and cancellation-join memory obligations after timeout ([packet](plans/85-memory-timeout-obligation-fixture.md)).
 
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.
