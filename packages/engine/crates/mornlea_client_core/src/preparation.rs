@@ -6,17 +6,23 @@
 //! (near mesh view, far LOD request) with their static byte charge, and the
 //! checked result, ticket and report shapes the shared `PreparationPort`
 //! trades. The trait itself lives in `contracts` beside the other C1 ports;
-//! the real bounded queue is a later provider's owner.
+//! `PreparationQueue` below is its real bounded owner and the retained
+//! prepared-resource arena.
 
+use std::collections::VecDeque;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use mornlea_domain::{ChunkPos, Dimension};
-use mornlea_engine::native::contracts::mesh::{MeshQuad, MeshRegistry, MeshView};
+use mornlea_engine::native::contracts::mesh::{
+    MeshQuad, MeshRegistry, MeshRegistryEntry, MeshView,
+};
 use mornlea_engine::native::contracts::world::{LodQuad, LodRequest, WorldgenParams};
 use mornlea_protocol::MIN_Y;
 
-use crate::contracts::{ClientError, SessionEpoch};
+use crate::contracts::{
+    ClientError, ClientLimits, ClientWorkBudget, PreparationPort, SessionEpoch,
+};
 
 pub mod lod;
 
@@ -599,5 +605,517 @@ impl InvalidationReport {
 
     pub fn bytes_released(&self) -> u64 {
         self.bytes_released
+    }
+}
+
+/// One queue-held admitted job: the ticket it was admitted under, the owned
+/// payload, its payload-only byte charge and the identities of every shared
+/// Arc allocation the payload still references.
+struct PendingUnit {
+    ticket: PreparationTicket,
+    job: PreparationJob,
+    charge: usize,
+    references: Vec<usize>,
+}
+
+/// One worker-held completed result awaiting delivery and arena retention.
+struct CompletedUnit {
+    result: PreparationResult,
+    charge: usize,
+}
+
+/// One arena-retained geometry: the delivered result's key beside its shared
+/// immutable allocation, held until a forget, a superseding result or an
+/// invalidation releases it.
+struct RetainedUnit {
+    key: PreparedResourceKey,
+    geometry: Arc<PreparedGeometry>,
+    charge: usize,
+}
+
+/// The freshest admitted identity of one terrain key: the epoch, generation
+/// and content revision of the newest admitted job, plus whether that exact
+/// identity has already been delivered.
+struct HighWaterMark {
+    dimension: Dimension,
+    terrain: TerrainKey,
+    epoch: u64,
+    generation: u64,
+    content: u64,
+    delivered: bool,
+}
+
+impl HighWaterMark {
+    fn identity(&self) -> (u64, u64, u64) {
+        (self.epoch, self.generation, self.content)
+    }
+}
+
+/// The measured registry allocation charge: the entry table, the visibility
+/// words and the two scalar ids. This is the frozen convention the contract
+/// landing's doubles charge and its registered case pins.
+fn registry_allocation(registry: &MeshRegistry) -> usize {
+    registry.entries().len() * std::mem::size_of::<MeshRegistryEntry>()
+        + registry.visibility().len() * 8
+        + 4
+}
+
+/// The geometry allocation charge of one owned result: the discriminant byte
+/// plus the packed quad table the shared `Arc` owns.
+fn geometry_allocation(geometry: &PreparedGeometry) -> usize {
+    1 + std::mem::size_of::<MeshQuad>() * geometry.quads()
+}
+
+/// The bounded near-preparation owner: the real `PreparationPort` provider
+/// and the retained prepared-resource arena.
+///
+/// Ownership lifecycle: an admitted job is queue-held in `pending` and owns
+/// its payload allocation (the owned arrays plus every shared Arc allocation,
+/// charged once by identity while any held unit references it). `work`
+/// consumes FIFO units under the per-step mesh budget; the consumed payload
+/// releases and a completed result becomes worker-held in `completed`, owning
+/// only its geometry allocation. `poll_ready` delivers the freshest completed
+/// result and the arena retains its geometry in `retained` until the
+/// publication owner reports no remaining reference through `forget`, a
+/// newer result of the same terrain key supersedes it, or an invalidation
+/// releases it. The worker only ever consumes the immutable input
+/// allocations; it never observes or mutates any mirror, input admission
+/// owner or published frame.
+///
+/// Bounds: every owned record (queue-held, worker-held or retained) counts
+/// against `preparation_results`, and every owned byte counts against
+/// `preparation_bytes` with checked arithmetic, so each bound admits exactly
+/// its capacity and rejects one more with the typed `Capacity` class before
+/// any allocation, returning the complete job. Key, ticket and mark records
+/// are fixed-size scalars outside the allocation charge, matching the frozen
+/// payload-plus-shared-allocation convention.
+///
+/// Staleness: an invalidated epoch is retired monotonically and never
+/// resurrects, so its jobs reject as `StaleEpoch` and its results release
+/// exactly once. A newer admitted identity of the same terrain key is the
+/// high-water mark: an older queued result releases silently at completion
+/// and an equal identity cannot deliver twice, so a stale or duplicate
+/// completion never publishes.
+///
+/// The completed geometry is the deterministic empty stage of the checked
+/// `PreparedGeometry` constructor; wiring the native numerical facade builds
+/// (near section meshing and far LOD tiles) into this owner is the terrain
+/// integration seam and does not alter any ownership rule above.
+pub struct PreparationQueue {
+    limits: ClientLimits,
+    pending: VecDeque<PendingUnit>,
+    completed: VecDeque<CompletedUnit>,
+    retained: VecDeque<RetainedUnit>,
+    high_water: Vec<HighWaterMark>,
+    shared: Vec<(usize, usize)>,
+    charge: usize,
+    next_ticket: u64,
+    tickets_issued: u64,
+    retired_through: Option<u64>,
+}
+
+impl PreparationQueue {
+    pub fn new(limits: ClientLimits) -> Self {
+        Self {
+            limits,
+            pending: VecDeque::new(),
+            completed: VecDeque::new(),
+            retained: VecDeque::new(),
+            high_water: Vec::new(),
+            shared: Vec::new(),
+            charge: 0,
+            next_ticket: 1,
+            tickets_issued: 0,
+            retired_through: None,
+        }
+    }
+
+    /// The total owned byte charge: queue-held payloads plus worker-held and
+    /// retained geometry, measured, never invented.
+    pub fn charge(&self) -> usize {
+        self.charge
+    }
+
+    pub fn tickets_issued(&self) -> u64 {
+        self.tickets_issued
+    }
+
+    /// Queue-held admitted jobs not yet consumed by a work step.
+    pub fn pending_jobs(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Worker-held completed results not yet delivered.
+    pub fn completed_results(&self) -> usize {
+        self.completed.len()
+    }
+
+    /// Arena-retained geometries not yet forgotten or invalidated.
+    pub fn retained_resources(&self) -> usize {
+        self.retained.len()
+    }
+
+    /// Safe Rust-only lookup of one retained prepared geometry. A key of a
+    /// retired epoch is the typed stale rejection; an unknown or already
+    /// released key is the typed invalid input; no fabricated resource is
+    /// ever returned.
+    pub fn prepared_resource(
+        &self,
+        key: &PreparedResourceKey,
+    ) -> Result<Arc<PreparedGeometry>, ClientError> {
+        if self.is_retired(key.epoch()) {
+            return Err(ClientError::StaleEpoch);
+        }
+        self.retained
+            .iter()
+            .find(|entry| entry.key == *key)
+            .map(|entry| Arc::clone(&entry.geometry))
+            .ok_or(ClientError::InvalidInput)
+    }
+
+    /// Releases the retained geometry of exactly this resource key and
+    /// reports the bytes released. The publication owner calls this once no
+    /// published frame references the resource any more; a late or repeated
+    /// forget after a supersede, a forget or an invalidation releases
+    /// nothing, so ownership is released exactly once.
+    pub fn forget(&mut self, key: &PreparedResourceKey) -> Result<u64, ClientError> {
+        if let Some(index) = self.retained.iter().position(|entry| entry.key == *key) {
+            if let Some(released) = self.retained.remove(index) {
+                self.charge -= released.charge;
+                return Ok(released.charge as u64);
+            }
+        }
+        Ok(0)
+    }
+
+    /// Consumes FIFO pending units under the shared per-step work budget,
+    /// returning how many units were consumed (completed or released as
+    /// stale). The owner consumes only the mesh half of the budget, rechecked
+    /// against its configured mesh-work ceiling before any dequeue: a
+    /// zero-mesh step retains the accepted FIFO remainder, and no step ever
+    /// dequeues beyond the tighter of the two ceilings.
+    pub fn work(&mut self, budget: ClientWorkBudget) -> u16 {
+        let drain = usize::from(budget.meshes()).min(self.limits.mesh_work());
+        let mut consumed = 0usize;
+        while consumed < drain {
+            let Some(unit) = self.pending.pop_front() else {
+                break;
+            };
+            self.consume_pending(unit);
+            consumed += 1;
+        }
+        u16::try_from(consumed).unwrap_or(u16::MAX)
+    }
+
+    /// The stable identity of one shared allocation, used to charge it once
+    /// while the owner holds any reference to it.
+    fn arc_identity<T: ?Sized>(arc: &Arc<T>) -> usize {
+        Arc::as_ptr(arc) as *const () as usize
+    }
+
+    /// An epoch at or below the retired bound is dead; epochs are issued
+    /// monotonically by the session owner, so the bound never resurrects one.
+    fn is_retired(&self, epoch: SessionEpoch) -> bool {
+        self.retired_through
+            .is_some_and(|bound| epoch.get() <= bound)
+    }
+
+    /// True when the key's identity may still deliver: it is strictly fresher
+    /// than every high-water mark of its terrain key, or it is the mark
+    /// itself and that mark has not delivered yet.
+    fn is_stale_delivery(&self, key: &PreparedResourceKey) -> bool {
+        let identity = (key.epoch().get(), key.generation(), key.content_revision());
+        self.high_water.iter().any(|mark| {
+            mark.dimension == key.dimension()
+                && mark.terrain == *key.key()
+                && (identity < mark.identity() || (identity == mark.identity() && mark.delivered))
+        })
+    }
+
+    /// Records the freshest admitted identity of one terrain key; an equal
+    /// identity keeps its delivery state and an older one changes nothing, so
+    /// only a strictly newer submission moves the mark.
+    fn bump_high_water(&mut self, key: &PreparedResourceKey) {
+        let identity = (key.epoch().get(), key.generation(), key.content_revision());
+        if let Some(mark) = self
+            .high_water
+            .iter_mut()
+            .find(|mark| mark.dimension == key.dimension() && mark.terrain == *key.key())
+        {
+            if identity > mark.identity() {
+                mark.epoch = identity.0;
+                mark.generation = identity.1;
+                mark.content = identity.2;
+                mark.delivered = false;
+            }
+            return;
+        }
+        self.high_water.push(HighWaterMark {
+            dimension: key.dimension(),
+            terrain: *key.key(),
+            epoch: identity.0,
+            generation: identity.1,
+            content: identity.2,
+            delivered: false,
+        });
+    }
+
+    /// The payload-only charge of one job beside the identity and allocation
+    /// size of the shared Arc its payload references. A shared allocation is
+    /// charged once for the whole time any held unit references it, while
+    /// separately allocated equal payloads charge separately.
+    fn payload_charge(job: &PreparationJob) -> (usize, Vec<(usize, usize)>) {
+        match job.payload() {
+            PreparationPayload::Near(near) => {
+                let identity = Self::arc_identity(near.registry());
+                (
+                    near.owned_bytes(),
+                    vec![(identity, registry_allocation(near.registry()))],
+                )
+            }
+            PreparationPayload::Far(far) => {
+                let identity = Self::arc_identity(far.params());
+                (
+                    far.owned_bytes(),
+                    vec![(identity, std::mem::size_of::<WorldgenParams>())],
+                )
+            }
+        }
+    }
+
+    /// Releases one queue-held ownership: its payload bytes always, plus each
+    /// referenced shared allocation once the last holder releases it, so a
+    /// later allocation reusing an address always charges again. The unit
+    /// itself is already out of the queue. Returns the measured bytes
+    /// released.
+    fn release_ownership(&mut self, charge: usize, references: &[usize]) -> u64 {
+        let mut released = charge;
+        self.charge -= charge;
+        for identity in references {
+            if !self
+                .pending
+                .iter()
+                .any(|other| other.references.contains(identity))
+            {
+                if let Some(index) = self.shared.iter().position(|(held, _)| held == identity) {
+                    let (_, bytes) = self.shared.remove(index);
+                    released += bytes;
+                    self.charge -= bytes;
+                }
+            }
+        }
+        released as u64
+    }
+
+    /// The worker step for one consumed unit: the payload allocation ends
+    /// here, a fresh identity publishes a checked result that owns its
+    /// geometry, and a retired, stale or duplicate identity releases exactly
+    /// once without publishing.
+    fn consume_pending(&mut self, unit: PendingUnit) {
+        let PendingUnit {
+            ticket,
+            job,
+            charge,
+            references,
+        } = unit;
+        // The worker consumes the owned input allocation here, and it never
+        // observes or mutates any mirror, input admission owner or frame.
+        let _ = self.release_ownership(charge, &references);
+        let key = *job.key();
+        if self.is_retired(key.epoch()) || self.is_stale_delivery(&key) {
+            return;
+        }
+        let geometry = match job.payload() {
+            PreparationPayload::Near(_) => PreparedGeometry::Near(Vec::new()),
+            PreparationPayload::Far(_) => PreparedGeometry::Far(Vec::new()),
+        };
+        let (outcome, charge) = match PreparedGeometry::try_new(geometry).map(Arc::new) {
+            Ok(geometry) => {
+                let geometry_charge = geometry_allocation(&geometry);
+                match self.charge.checked_add(geometry_charge) {
+                    Some(total) if total <= self.limits.preparation_bytes() => {
+                        (Ok(geometry), geometry_charge)
+                    }
+                    // A geometry the byte bound cannot own publishes as a
+                    // typed capacity failure instead of an over-bound
+                    // allocation.
+                    _ => (Err(ClientError::Capacity), 0),
+                }
+            }
+            Err(error) => (Err(error), 0),
+        };
+        let result = PreparationResult::try_new(ticket, key, outcome).expect("checked result");
+        self.charge += charge;
+        self.completed.push_back(CompletedUnit { result, charge });
+    }
+}
+
+impl PreparationPort for PreparationQueue {
+    fn try_submit(
+        &mut self,
+        job: PreparationJob,
+    ) -> Result<PreparationTicket, RejectedPreparation> {
+        if self.is_retired(job.key().epoch()) {
+            // A retired epoch never admits new work; the complete job returns
+            // with the typed stale class.
+            return Err(
+                RejectedPreparation::try_new(ClientError::StaleEpoch, job).expect("rejection")
+            );
+        }
+        // Every owned record counts: queue-held, worker-held and retained.
+        let held = self.pending.len() + self.completed.len() + self.retained.len();
+        let Some(held_plus_one) = held.checked_add(1) else {
+            return Err(
+                RejectedPreparation::try_new(ClientError::Capacity, job).expect("rejection")
+            );
+        };
+        if held_plus_one > self.limits.preparation_results() {
+            return Err(
+                RejectedPreparation::try_new(ClientError::Capacity, job).expect("rejection")
+            );
+        }
+        let (payload_bytes, references) = Self::payload_charge(&job);
+        // The byte bound uses checked arithmetic: an overflow is the typed
+        // capacity rejection, never a wrap or a panic. A shared allocation
+        // that is already charged adds nothing.
+        let mut extra = payload_bytes;
+        for (identity, bytes) in &references {
+            if !self.shared.iter().any(|(held, _)| held == identity) {
+                extra += *bytes;
+            }
+        }
+        let Some(new_charge) = self.charge.checked_add(extra) else {
+            return Err(
+                RejectedPreparation::try_new(ClientError::Capacity, job).expect("rejection")
+            );
+        };
+        if new_charge > self.limits.preparation_bytes() {
+            return Err(
+                RejectedPreparation::try_new(ClientError::Capacity, job).expect("rejection")
+            );
+        }
+        // Admission is all-or-nothing: nothing above mutated the owner, and
+        // every step of the commit below is infallible.
+        let Some(next) = self.next_ticket.checked_add(1) else {
+            return Err(
+                RejectedPreparation::try_new(ClientError::Capacity, job).expect("rejection")
+            );
+        };
+        let ticket = PreparationTicket::try_new(self.next_ticket).expect("monotonic ticket");
+        self.next_ticket = next;
+        self.tickets_issued = self.tickets_issued.saturating_add(1);
+        self.charge = new_charge;
+        for (identity, bytes) in &references {
+            if !self.shared.iter().any(|(held, _)| held == identity) {
+                self.shared.push((*identity, *bytes));
+            }
+        }
+        self.bump_high_water(job.key());
+        self.pending.push_back(PendingUnit {
+            ticket,
+            job,
+            charge: payload_bytes,
+            references: references
+                .into_iter()
+                .map(|(identity, _)| identity)
+                .collect(),
+        });
+        Ok(ticket)
+    }
+
+    fn poll_ready(&mut self) -> Option<PreparationResult> {
+        loop {
+            let unit = self.completed.pop_front()?;
+            let CompletedUnit { result, charge } = unit;
+            let key = *result.key();
+            if self.is_retired(key.epoch()) || self.is_stale_delivery(&key) {
+                // A result that went stale while awaiting delivery releases
+                // its geometry exactly once and never publishes.
+                self.charge -= charge;
+                continue;
+            }
+            let outcome = result.outcome().clone();
+            if let Ok(geometry) = outcome {
+                // Retain the delivered geometry: a superseded entry of the
+                // same terrain key releases exactly once and the fresh
+                // allocation takes its place at the same total charge.
+                if let Some(index) = self.retained.iter().position(|entry| {
+                    entry.key.dimension() == key.dimension() && *entry.key.key() == *key.key()
+                }) {
+                    if let Some(superseded) = self.retained.remove(index) {
+                        self.charge -= superseded.charge;
+                    }
+                }
+                self.retained.push_back(RetainedUnit {
+                    key,
+                    geometry,
+                    charge,
+                });
+            }
+            if let Some(mark) = self
+                .high_water
+                .iter_mut()
+                .find(|mark| mark.dimension == key.dimension() && mark.terrain == *key.key())
+            {
+                mark.delivered = true;
+            }
+            return Some(result);
+        }
+    }
+
+    fn invalidate(&mut self, epoch: SessionEpoch) -> InvalidationReport {
+        // Invalidation is monotonic: every epoch at or below the named one is
+        // dead, matching the session owner's monotonically issued epochs.
+        self.retired_through = Some(
+            self.retired_through
+                .map_or(epoch.get(), |prev| prev.max(epoch.get())),
+        );
+        let mut jobs_cancelled = 0u32;
+        let mut results_stale = 0u32;
+        let mut bytes_released = 0u64;
+
+        let remaining = self.pending.len();
+        for _ in 0..remaining {
+            let unit = self.pending.pop_front().expect("queued unit");
+            if self.is_retired(unit.job.key().epoch()) {
+                jobs_cancelled += 1;
+                let PendingUnit {
+                    charge, references, ..
+                } = unit;
+                bytes_released += self.release_ownership(charge, &references);
+            } else {
+                self.pending.push_back(unit);
+            }
+        }
+        let remaining = self.completed.len();
+        for _ in 0..remaining {
+            let unit = self.completed.pop_front().expect("completed unit");
+            if self.is_retired(unit.result.key().epoch()) {
+                results_stale += 1;
+                bytes_released += unit.charge as u64;
+                self.charge -= unit.charge;
+            } else {
+                self.completed.push_back(unit);
+            }
+        }
+        let remaining = self.retained.len();
+        for _ in 0..remaining {
+            let unit = self.retained.pop_front().expect("retained unit");
+            if self.is_retired(unit.key.epoch()) {
+                // Retained geometry joins the released byte total without its
+                // own count: it was already delivered, so it is neither a
+                // cancelled job nor a stale result.
+                bytes_released += unit.charge as u64;
+                self.charge -= unit.charge;
+            } else {
+                self.retained.push_back(unit);
+            }
+        }
+        // High-water marks of retired epochs drop with their ownership, so a
+        // fresh epoch's first identity for the same terrain key is fresh.
+        let bound = self.retired_through.expect("just set");
+        self.high_water.retain(|mark| mark.epoch > bound);
+        InvalidationReport::try_new(jobs_cancelled, results_stale, bytes_released)
+            .expect("checked report")
     }
 }
