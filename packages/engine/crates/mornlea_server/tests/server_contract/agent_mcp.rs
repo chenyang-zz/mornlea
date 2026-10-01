@@ -1679,3 +1679,6 @@ fn closed_listener() -> TcpListener {
     use std::os::windows::io::FromRawSocket;
     unsafe { TcpListener::from_raw_socket(u64::MAX as usize) }
 }
+
+#[path = "mcp_lifecycle.rs"]
+mod lifecycle;

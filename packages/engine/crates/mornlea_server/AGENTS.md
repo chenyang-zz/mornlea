@@ -14,6 +14,14 @@ Python Agent process. Workspace membership is `packages/engine/Cargo.toml`.
 No dependency-direction test guards this crate yet; review the manifest
 against this file.
 
+## Agent boundary
+
+[`src/agent/AGENTS.md`](src/agent/AGENTS.md) owns loopback HTTP, lease, host,
+memory, snapshot and MCP lifecycle guidance. The actual `McpService` implements
+`McpLifecycle`; successful explicit deadline-aware close proves every admitted
+connection and accept join retired. Timeout retains held tool ownership for
+same-service retry. Full Agent-to-authority runtime composition remains separate.
+
 ## Persistence boundary
 
 `src/store/AGENTS.md` owns disk worker I/O, decoded loads, durable acknowledgment

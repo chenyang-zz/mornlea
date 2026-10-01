@@ -24,18 +24,19 @@
 //! inclusive at the limit. Read-header, read, write, and idle timeouts are
 //! 5 s, 35 s, 35 s, and 5 s; connections serve exactly one request and then
 //! close, so there is no keep-alive idle state to time out. Closing shuts the
-//! registry first, then the HTTP listener; a serve failure only settles the
-//! done channel and never touches the world.
+//! registry first, then interrupts owned sockets and retires all connection
+//! and accept joins. A serve failure only settles the done channel and never
+//! touches the world.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::agent::snapshot::{SnapshotLease, SnapshotRegistry, canonical_snapshot_digest};
-use crate::contracts::ServerError;
+use crate::contracts::{Deadline, McpLifecycle, Operation, ServerError};
 
 /// Frozen MCP protocol version required after `initialize`.
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -2041,6 +2042,15 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 // HTTP service.
 // ---------------------------------------------------------------------------
 
+// The accept loop is the sole admission owner. Finished workers remain
+// charged until their actual join is collected; no historical record survives.
+const MAX_MCP_CONNECTIONS: usize = 16;
+
+struct ConnectionOwner {
+    shutdown: TcpStream,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
 struct ServiceInner {
     registry: SnapshotRegistry,
     tools: Arc<dyn PlanningTools>,
@@ -2050,10 +2060,14 @@ struct ServiceInner {
     endpoint: String,
     closing: AtomicBool,
     done: mpsc::Sender<Result<(), String>>,
+    connections: Mutex<Vec<ConnectionOwner>>,
+    close_start: Mutex<bool>,
+    diagnostic: Mutex<Option<ServerError>>,
 }
 
-/// Stateless MCP service on a loopback listener. `close` is idempotent and
-/// settles the serve channel exactly once.
+/// Stateless MCP service with bounded ownership of loopback connections.
+/// Only successful explicit deadline-aware close proves all joins retired;
+/// compatibility cleanup cannot kill a held synchronous planning tool.
 pub struct McpService {
     inner: Arc<ServiceInner>,
     accept: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -2091,6 +2105,9 @@ impl McpService {
                 endpoint,
                 closing: AtomicBool::new(false),
                 done: done_tx,
+                connections: Mutex::new(Vec::with_capacity(MAX_MCP_CONNECTIONS)),
+                close_start: Mutex::new(false),
+                diagnostic: Mutex::new(None),
             }),
             accept: Mutex::new(None),
             done: Mutex::new(None),
@@ -2113,15 +2130,65 @@ impl McpService {
         &self.inner.authority
     }
 
-    /// Idempotent close: the registry goes first so outstanding read leases
-    /// die before the HTTP listener, then the accept loop is joined.
+    /// Best-effort off-tick compatibility cleanup with a finite budget.
+    /// Use `close_until` when resource retirement must be proven or retried.
     pub fn close(&self) {
-        if self.inner.closing.swap(true, Ordering::SeqCst) {
-            return;
+        let _ = self.close_until(Deadline::at(Instant::now() + Duration::from_secs(30)));
+    }
+
+    /// Freezes capabilities and admission, interrupts socket I/O, and retires
+    /// only finished joins. Timeout retains synchronous tool ownership for
+    /// same-service retry; a collected join diagnostic is returned once.
+    pub fn close_until(&self, deadline: Deadline) -> Result<(), ServerError> {
+        self.inner.closing.store(true, Ordering::SeqCst);
+        loop {
+            match self.inner.close_start.try_lock() {
+                Ok(mut started) => {
+                    // Registry close settles lease cancellation after releasing
+                    // its internal lock; concurrent callers must observe that
+                    // complete freeze before any successful retirement result.
+                    if !*started {
+                        self.inner.registry.close_shared();
+                        *started = true;
+                    }
+                    break;
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(ServerError::Internal {
+                        invariant: "mcp close start",
+                    });
+                }
+                Err(std::sync::TryLockError::WouldBlock) => wait_close(deadline)?,
+            }
         }
-        self.inner.registry.close_shared();
-        if let Some(handle) = self.accept.lock().unwrap().take() {
-            let _ = handle.join();
+        {
+            let connections = self.inner.connections.lock().unwrap();
+            for owner in connections.iter() {
+                // Peer EOF and repeated shutdown do not make cleanup fail.
+                let _ = owner.shutdown.shutdown(Shutdown::Both);
+            }
+        }
+        loop {
+            let connections_empty = self.inner.retire_connections();
+            let accept_empty = {
+                let mut accept = self.accept.lock().unwrap();
+                if accept.as_ref().is_some_and(|join| join.is_finished())
+                    && accept.take().unwrap().join().is_err()
+                {
+                    self.inner.record_diagnostic("mcp accept join");
+                }
+                accept.is_none()
+            };
+            if connections_empty && accept_empty {
+                return self
+                    .inner
+                    .diagnostic
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .map_or(Ok(()), Err);
+            }
+            wait_close(deadline)?;
         }
     }
 
@@ -2134,20 +2201,99 @@ impl McpService {
     }
 }
 
+fn wait_close(deadline: Deadline) -> Result<(), ServerError> {
+    let now = Instant::now();
+    if deadline.expired(now) {
+        return Err(ServerError::Timeout {
+            operation: Operation::Close,
+        });
+    }
+    std::thread::sleep(Duration::from_millis(1).min(deadline.instant() - now));
+    Ok(())
+}
+
+impl McpLifecycle for McpService {
+    fn close(&mut self, deadline: Deadline) -> Result<(), ServerError> {
+        McpService::close_until(self, deadline)
+    }
+}
+
+impl ServiceInner {
+    fn record_diagnostic(&self, invariant: &'static str) {
+        let mut diagnostic = self.diagnostic.lock().unwrap();
+        if diagnostic.is_none() {
+            *diagnostic = Some(ServerError::Internal { invariant });
+        }
+    }
+
+    fn retire_connections(&self) -> bool {
+        let mut owners = self.connections.lock().unwrap();
+        self.retire_finished(&mut owners);
+        owners.is_empty()
+    }
+
+    fn retire_finished(&self, owners: &mut Vec<ConnectionOwner>) {
+        let mut index = 0;
+        while index < owners.len() {
+            if owners[index]
+                .join
+                .as_ref()
+                .is_some_and(|join| join.is_finished())
+            {
+                // Finished-only joins cannot await tool execution. Settlement
+                // stays under the owner lock so empty also proves diagnostics
+                // were recorded before another close can observe retirement.
+                if owners[index].join.take().unwrap().join().is_err() {
+                    self.record_diagnostic("mcp connection join");
+                }
+                owners.swap_remove(index);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn admit(self: &Arc<Self>, stream: TcpStream) {
+        let mut owners = self.connections.lock().unwrap();
+        self.retire_finished(&mut owners);
+        // Closing sets the flag before taking this lock; every earlier
+        // admission is inserted before close interrupts its shutdown handle.
+        if self.closing.load(Ordering::SeqCst) || owners.len() == MAX_MCP_CONNECTIONS {
+            return;
+        }
+        let shutdown = match stream.try_clone() {
+            Ok(shutdown) => shutdown,
+            Err(_) => {
+                self.record_diagnostic("mcp connection spawn");
+                return;
+            }
+        };
+        let inner = self.clone();
+        match std::thread::Builder::new()
+            .name("mornlea-mcp-connection".to_owned())
+            .spawn(move || serve_connection(&inner, stream))
+        {
+            Ok(join) => owners.push(ConnectionOwner {
+                shutdown,
+                join: Some(join),
+            }),
+            Err(_) => self.record_diagnostic("mcp connection spawn"),
+        }
+    }
+}
+
 fn serve_loop(inner: Arc<ServiceInner>, listener: TcpListener) {
     listener.set_nonblocking(true).unwrap_or_default();
     loop {
+        // Retained shutdown clones keep the socket alive after a worker exits;
+        // idle collection restores ordinary peer EOF without a new admission.
+        inner.retire_connections();
         if inner.closing.load(Ordering::SeqCst) {
             let _ = inner.done.send(Ok(()));
             return;
         }
         match listener.accept() {
-            Ok((stream, _)) => {
-                let inner = inner.clone();
-                let _ = std::thread::Builder::new()
-                    .name("mornlea-mcp-connection".to_owned())
-                    .spawn(move || serve_connection(&inner, stream));
-            }
+            Ok((stream, _)) => inner.admit(stream),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(10));
             }
