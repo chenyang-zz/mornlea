@@ -19,8 +19,9 @@ against this file.
 [`src/agent/AGENTS.md`](src/agent/AGENTS.md) owns loopback HTTP, lease, host,
 memory, snapshot and MCP lifecycle guidance. The actual `McpService` implements
 `McpLifecycle`; successful explicit deadline-aware close proves every admitted
-connection and accept join retired. Timeout retains held tool ownership for
-same-service retry. Full Agent-to-authority runtime composition remains separate.
+connection and accept join retired. Registry acquisition honors the same
+caller deadline; timeout retains snapshots or held tool ownership for same-service
+retry. Full Agent-to-authority runtime composition remains separate.
 
 ## Persistence boundary
 

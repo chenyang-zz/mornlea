@@ -24,15 +24,31 @@ Finished owners retire on accept-loop iterations and explicit close, with
 finished-only joins and diagnostic settlement under the corresponding owner
 mutex. Ordinary response EOF must not depend on a later admission.
 
-`McpService::close_until` and its actual `McpLifecycle` implementation freeze
-capabilities, stop admission and interrupt retained socket I/O. The independent
-close-start mutex serializes complete registry cancellation; contention polls
-the caller's absolute deadline. Timeout retains actual joins for same-service
-retry. A held synchronous `PlanningTools` cannot be killed. Only successful
-explicit close proves accept and connection joins retired; compatibility
+`McpService::close_until` and its actual `McpLifecycle` implementation stop
+admission before attempting registry cancellation and interrupting retained
+socket I/O. The independent close-start mutex and registry core acquisition
+both honor the caller's absolute deadline. Registry contention retains snapshot
+records and leaves the start barrier retryable; worker timeout retains actual
+joins for same-service retry. A held synchronous `PlanningTools` cannot be
+killed. Only successful explicit close proves accept and connection joins retired;
+compatibility
 `close` is finite best-effort cleanup. Pending join diagnostics are bounded and
 returned once after retirement. No world, store or Agent-process ownership
 crosses this boundary.
+
+## Snapshot close (`snapshot.rs`)
+
+`SnapshotRegistry::close_until_shared` uses the same real monotonic deadline
+passed by MCP. Core contention polls outside locks; poison reports
+`Internal("snapshot close")`. The common private settlement also serves legacy
+blocking `close_shared`. Every retained cancellation flag settles under the
+actual core mutex before its closed bit can authorize a completed observation.
+`REGISTRY_CAPACITY` bounds the records; drained snapshot payloads drop after
+unlocking. Direct and cross-service callers share this completion boundary.
+
+Private `close_tests` hold the actual core mutex behind entry/release channels,
+exercise MCP deadline refusal and retry, and prove actual shared/direct close
+cancellation and typed poison failure. They expose no production fault API.
 
 ## Helpers and regression evidence
 
@@ -51,6 +67,7 @@ in `agent_snapshot.rs`; actual Python integration is in `tests/agent_process/`.
 From the repository root with the pinned Rust toolchain and explicit target:
 
 ```bash
+cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --lib --locked
 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked agent_mcp::
 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test server_contract --locked agent_snapshot::
 cargo test --manifest-path packages/engine/Cargo.toml -p mornlea_server --test agent_process --locked

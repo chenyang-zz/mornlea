@@ -2144,11 +2144,11 @@ impl McpService {
         loop {
             match self.inner.close_start.try_lock() {
                 Ok(mut started) => {
-                    // Registry close settles lease cancellation after releasing
-                    // its internal lock; concurrent callers must observe that
-                    // complete freeze before any successful retirement result.
+                    // Mark this service frozen only after the shared registry
+                    // completes bounded cancellation under the same deadline.
+                    // A refused registry close leaves this barrier retryable.
                     if !*started {
-                        self.inner.registry.close_shared();
+                        self.inner.registry.close_until_shared(deadline)?;
                         *started = true;
                     }
                     break;

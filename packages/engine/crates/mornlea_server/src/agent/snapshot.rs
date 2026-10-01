@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use mornlea_domain::registered_block;
 
 use crate::contracts::{
-    Clock, Deadline, NamespaceId, PlanningSnapshot, Resource, ServerError, SnapshotId,
+    Clock, Deadline, NamespaceId, Operation, PlanningSnapshot, Resource, ServerError, SnapshotId,
     SnapshotPort, SnapshotRegistration,
 };
 
@@ -1026,20 +1026,61 @@ impl SnapshotRegistry {
         Ok(())
     }
 
-    /// Idempotent shared close for the MCP service, which holds the registry
-    /// behind `Arc` and cannot take `&mut`.
+    /// Idempotent blocking compatibility close. Deadline-aware owners use
+    /// `close_until_shared` so contention cannot extend their cleanup budget.
     pub fn close_shared(&self) {
-        let mut core = self.shared.core.lock().unwrap();
-        if core.closed {
-            return;
+        let records = {
+            let mut core = self.shared.core.lock().unwrap();
+            Self::settle_close(&mut core)
+        };
+        drop(records);
+    }
+
+    /// Closes shared capabilities within one real monotonic deadline. Core
+    /// contention times out without discarding records, allowing same-owner
+    /// retry. Closed observation always follows complete lease cancellation.
+    pub fn close_until_shared(&self, deadline: Deadline) -> Result<(), ServerError> {
+        loop {
+            match self.shared.core.try_lock() {
+                Ok(mut core) => {
+                    let records = Self::settle_close(&mut core);
+                    drop(core);
+                    // Snapshot payload destruction belongs outside ownership
+                    // locking, after all retained lease flags are settled.
+                    drop(records);
+                    return Ok(());
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(ServerError::Internal {
+                        invariant: "snapshot close",
+                    });
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    let now = Instant::now();
+                    if deadline.expired(now) {
+                        return Err(ServerError::Timeout {
+                            operation: Operation::Close,
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(1).min(deadline.instant() - now));
+                }
+            }
         }
-        core.closed = true;
-        let records: Vec<Record> = core.by_id.drain().map(|(_, record)| record).collect();
-        core.by_bearer.clear();
-        drop(core);
-        for record in &records {
+    }
+
+    fn settle_close(core: &mut Core) -> Vec<Record> {
+        if core.closed {
+            return Vec::new();
+        }
+        // At most REGISTRY_CAPACITY flags settle under the same mutex as the
+        // closed bit; direct and cross-service callers share this completion.
+        for record in core.by_id.values() {
             record.cancelled.store(true, Ordering::SeqCst);
         }
+        core.closed = true;
+        let records = core.by_id.drain().map(|(_, record)| record).collect();
+        core.by_bearer.clear();
+        records
     }
 
     /// Authorizes a bearer without copying the frozen snapshot. Every failure
@@ -1262,5 +1303,238 @@ impl SnapshotLease {
 
     pub fn expires_at(&self) -> Instant {
         self.expires_at
+    }
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+    use crate::agent::mcp::McpService;
+    use crate::contracts::Operation;
+    use std::sync::mpsc;
+
+    const WAIT: Duration = Duration::from_secs(5);
+
+    struct RealClock;
+
+    impl Clock for RealClock {
+        fn monotonic(&self) -> Instant {
+            Instant::now()
+        }
+
+        fn unix_ms(&self) -> i64 {
+            0
+        }
+    }
+
+    fn registry() -> SnapshotRegistry {
+        SnapshotRegistry::try_new(
+            Arc::new(RealClock),
+            Arc::new(SystemEntropy),
+            "http://127.0.0.1:9/mcp".to_owned(),
+        )
+        .expect("actual registry")
+    }
+
+    fn identity(tag: u8) -> [u8; 16] {
+        let mut bytes = [tag; 16];
+        bytes[6] = tag & 0x0f | 0x40;
+        bytes[8] = tag & 0x3f | 0x80;
+        bytes
+    }
+
+    fn leased_registry() -> (SnapshotRegistry, Vec<SnapshotLease>) {
+        use crate::contracts::{
+            SnapshotCompanion, SnapshotIssuer, SnapshotTaskStatusText, SnapshotTerrain,
+        };
+        use mornlea_domain::{
+            BlockPos, CommandText, CompanionId, FiniteVec3, LookAngles, PlayerId,
+        };
+        use mornlea_storage::ItemStack;
+
+        let position = FiniteVec3::try_new([0.0, 64.0, 0.0]).unwrap();
+        let look = LookAngles::try_new(0.0, 0.0).unwrap();
+        let companion = CompanionId::try_from_bytes(identity(0x66)).unwrap();
+        let snapshot = PlanningSnapshot::try_new(
+            1,
+            0,
+            CommandText::try_from_canonical("planning".to_owned()).unwrap(),
+            SnapshotIssuer {
+                player_id: PlayerId::try_from_bytes(identity(0x99)).unwrap(),
+                position,
+                look,
+                look_hit: None,
+            },
+            SnapshotCompanion {
+                companion_id: companion,
+                position,
+                look,
+                task_status: SnapshotTaskStatusText::idle(),
+                inventory: [ItemStack {
+                    item: 0,
+                    count: 0,
+                    durability: 0,
+                }; 36],
+            },
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            SnapshotTerrain::try_new(
+                BlockPos::new(-16, 56, -16),
+                TERRAIN_DIMENSIONS,
+                vec![0; TERRAIN_READY_BYTES],
+                vec![-65; TERRAIN_COLUMNS],
+                vec![0; TERRAIN_BLOCKS],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let registry = registry();
+        let mut leases = Vec::new();
+        for generation in 1..=REGISTRY_CAPACITY as u64 {
+            let registration = registry
+                .register_shared(
+                    NamespaceId::try_from_bytes(identity(0x44)).unwrap(),
+                    companion,
+                    generation,
+                    snapshot.clone(),
+                    Deadline::at(Instant::now() + WAIT),
+                )
+                .expect("register actual snapshot");
+            let bearer = base64_encode(&registration.capability, URL_ALPHABET, false);
+            leases.push(registry.lookup(&bearer).expect("actual lease"));
+        }
+        (registry, leases)
+    }
+
+    #[test]
+    fn mcp_close_deadline_bounds_actual_registry_core_contention() {
+        let (registry, leases) = leased_registry();
+        let service = Arc::new(McpService::try_new(registry.clone()).expect("actual MCP"));
+        let held = registry.clone();
+        let (entered, entry) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            let core = held.shared.core.lock().unwrap();
+            entered.send(()).unwrap();
+            let result = released.recv_timeout(WAIT);
+            drop(core);
+            result
+        });
+        let entry_result = entry.recv_timeout(WAIT);
+        let closing = service.clone();
+        let (done, returned) = mpsc::channel();
+        let closer = std::thread::spawn(move || {
+            let start = Instant::now();
+            let result = closing.close_until(Deadline::at(start + Duration::from_millis(5)));
+            done.send((result, start.elapsed())).unwrap();
+        });
+        let observation = returned.recv_timeout(Duration::from_millis(100));
+        let admission_stopped = service.wait_done(Duration::from_millis(100));
+        let retained = leases.iter().all(|lease| lease.checkpoint().is_ok());
+        let released = release.send(());
+        let held_result = owner.join().expect("join registry holder");
+        closer.join().expect("join actual closer");
+        let retry = service.close_until(Deadline::at(Instant::now() + WAIT));
+        let repeated = service.close_until(Deadline::at(Instant::now()));
+        assert!(entry_result.is_ok(), "actual core gate did not enter");
+        assert!(released.is_ok());
+        assert!(held_result.is_ok());
+        let (result, elapsed) =
+            observation.expect("MCP close blocked beyond its deadline on actual registry core");
+        assert_eq!(
+            result,
+            Err(ServerError::Timeout {
+                operation: Operation::Close
+            })
+        );
+        assert!(elapsed < Duration::from_millis(100));
+        assert_eq!(admission_stopped, Some(Ok(())));
+        assert!(
+            retained,
+            "contention timeout must retain registry ownership until retry"
+        );
+        assert!(leases.iter().all(|lease| lease.checkpoint().is_err()));
+        assert_eq!(retry, Ok(()));
+        assert_eq!(repeated, Ok(()));
+    }
+
+    #[test]
+    fn shared_direct_and_mcp_close_complete_all_actual_lease_cancellation() {
+        let (registry, leases) = leased_registry();
+        let services: Vec<_> = (0..2)
+            .map(|_| {
+                Arc::new(McpService::try_new(registry.clone()).expect("actual shared-registry MCP"))
+            })
+            .collect();
+        let start = Arc::new(std::sync::Barrier::new(4));
+        let direct = registry.clone();
+        let direct_leases = leases.clone();
+        let direct_start = start.clone();
+        let direct_close = std::thread::spawn(move || {
+            direct_start.wait();
+            direct.close_shared();
+            direct_leases
+                .iter()
+                .all(|lease| lease.checkpoint().is_err())
+        });
+        let attempts: Vec<_> = services
+            .iter()
+            .map(|service| {
+                let service = service.clone();
+                let leases = leases.clone();
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    let result = service.close_until(Deadline::at(Instant::now() + WAIT));
+                    (
+                        result,
+                        leases.iter().all(|lease| lease.checkpoint().is_err()),
+                    )
+                })
+            })
+            .collect();
+        start.wait();
+        let direct_cancelled = direct_close.join().expect("join direct close");
+        let results: Vec<_> = attempts
+            .into_iter()
+            .map(|attempt| attempt.join().expect("join MCP close"))
+            .collect();
+        let repeated = registry.close_until_shared(Deadline::at(Instant::now()));
+        let core = registry.shared.core.lock().unwrap();
+        assert!(direct_cancelled);
+        assert!(core.closed);
+        assert!(core.by_id.is_empty());
+        assert!(core.by_bearer.is_empty());
+        assert!(
+            leases
+                .iter()
+                .all(|lease| lease.cancelled.load(Ordering::SeqCst))
+        );
+        drop(core);
+        assert_eq!(results, vec![(Ok(()), true); 2]);
+        assert_eq!(repeated, Ok(()));
+        for service in services {
+            assert_eq!(service.close_until(Deadline::at(Instant::now())), Ok(()));
+        }
+    }
+
+    #[test]
+    fn poisoned_actual_registry_close_is_typed_failure() {
+        let registry = registry();
+        let poison = registry.clone();
+        let owner = std::thread::spawn(move || {
+            let _core = poison.shared.core.lock().unwrap();
+            panic!("deliberate actual registry owner panic");
+        });
+        let panicked = owner.join().is_err();
+        let direct = registry.close_until_shared(Deadline::at(Instant::now() + WAIT));
+        assert!(panicked);
+        assert_eq!(
+            direct,
+            Err(ServerError::Internal {
+                invariant: "snapshot close"
+            })
+        );
     }
 }
