@@ -103,6 +103,7 @@ enum Command {
 struct PendingLifecycle {
     kind: LifecycleKind,
     reply: mpsc::Receiver<Result<(), ServerError>>,
+    outcome: Option<Result<(), ServerError>>,
     disconnected: bool,
 }
 
@@ -229,6 +230,7 @@ impl Background {
                         self.lifecycle = Some(PendingLifecycle {
                             kind,
                             reply: receive,
+                            outcome: None,
                             disconnected: false,
                         });
                         break;
@@ -241,6 +243,7 @@ impl Background {
                         self.lifecycle = Some(PendingLifecycle {
                             kind,
                             reply: receive,
+                            outcome: None,
                             disconnected: true,
                         });
                         return Err(internal("store owner disconnected"));
@@ -253,33 +256,47 @@ impl Background {
             if pending.disconnected {
                 return Err(internal("store owner disconnected"));
             }
-            match pending.reply.try_recv() {
-                Ok(result) => {
-                    let mut pending = self.lifecycle.take().expect("retained lifecycle");
-                    if result.is_ok() && kind == LifecycleKind::Close {
-                        // A successful close joins through backend destruction. An
-                        // unexpected exit retains the failed close boundary forever.
-                        let joined = self
-                            .thread
-                            .take()
-                            .ok_or_else(|| internal("store owner join"))
-                            .and_then(|thread| {
-                                thread.join().map_err(|_| internal("store owner join"))
-                            });
-                        if let Err(error) = joined {
-                            pending.disconnected = true;
-                            self.lifecycle = Some(pending);
-                            return Err(error);
-                        }
+            if pending.outcome.is_none() {
+                match pending.reply.try_recv() {
+                    // Retain the result before waiting for owner destruction.
+                    Ok(result) => pending.outcome = Some(result),
+                    Err(mpsc::TryRecvError::Empty) => {
+                        wait(deadline, kind.operation())?;
+                        continue;
                     }
-                    return result;
-                }
-                Err(mpsc::TryRecvError::Empty) => wait(deadline, kind.operation())?,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    pending.disconnected = true;
-                    return Err(internal("store owner disconnected"));
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        pending.disconnected = true;
+                        return Err(internal("store owner disconnected"));
+                    }
                 }
             }
+            let result = pending.outcome.expect("retained lifecycle outcome");
+            if result.is_ok() && kind == LifecycleKind::Close {
+                let Some(thread) = self.thread.as_ref() else {
+                    pending.disconnected = true;
+                    return Err(internal("store owner join"));
+                };
+                if !thread.is_finished() {
+                    // Close may have succeeded while backend destruction still
+                    // runs. Timeout keeps both that success and its owner handle.
+                    wait(deadline, kind.operation())?;
+                    continue;
+                }
+                // Joining a finished owner cannot wait on backend destruction.
+                // An unexpected exit retains the failed close boundary forever.
+                let joined = self
+                    .thread
+                    .take()
+                    .expect("finished store owner")
+                    .join()
+                    .map_err(|_| internal("store owner join"));
+                if let Err(error) = joined {
+                    pending.disconnected = true;
+                    return Err(error);
+                }
+            }
+            self.lifecycle = None;
+            return result;
         }
     }
 }

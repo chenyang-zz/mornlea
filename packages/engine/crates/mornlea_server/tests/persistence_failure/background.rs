@@ -82,6 +82,35 @@ impl Gate {
             .unwrap();
     }
 }
+/// The parent keeps the I/O gate and releases it before every assertion. The
+/// driver waits for the parent's causal start before observing held operations.
+fn observe_held<T: Send + 'static>(
+    entered: mpsc::Receiver<()>,
+    release: &Release,
+    work: impl FnOnce(mpsc::Receiver<()>) -> T + Send + 'static,
+) -> T {
+    let (start, started) = mpsc::sync_channel(1);
+    let (returned, receive) = mpsc::sync_channel(1);
+    let driver = thread::spawn(move || returned.send(work(started)).unwrap());
+    let gate_entered = entered.recv_timeout(BOUND);
+    let _ = start.send(());
+    let observed = receive.recv_timeout(Duration::from_secs(1));
+    let returned_before_release = observed.is_ok();
+    release.open();
+    let result = observed.or_else(|_| receive.recv_timeout(BOUND));
+    let joined = driver.join();
+    assert!(
+        gate_entered.is_ok(),
+        "backend operation must enter its gate"
+    );
+    joined.unwrap();
+    assert!(
+        returned_before_release,
+        "held operation must return before gate release"
+    );
+    result.unwrap()
+}
+
 struct GatedBackend {
     write: Gate,
 }
@@ -194,6 +223,7 @@ struct ScriptedBackend {
     write_gate: Option<Gate>,
     sync_gate: Option<Gate>,
     close_gate: Option<Gate>,
+    drop_gate: Option<Gate>,
     wrong_ticket: bool,
     panic_write: bool,
     partial: bool,
@@ -208,6 +238,7 @@ fn scripted() -> (ScriptedBackend, Arc<Mutex<Calls>>) {
             write_gate: None,
             sync_gate: None,
             close_gate: None,
+            drop_gate: None,
             wrong_ticket: false,
             panic_write: false,
             partial: false,
@@ -226,6 +257,9 @@ fn fault() -> ServerError {
 impl Drop for ScriptedBackend {
     fn drop(&mut self) {
         self.calls.lock().unwrap().drops += 1;
+        if let Some(gate) = self.drop_gate.take() {
+            gate.hold();
+        }
         assert!(!self.panic_drop, "explicit destructor panic");
     }
 }
@@ -327,35 +361,50 @@ fn slots_cancellation_partial_results_and_occupancy_are_retained() {
             snapshots: vec![cancelled.clone()],
         })
         .unwrap();
-    let mut state = authority();
-    store
-        .poll_tick(1, SaveBudget::default(), &mut state)
-        .unwrap();
-    entered.recv_timeout(BOUND).unwrap();
-    assert_eq!(store.worker_jobs(), 2);
-    assert_eq!(store.queued_jobs(), 1);
-    state.remember_dirty(snapshot(20));
-    assert_eq!(
-        store
-            .poll_tick(2, SaveBudget::default(), &mut state)
-            .unwrap()
-            .stats
-            .dirty,
-        1
-    );
-    assert_eq!(store.cancel_pending().unwrap(), vec![cancelled]);
-    assert_eq!(store.queued_jobs(), 0);
+    let held_calls = calls.clone();
+    let (mut store, workers, queued, dirty, returned, remaining, cancelled_poll, jobs, writes) =
+        observe_held(entered, &release, move |started| {
+            let mut state = authority();
+            store
+                .poll_tick(1, SaveBudget::default(), &mut state)
+                .unwrap();
+            started.recv().unwrap();
+            let workers = store.worker_jobs();
+            let queued = store.queued_jobs();
+            state.remember_dirty(snapshot(20));
+            let dirty = store
+                .poll_tick(2, SaveBudget::default(), &mut state)
+                .unwrap()
+                .stats
+                .dirty;
+            let returned = store.cancel_pending().unwrap();
+            let remaining = store.queued_jobs();
+            let cancelled_poll = store.poll(c);
+            let jobs = store.occupancy().jobs;
+            let writes = held_calls.lock().unwrap().writes;
+            (
+                store,
+                workers,
+                queued,
+                dirty,
+                returned,
+                remaining,
+                cancelled_poll,
+                jobs,
+                writes,
+            )
+        });
+    assert_eq!(workers, 2);
+    assert_eq!(queued, 1);
+    assert_eq!(dirty, 1);
+    assert_eq!(returned, vec![cancelled]);
+    assert_eq!(remaining, 0);
     assert!(matches!(
-        store.poll(c),
+        cancelled_poll,
         mornlea_server::contracts::SavePoll::Pending
     ));
-    assert_eq!(store.occupancy().jobs, 2);
-    assert_eq!(
-        calls.lock().unwrap().writes,
-        1,
-        "one serialized backend owner"
-    );
-    release.open();
+    assert_eq!(jobs, 2);
+    assert_eq!(writes, 1, "one serialized backend owner");
     let until = Instant::now() + BOUND;
     while store.held_completions() < 2 {
         store.drive_workers();
@@ -421,16 +470,14 @@ fn started_sync_timeout_retry_consumes_one_outcome() {
     let (sync, entered, release) = gate();
     backend.sync_gate = Some(sync);
     let store = StoreMailbox::try_new_background(limits(), backend).unwrap();
-    let (returned, receive) = mpsc::sync_channel(1);
-    let attempt = thread::spawn(move || {
+    let (mut store, result, different_kind) = observe_held(entered, &release, move |started| {
         let mut store = store;
         let result =
             store.sync(Deadline::after(Instant::now(), Duration::from_millis(500)).unwrap());
-        returned.send((store, result)).unwrap();
+        started.recv().unwrap();
+        let different_kind = store.close(deadline());
+        (store, result, different_kind)
     });
-    entered.recv_timeout(BOUND).unwrap();
-    let (mut store, result) = receive.recv_timeout(BOUND).unwrap();
-    attempt.join().unwrap();
     assert_eq!(
         result,
         Err(ServerError::Timeout {
@@ -438,10 +485,9 @@ fn started_sync_timeout_retry_consumes_one_outcome() {
         })
     );
     assert!(matches!(
-        store.close(deadline()),
+        different_kind,
         Err(ServerError::InvalidState { .. })
     ));
-    release.open();
     store.sync(deadline()).unwrap();
     assert_eq!(calls.lock().unwrap().syncs, 1);
     store.close(deadline()).unwrap();
@@ -458,16 +504,19 @@ fn queued_expired_sync_performs_no_backend_call() {
             snapshots: vec![snapshot(1)],
         })
         .unwrap();
-    store.drive_workers();
-    entered.recv_timeout(BOUND).unwrap();
-    let result = store.sync(Deadline::after(Instant::now(), Duration::from_millis(30)).unwrap());
+    let (mut store, result) = observe_held(entered, &release, move |started| {
+        store.drive_workers();
+        started.recv().unwrap();
+        let result =
+            store.sync(Deadline::after(Instant::now(), Duration::from_millis(30)).unwrap());
+        (store, result)
+    });
     assert_eq!(
         result,
         Err(ServerError::Timeout {
             operation: mornlea_server::contracts::Operation::Sync
         })
     );
-    release.open();
     assert!(wait_completion(&mut store, ticket).error.is_none());
     assert_eq!(
         store.sync(deadline()),
@@ -501,16 +550,14 @@ fn started_close_timeout_retains_success_for_join_without_replay() {
     let (close, entered, release) = gate();
     backend.close_gate = Some(close);
     let store = StoreMailbox::try_new_background(limits(), backend).unwrap();
-    let (returned, receive) = mpsc::sync_channel(1);
-    let attempt = thread::spawn(move || {
+    let (mut store, result, different_kind) = observe_held(entered, &release, move |started| {
         let mut store = store;
         let result =
             store.close(Deadline::after(Instant::now(), Duration::from_millis(500)).unwrap());
-        returned.send((store, result)).unwrap();
+        started.recv().unwrap();
+        let different_kind = store.sync(deadline());
+        (store, result, different_kind)
     });
-    entered.recv_timeout(BOUND).unwrap();
-    let (mut store, result) = receive.recv_timeout(BOUND).unwrap();
-    attempt.join().unwrap();
     assert_eq!(
         result,
         Err(ServerError::Timeout {
@@ -518,10 +565,9 @@ fn started_close_timeout_retains_success_for_join_without_replay() {
         })
     );
     assert!(matches!(
-        store.sync(deadline()),
+        different_kind,
         Err(ServerError::InvalidState { .. })
     ));
-    release.open();
     store.close(deadline()).unwrap();
     let calls = calls.lock().unwrap();
     assert_eq!(calls.closes, 1);
@@ -718,32 +764,38 @@ fn real_payload_write_keeps_tick_free_and_lease_until_close_join() {
         })
         .unwrap();
     let reserved = store.occupancy().encoded_bytes;
-    store.drive_workers();
-    entered.recv_timeout(BOUND).unwrap();
-    let mut state = authority();
-    state.remember_dirty(snapshot(30));
-    assert_eq!(
+    let (mut store, dirty, pending, flush) = observe_held(entered, &release, move |started| {
+        let mut state = authority();
         store
+            .poll_tick(1, SaveBudget::default(), &mut state)
+            .unwrap();
+        store.drive_workers();
+        started.recv().unwrap();
+        state.remember_dirty(snapshot(30));
+        let dirty = store
             .poll_tick(2, SaveBudget::default(), &mut state)
             .unwrap()
             .stats
-            .dirty,
-        1
-    );
+            .dirty;
+        let pending = store.poll(ticket);
+        let flush = store.flush(
+            Deadline::after(Instant::now(), Duration::from_millis(30)).unwrap(),
+            &mut state,
+            &RealClock,
+        );
+        (store, dirty, pending, flush)
+    });
+    assert_eq!(dirty, 1);
     assert!(matches!(
-        store.poll(ticket),
+        pending,
         mornlea_server::contracts::SavePoll::Pending
     ));
     assert!(
         DiskStore::open(&root.0, options()).is_err(),
-        "the worker holds the world lease"
+        "the worker holds the world lease until complete close"
     );
     assert_eq!(
-        store.flush(
-            Deadline::after(Instant::now(), Duration::from_millis(30)).unwrap(),
-            &mut state,
-            &RealClock
-        ),
+        flush,
         Err(ServerError::Timeout {
             operation: mornlea_server::contracts::Operation::Flush
         })
@@ -753,7 +805,6 @@ fn real_payload_write_keeps_tick_free_and_lease_until_close_join() {
         1,
         "timeout retains original save ownership"
     );
-    release.open();
     // Collect without polling to inspect the worker's one-time reservation shrink.
     let until = Instant::now() + BOUND;
     while store.held_completions() == 0 {
@@ -871,18 +922,15 @@ fn scheduler_metadata_timeout_keeps_ticket_for_retry_without_duplicate_write() {
     let store = StoreMailbox::try_new_background(limits(), backend).unwrap();
     let mut scheduler = AutosaveScheduler::try_new(SchedulerConfig::default(), store).unwrap();
     let mut state = authority();
-    let (finished, receive) = mpsc::sync_channel(1);
-    let driver = thread::spawn(move || {
+    let (mut scheduler, mut state, result) = observe_held(entered, &release, move |started| {
         let result = scheduler.flush(
             Deadline::after(Instant::now(), Duration::from_millis(500)).unwrap(),
             &mut state,
             &RealClock,
         );
-        finished.send((scheduler, state, result)).unwrap();
+        started.recv().unwrap();
+        (scheduler, state, result)
     });
-    entered.recv_timeout(BOUND).unwrap();
-    let (mut scheduler, mut state, result) = receive.recv_timeout(BOUND).unwrap();
-    driver.join().unwrap();
     assert_eq!(
         result,
         Err(ServerError::Timeout {
@@ -890,7 +938,6 @@ fn scheduler_metadata_timeout_keeps_ticket_for_retry_without_duplicate_write() {
         })
     );
     assert_eq!(scheduler.tracked_submits(), 1);
-    release.open();
     assert_eq!(
         scheduler
             .flush(deadline(), &mut state, &RealClock)
@@ -919,11 +966,17 @@ fn maximum_jobs_stay_charged_through_completed_replies() {
     let tickets = (0..4)
         .map(|_| store.submit(request.clone()).unwrap())
         .collect::<Vec<_>>();
-    store.drive_workers();
-    entered.recv_timeout(BOUND).unwrap();
-    assert_eq!(store.worker_jobs(), 2);
-    assert_eq!(store.queued_jobs(), 2);
-    let refused = store.submit(request.clone()).unwrap_err();
+    let held_request = request.clone();
+    let (mut store, workers, queued, refused) = observe_held(entered, &release, move |started| {
+        store.drive_workers();
+        started.recv().unwrap();
+        let workers = store.worker_jobs();
+        let queued = store.queued_jobs();
+        let refused = store.submit(held_request).unwrap_err();
+        (store, workers, queued, refused)
+    });
+    assert_eq!(workers, 2);
+    assert_eq!(queued, 2);
     assert_eq!(refused.request, request);
     assert!(matches!(
         refused.error,
@@ -933,7 +986,6 @@ fn maximum_jobs_stay_charged_through_completed_replies() {
             ..
         }
     ));
-    release.open();
     let until = Instant::now() + BOUND;
     while store.held_completions() < 4 {
         store.drive_workers();
@@ -1031,19 +1083,22 @@ fn stationary_caller_clock_cannot_extend_background_flush_wait() {
             snapshots: vec![snapshot(1)],
         })
         .unwrap();
-    store.drive_workers();
-    entered.recv_timeout(BOUND).unwrap();
-    let now = Instant::now();
-    let deadline = Deadline::after(now, Duration::from_millis(30)).unwrap();
+    let (mut store, held_deadline, result) = observe_held(entered, &release, move |started| {
+        store.drive_workers();
+        started.recv().unwrap();
+        let now = Instant::now();
+        let held_deadline = Deadline::after(now, Duration::from_millis(30)).unwrap();
+        let result = store.flush(held_deadline, &mut authority(), &FrozenClock(now));
+        (store, held_deadline, result)
+    });
     assert_eq!(
-        store.flush(deadline, &mut authority(), &FrozenClock(now)),
+        result,
         Err(ServerError::Timeout {
             operation: mornlea_server::contracts::Operation::Flush
         })
     );
-    assert!(deadline.expired(Instant::now()));
+    assert!(held_deadline.expired(Instant::now()));
     assert_eq!(store.occupancy().jobs, 1);
-    release.open();
     assert_eq!(
         wait_completion(&mut store, ticket).snapshots,
         vec![snapshot(1)]
@@ -1072,4 +1127,35 @@ fn unexpected_owner_exit_retains_lifecycle_failure() {
         Err(ServerError::Internal { .. })
     ));
     assert_eq!(calls.lock().unwrap().closes, 1);
+}
+
+#[test]
+fn close_deadline_bounds_backend_drop_and_retry_joins_once() {
+    let (mut backend, calls) = scripted();
+    let (drop_gate, entered, release) = gate();
+    backend.drop_gate = Some(drop_gate);
+    let store = StoreMailbox::try_new_background(limits(), backend).unwrap();
+    let (mut store, result, different_kind) = observe_held(entered, &release, move |started| {
+        let mut store = store;
+        let result =
+            store.close(Deadline::after(Instant::now(), Duration::from_millis(500)).unwrap());
+        started.recv().unwrap();
+        // Backend close succeeded, but destruction still owns the thread.
+        let different_kind = store.sync(deadline());
+        (store, result, different_kind)
+    });
+    assert_eq!(
+        result,
+        Err(ServerError::Timeout {
+            operation: mornlea_server::contracts::Operation::Close
+        })
+    );
+    assert!(matches!(
+        different_kind,
+        Err(ServerError::InvalidState { .. })
+    ));
+    store.close(deadline()).unwrap();
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.closes, 1, "retry consumes the retained success");
+    assert_eq!(calls.drops, 1, "retry joins the original owner");
 }
