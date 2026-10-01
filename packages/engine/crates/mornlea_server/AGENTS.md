@@ -141,6 +141,16 @@ consume its cancellation and error contracts before joining the real backend.
   vector clone costs and does not bound all tick work.
   `owned_resident_tests` and `ready_commit_tests` enforce these invariants.
 
+- `src/core/block_observations.rs` owns sparse observations grouped by exact
+  chunk key. Resident/context/read views preserve full-key order, block values
+  and per-cell CAS counters across durable commits; chunk revisions do not
+  replace that history. Production loans move the collection, while explicit
+  off-tick observations may clone it. Whole-chunk detachment transfers one
+  existing tree without visiting cells; later retirement policy owns destruction.
+  Touched-cell compound restoration prunes empty owners, and detached fixture
+  replacement drops only its exact owner off tick. This representation does not
+  perform physical unload or establish a global allocation bound.
+
 - `ServerLimits`, `TickBudget`, and `StoreLimits` reject an over-ceiling
   constructor before they reserve command storage. `AuthorityState` keeps
   world, sessions, queues, tick, and publication private to `src/core/state.rs`.

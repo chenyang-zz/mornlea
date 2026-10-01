@@ -23,6 +23,7 @@ use super::acquisition::{
     AcquiredChunkEvent, AcquisitionState, ChunkGenerationReservation, ChunkLoadReservation,
     LiveChunkFacts, LiveChunkPhase, RejectedAcquiredChunk,
 };
+use super::block_observations::ChunkBlockObservations;
 use super::container_store::ContainerState;
 use super::contracts::*;
 use super::drop_store::{self, DropState};
@@ -81,7 +82,7 @@ pub struct ResidentTickState {
     pub environment: Option<EnvironmentState>,
     pub sleep_record: Option<SleepState>,
     pub sleeping: BTreeSet<SessionKey>,
-    pub blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
+    pub blocks: ChunkBlockObservations,
     ready: BTreeMap<ChunkKey, ReadyChunk>,
     drops: BTreeMap<ChunkKey, DropState>,
     containers: BTreeMap<ContainerRef, ContainerRecord>,
@@ -1893,7 +1894,7 @@ pub struct AuthorityReadView<'a> {
     companions: &'a [CompanionActionEnvelope],
     interactions: &'a [AuthorityInteraction],
     inventories: &'a BTreeMap<ActorKey, InventoryRecord>,
-    blocks: &'a BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
+    blocks: &'a ChunkBlockObservations,
     ready: &'a BTreeMap<ChunkKey, ReadyChunk>,
     actors: &'a [ActorRecord],
     runtimes: &'a BTreeMap<ActorKey, ActorRuntime>,
@@ -2270,7 +2271,7 @@ pub struct TickContext<'a> {
     sleep_record_touched: bool,
     dirty_chunks: BTreeSet<ChunkKey>,
     inventories: BTreeMap<ActorKey, InventoryRecord>,
-    blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), BlockObservation>,
+    blocks: ChunkBlockObservations,
     /// Successful block mutations only, keyed in source chunk/index order.
     changed: BTreeMap<(ChunkKey, u32), BlockObservation>,
     ready: BTreeMap<ChunkKey, ReadyChunk>,
@@ -2477,7 +2478,14 @@ impl CompoundUndo {
 
     fn restore(self, context: &mut TickContext<'_>) {
         restore_preimages(&mut context.inventories, self.inventories);
-        restore_preimages(&mut context.blocks, self.blocks);
+        // Restore only journaled cells; removal also retires an empty sparse owner.
+        for (cell, original) in self.blocks {
+            if let Some(original) = original {
+                context.blocks.insert(cell, original);
+            } else {
+                context.blocks.remove(&cell);
+            }
+        }
         restore_preimages(&mut context.changed, self.changed);
         restore_preimages(&mut context.ready, self.ready);
         restore_preimages(&mut context.containers, self.containers);
@@ -2634,7 +2642,8 @@ impl<'a> TickContext<'a> {
 
     /// Installs already validated compact data; preparation belongs off the tick.
     pub fn preload_ready_chunk(&mut self, chunk: ReadyChunk) {
-        self.blocks.retain(|(key, _), _| *key != chunk.key);
+        // Fixture replacement drops only this chunk's sparse owner off tick.
+        self.blocks.take_chunk(chunk.key);
         self.changed.retain(|(key, _), _| *key != chunk.key);
         self.dirty_chunks.remove(&chunk.key);
         self.drops.insert(
@@ -2764,7 +2773,7 @@ impl<'a> TickContext<'a> {
             sleep_record_touched: false,
             dirty_chunks: BTreeSet::new(),
             inventories: BTreeMap::new(),
-            blocks: BTreeMap::new(),
+            blocks: ChunkBlockObservations::new(),
             changed: BTreeMap::new(),
             ready: BTreeMap::new(),
             containers: BTreeMap::new(),
@@ -4492,6 +4501,98 @@ mod owned_resident_tests {
             ctx.apply_effect(RuleEffect::Compound(parts)),
             Err(RuleReject::Wire(RejectReason::InvalidInput))
         );
+    }
+
+    #[test]
+    fn chunk_cell_cas_survives_multiwrite_commit_and_unrelated_dirty_ticks() {
+        let mut authority = authority(1, false);
+        let original_capture = authority
+            .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
+            .unwrap();
+        let SaveValue::ChunkView(original_view) = &original_capture.value else {
+            unreachable!()
+        };
+        let original_body = original_view.materialize();
+        assert_eq!(original_capture.revision, 5);
+        let pos = BlockPos::new(1, 64, 1);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        let initial = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
+        assert_eq!(
+            (initial.generation, initial.revision, initial.block),
+            (7, 5, 0)
+        );
+        write(&mut ctx, 1, 4);
+        let first = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
+        assert_eq!((first.generation, first.revision, first.block), (7, 6, 4));
+        write(&mut ctx, 1, 5);
+        let twice = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
+        assert_eq!((twice.generation, twice.revision, twice.block), (7, 7, 5));
+        ctx.commit_carried();
+        drop(ctx);
+        assert_eq!(authority.residents.ready[&key(0)].revision, 6);
+        assert_eq!(authority.residents.blocks[&(key(0), pos)], twice);
+        for (x, durable) in [(2, 7), (3, 8)] {
+            let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+            assert_eq!(
+                ctx.read().observation(Dimension::OVERWORLD, pos),
+                Some(twice)
+            );
+            assert_eq!(
+                ctx.transaction().try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(first, 4).unwrap()],
+                ),
+                Err(RuleReject::StaleObservation)
+            );
+            write(&mut ctx, x, 4);
+            ctx.commit_carried();
+            drop(ctx);
+            assert_eq!(authority.residents.ready[&key(0)].revision, durable);
+            assert_eq!(authority.residents.blocks[&(key(0), pos)], twice);
+            assert_eq!(original_view.materialize(), original_body);
+        }
+    }
+
+    #[test]
+    fn chunk_local_observation_compound_failure_restores_empty_owner() {
+        let mut authority = authority(1, true);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        let pos = BlockPos::new(1, 64, 1);
+        let original = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
+        let original_height = ctx.ready[&key(0)].height(1, 1);
+        assert!(ctx.blocks.is_empty());
+        assert!(ctx.changed.is_empty());
+        assert!(ctx.dirty_chunks.is_empty());
+        let tick = ctx.read().tick();
+        // Inject the existing invalid projectile arm after a real accepted block arm.
+        rejected_apply(
+            &mut ctx,
+            vec![RuleEffect::Blocks(BlockTxn::system(
+                SystemRule::Support,
+                tick,
+                vec![BlockWrite::try_new(original, 4).unwrap()],
+            ))],
+        );
+        assert_eq!(ctx.blocks.len(), 0);
+        assert!(ctx.blocks.is_empty());
+        assert_eq!(ctx.blocks.take_chunk(key(0)), None);
+        assert_eq!(
+            ctx.read().observation(Dimension::OVERWORLD, pos),
+            Some(original)
+        );
+        assert_eq!(ctx.ready[&key(0)].height(1, 1), original_height);
+        assert!(ctx.changed.is_empty());
+        assert!(ctx.dirty_chunks.is_empty());
+        write(&mut ctx, 1, 4);
+        let accepted = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
+        assert_eq!(ctx.blocks.len(), 1);
+        assert_eq!(ctx.blocks[&(key(0), pos)], accepted);
+        assert_eq!(
+            (accepted.generation, accepted.revision, accepted.block),
+            (7, 6, 4)
+        );
+        assert_eq!(ctx.changed.len(), 1);
+        assert_eq!(ctx.dirty_chunks, BTreeSet::from([key(0)]));
     }
 
     #[test]
