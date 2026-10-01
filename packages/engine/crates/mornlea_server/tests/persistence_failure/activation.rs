@@ -1859,9 +1859,34 @@ fn control_dribbled_request_obeys_absolute_deadline() {
     let elapsed = start.elapsed();
     writer.join().expect("dribbling sender finishes");
     assert!(
-        matches!(retired, Ok(0)),
+        control_connection_retired(&retired),
         "connection not retired: {retired:?}"
     );
     assert!(elapsed < Duration::from_millis(350));
     owner.shutdown();
+}
+
+// A read timeout or live connection must not qualify as server retirement.
+fn control_connection_retired(result: &std::io::Result<usize>) -> bool {
+    matches!(result, Ok(0))
+        || matches!(result, Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset)
+}
+
+#[test]
+fn control_retirement_accepts_only_eof_or_reset() {
+    use std::io::{Error, ErrorKind};
+    assert!(control_connection_retired(&Ok(0)));
+    assert!(control_connection_retired(&Err(Error::from(
+        ErrorKind::ConnectionReset
+    ))));
+    assert!(!control_connection_retired(&Ok(1)));
+    for kind in [
+        ErrorKind::WouldBlock,
+        ErrorKind::TimedOut,
+        ErrorKind::BrokenPipe,
+        ErrorKind::UnexpectedEof,
+        ErrorKind::Other,
+    ] {
+        assert!(!control_connection_retired(&Err(Error::from(kind))));
+    }
 }
