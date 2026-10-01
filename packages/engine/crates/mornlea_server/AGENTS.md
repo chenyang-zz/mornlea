@@ -95,8 +95,13 @@ consume its cancellation and error contracts before joining the real backend.
   identity without finalization or publication, including the original absent
   sleep record unless touched. This is recovery, not global tick rollback.
   Detached harnesses and explicit `resident_snapshot` observations keep their
-  clone/finalize behavior. Defensive compound snapshots remain until a separate
-  bounded journal replaces them; this change does not bound all tick work.
+  clone/finalize behavior. Defensive compounds retain initial preimages only
+  for touched map keys, actor ordinals and appends, dirty membership and changed
+  scalar lanes. Ready copies share compact bases; only projectile arms copy the
+  capped vector. Direct parts, aggregate writes, captured containers and
+  read-basis cells each have an independent 4096 ceiling checked before
+  rehearsal or capture. The journal excludes touched actor search and record
+  vector clone costs and does not bound all tick work.
   `owned_resident_tests` and `ready_commit_tests` enforce these invariants.
 
 - `ServerLimits`, `TickBudget`, and `StoreLimits` reject an over-ceiling

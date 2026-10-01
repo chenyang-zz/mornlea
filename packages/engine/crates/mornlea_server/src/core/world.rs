@@ -10,6 +10,7 @@ use super::contracts::{BlockObservation, ChunkKey, RecoveredChunk, ServerError};
 
 #[cfg(test)]
 thread_local! {
+    static READY_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TICK_FINISHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -21,6 +22,16 @@ pub(crate) fn reset_tick_finishes() {
 #[cfg(test)]
 pub(crate) fn tick_finishes() -> usize {
     TICK_FINISHES.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_ready_clones() {
+    READY_CLONES.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn ready_clones() -> usize {
+    READY_CLONES.with(std::cell::Cell::get)
 }
 
 /// A load's immutable compact base, prepared entirely away from the tick.
@@ -92,7 +103,6 @@ impl PreparedChunk {
 /// Immutable compact storage with a derived, tick-local non-air height cache.
 /// Construction validates save associations and builds heights off the tick;
 /// installing or cloning the value never expands or decodes its block storage.
-#[derive(Clone)]
 pub struct ReadyChunk {
     pub(crate) key: ChunkKey,
     pub(crate) generation: u64,
@@ -100,6 +110,21 @@ pub struct ReadyChunk {
     base: Arc<Chunk>,
     heights: [i16; 256],
     blocks_dirty: bool,
+}
+
+impl Clone for ReadyChunk {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        READY_CLONES.with(|count| count.set(count.get() + 1));
+        Self {
+            key: self.key,
+            generation: self.generation,
+            revision: self.revision,
+            base: Arc::clone(&self.base),
+            heights: self.heights,
+            blocks_dirty: self.blocks_dirty,
+        }
+    }
 }
 
 impl ReadyChunk {

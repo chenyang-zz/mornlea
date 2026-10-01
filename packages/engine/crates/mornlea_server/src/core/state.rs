@@ -1891,6 +1891,240 @@ pub struct TickContext<'a> {
     pre_step: BTreeMap<ActorKey, MotionState>,
 }
 
+/// Compound-entry preimages own only affected keys. Fixed slot rehearsals stay
+/// outside this journal and publish only after the complete apply succeeds.
+#[derive(Default)]
+struct CompoundUndo {
+    inventories: BTreeMap<ActorKey, Option<InventoryRecord>>,
+    blocks: BTreeMap<(ChunkKey, mornlea_domain::BlockPos), Option<BlockObservation>>,
+    changed: BTreeMap<(ChunkKey, u32), Option<BlockObservation>>,
+    ready: BTreeMap<ChunkKey, Option<ReadyChunk>>,
+    containers: BTreeMap<ContainerRef, Option<ContainerRecord>>,
+    viewers: BTreeMap<SessionKey, Option<ViewLease>>,
+    runtimes: BTreeMap<ActorKey, Option<ActorRuntime>>,
+    mining: BTreeMap<ActorKey, Option<MiningProgress>>,
+    player_slots: BTreeMap<SessionKey, Option<usize>>,
+    dirty_chunks: BTreeMap<ChunkKey, bool>,
+    actors_len: usize,
+    actors: BTreeMap<ActorKey, Option<(usize, ActorRecord)>>,
+    world: Option<Option<WorldState>>,
+    environment: Option<Option<EnvironmentState>>,
+    sleep: Option<(SleepState, bool)>,
+    projectiles: Option<Vec<ProjectileRecord>>,
+    damage_len: Option<usize>,
+}
+
+impl CompoundUndo {
+    fn capture(context: &TickContext<'_>, parts: &[RuleEffect]) -> Self {
+        let mut undo = Self {
+            actors_len: context.actors.len(),
+            ..Self::default()
+        };
+        for part in parts {
+            match part {
+                RuleEffect::Actor(record) => {
+                    undo.actors.entry(record.key).or_insert_with(|| {
+                        context
+                            .actors
+                            .iter()
+                            .enumerate()
+                            .find(|(_, actor)| actor.key == record.key)
+                            .map(|(index, actor)| (index, actor.clone()))
+                    });
+                    if let ActorKey::Player(session) = record.key {
+                        undo.player_slots
+                            .entry(session)
+                            .or_insert_with(|| context.player_slots.get(&session).copied());
+                    }
+                }
+                RuleEffect::Runtime(record) => {
+                    undo.runtimes
+                        .entry(record.key)
+                        .or_insert_with(|| context.runtimes.get(&record.key).cloned());
+                }
+                RuleEffect::Mining { actor, .. } => {
+                    undo.mining
+                        .entry(*actor)
+                        .or_insert_with(|| context.mining.get(actor).cloned());
+                }
+                RuleEffect::Inventory(patch) => undo.capture_inventory(context, patch.actor),
+                RuleEffect::Container { after, .. } => {
+                    undo.capture_container(context, Dimension::OVERWORLD, after.reference)
+                }
+                RuleEffect::WorldContainer {
+                    dimension, after, ..
+                } => undo.capture_container(context, *dimension, after.reference),
+                RuleEffect::Viewer { session, .. } => {
+                    undo.viewers
+                        .entry(*session)
+                        .or_insert_with(|| context.viewers.get(session).copied());
+                }
+                RuleEffect::World(_) => {
+                    undo.world.get_or_insert(context.world);
+                }
+                RuleEffect::Blocks(txn) => {
+                    if let Some(patch) = &txn.inventory {
+                        undo.capture_inventory(context, patch.actor);
+                    }
+                    for capture in &txn.containers {
+                        if capture.key.dimension == Dimension::OVERWORLD
+                            && !context.container_chunks.contains_key(&capture.key)
+                        {
+                            undo.containers
+                                .entry(capture.record.reference)
+                                .or_insert_with(|| {
+                                    context.containers.get(&capture.record.reference).cloned()
+                                });
+                        }
+                    }
+                    for write in &txn.writes {
+                        if write.replacement == write.observed.block {
+                            continue;
+                        }
+                        let key = write.observed.key;
+                        let cell = (key, write.observed.pos);
+                        let changed = (key, mornlea_domain::chunk_block_index(write.observed.pos));
+                        undo.blocks
+                            .entry(cell)
+                            .or_insert_with(|| context.blocks.get(&cell).copied());
+                        undo.changed
+                            .entry(changed)
+                            .or_insert_with(|| context.changed.get(&changed).copied());
+                        undo.ready
+                            .entry(key)
+                            .or_insert_with(|| context.ready.get(&key).cloned());
+                        undo.dirty_chunks
+                            .entry(key)
+                            .or_insert_with(|| context.dirty_chunks.contains(&key));
+                    }
+                }
+                RuleEffect::Damage(_) => {
+                    undo.damage_len.get_or_insert(context.damage_intents.len());
+                }
+                RuleEffect::Projectile { .. } => {
+                    undo.projectiles
+                        .get_or_insert_with(|| context.projectiles.clone());
+                }
+                RuleEffect::Environment(_) => {
+                    undo.environment
+                        .get_or_insert_with(|| context.environment.clone());
+                }
+                RuleEffect::Sleep(_) => {
+                    undo.sleep.get_or_insert_with(|| {
+                        (context.sleep_record.clone(), context.sleep_record_touched)
+                    });
+                }
+                RuleEffect::Drops(_) | RuleEffect::DropPatch { .. } | RuleEffect::Work(_) => {}
+                RuleEffect::Compound(_) => unreachable!("compound shape checked before capture"),
+            }
+        }
+        undo
+    }
+
+    fn capture_inventory(&mut self, context: &TickContext<'_>, actor: ActorKey) {
+        self.inventories
+            .entry(actor)
+            .or_insert_with(|| context.inventories.get(&actor).copied());
+    }
+
+    fn capture_container(
+        &mut self,
+        context: &TickContext<'_>,
+        dimension: Dimension,
+        reference: ContainerRef,
+    ) {
+        let key = ChunkKey {
+            dimension,
+            pos: reference.chunk(),
+        };
+        if dimension == Dimension::OVERWORLD && !context.container_chunks.contains_key(&key) {
+            self.containers
+                .entry(reference)
+                .or_insert_with(|| context.containers.get(&reference).cloned());
+        }
+    }
+
+    fn restore(self, context: &mut TickContext<'_>) {
+        restore_preimages(&mut context.inventories, self.inventories);
+        restore_preimages(&mut context.blocks, self.blocks);
+        restore_preimages(&mut context.changed, self.changed);
+        restore_preimages(&mut context.ready, self.ready);
+        restore_preimages(&mut context.containers, self.containers);
+        restore_preimages(&mut context.viewers, self.viewers);
+        restore_preimages(&mut context.runtimes, self.runtimes);
+        restore_preimages(&mut context.mining, self.mining);
+        // Actor application replaces in place or appends, never removes.
+        context.actors.truncate(self.actors_len);
+        for (index, record) in self.actors.into_values().flatten() {
+            context.actors[index] = record;
+        }
+        restore_preimages(&mut context.player_slots, self.player_slots);
+        for (key, dirty) in self.dirty_chunks {
+            if dirty {
+                context.dirty_chunks.insert(key);
+            } else {
+                context.dirty_chunks.remove(&key);
+            }
+        }
+        if let Some(world) = self.world {
+            context.world = world;
+        }
+        if let Some(environment) = self.environment {
+            context.environment = environment;
+        }
+        if let Some((record, touched)) = self.sleep {
+            context.sleep_record = record;
+            context.sleep_record_touched = touched;
+        }
+        if let Some(projectiles) = self.projectiles {
+            context.projectiles = projectiles;
+        }
+        if let Some(length) = self.damage_len {
+            context.damage_intents.truncate(length);
+        }
+    }
+}
+
+fn restore_preimages<K: Ord, V>(target: &mut BTreeMap<K, V>, preimages: BTreeMap<K, Option<V>>) {
+    for (key, value) in preimages {
+        if let Some(value) = value {
+            target.insert(key, value);
+        } else {
+            target.remove(&key);
+        }
+    }
+}
+
+/// Bound independent private producer vectors before rehearsal or journal capture.
+fn check_effect_work(effect: &RuleEffect) -> Result<(), RuleReject> {
+    let rejection = RuleReject::ResourceFull(Resource::RuleEffects);
+    let parts = match effect {
+        RuleEffect::Compound(parts) if parts.len() <= EFFECT_BUDGET => parts.as_slice(),
+        RuleEffect::Compound(_) => return Err(rejection),
+        _ => std::slice::from_ref(effect),
+    };
+    let mut totals = [0usize; 3];
+    for part in parts {
+        if matches!(part, RuleEffect::Compound(_)) {
+            return Err(rejection);
+        }
+        if let RuleEffect::Blocks(txn) = part {
+            let lengths = [
+                txn.writes.len(),
+                txn.containers.len(),
+                txn.read_basis.as_ref().map_or(0, |basis| basis.cells.len()),
+            ];
+            for (total, length) in totals.iter_mut().zip(lengths) {
+                *total = total
+                    .checked_add(length)
+                    .filter(|sum| *sum <= EFFECT_BUDGET)
+                    .ok_or(rejection)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Exhaustion charge receipt one action provider notes for the survival
 /// provider to settle.
 ///
@@ -2485,6 +2719,7 @@ impl<'a> TickContext<'a> {
     }
 
     pub fn stage(&mut self, effect: RuleEffect) -> Result<(), RuleReject> {
+        check_effect_work(&effect)?;
         let mut pending_projectiles = None;
         let mut pending_damage = 0;
         let mut pending_drops = BTreeMap::new();
@@ -2948,52 +3183,13 @@ impl<'a> TickContext<'a> {
     }
 
     fn apply_effect(&mut self, effect: RuleEffect) -> Result<(), RuleReject> {
+        check_effect_work(&effect)?;
         match effect {
             RuleEffect::Compound(parts) => {
-                let inventories = self.inventories.clone();
-                let world = self.world;
-                let blocks = self.blocks.clone();
-                let changed = self.changed.clone();
-                let ready = self.ready.clone();
-                let containers = self.containers.clone();
-                let viewers = self.viewers.clone();
-                let projectiles = self.projectiles.clone();
-                let damage_len = self.damage_intents.len();
-                let environment = self.environment.clone();
-                let sleep_record = self.sleep_record.clone();
-                let sleep_record_touched = self.sleep_record_touched;
-                let dirty_chunks = self.dirty_chunks.clone();
-                // Defensive enforcement of the seam rule that a rejected
-                // atomic effect leaves all components unchanged: actor
-                // records became effect-mutable with the `Actor` staging arm,
-                // so they join the rollback snapshot, and container records
-                // and viewer leases join it with their own staging arms. No
-                // public path reaches this restore today because `stage`
-                // validates every component before applying any. Drop copies
-                // publish only after this entire operation succeeds.
-                let actors = self.actors.clone();
-                let player_slots = self.player_slots.clone();
-                let runtimes = self.runtimes.clone();
-                let mining = self.mining.clone();
+                let undo = CompoundUndo::capture(self, &parts);
                 for part in parts {
                     if let Err(error) = self.apply_effect(part) {
-                        self.inventories = inventories;
-                        self.world = world;
-                        self.blocks = blocks;
-                        self.changed = changed;
-                        self.ready = ready;
-                        self.containers = containers;
-                        self.viewers = viewers;
-                        self.projectiles = projectiles;
-                        self.damage_intents.truncate(damage_len);
-                        self.environment = environment;
-                        self.sleep_record = sleep_record;
-                        self.sleep_record_touched = sleep_record_touched;
-                        self.dirty_chunks = dirty_chunks;
-                        self.actors = actors;
-                        self.player_slots = player_slots;
-                        self.runtimes = runtimes;
-                        self.mining = mining;
+                        undo.restore(self);
                         return Err(error);
                     }
                 }
@@ -3477,6 +3673,559 @@ mod owned_resident_tests {
             std::ptr::from_ref(residents.drops.values().next().unwrap()) as usize,
             std::ptr::from_ref(residents.container_chunks.values().next().unwrap()) as usize,
         ]
+    }
+
+    #[test]
+    fn compound_clones_only_touched_ready_owners() {
+        use super::super::world::{ready_clones, reset_ready_clones};
+        let mut authority = authority(128, true);
+        let mut ctx = TickContext::harness(&mut authority, TickBudget::full());
+        let chunks: Vec<_> = ctx.authority.residents.ready.values().cloned().collect();
+        for chunk in chunks {
+            ctx.preload_ready_chunk(chunk);
+        }
+        ctx.inventories = ctx.authority.residents.inventories.clone();
+        let observed = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(1, 64, 1))
+            .unwrap();
+        reset_ready_clones();
+        ctx.stage(RuleEffect::Compound(vec![RuleEffect::Blocks(
+            BlockTxn::system(
+                SystemRule::Support,
+                ctx.read().tick(),
+                vec![BlockWrite::try_new(observed, 4).unwrap()],
+            ),
+        )]))
+        .unwrap();
+        assert_eq!(ready_clones(), 1);
+        let (&actor, &before) = ctx.inventories.iter().next().unwrap();
+        reset_ready_clones();
+        ctx.stage(RuleEffect::Compound(vec![RuleEffect::Inventory(
+            InventoryPatch {
+                actor,
+                before,
+                after: before,
+            },
+        )]))
+        .unwrap();
+        assert_eq!(ready_clones(), 0);
+    }
+
+    #[test]
+    fn compound_failure_preserves_unrelated_allocations_and_prior_dirty_work() {
+        let mut authority = authority(2, true);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut ctx, 1, 4);
+        let changed = ctx.changed.clone();
+        let inventory_pointer =
+            std::ptr::from_ref(ctx.inventories.values().next().unwrap()) as usize;
+        let ready_pointer = std::ptr::from_ref(&ctx.ready[&key(1)]) as usize;
+        let observed = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(2, 65, 1))
+            .unwrap();
+        assert_eq!(
+            ctx.apply_effect(RuleEffect::Compound(vec![
+                RuleEffect::Blocks(BlockTxn::system(
+                    SystemRule::Support,
+                    ctx.read().tick(),
+                    vec![BlockWrite::try_new(observed, 4).unwrap()]
+                )),
+                RuleEffect::Projectile {
+                    before: None,
+                    after: None
+                },
+            ])),
+            Err(RuleReject::Wire(RejectReason::InvalidInput))
+        );
+        assert_eq!(
+            std::ptr::from_ref(ctx.inventories.values().next().unwrap()) as usize,
+            inventory_pointer
+        );
+        assert_eq!(
+            std::ptr::from_ref(&ctx.ready[&key(1)]) as usize,
+            ready_pointer
+        );
+        assert_eq!(
+            ctx.read().block(Dimension::OVERWORLD, observed.pos),
+            Some(0)
+        );
+        assert_eq!(ctx.ready[&key(0)].height(1, 1), 64);
+        assert_eq!(ctx.ready[&key(0)].height(2, 1), -65);
+        assert_eq!(ctx.ready[&key(0)].revision, 5);
+        assert_eq!(ctx.changed, changed);
+        assert_eq!(ctx.dirty_chunks, BTreeSet::from([key(0)]));
+        ctx.commit_carried();
+        drop(ctx);
+        assert_eq!(authority.residents.ready[&key(0)].revision, 6);
+        assert_eq!(authority.residents.ready[&key(1)].revision, 5);
+    }
+
+    fn rejected_apply(ctx: &mut TickContext<'_>, mut parts: Vec<RuleEffect>) {
+        parts.push(RuleEffect::Projectile {
+            before: None,
+            after: None,
+        });
+        assert_eq!(
+            ctx.apply_effect(RuleEffect::Compound(parts)),
+            Err(RuleReject::Wire(RejectReason::InvalidInput))
+        );
+    }
+
+    #[test]
+    fn compound_restores_first_actor_inventory_runtime_and_mining_preimages() {
+        use mornlea_domain::HotbarSlot;
+        let mut authority = authority(1, true);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        let actor = ctx.actors[0].key;
+        let new_session = SessionKey::from_raw(2).unwrap();
+        let new_key = ActorKey::Player(new_session);
+        let ActorKey::Player(session) = actor else {
+            unreachable!()
+        };
+        for session in [session, new_session] {
+            ctx.authority.sessions.insert(
+                session,
+                SessionRecord {
+                    player_id: PlayerId::try_from_bytes([
+                        1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1,
+                    ])
+                    .unwrap(),
+                    display_name: "Ada".into(),
+                    phase: SessionPhase::Active,
+                    last_applied_sequence: 0,
+                    last_input_sequence: 0,
+                    next_arrival: 0,
+                    body: None,
+                    outbox: Vec::new(),
+                    outbox_closed: false,
+                },
+            );
+        }
+        ctx.player_slots.insert(session, 0);
+        let mut unrelated = ctx.actors[0].clone();
+        unrelated.key = ActorKey::Player(SessionKey::from_raw(3).unwrap());
+        ctx.actors.push(unrelated);
+        let actors = ctx.actors.clone();
+        let slots = ctx.player_slots.clone();
+        let inventory = ctx.inventories[&actor];
+        let mut after_inventory = inventory;
+        after_inventory.selected = HotbarSlot::new(1).unwrap();
+        let runtime = ActorRuntime {
+            key: actor,
+            controls: None,
+            has_view: false,
+            reset: false,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 0,
+            oxygen: 300,
+            peak_y: 64.0,
+            exhaustion_milli: 0,
+            saturation_milli: 0,
+            since_damage_ticks: 0,
+            drown_ticks: 0,
+            starvation_ticks: 0,
+            eating: None,
+            bow: None,
+            path: None,
+            aux: ActorAux::Player {
+                respawn: None,
+                workbench: None,
+            },
+        };
+        ctx.runtimes.insert(actor, runtime.clone());
+        let mut last_inventory = after_inventory;
+        last_inventory.selected = HotbarSlot::new(2).unwrap();
+        let mut after_runtime = runtime.clone();
+        after_runtime.reset = !runtime.reset;
+        let progress = MiningProgress {
+            actor,
+            dimension: Dimension::OVERWORLD,
+            target: BlockPos::new(1, 64, 1),
+            observed_block: 4,
+            tool_slot: HotbarSlot::new(0).unwrap(),
+            tool: Default::default(),
+            elapsed: 1,
+            required: 3,
+            last_tick: ctx.read().tick(),
+        };
+        ctx.mining.insert(actor, progress.clone());
+        let mut later_progress = progress.clone();
+        later_progress.elapsed = 2;
+        let mut replacement = actors[0].clone();
+        replacement.lifecycle = ActorLifecycle::Dead;
+        let mut appended = actors[0].clone();
+        appended.key = new_key;
+        let mut new_runtime = runtime.clone();
+        new_runtime.key = new_key;
+        rejected_apply(
+            &mut ctx,
+            vec![
+                RuleEffect::Actor(replacement.clone()),
+                RuleEffect::Actor(appended.clone()),
+                RuleEffect::Actor(replacement),
+                RuleEffect::Actor(appended),
+                RuleEffect::Inventory(InventoryPatch {
+                    actor,
+                    before: inventory,
+                    after: after_inventory,
+                }),
+                RuleEffect::Inventory(InventoryPatch {
+                    actor,
+                    before: after_inventory,
+                    after: last_inventory,
+                }),
+                RuleEffect::Inventory(InventoryPatch {
+                    actor: new_key,
+                    before: inventory,
+                    after: inventory,
+                }),
+                RuleEffect::Runtime(after_runtime.clone()),
+                RuleEffect::Runtime(after_runtime),
+                RuleEffect::Runtime(new_runtime),
+                RuleEffect::Mining {
+                    actor,
+                    progress: None,
+                },
+                RuleEffect::Mining {
+                    actor,
+                    progress: Some(later_progress),
+                },
+                RuleEffect::Mining {
+                    actor: new_key,
+                    progress: Some(progress.clone()),
+                },
+            ],
+        );
+        assert_eq!(ctx.actors, actors);
+        assert_eq!(ctx.player_slots, slots);
+        assert_eq!(ctx.inventories[&actor], inventory);
+        assert!(!ctx.inventories.contains_key(&new_key));
+        assert_eq!(ctx.runtimes[&actor], runtime);
+        assert!(!ctx.runtimes.contains_key(&new_key));
+        assert_eq!(ctx.mining[&actor], progress);
+        assert!(!ctx.mining.contains_key(&new_key));
+    }
+
+    #[test]
+    fn compound_restores_sparse_container_and_viewer_presence() {
+        use mornlea_domain::ContainerKind;
+        let mut authority = authority(1, true);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        let reference = ContainerRef::try_new(key(2).pos, ContainerKind::Chest, 0, 1).unwrap();
+        let missing = ContainerRef::try_new(key(3).pos, ContainerKind::Chest, 0, 1).unwrap();
+        let record = ContainerRecord {
+            reference,
+            revision: 5,
+            slots: ContainerSlots::Chest([Default::default(); 27]),
+        };
+        let mut after = record.clone();
+        let ContainerSlots::Chest(items) = &mut after.slots else {
+            unreachable!()
+        };
+        items[0].item = 2;
+        items[0].count = 1;
+        let mut absent = record.clone();
+        absent.reference = missing;
+        ctx.containers.insert(reference, record.clone());
+        let session = SessionKey::from_raw(1).unwrap();
+        let missing_session = SessionKey::from_raw(2).unwrap();
+        let lease = ViewLease::new(session, reference);
+        ctx.viewers.insert(session, lease);
+        let mut removal = BlockTxn::system(SystemRule::Support, ctx.read().tick(), Vec::new());
+        removal.containers.push(CapturedContainer {
+            key: key(2),
+            record: record.clone(),
+        });
+        rejected_apply(
+            &mut ctx,
+            vec![
+                RuleEffect::Blocks(removal),
+                RuleEffect::Container {
+                    before: record.clone(),
+                    after,
+                },
+                RuleEffect::WorldContainer {
+                    dimension: Dimension::OVERWORLD,
+                    before: absent.clone(),
+                    after: absent,
+                },
+                RuleEffect::Viewer {
+                    session,
+                    view: None,
+                },
+                RuleEffect::Viewer {
+                    session,
+                    view: Some(ViewLease::new(session, missing)),
+                },
+                RuleEffect::Viewer {
+                    session: missing_session,
+                    view: Some(ViewLease::new(missing_session, missing)),
+                },
+            ],
+        );
+        assert_eq!(ctx.containers.get(&reference), Some(&record));
+        assert!(!ctx.containers.contains_key(&missing));
+        assert_eq!(ctx.viewers.get(&session), Some(&lease));
+        assert!(!ctx.viewers.contains_key(&missing_session));
+    }
+
+    #[test]
+    fn compound_restores_scalar_presence_sleep_bit_projectile_order_and_damage_length() {
+        use mornlea_domain::{FiniteVec3, ProjectileId, ProjectileKind, Season, WorldStateParts};
+        for initially_present in [false, true] {
+            let mut authority = authority(1, true);
+            let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+            let actor = ctx.actors[0].key;
+            let world = WorldState::try_new(WorldStateParts {
+                day_phase_offset: 0,
+                world_time_ticks: 7,
+                weather: Weather::Clear,
+                season: Season::Spring,
+                season_progress: 0,
+                temperature: 0,
+            })
+            .unwrap();
+            ctx.freeze_environment(1);
+            let environment = ctx.environment.clone().unwrap();
+            if initially_present {
+                ctx.world = Some(world);
+                ctx.sleep_record_touched = true;
+            } else {
+                ctx.environment = None;
+            }
+            let old_world = ctx.world;
+            let old_environment = ctx.environment.clone();
+            let old_sleep = ctx.sleep_record.clone();
+            let mut after_environment = environment;
+            after_environment.world_time += 99;
+            let after_world = WorldState::try_new(WorldStateParts {
+                day_phase_offset: 0,
+                world_time_ticks: 11,
+                weather: Weather::Clear,
+                season: Season::Spring,
+                season_progress: 0,
+                temperature: 0,
+            })
+            .unwrap();
+            let projectile = |id| ProjectileRecord {
+                id: ProjectileId::try_new(id).unwrap(),
+                owner: actor,
+                dimension: Dimension::OVERWORLD,
+                position: FiniteVec3::try_new([0.0, 64.0, 0.0]).unwrap(),
+                velocity: FiniteVec3::try_new([0.0, 0.0, 1.0]).unwrap(),
+                kind: ProjectileKind::Arrow,
+                damage: 1,
+                age: 0,
+            };
+            ctx.projectiles = vec![projectile(8), projectile(2), projectile(5)];
+            let projectiles = ctx.projectiles.clone();
+            let damage = DamageIntent {
+                source: actor,
+                target: actor,
+                dimension: Dimension::OVERWORLD,
+                amount: 1,
+                cause: DamageCause::Fall,
+                projectile: None,
+                tick: ctx.read().tick(),
+            };
+            ctx.damage_intents.push(damage);
+            rejected_apply(
+                &mut ctx,
+                vec![
+                    RuleEffect::World(after_world),
+                    RuleEffect::Environment(after_environment),
+                    RuleEffect::Sleep(SleepState::try_new(Vec::new(), 23, None).unwrap()),
+                    RuleEffect::Sleep(SleepState::try_new(Vec::new(), 24, None).unwrap()),
+                    RuleEffect::Projectile {
+                        before: Some(projectile(2)),
+                        after: None,
+                    },
+                    RuleEffect::Projectile {
+                        before: None,
+                        after: Some(projectile(7)),
+                    },
+                    RuleEffect::Damage(damage),
+                    RuleEffect::Damage(damage),
+                ],
+            );
+            assert_eq!(ctx.world, old_world);
+            assert_eq!(ctx.environment, old_environment);
+            assert_eq!(ctx.sleep_record, old_sleep);
+            assert_eq!(ctx.sleep_record_touched, initially_present);
+            assert_eq!(ctx.projectiles, projectiles);
+            assert_eq!(ctx.damage_intents, vec![damage]);
+        }
+    }
+
+    #[test]
+    fn compound_repeated_cells_restore_initial_absence_and_height_column() {
+        let mut authority = authority(1, true);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        write(&mut ctx, 1, 4);
+        let blocks = ctx.blocks.clone();
+        let changed = ctx.changed.clone();
+        let low = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(1, 64, 1))
+            .unwrap();
+        let high = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(1, 65, 1))
+            .unwrap();
+        let mut updated_high = high;
+        updated_high.block = 4;
+        updated_high.revision += 1;
+        let tick = ctx.read().tick();
+        rejected_apply(
+            &mut ctx,
+            vec![
+                RuleEffect::Blocks(BlockTxn::system(
+                    SystemRule::Support,
+                    tick,
+                    vec![
+                        BlockWrite::try_new(low, 0).unwrap(),
+                        BlockWrite::try_new(high, 4).unwrap(),
+                    ],
+                )),
+                RuleEffect::Blocks(BlockTxn::system(
+                    SystemRule::Support,
+                    tick,
+                    vec![BlockWrite::try_new(updated_high, 0).unwrap()],
+                )),
+            ],
+        );
+        assert_eq!(ctx.blocks, blocks);
+        assert_eq!(ctx.changed, changed);
+        assert_eq!(ctx.ready[&key(0)].height(1, 1), 64);
+        assert_eq!(ctx.dirty_chunks, BTreeSet::from([key(0)]));
+    }
+
+    #[test]
+    fn compound_work_bounds_precede_validation_and_mutation() {
+        use mornlea_domain::ContainerKind;
+        let mut authority = authority(1, true);
+        let mut ctx = TickContext::for_tick(&mut authority, TickBudget::full());
+        let observed = ctx
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(1, 64, 1))
+            .unwrap();
+        let txn = |count| {
+            BlockTxn::system(
+                SystemRule::Support,
+                0,
+                vec![BlockWrite::try_new(observed, 4).unwrap(); count],
+            )
+        };
+        ctx.stage(RuleEffect::Compound(Vec::new())).unwrap();
+        ctx.apply_effect(RuleEffect::Compound(Vec::new())).unwrap();
+        let rejection = Err(RuleReject::ResourceFull(Resource::RuleEffects));
+        let actor = ctx.actors[0].clone();
+        let mut captures = txn(0);
+        captures.containers = vec![
+            CapturedContainer {
+                key: key(2),
+                record: ContainerRecord {
+                    reference: ContainerRef::try_new(key(2).pos, ContainerKind::Chest, 0, 1)
+                        .unwrap(),
+                    revision: 5,
+                    slots: ContainerSlots::Chest([Default::default(); 27]),
+                },
+            };
+            4097
+        ];
+        ctx.freeze_environment(1);
+        let mut basis = txn(0);
+        basis.read_basis = Some(MutationReadBasis {
+            actor: actor.key,
+            dimension: actor.dimension,
+            motion: actor.motion,
+            look: actor.look,
+            seed: 0,
+            tunables: RuleTunables::source_defaults(),
+            cells: vec![(Dimension::OVERWORLD, observed.pos, Some(observed)); 4097],
+        });
+        let mut first_captures = captures.clone();
+        first_captures.containers.truncate(2048);
+        let mut second_captures = captures.clone();
+        second_captures.containers.truncate(2049);
+        let mut first_basis = basis.clone();
+        first_basis
+            .read_basis
+            .as_mut()
+            .unwrap()
+            .cells
+            .truncate(2048);
+        let mut second_basis = basis.clone();
+        second_basis
+            .read_basis
+            .as_mut()
+            .unwrap()
+            .cells
+            .truncate(2049);
+        let effects = vec![
+            RuleEffect::Compound(vec![RuleEffect::Compound(Vec::new())]),
+            RuleEffect::Compound(vec![RuleEffect::Actor(actor); 4097]),
+            RuleEffect::Compound(vec![
+                RuleEffect::Blocks(txn(2048)),
+                RuleEffect::Blocks(txn(2049)),
+            ]),
+            RuleEffect::Blocks(captures.clone()),
+            RuleEffect::Blocks(basis.clone()),
+            RuleEffect::Compound(vec![
+                RuleEffect::Blocks(first_captures),
+                RuleEffect::Blocks(second_captures),
+            ]),
+            RuleEffect::Compound(vec![
+                RuleEffect::Blocks(first_basis),
+                RuleEffect::Blocks(second_basis),
+            ]),
+            RuleEffect::Compound(vec![RuleEffect::Blocks(captures)]),
+            RuleEffect::Compound(vec![RuleEffect::Blocks(basis)]),
+        ];
+        for effect in effects {
+            assert_eq!(ctx.stage(effect.clone()), rejection);
+            assert_eq!(ctx.apply_effect(effect), rejection);
+            assert!(ctx.blocks.is_empty());
+            assert!(ctx.changed.is_empty());
+            assert!(ctx.dirty_chunks.is_empty());
+        }
+        let mut accepted = txn(4096);
+        accepted.tick = ctx.read().tick();
+        let mut independent = accepted.clone();
+        independent.containers = vec![
+            CapturedContainer {
+                key: key(2),
+                record: ContainerRecord {
+                    reference: ContainerRef::try_new(key(2).pos, ContainerKind::Chest, 0, 1)
+                        .unwrap(),
+                    revision: 5,
+                    slots: ContainerSlots::Chest([Default::default(); 27]),
+                },
+            };
+            4096
+        ];
+        independent.read_basis = Some(MutationReadBasis {
+            actor: ctx.actors[0].key,
+            dimension: ctx.actors[0].dimension,
+            motion: ctx.actors[0].motion,
+            look: ctx.actors[0].look,
+            seed: 0,
+            tunables: RuleTunables::source_defaults(),
+            cells: vec![(Dimension::OVERWORLD, observed.pos, Some(observed)); 4096],
+        });
+        assert_eq!(
+            check_effect_work(&RuleEffect::Compound(vec![RuleEffect::Blocks(independent)])),
+            Ok(())
+        );
+        ctx.stage(RuleEffect::Compound(vec![RuleEffect::Blocks(accepted)]))
+            .unwrap();
+        assert_eq!(
+            ctx.read().block(Dimension::OVERWORLD, observed.pos),
+            Some(4)
+        );
     }
 
     #[test]
