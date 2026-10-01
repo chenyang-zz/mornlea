@@ -8,6 +8,7 @@ pub mod interaction;
 pub mod login_seed;
 pub mod mailbox;
 pub mod mutation;
+mod player_publication;
 pub mod publication;
 pub mod session;
 pub mod shutdown;

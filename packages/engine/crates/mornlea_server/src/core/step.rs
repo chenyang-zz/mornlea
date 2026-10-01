@@ -11,7 +11,9 @@
 //! The context holds the only mutable authority borrow for the whole
 //! dispatch, so authority writes happen exclusively before construction
 //! (mailbox drain, companion feed, login scan) and after the context drops
-//! (viewer and resident commits, publication delivery). A mid-tick viewer commit would be
+//! (viewer and resident commits, publication delivery). The context also owns
+//! input-acknowledgment bookkeeping before semantic control validation.
+//! A mid-tick viewer commit would be
 //! observationally void: providers read the staged overlay, and the closing
 //! commit replaces the full set. A batch failure stops later rows but never
 //! the tick itself: staged work commits, the publication reports what ran,
@@ -174,7 +176,14 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
     );
     let overlay = context.viewer_leases();
     let residents = context.resident_snapshot();
-    let events = context.events().to_vec();
+    // Private observations are projected after every settlement. Provider
+    // observations remain useful to fixtures but cannot publish an early pose.
+    let (hits, mut events): (Vec<_>, Vec<_>) = context
+        .events()
+        .iter()
+        .filter(|event| !matches!(event.event(), mornlea_domain::Event::PlayerState(_)))
+        .cloned()
+        .partition(|event| matches!(event.event(), mornlea_domain::Event::CombatHit(_)));
     let counters = TickCounters {
         executed_tick: tick,
         commands: drained.commands,
@@ -198,6 +207,8 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
     );
     state.commit_viewers(overlay);
     state.commit_residents(residents);
+    events.extend(state.project_player_updates(tick));
+    events.extend(hits);
     let publication = TickPublication {
         tick,
         events,
@@ -473,6 +484,7 @@ fn admit_command(
     context: &mut TickContext<'_>,
     envelope: &CommandEnvelope,
 ) -> Result<(), ServerError> {
+    context.record_player_input(envelope);
     let call = RuleCall {
         phase: RulePhase::PlayerCommand,
         actor: None,

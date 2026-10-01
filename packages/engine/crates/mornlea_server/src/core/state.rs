@@ -32,6 +32,7 @@ struct SessionRecord {
     display_name: String,
     phase: SessionPhase,
     last_applied_sequence: u64,
+    last_input_sequence: u64,
     next_arrival: u64,
     body: Option<PlayerSave>,
     outbox: Vec<Vec<u8>>,
@@ -56,6 +57,8 @@ struct QueuedCompanion {
 #[derive(Clone, Default)]
 pub struct ResidentTickState {
     pub actors: Vec<ActorRecord>,
+    /// Ordinals for at most eight live recipients, never historical actors.
+    player_slots: BTreeMap<SessionKey, usize>,
     pub runtimes: BTreeMap<ActorKey, ActorRuntime>,
     pub inventories: BTreeMap<ActorKey, InventoryRecord>,
     pub mining: BTreeMap<ActorKey, MiningProgress>,
@@ -226,6 +229,64 @@ impl AuthorityState {
     /// serial reducer owns the only call; providers only stage the overlay.
     pub fn commit_residents(&mut self, next: ResidentTickState) {
         self.residents = next;
+    }
+
+    /// Captures the final private state before consuming its one-tick reset.
+    pub(crate) fn project_player_updates(&mut self, tick: u64) -> Vec<RoutedEvent> {
+        let Some(environment) = self.residents.environment.as_ref() else {
+            return Vec::new();
+        };
+        let mut events = Vec::new();
+        let mut projected = Vec::new();
+        let mut refused = Vec::new();
+        // Retired records retain durable and wire ownership. Their number
+        // cannot enlarge this live-recipient projection or its census work.
+        for (&session, &slot) in &self.residents.player_slots {
+            let Some(record) = self
+                .sessions
+                .get(&session)
+                .filter(|record| record.phase == SessionPhase::Active)
+            else {
+                continue;
+            };
+            let key = ActorKey::Player(session);
+            let Some(actor) = self
+                .residents
+                .actors
+                .get(slot)
+                .filter(|actor| actor.key == key)
+            else {
+                refused.push(session);
+                continue;
+            };
+            match super::player_publication::project(
+                tick,
+                record.last_input_sequence,
+                actor,
+                self.residents.inventories.get(&key),
+                self.residents.runtimes.get(&key),
+                self.residents.mining.get(&key),
+                environment,
+            ) {
+                Ok(state) => {
+                    events.push(RoutedEvent::new(
+                        EventRecipient::Session(session.get()),
+                        mornlea_domain::Event::PlayerState(state),
+                    ));
+                    projected.push(key);
+                }
+                Err(_) => refused.push(session),
+            }
+        }
+        for key in projected {
+            if let Some(runtime) = self.residents.runtimes.get_mut(&key) {
+                runtime.reset = false;
+            }
+        }
+        for session in refused {
+            let _ = self.retire(session, CloseReason::InvalidPlay);
+        }
+        events
     }
 
     /// Cloned resident tick state for inspection and replay assertions.
@@ -486,6 +547,7 @@ impl AuthorityState {
             sleep.beds.retain(|(session, _, _)| *session != key);
         }
         self.residents.sleeping.remove(&key);
+        self.residents.player_slots.remove(&key);
         Ok(())
     }
 
@@ -1130,6 +1192,7 @@ impl AuthorityState {
                 display_name: login.display_name().as_str().to_owned(),
                 phase,
                 last_applied_sequence: 0,
+                last_input_sequence: 0,
                 next_arrival: 0,
                 body: None,
                 outbox: Vec::new(),
@@ -1737,6 +1800,7 @@ pub struct TickContext<'a> {
     companions: Vec<CompanionActionEnvelope>,
     interactions: Vec<AuthorityInteraction>,
     actors: Vec<ActorRecord>,
+    player_slots: BTreeMap<SessionKey, usize>,
     runtimes: BTreeMap<ActorKey, ActorRuntime>,
     mining: BTreeMap<ActorKey, MiningProgress>,
     environment: Option<EnvironmentState>,
@@ -1819,6 +1883,7 @@ impl<'a> TickContext<'a> {
         // providers read last tick's committed state. The pre-step snapshot
         // covers the seeded actors by the same construction rule as fixtures.
         context.actors = context.authority.residents.actors.clone();
+        context.player_slots = context.authority.residents.player_slots.clone();
         context.runtimes = context.authority.residents.runtimes.clone();
         context.inventories = context.authority.residents.inventories.clone();
         context.mining = context.authority.residents.mining.clone();
@@ -1924,6 +1989,7 @@ impl<'a> TickContext<'a> {
             companions: Vec::new(),
             interactions: Vec::new(),
             actors: Vec::new(),
+            player_slots: BTreeMap::new(),
             runtimes: BTreeMap::new(),
             mining: BTreeMap::new(),
             environment: None,
@@ -2089,6 +2155,7 @@ impl<'a> TickContext<'a> {
         }
         ResidentTickState {
             actors: self.actors.clone(),
+            player_slots: self.player_slots.clone(),
             runtimes: self.runtimes.clone(),
             inventories: self.inventories.clone(),
             mining: self.mining.clone(),
@@ -2104,21 +2171,67 @@ impl<'a> TickContext<'a> {
         }
     }
 
+    /// Input acknowledgment precedes semantic validation and survives idle ticks.
+    pub(crate) fn record_player_input(&mut self, envelope: &CommandEnvelope) {
+        if !matches!(envelope.command(), mornlea_domain::Command::PlayerInput(_)) {
+            return;
+        }
+        let Some(session) = SessionKey::from_raw(envelope.session()) else {
+            return;
+        };
+        if !self
+            .player_slots
+            .get(&session)
+            .and_then(|slot| self.actors.get(*slot))
+            .is_some_and(|actor| {
+                actor.key == ActorKey::Player(session) && actor.lifecycle == ActorLifecycle::Active
+            })
+        {
+            return;
+        }
+        if let Some(record) = self.authority.sessions.get_mut(&session)
+            && record.phase == SessionPhase::Active
+        {
+            record.last_input_sequence = envelope.sequence();
+        }
+    }
+
     /// Stages one login seed into the overlay. Latest-wins on a repeated key
     /// preserves the no-duplicate-actor invariant even against a carried
     /// record; the scan itself only emits sessions without one.
     pub fn stage_login(&mut self, seeded: SeededPlayer) {
         let SeededPlayer { actor, inventory } = seeded;
-        match self
+        let slot = match self
             .actors
             .iter()
             .position(|staged| staged.key == actor.key)
         {
-            Some(index) => self.actors[index] = actor.clone(),
-            None => self.actors.push(actor.clone()),
-        }
+            Some(index) => {
+                self.actors[index] = actor.clone();
+                index
+            }
+            None => {
+                let index = self.actors.len();
+                self.actors.push(actor.clone());
+                index
+            }
+        };
+        self.index_player_actor(actor.key, slot);
         self.pre_step.insert(actor.key, actor.motion);
         self.inventories.insert(actor.key, inventory);
+    }
+
+    /// Existing actor writes retain ordinals; only owned active sessions enter.
+    fn index_player_actor(&mut self, key: ActorKey, slot: usize) {
+        if let ActorKey::Player(session) = key
+            && self
+                .authority
+                .sessions
+                .get(&session)
+                .is_some_and(|record| record.phase == SessionPhase::Active)
+        {
+            self.player_slots.insert(session, slot);
+        }
     }
 
     /// Reducer-carried sleep record under settlement.
@@ -2720,6 +2833,7 @@ impl<'a> TickContext<'a> {
                 // validates every component before applying any. Drop copies
                 // publish only after this entire operation succeeds.
                 let actors = self.actors.clone();
+                let player_slots = self.player_slots.clone();
                 let runtimes = self.runtimes.clone();
                 let mining = self.mining.clone();
                 for part in parts {
@@ -2736,6 +2850,7 @@ impl<'a> TickContext<'a> {
                         self.environment = environment;
                         self.sleep_record = sleep_record;
                         self.actors = actors;
+                        self.player_slots = player_slots;
                         self.runtimes = runtimes;
                         self.mining = mining;
                         return Err(error);
@@ -2747,10 +2862,19 @@ impl<'a> TickContext<'a> {
                 // Latest-wins overlay replace, mirroring the inventory arm: a
                 // staged actor snapshot supersedes the earlier record with
                 // the same key instead of accumulating duplicates.
-                match self.actors.iter().position(|actor| actor.key == record.key) {
-                    Some(index) => self.actors[index] = record,
-                    None => self.actors.push(record),
-                }
+                let key = record.key;
+                let slot = match self.actors.iter().position(|actor| actor.key == key) {
+                    Some(index) => {
+                        self.actors[index] = record;
+                        index
+                    }
+                    None => {
+                        let index = self.actors.len();
+                        self.actors.push(record);
+                        index
+                    }
+                };
+                self.index_player_actor(key, slot);
                 Ok(())
             }
             RuleEffect::Runtime(record) => {
@@ -3629,6 +3753,218 @@ mod compound_inventory_tests {
                 assert!(ctx.events().is_empty());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod player_publication_tests {
+    use super::*;
+    use mornlea_domain::{BlockPos, FiniteVec3, HotbarSlot, MiningState, MotionStateParts};
+    use mornlea_storage::ItemStack;
+
+    fn fixture() -> (SeededPlayer, EnvironmentState) {
+        let player =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        let seeded = seed_player(
+            SessionKey::from_raw(1).unwrap(),
+            &canonical_player(player, "Ada").unwrap(),
+        )
+        .unwrap();
+        let environment = EnvironmentState {
+            seed: 0,
+            next_tick: 1,
+            world_time: 72_000,
+            day_phase_offset: 7_800,
+            season_offset: 0,
+            weather: Weather::Clear,
+            weather_remaining: 5_000,
+            difficulty: 0,
+            tunables: RuleTunables::source_defaults(),
+        };
+        (seeded, environment)
+    }
+
+    fn login(authority: &mut AuthorityState, tag: u8) -> SessionKey {
+        let player =
+            PlayerId::try_from_bytes([tag, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1])
+                .unwrap();
+        let start = mornlea_protocol::LoginStart::new(player, "Ada", 8).unwrap();
+        let inbound =
+            mornlea_protocol::LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
+        let session = authority
+            .admit(
+                mornlea_protocol::admit_login(inbound).unwrap(),
+                TransportKind::Memory,
+            )
+            .unwrap();
+        let mut context = TickContext::for_tick(authority, TickBudget::full());
+        context
+            .stage_login(seed_player(session, &canonical_player(player, "Ada").unwrap()).unwrap());
+        context.stage(RuleEffect::Environment(fixture().1)).unwrap();
+        let residents = context.resident_snapshot();
+        drop(context);
+        authority.commit_residents(residents);
+        session
+    }
+
+    #[test]
+    fn reconnect_history_never_enters_live_projection_index() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            0,
+        )
+        .unwrap();
+        for _ in 0..32 {
+            let session = login(&mut authority, 1);
+            assert_eq!(authority.residents.player_slots.len(), 1);
+            authority.retire(session, CloseReason::PeerGone).unwrap();
+            assert!(authority.residents.player_slots.is_empty());
+        }
+        let current = login(&mut authority, 1);
+        assert_eq!(authority.residents.actors.len(), 33);
+        assert_eq!(authority.residents.player_slots.len(), 1);
+        let events = authority.project_player_updates(5);
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].recipient(),
+            EventRecipient::Session(current.get())
+        );
+    }
+
+    #[test]
+    fn invalid_private_projection_retires_only_its_recipient() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            0,
+        )
+        .unwrap();
+        let broken = login(&mut authority, 1);
+        let healthy = login(&mut authority, 2);
+        authority.residents.mining.insert(
+            ActorKey::Player(broken),
+            MiningProgress {
+                actor: ActorKey::Player(broken),
+                dimension: Dimension::OVERWORLD,
+                target: BlockPos::new(1, 65, 0),
+                observed_block: 17,
+                tool_slot: HotbarSlot::new(0).unwrap(),
+                tool: ItemStack::default(),
+                elapsed: 4,
+                required: u32::MAX,
+                last_tick: 5,
+            },
+        );
+        let events = authority.project_player_updates(5);
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].recipient(),
+            EventRecipient::Session(healthy.get())
+        );
+        assert_eq!(
+            authority.session(broken).unwrap().phase,
+            SessionPhase::Retired
+        );
+        assert_eq!(
+            authority.session(healthy).unwrap().phase,
+            SessionPhase::Active
+        );
+        assert!(!authority.residents.player_slots.contains_key(&broken));
+    }
+
+    #[test]
+    fn final_temperature_matches_source_solstice_and_altitude_anchors() {
+        for (time, offset, y, weather, expected) in [
+            (72_000, 7_800, 64.0, Weather::Clear, 30),
+            (72_000, 7_800, 88.0, Weather::Clear, 0),
+            (72_000, 7_800, 88.0, Weather::Rain, -4),
+            (72_000, 7_800, 64.0, Weather::Rain, 26),
+            (216_000, 4_200, 64.0, Weather::Clear, -8),
+            (216_000, 4_200, 319.0, Weather::Thunder, -40),
+        ] {
+            let (mut seeded, mut environment) = fixture();
+            seeded.actor.motion = MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new([0.5, y, 0.5]).unwrap(),
+                velocity: seeded.actor.motion.velocity(),
+                on_ground: true,
+            });
+            environment.world_time = time;
+            environment.day_phase_offset = offset;
+            environment.weather = weather;
+            let state = super::super::player_publication::project(
+                9,
+                7,
+                &seeded.actor,
+                Some(&seeded.inventory),
+                None,
+                None,
+                &environment,
+            )
+            .unwrap();
+            assert_eq!(
+                state.world().temperature(),
+                expected,
+                "time={time} y={y} weather={weather:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn final_mining_and_armor_observe_latest_resident_values() {
+        let (mut seeded, environment) = fixture();
+        seeded.inventory.armor[1] = ItemStack {
+            item: 59,
+            count: 1,
+            durability: 240,
+        };
+        let ActorBody::Player(body) = &mut seeded.actor.body else {
+            unreachable!()
+        };
+        body.saturation_milli = 0;
+        let mut progress = MiningProgress {
+            actor: seeded.actor.key,
+            dimension: seeded.actor.dimension,
+            target: BlockPos::new(1, 65, 0),
+            observed_block: 17,
+            tool_slot: HotbarSlot::new(0).unwrap(),
+            tool: ItemStack::default(),
+            elapsed: 4,
+            required: 15,
+            last_tick: 9,
+        };
+        let state = super::super::player_publication::project(
+            9,
+            7,
+            &seeded.actor,
+            Some(&seeded.inventory),
+            None,
+            Some(&progress),
+            &environment,
+        )
+        .unwrap();
+        assert_eq!(state.survival().armor_points(), 6);
+        assert!(state.survival().saturation_zero());
+        let MiningState::Active(mining) = state.mining() else {
+            panic!("unfinished mining must publish")
+        };
+        assert_eq!(mining.target(), progress.target);
+        assert_eq!(mining.progress(), 4);
+        assert_eq!(mining.required(), 15);
+        assert!(mining.harvestable());
+        progress.required = u32::MAX;
+        assert_eq!(
+            super::super::player_publication::project(
+                9,
+                7,
+                &seeded.actor,
+                None,
+                None,
+                Some(&progress),
+                &environment
+            ),
+            Err(ServerError::InvalidInput {
+                field: "mining_publication"
+            })
+        );
     }
 }
 

@@ -242,6 +242,208 @@ fn login_session_becomes_actor_on_live_tick() {
     );
 }
 
+/// The real reducer publishes its final observation through canonical framing.
+#[test]
+fn live_player_state_reaches_owned_wire_after_environment_settlement() {
+    let mut authority = authority();
+    let login = admitted(1, "Ada");
+    let (stored, _) = customized_save(login.player_id());
+    let session = login_session(&mut authority, login, stored);
+    for completed in 1..=2 {
+        let publication = authority.advance_tick(TickBudget::full()).unwrap();
+        let states: Vec<_> = publication
+            .events
+            .iter()
+            .filter_map(|event| match event.event() {
+                mornlea_domain::Event::PlayerState(state) => Some(*state),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states.len(), 1, "one final private observation per tick");
+        assert_eq!(states[0].server_tick(), completed - 1);
+        assert_eq!(states[0].world().world_time_ticks(), completed);
+        assert_eq!(states[0].motion(), authority.residents().actors[0].motion);
+        let frames = authority.take_outbox(session, 16, 1_048_576).unwrap();
+        let player_frames: Vec<_> = frames
+            .iter()
+            .filter(|bytes| {
+                let frame = mornlea_protocol::read_frame_ref(bytes).unwrap();
+                frame.packet_id == 3
+            })
+            .collect();
+        assert_eq!(player_frames.len(), 1, "the observation reaches the wire");
+    }
+}
+
+fn private_player_state(
+    publication: &mornlea_server::contracts::TickPublication,
+) -> mornlea_domain::PlayerState {
+    publication
+        .events
+        .iter()
+        .find_map(|event| match event.event() {
+            mornlea_domain::Event::PlayerState(state) => Some(*state),
+            _ => None,
+        })
+        .expect("final player observation")
+}
+
+/// Input acknowledgment survives idle ticks and differs from inventory ordering.
+#[test]
+fn live_player_state_retains_last_input_sequence_after_invalid_controls() {
+    let mut authority = authority();
+    let login = admitted(1, "Ada");
+    let (stored, _) = customized_save(login.player_id());
+    let session = login_session(&mut authority, login, stored);
+    authority.advance_tick(TickBudget::full()).unwrap();
+    let input = PlayerControl::new(PlayerControlParts {
+        movement: Movement {
+            move_x: 2,
+            move_z: 0,
+            jump: false,
+        },
+        look: LookAngles::try_new(0.0, 0.0).unwrap(),
+        actions: HeldActions {
+            primary: false,
+            eating: false,
+            sprinting: false,
+            sneaking: false,
+        },
+    });
+    authority
+        .submit(
+            session,
+            mornlea_protocol::PlayIntent::Sequenced {
+                sequence: 7,
+                command: mornlea_domain::Command::PlayerInput(input),
+            },
+        )
+        .unwrap();
+    let publication = authority.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(private_player_state(&publication).last_input_sequence(), 7);
+    authority
+        .submit(
+            session,
+            mornlea_protocol::PlayIntent::Sequenced {
+                sequence: 8,
+                command: mornlea_domain::Command::SelectHotbar(HotbarSlot::new(2).unwrap()),
+            },
+        )
+        .unwrap();
+    let publication = authority.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(private_player_state(&publication).last_input_sequence(), 7);
+    let publication = authority.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(private_player_state(&publication).last_input_sequence(), 7);
+}
+
+#[test]
+fn live_pending_player_observation_is_private_and_retirement_stops_it() {
+    let mut authority = authority();
+    let first = admitted(1, "Ada");
+    let save = customized_save(first.player_id()).1;
+    let session = authority.admit(first, TransportKind::Memory).unwrap();
+    let other = authority
+        .admit(admitted(2, "Ben"), TransportKind::Memory)
+        .unwrap();
+    let mut seeded = seed_player(session, &save).unwrap();
+    seeded.actor.lifecycle = ActorLifecycle::Pending;
+    let mut context = TickContext::harness(&mut authority, TickBudget::full());
+    context.stage_login(seeded);
+    let residents = context.resident_snapshot();
+    drop(context);
+    authority.commit_residents(residents);
+    let publication = authority.advance_tick(TickBudget::full()).unwrap();
+    assert!(!private_player_state(&publication).ready());
+    assert!(
+        authority
+            .take_outbox(other, 16, 1_048_576)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        authority.take_outbox(session, 16, 1_048_576).unwrap().len(),
+        1
+    );
+    authority.retire(session, CloseReason::PeerGone).unwrap();
+    let publication = authority.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        !publication
+            .events
+            .iter()
+            .any(|event| matches!(event.event(), mornlea_domain::Event::PlayerState(_)))
+    );
+}
+
+/// Final corrections follow a real hit's settlement and precede its confirmation.
+#[test]
+fn live_projectile_hit_publishes_final_player_state_before_confirmation() {
+    let mut authority = authority();
+    authority.advance_tick(TickBudget::full()).unwrap();
+    let victim_login = admitted(1, "Ada");
+    let victim_save = customized_save(victim_login.player_id()).1;
+    let victim = authority
+        .admit(victim_login, TransportKind::Memory)
+        .unwrap();
+    let shooter_login = admitted(2, "Ben");
+    let mut shooter_save = customized_save(shooter_login.player_id()).1;
+    shooter_save.current.position = [40.5, 65.0, 0.5];
+    let shooter = authority
+        .admit(shooter_login, TransportKind::Memory)
+        .unwrap();
+    let mut context = TickContext::harness(&mut authority, TickBudget::full());
+    context.stage_login(seed_player(victim, &victim_save).unwrap());
+    context.stage_login(seed_player(shooter, &shooter_save).unwrap());
+    for key in [chunk_key(0, -1), chunk_key(2, 0)] {
+        context.preload_ready_chunk(ReadyChunk::try_new(key, 1, 1, air_chunk()).unwrap());
+    }
+    context
+        .stage(RuleEffect::Projectile {
+            before: None,
+            after: Some(ProjectileRecord {
+                id: ProjectileId::try_new(1).unwrap(),
+                owner: ActorKey::Player(shooter),
+                dimension: Dimension::OVERWORLD,
+                position: FiniteVec3::try_new([10.5, 66.0, -3.25]).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                kind: ProjectileKind::Arrow,
+                damage: 4,
+                age: 0,
+            }),
+        })
+        .unwrap();
+    let residents = context.resident_snapshot();
+    drop(context);
+    authority.commit_residents(residents);
+    let publication = authority.advance_tick(TickBudget::full()).unwrap();
+    let hit = publication
+        .events
+        .iter()
+        .position(|event| matches!(event.event(), mornlea_domain::Event::CombatHit(_)))
+        .expect("actual projectile confirmation");
+    let victim_state = publication
+        .events
+        .iter()
+        .enumerate()
+        .find_map(|(index, event)| {
+            if event.recipient() == mornlea_domain::EventRecipient::Session(victim.get())
+                && let mornlea_domain::Event::PlayerState(state) = event.event()
+            {
+                Some((index, *state))
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert!(victim_state.0 < hit);
+    assert_eq!(victim_state.1.survival().health(), 11);
+    let wire = authority.take_outbox(shooter, 16, 1_048_576).unwrap();
+    let ids: Vec<_> = wire
+        .iter()
+        .map(|frame| mornlea_protocol::read_frame_ref(frame).unwrap().packet_id)
+        .collect();
+    assert_eq!(ids, [3, 25]);
+}
+
 /// Zero health restores full health instead of staging a dead actor.
 #[test]
 fn login_zero_health_restores_full_health() {
@@ -955,7 +1157,8 @@ fn live_reset_keeps_physics_lanes_while_regen_and_actions_advance() {
     let residents = context.resident_snapshot();
     drop(context);
     authority.commit_residents(residents);
-    authority.advance_tick(TickBudget::full()).unwrap();
+    let publication = authority.advance_tick(TickBudget::full()).unwrap();
+    assert!(private_player_state(&publication).reset());
     let resident = authority.residents();
     let after = resident.runtimes.get(&key).unwrap();
     assert_eq!(
@@ -967,6 +1170,7 @@ fn live_reset_keeps_physics_lanes_while_regen_and_actions_advance() {
     assert_eq!(
         after,
         &ActorRuntime {
+            reset: false,
             since_damage_ticks: 72,
             starvation_ticks: 0,
             eating: None,
@@ -993,6 +1197,8 @@ fn live_reset_keeps_physics_lanes_while_regen_and_actions_advance() {
         resident.inventories.get(&key),
         Some(&InventoryRecord::empty())
     );
+    let publication = authority.advance_tick(TickBudget::full()).unwrap();
+    assert!(!private_player_state(&publication).reset());
 }
 
 /// Retirement releases transient participation without rewriting durable

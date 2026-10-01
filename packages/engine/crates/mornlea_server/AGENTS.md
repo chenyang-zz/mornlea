@@ -216,6 +216,13 @@ consume its cancellation and error contracts before joining the real backend.
   and damage-event emission that the sleep node consumes for wake. The
   serial reducer must construct contexts from pre-motion authority so the
   pre-step snapshot holds.
+- `src/core/player_publication.rs` owns the live tick-end private player
+  projection after final movement, actions, damage and climate settlement.
+  It derives mining, armor, saturation and per-height temperature from final
+  resident values. The reducer replaces provisional fixture poses, orders
+  private observations before hits, and consumes reset after capturing it.
+  Input acknowledgment is session-owned, recorded before semantic control
+  validation and retained across idle ticks independently of command ordering.
 - `src/rules/fluids.rs` owns boundary rescans before updates over the F1
   `NativeFluidEval` kernel: snapshot the 7-neighborhood before writing,
   strongest-merge with sorted writes, then one transaction per target,
