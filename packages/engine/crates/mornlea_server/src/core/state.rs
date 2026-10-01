@@ -8,13 +8,15 @@
 //! the existing protocol conversion before it appends any frame.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use mornlea_domain::{
     CommandEnvelope, CommandEnvelopeParts, ContainerRef, Dimension, EventRecipient, MotionState,
     PlayerId, RejectReason, RoutedEvent, Weather, WorldState,
 };
-use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket};
+use mornlea_protocol::{
+    AdmittedLogin, Direction, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket, State,
+};
 use mornlea_storage::{Chunk, Metadata, PlayerLocation, PlayerSave, StoredPlayer};
 
 use super::acquisition::{
@@ -25,6 +27,7 @@ use super::container_store::ContainerState;
 use super::contracts::*;
 use super::drop_store::{self, DropState};
 use super::login_seed::{SeededPlayer, seed_player};
+use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
 use super::world::ReadyChunk;
 use crate::rules::farmland::FarmlandSchedule;
 use crate::rules::fluids::FluidSchedule;
@@ -33,6 +36,9 @@ const COMPANION_INBOX: usize = 4;
 
 #[cfg(test)]
 thread_local! {
+    // Private work observations count current-key lookups without changing decisions.
+    static CURRENT_PUBLICATION_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CURRENT_DUPLICATE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     // One tick's bounded acquisition observation; no production hook is exposed.
     static ACQUIRE_AVAILABILITY: std::cell::Cell<Option<(ChunkKey,bool,bool)>> = const { std::cell::Cell::new(None) };
 }
@@ -45,7 +51,7 @@ struct SessionRecord {
     last_input_sequence: u64,
     next_arrival: u64,
     body: Option<PlayerSave>,
-    outbox: Vec<Vec<u8>>,
+    outbox: VecDeque<PreparedFrame>,
     outbox_closed: bool,
 }
 
@@ -135,6 +141,8 @@ pub struct AuthorityState {
     next_tick: u64,
     world_seed: i64,
     sessions: BTreeMap<SessionKey, SessionRecord>,
+    /// Prepared and Active membership is bounded independently of retained history.
+    current_sessions: BTreeSet<SessionKey>,
     occupied: usize,
     commands: Vec<CommandEnvelope>,
     companions: Vec<QueuedCompanion>,
@@ -200,6 +208,7 @@ impl AuthorityState {
             next_tick: 0,
             world_seed,
             sessions: BTreeMap::new(),
+            current_sessions: BTreeSet::new(),
             occupied: 0,
             commands,
             companions: Vec::new(),
@@ -566,6 +575,7 @@ impl AuthorityState {
         }
         record.phase = SessionPhase::Retired;
         record.outbox_closed = true;
+        self.current_sessions.remove(&key);
         self.occupied = self.occupied.saturating_sub(1);
         // Sleep participation belongs to the live session. Durable respawn
         // anchors and the other resident lanes keep their persistence owner.
@@ -862,7 +872,7 @@ impl AuthorityState {
         for event in &publication.events {
             let packet = ServerPacket::try_from(event.event().clone())
                 .map_err(|_| ServerError::InvalidInput { field: "packet" })?;
-            let frame = encode_packet(&mut codec, &packet)?;
+            let frame = PreparedFrame::encode(&mut codec, &packet)?;
             match event.recipient() {
                 EventRecipient::Session(raw) => {
                     let session = SessionKey::from_raw(raw)
@@ -881,7 +891,7 @@ impl AuthorityState {
                     session: reply.session,
                 });
             }
-            let frame = encode_packet(&mut codec, &reply.packet)?;
+            let frame = PreparedFrame::encode(&mut codec, &reply.packet)?;
             pending.push(PendingFrame::One {
                 session: reply.session,
                 frame,
@@ -896,8 +906,10 @@ impl AuthorityState {
                     }
                 }
                 PendingFrame::Broadcast { frame } => {
-                    let sessions: Vec<SessionKey> = self.sessions.keys().copied().collect();
+                    let sessions: Vec<SessionKey> = self.current_sessions.iter().copied().collect();
                     for session in sessions {
+                        #[cfg(test)]
+                        CURRENT_PUBLICATION_VISITS.with(|visits| visits.set(visits.get() + 1));
                         if self.append_frame(session, frame.clone()) {
                             slow.push(session);
                         }
@@ -918,7 +930,7 @@ impl AuthorityState {
     /// Appends one frame to a receiver's outbox. Returns `true` only when
     /// this append saturated the outbox and flipped it closed; the overflowing
     /// frame is dropped and the caller owns the slow-receiver retirement.
-    fn append_frame(&mut self, session: SessionKey, frame: Vec<u8>) -> bool {
+    fn append_frame(&mut self, session: SessionKey, frame: PreparedFrame) -> bool {
         let Some(record) = self.sessions.get_mut(&session) else {
             return false;
         };
@@ -929,34 +941,77 @@ impl AuthorityState {
             record.outbox_closed = true;
             return true;
         }
-        record.outbox.push(frame);
+        record.outbox.push_back(frame);
         false
     }
 
-    pub fn take_outbox(
+    /// Admits an immutable Play owner; the receipt certifies queue admission only.
+    /// Legacy control publication keeps its existing permissive phase policy.
+    pub fn enqueue_prepared(
+        &mut self,
+        session: SessionKey,
+        frame: PreparedFrame,
+    ) -> Result<EnqueueOutcome, ServerError> {
+        let key = frame.packet_key();
+        if key.direction != Direction::ServerToClient || key.state != State::Play {
+            return Err(ServerError::InvalidInput { field: "packet" });
+        }
+        let record = self
+            .sessions
+            .get(&session)
+            .ok_or(ServerError::StaleSession { session })?;
+        if record.phase != SessionPhase::Active || record.outbox_closed {
+            return Ok(EnqueueOutcome::Closed);
+        }
+        if self.append_frame(session, frame) {
+            self.retire(session, CloseReason::SlowReceiver)?;
+            return Ok(EnqueueOutcome::Closed);
+        }
+        Ok(EnqueueOutcome::Queued)
+    }
+
+    /// Moves whole immutable owners from the one FIFO, including retained prefixes.
+    /// The first frame is exempt from the byte budget; later nonfits stay queued.
+    pub fn take_prepared_outbox(
         &mut self,
         session: SessionKey,
         max_frames: usize,
         max_bytes: usize,
-    ) -> Result<Vec<Vec<u8>>, ServerError> {
+    ) -> Result<Vec<PreparedFrame>, ServerError> {
         let record = self
             .sessions
             .get_mut(&session)
             .ok_or(ServerError::StaleSession { session })?;
         let mut taken = Vec::new();
         let mut bytes = 0usize;
-        while taken.len() < max_frames {
-            let Some(frame) = record.outbox.first() else {
+        while taken.len() < max_frames.min(512) {
+            let Some(frame) = record.outbox.front() else {
                 break;
             };
-            let next = bytes.saturating_add(frame.len());
+            let next = bytes.saturating_add(frame.byte_len());
             if !taken.is_empty() && next > max_bytes {
                 break;
             }
             bytes = next;
-            taken.push(record.outbox.remove(0));
+            taken.push(record.outbox.pop_front().expect("inspected FIFO head"));
         }
         Ok(taken)
+    }
+
+    /// Legacy byte observation converts the same FIFO owners off tick.
+    pub fn take_outbox(
+        &mut self,
+        session: SessionKey,
+        max_frames: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<Vec<u8>>, ServerError> {
+        self.take_prepared_outbox(session, max_frames, max_bytes)
+            .map(|frames| {
+                frames
+                    .into_iter()
+                    .map(PreparedFrame::into_legacy_bytes)
+                    .collect()
+            })
     }
 
     pub fn close_outbox(&mut self, session: SessionKey, _reason: CloseReason) {
@@ -1529,8 +1584,10 @@ impl AuthorityState {
                 observed: self.occupied + 1,
             });
         }
-        if self.sessions.values().any(|record| {
-            record.phase != SessionPhase::Retired && record.player_id == login.player_id()
+        if self.current_sessions.iter().any(|key| {
+            #[cfg(test)]
+            CURRENT_DUPLICATE_VISITS.with(|visits| visits.set(visits.get() + 1));
+            self.sessions[key].player_id == login.player_id()
         }) {
             return Err(ServerError::InvalidInput { field: "player_id" });
         }
@@ -1560,10 +1617,11 @@ impl AuthorityState {
                 last_input_sequence: 0,
                 next_arrival: 0,
                 body: None,
-                outbox: Vec::new(),
+                outbox: VecDeque::new(),
                 outbox_closed: false,
             },
         );
+        self.current_sessions.insert(key);
         self.occupied += 1;
         Ok(key)
     }
@@ -1647,8 +1705,13 @@ fn save_from_stored(stored: StoredPlayer) -> Result<PlayerSave, ServerError> {
 }
 
 enum PendingFrame {
-    One { session: SessionKey, frame: Vec<u8> },
-    Broadcast { frame: Vec<u8> },
+    One {
+        session: SessionKey,
+        frame: PreparedFrame,
+    },
+    Broadcast {
+        frame: PreparedFrame,
+    },
 }
 
 /// Encodes one packet with the protocol codec. A short buffer is resized to
@@ -1740,6 +1803,24 @@ impl MailboxPort for AuthorityState {
     }
     fn enqueue_interaction(&mut self, value: AuthorityInteraction) -> Result<(), ServerError> {
         AuthorityState::enqueue_interaction(self, value)
+    }
+}
+
+impl PreparedPublicationPort for AuthorityState {
+    fn enqueue_prepared(
+        &mut self,
+        session: SessionKey,
+        frame: PreparedFrame,
+    ) -> Result<EnqueueOutcome, ServerError> {
+        AuthorityState::enqueue_prepared(self, session, frame)
+    }
+    fn take_prepared_outbox(
+        &mut self,
+        session: SessionKey,
+        max_frames: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<PreparedFrame>, ServerError> {
+        AuthorityState::take_prepared_outbox(self, session, max_frames, max_bytes)
     }
 }
 
@@ -4438,11 +4519,14 @@ mod owned_resident_tests {
                     last_input_sequence: 0,
                     next_arrival: 0,
                     body: None,
-                    outbox: Vec::new(),
+                    outbox: VecDeque::new(),
                     outbox_closed: false,
                 },
             );
         }
+        ctx.authority
+            .current_sessions
+            .extend([session, new_session]);
         ctx.player_slots.insert(session, 0);
         let mut unrelated = ctx.actors[0].clone();
         unrelated.key = ActorKey::Player(SessionKey::from_raw(3).unwrap());
@@ -7568,5 +7652,116 @@ mod live_acquisition_tests {
             ctx.authority.acquisition.ownership_counts(),
             (16, 0, 0, 0, 0, 0)
         );
+    }
+}
+
+#[cfg(test)]
+mod prepared_current_index_tests {
+    use super::*;
+    use crate::core::publication::{EnqueueOutcome, PreparedFrame};
+    use mornlea_domain::{CommandRejection, Event};
+    use mornlea_protocol::{LoginStart, admit_login};
+
+    #[test]
+    fn sequential_reservations_keep_one_current_key_and_skip_retained_history() {
+        let mut state = AuthorityState::try_new(
+            ServerLimits::try_new(1, 4096, 2, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let mut history = Vec::new();
+        for ordinal in 0u16..256 {
+            CURRENT_PUBLICATION_VISITS.with(|visits| visits.set(0));
+            CURRENT_DUPLICATE_VISITS.with(|visits| visits.set(0));
+            let mut bytes = [0u8; 16];
+            bytes[..2].copy_from_slice(&ordinal.to_le_bytes());
+            bytes[6] = 0x40;
+            bytes[8] = 0x80;
+            let player = PlayerId::try_from_bytes(bytes).unwrap();
+            let start = LoginStart::new(player, "Ada", 8).unwrap();
+            let login =
+                admit_login(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap()).unwrap();
+            let key = if ordinal % 2 == 0 {
+                state.prepare(login, TransportKind::Memory).unwrap()
+            } else {
+                state.admit(login, TransportKind::Memory).unwrap()
+            };
+            assert_eq!(
+                state.current_sessions.iter().copied().collect::<Vec<_>>(),
+                vec![key]
+            );
+            let packet = ServerPacket::CommandRejected(
+                mornlea_protocol::CommandRejected::new(u64::from(ordinal), 1).unwrap(),
+            );
+            if ordinal % 2 == 0 {
+                assert_eq!(
+                    state
+                        .enqueue_prepared(
+                            key,
+                            PreparedFrame::encode(&mut ProtocolCodec::new().unwrap(), &packet)
+                                .unwrap()
+                        )
+                        .unwrap(),
+                    EnqueueOutcome::Closed
+                );
+            }
+            state
+                .publish(TickPublication {
+                    tick: 0,
+                    events: vec![RoutedEvent::new(
+                        EventRecipient::Broadcast,
+                        Event::CommandRejected(CommandRejection::new(
+                            u64::from(ordinal),
+                            RejectReason::InvalidRay,
+                        )),
+                    )],
+                    control: vec![],
+                    counters: TickCounters::default(),
+                })
+                .unwrap();
+            assert_eq!(state.sessions[&key].outbox.len(), 1);
+            CURRENT_PUBLICATION_VISITS.with(|visits| assert_eq!(visits.get(), 1));
+            CURRENT_DUPLICATE_VISITS.with(|visits| assert_eq!(visits.get(), 0));
+            for old in &history {
+                assert_eq!(state.sessions[old].phase, SessionPhase::Retired);
+                assert_eq!(state.sessions[old].outbox.len(), 1);
+            }
+            state.retire(key, CloseReason::PeerGone).unwrap();
+            assert!(state.current_sessions.is_empty());
+            assert_eq!(state.occupied, 0);
+            history.push(key);
+        }
+        assert_eq!(state.sessions.len(), 256);
+    }
+    #[test]
+    fn duplicate_player_lookup_uses_only_current_prepared_membership() {
+        let mut state = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 2, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let player =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        let login = || {
+            let start = LoginStart::new(player, "Ada", 8).unwrap();
+            admit_login(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap()).unwrap()
+        };
+        for _ in 0..256 {
+            let key = state.prepare(login(), TransportKind::Memory).unwrap();
+            state.retire(key, CloseReason::PeerGone).unwrap();
+        }
+        CURRENT_DUPLICATE_VISITS.with(|visits| visits.set(0));
+        let key = state.prepare(login(), TransportKind::Memory).unwrap();
+        CURRENT_DUPLICATE_VISITS.with(|visits| assert_eq!(visits.get(), 0));
+        assert_eq!(
+            state.prepare(login(), TransportKind::Memory),
+            Err(ServerError::InvalidInput { field: "player_id" })
+        );
+        CURRENT_DUPLICATE_VISITS.with(|visits| assert_eq!(visits.get(), 1));
+        assert_eq!(
+            state.current_sessions.iter().copied().collect::<Vec<_>>(),
+            vec![key]
+        );
+        assert_eq!(state.sessions.len(), 257);
     }
 }

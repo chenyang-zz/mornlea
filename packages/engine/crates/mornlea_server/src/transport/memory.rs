@@ -30,6 +30,7 @@ use crate::contracts::{
 };
 
 use super::common::{ConnectionCore, HandshakeLimits, TransportAuthority};
+use crate::core::publication::{PreparedFrame, PreparedPublicationPort};
 
 /// One in-process transport endpoint over the shared connection core.
 ///
@@ -126,6 +127,17 @@ impl MemoryTransport {
         max_bytes: usize,
     ) -> Result<Vec<Vec<u8>>, ServerError> {
         endpoint.take_outbox(session, max_frames, max_bytes)
+    }
+
+    /// Moves prepared owners through the narrow publication port only.
+    /// Queue receipts and this observation do not acknowledge peer consumption.
+    pub fn drain_prepared_session(
+        endpoint: &mut dyn PreparedPublicationPort,
+        session: SessionKey,
+        max_frames: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<PreparedFrame>, ServerError> {
+        endpoint.take_prepared_outbox(session, max_frames, max_bytes)
     }
 
     /// Frames one owned client packet into its length-prefixed wire envelope:

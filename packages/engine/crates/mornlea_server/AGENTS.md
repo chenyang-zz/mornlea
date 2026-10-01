@@ -674,8 +674,15 @@ a shared allocation; actual prepared publication and transport must not call it.
 `PreparedPublicationPort` declares explicit Queued/Closed receipts and whole-frame
 FIFO budgets. Only Queued permits a caller to advance its source mirror revision;
 it acknowledges queue admission alone. The first whole frame may exceed the byte
-budget, while a zero frame budget takes none. Current-session membership, bounded
-outbox capacity and retirement remain with the later actual provider. The
+budget, while a zero frame budget takes none. AuthorityState owns one VecDeque
+of PreparedFrame per session, shared by legacy and prepared publication, with
+current Prepared/Active membership bounded to
+eight keys independently of retained retired history. Prepared admission validates
+Play identity before lookup, admits only Active/open queues and synchronously
+retires a saturated receiver while retaining its queued prefix. LiveEndpoint
+forwards the narrow port directly, and Memory drain_prepared_session moves owners
+without legacy byte conversion or control-frame acknowledgment. Actual peer
+acknowledgment remains the shared connection core's distinct lifecycle step. The
 `server_contract::prepared_publication` executing double proves consumer semantics
 and owned transfer; it does not accept the actual authority outbox or transport.
 Factory tests separately execute the real protocol codec and family decoders.

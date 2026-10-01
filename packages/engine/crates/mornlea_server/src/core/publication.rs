@@ -103,13 +103,6 @@ impl PreparedFrame {
     /// explicitly copying a shared one. Actual prepared publication and transport
     /// paths must transfer frame owners and must never call this compatibility
     /// observation; it grants no on-tick cloning exemption.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "off-tick compatibility observation has no production consumer"
-        )
-    )]
     pub(crate) fn into_legacy_bytes(self) -> Vec<u8> {
         match Arc::try_unwrap(self.0) {
             Ok(inner) => inner.bytes,
@@ -138,8 +131,9 @@ pub enum EnqueueOutcome {
 
 /// Transfers immutable frame owners through one per-session FIFO.
 ///
-/// Queue capacity, current membership and retirement belong to a later provider;
-/// these declarations and consumer doubles do not accept the actual outbox.
+/// AuthorityState owns queue capacity, current membership and retirement.
+/// Consumer doubles prove caller semantics; actual provider and transport
+/// acceptance require their separate real-owner evidence.
 pub trait PreparedPublicationPort {
     /// Rejects non-server Play keys as packet input errors before queue mutation.
     /// An unknown session is stale. Only an exact Active session with an open

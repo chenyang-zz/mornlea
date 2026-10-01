@@ -52,3 +52,6 @@ mod interaction;
 
 #[path = "server_contract/prepared_publication.rs"]
 mod prepared_publication;
+
+#[path = "server_contract/prepared_delivery.rs"]
+mod prepared_delivery;

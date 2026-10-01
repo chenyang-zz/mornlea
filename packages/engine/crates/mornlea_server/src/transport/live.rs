@@ -9,6 +9,7 @@ use crate::contracts::{
     PublicationPort, Resource, ServerError, ServerPhase, SessionKey, SessionPhase, StorageFailure,
     SubmissionReceipt, TickPublication, TransportKind,
 };
+use crate::core::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
 use crate::state::AuthorityState;
 use mornlea_domain::PlayerId;
 use mornlea_protocol::{
@@ -135,6 +136,25 @@ impl TransportSessionPort for LiveEndpoint<'_> {
         reason: CloseReason,
     ) -> Result<(), ServerError> {
         self.authority.close_session(session, reason)
+    }
+}
+// Borrowed delivery forwards owners directly; the endpoint retains no queue.
+impl PreparedPublicationPort for LiveEndpoint<'_> {
+    fn enqueue_prepared(
+        &mut self,
+        session: SessionKey,
+        frame: PreparedFrame,
+    ) -> Result<EnqueueOutcome, ServerError> {
+        self.authority.enqueue_prepared(session, frame)
+    }
+    fn take_prepared_outbox(
+        &mut self,
+        session: SessionKey,
+        max_frames: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<PreparedFrame>, ServerError> {
+        self.authority
+            .take_prepared_outbox(session, max_frames, max_bytes)
     }
 }
 impl PublicationPort for LiveEndpoint<'_> {
