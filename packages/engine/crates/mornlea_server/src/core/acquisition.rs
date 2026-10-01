@@ -14,7 +14,7 @@ use super::{
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_WANTS: usize = 36_660;
-const MAX_MANAGED: usize = 36_676;
+pub(crate) const MAX_MANAGED: usize = 36_676;
 const MAX_ATTEMPTS: usize = 8;
 const MAX_STAGED: usize = 16;
 

@@ -65,8 +65,21 @@ consume its cancellation and error contracts before joining the real backend.
   tests qualify this common context boundary. Active source recovery consumes
   it before oxygen/native motion and restarts the same captured scan in the
   current dimension. Positional lifts change only position and rebase the existing
-  pre-step owner. Death settlement, late successful-action settlement, subscriptions,
+  pre-step owner. Prepared death fills survival and hunger before this same mapping,
+  while actual death routing, late successful-action settlement, subscriptions,
   save eligibility and executable runtime acceptance remain separately owned.
+
+- `src/core/source_player_death.rs` prepares bounded fixed inventory and live-bed
+  values for one indexed zero-health Active source player. The context guards the
+  retained Ready map at the managed ceiling before cumulative ring-drop rehearsal;
+  crafting repack refuses as a hard invariant. Both bed halves use the shared
+  placement read, including source outside-height AIR independently of acquisition.
+  Inventory/drop staging precedes survival refill, own receipt removal and common
+  Pending mapping. Durable body/path allocations and independent bed/view owners
+  remain retained. The Copy payload leaves completed scan restart with its caller.
+  Eight private prepared cases qualify this boundary and abandonment semantics;
+  actual phase routing, damage producers, scan restart and executable acceptance
+  remain separately owned.
 
 - `src/core/source_player_restore.rs` owns explicit source-mode background-login
   registration and at most eight live initial player scans. Missing saves retain

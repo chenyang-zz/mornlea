@@ -1137,7 +1137,7 @@ fn settle_player_death(
 /// chunk first, then outward rings with column order breaking ties inside one
 /// ring (`deathDropChunks`). The set is bounded by the ready set, so the walk
 /// never touches an unloaded chunk.
-fn death_candidates(
+pub(crate) fn death_candidates(
     view: &AuthorityReadView<'_>,
     dimension: Dimension,
     block: BlockPos,
@@ -1190,7 +1190,7 @@ fn rehearse_loot(
 /// successful cumulative preview clears the slot; durable armor keeps its
 /// original form, and refused stacks remain available to later candidates.
 #[allow(clippy::too_many_arguments)]
-fn drop_player_stack(
+pub(crate) fn drop_player_stack(
     rehearsal: &mut DropRehearsal<'_>,
     actor: ActorKey,
     tick: u64,
@@ -1354,7 +1354,7 @@ fn clamp_block_to_chunk(block: BlockPos, chunk: ChunkPos) -> BlockPos {
 /// `packages/server/sim/entity/hostile.go`): each component floors in float64
 /// before narrowing, so an out-of-span pose refuses instead of saturating
 /// silently through the cast.
-fn death_block(position: [f32; 3]) -> Option<BlockPos> {
+pub(crate) fn death_block(position: [f32; 3]) -> Option<BlockPos> {
     let mut block = [0i32; 3];
     for (index, value) in position.iter().enumerate() {
         let floored = f64::from(*value).floor();

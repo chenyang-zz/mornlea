@@ -3439,6 +3439,123 @@ impl<'a> TickContext<'a> {
         Ok(Some(dimension))
     }
 
+    /// Identifies source sessions whose death routing belongs to the serial consumer.
+    #[allow(dead_code)] // Temporary until the qualified serial death consumer lands.
+    pub(crate) fn source_player_death_deferred(&self, session: SessionKey) -> bool {
+        self.authority.source_player_radius.is_some() && self.source_player_session_active(session)
+    }
+
+    /// Prepares one indexed death and returns fixed data for the caller's retained scan.
+    /// The Ready guard bounds rehearsal; staging precedes fixed mapping and own cleanup.
+    #[allow(dead_code)] // Temporary until the qualified serial death consumer lands.
+    pub(crate) fn settle_source_player_death(
+        &mut self,
+        session: SessionKey,
+        restore: &super::pending_restore::PendingRestore,
+    ) -> Result<Option<super::source_player_death::SourceDeathReset>, ServerError> {
+        if let Some(error) = self.authority.tick_failure {
+            return Err(error);
+        }
+        if self.authority.phase == ServerPhase::Closed {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed,
+            });
+        }
+        let invalid = ServerError::InvalidInput {
+            field: "source_player_reset",
+        };
+        if self.authority.source_player_radius.is_none()
+            || !self.source_player_session_active(session)
+        {
+            return Err(invalid);
+        }
+        let slot = *self.player_slots.get(&session).ok_or(invalid)?;
+        let actor = self.actors.get(slot).ok_or(invalid)?;
+        let key = ActorKey::Player(session);
+        if actor.key != key {
+            return Err(invalid);
+        }
+        if actor.lifecycle != ActorLifecycle::Active || actor.survival.health() > 0 {
+            return Ok(None);
+        }
+        if !matches!(actor.body, ActorBody::Player(_)) {
+            return Err(invalid);
+        }
+        let runtime = self.runtimes.get(&key).ok_or(invalid)?;
+        if runtime.key != key {
+            return Err(invalid);
+        }
+        let ActorAux::Player { respawn, .. } = runtime.aux else {
+            return Err(invalid);
+        };
+        restore.player_reset_anchor()?;
+        let refusal = ServerError::Internal {
+            invariant: "source player death",
+        };
+        let before = *self.inventories.get(&key).ok_or(refusal)?;
+        let pickup_delay = self
+            .environment
+            .as_ref()
+            .ok_or(refusal)?
+            .tunables
+            .player_drop_pickup_delay_ticks();
+        let dimension = actor.dimension;
+        let position = actor.motion.position().get();
+        if self.ready.len() > super::acquisition::MAX_MANAGED {
+            return Err(ServerError::Capacity {
+                resource: Resource::ResidentChunks,
+                limit: super::acquisition::MAX_MANAGED,
+                observed: self.ready.len(),
+            });
+        }
+        let view = self.read();
+        let prepared = super::source_player_death::prepare_inventory(
+            &view,
+            key,
+            dimension,
+            position,
+            pickup_delay,
+            before,
+        )?;
+        let bed = super::source_player_death::prepare_bed(&view, dimension, respawn)?;
+        let survival = mornlea_domain::SurvivalState::try_new(mornlea_domain::SurvivalStateParts {
+            health: 20,
+            oxygen: 300,
+            hunger: 20,
+            saturation_zero: false,
+            armor_points: crate::rules::inventory::armor_points(&prepared.after.armor),
+        })
+        .map_err(|_| refusal)?;
+        let staging = ServerError::Internal {
+            invariant: "source player death staging",
+        };
+        let patch = InventoryPatch::try_new(key, before, prepared.after).map_err(|_| staging)?;
+        let mut effects = Vec::with_capacity(1 + prepared.drops.len());
+        effects.push(RuleEffect::Inventory(patch));
+        effects.extend(prepared.drops);
+        self.stage(RuleEffect::Compound(effects))
+            .map_err(|_| staging)?;
+
+        self.actors[slot].survival = survival;
+        let runtime = self.runtimes.get_mut(&key).ok_or(refusal)?;
+        runtime.saturation_milli = 5000;
+        runtime.exhaustion_milli = 0;
+        runtime.since_damage_ticks = 0;
+        runtime.starvation_ticks = 0;
+        if let ActorAux::Player { respawn, .. } = &mut runtime.aux {
+            *respawn = bed.respawn;
+        }
+        // Keep the other actors' receipt order and the existing bounded allocation.
+        self.charges.retain(|(charged, _)| *charged != key);
+        if let Err(error) = self.begin_source_player_reset(session, restore) {
+            return Err(self.authority.fail_tick(error));
+        }
+        Ok(Some(super::source_player_death::SourceDeathReset {
+            dimension,
+            candidate: bed.candidate,
+        }))
+    }
+
     /// Resets a live source player in place; the caller selects its completed scan.
     /// Refusals precede mutation, and earned receipts stay with their settlement owner.
     /// Keyed lookups and removals are logarithmic; resident maps may retain history.
@@ -11818,6 +11935,825 @@ mod source_player_restore_tests {
             assert_eq!(ctx_snapshot(&c), before, "case {case}");
             assert_eq!(ctx_book_snapshot(&book, s), before_book, "case {case}");
         }
+    }
+    fn ctx_death_snapshot(c: &TickContext<'_>) -> String {
+        format!(
+            "{}/{:?}",
+            ctx_snapshot(c),
+            (
+                c.drops
+                    .iter()
+                    .map(|(k, v)| (*k, v.slots, v.dirty, v.records()))
+                    .collect::<Vec<_>>(),
+                &c.dirty_chunks,
+                c.ready
+                    .iter()
+                    .map(|(k, v)| (*k, v.key, v.generation, v.revision))
+                    .collect::<Vec<_>>(),
+                &c.environment,
+            )
+        )
+    }
+    fn ctx_death_zero(a: &mut AuthorityState, s: SessionKey) {
+        a.residents.actors[a.residents.player_slots[&s]].survival = ctx_survival(0, 9, 3);
+    }
+    fn ctx_death_expected(c: &TickContext<'_>, s: SessionKey) -> (ActorRecord, ActorRuntime) {
+        let mut want = ctx_expected(c, s);
+        want.0.survival =
+            mornlea_domain::SurvivalState::try_new(mornlea_domain::SurvivalStateParts {
+                health: 20,
+                hunger: 20,
+                oxygen: 300,
+                saturation_zero: false,
+                armor_points: crate::rules::inventory::armor_points(
+                    &c.inventories[&ActorKey::Player(s)].armor,
+                ),
+            })
+            .unwrap();
+        want.1.saturation_milli = 5000;
+        want.1.exhaustion_milli = 0;
+        want.1.since_damage_ticks = 0;
+        want.1.starvation_ticks = 0;
+        want
+    }
+    fn ctx_death_result(
+        dimension: Dimension,
+        candidate: Option<super::super::actor_placement::RestoreCandidate>,
+    ) -> Option<super::super::source_player_death::SourceDeathReset> {
+        Some(super::super::source_player_death::SourceDeathReset {
+            dimension,
+            candidate,
+        })
+    }
+    fn ctx_death_refuse(
+        c: &mut TickContext<'_>,
+        s: SessionKey,
+        scan: &super::super::pending_restore::PendingRestore,
+        error: ServerError,
+    ) {
+        let before = ctx_death_snapshot(c);
+        let scan_before = format!("{scan:?}");
+        assert_eq!(c.settle_source_player_death(s, scan), Err(error));
+        assert_eq!(ctx_death_snapshot(c), before);
+        assert_eq!(format!("{scan:?}"), scan_before);
+    }
+    fn ctx_death_stack(count: u8) -> mornlea_storage::ItemStack {
+        mornlea_storage::ItemStack {
+            item: 2,
+            count,
+            durability: 0,
+        }
+    }
+    fn ctx_death_write(c: &mut TickContext<'_>, pos: BlockPos, block: u16) {
+        let observed = c.read().observation(Dimension::OVERWORLD, pos).unwrap();
+        c.transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, block).unwrap()],
+            )
+            .unwrap();
+    }
+    fn ctx_death_live_bed(
+        c: &mut TickContext<'_>,
+        s: SessionKey,
+        bed: Option<(Dimension, BlockPos)>,
+    ) {
+        let ActorAux::Player { respawn, .. } =
+            &mut c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().aux
+        else {
+            unreachable!()
+        };
+        *respawn = bed;
+    }
+    #[test]
+    fn ctx_death_mode_eligibility_is_explicit() {
+        for case in 0..6 {
+            let (mut a, s, _) = ctx_fixture(false);
+            let book = std::mem::take(&mut a.source_players);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            let absent = SessionKey::from_raw(999).unwrap();
+            match case {
+                1 => c.authority.source_player_radius = None,
+                2 => c.authority.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired,
+                4 => c.authority.phase = ServerPhase::Closing,
+                5 => {
+                    c.player_slots.remove(&s);
+                }
+                _ => {}
+            }
+            let before = ctx_death_snapshot(&c);
+            let scan = ctx_book_snapshot(&book, s);
+            assert_eq!(
+                c.source_player_death_deferred(if case == 3 { absent } else { s }),
+                !matches!(case, 1..=3),
+                "case {case}"
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+        }
+    }
+    #[test]
+    fn ctx_death_healthy_inactive_are_quiet() {
+        for lifecycle in [
+            ActorLifecycle::Active,
+            ActorLifecycle::Pending,
+            ActorLifecycle::Respawning,
+            ActorLifecycle::Dead,
+        ] {
+            let (mut a, s, _) = ctx_fixture(false);
+            if lifecycle != ActorLifecycle::Active {
+                ctx_death_zero(&mut a, s);
+            }
+            a.residents.actors[a.residents.player_slots[&s]].lifecycle = lifecycle;
+            a.residents.runtimes.remove(&ActorKey::Player(s));
+            let book = std::mem::take(&mut a.source_players);
+            let scan = ctx_scan(super::super::pending_restore::RestoreKind::Player, false);
+            let before_book = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            let before = ctx_death_snapshot(&c);
+            assert_eq!(c.settle_source_player_death(s, &scan), Ok(None));
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(ctx_book_snapshot(&book, s), before_book);
+        }
+    }
+    #[test]
+    fn ctx_death_refusals_preserve_owners() {
+        for case in 0..16 {
+            let (mut a, s, other) = ctx_fixture(true);
+            let other = other.unwrap();
+            ctx_death_zero(&mut a, s);
+            let book = std::mem::take(&mut a.source_players);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_seed_transients(&mut c, &[s, other]);
+            let slot = c.player_slots[&s];
+            let mut incomplete = None;
+            match case {
+                0 => {
+                    c.authority.tick_failure = Some(ServerError::Disconnected);
+                    c.authority.phase = ServerPhase::Closed;
+                }
+                1 => {
+                    c.authority.phase = ServerPhase::Closed;
+                    c.actors[slot].survival = ctx_survival(7, 9, 3);
+                }
+                2 => c.authority.source_player_radius = None,
+                3 => c.authority.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired,
+                4 => {
+                    c.player_slots.remove(&s);
+                }
+                5 => {
+                    c.player_slots.insert(s, c.actors.len());
+                }
+                6 => c.actors[slot].key = ActorKey::Player(other),
+                7 => {
+                    c.actors[slot].body = ActorBody::Passive(mornlea_storage::PassiveMob {
+                        id: 1,
+                        dimension: 0,
+                        position: [0., 64., 0.],
+                        velocity: [0.; 3],
+                        on_ground: true,
+                        yaw: 0.,
+                        health: 7,
+                    })
+                }
+                8 => {
+                    c.runtimes.remove(&ActorKey::Player(s));
+                }
+                9 | 14 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().key = ActorKey::Player(other);
+                    if case == 14 {
+                        incomplete = Some(ctx_scan(
+                            super::super::pending_restore::RestoreKind::Player,
+                            false,
+                        ));
+                    }
+                }
+                10 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().aux = ActorAux::Hostile {
+                        distant_ticks: 1,
+                        shoot_cooldown: 2,
+                        fresh: true,
+                    }
+                }
+                11 => {
+                    incomplete = Some(ctx_scan(
+                        super::super::pending_restore::RestoreKind::Player,
+                        false,
+                    ))
+                }
+                12 => {
+                    incomplete = Some(ctx_scan(
+                        super::super::pending_restore::RestoreKind::Companion,
+                        true,
+                    ))
+                }
+                13 => {
+                    c.inventories.remove(&ActorKey::Player(s));
+                }
+                15 => c.environment = None,
+                _ => unreachable!(),
+            }
+            let error = match case {
+                0 => ServerError::Disconnected,
+                1 => ServerError::InvalidState {
+                    phase: ServerPhase::Closed,
+                },
+                11 | 12 => ServerError::InvalidInput {
+                    field: "restore_restart",
+                },
+                13 | 15 => ServerError::Internal {
+                    invariant: "source player death",
+                },
+                _ => ctx_error(),
+            };
+            let scan = incomplete.as_ref().unwrap_or(&book.entries[&s].restore);
+            let before_book = ctx_book_snapshot(&book, s);
+            ctx_death_refuse(&mut c, s, scan, error);
+            assert_eq!(ctx_book_snapshot(&book, s), before_book);
+        }
+    }
+    #[test]
+    fn ctx_death_fills_stats_and_cleans_only_owned_state() {
+        let (mut a, s, other) = ctx_fixture(true);
+        let other = other.unwrap();
+        ctx_death_zero(&mut a, s);
+        ctx_add_allocations(&mut a, s);
+        a.sessions.get_mut(&s).unwrap().last_input_sequence = 3;
+        let book = std::mem::take(&mut a.source_players);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        ctx_seed_transients(&mut c, &[s, other]);
+        c.sleep_record = SleepState::try_new(
+            vec![
+                (s, Dimension::DEPTHS, BlockPos::new(-1, 2, 0)),
+                (other, Dimension::OVERWORLD, BlockPos::new(2, 3, 4)),
+            ],
+            55,
+            Some(66),
+        )
+        .unwrap();
+        let reference = ContainerRef::try_new(
+            ChunkPos::new(0, 0),
+            mornlea_domain::ContainerKind::Chest,
+            0,
+            1,
+        )
+        .unwrap();
+        c.viewers.insert(s, ViewLease::new(s, reference));
+        c.viewers.insert(other, ViewLease::new(other, reference));
+        c.charges = vec![
+            (ActorKey::Player(s), ActionKind::Till),
+            (ActorKey::Player(other), ActionKind::Mining),
+            (ActorKey::Player(s), ActionKind::Mining),
+            (ActorKey::Player(other), ActionKind::Melee),
+            (ActorKey::Player(s), ActionKind::Melee),
+        ];
+        let want = ctx_death_expected(&c, s);
+        let allocations = ctx_allocations(
+            &c.actors[c.player_slots[&s]],
+            &c.runtimes[&ActorKey::Player(s)],
+        );
+        let other_pair = (
+            c.actors[c.player_slots[&other]].clone(),
+            c.runtimes[&ActorKey::Player(other)].clone(),
+        );
+        let before = (
+            c.inventories.clone(),
+            c.pre_step.clone(),
+            c.sleep_record.clone(),
+            c.viewers.clone(),
+            c.sleep_record_touched,
+            c.mining[&ActorKey::Player(other)].clone(),
+        );
+        let book_before = ctx_book_snapshot(&book, s);
+        assert_eq!(
+            c.settle_source_player_death(s, &book.entries[&s].restore),
+            Ok(ctx_death_result(Dimension::DEPTHS, None))
+        );
+        ctx_assert_pair(&c, s, &want);
+        ctx_assert_pair(&c, other, &other_pair);
+        assert_eq!(
+            ctx_allocations(
+                &c.actors[c.player_slots[&s]],
+                &c.runtimes[&ActorKey::Player(s)]
+            ),
+            allocations
+        );
+        assert_eq!(
+            (
+                c.inventories.clone(),
+                c.pre_step.clone(),
+                c.sleep_record.clone(),
+                c.viewers.clone(),
+                c.sleep_record_touched,
+                c.mining[&ActorKey::Player(other)].clone()
+            ),
+            before
+        );
+        assert!(!c.mining.contains_key(&ActorKey::Player(s)));
+        assert!(!c.sleeping.contains(&s));
+        assert!(c.sleeping.contains(&other));
+        assert!(!c.suppressed_mining.contains(&ActorKey::Player(s)));
+        assert!(c.suppressed_mining.contains(&ActorKey::Player(other)));
+        assert_eq!(
+            c.charges,
+            vec![
+                (ActorKey::Player(other), ActionKind::Mining),
+                (ActorKey::Player(other), ActionKind::Melee)
+            ]
+        );
+        assert_eq!(c.authority.sessions[&s].last_input_sequence, 3);
+        assert_eq!(ctx_book_snapshot(&book, s), book_before);
+        assert_eq!(
+            book.entries[&s].restore.player_reset_anchor(),
+            Ok(ChunkPos::new(2, 0))
+        );
+    }
+    #[test]
+    fn ctx_death_repack_is_lossless_or_hard_failure() {
+        for impossible in [false, true] {
+            let (mut a, s, _) = ctx_fixture(false);
+            ctx_death_zero(&mut a, s);
+            let mut inventory = InventoryRecord::empty();
+            inventory.crafting_size = mornlea_domain::CraftingSize::Workbench;
+            if impossible {
+                inventory.slots = [ctx_death_stack(64); 36];
+                inventory.crafting[0] = ctx_death_stack(1);
+            } else {
+                inventory.crafting = [ctx_death_stack(1); 9];
+            }
+            a.residents
+                .inventories
+                .insert(ActorKey::Player(s), inventory);
+            let book = std::mem::take(&mut a.source_players);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            let body = c.actors[c.player_slots[&s]].body.clone();
+            c.charges.push((ActorKey::Player(s), ActionKind::Mining));
+            if impossible {
+                ctx_death_refuse(
+                    &mut c,
+                    s,
+                    &book.entries[&s].restore,
+                    ServerError::Internal {
+                        invariant: "source player death crafting",
+                    },
+                );
+            } else {
+                assert_eq!(
+                    c.settle_source_player_death(s, &book.entries[&s].restore),
+                    Ok(ctx_death_result(Dimension::DEPTHS, None))
+                );
+                let after = &c.inventories[&ActorKey::Player(s)];
+                let mut expected = inventory;
+                expected.slots[0] = ctx_death_stack(9);
+                expected.crafting = [Default::default(); 9];
+                expected.crafting_size = mornlea_domain::CraftingSize::Personal;
+                assert_eq!(*after, expected);
+                assert_eq!(
+                    after
+                        .slots
+                        .iter()
+                        .chain(after.armor.iter())
+                        .map(|s| u32::from(s.count))
+                        .sum::<u32>(),
+                    9
+                );
+            }
+            assert_eq!(c.actors[c.player_slots[&s]].body, body);
+        }
+    }
+    fn ctx_death_full_drops(k: ChunkKey) -> super::super::drop_store::DropState {
+        super::super::drop_store::DropState::new(
+            k,
+            [mornlea_storage::DropSlot {
+                generation: 1,
+                active: true,
+                stack: ctx_death_stack(64),
+                block_index: mornlea_domain::chunk_block_index(BlockPos::new(8, 65, 8)),
+                age_ticks: 0,
+                pickup_delay_ticks: 0,
+            }; 32],
+        )
+    }
+    fn ctx_death_total(c: &TickContext<'_>, s: SessionKey) -> u32 {
+        let inv = &c.inventories[&ActorKey::Player(s)];
+        inv.slots
+            .iter()
+            .chain(inv.armor.iter())
+            .chain(inv.crafting.iter())
+            .map(|s| u32::from(s.count))
+            .sum::<u32>()
+            + c.drops
+                .values()
+                .flat_map(|v| v.records())
+                .map(|v| u32::from(v.stack.count))
+                .sum::<u32>()
+    }
+    #[test]
+    fn ctx_death_ring_previews_clear_only_accepted_slots() {
+        for case in 0..3 {
+            let (mut a, s, _) = ctx_fixture(false);
+            if case != 2 {
+                offer(&mut a, key(Dimension::OVERWORLD, 1, 0), 0);
+                a.advance_tick(TickBudget::full()).unwrap();
+            }
+            ctx_recovery_pose(
+                &mut a,
+                s,
+                if case == 2 {
+                    Dimension::DEPTHS
+                } else {
+                    Dimension::OVERWORLD
+                },
+                [8.5, 65., 8.5],
+            );
+            ctx_death_zero(&mut a, s);
+            let mut inventory = InventoryRecord::empty();
+            inventory.selected = HotbarSlot::new(3).unwrap();
+            inventory.crafting_size = mornlea_domain::CraftingSize::Workbench;
+            inventory.slots[0] = ctx_death_stack(1);
+            inventory.slots[1] = ctx_death_stack(2);
+            inventory.armor[0] = ctx_death_stack(1);
+            a.residents
+                .inventories
+                .insert(ActorKey::Player(s), inventory);
+            let current = key(Dimension::OVERWORLD, 0, 0);
+            let neighbor = key(Dimension::OVERWORLD, 1, 0);
+            a.residents
+                .drops
+                .insert(current, ctx_death_full_drops(current));
+            if case == 1 {
+                a.residents
+                    .drops
+                    .insert(neighbor, ctx_death_full_drops(neighbor));
+            }
+            let book = std::mem::take(&mut a.source_players);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            let before = ctx_death_snapshot(&c);
+            let total = ctx_death_total(&c, s);
+            let full = c.drops[&current].slots;
+            let delay = c
+                .environment
+                .as_ref()
+                .unwrap()
+                .tunables
+                .player_drop_pickup_delay_ticks();
+            let dimension = c.actors[c.player_slots[&s]].dimension;
+            let prepared = super::super::source_player_death::prepare_inventory(
+                &c.read(),
+                ActorKey::Player(s),
+                dimension,
+                [8.5, 65., 8.5],
+                delay,
+                inventory,
+            )
+            .unwrap();
+            assert_eq!(ctx_death_snapshot(&c), before);
+            if case == 0 {
+                assert_eq!(prepared.drops.len(), 3);
+                for effect in &prepared.drops {
+                    let RuleEffect::Drops(batch) = effect else {
+                        unreachable!()
+                    };
+                    assert_eq!(
+                        batch.source,
+                        DropSource::Death {
+                            actor: ActorKey::Player(s),
+                            tick: c.read().tick()
+                        }
+                    );
+                    assert_eq!(batch.dimension, dimension);
+                    assert_eq!(batch.origin.get(), [16.5, 65.5, 8.5]);
+                    assert_eq!(batch.pickup_delay, delay);
+                }
+            } else {
+                assert!(prepared.drops.is_empty());
+            }
+            assert_eq!(
+                c.settle_source_player_death(s, &book.entries[&s].restore),
+                Ok(ctx_death_result(dimension, None))
+            );
+            assert_eq!(ctx_death_total(&c, s), total);
+            assert_eq!(c.drops[&current].slots, full);
+            let mut expected = inventory;
+            expected.crafting_size = mornlea_domain::CraftingSize::Personal;
+            if case == 0 {
+                expected.slots[0] = Default::default();
+                expected.slots[1] = Default::default();
+                expected.armor[0] = Default::default();
+                let records = c.drops[&neighbor].records();
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].stack, ctx_death_stack(4));
+                assert_eq!(records[0].position.get(), [16.5, 65.5, 8.5]);
+                assert_eq!(records[0].pickup_delay, delay);
+            }
+            assert_eq!(c.inventories[&ActorKey::Player(s)], expected);
+            assert_eq!(
+                c.actors[c.player_slots[&s]].lifecycle,
+                ActorLifecycle::Pending
+            );
+            assert_eq!(c.actors[c.player_slots[&s]].survival.health(), 20);
+        }
+    }
+    #[test]
+    fn ctx_death_uses_live_bed_and_delays_geometry() {
+        let mut rows = vec![
+            (None, None, None, false),
+            (
+                Some((Dimension::DEPTHS, BlockPos::new(8, 64, 8))),
+                None,
+                None,
+                false,
+            ),
+            (
+                Some((Dimension::OVERWORLD, BlockPos::new(1000, 64, 8))),
+                None,
+                None,
+                false,
+            ),
+            (
+                Some((Dimension::OVERWORLD, BlockPos::new(8, 64, 8))),
+                None,
+                None,
+                true,
+            ),
+            (
+                Some((Dimension::OVERWORLD, BlockPos::new(8, 64, 8))),
+                Some(76),
+                Some(80),
+                false,
+            ),
+            (
+                Some((Dimension::OVERWORLD, BlockPos::new(8, 64, 8))),
+                Some(76),
+                Some(81),
+                true,
+            ),
+            (
+                Some((Dimension::OVERWORLD, BlockPos::new(15, 64, 8))),
+                Some(79),
+                None,
+                false,
+            ),
+            (
+                Some((Dimension::OVERWORLD, BlockPos::new(8, 64, 8))),
+                Some(80),
+                None,
+                true,
+            ),
+        ];
+        for y in [-65, -64, 319, 320] {
+            rows.push((
+                Some((Dimension::OVERWORLD, BlockPos::new(1000, y, 8))),
+                None,
+                None,
+                !(-64..320).contains(&y),
+            ));
+            if (-64..320).contains(&y) {
+                rows.push((
+                    Some((Dimension::OVERWORLD, BlockPos::new(8, y, 8))),
+                    None,
+                    None,
+                    true,
+                ));
+            }
+            rows.push((
+                Some((Dimension::DEPTHS, BlockPos::new(1000, y, 8))),
+                None,
+                None,
+                false,
+            ));
+        }
+        for dir in 0..4 {
+            rows.push((
+                Some((Dimension::OVERWORLD, BlockPos::new(8, 64, 8))),
+                Some(76 + dir),
+                Some(80 + dir),
+                false,
+            ));
+        }
+        for (bed, foot, head, clear) in rows {
+            let (mut a, s, _) = ctx_fixture(false);
+            ctx_recovery_pose(&mut a, s, Dimension::OVERWORLD, [8.5, 65., 8.5]);
+            ctx_death_zero(&mut a, s);
+            let book = std::mem::take(&mut a.source_players);
+            let book_before = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            if let (Some((_, pos)), Some(form)) = (bed, foot) {
+                ctx_death_write(&mut c, pos, form);
+                if let Some(head) = head {
+                    let partner = crate::rules::sleep::bed_head_neighbor(
+                        pos,
+                        crate::rules::sleep::bed_dir(form).unwrap(),
+                    )
+                    .unwrap();
+                    ctx_death_write(&mut c, partner, head);
+                }
+            }
+            ctx_death_live_bed(&mut c, s, bed);
+            let durable = (
+                c.actors[c.player_slots[&s]].body.clone(),
+                c.sleep_record.clone(),
+            );
+            let workbench = match c.runtimes[&ActorKey::Player(s)].aux {
+                ActorAux::Player { workbench, .. } => workbench,
+                _ => unreachable!(),
+            };
+            let valid = foot.is_some_and(|f| (76..80).contains(&f)) && head == foot.map(|f| f + 4);
+            let candidate = if valid {
+                let pos = bed.unwrap().1;
+                Some(super::super::actor_placement::RestoreCandidate {
+                    dimension: Dimension::OVERWORLD,
+                    position: [
+                        pos.x() as f32 + 0.5,
+                        pos.y() as f32 + 0.5625,
+                        pos.z() as f32 + 0.5,
+                    ],
+                    require_support: false,
+                })
+            } else {
+                None
+            };
+            assert_eq!(
+                c.settle_source_player_death(s, &book.entries[&s].restore),
+                Ok(ctx_death_result(Dimension::OVERWORLD, candidate))
+            );
+            assert_eq!(
+                c.runtimes[&ActorKey::Player(s)].aux,
+                ActorAux::Player {
+                    respawn: if clear { None } else { bed },
+                    workbench
+                }
+            );
+            assert_eq!(
+                (
+                    c.actors[c.player_slots[&s]].body.clone(),
+                    c.sleep_record.clone()
+                ),
+                durable
+            );
+            assert_eq!(ctx_book_snapshot(&book, s), book_before);
+        }
+        // The source placement read owns height semantics even without acquisition.
+        for y in [-65, -64, 319, 320] {
+            for dimension in [Dimension::OVERWORLD, Dimension::DEPTHS] {
+                for x in [8, 1000] {
+                    let (mut a, s, _) = ctx_fixture(false);
+                    a.acquisition = Default::default();
+                    let book = std::mem::take(&mut a.source_players);
+                    let c = TickContext::for_tick(&mut a, TickBudget::full());
+                    let before = ctx_death_snapshot(&c);
+                    let trace = RefCell::new(ObservationTrace::default());
+                    let view = c.read();
+                    let traced = view.with_observation_trace(&trace);
+                    let bed = Some((dimension, BlockPos::new(x, y, 8)));
+                    let prepared = super::super::source_player_death::prepare_bed(
+                        &traced,
+                        Dimension::OVERWORLD,
+                        bed,
+                    )
+                    .unwrap();
+                    let clear =
+                        dimension == Dimension::OVERWORLD && (!(-64..320).contains(&y) || x == 8);
+                    assert_eq!(prepared.respawn, if clear { None } else { bed });
+                    assert_eq!(prepared.candidate, None);
+                    if !(-64..320).contains(&y) || dimension != Dimension::OVERWORLD {
+                        assert!(trace.borrow().cells.is_empty());
+                    }
+                    assert_eq!(ctx_death_snapshot(&c), before);
+                    assert!(book.entries[&s].restore.player_reset_anchor().is_ok());
+                }
+            }
+        }
+        // One real acquired extreme foot proves checked neighbor overflow without a head read.
+        let (mut a, s, _) = ctx_fixture(false);
+        offer(&mut a, key(Dimension::OVERWORLD, i32::MAX >> 4, 0), 0);
+        a.advance_tick(TickBudget::full()).unwrap();
+        ctx_recovery_pose(&mut a, s, Dimension::OVERWORLD, [8.5, 65., 8.5]);
+        ctx_death_zero(&mut a, s);
+        let book = std::mem::take(&mut a.source_players);
+        let before_book = ctx_book_snapshot(&book, s);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        let pos = BlockPos::new(i32::MAX, 64, 8);
+        ctx_death_write(&mut c, pos, 79);
+        let bed = Some((Dimension::OVERWORLD, pos));
+        ctx_death_live_bed(&mut c, s, bed);
+        let before = ctx_death_snapshot(&c);
+        let trace = RefCell::new(ObservationTrace::default());
+        {
+            let view = c.read();
+            let traced = view.with_observation_trace(&trace);
+            let prepared =
+                super::super::source_player_death::prepare_bed(&traced, Dimension::OVERWORLD, bed)
+                    .unwrap();
+            assert_eq!(prepared.respawn, bed);
+            assert_eq!(prepared.candidate, None);
+        }
+        assert_eq!(trace.borrow().cells.len(), 1);
+        assert!(
+            trace
+                .borrow()
+                .cells
+                .contains_key(&(Dimension::OVERWORLD, pos))
+        );
+        assert_eq!(ctx_death_snapshot(&c), before);
+        assert_eq!(
+            c.settle_source_player_death(s, &book.entries[&s].restore),
+            Ok(ctx_death_result(Dimension::OVERWORLD, None))
+        );
+        assert_eq!(ctx_book_snapshot(&book, s), before_book);
+    }
+    #[test]
+    fn ctx_death_ready_cap_precedes_enumeration_and_drop_returns() {
+        for over in [false, true] {
+            let (mut a, s, _) = ctx_fixture(false);
+            ctx_death_zero(&mut a, s);
+            a.residents
+                .inventories
+                .insert(ActorKey::Player(s), InventoryRecord::empty());
+            let original = a.residents.ready[&key(Dimension::OVERWORLD, 0, 0)].clone();
+            let count = super::super::acquisition::MAX_MANAGED + usize::from(over);
+            for x in 1..count {
+                let k = key(Dimension::OVERWORLD, x as i32, 0);
+                let mut copy = original.clone();
+                copy.key = k;
+                a.residents.ready.insert(k, copy);
+            }
+            let book = std::mem::take(&mut a.source_players);
+            let book_before = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            assert_eq!(c.ready.len(), count);
+            if over {
+                ctx_death_refuse(
+                    &mut c,
+                    s,
+                    &book.entries[&s].restore,
+                    ServerError::Capacity {
+                        resource: Resource::ResidentChunks,
+                        limit: super::super::acquisition::MAX_MANAGED,
+                        observed: count,
+                    },
+                );
+            } else {
+                assert_eq!(
+                    c.settle_source_player_death(s, &book.entries[&s].restore),
+                    Ok(ctx_death_result(Dimension::DEPTHS, None))
+                );
+            }
+            assert_eq!(ctx_book_snapshot(&book, s), book_before);
+        }
+        let (mut a, s, _) = ctx_fixture(false);
+        ctx_recovery_pose(&mut a, s, Dimension::OVERWORLD, [8.5, 65., 8.5]);
+        ctx_death_zero(&mut a, s);
+        ctx_add_allocations(&mut a, s);
+        let selected = a.residents.inventories[&ActorKey::Player(s)].selected;
+        a.residents.inventories.insert(
+            ActorKey::Player(s),
+            InventoryRecord::empty().with_selected(selected),
+        );
+        let book = std::mem::take(&mut a.source_players);
+        let before_book = ctx_book_snapshot(&book, s);
+        let allocations =
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]);
+        let inventory = a.residents.inventories[&ActorKey::Player(s)];
+        let want;
+        let reset;
+        {
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_seed_transients(&mut c, &[s]);
+            ctx_death_write(&mut c, BlockPos::new(8, 64, 8), 76);
+            ctx_death_write(&mut c, BlockPos::new(8, 64, 9), 80);
+            ctx_death_live_bed(
+                &mut c,
+                s,
+                Some((Dimension::OVERWORLD, BlockPos::new(8, 64, 8))),
+            );
+            want = ctx_death_expected(&c, s);
+            reset = c
+                .settle_source_player_death(s, &book.entries[&s].restore)
+                .unwrap();
+        }
+        a.source_players = book;
+        assert_eq!(
+            reset,
+            ctx_death_result(
+                Dimension::OVERWORLD,
+                Some(super::super::actor_placement::RestoreCandidate {
+                    dimension: Dimension::OVERWORLD,
+                    position: [8.5, 64.5625, 8.5],
+                    require_support: false,
+                })
+            )
+        );
+        assert_eq!(
+            (player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]),
+            (&want.0, &want.1)
+        );
+        assert_eq!(a.residents.inventories[&ActorKey::Player(s)], inventory);
+        assert_eq!(
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]),
+            allocations
+        );
+        assert_eq!(ctx_book_snapshot(&a.source_players, s), before_book);
     }
 }
 

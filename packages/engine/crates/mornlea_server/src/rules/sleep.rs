@@ -452,14 +452,14 @@ fn is_bed(block: u16) -> bool {
 }
 
 /// Reports whether a block number is a bed-foot form (`core.IsBedFoot`).
-fn is_bed_foot(block: u16) -> bool {
+pub(crate) fn is_bed_foot(block: u16) -> bool {
     (BED_FOOT_SOUTH..=BED_FOOT_EAST).contains(&block)
 }
 
 /// Direction encoding of a bed form, south 0 / west 1 / north 2 / east 3
 /// (`core.BedDir`); the head segment translates the foot segment by four, so
 /// paired halves share the code.
-fn bed_dir(block: u16) -> Option<u8> {
+pub(crate) fn bed_dir(block: u16) -> Option<u8> {
     match block {
         BED_FOOT_SOUTH | BED_HEAD_SOUTH => Some(0),
         x if x == BED_FOOT_SOUTH + 1 || x == BED_HEAD_SOUTH + 1 => Some(1),
@@ -471,7 +471,7 @@ fn bed_dir(block: u16) -> Option<u8> {
 
 /// Head-cell neighbor of a foot cell in the bed's facing
 /// (`core.BedHeadNeighbor`): south +Z, west -X, north -Z, east +X.
-fn bed_head_neighbor(foot: BlockPos, dir: u8) -> Option<BlockPos> {
+pub(crate) fn bed_head_neighbor(foot: BlockPos, dir: u8) -> Option<BlockPos> {
     let (dx, dz) = match dir {
         0 => (0, 1),
         1 => (-1, 0),

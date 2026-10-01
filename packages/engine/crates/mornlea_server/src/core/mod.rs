@@ -26,6 +26,7 @@ pub mod publication;
 pub mod retirement_worker;
 pub mod session;
 pub mod shutdown;
+mod source_player_death;
 mod source_player_reset;
 mod source_player_restore;
 pub mod state;
