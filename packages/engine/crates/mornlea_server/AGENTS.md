@@ -22,6 +22,14 @@ consume its cancellation and error contracts before joining the real backend.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
+- `src/core/generation.rs` owns off-tick seed-compatible terrain preparation.
+  One `ChunkGenerator` retains independent Overworld/Depths checked parameters,
+  native scratch and a fixed dense destination, then returns an owned compact
+  chunk with first-appearance palettes and inactive fixed slots. Private
+  `src/core/go_random.rs` preserves the Go RNG/Shuffle stream and BSD notice.
+  Generation owns no authority, storage, request identity or publication;
+  acquisition supplies revisions and validates Ready preparation separately.
+
 - `src/core/world.rs` validates compact Ready chunk bases and derives non-air
   heights off the tick. Read views use exact chunk/cell indexing and observe
   sparse writes first; missing chunks never become air. Height changes are
