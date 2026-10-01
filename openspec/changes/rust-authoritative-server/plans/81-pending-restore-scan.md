@@ -6,7 +6,7 @@
 
 **Architecture:** One small state machine owns only bounded candidate/column/key/scalar data and consumes the accepted borrowed PlacementWorld geometry. It returns a chosen activation value; it does not mutate an actor, request a chunk, schedule a worker or publish/save anything. This compile-ready owner with actual utility and provider examples precedes separately reviewed player/companion lifecycle consumers.
 
-**Tech stack:** Rust1.97.1, std Vec/BTreeSet and existing Dimension/ChunkPos/ChunkKey; packet80 public values/functions. **Spec:** ../design.md and ../specs/rust-authoritative-server/spec.md. Compatibility source d042982d33bb1694d768b75b01c297bd02534a08, entity/spawn.go and companion.go; source trace /workspace/scratch/pending-restore-subscription-source-trace.log sections1–5. Dispatch waits independently accepted80 source identity recorded by root; no planned-only port is callable. Root owns all choices below.
+**Tech stack:** Rust1.97.1, std Vec/BTreeSet and existing Dimension/ChunkPos/ChunkKey; accepted packet80 source1d0f4a119890441eec4db3350bb50056cb22a397 integrated as28d11e357be324acf8ac7abe16dd3e25654c8490 supplies the exact public values/functions. **Spec:** ../design.md and ../specs/rust-authoritative-server/spec.md. Compatibility source d042982d33bb1694d768b75b01c297bd02534a08, entity/spawn.go and companion.go; source trace /workspace/scratch/pending-restore-subscription-source-trace.log sections1–5. Root first review, fresh independent exact-source review and cumulative rebuilt release gates accepted80 before dispatch; no planned-only port is callable. Root owns all choices below.
 
 ## Exact files and interface
 
