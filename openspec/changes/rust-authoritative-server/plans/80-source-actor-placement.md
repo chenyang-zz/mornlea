@@ -1,0 +1,95 @@
+# Source actor placement implementation plan
+
+> For agentic workers: use superpowers:executing-plans and test-driven-development. tasks.md is the sole status source.
+
+**Goal:** Qualify the shared bounded geometry used by player/companion restoration, safe-location updates and spawn-column search before lifecycle consumers are implemented.
+
+**Architecture:** A read-only core module consumes existing checked Dimension/ChunkKey/BlockPos values and one narrow borrowed world interface. The existing player-motion collision mapping supplies the same block shapes through a crate-private visibility change only. This module does not own actors, schedules, requests, publication or disk work; later serial consumers name its accepted implementation identity.
+
+**Tech stack:** Pinned Rust1.97.1, std fixed AABB calculations, accepted AuthorityReadView and native CollisionCell getters. **Spec:** ../design.md and ../specs/rust-authoritative-server/spec.md. Sealed Go source d042982d33bb1694d768b75b01c297bd02534a08 is the compatibility authority. This packet is not worker-ready until controller source-readiness criticism and accepted79 source identity are recorded. No implementation overlaps state/guide/mod ownership of78/79.
+
+## Scope and interfaces
+
+Exactly FOUR editable crate paths: new src/core/actor_placement.rs; src/core/mod.rs public registration; src/rules/player_motion.rs ONLY change collision_cell visibility from private to pub(crate); AGENTS.md describe the module. All tests are private actor_placement.rs tests. Existing player-motion helper body/constants/docs/tests and all state/contracts/rules/store/transport/Agent/Go/native/seals remain read-only. Existing core/crate guide owns this utility boundary; no new directory is introduced.
+
+The new shared values/interface land with actual algorithms, checked examples and a deterministic executing consumer fixture before independent lifecycle consumers use them. A separate scheduling/worker port is unnecessary for pure bounded reads. Public interface:
+
+```rust
+pub trait PlacementWorld {
+    fn ready_revision(&self, key: ChunkKey) -> Option<u64>;
+    fn block_at(&self, dimension: Dimension, pos: BlockPos) -> Option<u16>;
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RestoreCandidate {
+    pub dimension: Dimension,
+    pub position: [f32; 3],
+    pub require_support: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreCheck { pub valid: bool, pub ready: bool, pub on_ground: bool }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BodySpace { pub free: bool, pub ready: bool }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupportContact { pub complete: bool, pub any: bool }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SpawnColumn { pub x: i32, pub z: i32 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpawnTier { Dry, EyeDry, Submerged }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpawnSite { pub position: [f32; 3], pub tier: SpawnTier }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColumnSpawn { pub ready: bool, pub site: Option<SpawnSite> }
+pub fn candidate_chunks(candidate: RestoreCandidate) -> Result<Vec<ChunkKey>, ServerError>;
+pub fn validate_restore(world: &impl PlacementWorld, candidate: RestoreCandidate)
+    -> Result<RestoreCheck, ServerError>;
+pub fn body_space(world: &impl PlacementWorld, dimension: Dimension, position: [f32; 3])
+    -> Result<BodySpace, ServerError>;
+pub fn support_contact(world: &impl PlacementWorld, dimension: Dimension, position: [f32; 3])
+    -> Result<SupportContact, ServerError>;
+pub fn spawn_columns(anchor: ChunkPos, radius: u8) -> Result<Vec<SpawnColumn>, ServerError>;
+pub fn spawn_chunk_keys(dimension: Dimension, columns: &[SpawnColumn])
+    -> Result<Vec<ChunkKey>, ServerError>;
+pub fn scan_spawn_column(world: &impl PlacementWorld, dimension: Dimension,
+    column: SpawnColumn, eye_height: f32) -> Result<ColumnSpawn, ServerError>;
+```
+
+Add impl PlacementWorld for AuthorityReadView<'_> in the new module. ready_revision delegates to existing ready_chunk_revision; block_at delegates to observation(...).map(|v|v.block), except Y outside[-64,320) is Some(0) BEFORE any chunk check, matching Go realm.BlockAt. This normalization belongs only to this source geometry adapter; existing motion unknown-as-blocking semantics do not change. All functions accept borrowed world and have no retained world/body clone. ServerError::InvalidInput fields below are exact; any existing collision_cell Internal error propagates unchanged.
+
+## Geometry, ordering and failure algorithms
+
+Use source constants width0.6, half-width0.3, height1.8, epsilon1e-5, groundprobe1e-4, all f32. Bounds are feet-centered [x-.3,y,z-.3]..[x+.3,y+1.8,z+.3], computed in f32 in source order. Strict overlap requires min<othermax AND max>othermin on ALL three axes; touching a face is free. Local boxes come only from existing player_motion::collision_cell(block)?.boxes(), translated with f32 integer coordinates in source order. Missing block_at becomes unloaded/zero boxes.
+
+One private span helper computes floor(minimum) and ceil(maximum)-1 in f64 after the source f32 bounds arithmetic; require finite values and both integer endpoints within i32, use i64 inclusive loop indices and narrow only checked values. Nonempty X/Z spans contain at most2 cells, Y at most3. Preserve a finite precision-degenerate empty span as empty: do not invent support cells or silently saturate. Invalid/overflow/oversized spans refuse InvalidInput{field:"actor_geometry"} before reads/allocation. This qualifies safe target representation rather than copying Go's unchecked out-of-range narrowing. validate_restore maps this ordinary invalid candidate to validfalse/readytrue/on_groundfalse; it does not turn corrupt pose fallback into an authority hard failure. candidate_chunks/body_space/support_contact retain the typed invalid result for their explicit callers. No new world-coordinate cap is imposed on valid checked spans.
+
+candidate_chunks enumerates footprint X/Z cells, converts by arithmetic>>4, deduplicates and sorts exact dimension/X/Z, maximum4; it does not check world readiness or support and does not enforce Y world bounds. validate_restore rejects nonfinite/invalid shape or bounds.minY<-64/bounds.maxY>320 as readytrue invalid before world reads. For a valid candidate it checks ALL footprint chunk ready_revision values FIRST; any missing/non-Ready means validfalse/readyfalse/on_groundfalse, even if another touched cell is solid. Then body_space: unknown first yields freefalse/readyfalse; first strict collision yields freefalse/readytrue; otherwise freetrue/readytrue. If body not ready return the waiting result. Compute support even when freefalse/readytrue, matching source. Result on_ground is ANY contact; valid is free && (!require_support || complete). Water is allowed in Current/Safe validation. Dimensions are existing checked Overworld/Depths values; unknown dimension cannot enter this interface.
+
+body_space loops source Y,X,Z order across at most12 cells and at most8 local boxes per cell. It does not reject world-height bounds, because source unstick and spawn use loaded air outside world height. support_contact uses floor(positionY-groundprobe), loops source X,Z over at most4 cells. For each box top accept only top>=feet-groundprobe-epsilon && top<=feet+epsilon. ANY strict horizontal overlap sets any=true. A cell is completely supported only if ONE box covers its whole footprint-cell intersection: worldMinX<=max(boundsMinX,x), worldMaxX>=min(boundsMaxX,x+1), analogous Z. Do not union disjoint boxes. Complete is conjunction of cell results; empty footprint preserves source vacuous conjunction and anyfalse. Unknown support cells have no boxes and supply no support; no readiness is fabricated.
+
+spawn_columns validates radius1..64 before allocation (otherwise InvalidInput{field:"spawn_radius"}), checked i64 anchor*16 and anchorBlock+/-radius both within i32 (otherwise InvalidInput{field:"spawn_anchor"}). Enumerate inclusive X then Z; sort by i64 squared displacement to anchor block, then X then Z. These checked displacements are at most64; maximum16,641 columns. Default/companion16 yields1,089; no clamping inside helper or unsafe int32-wrap loop. spawn_chunk_keys refuses input length>16,641 with InvalidInput{field:"spawn_columns"} before allocation; deduplicates exact dimension/X/Z keys and does not assume caller columns form one square. Its owner is bounded by the input cap, so arbitrary supplied valid columns can yield16,641 keys; the actual radius64 square yields at most81. No assertion incorrectly caps arbitrary public input at81 or mislabels geometry input as command-queue capacity.
+
+scan_spawn_column validates eye_height finite (InvalidInput{field:"eye_height"}); source column X/Z are i32 and center is f32(column)+0.5. Scan y319 down through-64, ALWAYS consulting block_at at each row, including air. Missing row returns readyfalse/siteNone and discards this column's earlier fallback, as source function does. Zero-box/air rows skip. Sort up to8 local top heights descending. For each top form position[xCenter,f32(y)+top,zCenter]; body_space unknown aborts column waiting, collision skips; incomplete support skips. Source spawn does NOT apply restore world-height rejection. Eye-fluid at floor(positionY+eye_height) overrides tier to Submerged; otherwise any fluid among body footprint Y,X,Z gives EyeDry, otherwise Dry. Fluid block IDs27..34; missing fluid observations are false; outheight is loaded air. Eye cell and body sampling use checked span/narrowing and preserve source f32 arithmetic. First Dry returns immediately. Within a column retain first/highest site of equal tier; EyeDry replaces Submerged, never reverse. At end return readytrue with best downgrade orNone. Cross-column fallback retention/validation, exhausted revisions, scan cadence and actor reset are future consumers, not hidden here.
+
+Work bounds: restore<=4 readiness lookups+12 body reads+4 support reads; support boxes<=32, body boxes<=96. One column<=384 source rows, at most8 top attempts each with<=12 body+4support+13fluid reads; conservative maximum89,472 block reads, no retained full-world snapshot. Actual existing mapping has at mostonebox. candidate/column enumeration allocation is capped above. This module is not permission to scan all16,641 columns on every tick; the later scan owner must separately qualify work/cadence against source before dispatch.
+
+## Concrete RED/GREEN evidence
+
+Private tests use deterministic CountingWorld implementing PlacementWorld: known ready keys BTreeMap<ChunkKey,u64>, sparse block overrides, air for all cells within a known Ready key, None for missing keys, source outheight air. Cell counters track ready/block queries. A second actual provider fixture uses AuthorityState::try_new checked8/4096/512/64/64/1MiB, TickContext::harness, real ReadyChunk::try_new and preload_ready_chunk; clone no residents into the functions. Raw invalid poses exercise validate_restore ordinary rejection. An inert compile-ready implementation returns optimistic RestoreCheck/BodySpace and empty columns/siteNone; causal geometry assertions must fail before real algorithms. Missing symbols/visibility are separate declaration evidence.
+
+1. current_airborne_exact: Ready stone layer63 under actor[8.5,65.25,8.5], Current requirefalse -> validtrue/readytrue/on_groundfalse; same Safe requiretrue -> validfalse/readytrue/on_groundfalse. No pose snap/clamp or water rejection.
+2. grounded_and_partial_support: exact feet64 over stone63 -> full/any true. At[16.0,64,16.0] allfour keys Ready but onlythree footprint cells solid -> Current valid/on_groundtrue, Safe invalid/on_groundtrue; allfoursolid -> Safe valid. A collision box covering only part of one footprint cell is not full support. Use real thin door62 at its top rather than inventing an alternate collision table.
+3. all_ready_before_collision: same boundary candidate with only one of4keys Ready and a blocked cell -> readyfalse, not early readytrue collision. Mark all4Ready -> collision validfalse/readytrue. Missing Loaded body within a double despite ready_revision present -> readyfalse.
+4. exact reduced tops: stone2 at y63 produces feet64, farmland35 at y63 produces63.9375, bed76 produces63.5625; Safe accepts corresponding complete support and body-free face contact. Centered door leaf does not provide full support. Air0/water27/crop37/torch71/snow85/doorupper70 contribute no collision/support. Source shape helper body remains byte-identical.
+5. bounds and ordinary fallback: candidatefeet<-64 or feet+1.8>320,NaN/inf/overflow return readytrueinvalid with zero world reads; raw candidate_chunks/body_space invalid returns exact actor_geometry. Finite negative coordinates use floor/ceil, not truncation. Face touching is free while 1/16 penetration blocks. Empty finite precision footprint does not exceed fixed work bounds.
+6. water_restore_allowed: water cells at body/eye levels leave Current/Safe body-space free and supported unchanged. No spawn tier applied to restore.
+7. columns_exact_order_and_caps: anchor0,radius1 order[(0,0),(-1,0),(0,-1),(0,1),(1,0),(-1,-1),(-1,1),(1,-1),(1,1)]; radius16=>1089/9keys;64=>16641/81keys; radius0/65 refuse; i32MAX anchor refuses before allocation. Exactly16,642 supplied columns fail InvalidInput spawn_columns unchanged input; arbitrary16,641 unique columns are not falsely assumed<=81.
+8. column_top_and_void: known Ready solid layer63 yields first Dry feet64; same all-air column yields readytrueNone; missing key yields readyfalseNone. Highest solid y319 yields source feet320 despite restore validation rejecting that pose's body bounds. Count all384air rows, not a height-cache shortcut.
+9. tier_ladder: stone63,water64 andair65 yields EyeDry feet64 at eyeheight1.62; water64+65 yields Submerged. A lower dry air pocket in same column outranks its higher wet supported surface. Equal-tier two surfaces retain higher one. A missing body-neighbor fixture aborts with None even after an earlier downgrade; this does not preserve cross-column fallback here.
+10. actual_read_view_source_height_air: real preloaded Ready chunk with air24sections+checked sparse stone/farmland/bed observations executes actual adapter validation/column probing; missingchunk is waiting, Y320 returns sourceair, and no source geometry call changes actor/world/schedules/Ready revisions. Retain before/after exact small fixture read probes. This proves borrowed provider composition, not disk/login/actor restoration.
+11. executing_consumer_double: a private test consumer tries rejected Current then Safe using the same checked shared values and counting world; Current unready stops before Safe, assessed blocked Current proceeds to supported Safe. This illustrates the future contract without implementing actor ownership or claiming pending semantics.
+12. counters for fullair/solid/wet/private unknown scenes prove each invocation respects fixed read bounds and zero Ready clone/materialization counters; enumeration caps prove no unbounded allocation. Source old non-English comments are not copied.
+
+## Validation and closure
+
+New private actor_placement cases must execute nonzero behavioral RED/GREEN. Run full lib/contracts/replay/default-thread parity and existing acquisition8/save6/driver22/encoding2/retirement2/actor_projection1 topics, doc2, all-target clippy-Dwarnings/workspacefmt/diff. Sequential make rust before Go helpers; explicit pinned MORNLEA_AGENT_PYTHON. Scope exactly4paths, motion file visibility-only, current task-ID/English added comments and protected source/native/F1/version/dependency/oracle/previous-package seals unchanged. Logs /workspace/scratch/source-actor-placement-*.log. Root independent source/float/order/read-bound review and rebuilt actual release gate before only3.7l3g closes. Commit feat(server): qualify source actor placement geometry. Rollback reverts only4paths; no mutable runtime state is introduced. Architecture skill round-end review follows actual evidence.
+
+Read-only facts: /workspace/scratch/pending-restore-subscription-source-trace.log sections2–4, source spawn.go validateRestoreCandidate/playerBoundsAreFree/playerSupport/findSpawnInColumn/spawnCandidates; shared physics/types.go/submersion.go; accepted player_motion collision mapping and AuthorityReadView. Root chooses one read-only geometry utility over duplicated lifecycle collision checks or a blocking/full-world restoration worker. This does not decide the pending scan work/cadence owner, active recovery, death producer merge, session wants, pure actor persistability or executable composition; those are separate bounded successors.
