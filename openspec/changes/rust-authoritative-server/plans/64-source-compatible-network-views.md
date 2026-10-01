@@ -4,6 +4,8 @@
 
 **Architecture:** Ready retains one additional fixed u32 union of sections whose logical cells differed since the loaded compact base. Immutable ChunkCapture copies that mask and one validity bool; no frequency owner or body is added. A new off-tick ChunkSaveView method returns owned checked domain sections and their network scheduling charge. Existing capture identity, metadata estimate, store materialization/maximum reservation and every page/COW bound stay unchanged. Cache8d9e7caa/requestcaed546c accepted atd081e2de. Dispatch serially after packet63 integration/acceptance because crate guide/state consumers are broad serial ownership. Node3.7p2v; full publication/runtime stays open.
 
+Serial predecessor: live-save33e48382 integrated asa0e9f088 plus original-cause repair402f6abf integrated as8f024f5e. Independent cumulative review clean; root rebuilt release and all1075 actual server cases pass, including205 persistence cases with every activation fixture. Root clippy/workspacefmt/diff pass. Dispatch from the root acceptance commit recording this evidence; no prospective save adapter is consumed.
+
 ## Exact API and algorithms
 
 Add `pub fn network_snapshot(&self)->Result<(mornlea_domain::ChunkSnapshot,usize),ServerError>` to ChunkSaveView, documented off tick only. Tuple second element is sum of source section wire PayloadBytes, excluding identity/header/envelope/compressed/frame bytes, fixed slots and persistence lookup overhead. This new boundary has one implementation/test consumer here; later independent encoder/publication consumers must name its accepted implementation SHA.
