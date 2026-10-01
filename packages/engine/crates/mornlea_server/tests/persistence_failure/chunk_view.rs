@@ -124,6 +124,108 @@ fn capture(state: &AuthorityState) -> OwnedSnapshot {
         .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
         .unwrap()
 }
+fn committed(snapshot: OwnedSnapshot, ticket: u64) -> SaveCompletion {
+    let identity = (snapshot.key.clone(), snapshot.revision);
+    SaveCompletion {
+        ticket: SaveTicket::try_from_raw(ticket).unwrap(),
+        snapshots: vec![snapshot],
+        submitted: vec![identity.clone()],
+        committed: vec![identity],
+        error: None,
+    }
+}
+fn select_capture(state: &mut AuthorityState, snapshot: &OwnedSnapshot) {
+    state.remember_dirty(snapshot.clone());
+    assert_eq!(
+        state.select(SaveMode::All, SaveBudget::default()),
+        vec![snapshot.clone()]
+    );
+}
+#[test]
+fn independent_captures_acknowledge_only_the_echoed_token() {
+    for reverse in [false, true] {
+        let mut state = authority();
+        let first = capture(&state);
+        let second = capture(&state);
+        assert_eq!(first.key, second.key);
+        assert_eq!(first.revision, second.revision);
+        assert_ne!(first, second);
+        assert_eq!(view(&first).materialize(), view(&second).materialize());
+        select_capture(&mut state, &first);
+        select_capture(&mut state, &second);
+        assert_eq!(state.save_stats().in_flight, 2);
+        let order = if reverse {
+            [second, first]
+        } else {
+            [first, second]
+        };
+        for (index, snapshot) in order.into_iter().enumerate() {
+            let ack = state.apply_completion(committed(snapshot, index as u64 + 1));
+            assert_eq!(ack.acked, 1);
+            assert_eq!(ack.released, 0);
+            assert!(ack.retry.is_empty());
+            assert!(ack.errors.is_empty());
+            assert_eq!(state.save_stats().in_flight, 1 - index);
+        }
+    }
+}
+#[test]
+fn independent_captures_return_dirty_only_the_echoed_token() {
+    let mut state = authority();
+    let first = capture(&state);
+    let second = capture(&state);
+    assert_ne!(first, second);
+    assert_eq!(view(&first).materialize(), view(&second).materialize());
+    select_capture(&mut state, &first);
+    select_capture(&mut state, &second);
+    state.return_dirty(first.clone());
+    assert_eq!(state.save_stats().in_flight, 1);
+    assert_eq!(state.save_stats().dirty, 1);
+    let ack = state.apply_completion(committed(second, 2));
+    assert_eq!(ack.acked, 1);
+    assert!(ack.errors.is_empty());
+    assert!(ack.retry.is_empty());
+    assert_eq!(state.save_stats().in_flight, 0);
+    assert_eq!(
+        state.select(SaveMode::All, SaveBudget::default()),
+        vec![first]
+    );
+}
+#[test]
+fn forged_sibling_refuses_and_unknown_and_direct_metadata_lanes_remain() {
+    let mut state = authority();
+    let first = capture(&state);
+    let second = capture(&state);
+    select_capture(&mut state, &first);
+    select_capture(&mut state, &second);
+    let forged = capture(&state);
+    assert_ne!(forged, first);
+    assert_ne!(forged, second);
+    assert_eq!(view(&forged).materialize(), view(&first).materialize());
+    let ack = state.apply_completion(committed(forged, 3));
+    assert_eq!(ack.acked, 0);
+    assert_eq!(ack.released, 0);
+    assert!(ack.retry.is_empty());
+    assert_eq!(
+        ack.errors,
+        vec![ServerError::Internal {
+            invariant: "save completion identity"
+        }]
+    );
+    assert_eq!(state.save_stats().in_flight, 2);
+    let mut unselected = authority();
+    let ack = unselected.apply_completion(committed(capture(&unselected), 4));
+    assert_eq!(ack.acked, 0);
+    assert!(ack.errors.is_empty());
+    assert!(ack.retry.is_empty());
+    assert_eq!(unselected.save_stats().in_flight, 0);
+    let metadata = unselected.metadata_snapshot();
+    let ack = unselected.apply_completion(committed(metadata, 5));
+    assert_eq!(ack.acked, 1);
+    assert!(ack.errors.is_empty());
+    assert!(ack.retry.is_empty());
+    assert_eq!(unselected.save_stats().in_flight, 0);
+}
 fn write(ctx: &mut TickContext<'_>, pos: BlockPos, block: u16) {
     let observed = ctx.read().observation(Dimension::OVERWORLD, pos).unwrap();
     ctx.transaction()

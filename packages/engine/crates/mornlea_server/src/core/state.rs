@@ -938,8 +938,9 @@ impl AuthorityState {
     }
 
     pub fn return_dirty(&mut self, snapshot: OwnedSnapshot) {
-        self.in_flight
-            .retain(|held| !(held.key == snapshot.key && held.revision == snapshot.revision));
+        if let Some(position) = self.in_flight.iter().position(|held| held == &snapshot) {
+            self.in_flight.remove(position);
+        }
         self.dirty.push(snapshot);
     }
 
@@ -957,10 +958,16 @@ impl AuthorityState {
                 .iter()
                 .all(|identity| completion.submitted.contains(identity))
             && completion.snapshots.iter().all(|snapshot| {
-                self.in_flight
+                // Independent captures can share a revision; only one exact
+                // held preimage must match. Unknown identities retain their lanes.
+                let mut candidates = self
+                    .in_flight
                     .iter()
-                    .filter(|held| held.key == snapshot.key && held.revision == snapshot.revision)
-                    .all(|held| held == snapshot)
+                    .filter(|held| held.key == snapshot.key && held.revision == snapshot.revision);
+                match candidates.next() {
+                    None => true,
+                    Some(held) => held == snapshot || candidates.any(|held| held == snapshot),
+                }
             });
         let mut errors: Vec<_> = completion.error.into_iter().collect();
         if !identities_match {
@@ -978,10 +985,7 @@ impl AuthorityState {
         let mut released = 0;
         let mut retry = Vec::new();
         for snapshot in completion.snapshots {
-            let position = self
-                .in_flight
-                .iter()
-                .position(|held| held.key == snapshot.key && held.revision == snapshot.revision);
+            let position = self.in_flight.iter().position(|held| held == &snapshot);
             // Metadata has an explicit direct-scheduler lane: unlike actor
             // and chunk saves, metadata_snapshot is submitted without select.
             if position.is_none() && !matches!(snapshot.key, SaveKey::Metadata) {
