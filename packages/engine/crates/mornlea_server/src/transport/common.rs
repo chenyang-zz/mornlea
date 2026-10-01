@@ -43,7 +43,8 @@ use mornlea_protocol::{
 
 use crate::contracts::{
     Clock, CloseReason, ConnectionId, ConnectionProgress, Deadline, LoginPoll, LoginTicket,
-    Operation, PublicationPort, Resource, ServerEndpoint, ServerError, SessionKey, TransportKind,
+    Operation, PublicationPort, Resource, ServerEndpoint, ServerError, SessionKey,
+    SubmissionReceipt, TransportKind,
 };
 
 /// Ceiling of simultaneous prelogin reservations, mirroring the Go host's
@@ -133,15 +134,48 @@ impl HandshakeLimits {
     }
 }
 
-/// The authority seam one connection core drives. It bundles the frozen
-/// endpoint and publication ports with the login lifecycle both adapters
+/// Session operations a transport can borrow without owning ticks or shutdown.
+pub trait TransportSessionPort {
+    fn submit(
+        &mut self,
+        session: SessionKey,
+        intent: PlayIntent,
+    ) -> Result<SubmissionReceipt, ServerError>;
+    fn close_session(
+        &mut self,
+        session: SessionKey,
+        reason: CloseReason,
+    ) -> Result<(), ServerError>;
+}
+
+/// Existing complete endpoints keep their session behavior through this adapter.
+impl<T: ServerEndpoint + ?Sized> TransportSessionPort for T {
+    fn submit(
+        &mut self,
+        session: SessionKey,
+        intent: PlayIntent,
+    ) -> Result<SubmissionReceipt, ServerError> {
+        ServerEndpoint::submit(self, session, intent)
+    }
+
+    fn close_session(
+        &mut self,
+        session: SessionKey,
+        reason: CloseReason,
+    ) -> Result<(), ServerError> {
+        ServerEndpoint::close_session(self, session, reason)
+    }
+}
+
+/// The authority seam one connection core drives. It bundles the narrow
+/// session and publication ports with the login lifecycle both adapters
 /// share: `begin_login` rechecks capacity and identity through the same S1
 /// admission, prepares the session, and starts a bounded player load;
 /// `poll_login` reports the load outcome; `commit_login` activates exactly
 /// once on the acknowledged success handoff; `cancel_login` retires a
 /// prepared session whose handoff was never acknowledged. `world_seed` is
 /// immutable until close and feeds the existing `LoginSuccess` payload.
-pub trait TransportAuthority: ServerEndpoint + PublicationPort {
+pub trait TransportAuthority: TransportSessionPort + PublicationPort {
     fn begin_login(
         &mut self,
         login: AdmittedLogin,

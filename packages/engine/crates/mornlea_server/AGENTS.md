@@ -231,7 +231,11 @@ consume its cancellation and error contracts before joining the real backend.
   with plan-exact signatures because the contract landing did not place
   them; the declaration file moves only if a consumer outside the transport
   subtree appears. A failed load never double-retires its prepared session
-  (regression-guarded). Play-frame wire envelopes and connection reaping
+  (regression-guarded).
+  `TransportSessionPort` limits borrowed transport authority to submit/close;
+  full endpoints retain those calls through explicit blanket delegation.
+  Tick and shutdown ownership remain with the complete runtime.
+  Play-frame wire envelopes and connection reaping
   belong to the adapter nodes.
 - `src/rules/world_mutation.rs` owns placement geometry on the
   `Interaction` phase: current-look ray plus selected slot settled only
