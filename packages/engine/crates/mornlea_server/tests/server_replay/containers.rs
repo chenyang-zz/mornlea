@@ -49,10 +49,7 @@ const ITEM_RAW_IRON: u16 = 6; // `core.ItemRawIron`
 const ITEM_IRON_INGOT: u16 = 7; // `core.ItemIronIngot`
 const ITEM_SAND: u16 = 18; // `core.ItemSand`
 
-/// Mints one session identity through the real admission path. Session keys
-/// are process-local nonzero ids, so a key minted on a throwaway authority is
-/// a valid fixture identity for the replay authority.
-fn player_session(tag: u8, name: &str) -> SessionKey {
+fn player_login(tag: u8, name: &str) -> mornlea_protocol::AdmittedLogin {
     let mut bytes = [0u8; 16];
     bytes[0] = tag.max(1);
     bytes[6] = 0x40;
@@ -60,9 +57,29 @@ fn player_session(tag: u8, name: &str) -> SessionKey {
     let id = PlayerId::try_from_bytes(bytes).expect("player id");
     let start = LoginStart::new(id, name, 8).expect("login start");
     let inbound = LoginStart::decode_inbound(&start.encode().expect("encoded")).expect("inbound");
-    let login = admit_login(inbound).expect("admitted");
+    admit_login(inbound).expect("admitted")
+}
+
+/// Mints one session identity through the real admission path. Session keys
+/// are process-local nonzero ids, so a key minted on a throwaway authority is
+/// a valid fixture identity for the replay authority.
+fn player_session(tag: u8, name: &str) -> SessionKey {
     let mut mint = AuthorityState::try_new(limits(), 0).expect("authority");
-    mint.admit(login, TransportKind::Memory).expect("session")
+    mint.admit(player_login(tag, name), TransportKind::Memory)
+        .expect("session")
+}
+
+/// Multi-viewer fixtures share one mint so their process-local keys differ.
+fn player_sessions(first: (u8, &str), second: (u8, &str)) -> (SessionKey, SessionKey) {
+    let pair_limits = ServerLimits::try_new(2, 1, 1, 1, 1, 1).expect("two-player limits");
+    let mut mint = AuthorityState::try_new(pair_limits, 0).expect("authority");
+    let first = mint
+        .admit(player_login(first.0, first.1), TransportKind::Memory)
+        .expect("first session");
+    let second = mint
+        .admit(player_login(second.0, second.1), TransportKind::Memory)
+        .expect("second session");
+    (first, second)
 }
 
 fn stack(item: u16, count: u8) -> ItemStack {
@@ -1649,8 +1666,8 @@ fn partial_absorb() {
 
 #[test]
 fn stale_view_and_unauthorized() {
-    let session = player_session(14, "stale-view");
-    let other = player_session(15, "other-viewer");
+    let (session, other) = player_sessions((14, "stale-view"), (15, "other-viewer"));
+    assert_ne!(session, other);
     let target = BlockPos::new(0, 65, -1);
 
     // A move naming a retired generation refuses with every cell unchanged
@@ -1915,6 +1932,7 @@ fn stale_view_and_unauthorized() {
     let mut context = TickContext::harness(&mut state, TickBudget::full());
     let first_actor = viewer_scene(&mut context, session, (target, CHEST_BLOCK), &[]);
     let second_actor = viewer_scene(&mut context, other, (target, CHEST_BLOCK), &[]);
+    assert_ne!(first_actor, second_actor);
     let live = chest_ref(0, 1);
     install_container(
         &mut context,
@@ -2226,8 +2244,8 @@ fn container_inventory_region_drop_preserves_tool_durability() {
 
 #[test]
 fn two_viewers_cannot_drop_the_same_container_source_twice() {
-    let first = player_session(103, "first-dropper");
-    let second = player_session(104, "second-dropper");
+    let (first, second) = player_sessions((103, "first-dropper"), (104, "second-dropper"));
+    assert_ne!(first, second);
     let target = BlockPos::new(0, 65, -1);
     let foot = overworld_key(BlockPos::new(0, 64, 0));
     let mut authority = AuthorityState::try_new(limits(), 7).unwrap();
