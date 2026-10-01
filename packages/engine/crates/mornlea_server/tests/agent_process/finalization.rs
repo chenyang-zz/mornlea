@@ -101,6 +101,30 @@ impl Drop for OpenGateOnDrop {
     }
 }
 
+// One semantic reservation may also retain the held request's cancellation join.
+fn valid_held_reconcile_outstanding(reported: usize, owned: usize) -> bool {
+    reported == owned && matches!(reported, 1 | 2)
+}
+
+#[test]
+fn held_reconcile_obligation_counts_preserve_owned_work() {
+    for (reported, owned, expected) in [
+        (0, 0, false),
+        (1, 1, true),
+        (2, 2, true),
+        (3, 3, false),
+        (usize::MAX, usize::MAX, false),
+        (1, 2, false),
+        (2, 1, false),
+    ] {
+        assert_eq!(
+            valid_held_reconcile_outstanding(reported, owned),
+            expected,
+            "reported {reported}, owned {owned}"
+        );
+    }
+}
+
 fn unused() -> ServerError {
     ServerError::Internal {
         invariant: "memory shutdown integration unused port",
@@ -313,7 +337,12 @@ fn real_memory_shutdown_retry_confirms_lost_commit_before_release() {
         }
     );
     assert_eq!(failure.report.next, ShutdownPhase::FinalizeMemory);
-    assert_eq!(failure.report.outstanding, 1);
+    let owned = ports.memory.pending().outstanding;
+    assert!(
+        valid_held_reconcile_outstanding(failure.report.outstanding, owned),
+        "reported {}, owned {owned}",
+        failure.report.outstanding
+    );
     assert!(
         faults.reconcile_entered.load(Ordering::SeqCst),
         "actual finalizer did not admit reconcile"
