@@ -103,7 +103,8 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7l2 Drive live chunk requests through the actual borrowed owners ([packet](plans/61-live-chunk-request-driver.md)).
 - [x] 3.7l3g Qualify shared source restoration, support and spawn-column geometry ([packet](plans/80-source-actor-placement.md)).
 - [x] 3.7l3s Retain bounded pending restore scan, wanted keys and exhausted revisions ([packet](plans/81-pending-restore-scan.md)).
-- [ ] 3.7l3p Integrate initial pending player registration and actual Ready restoration ([packet](plans/83-source-player-initial-restore.md)).
+- [x] 3.7l3p Integrate initial pending player registration and actual Ready restoration ([packet](plans/83-source-player-initial-restore.md)).
+- [ ] 3.7l3rc Land the common checked source player reset mapping ([packet](plans/86-source-player-reset-contract.md)).
 - [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
 - [x] 3.7r0 Move resident ownership through live ticks and finalize changed chunks only ([packet](plans/52-owned-resident-tick.md)).
 - [x] 3.7r1 Bound defensive compound rollback to touched resident keys ([packet](plans/53-bounded-compound-undo.md)).
