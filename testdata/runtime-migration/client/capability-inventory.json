@@ -5221,6 +5221,275 @@
     }
    ],
    "discovery_command": "go test ./packages/client/runtime -list 'Predict|Step|Messages|Mirror|Mesh|Remote|Lifecycle' -count=1"
+  },
+  {
+   "owner_node": "3.1b (G1 adapter architecture boundary)",
+   "package": "./packages/audit",
+   "filter": "Architecture|Godot",
+   "discovered_count": 52,
+   "selected_tests": [
+    {
+     "name": "TestArchitecturePilotProfile",
+     "source": "packages/audit/architecture_profile_test.go",
+     "source_sha256": "sha256:5cacd138e7a4494b9f51329dc4e8151d16cb7e0e7aa7d773bfa3c5dfddc23c88"
+    },
+    {
+     "name": "TestArchitectureTargetProfile",
+     "source": "packages/audit/architecture_profile_test.go",
+     "source_sha256": "sha256:5cacd138e7a4494b9f51329dc4e8151d16cb7e0e7aa7d773bfa3c5dfddc23c88"
+    },
+    {
+     "name": "TestArchitectureProfilesDetectDrift",
+     "source": "packages/audit/architecture_profile_test.go",
+     "source_sha256": "sha256:5cacd138e7a4494b9f51329dc4e8151d16cb7e0e7aa7d773bfa3c5dfddc23c88"
+    },
+    {
+     "name": "TestProjectArchitectureSkillsMatch",
+     "source": "packages/audit/architecture_skill_test.go",
+     "source_sha256": "sha256:bf69adb7c01531578f2cf7d6fc10805bf671dc2436cd3d7a0912fe2b0c8eb535"
+    },
+    {
+     "name": "TestArchitectureSkillRetrospective",
+     "source": "packages/audit/architecture_skill_test.go",
+     "source_sha256": "sha256:bf69adb7c01531578f2cf7d6fc10805bf671dc2436cd3d7a0912fe2b0c8eb535"
+    },
+    {
+     "name": "TestArchitectureTargetDocumentsFoundationAndRollback",
+     "source": "packages/audit/architecture_target_documentation_test.go",
+     "source_sha256": "sha256:474537fe0de6c032db9c20e39d911eefc8a98dd763ee1b45b56838445b35ca7f"
+    },
+    {
+     "name": "TestGodotAssetSyncIsDeterministicAndRejectsManualFiles",
+     "source": "packages/audit/godot_asset_sync_test.go",
+     "source_sha256": "sha256:ab9a19e2dd52bd55ee87929a593963a1251be4f2aea8ef9f37a75e3c21de1fb1"
+    },
+    {
+     "name": "TestGodotBuildCoreScriptPin",
+     "source": "packages/audit/godot_build_core_test.go",
+     "source_sha256": "sha256:d2f96e450741f334ee3d48ef4be8f14c18834dc5a6492fb3eaddd8a2c5d00f60"
+    },
+    {
+     "name": "TestGodotBuildExtensionUsesEffectiveCargoTargetDirectory",
+     "source": "packages/audit/godot_build_extension_test.go",
+     "source_sha256": "sha256:d9d0045d6c352c3000b51c5cf86a4581b0d93737c355d2a27bda3224864f7b4e"
+    },
+    {
+     "name": "TestGodotBuildExtensionColdEditorImport",
+     "source": "packages/audit/godot_build_extension_test.go",
+     "source_sha256": "sha256:d9d0045d6c352c3000b51c5cf86a4581b0d93737c355d2a27bda3224864f7b4e"
+    },
+    {
+     "name": "TestGodotIsOptionalForLegacyBuild",
+     "source": "packages/audit/godot_entrypoints_test.go",
+     "source_sha256": "sha256:1c13b45f50ff160e492d4eab08d04c304d085e90aa2c6588ccbdcc212438795e"
+    },
+    {
+     "name": "TestGodotRollbackRejectsMissingOptionalWorkflow",
+     "source": "packages/audit/godot_entrypoints_test.go",
+     "source_sha256": "sha256:1c13b45f50ff160e492d4eab08d04c304d085e90aa2c6588ccbdcc212438795e"
+    },
+    {
+     "name": "TestGodotRollbackWorkflowIsolation",
+     "source": "packages/audit/godot_entrypoints_test.go",
+     "source_sha256": "sha256:1c13b45f50ff160e492d4eab08d04c304d085e90aa2c6588ccbdcc212438795e"
+    },
+    {
+     "name": "TestGodotCapabilityRegistryKeepsPythonAsPresentationLanguage",
+     "source": "packages/audit/godot_feature_boundary_test.go",
+     "source_sha256": "sha256:ffc16105a55015411858218ba4049e31603c9960c2605e2af191505380e5fafe"
+    },
+    {
+     "name": "TestGodotFeatureBoundaryRejectsCatalogAndOwnershipEscapes",
+     "source": "packages/audit/godot_feature_boundary_test.go",
+     "source_sha256": "sha256:ffc16105a55015411858218ba4049e31603c9960c2605e2af191505380e5fafe"
+    },
+    {
+     "name": "TestGodotFeatureBoundaryDetectsDrift",
+     "source": "packages/audit/godot_feature_boundary_test.go",
+     "source_sha256": "sha256:ffc16105a55015411858218ba4049e31603c9960c2605e2af191505380e5fafe"
+    },
+    {
+     "name": "TestGodotScriptsDoNotImplementProtocolMarkers",
+     "source": "packages/audit/godot_host_discipline_test.go",
+     "source_sha256": "sha256:21da41464d6ece359b96748349cb8cfafa913086068bf4fdd3445596b3614825"
+    },
+    {
+     "name": "TestGodotHostIsFeatureAgnosticAcrossInjection",
+     "source": "packages/audit/godot_host_discipline_test.go",
+     "source_sha256": "sha256:21da41464d6ece359b96748349cb8cfafa913086068bf4fdd3445596b3614825"
+    },
+    {
+     "name": "TestGodotPlayableLogRejectsEveryUnapprovedError",
+     "source": "packages/audit/godot_playable_log_test.go",
+     "source_sha256": "sha256:11ed66060865ade25bbf9aebfa8fa828aa0918f3a213a09e23f49e05fc5bb82f"
+    },
+    {
+     "name": "TestGodotPlayableSmokeOracleContracts",
+     "source": "packages/audit/godot_playable_log_test.go",
+     "source_sha256": "sha256:11ed66060865ade25bbf9aebfa8fa828aa0918f3a213a09e23f49e05fc5bb82f"
+    },
+    {
+     "name": "TestGodotProjectRootRejectsEscapes",
+     "source": "packages/audit/godot_project_closure_test.go",
+     "source_sha256": "sha256:9a6a391896c5dff20e45666b7ce1766837e5656613049f67916fbb0d64385121"
+    },
+    {
+     "name": "TestGodotResourceClosureRejectsExternalReferences",
+     "source": "packages/audit/godot_project_closure_test.go",
+     "source_sha256": "sha256:9a6a391896c5dff20e45666b7ce1766837e5656613049f67916fbb0d64385121"
+    },
+    {
+     "name": "TestGodotUIDPolicyKeepsGeneratedStateOutAndIdentityIn",
+     "source": "packages/audit/godot_project_closure_test.go",
+     "source_sha256": "sha256:9a6a391896c5dff20e45666b7ce1766837e5656613049f67916fbb0d64385121"
+    },
+    {
+     "name": "TestGodotExportClosureExcludesDevelopmentResources",
+     "source": "packages/audit/godot_project_closure_test.go",
+     "source_sha256": "sha256:9a6a391896c5dff20e45666b7ce1766837e5656613049f67916fbb0d64385121"
+    },
+    {
+     "name": "TestGodotDesktopOnlyRejectsUnsupportedTargets",
+     "source": "packages/audit/godot_project_closure_test.go",
+     "source_sha256": "sha256:9a6a391896c5dff20e45666b7ce1766837e5656613049f67916fbb0d64385121"
+    },
+    {
+     "name": "TestGodotPythonBoundaryRejectsAmbientRuntimeResolution",
+     "source": "packages/audit/godot_project_closure_test.go",
+     "source_sha256": "sha256:9a6a391896c5dff20e45666b7ce1766837e5656613049f67916fbb0d64385121"
+    },
+    {
+     "name": "TestGodotProjectBootstrapIsPureAndStable",
+     "source": "packages/audit/godot_project_test.go",
+     "source_sha256": "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9"
+    },
+    {
+     "name": "TestGodotBootstrapDoesNotInitiateNetwork",
+     "source": "packages/audit/godot_project_test.go",
+     "source_sha256": "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9"
+    },
+    {
+     "name": "TestGodotBootstrapDiagnosesIncompleteDistribution",
+     "source": "packages/audit/godot_project_test.go",
+     "source_sha256": "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9"
+    },
+    {
+     "name": "TestGodotPreparedBootstrapHandsOffToPythonDynamically",
+     "source": "packages/audit/godot_project_test.go",
+     "source_sha256": "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9"
+    },
+    {
+     "name": "TestGodotDesktopOnlyFeatureSkeleton",
+     "source": "packages/audit/godot_project_test.go",
+     "source_sha256": "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9"
+    },
+    {
+     "name": "TestGodotPythonFeatureSkeletonsAndScriptOwnership",
+     "source": "packages/audit/godot_project_test.go",
+     "source_sha256": "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9"
+    },
+    {
+     "name": "TestGodotBridgeHostIsIdentityOnlyAndDesktopBound",
+     "source": "packages/audit/godot_project_test.go",
+     "source_sha256": "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9"
+    },
+    {
+     "name": "TestGodotLifecycleSmokeContract",
+     "source": "packages/audit/godot_project_test.go",
+     "source_sha256": "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9"
+    },
+    {
+     "name": "TestGodotFeatureHostIsPythonOwnedAndExplicit",
+     "source": "packages/audit/godot_project_test.go",
+     "source_sha256": "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9"
+    },
+    {
+     "name": "TestGodotPythonForkIsPinnedAndMinimal",
+     "source": "packages/audit/godot_python_fork_test.go",
+     "source_sha256": "sha256:8ab815bc1b9135e1743651a7b8f5003ad2afe77af386350a5067d8732364c95b"
+    },
+    {
+     "name": "TestGodotPythonIsolationBuildEntryPoint",
+     "source": "packages/audit/godot_python_fork_test.go",
+     "source_sha256": "sha256:8ab815bc1b9135e1743651a7b8f5003ad2afe77af386350a5067d8732364c95b"
+    },
+    {
+     "name": "TestGodotPythonToolingIsLockedAndRuntimeFree",
+     "source": "packages/audit/godot_python_tooling_test.go",
+     "source_sha256": "sha256:f8a15ddf18bc2f7495734a03ee8449a1f5bfc1378da098aeb561c4175a3841e2"
+    },
+    {
+     "name": "TestGodotReleaseUnitSeparatesPythonEnvironments",
+     "source": "packages/audit/godot_release_unit_test.go",
+     "source_sha256": "sha256:e9b8e51e3d92e4fe472e4ab7ad1432c2bf0de18ebcda5e67f76313644fc0c577"
+    },
+    {
+     "name": "TestGodotReleaseUnitRejectsMojangAndSystemPathLibraries",
+     "source": "packages/audit/godot_release_unit_test.go",
+     "source_sha256": "sha256:e9b8e51e3d92e4fe472e4ab7ad1432c2bf0de18ebcda5e67f76313644fc0c577"
+    },
+    {
+     "name": "TestGodotResourceLicenses",
+     "source": "packages/audit/godot_resource_licenses_test.go",
+     "source_sha256": "sha256:496d20c002bfb1d8ffed1aa7918ba277c754f74341bba785275482072fd2f2f9"
+    },
+    {
+     "name": "TestGodotResourceLicensesRejectUnapprovedComponent",
+     "source": "packages/audit/godot_resource_licenses_test.go",
+     "source_sha256": "sha256:496d20c002bfb1d8ffed1aa7918ba277c754f74341bba785275482072fd2f2f9"
+    },
+    {
+     "name": "TestGodotResolverPrintsCachedExecutablePath",
+     "source": "packages/audit/godot_toolchain_test.go",
+     "source_sha256": "sha256:ccf94bba88f3d5cf2071a7c2f33d4534e32c250a2e9fbbfbc72615570864de6b"
+    },
+    {
+     "name": "TestGodotExportProbeResolvesCachedEditor",
+     "source": "packages/audit/godot_toolchain_test.go",
+     "source_sha256": "sha256:ccf94bba88f3d5cf2071a7c2f33d4534e32c250a2e9fbbfbc72615570864de6b"
+    },
+    {
+     "name": "TestGodotIsolatedProbeUsesCachedEditorWithScrubbedPath",
+     "source": "packages/audit/godot_toolchain_test.go",
+     "source_sha256": "sha256:ccf94bba88f3d5cf2071a7c2f33d4534e32c250a2e9fbbfbc72615570864de6b"
+    },
+    {
+     "name": "TestGodotFetchMaterializesVerifiedEditor",
+     "source": "packages/audit/godot_toolchain_test.go",
+     "source_sha256": "sha256:ccf94bba88f3d5cf2071a7c2f33d4534e32c250a2e9fbbfbc72615570864de6b"
+    },
+    {
+     "name": "TestGodotDesktopOnlyToolchainPin",
+     "source": "packages/audit/godot_toolchain_test.go",
+     "source_sha256": "sha256:ccf94bba88f3d5cf2071a7c2f33d4534e32c250a2e9fbbfbc72615570864de6b"
+    },
+    {
+     "name": "TestGodotRustDependencyPin",
+     "source": "packages/audit/godot_toolchain_test.go",
+     "source_sha256": "sha256:ccf94bba88f3d5cf2071a7c2f33d4534e32c250a2e9fbbfbc72615570864de6b"
+    },
+    {
+     "name": "TestGodotPythonRuntimePin",
+     "source": "packages/audit/godot_toolchain_test.go",
+     "source_sha256": "sha256:ccf94bba88f3d5cf2071a7c2f33d4534e32c250a2e9fbbfbc72615570864de6b"
+    },
+    {
+     "name": "TestGodotProjectValidatorRequiresRipgrepBeforeValidation",
+     "source": "packages/audit/godot_validator_prerequisite_test.go",
+     "source_sha256": "sha256:44bd37b9ec56dcd087a6c7e32d08662d58445e4aef0bd940385b8260f537ccc8"
+    },
+    {
+     "name": "TestGodotProjectValidatorRejectsRipgrepExecutionError",
+     "source": "packages/audit/godot_validator_prerequisite_test.go",
+     "source_sha256": "sha256:44bd37b9ec56dcd087a6c7e32d08662d58445e4aef0bd940385b8260f537ccc8"
+    },
+    {
+     "name": "TestGodotAssetGeneratorUsesPortableLinuxSourceSet",
+     "source": "packages/audit/linux_asset_source_set_test.go",
+     "source_sha256": "sha256:665098d2828659144f0eac979252faec3caffc8913283bf24c7c9ad909b37478"
+    }
+   ],
+   "discovery_command": "go test ./packages/audit -list 'Architecture|Godot' -count=1"
   }
  ],
  "limits": [
@@ -6635,6 +6904,111 @@
    "rust_node": "2.1",
    "rust_test": [
     "prediction_replay::input"
+   ]
+  },
+  {
+   "id": "oracle.Architecture|Godot",
+   "source": [
+    "packages/audit/architecture_profile_test.go",
+    "packages/audit/architecture_skill_test.go",
+    "packages/audit/architecture_target_documentation_test.go",
+    "packages/audit/godot_asset_sync_test.go",
+    "packages/audit/godot_build_core_test.go",
+    "packages/audit/godot_build_extension_test.go",
+    "packages/audit/godot_entrypoints_test.go",
+    "packages/audit/godot_feature_boundary_test.go",
+    "packages/audit/godot_host_discipline_test.go",
+    "packages/audit/godot_playable_log_test.go",
+    "packages/audit/godot_project_closure_test.go",
+    "packages/audit/godot_project_test.go",
+    "packages/audit/godot_python_fork_test.go",
+    "packages/audit/godot_python_tooling_test.go",
+    "packages/audit/godot_release_unit_test.go",
+    "packages/audit/godot_resource_licenses_test.go",
+    "packages/audit/godot_toolchain_test.go",
+    "packages/audit/godot_validator_prerequisite_test.go",
+    "packages/audit/linux_asset_source_set_test.go"
+   ],
+   "source_sha256": [
+    "sha256:11ed66060865ade25bbf9aebfa8fa828aa0918f3a213a09e23f49e05fc5bb82f",
+    "sha256:1a8c9bbef947f17656f4d12c44dd36bd16cd830afb896cbf1511359d63019aa9",
+    "sha256:1c13b45f50ff160e492d4eab08d04c304d085e90aa2c6588ccbdcc212438795e",
+    "sha256:21da41464d6ece359b96748349cb8cfafa913086068bf4fdd3445596b3614825",
+    "sha256:44bd37b9ec56dcd087a6c7e32d08662d58445e4aef0bd940385b8260f537ccc8",
+    "sha256:474537fe0de6c032db9c20e39d911eefc8a98dd763ee1b45b56838445b35ca7f",
+    "sha256:496d20c002bfb1d8ffed1aa7918ba277c754f74341bba785275482072fd2f2f9",
+    "sha256:5cacd138e7a4494b9f51329dc4e8151d16cb7e0e7aa7d773bfa3c5dfddc23c88",
+    "sha256:665098d2828659144f0eac979252faec3caffc8913283bf24c7c9ad909b37478",
+    "sha256:8ab815bc1b9135e1743651a7b8f5003ad2afe77af386350a5067d8732364c95b",
+    "sha256:9a6a391896c5dff20e45666b7ce1766837e5656613049f67916fbb0d64385121",
+    "sha256:ab9a19e2dd52bd55ee87929a593963a1251be4f2aea8ef9f37a75e3c21de1fb1",
+    "sha256:bf69adb7c01531578f2cf7d6fc10805bf671dc2436cd3d7a0912fe2b0c8eb535",
+    "sha256:ccf94bba88f3d5cf2071a7c2f33d4534e32c250a2e9fbbfbc72615570864de6b",
+    "sha256:d2f96e450741f334ee3d48ef4be8f14c18834dc5a6492fb3eaddd8a2c5d00f60",
+    "sha256:d9d0045d6c352c3000b51c5cf86a4581b0d93737c355d2a27bda3224864f7b4e",
+    "sha256:e9b8e51e3d92e4fe472e4ab7ad1432c2bf0de18ebcda5e67f76313644fc0c577",
+    "sha256:f8a15ddf18bc2f7495734a03ee8449a1f5bfc1378da098aeb561c4175a3841e2",
+    "sha256:ffc16105a55015411858218ba4049e31603c9960c2605e2af191505380e5fafe"
+   ],
+   "fixture": [
+    "./packages/audit#TestArchitecturePilotProfile",
+    "./packages/audit#TestArchitectureTargetProfile",
+    "./packages/audit#TestArchitectureProfilesDetectDrift",
+    "./packages/audit#TestProjectArchitectureSkillsMatch",
+    "./packages/audit#TestArchitectureSkillRetrospective",
+    "./packages/audit#TestArchitectureTargetDocumentsFoundationAndRollback",
+    "./packages/audit#TestGodotAssetSyncIsDeterministicAndRejectsManualFiles",
+    "./packages/audit#TestGodotBuildCoreScriptPin",
+    "./packages/audit#TestGodotBuildExtensionUsesEffectiveCargoTargetDirectory",
+    "./packages/audit#TestGodotBuildExtensionColdEditorImport",
+    "./packages/audit#TestGodotIsOptionalForLegacyBuild",
+    "./packages/audit#TestGodotRollbackRejectsMissingOptionalWorkflow",
+    "./packages/audit#TestGodotRollbackWorkflowIsolation",
+    "./packages/audit#TestGodotCapabilityRegistryKeepsPythonAsPresentationLanguage",
+    "./packages/audit#TestGodotFeatureBoundaryRejectsCatalogAndOwnershipEscapes",
+    "./packages/audit#TestGodotFeatureBoundaryDetectsDrift",
+    "./packages/audit#TestGodotScriptsDoNotImplementProtocolMarkers",
+    "./packages/audit#TestGodotHostIsFeatureAgnosticAcrossInjection",
+    "./packages/audit#TestGodotPlayableLogRejectsEveryUnapprovedError",
+    "./packages/audit#TestGodotPlayableSmokeOracleContracts",
+    "./packages/audit#TestGodotProjectRootRejectsEscapes",
+    "./packages/audit#TestGodotResourceClosureRejectsExternalReferences",
+    "./packages/audit#TestGodotUIDPolicyKeepsGeneratedStateOutAndIdentityIn",
+    "./packages/audit#TestGodotExportClosureExcludesDevelopmentResources",
+    "./packages/audit#TestGodotDesktopOnlyRejectsUnsupportedTargets",
+    "./packages/audit#TestGodotPythonBoundaryRejectsAmbientRuntimeResolution",
+    "./packages/audit#TestGodotProjectBootstrapIsPureAndStable",
+    "./packages/audit#TestGodotBootstrapDoesNotInitiateNetwork",
+    "./packages/audit#TestGodotBootstrapDiagnosesIncompleteDistribution",
+    "./packages/audit#TestGodotPreparedBootstrapHandsOffToPythonDynamically",
+    "./packages/audit#TestGodotDesktopOnlyFeatureSkeleton",
+    "./packages/audit#TestGodotPythonFeatureSkeletonsAndScriptOwnership",
+    "./packages/audit#TestGodotBridgeHostIsIdentityOnlyAndDesktopBound",
+    "./packages/audit#TestGodotLifecycleSmokeContract",
+    "./packages/audit#TestGodotFeatureHostIsPythonOwnedAndExplicit",
+    "./packages/audit#TestGodotPythonForkIsPinnedAndMinimal",
+    "./packages/audit#TestGodotPythonIsolationBuildEntryPoint",
+    "./packages/audit#TestGodotPythonToolingIsLockedAndRuntimeFree",
+    "./packages/audit#TestGodotReleaseUnitSeparatesPythonEnvironments",
+    "./packages/audit#TestGodotReleaseUnitRejectsMojangAndSystemPathLibraries",
+    "./packages/audit#TestGodotResourceLicenses",
+    "./packages/audit#TestGodotResourceLicensesRejectUnapprovedComponent",
+    "./packages/audit#TestGodotResolverPrintsCachedExecutablePath",
+    "./packages/audit#TestGodotExportProbeResolvesCachedEditor",
+    "./packages/audit#TestGodotIsolatedProbeUsesCachedEditorWithScrubbedPath",
+    "./packages/audit#TestGodotFetchMaterializesVerifiedEditor",
+    "./packages/audit#TestGodotDesktopOnlyToolchainPin",
+    "./packages/audit#TestGodotRustDependencyPin",
+    "./packages/audit#TestGodotPythonRuntimePin",
+    "./packages/audit#TestGodotProjectValidatorRequiresRipgrepBeforeValidation",
+    "./packages/audit#TestGodotProjectValidatorRejectsRipgrepExecutionError",
+    "./packages/audit#TestGodotAssetGeneratorUsesPortableLinuxSourceSet"
+   ],
+   "rust_node": "3.1b",
+   "rust_test": [
+    "rust_producer::rust_mode_does_not_load_go",
+    "rust_producer::whole_frame_failure_atomic",
+    "rust_producer::method_table_and_owned_values"
    ]
   },
   {
