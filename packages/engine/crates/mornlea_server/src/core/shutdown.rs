@@ -292,7 +292,7 @@ fn fail(
 ) -> ShutdownFailure {
     report.next = phase;
     report.failed = report.failed.saturating_add(1);
-    report.retryable = is_transient(&error);
+    report.retryable = state.tick_failure().is_none() && is_transient(&error);
     if state.phase() == ServerPhase::Running {
         let _ = state.begin_close();
     }
@@ -303,7 +303,7 @@ fn fail(
 /// Transient failures can clear on a later attempt: timeouts, I/O errors,
 /// cancellation, disconnection, and typed Agent conditions. Field, state,
 /// and invariant violations are permanent; retrying them cannot succeed.
-fn is_transient(error: &ServerError) -> bool {
+pub(crate) fn is_transient(error: &ServerError) -> bool {
     matches!(
         error,
         ServerError::Timeout { .. }

@@ -31,6 +31,22 @@ consume its cancellation and error contracts before joining the real backend.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
+- `src/core/step.rs` shares one fallible phase engine between `reduce_tick`
+  and `AuthoritativeFinalReducer`. The final adapter uses full budgets and
+  commits successful resident/viewer work without delivery; `run_final` owns
+  once-on-success consumption and endpoint advancement. Hard phase/delivery
+  errors and trusted Rust unwinds retain the first error and fence the authority
+  in Closing. Exclusive context drop returns partial resident/dirty ownership
+  before both moved schedules return; it provides no whole-tick rollback.
+  Failed authorities refuse new captures, selection and metadata targets while
+  preserving already-selected immutable ownership and completion/return paths.
+  Both shutdown entries permanently stop at failed FinalTick, including a
+  retained I/O error; ordinary injected lifecycle failures keep their existing
+  transient classification. Cold abort/quiescence and real executable runtime
+  composition remain separate acceptance work. `core::state::failed_tick_tests`,
+  `core::step::routing_tests`, and the actual-final case in
+  `tests/server_contract/tick.rs` pin these boundaries.
+
 - `src/core/deferred_commands.rs` retains at most 4096 immutable command
   envelopes per tick under their full tick/session/sequence/arrival identity.
   Each provider phase has a separate ordered list of at most 4096 ordinal

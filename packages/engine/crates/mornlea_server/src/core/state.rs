@@ -148,6 +148,8 @@ pub struct AuthorityState {
     next_session: u64,
     ids_exhausted: bool,
     next_tick: u64,
+    /// First hard execution failure permanently fences new reduction and save capture.
+    tick_failure: Option<ServerError>,
     world_seed: i64,
     sessions: BTreeMap<SessionKey, SessionRecord>,
     /// Prepared and Active membership is bounded independently of retained history.
@@ -215,6 +217,7 @@ impl AuthorityState {
             next_session: 1,
             ids_exhausted: false,
             next_tick: 0,
+            tick_failure: None,
             world_seed,
             sessions: BTreeMap::new(),
             current_sessions: BTreeSet::new(),
@@ -471,7 +474,23 @@ impl AuthorityState {
         Ok(CompanionReceipt::new(self.next_tick, next))
     }
 
+    pub(crate) fn tick_failure(&self) -> Option<ServerError> {
+        self.tick_failure
+    }
+
+    /// Partial mutations retain ownership, but this authority cannot resume or save them.
+    pub(crate) fn fail_tick(&mut self, error: ServerError) -> ServerError {
+        let retained = *self.tick_failure.get_or_insert(error);
+        if self.phase == ServerPhase::Running {
+            self.phase = ServerPhase::Closing;
+        }
+        retained
+    }
+
     pub fn advance_tick(&mut self, work: TickBudget) -> Result<TickPublication, ServerError> {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
         if self.phase != ServerPhase::Running {
             return Err(ServerError::InvalidState { phase: self.phase });
         }
@@ -486,7 +505,7 @@ impl AuthorityState {
         // current counter as the executing tick, and the bump lands only
         // after it returns, so staged event ticks name the tick the
         // publication carries.
-        let publication = super::step::reduce_tick(self, work);
+        let publication = super::step::reduce_tick(self, work)?;
         self.next_tick = self.next_tick.saturating_add(1);
         Ok(publication)
     }
@@ -723,6 +742,9 @@ impl AuthorityState {
         Ok(())
     }
     fn require_live_chunks(&self, running: bool) -> Result<(), ServerError> {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
         if !self.acquisition.enabled()
             || self.phase == ServerPhase::Closed
             || (running && self.phase != ServerPhase::Running)
@@ -1115,7 +1137,10 @@ impl AuthorityState {
     }
 
     pub fn run_final(&mut self, reducer: &mut dyn FinalReducer) -> Result<u64, ServerError> {
-        if self.final_consumed {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
+        if self.phase == ServerPhase::Closed || self.final_consumed {
             return Err(ServerError::InvalidState { phase: self.phase });
         }
         let tick = reducer.reduce_final(self)?;
@@ -1163,6 +1188,9 @@ impl AuthorityState {
         key: ChunkKey,
         urgency: SaveUrgency,
     ) -> Option<OwnedSnapshot> {
+        if self.tick_failure.is_some() {
+            return None;
+        }
         if self.acquisition.enabled()
             && !self.acquisition.facts(key).is_some_and(|f| {
                 matches!(f.phase, LiveChunkPhase::Ready | LiveChunkPhase::Unloading)
@@ -1193,7 +1221,7 @@ impl AuthorityState {
     }
 
     pub fn select(&mut self, mode: SaveMode, budget: SaveBudget) -> Vec<OwnedSnapshot> {
-        if self.phase == ServerPhase::Closed {
+        if self.tick_failure.is_some() || self.phase == ServerPhase::Closed {
             return Vec::new();
         }
         if self.acquisition.enabled() {
@@ -1463,6 +1491,9 @@ impl AuthorityState {
     /// remain the startup configuration. Distinct targets advance one checked
     /// process-local sequence, and refusal leaves the last captured target intact.
     pub fn try_metadata_snapshot(&mut self) -> Result<OwnedSnapshot, ServerError> {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
         let mut target = self.metadata.clone();
         if let Some(environment) = &self.residents.environment {
             target.world_time_ticks = environment.world_time;
@@ -1564,7 +1595,7 @@ impl AuthorityState {
         error: ServerError,
     ) -> Result<ShutdownReport, ShutdownFailure> {
         report.next = phase;
-        report.retryable = true;
+        report.retryable = self.tick_failure.is_none() && super::shutdown::is_transient(&error);
         report.failed = report.failed.saturating_add(1);
         self.shutdown = report.clone();
         if self.phase == ServerPhase::Running {
@@ -8489,5 +8520,697 @@ mod prepared_current_index_tests {
             vec![key]
         );
         assert_eq!(state.sessions.len(), 257);
+    }
+}
+
+#[cfg(test)]
+mod failed_tick_tests {
+    use super::super::step::{AuthoritativeFinalReducer, reduce_tick, set_dispatch_hook};
+    use super::*;
+    use mornlea_domain::{BlockPos, ChunkPos, Command, CommandRejection, Event};
+    use mornlea_storage::{ContainerSnapshot, StorageKind};
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
+
+    thread_local! { static HOOK_CALLS: Cell<usize> = const { Cell::new(0) }; }
+
+    struct HookGuard;
+    impl HookGuard {
+        fn install(hook: fn(&mut TickContext<'_>) -> Result<(), ServerError>) -> Self {
+            HOOK_CALLS.with(|calls| calls.set(0));
+            set_dispatch_hook(Some(hook));
+            Self
+        }
+    }
+    impl Drop for HookGuard {
+        fn drop(&mut self) {
+            set_dispatch_hook(None);
+        }
+    }
+    fn key() -> ChunkKey {
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        }
+    }
+    fn pos() -> BlockPos {
+        BlockPos::new(0, -64, 0)
+    }
+    fn due_pos() -> BlockPos {
+        BlockPos::new(15, 200, 15)
+    }
+    fn capacity() -> ServerError {
+        ServerError::Capacity {
+            resource: Resource::Commands,
+            limit: 4096,
+            observed: 4097,
+        }
+    }
+    fn fixture() -> (AuthorityState, SessionKey, OwnedSnapshot) {
+        let mut a = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap();
+        let id =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        let start = mornlea_protocol::LoginStart::new(id, "Ada", 8).unwrap();
+        let session = a
+            .prepare(
+                mornlea_protocol::admit_login(
+                    mornlea_protocol::LoginStart::decode_inbound(&start.encode().unwrap()).unwrap(),
+                )
+                .unwrap(),
+                TransportKind::Memory,
+            )
+            .unwrap();
+        a.install(session, None).unwrap();
+        a.activate(session).unwrap();
+        a.enable_live_chunks().unwrap();
+        a.replace_chunk_wants(BTreeSet::from([key()])).unwrap();
+        let r = a.reserve_chunk_load(key()).unwrap();
+        let request = ChunkRequestId::try_new(1).unwrap();
+        a.bind_chunk_load(r, request).unwrap();
+        let prepared = super::super::world::PreparedChunk::try_new(
+            key(),
+            r.generation(),
+            RecoveredChunk {
+                chunk: Chunk {
+                    sections: vec![
+                        ContainerSnapshot {
+                            kind: StorageKind::Single,
+                            bits: 0,
+                            single: 0,
+                            palette: vec![],
+                            packed: vec![]
+                        };
+                        24
+                    ],
+                    drops: vec![Default::default(); 32],
+                    furnaces: vec![Default::default(); 32],
+                    chests: vec![Default::default(); 16],
+                },
+                revision: 9,
+                persisted_revision: 7,
+                needs_rewrite: true,
+                recovered: true,
+            },
+        )
+        .unwrap();
+        a.offer_acquired(AcquiredChunkEvent::Load {
+            key: key(),
+            generation: r.generation(),
+            request,
+            result: Ok(Some(prepared)),
+        })
+        .unwrap();
+        a.advance_tick(TickBudget::full()).unwrap();
+        let installed = a.live_chunk_facts(key()).unwrap();
+        assert_eq!(installed.generation, r.generation());
+        assert_eq!(
+            (
+                installed.revision,
+                installed.persisted_revision,
+                installed.needs_rewrite,
+                installed.recovered
+            ),
+            (9, 7, true, true)
+        );
+        assert_eq!(a.residents.ready[&key()].block(pos()), Some(0));
+        assert!(a.residents.dirty_chunks.is_empty());
+        a.sessions.get_mut(&session).unwrap().outbox.clear();
+        let old = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap();
+        a.fluid_schedule_mut().enqueue_fluid(key(), due_pos(), 100);
+        a.farmland_schedule_mut()
+            .enqueue_candidate(key(), due_pos(), 100);
+        (a, session, old)
+    }
+    fn write_and_emit(
+        context: &mut TickContext<'_>,
+        recipient: EventRecipient,
+    ) -> Result<(), ServerError> {
+        HOOK_CALLS.with(|calls| calls.set(calls.get() + 1));
+        let observed = context
+            .read()
+            .observation(Dimension::OVERWORLD, pos())
+            .unwrap();
+        context
+            .transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, 1).unwrap()],
+            )
+            .unwrap();
+        context.emit(RoutedEvent::new(
+            recipient,
+            Event::CommandRejected(CommandRejection::new(1, RejectReason::InvalidRay)),
+        ))
+    }
+    fn oversubscribe(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        write_and_emit(context, EventRecipient::Broadcast)?;
+        let session = context
+            .read()
+            .actors()
+            .iter()
+            .find_map(|actor| match actor.key {
+                ActorKey::Player(session) => Some(session),
+                _ => None,
+            })
+            .unwrap();
+        // Explicit trusted-hook oversubscription exceeds ordinary supported admission.
+        let envelope = CommandEnvelope::try_new(CommandEnvelopeParts {
+            tick: context.authority.next_tick,
+            session: session.get(),
+            sequence: 4097,
+            arrival_index: 4097,
+            command: Command::CloseContainer,
+        })
+        .unwrap();
+        context.defer(envelope, RulePhase::Interaction)
+    }
+    fn unwind(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        write_and_emit(context, EventRecipient::Broadcast)?;
+        panic!("intentional trusted dispatch unwind");
+    }
+    fn stale_delivery(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        write_and_emit(context, EventRecipient::Session(999_999))
+    }
+    fn success(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        write_and_emit(context, EventRecipient::Broadcast)
+    }
+    fn io_failure(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        write_and_emit(context, EventRecipient::Broadcast)?;
+        Err(ServerError::Io {
+            operation: Operation::Shutdown,
+            kind: std::io::ErrorKind::Other,
+        })
+    }
+    fn fill(a: &mut AuthorityState, session: SessionKey) {
+        for sequence in 1..=4096 {
+            a.submit(
+                session,
+                PlayIntent::Sequenced {
+                    sequence,
+                    command: Command::CloseContainer,
+                },
+            )
+            .unwrap();
+        }
+    }
+    fn old_is_immutable(old: &OwnedSnapshot) {
+        let SaveValue::ChunkView(view) = &old.value else {
+            panic!("captured chunk");
+        };
+        assert_eq!(old.revision, 9);
+        assert_eq!(view.materialize().chunk.sections[0].single, 0);
+    }
+    fn failed_facts(
+        a: &mut AuthorityState,
+        session: SessionKey,
+        old: &OwnedSnapshot,
+        tick: u64,
+        environment: &Option<EnvironmentState>,
+        error: ServerError,
+        committed: bool,
+    ) {
+        assert_eq!(
+            a.next_tick(),
+            tick,
+            "failed execution must not bump endpoint tick"
+        );
+        assert_eq!(a.phase(), ServerPhase::Closing);
+        assert_eq!(a.tick_failure(), Some(error));
+        assert_eq!(&a.residents.environment, environment);
+        assert_eq!(a.residents.ready[&key()].block(pos()), Some(1));
+        assert_eq!(
+            a.residents.ready[&key()].revision,
+            if committed { 10 } else { 9 }
+        );
+        assert_eq!(
+            a.live_chunk_facts(key()).unwrap().revision,
+            if committed { 10 } else { 9 }
+        );
+        let facts = a.live_chunk_facts(key()).unwrap();
+        let SaveValue::ChunkView(old_view) = &old.value else {
+            panic!("original capture");
+        };
+        assert_eq!(facts.generation, old_view.generation());
+        assert_eq!(
+            (
+                facts.persisted_revision,
+                facts.needs_rewrite,
+                facts.recovered
+            ),
+            (7, true, true)
+        );
+        assert_eq!(facts.phase, LiveChunkPhase::Ready);
+        assert_eq!(a.residents.dirty_chunks.contains(&key()), !committed);
+        assert!(a.commands.is_empty());
+        assert!(a.views.is_empty());
+        assert!(!a.final_consumed);
+        assert_eq!(
+            a.fluid_schedule()
+                .fluid_due(Dimension::OVERWORLD, due_pos()),
+            Some(100)
+        );
+        assert_eq!(
+            a.farmland_schedule()
+                .candidate_due(Dimension::OVERWORLD, due_pos()),
+            Some(100)
+        );
+        assert!(
+            a.capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+                .is_none()
+        );
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+        let last_metadata = a.metadata_snapshot();
+        assert_eq!(a.try_metadata_snapshot(), Err(error));
+        assert_eq!(a.metadata_snapshot(), last_metadata);
+        assert_eq!(a.replace_chunk_wants(BTreeSet::new()), Err(error));
+        assert_eq!(
+            a.sessions[&session].last_applied_sequence,
+            if committed { 0 } else { 4096 }
+        );
+        old_is_immutable(old);
+        let unchanged = a.residents.ready[&key()].revision;
+        assert_eq!(a.advance_tick(TickBudget::full()), Err(error));
+        assert_eq!(reduce_tick(a, TickBudget::full()), Err(error));
+        let mut fallback = CountingFallback(Cell::new(0));
+        assert_eq!(a.run_final(&mut fallback), Err(error));
+        assert_eq!(fallback.0.get(), 0);
+        assert_eq!(a.residents.ready[&key()].revision, unchanged);
+        assert_eq!(a.next_tick(), tick);
+        assert_eq!(
+            a.fail_tick(ServerError::Disconnected),
+            error,
+            "later failure cannot replace first error"
+        );
+        assert_eq!(a.tick_failure(), Some(error));
+        HOOK_CALLS.with(|calls| assert_eq!(calls.get(), 1));
+    }
+    #[test]
+    fn dispatch_capacity_after_partial_write_stops_tick_and_fences_new_saves() {
+        let (mut a, session, old) = fixture();
+        let selected = a
+            .select(SaveMode::All, SaveBudget::default())
+            .pop()
+            .unwrap();
+        fill(&mut a, session);
+        let tick = a.next_tick();
+        let environment = a.residents.environment.clone();
+        let _hook = HookGuard::install(oversubscribe);
+        assert_eq!(
+            a.advance_tick(TickBudget::full()),
+            Err(capacity()),
+            "hard dispatch failure must reach the caller"
+        );
+        failed_facts(&mut a, session, &old, tick, &environment, capacity(), false);
+        assert!(a.sessions[&session].outbox.is_empty());
+        assert_eq!(a.save_stats().in_flight, 1);
+        a.return_dirty(selected);
+        assert_eq!(a.save_stats().in_flight, 0);
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+    }
+    #[test]
+    fn dispatch_unwind_returns_moved_schedules_and_retains_failure() {
+        let (mut a, session, old) = fixture();
+        let selected = a
+            .select(SaveMode::All, SaveBudget::default())
+            .pop()
+            .unwrap();
+        fill(&mut a, session);
+        let tick = a.next_tick();
+        let environment = a.residents.environment.clone();
+        let _hook = HookGuard::install(unwind);
+        let error = ServerError::Internal {
+            invariant: "authoritative tick panic",
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            a.advance_tick(TickBudget::full())
+        }));
+        assert_eq!(
+            result.ok(),
+            Some(Err(error)),
+            "trusted unwind must become the retained error"
+        );
+        failed_facts(&mut a, session, &old, tick, &environment, error, false);
+        assert!(a.sessions[&session].outbox.is_empty());
+        assert_eq!(a.save_stats().in_flight, 1);
+        a.return_dirty(selected);
+        assert_eq!(a.save_stats().in_flight, 0);
+        drop(_hook);
+        let (mut healthy, _, _) = fixture();
+        healthy.advance_tick(TickBudget::full()).unwrap();
+        HOOK_CALLS.with(|calls| assert_eq!(calls.get(), 1));
+    }
+    #[test]
+    fn publication_refusal_after_commit_is_sticky_without_undo() {
+        let (mut a, session, old) = fixture();
+        let selected = a
+            .select(SaveMode::All, SaveBudget::default())
+            .pop()
+            .unwrap();
+        a.publish(TickPublication {
+            tick: 0,
+            events: vec![RoutedEvent::new(
+                EventRecipient::Broadcast,
+                Event::CommandRejected(CommandRejection::new(99, RejectReason::InvalidRay)),
+            )],
+            control: vec![],
+            counters: TickCounters::default(),
+        })
+        .unwrap();
+        let frames: Vec<_> = a.sessions[&session]
+            .outbox
+            .iter()
+            .map(|frame| frame.as_bytes().to_vec())
+            .collect();
+        let tick = a.next_tick();
+        let _hook = HookGuard::install(stale_delivery);
+        let error = ServerError::StaleSession {
+            session: SessionKey::from_raw(999_999).unwrap(),
+        };
+        assert_eq!(
+            a.advance_tick(TickBudget::full()),
+            Err(error),
+            "publication refusal must reach the caller after commit"
+        );
+        // Successful dispatch committed its environment before delivery refused.
+        let environment = a.residents.environment.clone();
+        assert_eq!(environment.as_ref().unwrap().world_time, tick + 1);
+        failed_facts(&mut a, session, &old, tick, &environment, error, true);
+        assert_eq!(
+            a.sessions[&session]
+                .outbox
+                .iter()
+                .map(|frame| frame.as_bytes().to_vec())
+                .collect::<Vec<_>>(),
+            frames
+        );
+        assert_eq!(a.save_stats().in_flight, 1);
+        // This checked completion is synthetic ownership evidence, not a disk durability claim.
+        let submitted = vec![(selected.key.clone(), selected.revision)];
+        assert_eq!(
+            a.apply_completion(SaveCompletion {
+                ticket: SaveTicket::try_from_raw(1).unwrap(),
+                snapshots: vec![selected],
+                submitted: submitted.clone(),
+                committed: submitted,
+                error: None,
+            })
+            .acked,
+            1
+        );
+        assert_eq!(a.save_stats().in_flight, 0);
+        assert_eq!(a.live_chunk_facts(key()).unwrap().persisted_revision, 9);
+        assert_eq!(a.live_chunk_facts(key()).unwrap().revision, 10);
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+    }
+    #[test]
+    fn final_real_reducer_commits_same_write_once_without_frames() {
+        let (mut a, session, old) = fixture();
+        let tick = a.next_tick();
+        let before = a.residents.environment.clone().unwrap();
+        let views = a.views.clone();
+        let _hook = HookGuard::install(success);
+        a.begin_close();
+        assert_eq!(a.run_final(&mut AuthoritativeFinalReducer), Ok(tick));
+        assert!(
+            a.sessions[&session].outbox.is_empty(),
+            "actual final execution must suppress frames"
+        );
+        assert_eq!(a.next_tick(), tick + 1);
+        let after = a.residents.environment.clone().unwrap();
+        assert_eq!(after.world_time, before.world_time + 1);
+        assert_eq!(after.next_tick, before.next_tick + 1);
+        assert_eq!(a.residents.ready[&key()].revision, 10);
+        assert_eq!(a.live_chunk_facts(key()).unwrap().revision, 10);
+        assert!(!a.residents.dirty_chunks.contains(&key()));
+        assert_eq!(a.views, views);
+        assert_eq!(
+            a.fluid_schedule()
+                .fluid_due(Dimension::OVERWORLD, due_pos()),
+            Some(100)
+        );
+        assert_eq!(
+            a.farmland_schedule()
+                .candidate_due(Dimension::OVERWORLD, due_pos()),
+            Some(100)
+        );
+        let selected = a.select(SaveMode::All, SaveBudget::default());
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].revision, 10);
+        let SaveValue::ChunkView(view) = &selected[0].value else {
+            panic!("selected body");
+        };
+        let body = view.materialize();
+        assert_eq!(
+            super::super::world::ReadyChunk::try_new(key(), 1, body.revision, body.chunk)
+                .unwrap()
+                .block(pos())
+                .unwrap(),
+            1
+        );
+        old_is_immutable(&old);
+        assert_eq!(
+            a.run_final(&mut AuthoritativeFinalReducer),
+            Err(ServerError::InvalidState {
+                phase: ServerPhase::Closing
+            })
+        );
+        assert_eq!(
+            a.advance_tick(TickBudget::full()),
+            Err(ServerError::InvalidState {
+                phase: ServerPhase::Closing
+            })
+        );
+        assert_eq!(a.next_tick(), tick + 1);
+        assert_eq!(a.residents.environment, Some(after));
+        assert_eq!(a.residents.ready[&key()].revision, 10);
+        HOOK_CALLS.with(|calls| assert_eq!(calls.get(), 1));
+    }
+    struct CountingFallback(Cell<usize>);
+    impl FinalReducer for CountingFallback {
+        fn reduce_final(&mut self, a: &mut AuthorityState) -> Result<u64, ServerError> {
+            self.0.set(self.0.get() + 1);
+            Ok(a.next_tick())
+        }
+    }
+    struct FixedClock(Instant);
+    impl Clock for FixedClock {
+        fn monotonic(&self) -> Instant {
+            self.0
+        }
+        fn unix_ms(&self) -> i64 {
+            0
+        }
+    }
+    struct ForbiddenIo;
+    impl WorkerLifecycle for ForbiddenIo {
+        fn stop_new(&mut self) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn cancel(&mut self) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn wait(&mut self, _: Deadline) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn close(&mut self, _: Deadline) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+    }
+    impl ActorPersistence for ForbiddenIo {
+        fn flush(&mut self, _: SaveKey, _: Deadline) -> Result<FlushReport, ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+    }
+    impl MemoryFinalizer for ForbiddenIo {
+        fn pending(&self) -> MemoryFinalizationReport {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn begin_attempt(&mut self, _: Deadline) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn drain(&mut self, _: Deadline) -> Result<MemoryFinalizationReport, ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+    }
+    impl StoreHandle for ForbiddenIo {
+        fn submit(&mut self, _: SaveRequest) -> Result<SaveTicket, SubmitSaveError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn poll(&mut self, _: SaveTicket) -> SavePoll {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn poll_tick(
+            &mut self,
+            _: u64,
+            _: SaveBudget,
+            _: &mut dyn SaveAuthority,
+        ) -> Result<SaveScheduleReport, ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn cancel_pending(&mut self) -> Result<Vec<OwnedSnapshot>, ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn flush(
+            &mut self,
+            _: Deadline,
+            _: &mut dyn SaveAuthority,
+            _: &dyn Clock,
+        ) -> Result<FlushReport, ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn sync(&mut self, _: Deadline) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn close(&mut self, _: Deadline) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+    }
+    impl AgentHandle for ForbiddenIo {
+        fn submit(&mut self, _: AgentRequest) -> Result<AgentRequestId, ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn poll(&mut self, _: AgentRequestId) -> AgentPoll {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn cancel(&mut self, _: AgentRequestId, _: Deadline) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn freeze(&mut self, _: &dyn Clock) -> Option<FrozenLease> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn release(&mut self, _: &FrozenLease, _: Deadline) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn close(&mut self, _: Deadline) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+    }
+    impl McpLifecycle for ForbiddenIo {
+        fn close(&mut self, _: Deadline) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+    }
+    impl SnapshotPort for ForbiddenIo {
+        fn register(
+            &mut self,
+            _: NamespaceId,
+            _: mornlea_domain::CompanionId,
+            _: u64,
+            _: PlanningSnapshot,
+            _: Deadline,
+        ) -> Result<SnapshotRegistration, ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn complete(&mut self, _: SnapshotId) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn cancel(&mut self, _: SnapshotId) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+        fn close(&mut self) -> Result<(), ServerError> {
+            panic!("unexpected post-failure shutdown I/O")
+        }
+    }
+    fn assert_no_shutdown_io(a: &mut AuthorityState, error: ServerError, scaffold: bool) {
+        let tick = a.next_tick();
+        let mut fallback = CountingFallback(Cell::new(0));
+        let (mut workers, mut actors, mut memory, mut store, mut agent, mut mcp, mut snapshots) = (
+            ForbiddenIo,
+            ForbiddenIo,
+            ForbiddenIo,
+            ForbiddenIo,
+            ForbiddenIo,
+            ForbiddenIo,
+            ForbiddenIo,
+        );
+        let clock = FixedClock(Instant::now());
+        let deadline = Deadline::at(clock.0 + Duration::from_secs(5));
+        for failed in 1..=2 {
+            let result = if scaffold {
+                a.drive_shutdown(
+                    deadline,
+                    &mut ShutdownIo {
+                        reducer: &mut fallback,
+                        workers: &mut workers,
+                        persistence: &mut actors,
+                        memory: &mut memory,
+                        store: &mut store,
+                        agent: &mut agent,
+                        mcp: &mut mcp,
+                        snapshots: &mut snapshots,
+                        clock: &clock,
+                    },
+                )
+            } else {
+                super::super::shutdown::shutdown(
+                    a,
+                    &mut super::super::shutdown::ShutdownPorts {
+                        reducer: &mut fallback,
+                        workers: &mut workers,
+                        actors: &mut actors,
+                        memory: &mut memory,
+                        store: &mut store,
+                        agent: &mut agent,
+                        mcp: &mut mcp,
+                        clock: &clock,
+                    },
+                    deadline,
+                )
+            };
+            let failure = result.unwrap_err();
+            assert_eq!(failure.error, error);
+            assert_eq!(failure.report.next, ShutdownPhase::FinalTick);
+            assert!(!failure.report.retryable);
+            assert_eq!(failure.report.completed, vec![ShutdownPhase::StopAdmission]);
+            assert_eq!(failure.report.final_tick, None);
+            assert_eq!(failure.report.failed, failed);
+            assert_eq!(failure.report.durable, 0);
+            assert_eq!(a.shutdown_progress(), failure.report);
+            assert_eq!(fallback.0.get(), 0);
+            assert_eq!(a.next_tick(), tick);
+        }
+    }
+    #[test]
+    fn actual_final_hard_error_cannot_replay_or_flush() {
+        for scaffold in [false, true] {
+            let (mut a, session, _) = fixture();
+            fill(&mut a, session);
+            let tick = a.next_tick();
+            let _hook = HookGuard::install(oversubscribe);
+            a.begin_close();
+            assert_eq!(
+                a.run_final(&mut AuthoritativeFinalReducer),
+                Err(capacity()),
+                "actual failed final must remain unconsumed"
+            );
+            assert!(!a.final_consumed);
+            assert_eq!(a.next_tick(), tick);
+            assert_no_shutdown_io(&mut a, capacity(), scaffold);
+            HOOK_CALLS.with(|calls| assert_eq!(calls.get(), 1));
+        }
+    }
+    #[test]
+    fn retained_dispatch_io_is_permanent_in_both_shutdown_machines() {
+        for scaffold in [false, true] {
+            let (mut a, _, _) = fixture();
+            let _hook = HookGuard::install(io_failure);
+            let error = ServerError::Io {
+                operation: Operation::Shutdown,
+                kind: std::io::ErrorKind::Other,
+            };
+            assert_eq!(
+                a.advance_tick(TickBudget::full()),
+                Err(error),
+                "normally transient I/O becomes a retained tick failure"
+            );
+            assert_no_shutdown_io(&mut a, error, scaffold);
+            HOOK_CALLS.with(|calls| assert_eq!(calls.get(), 1));
+        }
     }
 }

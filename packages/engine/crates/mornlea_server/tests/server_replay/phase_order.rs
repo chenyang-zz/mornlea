@@ -236,7 +236,7 @@ const DISPATCH_CHAIN: &[&str] = &[
 #[test]
 fn dispatch_chain_runs_in_frozen_order() {
     let code = step_source();
-    chain_positions(fn_body(&code, "fn reduce_tick"), WRAPPER_CHAIN);
+    chain_positions(fn_body(&code, "fn reduce_tick_inner"), WRAPPER_CHAIN);
     chain_positions(fn_body(&code, "fn drain_mailbox"), MAILBOX_CHAIN);
     chain_positions(fn_body(&code, "fn admit_command"), ADMIT_CHAIN);
     chain_positions(fn_body(&code, "fn route_interaction"), GATE_CHAIN);

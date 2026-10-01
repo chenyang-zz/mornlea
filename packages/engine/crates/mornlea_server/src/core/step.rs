@@ -4,7 +4,8 @@
 //! this reducer drains the mailbox, seeds residents and logins into the
 //! overlay, feeds every accepted provider in the frozen Go order, commits
 //! the viewer and resident overlays with retired-session pruning on the
-//! viewer leg, and publishes exactly once. The replay order suite pins the
+//! viewer leg, and delivers successful normal ticks once. Final execution
+//! uses the same engine without delivery. The replay order suite pins the
 //! dispatch call sequence per function below, so a swapped row fails loudly;
 //! keep provider call sites spelled as plain provider paths.
 //!
@@ -15,11 +16,12 @@
 //! input-acknowledgment bookkeeping before semantic control validation.
 //! A mid-tick viewer commit would be
 //! observationally void: providers read the staged overlay, and the closing
-//! commit replaces the full set. A batch failure stops later rows but never
-//! the tick itself: staged work commits, the publication reports what ran,
-//! and the mailbox accounting already holds.
+//! commit replaces the full set. A hard failure fences the authority and
+//! stops successful advancement. Accepted partial writes retain ownership
+//! without claiming whole-tick rollback or a fresh durable capture.
 
 use std::collections::BTreeSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use mornlea_domain::{
     BlockPos, ChunkPos, CommandEnvelope, CommandOrderScratch, ContainerRef, Dimension,
@@ -27,9 +29,9 @@ use mornlea_domain::{
 };
 
 use super::contracts::{
-    ActorKey, ActorLifecycle, AuthorityInteraction, ChunkKey, ContainerSlots, InteractionKind,
-    PhaseReport, RuleCall, RulePhase, ServerError, SessionKey, SessionPhase, TickBudget,
-    TickCounters, TickPublication,
+    ActorKey, ActorLifecycle, AuthorityInteraction, ChunkKey, ContainerSlots, FinalReducer,
+    InteractionKind, PhaseReport, RuleCall, RulePhase, ServerError, ServerPhase, SessionKey,
+    SessionPhase, TickBudget, TickCounters, TickPublication,
 };
 use super::publication;
 use super::state::{AuthorityState, TickContext};
@@ -66,6 +68,19 @@ const SIX_NEIGHBORS: [(i32, i32, i32); 6] = [
 
 /// One frozen provider call: the context plus its exact call record.
 type ProviderCall = fn(&mut TickContext<'_>, RuleCall<'_>) -> Result<PhaseReport, ServerError>;
+
+#[cfg(test)]
+type DispatchHook = fn(&mut TickContext<'_>) -> Result<(), ServerError>;
+
+#[cfg(test)]
+thread_local! {
+    static DISPATCH_HOOK: std::cell::Cell<Option<DispatchHook>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_dispatch_hook(hook: Option<DispatchHook>) {
+    DISPATCH_HOOK.with(|slot| slot.set(hook));
+}
 
 /// Water source through level seven, mirrored beside the farmland
 /// provider's own range.
@@ -135,13 +150,63 @@ pub fn feed_farmland_schedule(
     }
 }
 
-/// Reduces one claimed tick into its owned publication.
-///
-/// The endpoint already validated the phase and budget shape; it bumps the
-/// tick counter after this returns, so the executing tick is the current
-/// counter. A direct call without the endpoint claim repeats the current
-/// tick; the production path always goes through the endpoint delegation.
-pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublication {
+/// Executes a running tick with checked budgets, retaining any trusted failure.
+/// The endpoint advances its counter only after successful reduction.
+pub fn reduce_tick(
+    state: &mut AuthorityState,
+    budget: TickBudget,
+) -> Result<TickPublication, ServerError> {
+    reduce_tick_mode(state, budget, true)
+}
+
+/// Runs the actual full phase engine once without appending publication frames.
+/// `AuthorityState::run_final` owns the successful endpoint counter and consumption.
+pub struct AuthoritativeFinalReducer;
+
+impl FinalReducer for AuthoritativeFinalReducer {
+    fn reduce_final(&mut self, state: &mut AuthorityState) -> Result<u64, ServerError> {
+        Ok(reduce_tick_mode(state, TickBudget::full(), false)?.tick)
+    }
+}
+
+/// Validation refusals precede execution and do not poison a healthy authority.
+fn reduce_tick_mode(
+    state: &mut AuthorityState,
+    budget: TickBudget,
+    publish: bool,
+) -> Result<TickPublication, ServerError> {
+    if let Some(error) = state.tick_failure() {
+        return Err(error);
+    }
+    if state.phase() == ServerPhase::Closed || (publish && state.phase() != ServerPhase::Running) {
+        return Err(ServerError::InvalidState {
+            phase: state.phase(),
+        });
+    }
+    TickBudget::try_new(
+        budget.commands(),
+        budget.fluid_updates_per_dimension(),
+        budget.fluid_rescan_target_per_dimension(),
+        budget.farmland_checks(),
+        budget.farmland_block_reads(),
+    )?;
+    // Trusted Rust provider unwinds stop the owner; native aborts and UB are outside this boundary.
+    match catch_unwind(AssertUnwindSafe(|| {
+        reduce_tick_inner(state, budget, publish)
+    })) {
+        Ok(Ok(publication)) => Ok(publication),
+        Ok(Err(error)) => Err(state.fail_tick(error)),
+        Err(_) => Err(state.fail_tick(ServerError::Internal {
+            invariant: "authoritative tick panic",
+        })),
+    }
+}
+
+fn reduce_tick_inner(
+    state: &mut AuthorityState,
+    budget: TickBudget,
+    publish: bool,
+) -> Result<TickPublication, ServerError> {
     let tick = state.next_tick();
     let drained = drain_mailbox(state, tick, budget.commands());
     let companions = state.drain_companions(COMPANION_FEED);
@@ -158,50 +223,57 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
         farmland::FarmlandSchedule::new(),
     );
     let mut context = TickContext::for_tick(state, budget);
-    // Seeded logins land before the first provider row, so this tick's own
-    // dispatch already observes freshly joined players.
-    for seeded in logins {
-        context.stage_login(seeded);
-    }
-    context.freeze_environment(tick);
-    for action in companions {
-        context.push_companion_action(action);
-    }
-    let _ = dispatch_rows(
-        &mut context,
-        tick,
-        &drained.dispatched,
-        &mut fluid_schedule,
-        &mut farmland_schedule,
-    );
-    let overlay = context.viewer_leases();
-    // Private observations are projected after every settlement. Provider
-    // observations remain useful to fixtures but cannot publish an early pose.
-    let (hits, mut events): (Vec<_>, Vec<_>) = context
-        .events()
-        .iter()
-        .filter(|event| !matches!(event.event(), mornlea_domain::Event::PlayerState(_)))
-        .cloned()
-        .partition(|event| matches!(event.event(), mornlea_domain::Event::CombatHit(_)));
-    let counters = TickCounters {
-        executed_tick: tick,
-        commands: drained.commands,
-        fluid_by_dimension: dimension_counters(&context, |context, dimension| {
-            context.spent_fluid(dimension)
-        }),
-        rescan_by_dimension: dimension_counters(&context, |context, dimension| {
-            context.spent_rescan(dimension)
-        }),
-        farmland_checks: context.spent_farmland_checks(),
-        farmland_reads: context.spent_farmland_reads(),
-        carried: drained.carried,
-        stale: drained.stale,
-    };
-    context.commit_carried();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // Seeded logins land before the first provider row, so this tick's own
+        // dispatch already observes freshly joined players.
+        for seeded in logins {
+            context.stage_login(seeded);
+        }
+        context.freeze_environment(tick);
+        for action in companions {
+            context.push_companion_action(action);
+        }
+        dispatch_rows(
+            &mut context,
+            tick,
+            &drained.dispatched,
+            &mut fluid_schedule,
+            &mut farmland_schedule,
+        )?;
+        let overlay = context.viewer_leases();
+        // Private observations are projected after every settlement. Provider
+        // observations remain useful to fixtures but cannot publish an early pose.
+        let (hits, events): (Vec<_>, Vec<_>) = context
+            .events()
+            .iter()
+            .filter(|event| !matches!(event.event(), mornlea_domain::Event::PlayerState(_)))
+            .cloned()
+            .partition(|event| matches!(event.event(), mornlea_domain::Event::CombatHit(_)));
+        let counters = TickCounters {
+            executed_tick: tick,
+            commands: drained.commands,
+            fluid_by_dimension: dimension_counters(&context, |context, dimension| {
+                context.spent_fluid(dimension)
+            }),
+            rescan_by_dimension: dimension_counters(&context, |context, dimension| {
+                context.spent_rescan(dimension)
+            }),
+            farmland_checks: context.spent_farmland_checks(),
+            farmland_reads: context.spent_farmland_reads(),
+            carried: drained.carried,
+            stale: drained.stale,
+        };
+        context.commit_carried();
+        Ok::<_, ServerError>((overlay, hits, events, counters))
+    }));
+    // Drop returns partial resident and dirty ownership before either schedule is restored.
     drop(context);
     *state.fluid_schedule_mut() = fluid_schedule;
     *state.farmland_schedule_mut() = farmland_schedule;
-    let mut overlay = overlay;
+    let (mut overlay, hits, mut events, counters) = match result {
+        Ok(result) => result?,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
     overlay.retain(
         |key, _| matches!(state.session(*key), Some(facts) if facts.phase == SessionPhase::Active),
     );
@@ -216,10 +288,10 @@ pub fn reduce_tick(state: &mut AuthorityState, budget: TickBudget) -> TickPublic
         control: Vec::new(),
         counters,
     };
-    // Delivery never fails the tick: a stale recipient drops its frames
-    // inside the port while the returned publication keeps the events.
-    let _ = publication::publish_tick(state, publication.clone());
-    publication
+    if publish {
+        publication::publish_tick(state, publication.clone())?;
+    }
+    Ok(publication)
 }
 
 /// Mailbox-exact drain counters. Every frozen envelope is counted exactly
@@ -294,7 +366,7 @@ fn drain_mailbox(state: &mut AuthorityState, tick: u64, command_budget: usize) -
 }
 
 /// Runs every dispatch row in the frozen order. The first error stops later
-/// rows; the caller still commits and publishes. The carried schedules
+/// rows and prevents successful commit and delivery. The carried schedules
 /// arrive as locals because the context owns the authority borrow.
 #[allow(clippy::too_many_lines)]
 fn dispatch_rows(
@@ -307,6 +379,13 @@ fn dispatch_rows(
     for envelope in dispatched {
         admit_command(context, envelope)?;
     }
+    #[cfg(test)]
+    DISPATCH_HOOK.with(|slot| {
+        if let Some(hook) = slot.take() {
+            hook(context)?;
+        }
+        Ok::<(), ServerError>(())
+    })?;
     // Bed-kind internal entries are collected here for the row loop below:
     // intake owns validation and queueing while execution waits for its
     // phase, the two-phase shape Go pins (`ApplyPlayerCommands` validates
@@ -375,7 +454,7 @@ fn dispatch_rows(
     passives::run(context, batch_call(RulePhase::PassiveStepDeaths))?;
     companions::run(context, batch_call(RulePhase::CompanionPlacement))?;
     for envelope in context.deferred(RulePhase::Interaction) {
-        route_interaction(context, &envelope);
+        route_interaction(context, &envelope)?;
     }
     for interaction in context.read().interactions().to_vec() {
         if interaction.kind != InteractionKind::Door {
@@ -484,26 +563,32 @@ fn admit_command(
     envelope: &CommandEnvelope,
 ) -> Result<(), ServerError> {
     context.record_player_input(envelope);
-    let call = RuleCall {
-        phase: RulePhase::PlayerCommand,
-        actor: None,
-        command: Some(envelope),
-        internal: None,
-    };
     let admits: [ProviderCall; 4] = [
         player_motion::run,
         inventory::run,
         containers::run,
         crafting::run,
     ];
+    admit_command_with(context, envelope, admits)
+}
+
+fn admit_command_with(
+    context: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+    admits: [ProviderCall; 4],
+) -> Result<(), ServerError> {
+    let call = RuleCall {
+        phase: RulePhase::PlayerCommand,
+        actor: None,
+        command: Some(envelope),
+        internal: None,
+    };
     let mut admitted = false;
     for admit in admits {
         match admit(context, call) {
             Ok(_) => admitted = true,
-            Err(error @ (ServerError::Capacity { .. } | ServerError::Internal { .. })) => {
-                return Err(error);
-            }
-            Err(_) => {}
+            Err(ServerError::InvalidInput { .. }) => {}
+            Err(error) => return Err(error),
         }
     }
     if !admitted {
@@ -538,20 +623,33 @@ fn per_actor(
 /// it: placement and door geometry, tools and buckets, or panel drops.
 /// Refused everywhere, the envelope has no owner and drops; admission
 /// already bounded the bag.
-fn route_interaction(context: &mut TickContext<'_>, envelope: &CommandEnvelope) {
+fn route_interaction(
+    context: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+) -> Result<(), ServerError> {
+    let gates: [ProviderCall; 3] = [world_mutation::run, tools::run, drops::run];
+    route_interaction_with(context, envelope, gates)
+}
+
+fn route_interaction_with(
+    context: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+    gates: [ProviderCall; 3],
+) -> Result<(), ServerError> {
     let call = RuleCall {
         phase: RulePhase::Interaction,
         actor: None,
         command: Some(envelope),
         internal: None,
     };
-    if world_mutation::run(context, call).is_ok() {
-        return;
+    for gate in gates {
+        match gate(context, call) {
+            Ok(_) => return Ok(()),
+            Err(ServerError::InvalidInput { .. }) => {}
+            Err(error) => return Err(error),
+        }
     }
-    if tools::run(context, call).is_ok() {
-        return;
-    }
-    let _ = drops::run(context, call);
+    Ok(())
 }
 
 /// Settles one authority-owned door toggle through placement geometry. A
@@ -685,4 +783,171 @@ fn dimension_counters(
         }
     }
     counters
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::super::contracts::{Resource, ServerLimits};
+    use super::*;
+    use mornlea_domain::{Command, CommandEnvelopeParts};
+    use std::cell::RefCell;
+    thread_local! {
+        static CALLS: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        static FIRST: std::cell::Cell<Result<(),ServerError>> = const { std::cell::Cell::new(Ok(())) };
+        static SECOND: std::cell::Cell<Result<(),ServerError>> = const { std::cell::Cell::new(Ok(())) };
+    }
+    fn report() -> PhaseReport {
+        PhaseReport {
+            examined: 1,
+            applied: 0,
+            carried: 0,
+            rejected: 0,
+        }
+    }
+    fn first(_: &mut TickContext<'_>, _: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
+        CALLS.with(|c| c.borrow_mut().push(1));
+        FIRST.with(|r| r.get().map(|()| report()))
+    }
+    fn second(_: &mut TickContext<'_>, _: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
+        CALLS.with(|c| c.borrow_mut().push(2));
+        SECOND.with(|r| r.get().map(|()| report()))
+    }
+    fn third(_: &mut TickContext<'_>, _: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
+        CALLS.with(|c| c.borrow_mut().push(3));
+        Ok(report())
+    }
+    fn fourth(_: &mut TickContext<'_>, _: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
+        CALLS.with(|c| c.borrow_mut().push(4));
+        Ok(report())
+    }
+    fn invalid(_: &mut TickContext<'_>, _: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
+        Err(ServerError::InvalidInput { field: "gate" })
+    }
+    fn reset(result: Result<(), ServerError>) {
+        CALLS.with(|c| c.borrow_mut().clear());
+        FIRST.with(|r| r.set(result));
+        SECOND.with(|r| r.set(Ok(())));
+    }
+    fn calls(expected: &[u8]) {
+        CALLS.with(|c| assert_eq!(&*c.borrow(), expected));
+    }
+    fn fixture() -> (AuthorityState, CommandEnvelope) {
+        let mut a = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap();
+        let id = mornlea_domain::PlayerId::try_from_bytes([
+            1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1,
+        ])
+        .unwrap();
+        let start = mornlea_protocol::LoginStart::new(id, "Ada", 8).unwrap();
+        let session = a
+            .admit(
+                mornlea_protocol::admit_login(
+                    mornlea_protocol::LoginStart::decode_inbound(&start.encode().unwrap()).unwrap(),
+                )
+                .unwrap(),
+                super::super::contracts::TransportKind::Memory,
+            )
+            .unwrap();
+        let envelope = CommandEnvelope::try_new(CommandEnvelopeParts {
+            tick: 0,
+            session: session.get(),
+            sequence: 1,
+            arrival_index: 0,
+            command: Command::CloseContainer,
+        })
+        .unwrap();
+        (a, envelope)
+    }
+    #[test]
+    fn invalid_input_reaches_next_gate_and_unowned_admission_defers() {
+        let (mut a, envelope) = fixture();
+        let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+        reset(Err(ServerError::InvalidInput { field: "gate" }));
+        assert_eq!(
+            route_interaction_with(&mut context, &envelope, [first, second, third]),
+            Ok(())
+        );
+        calls(&[1, 2]);
+        reset(Err(ServerError::InvalidInput { field: "gate" }));
+        assert_eq!(
+            admit_command_with(&mut context, &envelope, [first, second, third, fourth]),
+            Ok(())
+        );
+        calls(&[1, 2, 3, 4]);
+        assert_eq!(
+            admit_command_with(&mut context, &envelope, [invalid; 4]),
+            Ok(())
+        );
+        let deferred_phase = RulePhase::Interaction;
+        assert_eq!(context.deferred(deferred_phase), vec![envelope]);
+        assert_eq!(
+            route_interaction_with(&mut context, &envelope, [invalid; 3]),
+            Ok(())
+        );
+        assert!(context.events().is_empty());
+    }
+    #[test]
+    fn hard_gate_errors_stop_every_later_admission_and_route() {
+        let errors = [
+            ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: 4096,
+                observed: 4097,
+            },
+            ServerError::Internal {
+                invariant: "injected gate",
+            },
+            ServerError::Disconnected,
+            ServerError::StaleSession {
+                session: SessionKey::from_raw(999_999).unwrap(),
+            },
+        ];
+        let (mut a, envelope) = fixture();
+        let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+        for error in errors {
+            reset(Err(error));
+            assert_eq!(
+                admit_command_with(&mut context, &envelope, [first, second, third, fourth]),
+                Err(error),
+                "every hard admission error propagates"
+            );
+            calls(&[1]);
+            reset(Err(error));
+            assert_eq!(
+                route_interaction_with(&mut context, &envelope, [first, second, third]),
+                Err(error),
+                "every hard route error propagates"
+            );
+            calls(&[1]);
+        }
+    }
+    #[test]
+    fn routing_ok_owns_once_while_admission_ok_keeps_all_roles() {
+        let (mut a, envelope) = fixture();
+        let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+        reset(Ok(()));
+        assert_eq!(
+            route_interaction_with(&mut context, &envelope, [first, second, third]),
+            Ok(())
+        );
+        calls(&[1]);
+        reset(Ok(()));
+        assert_eq!(
+            admit_command_with(&mut context, &envelope, [first, second, third, fourth]),
+            Ok(())
+        );
+        calls(&[1, 2, 3, 4]);
+        reset(Ok(()));
+        let error = ServerError::Disconnected;
+        SECOND.with(|r| r.set(Err(error)));
+        assert_eq!(
+            admit_command_with(&mut context, &envelope, [first, second, third, fourth]),
+            Err(error),
+            "later hard error stops remaining roles"
+        );
+        calls(&[1, 2]);
+    }
 }

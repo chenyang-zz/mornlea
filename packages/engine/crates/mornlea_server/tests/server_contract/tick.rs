@@ -45,7 +45,7 @@ fn full() -> TickBudget {
 #[test]
 fn empty_dispatch_runs_no_provider_with_empty_publication() {
     let mut state = authority();
-    let publication = reduce_tick(&mut state, full());
+    let publication = reduce_tick(&mut state, full()).unwrap();
     assert_eq!(publication.tick, 0, "the first tick executes");
     assert!(publication.events.is_empty(), "no provider runs");
     assert!(
@@ -73,7 +73,7 @@ fn retired_session_commands_drop_stale_never_carried() {
     state
         .close_session(key, mornlea_server::contracts::CloseReason::PeerGone)
         .unwrap();
-    let publication = reduce_tick(&mut state, full());
+    let publication = reduce_tick(&mut state, full()).unwrap();
     assert_eq!(publication.counters.commands, 2, "both envelopes drain");
     assert_eq!(publication.counters.stale, 2, "retired commands drop stale");
     assert_eq!(publication.counters.carried, 0);
@@ -82,7 +82,7 @@ fn retired_session_commands_drop_stale_never_carried() {
         "a retired session executes nothing"
     );
     // A retired session never returns: the next tick drains nothing.
-    let again = reduce_tick(&mut state, full());
+    let again = reduce_tick(&mut state, full()).unwrap();
     assert_eq!(again.counters.commands, 0);
     assert_eq!(again.counters.stale, 0);
 }
@@ -96,7 +96,7 @@ fn stale_batch_ordering_counts_duplicates() {
     for sequence in [9u64, 9, 8] {
         state.submit(key, sequenced(sequence)).unwrap();
     }
-    let publication = reduce_tick(&mut state, full());
+    let publication = reduce_tick(&mut state, full()).unwrap();
     assert_eq!(
         publication.counters.commands, 3,
         "every envelope drains once"
@@ -206,4 +206,46 @@ fn future_dues_fire_next_tick() {
             .pending_candidates(Dimension::OVERWORLD),
         0
     );
+}
+
+#[test]
+fn actual_final_reduces_accepted_commands_once_without_publication() {
+    use mornlea_server::contracts::{ServerError, ServerPhase};
+    use mornlea_server::core::step::AuthoritativeFinalReducer;
+    let mut state = authority();
+    let key = state
+        .prepare(login(25, "Final"), TransportKind::Memory)
+        .unwrap();
+    state.install(key, None).unwrap();
+    state.activate(key).unwrap();
+    state.advance_tick(full()).unwrap();
+    state.take_outbox(key, 512, usize::MAX).unwrap();
+    state.submit(key, sequenced(7)).unwrap();
+    let tick = state.next_tick();
+    let before = state.residents().environment.unwrap();
+    state.begin_close();
+    assert_eq!(state.run_final(&mut AuthoritativeFinalReducer), Ok(tick));
+    assert!(
+        state.take_outbox(key, 512, usize::MAX).unwrap().is_empty(),
+        "final engine appends no frames"
+    );
+    assert_eq!(state.session(key).unwrap().last_applied_sequence, 7);
+    assert_eq!(state.next_tick(), tick + 1);
+    let after = state.residents().environment.unwrap();
+    assert_eq!(after.world_time, before.world_time + 1);
+    assert_eq!(after.next_tick, before.next_tick + 1);
+    assert_eq!(
+        state.run_final(&mut AuthoritativeFinalReducer),
+        Err(ServerError::InvalidState {
+            phase: ServerPhase::Closing
+        })
+    );
+    assert_eq!(
+        state.advance_tick(full()),
+        Err(ServerError::InvalidState {
+            phase: ServerPhase::Closing
+        })
+    );
+    assert_eq!(state.next_tick(), tick + 1);
+    assert_eq!(state.residents().environment, Some(after));
 }
