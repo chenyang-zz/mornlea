@@ -134,6 +134,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9l4 Drive actual TCP receive progress through asynchronous login readiness ([packet](plans/71-prepared-tcp-receive-progress.md)).
 - [x] 3.9l5 Mint distinct admitted identities in actual two-container-viewer fixtures ([packet](plans/75-distinct-container-viewer-fixture.md)).
 - [x] 3.9l6 Recognize EOF or peer reset as control connection retirement without accepting a timeout ([packet](plans/82-control-retirement-fixture.md)).
+- [ ] 3.9l7 Count retained semantic and cancellation-join memory obligations after timeout ([packet](plans/85-memory-timeout-obligation-fixture.md)).
 
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.
