@@ -1808,3 +1808,5 @@ Placement target collision accepted after cumulative death node against support2
 ## Bounded compound undo qualified, 2026-10-01
 
 - Read-only mutation audit enumerated every actual apply arm, initial-preimage/ordinal hazards and the existing two direct defensive rollback cases. Root freezes packet53's touched-key journal and separate4096 aggregate writes/captures/basis ceilings before implementation. Existing public cumulative rehearsals and deferred fixed-slot publication stay intact; Runtime path payload and historical actor search bounds are explicitly outside this acceptance. Packet53 waits for accepted packet52 and serially owns the same state/world paths. Architecture skill: no change.
+
+- Packet52 integration scope ruling: verified four replay E0499 borrow-lifetime failures caused by its required Drop ownership recovery. Root expands only two existing replay topic files for four explicit drops at old harness last-use, retaining every assertion. Worker cannot alter architecture or unrelated tests; full replay/clippy repeated before handoff.
