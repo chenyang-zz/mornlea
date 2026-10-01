@@ -109,6 +109,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7l3mp Integrate managed collision reads in all four actual native actor-grid producers ([packet](plans/88-live-collision-actor-adapters.md)).
 - [x] 3.7l3cx Land checked in-place source player context reset ownership ([packet](plans/89-source-player-context-reset.md)).
 - [x] 3.7l3r Recover active source players and restart captured scans before native motion ([packet](plans/90-active-player-recovery.md)).
+- [ ] 3.7l3dc Land bounded prepared source player death settlement and live-bed restart payload ([packet](plans/91-source-player-death-context.md)).
 - [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
 - [x] 3.7r0 Move resident ownership through live ticks and finalize changed chunks only ([packet](plans/52-owned-resident-tick.md)).
 - [x] 3.7r1 Bound defensive compound rollback to touched resident keys ([packet](plans/53-bounded-compound-undo.md)).
