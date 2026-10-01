@@ -504,7 +504,8 @@ impl AcquisitionState {
             self.dirty.insert(key);
             self.dirty_bytes += bytes;
             if r.estimate.is_none() {
-                r.error = Some(ServerError::Internal {
+                // Preserve a specific refusal when its invalid estimate is retained.
+                r.error.get_or_insert(ServerError::Internal {
                     invariant: "chunk payload estimate",
                 });
             } else if !self.flights.contains_key(&key) {

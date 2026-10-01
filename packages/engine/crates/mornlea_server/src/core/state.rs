@@ -6293,6 +6293,61 @@ mod live_acquisition_tests {
         assert!(a.live_chunk_facts(key()).unwrap().recovered);
     }
     #[test]
+    fn live_save_defensive_capture_correlation_preserves_identity_refusal() {
+        let mut a = save_authority(1, 1);
+        let facts = a.live_chunk_facts(key()).unwrap();
+        let SaveValue::ChunkView(before) = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap()
+            .value
+        else {
+            panic!("immutable resident view");
+        };
+        // Defensive correlation evidence: the private cache contradicts a real
+        // capture; ordinary checked source commits keep these values aligned.
+        a.acquisition
+            .committed(key(), facts.generation, facts.revision, Some(6164));
+        world::reset_payload_work();
+        world::reset_ready_clones();
+        world::reset_materializations();
+        assert!(a.select(SaveMode::All, SaveBudget::default()).is_empty());
+        assert_eq!(
+            (
+                world::payload_work(),
+                world::ready_clones(),
+                world::materializations()
+            ),
+            ((0, 0, 0, 0), 0, 0)
+        );
+        assert_eq!(a.live_chunk_facts(key()), Some(facts));
+        assert_eq!(
+            a.save_stats(),
+            SaveStats {
+                dirty: 1,
+                in_flight: 0,
+                estimated_unsaved_bytes: crate::store::mailbox::CHUNK_MAX_RESERVATION,
+            }
+        );
+        assert_eq!(a.acquisition.ownership_counts().0, 1);
+        assert_eq!(a.freeze().save_keys, vec![SaveKey::Chunk(key())]);
+        let SaveValue::ChunkView(after) = a
+            .capture_chunk_snapshot(key(), SaveUrgency::Autosave)
+            .unwrap()
+            .value
+        else {
+            panic!("retained resident view");
+        };
+        assert_eq!(after.materialize(), before.materialize());
+        let original = ServerError::Internal {
+            invariant: "chunk save identity",
+        };
+        assert_eq!(a.live_chunk_error(key()), Some(&original));
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        assert!(a.select(SaveMode::Urgent, SaveBudget::default()).is_empty());
+        assert_eq!(a.live_chunk_error(key()), Some(&original));
+        assert_eq!(a.save_stats().in_flight, 0);
+    }
+    #[test]
     fn live_save_invalid_private_estimate_is_conservative_and_never_eligible() {
         let mut a = save_authority(1, 1);
         let r = a.residents.ready.get_mut(&key()).unwrap();
