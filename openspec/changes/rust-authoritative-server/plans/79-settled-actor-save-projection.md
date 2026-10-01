@@ -6,7 +6,7 @@
 
 **Architecture:** A small pure module borrows one actor and its fixed inventory/runtime records. It writes no authority, filesystem or queue and chooses no lifecycle/persistability/revision policy. Its checked outputs are qualified independently before a later live target owner captures/retains/ACKs them or composes runtime flush. Existing storage types are the stable accepted boundary; no new public port is needed.
 
-**Tech stack:** Pinned Rust1.97.1, existing ActorRecord/InventoryRecord/ActorRuntime and storage codecs. **Spec:** ../design.md and ../specs/rust-authoritative-server/spec.md. Source facts /workspace/scratch/actor-persistence-source-trace.log and sealed Go d042982d33bb1694d768b75b01c297bd02534a08. Serial guide/module dispatch follows accepted78 source and root acceptance baseline, recorded before implementation. No planned-only types are consumed.
+**Tech stack:** Pinned Rust1.97.1, existing ActorRecord/InventoryRecord/ActorRuntime and storage codecs. **Spec:** ../design.md and ../specs/rust-authoritative-server/spec.md. Source facts /workspace/scratch/actor-persistence-source-trace.log and sealed Go d042982d33bb1694d768b75b01c297bd02534a08. Accepted78 source48f621885f270252d06561375049e4238d51d13c is the serial guide/module predecessor; the controller supplies its acceptance baseline at dispatch. No planned-only types are consumed.
 
 ## Exact files and exclusions
 
