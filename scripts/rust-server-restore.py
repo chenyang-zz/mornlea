@@ -71,6 +71,13 @@ def _directory(path: Path, code: str = "restore_failed"):
     return info
 
 
+def _canonical(path: Path) -> bool:
+    try:
+        return path.is_absolute() and path.resolve() == path
+    except (OSError, RuntimeError):
+        return False
+
+
 def _id(info) -> str:
     return f"{info.st_dev}:{info.st_ino}"
 
@@ -202,7 +209,7 @@ def _restore(manifest_path: Path, world: Path, backup: Path, nonce: str, *,
     try:
         paths = (manifest_path, world, backup)
         for path in paths:
-            if not path.is_absolute() or path.resolve() != path:
+            if not _canonical(path):
                 _refuse("invalid_manifest", "managed paths must be canonical without symlink aliases")
         run = manifest_path.parent
         _directory(run, "invalid_manifest")
@@ -210,13 +217,20 @@ def _restore(manifest_path: Path, world: Path, backup: Path, nonce: str, *,
                            Path("/var/tmp").resolve())
         if not any(run != root and run.is_relative_to(root) for root in temporary_roots):
             _refuse("invalid_manifest", "run directory escapes temporary roots")
-        if (world == run or backup == run or not world.is_relative_to(run)
-                or not backup.is_relative_to(run) or world.is_relative_to(backup)
-                or backup.is_relative_to(world) or manifest_path.is_relative_to(world)
-                or manifest_path.is_relative_to(backup)):
-            _refuse("invalid_manifest", "managed restore trees overlap or escape the run directory")
         if re.fullmatch(r"[0-9a-f]{32}", nonce) is None:
             _refuse("invalid_manifest", "invalid restore nonce")
+        staged = Path(f"{world}.restore.{nonce}")
+        retired = Path(f"{world}.retired.{nonce}")
+        roots = (world, backup, staged, retired)
+        # Cleanup may delete a complete private sibling. Qualify every root
+        # pair before touching one so an imported backup cannot alias cleanup.
+        for index, root in enumerate(roots):
+            if (not _canonical(root) or root == run or not root.is_relative_to(run)
+                    or manifest_path.is_relative_to(root)):
+                _refuse("invalid_manifest", "restore root aliases, contains the manifest or escapes the run directory")
+            for other in roots[index + 1:]:
+                if root.is_relative_to(other) or other.is_relative_to(root):
+                    _refuse("invalid_manifest", "managed restore roots overlap")
         manifest = _json(manifest_path, CHUNK, "invalid_manifest")
         if (manifest.get("schema_version") != 1 or manifest.get("world_path") != str(world)
                 or manifest.get("backup_path") != str(backup)
@@ -241,10 +255,8 @@ def _restore(manifest_path: Path, world: Path, backup: Path, nonce: str, *,
             _refuse("backup_mismatch", str(error))
         except Refusal as error:
             _refuse("backup_mismatch", str(error))
-        staged = Path(f"{world}.restore.{nonce}")
-        retired = Path(f"{world}.retired.{nonce}")
         for path in (world, staged, retired):
-            if path.resolve() != path:
+            if not _canonical(path):
                 _refuse("invalid_manifest", "restore sibling is a symlink alias")
             if path.exists():
                 _directory(path, "invalid_manifest")
@@ -355,21 +367,35 @@ def _restore(manifest_path: Path, world: Path, backup: Path, nonce: str, *,
             _sync(manifest_path.parent)
             observe("installed")
             return retired
+        normalize_legacy_stage = False
         if missing_current:
-            # Historical retire-first crashes return the original owner to the
-            # canonical name before using the continuous-presence algorithm.
+            # Publish the original role before returning its canonical name.
+            # A crash before the following barrier can then qualify that exact
+            # directory again without adopting a foreign recreated world.
             if original_id is not None:
                 role(retired, original_id, original_hash)
             else:
-                _entries(retired)
+                original_id = _id(_directory(retired))
+                original_hash = _tree(retired)
+                lease(retired)
             protect_stage()
             if staged.exists() and _tree(staged, backup=True) != backup_hash:
                 _refuse("restore_failed", "legacy staged copy differs from backup")
+            manifest.update(restore_stage="old_retired", restore_directory_identity=original_id,
+                            restore_original_tree_sha256=original_hash)
+            _publish(manifest_path, manifest)
             native.rename(retired, world, exchange=False)
+            observe("legacy_returned")
             _sync(world.parent)
             stage = "staged"
+            normalize_legacy_stage = True
         elif stage == "old_retired":
-            _refuse("restore_failed", "legacy retired and current worlds collide")
+            if retired.exists() or original_id is None:
+                _refuse("restore_failed", "legacy current world is collided or unqualified")
+            role(world, original_id, original_hash)
+            _sync(world.parent)
+            stage = "staged"
+            normalize_legacy_stage = True
         if stage is None:
             if retired.exists():
                 _refuse("restore_failed", "fresh restore has an existing retired world")
@@ -380,13 +406,16 @@ def _restore(manifest_path: Path, world: Path, backup: Path, nonce: str, *,
             _copy(backup, staged)
             original_id = original_hash = None
             stage = "staged"
-        if stage == "staged" and original_id is None:
+        if stage == "staged" and (original_id is None or normalize_legacy_stage):
             if retired.exists():
                 _refuse("restore_failed", "legacy current and retired worlds collide")
-            original_id = _id(_directory(world))
-            original_hash = _tree(world)
+            if original_id is None:
+                original_id = _id(_directory(world))
+                original_hash = _tree(world)
+            else:
+                role(world, original_id, original_hash)
             if not staged.exists():
-                if not missing_current:
+                if not normalize_legacy_stage:
                     _refuse("restore_failed", "staged copy vanished")
                 _copy(backup, staged)
             if _tree(staged, backup=True) != backup_hash:

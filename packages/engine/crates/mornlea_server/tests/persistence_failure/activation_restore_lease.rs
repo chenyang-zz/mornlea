@@ -23,6 +23,23 @@ fn inode(path: &Path) -> (u64, u64) {
     (info.dev(), info.ino())
 }
 
+/// End semantic ownership explicitly so an unrelated fork's inherited file
+/// description cannot keep a released test guard locked until its exec.
+fn release_guard(mut guard: WorldLease) {
+    guard.release().expect("release owned native test lease");
+    drop(guard);
+}
+
+fn lease_refuses(root: &Path) -> bool {
+    match WorldLease::acquire(root) {
+        Err(_) => true,
+        Ok(guard) => {
+            release_guard(guard);
+            false
+        }
+    }
+}
+
 fn go_refuses(scope: &Scope, world: &Path) {
     let log_path = scope.path("refused-go.log");
     let log = File::create(&log_path).expect("refusal log");
@@ -82,8 +99,8 @@ fn held_real_world_lease_refuses_exact_restore_wrapper_without_mutation() {
     assert!(!PathBuf::from(format!("{}.restore.{nonce}", world.display())).exists());
     assert!(!PathBuf::from(format!("{}.retired.{nonce}", world.display())).exists());
     go_refuses(&scope, &world);
-    drop(owner);
-    WorldLease::acquire(&world).expect("lease releases after caller drops it");
+    release_guard(owner);
+    release_guard(WorldLease::acquire(&world).expect("lease releases after checked owner release"));
 }
 
 struct RestoreFixture {
@@ -149,8 +166,8 @@ impl RestoreFixture {
         );
         assert!(!self.sibling("restore").exists());
         let guard = WorldLease::acquire(&self.world).expect("completed helper released its lease");
-        assert!(WorldLease::acquire(&self.sibling("retired")).is_err());
-        drop(guard);
+        assert!(lease_refuses(&self.sibling("retired")));
+        release_guard(guard);
     }
 
     fn actual_restart(&self) {
@@ -182,7 +199,7 @@ impl RestoreFixture {
         )
         .expect("actual previous Go admits original identity");
         assert_eq!(seed, self.seed);
-        assert!(WorldLease::acquire(&self.world).is_err());
+        assert!(lease_refuses(&self.world));
         stop_previous(&record);
     }
 }
@@ -197,6 +214,9 @@ struct HelperChild {
 impl HelperChild {
     fn paused(fixture: &RestoreFixture, selected: &str) -> Self {
         let marker = fixture.scope.path("restore-boundary");
+        if marker.exists() {
+            fs::remove_file(&marker).expect("clear prior collected helper boundary");
+        }
         let log = fixture.scope.path("restore-helper.log");
         let handle = File::create(&log).expect("helper log");
         let source = r#"
@@ -312,7 +332,7 @@ fn actual_boundaries_hold_one_inode_against_rust_and_previous_go() {
             if root.exists() {
                 assert_eq!(inode(&root.join(LOCK_BASENAME)), fixture.lock);
                 assert!(
-                    WorldLease::acquire(root).is_err(),
+                    lease_refuses(root),
                     "Rust refuses {boundary} at {}",
                     root.display()
                 );
@@ -356,7 +376,9 @@ fn kill_after_exact_exchange_or_retirement_resumes_with_directory_roles_even_for
             assert_ne!(inode(&fixture.world), fixture.directory);
             assert_eq!(inode(&fixture.world.join(LOCK_BASENAME)), fixture.lock);
             helper.kill_collect();
-            drop(WorldLease::acquire(&fixture.world).expect("kill releases native helper lock"));
+            release_guard(
+                WorldLease::acquire(&fixture.world).expect("kill releases native helper lock"),
+            );
             let (code, output) = restore(
                 &fixture.scope,
                 &fixture.manifest,
@@ -406,7 +428,7 @@ fn installed_restore_is_idempotent_and_rejects_a_live_owner_through_each_alias()
         assert_ne!(code, 0);
         assert!(output.contains("FAIL writer_live"), "{output}");
         assert_eq!(fs::read(&fixture.manifest).unwrap(), before);
-        drop(guard);
+        release_guard(guard);
     }
 }
 
@@ -487,7 +509,9 @@ fn native_unavailable_copy_failure_and_barrier_failure_keep_real_artifacts() {
         assert_eq!(tree_hash(&fixture.backup, &[LOCK_BASENAME]), backup);
         assert_eq!(fixture.sibling("restore").exists(), artifacts);
         assert!(!fixture.sibling("retired").exists());
-        drop(WorldLease::acquire(&fixture.world).expect("typed refusal releases actual lease"));
+        release_guard(
+            WorldLease::acquire(&fixture.world).expect("typed refusal releases actual lease"),
+        );
     }
 }
 
@@ -615,7 +639,7 @@ fn stale_and_legacy_copied_stage_locks_are_guarded_before_deletion_or_rebinding(
         assert_eq!(tree_hash(&staged, &[LOCK_BASENAME]), stage_before);
         assert_eq!(inode(&fixture.world), fixture.directory);
         assert!(!fixture.sibling("retired").exists());
-        drop(guard);
+        release_guard(guard);
         let (code, output) = restore(
             &fixture.scope,
             &fixture.manifest,
@@ -799,11 +823,13 @@ fn secondary_copied_stage_descriptor_remains_held_until_installed_boundary_retur
         let mut helper = HelperChild::paused(&fixture, "installed");
         assert_ne!(copied_inode, fixture.lock);
         assert!(
-            WorldLease::acquire(&alias).is_err(),
+            lease_refuses(&alias),
             "deleted copied inode remains guarded through publication"
         );
         helper.resume();
-        drop(WorldLease::acquire(&alias).expect("secondary guard releases only at attempt end"));
+        release_guard(
+            WorldLease::acquire(&alias).expect("secondary guard releases only at attempt end"),
+        );
         fixture.assert_installed();
     }
 }
@@ -867,4 +893,335 @@ module._sync = refused_parent
         0
     );
     fixture.assert_installed();
+}
+
+#[test]
+fn backup_overlapping_restore_siblings_refuses_without_deleting_verified_source() {
+    for (kind, descendant) in [
+        ("restore", false),
+        ("restore", true),
+        ("retired", false),
+        ("retired", true),
+    ] {
+        let mut fixture = RestoreFixture::new("overlap", false);
+        let sibling = fixture.sibling(kind);
+        let target = if descendant {
+            fs::create_dir(&sibling).unwrap();
+            sibling.join("retained-backup")
+        } else {
+            sibling.clone()
+        };
+        fs::rename(&fixture.backup, &target)
+            .expect("move actual verified Go backup into overlap fixture");
+        fixture.backup = target;
+        set_manifest_field(
+            &fixture.manifest,
+            "backup_path",
+            serde_json::json!(fixture.backup),
+        );
+        let backup_tree = tree_hash(&fixture.backup, &[]);
+        let identity = fs::read(fixture.backup.join(BACKUP_IDENTITY_BASENAME)).unwrap();
+        let backup_directory = inode(&fixture.backup);
+        let current = tree_hash(&fixture.world, &[]);
+        let before = fs::read(&fixture.manifest).unwrap();
+        let roots = [
+            &fixture.world,
+            &fixture.backup,
+            &fixture.sibling("restore"),
+            &fixture.sibling("retired"),
+        ];
+        let physical: Vec<_> = roots
+            .iter()
+            .map(|root| root.exists().then(|| (inode(root), tree_hash(root, &[]))))
+            .collect();
+        let (code, output) = restore(
+            &fixture.scope,
+            &fixture.manifest,
+            &fixture.world,
+            &fixture.backup,
+        );
+        assert!(
+            fixture.backup.is_dir(),
+            "verified backup survives overlap refusal: {output}"
+        );
+        assert_eq!(inode(&fixture.backup), backup_directory);
+        assert_eq!(tree_hash(&fixture.backup, &[]), backup_tree);
+        assert_eq!(
+            fs::read(fixture.backup.join(BACKUP_IDENTITY_BASENAME)).unwrap(),
+            identity
+        );
+        assert_eq!(inode(&fixture.world), fixture.directory);
+        assert_eq!(inode(&fixture.world.join(LOCK_BASENAME)), fixture.lock);
+        assert_eq!(tree_hash(&fixture.world, &[]), current);
+        assert_eq!(fs::read(&fixture.manifest).unwrap(), before);
+        for (root, state) in roots.iter().zip(physical) {
+            assert_eq!(
+                root.exists().then(|| (inode(root), tree_hash(root, &[]))),
+                state
+            );
+        }
+        assert_ne!(code, 0);
+        assert!(
+            output.contains("FAIL invalid_manifest"),
+            "{kind}/{descendant}: {output}"
+        );
+    }
+}
+
+fn prepare_legacy_return(fixture: &RestoreFixture, staged_copy: bool) {
+    if staged_copy {
+        copy_dir(&fixture.backup, &fixture.sibling("restore"));
+    }
+    fs::rename(&fixture.world, fixture.sibling("retired")).unwrap();
+    set_manifest_field(
+        &fixture.manifest,
+        "restore_stage",
+        serde_json::json!("old_retired"),
+    );
+}
+
+#[test]
+fn legacy_return_sync_refusal_recovers_through_actual_cli_with_or_without_staging() {
+    for staged_copy in [false, true] {
+        for equal in [false, true] {
+            let fixture = RestoreFixture::new("legacy-barrier", equal);
+            let original = tree_hash(&fixture.world, &[LOCK_BASENAME]);
+            let backup = tree_hash(&fixture.backup, &[]);
+            prepare_legacy_return(&fixture, staged_copy);
+            let (code, output) = constructor(
+                &fixture,
+                r#"
+real_sync = module._sync
+world = pathlib.Path(sys.argv[3])
+retired = pathlib.Path(str(world) + '.retired.' + sys.argv[5])
+def failed_return_barrier(path):
+    if path == world.parent and world.exists() and not retired.exists():
+        raise OSError('typed injected legacy return directory barrier failure')
+    real_sync(path)
+module._sync = failed_return_barrier
+"#,
+            );
+            assert_ne!(code, 0);
+            assert!(output.contains("FAIL restore_failed"), "{output}");
+            assert_eq!(inode(&fixture.world), fixture.directory);
+            assert_eq!(inode(&fixture.world.join(LOCK_BASENAME)), fixture.lock);
+            assert_eq!(tree_hash(&fixture.world, &[LOCK_BASENAME]), original);
+            assert_eq!(tree_hash(&fixture.backup, &[]), backup);
+            assert!(!fixture.sibling("retired").exists());
+            let checkpoint = read_manifest(&fixture.manifest);
+            assert_eq!(checkpoint["restore_stage"], "old_retired");
+            release_guard(
+                WorldLease::acquire(&fixture.world).expect("typed failure releases original guard"),
+            );
+            let (code, output) = restore(
+                &fixture.scope,
+                &fixture.manifest,
+                &fixture.world,
+                &fixture.backup,
+            );
+            assert_eq!(
+                code, 0,
+                "ordinary CLI resumes real returned legacy original after sync refusal: {output}"
+            );
+            assert_eq!(
+                checkpoint["restore_directory_identity"],
+                format!("{}:{}", fixture.directory.0, fixture.directory.1)
+            );
+            assert_eq!(checkpoint["restore_original_tree_sha256"], original);
+            fixture.assert_installed();
+            assert_eq!(tree_hash(&fixture.backup, &[]), backup);
+            fixture.actual_restart();
+        }
+    }
+}
+
+#[test]
+fn kill_at_actual_legacy_return_resumes_prequalified_original_and_normalizes_staging() {
+    for staged_copy in [false, true] {
+        for equal in [false, true] {
+            let fixture = RestoreFixture::new("legacy-return-kill", equal);
+            let original = tree_hash(&fixture.world, &[LOCK_BASENAME]);
+            let backup = tree_hash(&fixture.backup, &[]);
+            if equal {
+                assert_eq!(
+                    original,
+                    tree_hash(&fixture.backup, &[LOCK_BASENAME, BACKUP_IDENTITY_BASENAME])
+                );
+            }
+            prepare_legacy_return(&fixture, staged_copy);
+            let mut helper = HelperChild::paused(&fixture, "legacy_returned");
+            let checkpoint = read_manifest(&fixture.manifest);
+            assert_eq!(checkpoint["restore_stage"], "old_retired");
+            assert_eq!(
+                checkpoint["restore_directory_identity"],
+                format!("{}:{}", fixture.directory.0, fixture.directory.1)
+            );
+            assert_eq!(checkpoint["restore_original_tree_sha256"], original);
+            assert_eq!(inode(&fixture.world), fixture.directory);
+            assert_eq!(inode(&fixture.world.join(LOCK_BASENAME)), fixture.lock);
+            assert!(!fixture.sibling("retired").exists());
+            assert!(lease_refuses(&fixture.world));
+            go_refuses(&fixture.scope, &fixture.world);
+            if staged_copy {
+                assert!(fixture.sibling("restore").is_dir());
+                assert!(lease_refuses(&fixture.sibling("restore")));
+                go_refuses(&fixture.scope, &fixture.sibling("restore"));
+            } else {
+                assert!(!fixture.sibling("restore").exists());
+            }
+            helper.kill_collect();
+            release_guard(
+                WorldLease::acquire(&fixture.world)
+                    .expect("collected helper releases original lease"),
+            );
+            if staged_copy {
+                release_guard(
+                    WorldLease::acquire(&fixture.sibling("restore"))
+                        .expect("collected helper releases copied stage lease"),
+                );
+            }
+            let mut resumed = HelperChild::paused(&fixture, "staged");
+            let staged = read_manifest(&fixture.manifest);
+            assert_eq!(staged["restore_stage"], "staged");
+            assert_eq!(
+                staged["restore_directory_identity"],
+                checkpoint["restore_directory_identity"]
+            );
+            assert_eq!(
+                staged["restore_original_tree_sha256"],
+                checkpoint["restore_original_tree_sha256"]
+            );
+            assert_eq!(
+                inode(&fixture.sibling("restore").join(LOCK_BASENAME)),
+                fixture.lock
+            );
+            assert!(
+                !fixture
+                    .sibling("restore")
+                    .join(BACKUP_IDENTITY_BASENAME)
+                    .exists()
+            );
+            resumed.resume();
+            fixture.assert_installed();
+            assert_eq!(tree_hash(&fixture.backup, &[]), backup);
+            fixture.actual_restart();
+        }
+    }
+}
+
+#[test]
+fn legacy_return_retry_refuses_foreign_current_collisions_and_unqualified_history() {
+    for kind in [
+        "foreign",
+        "changed-original",
+        "still-retired",
+        "unqualified",
+    ] {
+        let fixture = RestoreFixture::new("legacy-negative", true);
+        let retained = fixture.scope.path("retained-original");
+        if kind != "unqualified" {
+            prepare_legacy_return(&fixture, false);
+            let mut helper = HelperChild::paused(&fixture, "legacy_returned");
+            helper.kill_collect();
+            if kind == "foreign" {
+                fs::rename(&fixture.world, &retained).unwrap();
+                copy_dir(&fixture.backup, &fixture.world);
+                fs::remove_file(fixture.world.join(BACKUP_IDENTITY_BASENAME)).unwrap();
+                fs::remove_file(fixture.world.join(LOCK_BASENAME)).unwrap();
+                fs::hard_link(
+                    retained.join(LOCK_BASENAME),
+                    fixture.world.join(LOCK_BASENAME),
+                )
+                .unwrap();
+                assert_eq!(inode(&fixture.world.join(LOCK_BASENAME)), fixture.lock);
+                assert_ne!(inode(&fixture.world), fixture.directory);
+                assert_eq!(
+                    tree_hash(&fixture.world, &[LOCK_BASENAME]),
+                    read_manifest(&fixture.manifest)["restore_original_tree_sha256"]
+                        .as_str()
+                        .unwrap()
+                );
+            } else if kind == "changed-original" {
+                fs::write(
+                    fixture.world.join("changed-original.dat"),
+                    b"changed current body",
+                )
+                .unwrap();
+            } else {
+                copy_dir(&fixture.world, &fixture.sibling("retired"));
+            }
+        } else {
+            set_manifest_field(
+                &fixture.manifest,
+                "restore_stage",
+                serde_json::json!("old_retired"),
+            );
+        }
+        let before = fs::read(&fixture.manifest).unwrap();
+        let backup = tree_hash(&fixture.backup, &[]);
+        let roots = [
+            &fixture.world,
+            &fixture.backup,
+            &fixture.sibling("restore"),
+            &fixture.sibling("retired"),
+            &retained,
+        ];
+        let physical: Vec<_> = roots
+            .iter()
+            .map(|root| root.exists().then(|| (inode(root), tree_hash(root, &[]))))
+            .collect();
+        let (code, output) = restore(
+            &fixture.scope,
+            &fixture.manifest,
+            &fixture.world,
+            &fixture.backup,
+        );
+        assert_ne!(code, 0, "legacy {kind} must refuse adoption");
+        assert!(output.contains("FAIL restore_failed"), "{kind}: {output}");
+        assert_eq!(fs::read(&fixture.manifest).unwrap(), before);
+        assert_eq!(tree_hash(&fixture.backup, &[]), backup);
+        for (root, state) in roots.iter().zip(physical) {
+            assert_eq!(
+                root.exists().then(|| (inode(root), tree_hash(root, &[]))),
+                state
+            );
+        }
+        release_guard(
+            WorldLease::acquire(&fixture.world).expect("refusal releases held current lease"),
+        );
+    }
+}
+
+#[test]
+fn restore_sibling_symlink_aliases_and_loops_are_typed_immutable_refusals() {
+    for kind in ["restore", "retired"] {
+        for looped in [false, true] {
+            let fixture = RestoreFixture::new("sibling-alias", false);
+            let sibling = fixture.sibling(kind);
+            let target = if looped { &sibling } else { &fixture.backup };
+            std::os::unix::fs::symlink(target, &sibling).unwrap();
+            let before = fs::read(&fixture.manifest).unwrap();
+            let backup = tree_hash(&fixture.backup, &[]);
+            let current = tree_hash(&fixture.world, &[]);
+            let alias = inode(&sibling);
+            let (code, output) = restore(
+                &fixture.scope,
+                &fixture.manifest,
+                &fixture.world,
+                &fixture.backup,
+            );
+            assert_ne!(code, 0);
+            assert_eq!(inode(&sibling), alias);
+            assert_eq!(fs::read_link(&sibling).unwrap(), *target);
+            assert_eq!(fs::read(&fixture.manifest).unwrap(), before);
+            assert_eq!(tree_hash(&fixture.backup, &[]), backup);
+            assert_eq!(tree_hash(&fixture.world, &[]), current);
+            assert_eq!(inode(&fixture.world), fixture.directory);
+            assert_eq!(inode(&fixture.world.join(LOCK_BASENAME)), fixture.lock);
+            assert!(
+                output.contains("FAIL invalid_manifest"),
+                "{kind}/{looped}: {output}"
+            );
+        }
+    }
 }
