@@ -1611,32 +1611,349 @@ mod network_view_tests {
         assert_eq!(payload_work(), (0, 2, 0, 90));
     }
 
-    fn go_reports() -> serde_json::Value {
+    struct OracleRoot(std::path::PathBuf);
+    impl OracleRoot {
+        fn new() -> Self {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let root = Self(std::env::temp_dir().join(format!(
+                "mornlea-network-go-{}-{}",
+                std::process::id(),
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            )));
+            std::fs::create_dir(&root.0).unwrap();
+            root
+        }
+    }
+    impl Drop for OracleRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct GoOracleChild {
+        child: std::process::Child,
+        group: i32,
+        collected: bool,
+    }
+    impl GoOracleChild {
+        fn spawn(mut command: std::process::Command) -> std::io::Result<Self> {
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                let mut child = command.process_group(0).spawn()?;
+                let group = i32::try_from(child.id()).ok().filter(|id| *id > 0);
+                let Some(group) = group else {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(std::io::Error::other("invalid owned Go process group"));
+                };
+                Ok(Self {
+                    child,
+                    group,
+                    collected: false,
+                })
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = &mut command;
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "safe Go oracle process group cleanup requires Unix",
+                ))
+            }
+        }
+
+        fn wait_bounded(
+            &mut self,
+            stdout: &std::path::Path,
+            stderr: &std::path::Path,
+            timeout: std::time::Duration,
+            stdout_bound: u64,
+            stderr_bound: u64,
+            status: &std::path::Path,
+        ) -> Result<u8, &'static str> {
+            use std::io::Read;
+            use std::time::{Duration, Instant};
+            let deadline = Instant::now() + timeout;
+            loop {
+                if std::fs::metadata(stdout).unwrap().len() > stdout_bound {
+                    return Err("Go stdout exceeded its bound");
+                }
+                if std::fs::metadata(stderr).unwrap().len() > stderr_bound {
+                    return Err("Go stderr exceeded its bound");
+                }
+                match std::fs::File::open(status) {
+                    Ok(file) => {
+                        let mut bytes = Vec::new();
+                        file.take(17)
+                            .read_to_end(&mut bytes)
+                            .map_err(|_| "actual Go status read failed")?;
+                        if bytes.len() > 16 {
+                            return Err("actual Go status exceeded its bound");
+                        }
+                        if !bytes.is_empty() {
+                            let value = bytes
+                                .strip_suffix(b"\n")
+                                .filter(|digits| {
+                                    !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
+                                })
+                                .and_then(|digits| std::str::from_utf8(digits).ok())
+                                .and_then(|digits| digits.parse::<u8>().ok())
+                                .ok_or("actual Go status is invalid")?;
+                            return Ok(value);
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(_) => return Err("actual Go status read failed"),
+                }
+                if Instant::now() >= deadline {
+                    return Err("actual Go helper timed out");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        fn retire(&mut self) -> std::io::Result<()> {
+            if !self.collected {
+                let group_result = terminate_oracle_group(self.group);
+                let _ = self.child.kill();
+                let status = self.child.wait()?;
+                self.collected = true;
+                group_result?;
+                #[cfg(not(unix))]
+                let _ = status;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    if status.signal() != Some(9) {
+                        return Err(std::io::Error::other(
+                            "Go oracle runner exited before cancellation",
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    // The runner keeps the group leader and its stdin pipe owned after the
+    // actual Go command completes. Status-file polling never reaps that leader;
+    // Go receives only /dev/null, so it cannot consume the lifetime fence.
+    fn oracle_command(
+        source: &std::path::Path,
+        status: &std::path::Path,
+        stdout: &std::path::Path,
+        stderr: &std::path::Path,
+    ) -> std::process::Command {
         use std::{
             fs,
-            io::Read,
-            process::{Child, Command, Stdio},
-            time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+            process::{Command, Stdio},
         };
-        struct Root(std::path::PathBuf);
-        impl Drop for Root {
-            fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
+        let mut command = Command::new("bash");
+        command.args(["--noprofile", "--norc", "-c",
+            "go run \"$1\" </dev/null; oracle_status=$?; printf '%s\\n' \"$oracle_status\" > \"$2\"; IFS= read -r _owner_hold || :", "_"])
+            .arg(source).arg(status).env_remove("BASH_ENV")
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.."))
+            .stdin(Stdio::piped()).stdout(fs::File::create(stdout).unwrap())
+            .stderr(fs::File::create(stderr).unwrap());
+        command
+    }
+    impl Drop for GoOracleChild {
+        fn drop(&mut self) {
+            if let Err(error) = self.retire() {
+                eprintln!("owned Go oracle cleanup failed: {error}");
             }
         }
-        struct OwnedChild(Child);
-        impl Drop for OwnedChild {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
+    }
+
+    // Negative group IDs are accepted only from this child's checked positive
+    // identity; the signaling subprocess owns its own one-second deadline.
+    fn terminate_oracle_group(group: i32) -> std::io::Result<()> {
+        use std::{
+            io,
+            process::{Command, Stdio},
+            time::{Duration, Instant},
+        };
+        if group <= 0 {
+            return Err(io::Error::other("invalid owned Go process group"));
         }
-        let root = Root(std::env::temp_dir().join(format!(
-            "mornlea-network-go-{}-{}",
-            std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-        )));
-        fs::create_dir(&root.0).unwrap();
+        let mut signal = Command::new("bash")
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                "kill -KILL -- \"-$1\" 2>/dev/null || ! kill -0 -- \"-$1\" 2>/dev/null",
+                "_",
+            ])
+            .arg(group.to_string())
+            .env_remove("BASH_ENV")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let result = loop {
+            match signal.try_wait() {
+                Ok(Some(status)) => {
+                    break if status.success() {
+                        Ok(())
+                    } else {
+                        Err(io::Error::other("owned Go process group kill refused"))
+                    };
+                }
+                Err(error) => break Err(error),
+                Ok(None) if Instant::now() >= deadline => {
+                    break Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "owned Go process group kill timed out",
+                    ));
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        };
+        let _ = signal.kill();
+        let _ = signal.wait();
+        result
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn actual_go_oracle_descendants_retire_on_success_refusal_and_unwind() {
+        use std::{
+            fs,
+            time::{Duration, Instant},
+        };
+        let terminated = |pid: u32| match fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => matches!(
+                stat.rsplit_once(')').unwrap().1.split_whitespace().next(),
+                Some("Z" | "X")
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(error) => panic!("probe process observation failed: {error}"),
+        };
+        for mode in [
+            "timeout",
+            "stdout",
+            "stderr",
+            "success",
+            "unwind",
+            "status-overflow",
+            "status-invalid",
+            "leader-exit",
+        ] {
+            let root = OracleRoot::new();
+            let source = root.0.join("main.go");
+            let marker = root.0.join("descendant");
+            let stdout = root.0.join("stdout");
+            let stderr = root.0.join("stderr");
+            let status = root.0.join("exit-status");
+            fs::write(&source, r#"package main
+import ("fmt"; "os"; "os/exec"; "strconv"; "time")
+func main() {
+ pid := os.Getpid()
+ if os.Getenv("MORNLEA_ORACLE_PROBE_MODE") == "success" {
+  child := exec.Command("sleep", "60")
+  if err := child.Start(); err != nil { panic(err) }
+  pid = child.Process.Pid
+ }
+ if err := os.WriteFile(os.Getenv("MORNLEA_ORACLE_PROBE_MARKER"), []byte(strconv.Itoa(pid)), 0600); err != nil { panic(err) }
+ fmt.Print("actual descendant stdout")
+ fmt.Fprint(os.Stderr, "actual descendant stderr")
+ if os.Getenv("MORNLEA_ORACLE_PROBE_MODE") != "success" { time.Sleep(time.Minute) }
+}
+"#).unwrap();
+            let mut command = oracle_command(&source, &status, &stdout, &stderr);
+            command
+                .env("MORNLEA_ORACLE_PROBE_MARKER", &marker)
+                .env("MORNLEA_ORACLE_PROBE_MODE", mode);
+            let mut owner = GoOracleChild::spawn(command).expect("actual Go compiler required");
+            let deadline = Instant::now() + Duration::from_secs(120);
+            let descendant = loop {
+                if let Ok(text) = fs::read_to_string(&marker)
+                    && !text.is_empty()
+                {
+                    break text
+                        .parse::<u32>()
+                        .expect("actual descendant marker contains PID");
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "actual Go descendant marker timed out"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert!(
+                !terminated(descendant),
+                "probe must observe a live actual descendant"
+            );
+            match mode {
+                "status-overflow" => fs::write(&status, [b'9'; 17]).unwrap(),
+                "status-invalid" => fs::write(&status, b"invalid\n").unwrap(),
+                "leader-exit" => owner.child.kill().unwrap(),
+                _ => (),
+            }
+            let start = Instant::now();
+            let parent_collected = if mode == "unwind" {
+                let parent = owner.child.id();
+                let result = std::panic::catch_unwind(move || {
+                    let _owned = owner;
+                    panic!("force owned Go helper unwind");
+                });
+                assert!(result.is_err());
+                !std::path::Path::new(&format!("/proc/{parent}")).exists()
+            } else {
+                let outcome = owner.wait_bounded(
+                    &stdout,
+                    &stderr,
+                    Duration::from_millis(100),
+                    if mode == "stdout" { 0 } else { 1024 },
+                    if mode == "stderr" { 0 } else { 1024 },
+                    &status,
+                );
+                match mode {
+                    "timeout" | "leader-exit" => {
+                        assert_eq!(outcome.unwrap_err(), "actual Go helper timed out")
+                    }
+                    "stdout" => assert_eq!(outcome.unwrap_err(), "Go stdout exceeded its bound"),
+                    "stderr" => assert_eq!(outcome.unwrap_err(), "Go stderr exceeded its bound"),
+                    "success" => assert_eq!(outcome.unwrap(), 0),
+                    "status-overflow" => {
+                        assert_eq!(outcome.unwrap_err(), "actual Go status exceeded its bound")
+                    }
+                    "status-invalid" => {
+                        assert_eq!(outcome.unwrap_err(), "actual Go status is invalid")
+                    }
+                    _ => unreachable!(),
+                }
+                owner.retire().unwrap();
+                owner.collected && owner.child.try_wait().unwrap().is_some()
+            };
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while !terminated(descendant) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let descendant_terminated = terminated(descendant);
+            // A Linux zombie has released resources; only the owned outer
+            // supervisor may collect an adopted descendant. The group guard
+            // retires ownership before the private root can be removed.
+            println!(
+                "actual Go mode={mode} descendant_terminated={descendant_terminated} parent_collected={parent_collected}"
+            );
+            assert!(parent_collected, "direct Go parent was not collected");
+            assert!(
+                descendant_terminated,
+                "parent-only cleanup left actual descendant live ({mode})"
+            );
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "oracle retirement exceeded its bound"
+            );
+        }
+    }
+
+    fn go_reports() -> serde_json::Value {
+        use std::{fs, io::Read, time::Duration};
+        let root = OracleRoot::new();
         let source = root.0.join("main.go");
         let program = r#"package main
 import (
@@ -1694,38 +2011,32 @@ func main() {
         let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
         let stdout = root.0.join("stdout");
         let stderr = root.0.join("stderr");
+        let exit_status = root.0.join("exit-status");
         println!(
             "actual command: go run {} (cwd {})\n{program}",
             source.display(),
             repository.display()
         );
-        let mut child = OwnedChild(
-            Command::new("go")
-                .arg("run")
-                .arg(&source)
-                .current_dir(repository)
-                .stdin(Stdio::null())
-                .stdout(fs::File::create(&stdout).unwrap())
-                .stderr(fs::File::create(&stderr).unwrap())
-                .spawn()
-                .expect("actual Go compiler is required"),
+        let command = oracle_command(&source, &exit_status, &stdout, &stderr);
+        let mut child = GoOracleChild::spawn(command).expect("actual Go compiler is required");
+        let status = child
+            .wait_bounded(
+                &stdout,
+                &stderr,
+                Duration::from_secs(120),
+                1024 * 1024,
+                4096,
+                &exit_status,
+            )
+            .expect("actual Go helper report refused");
+        child
+            .retire()
+            .expect("retire owned Go helper before private file cleanup");
+        println!(
+            "actual Go exit status: {status}; runner={} owned_group={}",
+            child.child.id(),
+            child.group
         );
-        let deadline = Instant::now() + Duration::from_secs(120);
-        let status = loop {
-            assert!(
-                fs::metadata(&stdout).unwrap().len() <= 1024 * 1024,
-                "Go stdout exceeded its bound"
-            );
-            assert!(
-                fs::metadata(&stderr).unwrap().len() <= 4096,
-                "Go stderr exceeded its bound"
-            );
-            if let Some(status) = child.0.try_wait().unwrap() {
-                break status;
-            }
-            assert!(Instant::now() < deadline, "actual Go helper timed out");
-            std::thread::sleep(Duration::from_millis(10));
-        };
         let bounded_text = |path: &std::path::Path, bound: u64| {
             let mut text = String::new();
             fs::File::open(path)
@@ -1737,7 +2048,7 @@ func main() {
             text
         };
         let error = bounded_text(&stderr, 4096);
-        assert!(status.success(), "Go helper failed: {error}");
+        assert_eq!(status, 0, "Go helper failed: {error}");
         let output = bounded_text(&stdout, 1024 * 1024);
         println!("actual Go output: {output}");
         serde_json::from_str(&output).expect("actual Go helper returned invalid JSON")
