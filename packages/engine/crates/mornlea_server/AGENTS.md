@@ -41,6 +41,16 @@ consume its cancellation and error contracts before joining the real backend.
   and actual compact Ready/current-write fixtures qualify geometry alone;
   lifecycle, subscriptions, full-radius scan cadence and runtime stay caller-owned.
 
+- `src/core/pending_restore.rs` retains bounded candidate, wanted-key, nearest
+  column, fallback and exhausted-revision progress over borrowed placement reads.
+  Current waits before Safe; ready columns keep source same-call cadence, and
+  downgraded sites survive readiness gaps without revalidation. Stable exhausted
+  scans read only sorted Ready revisions. Player restart preserves captured
+  anchor/radius and dimensionless spawn retention in the current dimension.
+  Private consumer doubles and actual maximum-radius Ready/current-write probes
+  qualify this owner; actor lifecycle, reset effects, subscriptions and complete
+  runtime workload remain separately owned.
+
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
   inventory/runtime overlays to produce checked existing storage values. Player
   current pose/survival, inventory/armor and hunger/respawn come from their

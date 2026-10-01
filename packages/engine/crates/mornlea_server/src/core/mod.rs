@@ -20,6 +20,7 @@ pub mod interaction;
 pub mod login_seed;
 pub mod mailbox;
 pub mod mutation;
+pub mod pending_restore;
 mod player_publication;
 pub mod publication;
 pub mod retirement_worker;
