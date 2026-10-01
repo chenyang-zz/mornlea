@@ -127,13 +127,13 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9l2 Bound loopback delivery waits by real deadlines while preserving protocol clocks.
 - [x] 3.9l3 Recognize proven Linux zombie termination without weakening writer-lock guards ([packet](plans/33-linux-process-termination.md)).
 - [x] 3.9l4 Drive actual TCP receive progress through asynchronous login readiness ([packet](plans/71-prepared-tcp-receive-progress.md)).
-- [ ] 3.9l5 Mint distinct admitted identities in actual two-container-viewer fixtures ([packet](plans/75-distinct-container-viewer-fixture.md)).
+- [x] 3.9l5 Mint distinct admitted identities in actual two-container-viewer fixtures ([packet](plans/75-distinct-container-viewer-fixture.md)).
 
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.
 - [x] 3.9c1 Reclaim terminal common transport ownership with bounded diagnostics.
 - [x] 3.9c2 Reap terminal TCP sockets and bound send work.
-- [ ] 3.9c3 Share bounded deferred command ownership across provider phase roles ([packet](plans/73-shared-deferred-command-ownership.md)).
+- [x] 3.9c3 Share bounded deferred command ownership across provider phase roles ([packet](plans/73-shared-deferred-command-ownership.md)).
 - [x] 3.9e Repair retained region parent durability barriers.
 - [x] 3.9f Use OS entropy for snapshot bearer capabilities.
 - [x] 3.9g Reconcile Rust backup compatibility identities and English comment audit.
