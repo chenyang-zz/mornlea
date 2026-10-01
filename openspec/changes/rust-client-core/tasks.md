@@ -25,7 +25,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6a Project remote players into `actors@1`.
 - [x] 2.6c Project hostiles into `actors@1`.
 - [x] 2.6d Project passives into `actors@1`.
-- [ ] 2.6e Project projectiles into `actors@1`.
+- [x] 2.6e Project projectiles into `actors@1`.
 - [ ] 2.6f1 Project companions into `actors@1`.
 - [ ] 2.6f2 Project item drops into `actors@1`.
 - [ ] 2.6g Assemble the complete `actors@1` family.
