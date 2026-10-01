@@ -8,6 +8,11 @@ filesystem provider boundary. Save bytes and schema validation remain in
 
 - `mailbox.rs` and `scheduler.rs` retain owned snapshots through queue, worker,
   completion and retry. A later error never erases earlier durable keys.
+- Private `background.rs` transfers one backend, world lease and codec to one
+  OS thread through a bounded immutable save handoff. Tick admission and polls
+  use only nonblocking channel operations; off-tick lifecycle waits retain one
+  result across timeout, and successful close joins before marking closed.
+  Inline construction remains available for deterministic non-Send doubles.
 - `io.rs` owns per-request monotonic cancellation, codec/I/O error mapping,
   complete-write loops and the native fallible-close adapters. Its only unsafe
   blocks consume a uniquely owned File descriptor/handle once. Do not extend

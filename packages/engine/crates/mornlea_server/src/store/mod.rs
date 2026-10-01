@@ -1,6 +1,7 @@
 //! Save mailbox, scheduler, lease, and disk boundaries.
 
 pub mod atomic_file;
+mod background;
 pub mod disk;
 pub mod io;
 pub mod lease;

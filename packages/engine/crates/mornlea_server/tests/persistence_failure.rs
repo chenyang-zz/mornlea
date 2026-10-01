@@ -15,3 +15,6 @@ mod scheduler;
 
 #[path = "persistence_failure/io.rs"]
 mod io;
+
+#[path = "persistence_failure/background.rs"]
+mod background;

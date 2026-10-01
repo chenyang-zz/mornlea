@@ -12,8 +12,9 @@
 //! [`StoreHandle::poll_tick`] drains ready completions first, then dispatches
 //! due retries, then urgent snapshots, then cadence-triggered autosave, and
 //! finally the metadata schedule; autosave stays active until dirty and
-//! in-flight both clear. Only [`StoreHandle::flush`] drives workers to
-//! completion, because only flush, sync and close may block outside the tick.
+//! in-flight both clear. Background saves execute on their owner as soon as
+//! dispatched. Flush waits for actual results; sync and close share that same
+//! serialized owner, and all three waits remain outside the tick.
 //!
 //! Ownership across the layers: the authority retains its dirty and in-flight
 //! accounting while submitted copies travel through the mailbox. A failed
@@ -27,9 +28,9 @@
 use std::collections::HashMap;
 
 use crate::core::contracts::{
-    AckReport, Clock, Deadline, DiskBackend, FlushReport, Operation, OwnedSnapshot, SaveAuthority,
-    SaveBudget, SaveCompletion, SaveMode, SavePoll, SaveRequest, SaveScheduleReport, SaveTicket,
-    ServerError, StoreHandle, SubmitSaveError,
+    AckReport, Clock, Deadline, DiskBackend, FlushReport, OwnedSnapshot, SaveAuthority, SaveBudget,
+    SaveCompletion, SaveMode, SavePoll, SaveRequest, SaveScheduleReport, SaveTicket, ServerError,
+    StoreHandle, SubmitSaveError,
 };
 use crate::store::mailbox::StoreMailbox;
 
@@ -201,9 +202,8 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
         })
     }
 
-    /// Off-tick worker boundary: encodes queued jobs and runs the backend
-    /// writes, completing the submissions the tick path dispatched. Production
-    /// runs this on the storage worker threads; tests drive it between ticks.
+    /// Drives inline doubles synchronously; a background mailbox only hands off
+    /// immutable work and collects available completion facts.
     pub fn drive_workers(&mut self) -> usize {
         self.store.drive_workers()
     }
@@ -626,8 +626,7 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
             }
         }
         self.schedule_metadata(tick, authority);
-        // Hand every queued job to idle worker slots through the mailbox;
-        // the off-tick worker boundary executes them later.
+        // Hand queued jobs to idle slots without waiting for the background owner.
         self.store.poll_tick(tick, budget, authority)?;
         let stats = authority.save_stats();
         self.backpressured = next_backpressure(
@@ -660,11 +659,7 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
         let mut last_refusal: Option<ServerError> = None;
         // Dirty, pending and retry work drains first, in that order.
         loop {
-            if deadline.expired(clock.monotonic()) {
-                return Err(ServerError::Timeout {
-                    operation: Operation::Flush,
-                });
-            }
+            self.store.check_flush_deadline(deadline, clock)?;
             let selected = authority.select(SaveMode::All, SaveBudget::default());
             let mut submitted = false;
             if !selected.is_empty() {
@@ -713,15 +708,14 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
                     }));
                 }
             }
+            if self.store.is_background() {
+                self.store.wait_flush(deadline, clock)?;
+            }
         }
         // The final metadata barrier runs after chunk work drains.
         let snapshot = authority.metadata_snapshot();
         if snapshot.revision > self.metadata.committed {
-            if deadline.expired(clock.monotonic()) {
-                return Err(ServerError::Timeout {
-                    operation: Operation::Flush,
-                });
-            }
+            self.store.check_flush_deadline(deadline, clock)?;
             let sequence = snapshot.revision;
             let ticket = match self.store.submit(SaveRequest {
                 snapshots: vec![snapshot],
@@ -733,29 +727,27 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
                     return Err(refused.error);
                 }
             };
-            self.store.poll_tick(0, SaveBudget::default(), authority)?;
-            self.store.drive_workers();
-            match self.store.poll(ticket) {
-                SavePoll::Pending => {
-                    // The mailbox completes every driven job, so a pending
-                    // poll here means the deadline story changed underneath;
-                    // keep the ticket tracked and report the timeout with
-                    // ownership preserved.
-                    self.tracked.push(TrackedSubmit {
-                        ticket,
-                        kind: TrackedKind::Metadata { sequence },
-                    });
-                    return Err(ServerError::Timeout {
-                        operation: Operation::Flush,
-                    });
+            // Record ownership before any wait. A timed-out flush retries by
+            // draining this ticket before selecting another metadata target.
+            self.metadata.in_flight = true;
+            self.metadata.pending = false;
+            self.tracked.push(TrackedSubmit {
+                ticket,
+                kind: TrackedKind::Metadata { sequence },
+            });
+            loop {
+                self.store.check_flush_deadline(deadline, clock)?;
+                self.store.poll_tick(0, SaveBudget::default(), authority)?;
+                self.store.drive_workers();
+                if let Some(error) =
+                    self.drain_ready(authority, 0, &mut report.durable, &mut report.failed)
+                {
+                    return Err(error);
                 }
-                SavePoll::Completed(completion) => {
-                    let ack = authority.apply_completion(completion);
-                    if let Some(error) = self.apply_metadata_completion(sequence, ack, 0) {
-                        return Err(error);
-                    }
-                    report.durable += 1;
+                if !self.tracked.iter().any(|tracked| tracked.ticket == ticket) {
+                    break;
                 }
+                self.store.wait_flush(deadline, clock)?;
             }
         }
         report.outstanding = self.tracked.len() + self.pending.len();

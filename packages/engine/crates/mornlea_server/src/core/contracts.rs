@@ -592,6 +592,37 @@ impl StoreLimits {
         occupancy: &SaveOccupancy,
         request: &SaveRequest,
     ) -> Result<SaveOccupancy, ServerError> {
+        self.admit_lengths(
+            occupancy,
+            request,
+            request
+                .snapshots
+                .iter()
+                .map(|snapshot| snapshot.estimated_bytes),
+        )
+    }
+
+    /// Uses codec reservations without cloning snapshot bodies or changing caller estimates.
+    pub(crate) fn try_admit_reserved(
+        self,
+        occupancy: &SaveOccupancy,
+        request: &SaveRequest,
+        reservations: &[usize],
+    ) -> Result<SaveOccupancy, ServerError> {
+        if request.snapshots.len() != reservations.len() {
+            return Err(ServerError::Internal {
+                invariant: "store reservation length",
+            });
+        }
+        self.admit_lengths(occupancy, request, reservations.iter().copied())
+    }
+
+    fn admit_lengths(
+        self,
+        occupancy: &SaveOccupancy,
+        request: &SaveRequest,
+        lengths: impl Iterator<Item = usize>,
+    ) -> Result<SaveOccupancy, ServerError> {
         if occupancy.jobs >= MAX_SAVE_JOBS {
             return Err(capacity(
                 Resource::Snapshots,
@@ -601,7 +632,7 @@ impl StoreLimits {
         }
         let mut next = occupancy.clone();
         next.jobs += 1;
-        for snapshot in &request.snapshots {
+        for (snapshot, length) in request.snapshots.iter().zip(lengths) {
             let cap = self.lane_cap(&snapshot.key);
             let slot = next.lane_mut(&snapshot.key);
             let observed = slot.saturating_add(1);
@@ -614,12 +645,12 @@ impl StoreLimits {
                 return Err(capacity(resource, cap, observed));
             }
             *slot = observed;
-            next.encoded_bytes = next
-                .encoded_bytes
-                .checked_add(snapshot.estimated_bytes)
-                .ok_or(ServerError::InvalidInput {
-                    field: "estimated_bytes",
-                })?;
+            next.encoded_bytes =
+                next.encoded_bytes
+                    .checked_add(length)
+                    .ok_or(ServerError::InvalidInput {
+                        field: "estimated_bytes",
+                    })?;
             if next.encoded_bytes > self.max_owned_encoded_bytes {
                 return Err(capacity(
                     Resource::SaveBytes,
