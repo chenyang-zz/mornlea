@@ -89,7 +89,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7p0 Retain canonical packet identity through owned Memory/TCP publication ([packet](plans/44-owned-wire-publication.md)).
 - [x] 3.7s0 Run durable store work on a bounded background owner ([packet](plans/46-background-store-owner.md)).
 - [x] 3.7p1 Publish final authoritative player state each tick ([packet](plans/47-final-player-publication.md)).
-- [ ] 3.7p2v Extract source-compatible off-tick chunk network snapshots ([packet](plans/64-source-compatible-network-views.md)).
+- [x] 3.7p2v Extract source-compatible off-tick chunk network snapshots ([packet](plans/64-source-compatible-network-views.md)).
 - [ ] 3.7p2c Land checked prepared frames and explicit publication receipts ([packet](plans/66-prepared-publication-contract.md)).
 - [x] 3.7g0 Generate production seed-compatible compact chunks ([packet](plans/48-production-worldgen.md)).
 - [x] 3.7g1 Prepare generated chunks on bounded background owners ([packet](plans/51-background-generation-owner.md)).
