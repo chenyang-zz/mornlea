@@ -12,7 +12,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 1.2 Land compiling C1/C2 contract, typed family schema, frame validator and executing consumer double.
 - [x] 1.3 Implement login/session observation state machine.
 - [x] 1.4 Implement confirmed mirror and atomic observation order.
-- [ ] 1.5 Implement bounded shared Memory/TCP I/O queues.
+- [x] 1.5 Implement bounded shared Memory/TCP I/O queues.
 
 ## 2. Parallel input, prediction, preparation and family providers
 
