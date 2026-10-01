@@ -1,7 +1,8 @@
-//! Chunk acquisition and stale-generation rejection.
+//! Prepared live acquisition and legacy fixture identity checks.
 //!
-//! This rule owns the want/request ledger and the install gate for drained
-//! chunk completions. Mirrors, not choices:
+//! The managed entry transfers prepared owners at the actual acquisition row.
+//! The legacy fixture helpers below retain their identity-only ledger and
+//! completion gate. Their source mirrors follow:
 //!
 //! - `packages/server/sim/runtime/engine_subscription.go` (`applyAcquired`,
 //!   `applyGenerated`): a completion installs only while its key is still in
@@ -22,16 +23,9 @@
 //!   request/generation identity sharpens those skips into the counted
 //!   stale-generation and consumed refusals below.
 //!
-//! Reason accounting follows the accepted surfaces: cancellation tombstones
-//! and admission-level duplicates are counted by
-//! `AuthorityState::chunk_discard_counts` at mailbox admission; the
-//! provider-level refusals (`NotWanted`, `StaleGeneration`,
-//! `AlreadyConsumed`, `Failed`) have no state counter and report through
-//! `PhaseReport.rejected`. The frozen `RuleEffect` vocabulary has no chunk
-//! arm and the authority keeps no chunk store yet, so an accepted completion
-//! installs as the rule-level consumed record — the payload landing in a
-//! real chunk store belongs to the chunk-store node, and this module stages
-//! nothing rather than inventing an authority surface.
+//! Legacy fixture ledgers below retain their original identity-only behavior.
+//! Enabled managed worlds instead transfer prepared owners through the actual
+//! Acquire entry, after companion intent and before player physics.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -173,14 +167,8 @@ pub fn apply_drained(wants: &mut ChunkWants, drained: &[ChunkResult]) -> PhaseRe
     report
 }
 
-/// The frozen phase entry for the acquire batch phase.
-///
-/// Both arms return the zero report deliberately: completions reach this rule
-/// through [`apply_drained`] after the mailbox drain, because the frozen
-/// `RuleCall` record cannot carry chunk results and `TickContext` exposes no
-/// mailbox port — the reducer owns that drain. A call whose shape does not
-/// name this batch phase is the shared no-effect refusal arm.
-pub fn run(_ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
+/// Applies managed prepared completions only for the exact acquisition call.
+pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
     if call.phase != RulePhase::Acquire
         || call.actor.is_some()
         || call.command.is_some()
@@ -193,10 +181,5 @@ pub fn run(_ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport
             rejected: 0,
         });
     }
-    Ok(PhaseReport {
-        examined: 0,
-        applied: 0,
-        carried: 0,
-        rejected: 0,
-    })
+    Ok(ctx.apply_live_acquisition())
 }

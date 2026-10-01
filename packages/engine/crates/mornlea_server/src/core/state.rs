@@ -17,6 +17,10 @@ use mornlea_domain::{
 use mornlea_protocol::{AdmittedLogin, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket};
 use mornlea_storage::{Chunk, Metadata, PlayerLocation, PlayerSave, StoredPlayer};
 
+use super::acquisition::{
+    AcquiredChunkEvent, AcquisitionState, ChunkGenerationReservation, ChunkLoadReservation,
+    LiveChunkFacts, LiveChunkPhase, RejectedAcquiredChunk,
+};
 use super::container_store::ContainerState;
 use super::contracts::*;
 use super::drop_store::{self, DropState};
@@ -26,6 +30,12 @@ use crate::rules::farmland::FarmlandSchedule;
 use crate::rules::fluids::FluidSchedule;
 
 const COMPANION_INBOX: usize = 4;
+
+#[cfg(test)]
+thread_local! {
+    // One tick's bounded acquisition observation; no production hook is exposed.
+    static ACQUIRE_AVAILABILITY: std::cell::Cell<Option<(ChunkKey,bool,bool)>> = const { std::cell::Cell::new(None) };
+}
 
 struct SessionRecord {
     player_id: PlayerId,
@@ -131,6 +141,7 @@ pub struct AuthorityState {
     companion_arrival: BTreeMap<mornlea_domain::CompanionId, u64>,
     interactions: Vec<AuthorityInteraction>,
     chunk_results: Vec<ChunkResult>,
+    acquisition: AcquisitionState,
     cancelled_chunks: BTreeSet<ChunkRequestId>,
     chunk_cancel_discards: usize,
     chunk_duplicate_discards: usize,
@@ -195,6 +206,7 @@ impl AuthorityState {
             companion_arrival: BTreeMap::new(),
             interactions: Vec::new(),
             chunk_results: Vec::new(),
+            acquisition: AcquisitionState::default(),
             cancelled_chunks: BTreeSet::new(),
             chunk_cancel_discards: 0,
             chunk_duplicate_discards: 0,
@@ -670,10 +682,110 @@ impl AuthorityState {
         Ok(())
     }
 
-    // Refusal returns the original owned chunk result so the producer keeps
-    // ownership; the mailbox never stores or copies a rejected record.
+    /// Starts managed acquisition only on an empty world; actor state may exist.
+    pub fn enable_live_chunks(&mut self) -> Result<(), ServerError> {
+        if self.acquisition.enabled() {
+            return Ok(());
+        }
+        if self.phase != ServerPhase::Running
+            || !self.residents.blocks.is_empty()
+            || !self.residents.ready.is_empty()
+            || !self.residents.drops.is_empty()
+            || !self.residents.containers.is_empty()
+            || !self.residents.container_chunks.is_empty()
+            || !self.residents.dirty_chunks.is_empty()
+            || !self.chunk_results.is_empty()
+        {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        self.acquisition.enable();
+        Ok(())
+    }
+    fn require_live_chunks(&self, running: bool) -> Result<(), ServerError> {
+        if !self.acquisition.enabled()
+            || self.phase == ServerPhase::Closed
+            || (running && self.phase != ServerPhase::Running)
+        {
+            Err(ServerError::InvalidState { phase: self.phase })
+        } else {
+            Ok(())
+        }
+    }
+    pub fn replace_chunk_wants(&mut self, wants: BTreeSet<ChunkKey>) -> Result<(), ServerError> {
+        self.require_live_chunks(true)?;
+        self.acquisition.replace_wants(wants)
+    }
+    pub fn live_chunk_facts(&self, key: ChunkKey) -> Option<LiveChunkFacts> {
+        self.acquisition.facts(key)
+    }
+    pub fn live_chunk_error(&self, key: ChunkKey) -> Option<&ServerError> {
+        self.acquisition.error(key)
+    }
+    pub fn reserve_chunk_load(
+        &mut self,
+        key: ChunkKey,
+    ) -> Result<ChunkLoadReservation, ServerError> {
+        self.require_live_chunks(true)?;
+        self.acquisition.reserve_load(key)
+    }
+    pub fn bind_chunk_load(
+        &mut self,
+        r: ChunkLoadReservation,
+        request: ChunkRequestId,
+    ) -> Result<(), ServerError> {
+        self.require_live_chunks(false)?;
+        self.acquisition.bind_load(r, request)
+    }
+    pub fn abort_chunk_load(
+        &mut self,
+        r: ChunkLoadReservation,
+        error: ServerError,
+    ) -> Result<(), ServerError> {
+        self.require_live_chunks(false)?;
+        self.acquisition.abort_load(r, error)
+    }
+    pub fn reserve_chunk_generation(
+        &mut self,
+        key: ChunkKey,
+    ) -> Result<ChunkGenerationReservation, ServerError> {
+        self.require_live_chunks(true)?;
+        self.acquisition.reserve_generation(key)
+    }
+    pub fn bind_chunk_generation(
+        &mut self,
+        r: ChunkGenerationReservation,
+        request: ChunkRequestId,
+    ) -> Result<(), ServerError> {
+        self.require_live_chunks(false)?;
+        self.acquisition.bind_generation(r, request)
+    }
+    pub fn abort_chunk_generation(
+        &mut self,
+        r: ChunkGenerationReservation,
+        error: ServerError,
+    ) -> Result<(), ServerError> {
+        self.require_live_chunks(false)?;
+        self.acquisition.abort_generation(r, error)
+    }
+    // Return the whole refused event; its prepared owner must never be cloned.
+    #[allow(clippy::result_large_err)]
+    pub fn offer_acquired(
+        &mut self,
+        event: AcquiredChunkEvent,
+    ) -> Result<(), RejectedAcquiredChunk> {
+        if let Err(error) = self.require_live_chunks(false) {
+            return Err(RejectedAcquiredChunk { error, event });
+        }
+        self.acquisition.offer(event)
+    }
+
+    // Refusal returns the original owned chunk result, including in managed
+    // mode; the mailbox never stores or copies a rejected record.
     #[allow(clippy::result_large_err)]
     pub fn admit_chunk(&mut self, result: ChunkResult) -> Result<(), ChunkResult> {
+        if self.acquisition.enabled() {
+            return Err(result);
+        }
         if self.cancelled_chunks.remove(&result.request) {
             // The tombstone rejects exactly one late completion. The consumed
             // request stays recorded so one further repeat classifies as a
@@ -706,6 +818,9 @@ impl AuthorityState {
     }
 
     pub fn cancel_chunk(&mut self, request: ChunkRequestId) {
+        if self.acquisition.enabled() {
+            return;
+        }
         self.chunk_results
             .retain(|result| result.request != request);
         self.cancelled_chunks.insert(request);
@@ -901,6 +1016,13 @@ impl AuthorityState {
         key: ChunkKey,
         urgency: SaveUrgency,
     ) -> Option<OwnedSnapshot> {
+        if self.acquisition.enabled()
+            && !self.acquisition.facts(key).is_some_and(|f| {
+                matches!(f.phase, LiveChunkPhase::Ready | LiveChunkPhase::Unloading)
+            })
+        {
+            return None;
+        }
         let chunk = self.residents.ready.get(&key)?;
         let view = chunk.capture(
             self.residents.drops.get(&key),
@@ -1512,6 +1634,7 @@ impl SaveAuthority for AuthorityState {
 /// Borrowed read surface. `None` means the value is unavailable, not air.
 #[derive(Clone, Copy)]
 pub struct AuthorityReadView<'a> {
+    acquisition: Option<&'a AcquisitionState>,
     tick: u64,
     world: Option<WorldState>,
     commands: &'a [CommandEnvelope],
@@ -1573,6 +1696,7 @@ impl ObservationTrace {
 /// or mutate the immutable authority base. One player death admits at most
 /// forty slot batches; final compound staging remains the publication owner.
 pub(crate) struct DropRehearsal<'a> {
+    acquisition: Option<&'a AcquisitionState>,
     drops: &'a BTreeMap<ChunkKey, DropState>,
     ready: &'a BTreeMap<ChunkKey, ReadyChunk>,
     pending: BTreeMap<ChunkKey, DropState>,
@@ -1582,6 +1706,9 @@ impl DropRehearsal<'_> {
     pub(crate) fn try_insert(&mut self, batch: &DropBatch) -> Result<(), RuleReject> {
         drop_store::validate_batch(batch)?;
         let (key, _) = drop_store::batch_location(batch)?;
+        if self.acquisition.is_some_and(|book| !book.available(key)) {
+            return Err(RuleReject::StaleObservation);
+        }
         let mut next = self
             .pending
             .get(&key)
@@ -1604,6 +1731,9 @@ impl DropRehearsal<'_> {
 }
 
 impl<'a> AuthorityReadView<'a> {
+    fn available(&self, key: ChunkKey) -> bool {
+        self.acquisition.is_none_or(|book| book.available(key))
+    }
     /// A shorter borrowed view keeps the collector local to one resolution.
     pub(crate) fn with_observation_trace<'b>(
         &'b self,
@@ -1641,11 +1771,14 @@ impl<'a> AuthorityReadView<'a> {
     }
     /// Sparse fixture cells alone do not establish a Ready chunk.
     pub fn ready_chunk(&self, key: ChunkKey) -> bool {
-        self.ready.contains_key(&key)
+        self.available(key) && self.ready.contains_key(&key)
     }
     /// Exact Ready identity including accepted work in this tick. Sparse
     /// observations cannot supply a revision for an unavailable chunk.
     pub fn ready_chunk_revision(&self, key: ChunkKey) -> Option<u64> {
+        if !self.available(key) {
+            return None;
+        }
         let chunk = self.ready.get(&key)?;
         Some(
             chunk.pending_revision(
@@ -1661,7 +1794,11 @@ impl<'a> AuthorityReadView<'a> {
     /// such as death drops. The set is bounded by chunk-result caps, so
     /// collecting it never scans the world.
     pub fn ready_chunk_keys(&self) -> Vec<ChunkKey> {
-        self.ready.keys().copied().collect()
+        self.ready
+            .keys()
+            .copied()
+            .filter(|key| self.available(*key))
+            .collect()
     }
     /// World spawn anchor for death reset teleport when the actor carries no
     /// bed respawn. `None` only on corrupt metadata, which providers refuse.
@@ -1677,12 +1814,11 @@ impl<'a> AuthorityReadView<'a> {
     }
     /// The source height map counts every non-air cell, including transparent blocks.
     pub fn highest_non_air(&self, dimension: Dimension, x: i32, z: i32) -> Option<i32> {
-        self.ready
-            .get(&block_key(
-                dimension,
-                mornlea_domain::BlockPos::new(x, 0, z),
-            ))
-            .map(|chunk| chunk.height(x, z))
+        let key = block_key(dimension, mornlea_domain::BlockPos::new(x, 0, z));
+        if !self.available(key) {
+            return None;
+        }
+        self.ready.get(&key).map(|chunk| chunk.height(x, z))
     }
     pub fn tick(&self) -> u64 {
         self.tick
@@ -1736,6 +1872,9 @@ impl<'a> AuthorityReadView<'a> {
             return None;
         }
         let key = block_key(dimension, pos);
+        if !self.available(key) {
+            return None;
+        }
         if let Some(observed) = self.blocks.get(&(key, pos)) {
             return Some(*observed);
         }
@@ -1765,6 +1904,9 @@ impl<'a> AuthorityReadView<'a> {
             dimension,
             pos: reference.chunk(),
         };
+        if !self.available(key) {
+            return None;
+        }
         if let Some(chunk) = self.container_chunks.get(&key) {
             return chunk.record(key, reference);
         }
@@ -1783,6 +1925,9 @@ impl<'a> AuthorityReadView<'a> {
         kind: mornlea_domain::ContainerKind,
     ) -> Option<ContainerRecord> {
         let key = block_key(dimension, pos);
+        if !self.available(key) {
+            return None;
+        }
         if let Some(chunk) = self.container_chunks.get(&key) {
             return chunk.at(key, pos, kind);
         }
@@ -1793,6 +1938,9 @@ impl<'a> AuthorityReadView<'a> {
 
     /// Fixed array enumeration is bounded independently of total loaded chunks.
     pub fn container_refs(&self, key: ChunkKey) -> Vec<ContainerRef> {
+        if !self.available(key) {
+            return Vec::new();
+        }
         self.container_chunks
             .get(&key)
             .map(|chunk| chunk.references(key))
@@ -1806,11 +1954,15 @@ impl<'a> AuthorityReadView<'a> {
     /// Immutable active slots in physical slot order. Fixed inactive generations
     /// stay private to the owner and survive empty active observations.
     pub fn drops(&self, key: ChunkKey) -> &[DropRecord] {
+        if !self.available(key) {
+            return &[];
+        }
         self.drops.get(&key).map(DropState::records).unwrap_or(&[])
     }
     /// Cumulative preview borrows the base and retains only successful chunk copies.
     pub(crate) fn drop_rehearsal(&self) -> DropRehearsal<'a> {
         DropRehearsal {
+            acquisition: self.acquisition,
             drops: self.drops,
             ready: self.ready,
             pending: BTreeMap::new(),
@@ -2167,6 +2319,66 @@ pub enum ActionKind {
 }
 
 impl<'a> TickContext<'a> {
+    /// Consumes at most sixteen prepared owners at the existing Acquire row.
+    pub(crate) fn apply_live_acquisition(&mut self) -> PhaseReport {
+        let events = self.authority.acquisition.drain();
+        #[cfg(test)]
+        let observed_key = events.first().map(|e| match e {
+            AcquiredChunkEvent::Load { key, .. } | AcquiredChunkEvent::Generated { key, .. } => {
+                *key
+            }
+        });
+        #[cfg(test)]
+        let before = observed_key.is_some_and(|key| self.read().ready_chunk(key));
+        let mut report = PhaseReport {
+            examined: events.len(),
+            applied: 0,
+            rejected: 0,
+            carried: 0,
+        };
+        for event in events {
+            if !self.authority.acquisition.settle(&event) {
+                report.rejected += 1;
+                continue;
+            }
+            let (key, result) = match event {
+                AcquiredChunkEvent::Load { key, result, .. } => (key, result),
+                AcquiredChunkEvent::Generated { key, result, .. } => (key, result.map(Some)),
+            };
+            match result {
+                Ok(None) => {
+                    self.authority.acquisition.missing(key);
+                    report.applied += 1;
+                }
+                Ok(Some(prepared)) => {
+                    let (ready, drops, containers, persisted, rewrite, recovered) =
+                        prepared.into_live_parts();
+                    self.authority.acquisition.installed(
+                        key,
+                        ready.revision,
+                        persisted,
+                        rewrite,
+                        recovered,
+                    );
+                    self.ready.insert(key, ready);
+                    self.drops.insert(key, drops);
+                    self.container_chunks.insert(key, containers);
+                    report.applied += 1;
+                }
+                Err(error) => {
+                    self.authority.acquisition.failed(key, error);
+                    report.rejected += 1;
+                }
+            }
+        }
+        #[cfg(test)]
+        if let Some(key) = observed_key {
+            ACQUIRE_AVAILABILITY
+                .with(|value| value.set(Some((key, before, self.read().ready_chunk(key)))));
+        }
+        report
+    }
+
     /// Installs already validated compact data; preparation belongs off the tick.
     pub fn preload_ready_chunk(&mut self, chunk: ReadyChunk) {
         self.blocks.retain(|(key, _), _| *key != chunk.key);
@@ -2425,6 +2637,11 @@ impl<'a> TickContext<'a> {
 
     pub fn read(&self) -> AuthorityReadView<'_> {
         AuthorityReadView {
+            acquisition: self
+                .authority
+                .acquisition
+                .enabled()
+                .then_some(&self.authority.acquisition),
             tick: self.authority.next_tick,
             world: self.world,
             commands: &self.commands,
@@ -2515,6 +2732,13 @@ impl<'a> TickContext<'a> {
             }
             if let Some(state) = self.container_chunks.get_mut(key) {
                 state.finish_tick(chunk.revision);
+            }
+        }
+        for key in &self.dirty_chunks {
+            if let Some(chunk) = self.ready.get(key) {
+                self.authority
+                    .acquisition
+                    .committed(*key, chunk.generation, chunk.revision);
             }
         }
         self.dirty_chunks.clear();
@@ -3019,6 +3243,9 @@ impl<'a> TickContext<'a> {
                     self.validate_inventory_patch(patch, pending_inventories)?;
                 }
                 for capture in &txn.containers {
+                    if !self.read().available(capture.key) {
+                        return Err(RuleReject::StaleObservation);
+                    }
                     let current = if let Some(owner) = pending_containers.get(&capture.key) {
                         owner.record(capture.key, capture.record.reference)
                     } else {
@@ -3042,6 +3269,9 @@ impl<'a> TickContext<'a> {
                 if let Some(batch) = &txn.drops {
                     drop_store::validate_batch(batch)?;
                     let (key, _) = drop_store::batch_location(batch)?;
+                    if !self.read().available(key) {
+                        return Err(RuleReject::StaleObservation);
+                    }
                     let next = pending_drop_state(pending_drops, self.drops.get(&key), key)?;
                     next.insert(key, batch)?;
                     self.check_drop_revision(key, next)?;
@@ -3051,12 +3281,18 @@ impl<'a> TickContext<'a> {
             RuleEffect::Drops(batch) => {
                 drop_store::validate_batch(batch)?;
                 let (key, _) = drop_store::batch_location(batch)?;
+                if !self.read().available(key) {
+                    return Err(RuleReject::StaleObservation);
+                }
                 let next = pending_drop_state(pending_drops, self.drops.get(&key), key)?;
                 next.insert(key, batch)?;
                 self.check_drop_revision(key, next)
             }
             RuleEffect::DropPatch { before, after } => {
                 let key = drop_store::drop_key(before)?;
+                if !self.read().available(key) {
+                    return Err(RuleReject::StaleObservation);
+                }
                 let next = pending_drop_state(pending_drops, self.drops.get(&key), key)?;
                 next.patch(key, before, after.as_ref())?;
                 self.check_drop_revision(key, next)
@@ -3152,6 +3388,9 @@ impl<'a> TickContext<'a> {
             dimension,
             pos: before.reference.chunk(),
         };
+        if !self.read().available(key) {
+            return Err(RuleReject::StaleObservation);
+        }
         if let Some(current) = self.container_chunks.get(&key) {
             let next = pending.entry(key).or_insert_with(|| current.clone());
             next.patch(key, before, after)?;
@@ -5536,6 +5775,7 @@ mod drop_rehearsal_tests {
         let base = BTreeMap::from([(key, DropState::new(key, slots))]);
         let ready = BTreeMap::new();
         let mut rehearsal = DropRehearsal {
+            acquisition: None,
             drops: &base,
             ready: &ready,
             pending: BTreeMap::new(),
@@ -5560,5 +5800,770 @@ mod drop_rehearsal_tests {
         assert_eq!(base[&key].slots, slots);
         assert!(!base[&key].dirty);
         assert_eq!(rehearsal.pending.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod live_acquisition_tests {
+    use super::super::world::{self, PreparedChunk};
+    use super::*;
+    use mornlea_domain::{BlockPos, ChunkPos, FiniteVec3};
+    use mornlea_storage::{ContainerSnapshot, ItemStack, StorageKind};
+    fn key() -> ChunkKey {
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        }
+    }
+    fn request(n: u64) -> ChunkRequestId {
+        ChunkRequestId::try_new(n).unwrap()
+    }
+    fn authority() -> AuthorityState {
+        AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap()
+    }
+    fn chunk() -> Chunk {
+        Chunk {
+            sections: vec![
+                ContainerSnapshot {
+                    kind: StorageKind::Single,
+                    bits: 0,
+                    single: 0,
+                    palette: vec![],
+                    packed: vec![]
+                };
+                24
+            ],
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        }
+    }
+    fn prepared(generation: u64) -> PreparedChunk {
+        PreparedChunk::try_new(
+            key(),
+            generation,
+            RecoveredChunk {
+                chunk: chunk(),
+                revision: 9,
+                persisted_revision: 7,
+                needs_rewrite: true,
+                recovered: true,
+            },
+        )
+        .unwrap()
+    }
+    fn live() -> AuthorityState {
+        let mut a = authority();
+        a.enable_live_chunks().unwrap();
+        a.replace_chunk_wants(BTreeSet::from([key()])).unwrap();
+        a
+    }
+    fn queue(a: &mut AuthorityState, chunk: Chunk) {
+        let r = a.reserve_chunk_load(key()).unwrap();
+        a.bind_chunk_load(r, request(1)).unwrap();
+        let p = PreparedChunk::try_new(
+            key(),
+            r.generation(),
+            RecoveredChunk {
+                chunk,
+                revision: 9,
+                persisted_revision: 7,
+                needs_rewrite: true,
+                recovered: true,
+            },
+        )
+        .unwrap();
+        a.offer_acquired(AcquiredChunkEvent::Load {
+            key: key(),
+            generation: r.generation(),
+            request: request(1),
+            result: Ok(Some(p)),
+        })
+        .unwrap();
+    }
+    fn drop_batch() -> DropBatch {
+        DropBatch::try_new(
+            DropSource::System {
+                rule: SystemRule::Support,
+                tick: 0,
+                target: BlockPos::new(3, 1, 3),
+            },
+            Dimension::OVERWORLD,
+            FiniteVec3::try_new([3.5, 1.5, 3.5]).unwrap(),
+            vec![ItemStack {
+                item: 2,
+                count: 1,
+                durability: 0,
+            }],
+            5,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn offer_and_actual_tick_installation_clone_and_materialize_no_ready_body() {
+        let mut a = live();
+        let r = a.reserve_chunk_load(key()).unwrap();
+        use crate::store::{
+            disk::{DiskOptions, DiskStore},
+            mailbox::StoreMailbox,
+        };
+        use std::{
+            fs, thread,
+            time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+        };
+        struct Root(std::path::PathBuf);
+        impl Drop for Root {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = Root(std::env::temp_dir().join(format!(
+                "mornlea-live-counter-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )));
+        fs::create_dir(&root.0).unwrap();
+        let mut saved = chunk();
+        saved.drops[31].generation = 19;
+        saved.furnaces[31].generation = 20;
+        saved.chests[15].generation = 21;
+        let mut setup = authority();
+        let mut fixture = TickContext::harness(&mut setup, TickBudget::full());
+        fixture.preload_ready_chunk(ReadyChunk::try_new(key(), 1, 8, saved).unwrap());
+        for (pos, block) in [(BlockPos::new(1, 1, 1), 11), (BlockPos::new(2, 1, 2), 9)] {
+            let observed = fixture
+                .read()
+                .observation(Dimension::OVERWORLD, pos)
+                .unwrap();
+            fixture
+                .transaction()
+                .try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(observed, block).unwrap()],
+                )
+                .unwrap();
+        }
+        fixture.stage(RuleEffect::Drops(drop_batch())).unwrap();
+        let expected = fixture.resident_snapshot().ready_snapshot().remove(0).3;
+        drop(fixture);
+        let deadline = || Deadline::after(Instant::now(), Duration::from_secs(5)).unwrap();
+        let mut store = StoreMailbox::try_new_background(
+            StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap(),
+            DiskStore::open(
+                &root.0,
+                DiskOptions {
+                    create: a.metadata.clone(),
+                    region_handle_cap: 1,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let ticket = store
+            .submit(SaveRequest {
+                snapshots: vec![
+                    OwnedSnapshot::try_new(
+                        SaveKey::Chunk(key()),
+                        9,
+                        1,
+                        SaveUrgency::Autosave,
+                        SaveValue::Chunk(mornlea_storage::ChunkSave {
+                            key: mornlea_storage::ChunkKey {
+                                dimension: 0,
+                                x: 0,
+                                z: 0,
+                            },
+                            revision: 9,
+                            chunk: expected.clone(),
+                        }),
+                    )
+                    .unwrap(),
+                ],
+            })
+            .unwrap();
+        let until = deadline();
+        loop {
+            store.drive_workers();
+            if let SavePoll::Completed(completion) = StoreHandle::poll(&mut store, ticket) {
+                assert!(completion.error.is_none());
+                break;
+            }
+            assert!(!until.expired(Instant::now()));
+            thread::yield_now();
+        }
+        let ticket = store
+            .start_chunk(key(), r.generation(), deadline())
+            .unwrap();
+        a.bind_chunk_load(r, ticket).unwrap();
+        let until = deadline();
+        let p = loop {
+            store.drive_workers();
+            match store.poll_chunk(ticket) {
+                ChunkLoadPoll::Loaded(Some(prepared)) => break prepared,
+                ChunkLoadPoll::Pending => {
+                    assert!(!until.expired(Instant::now()));
+                    thread::yield_now();
+                }
+                ChunkLoadPoll::Failed(error) => panic!("real saved counter load: {error:?}"),
+                ChunkLoadPoll::Loaded(None) => panic!("saved counter load was absent"),
+            }
+        };
+        store.close(deadline()).unwrap();
+        world::reset_ready_clones();
+        world::reset_materializations();
+        a.offer_acquired(AcquiredChunkEvent::Load {
+            key: key(),
+            generation: r.generation(),
+            request: ticket,
+            result: Ok(Some(p)),
+        })
+        .unwrap();
+        a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(world::ready_clones(), 0);
+        assert_eq!(world::materializations(), 0);
+        let facts = a.live_chunk_facts(key()).unwrap();
+        assert_eq!(
+            (
+                facts.revision,
+                facts.persisted_revision,
+                facts.needs_rewrite,
+                facts.recovered
+            ),
+            (9, 9, false, false)
+        );
+        assert_eq!(
+            ACQUIRE_AVAILABILITY.with(std::cell::Cell::get),
+            Some((key(), false, true))
+        );
+        let ctx = TickContext::for_tick(&mut a, TickBudget::full());
+        let view = ctx.read();
+        assert_eq!(
+            view.block(Dimension::OVERWORLD, BlockPos::new(1, 1, 1)),
+            Some(11)
+        );
+        assert_eq!(view.highest_non_air(Dimension::OVERWORLD, 1, 1), Some(1));
+        assert_eq!(
+            view.container_at(
+                Dimension::OVERWORLD,
+                BlockPos::new(1, 1, 1),
+                mornlea_domain::ContainerKind::Chest
+            )
+            .unwrap()
+            .reference
+            .slot(),
+            0
+        );
+        assert_eq!(
+            view.container_at(
+                Dimension::OVERWORLD,
+                BlockPos::new(2, 1, 2),
+                mornlea_domain::ContainerKind::Furnace
+            )
+            .unwrap()
+            .reference
+            .slot(),
+            0
+        );
+        assert_eq!(view.drops(key()).len(), 1);
+        assert_eq!(
+            ctx.drops.get(&key()).unwrap().slots.as_slice(),
+            expected.drops
+        );
+        assert_eq!(
+            ctx.container_chunks
+                .get(&key())
+                .unwrap()
+                .furnaces
+                .as_slice(),
+            expected.furnaces
+        );
+        assert_eq!(
+            ctx.container_chunks.get(&key()).unwrap().chests.as_slice(),
+            expected.chests
+        );
+    }
+    #[test]
+    fn retained_unloading_gates_every_read_rehearsal_and_compound_preflight() {
+        let mut a = live();
+        queue(&mut a, chunk());
+        a.advance_tick(TickBudget::full()).unwrap();
+        let (observation, container, drop_record) = {
+            let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+            let observed = ctx
+                .read()
+                .observation(Dimension::OVERWORLD, BlockPos::new(1, 1, 1))
+                .unwrap();
+            ctx.transaction()
+                .try_system(
+                    SystemRule::Support,
+                    vec![BlockWrite::try_new(observed, 11).unwrap()],
+                )
+                .unwrap();
+            ctx.stage(RuleEffect::Drops(drop_batch())).unwrap();
+            let o = ctx
+                .read()
+                .observation(Dimension::OVERWORLD, BlockPos::new(1, 1, 1))
+                .unwrap();
+            let mut c = ctx
+                .read()
+                .container_at(
+                    Dimension::OVERWORLD,
+                    o.pos,
+                    mornlea_domain::ContainerKind::Chest,
+                )
+                .unwrap();
+            let d = ctx.read().drops(key())[0].clone();
+            ctx.commit_carried();
+            c.revision = ctx.authority.live_chunk_facts(key()).unwrap().revision;
+            (o, c, d)
+        };
+        let before = a.live_chunk_facts(key()).unwrap();
+        assert_eq!((before.revision, before.persisted_revision), (10, 7));
+        a.replace_chunk_wants(BTreeSet::new()).unwrap();
+        let unloading = a.live_chunk_facts(key()).unwrap();
+        assert_eq!(unloading.phase, LiveChunkPhase::Unloading);
+        assert!(
+            a.capture_chunk_snapshot(key(), SaveUrgency::Unload)
+                .is_some()
+        );
+        {
+            let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+            // A stale sparse observation must not outrank the managed phase gate.
+            ctx.blocks.insert((key(), observation.pos), observation);
+            let view = ctx.read();
+            assert!(!view.ready_chunk(key()));
+            assert!(view.ready_chunk_revision(key()).is_none());
+            assert!(view.ready_chunk_keys().is_empty());
+            assert!(view.highest_non_air(Dimension::OVERWORLD, 1, 1).is_none());
+            assert!(
+                view.observation(Dimension::OVERWORLD, observation.pos)
+                    .is_none()
+            );
+            assert!(view.block(Dimension::OVERWORLD, observation.pos).is_none());
+            assert!(view.container(container.reference).is_none());
+            assert!(
+                view.world_container(Dimension::OVERWORLD, container.reference)
+                    .is_none()
+            );
+            assert!(
+                view.container_at(
+                    Dimension::OVERWORLD,
+                    observation.pos,
+                    mornlea_domain::ContainerKind::Chest
+                )
+                .is_none()
+            );
+            assert!(view.container_refs(key()).is_empty());
+            assert!(view.drops(key()).is_empty());
+            assert_eq!(
+                view.check_drop_batch(&drop_batch()),
+                Err(RuleReject::StaleObservation)
+            );
+            assert_eq!(
+                view.drop_rehearsal().try_insert(&drop_batch()),
+                Err(RuleReject::StaleObservation)
+            );
+            let replacement = container.clone();
+            let effects = vec![
+                RuleEffect::Drops(drop_batch()),
+                RuleEffect::DropPatch {
+                    before: drop_record.clone(),
+                    after: None,
+                },
+                RuleEffect::Container {
+                    before: container.clone(),
+                    after: replacement.clone(),
+                },
+                RuleEffect::WorldContainer {
+                    dimension: Dimension::OVERWORLD,
+                    before: container.clone(),
+                    after: replacement,
+                },
+                RuleEffect::Blocks(BlockTxn::system(
+                    SystemRule::Support,
+                    ctx.read().tick(),
+                    vec![BlockWrite::try_new(observation, 2).unwrap()],
+                )),
+            ];
+            for effect in effects {
+                assert_eq!(
+                    ctx.stage(RuleEffect::Compound(vec![
+                        RuleEffect::World(
+                            WorldState::try_new(mornlea_domain::WorldStateParts {
+                                day_phase_offset: 0,
+                                world_time_ticks: 999,
+                                weather: Weather::Clear,
+                                season: mornlea_domain::Season::Spring,
+                                season_progress: 0,
+                                temperature: 0
+                            })
+                            .unwrap()
+                        ),
+                        effect
+                    ])),
+                    Err(RuleReject::StaleObservation)
+                );
+                assert!(ctx.world.is_none());
+            }
+            assert_eq!(ctx.drops.get(&key()).unwrap().records(), &[drop_record]);
+            assert_eq!(
+                ctx.container_chunks
+                    .get(&key())
+                    .unwrap()
+                    .record(key(), container.reference),
+                Some(container.clone())
+            );
+            ctx.commit_carried();
+        }
+        a.replace_chunk_wants(BTreeSet::from([key()])).unwrap();
+        let ready = a.live_chunk_facts(key()).unwrap();
+        assert_eq!(
+            (
+                ready.phase,
+                ready.generation,
+                ready.revision,
+                ready.persisted_revision,
+                ready.needs_rewrite,
+                ready.recovered
+            ),
+            (
+                LiveChunkPhase::Ready,
+                before.generation,
+                before.revision,
+                7,
+                true,
+                true
+            )
+        );
+        let ctx = TickContext::for_tick(&mut a, TickBudget::full());
+        assert!(ctx.read().ready_chunk(key()));
+        assert_eq!(ctx.read().container(container.reference), Some(container));
+        assert_eq!(ctx.read().drops(key()).len(), 1);
+    }
+    #[test]
+    fn sixty_four_failed_attempts_tick_forget_retain_only_global_generation() {
+        let mut a = live();
+        for n in 1..=64 {
+            a.replace_chunk_wants(BTreeSet::from([key()])).unwrap();
+            let r = a.reserve_chunk_load(key()).unwrap();
+            assert_eq!(r.generation(), n);
+            a.bind_chunk_load(r, request(n)).unwrap();
+            a.offer_acquired(AcquiredChunkEvent::Load {
+                key: key(),
+                generation: r.generation(),
+                request: request(n),
+                result: Err(ServerError::Cancelled),
+            })
+            .unwrap();
+            a.advance_tick(TickBudget::full()).unwrap();
+            assert_eq!(
+                a.live_chunk_facts(key()).unwrap().phase,
+                LiveChunkPhase::Failed
+            );
+            a.replace_chunk_wants(BTreeSet::new()).unwrap();
+            assert_eq!(a.acquisition.ownership_counts(), (0, 0, 0, 0, 0, 0));
+        }
+        a.replace_chunk_wants(BTreeSet::from([key()])).unwrap();
+        assert_eq!(a.reserve_chunk_load(key()).unwrap().generation(), 65);
+    }
+    #[test]
+    fn enable_refuses_sparse_ready_and_queued_legacy_before_changing_mode() {
+        for ready in [false, true] {
+            let mut a = authority();
+            let mut ctx = TickContext::harness(&mut a, TickBudget::full());
+            if ready {
+                ctx.preload_ready_chunk(prepared(1).into_parts().0);
+            } else {
+                ctx.preload_block(
+                    BlockObservation::try_new(key(), 1, 1, BlockPos::new(0, 0, 0), 2).unwrap(),
+                );
+            }
+            let residents = ctx.resident_snapshot();
+            drop(ctx);
+            a.commit_residents(residents);
+            assert_eq!(
+                a.enable_live_chunks(),
+                Err(ServerError::InvalidState {
+                    phase: ServerPhase::Running
+                })
+            );
+            assert!(!a.acquisition.enabled());
+            let ctx = TickContext::for_tick(&mut a, TickBudget::full());
+            assert!(
+                ctx.read()
+                    .observation(Dimension::OVERWORLD, BlockPos::new(0, 0, 0))
+                    .is_some()
+            );
+        }
+        let mut a = authority();
+        a.admit_chunk(ChunkResult {
+            key: key(),
+            generation: 1,
+            request: request(1),
+            result: Ok(chunk()),
+        })
+        .unwrap();
+        assert!(a.enable_live_chunks().is_err());
+        assert_eq!(a.drain_chunks(1).len(), 1);
+        a.enable_live_chunks().unwrap();
+    }
+    #[test]
+    fn ordinary_tick_selects_companion_before_acquire_and_moves_player_after_installation() {
+        use mornlea_domain::{
+            Command, CompanionId, HeldActions, LookAngles, MotionStateParts, Movement,
+            PlayerControl, PlayerControlParts, SurvivalState, SurvivalStateParts,
+        };
+        use mornlea_protocol::{LoginStart, admit_login};
+        fn uuid(n: u8) -> [u8; 16] {
+            let mut b = [0; 16];
+            b[0] = n;
+            b[6] = 0x40;
+            b[8] = 0x80;
+            b
+        }
+        let mut a = live();
+        let id = PlayerId::try_from_bytes(uuid(1)).unwrap();
+        let start = LoginStart::new(id, "Ada", 8).unwrap();
+        let login =
+            admit_login(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap()).unwrap();
+        let session = a.admit(login, TransportKind::Memory).unwrap();
+        let save = PlayerSave {
+            player_id: mornlea_storage::PlayerId::from_bytes(uuid(1)),
+            revision: 1,
+            display_name: "Ada".into(),
+            current: PlayerLocation {
+                dimension: 0,
+                position: [8.65, 0.0, 8.0],
+            },
+            yaw: 0.0,
+            pitch: 0.0,
+            safe: None,
+            inventory: Default::default(),
+            health: 20,
+            hunger: 20,
+            saturation_milli: 5000,
+            exhaustion_milli: 0,
+            respawn_present: false,
+            respawn_position: [0.0; 3],
+            respawn_dimension: 0,
+            armor: [Default::default(); 4],
+        };
+        let companion = CompanionId::try_from_bytes(uuid(2)).unwrap();
+        let mut seeded = seed_player(session, &save).unwrap();
+        seeded.actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([8.65, 0.0, 8.0]).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        let companion_actor = ActorRecord::try_new(
+            ActorKey::Companion(companion),
+            ActorLifecycle::Active,
+            Dimension::OVERWORLD,
+            MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new([6.0, 0.0, 6.0]).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            }),
+            LookAngles::try_new(0.0, 0.0).unwrap(),
+            SurvivalState::try_new(SurvivalStateParts {
+                health: 20,
+                oxygen: 300,
+                hunger: 20,
+                saturation_zero: false,
+                armor_points: 0,
+            })
+            .unwrap(),
+            ActorBody::Companion(mornlea_storage::CompanionBody {
+                id: mornlea_storage::PlayerId::from_bytes(uuid(2)),
+                dimension: 0,
+                position: [6.0, 0.0, 6.0],
+                yaw: 0.0,
+                pitch: 0.0,
+                inventory: Default::default(),
+            }),
+        )
+        .unwrap();
+        {
+            let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx.stage_login(seeded);
+            ctx.stage(RuleEffect::Actor(companion_actor)).unwrap();
+            ctx.preload_inventory(ActorKey::Companion(companion), InventoryRecord::empty());
+            ctx.commit_carried();
+        }
+        let control = PlayerControl::new(PlayerControlParts {
+            movement: Movement {
+                move_x: 1,
+                move_z: 0,
+                jump: false,
+            },
+            look: LookAngles::try_new(0.0, 0.0).unwrap(),
+            actions: HeldActions {
+                primary: false,
+                eating: false,
+                sprinting: false,
+                sneaking: false,
+            },
+        });
+        a.submit(
+            session,
+            PlayIntent::Sequenced {
+                sequence: 1,
+                command: Command::PlayerInput(control),
+            },
+        )
+        .unwrap();
+        let mut floor = chunk();
+        for section in &mut floor.sections[..4] {
+            section.single = 2;
+        }
+        let mut packed = vec![0u64; 1024];
+        for y in [0usize, 1] {
+            let cell = y * 256 + 8 * 16 + 9;
+            packed[cell / 4] |= 2u64 << ((cell % 4) * 15);
+        }
+        floor.sections[4] = ContainerSnapshot {
+            kind: StorageKind::Direct,
+            bits: 15,
+            single: 0,
+            palette: vec![],
+            packed,
+        };
+        queue(&mut a, floor);
+        let action = CompanionActionEnvelope::try_new(
+            companion,
+            a.next_tick(),
+            AgentRequestId::try_from_bytes(uuid(3)).unwrap(),
+            RunId::try_from_bytes(uuid(4)).unwrap(),
+            SnapshotId::try_from_bytes(uuid(5)).unwrap(),
+            1,
+            1,
+            [0; 32],
+            CompanionAction::MineHold {
+                target: BlockPos::new(9, 0, 8),
+            },
+        )
+        .unwrap();
+        a.submit_companion(action).unwrap();
+        world::reset_ready_clones();
+        world::reset_materializations();
+        a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(
+            ACQUIRE_AVAILABILITY.with(std::cell::Cell::get),
+            Some((key(), false, true))
+        );
+        let installed = a
+            .residents
+            .actors
+            .iter()
+            .find(|v| v.key == ActorKey::Player(session))
+            .unwrap()
+            .motion
+            .position()
+            .get();
+        assert_eq!(
+            installed[0], 8.7,
+            "later physics collides with the installed wall"
+        );
+        assert!(
+            a.residents
+                .actors
+                .iter()
+                .find(|v| v.key == ActorKey::Player(session))
+                .unwrap()
+                .motion
+                .on_ground()
+        );
+        assert_eq!(world::ready_clones(), 0);
+        assert_eq!(world::materializations(), 0);
+    }
+    #[test]
+    fn acquire_shape_and_batch_report_preserve_then_settle_separate_lanes() {
+        let mut a = live();
+        let k = |x| ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(x, 0),
+        };
+        a.replace_chunk_wants((0..16).map(k).collect()).unwrap();
+        for x in 0..8 {
+            let r = a.reserve_chunk_load(k(x)).unwrap();
+            a.bind_chunk_load(r, request(x as u64 + 1)).unwrap();
+            a.offer_acquired(AcquiredChunkEvent::Load {
+                key: k(x),
+                generation: r.generation(),
+                request: request(x as u64 + 1),
+                result: Ok(None),
+            })
+            .unwrap();
+        }
+        a.advance_tick(TickBudget::full()).unwrap();
+        for x in 0..8 {
+            let r = a.reserve_chunk_generation(k(x)).unwrap();
+            a.bind_chunk_generation(r, request(x as u64 + 1)).unwrap();
+            a.offer_acquired(AcquiredChunkEvent::Generated {
+                key: k(x),
+                generation: r.generation(),
+                request: request(x as u64 + 1),
+                result: Err(ServerError::Cancelled),
+            })
+            .unwrap();
+        }
+        for x in 8..16 {
+            let r = a.reserve_chunk_load(k(x)).unwrap();
+            a.bind_chunk_load(r, request(x as u64 - 7)).unwrap();
+            a.offer_acquired(AcquiredChunkEvent::Load {
+                key: k(x),
+                generation: r.generation(),
+                request: request(x as u64 - 7),
+                result: Ok(None),
+            })
+            .unwrap();
+        }
+        let mut ctx = TickContext::for_tick(&mut a, TickBudget::full());
+        let wrong = RuleCall {
+            phase: RulePhase::CompanionIntent,
+            actor: None,
+            command: None,
+            internal: None,
+        };
+        assert_eq!(
+            crate::rules::world_acquisition::run(&mut ctx, wrong).unwrap(),
+            PhaseReport {
+                examined: 0,
+                applied: 0,
+                carried: 0,
+                rejected: 0
+            }
+        );
+        assert_eq!(
+            ctx.authority.acquisition.ownership_counts(),
+            (16, 8, 8, 16, 8, 8)
+        );
+        let call = RuleCall {
+            phase: RulePhase::Acquire,
+            actor: None,
+            command: None,
+            internal: None,
+        };
+        let report = crate::rules::world_acquisition::run(&mut ctx, call).unwrap();
+        assert_eq!(
+            report,
+            PhaseReport {
+                examined: 16,
+                applied: 8,
+                carried: 0,
+                rejected: 8
+            }
+        );
+        assert_eq!(
+            ctx.authority.acquisition.ownership_counts(),
+            (16, 0, 0, 0, 0, 0)
+        );
     }
 }

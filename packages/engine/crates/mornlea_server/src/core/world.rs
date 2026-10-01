@@ -6,7 +6,9 @@ use std::sync::Arc;
 use mornlea_domain::{BlockPos, chunk_block_index};
 use mornlea_storage::{Chunk, ChunkSave, ContainerSnapshot, StorageKind};
 
+use super::container_store::ContainerState;
 use super::contracts::{BlockObservation, ChunkKey, RecoveredChunk, ServerError};
+use super::drop_store::DropState;
 
 #[cfg(test)]
 thread_local! {
@@ -245,6 +247,8 @@ fn apply_cell(chunk: &mut Chunk, converted: &mut BTreeSet<usize>, index: usize, 
 #[derive(Clone)]
 pub struct PreparedChunk {
     ready: ReadyChunk,
+    drops: DropState,
+    containers: ContainerState,
     persisted_revision: u64,
     needs_rewrite: bool,
     recovered: bool,
@@ -266,8 +270,19 @@ impl PreparedChunk {
                 field: "chunk_revision",
             });
         }
+        let ready = ReadyChunk::try_new(key, generation, loaded.revision, loaded.chunk)?;
+        let drops = DropState::new(
+            key,
+            ready
+                .drop_slots()
+                .try_into()
+                .expect("validated fixed drops"),
+        );
+        let containers = ready.container_state();
         Ok(Self {
-            ready: ReadyChunk::try_new(key, generation, loaded.revision, loaded.chunk)?,
+            ready,
+            drops,
+            containers,
             persisted_revision: loaded.persisted_revision,
             needs_rewrite: loaded.needs_rewrite,
             recovered: loaded.recovered,
@@ -291,6 +306,20 @@ impl PreparedChunk {
     }
     pub fn recovered(&self) -> bool {
         self.recovered
+    }
+
+    /// Moves fixed slot owners prepared off tick alongside the immutable base.
+    pub(crate) fn into_live_parts(
+        self,
+    ) -> (ReadyChunk, DropState, ContainerState, u64, bool, bool) {
+        (
+            self.ready,
+            self.drops,
+            self.containers,
+            self.persisted_revision,
+            self.needs_rewrite,
+            self.recovered,
+        )
     }
 
     /// Move the prepared base and facts into their authority owner without

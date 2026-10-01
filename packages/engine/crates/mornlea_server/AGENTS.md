@@ -594,3 +594,26 @@ and is required by the script self-test. Set an isolated `CARGO_TARGET_DIR` for
 focused work, and use an owned child supervisor on Linux when executing the
 activation suite or self-test. `activation_verifier.rs` covers real current-save,
 unloaded-family, restore/resume, immutable-package and unsafe-output consumers.
+
+## Managed live chunk acquisition
+
+`core/acquisition.rs` owns the opt-in lifecycle book, opaque reservations and
+whole prepared-result transfers. Enabling requires an empty resident world and
+legacy completion queue; disabled replay and sparse fixtures retain their
+existing behavior. Load and generation aliases occupy separate lanes of eight
+attempts, so equal numeric provider IDs coexist. The book retains at most 36660
+wanted keys, 36676 managed records and sixteen staged results, with one checked
+global generation scalar and no consumed-request or per-key history.
+
+The actual Acquire rule consumes prepared owners after companion intent and
+before player physics. Ready bases, fixed drop/container owners and source
+durability facts are prepared off tick and moved into resident ownership.
+Central reads and block/container/drop preflight require the managed Ready
+phase. Forgotten successes retain their body and durability facts as Unloading,
+unavailable to gameplay; rewant restores the same identity. Capture permits
+Ready and Unloading for a later durable consumer. This lane performs no save,
+provider cancellation, request driving or reclamation. Those serial consumers
+must preserve this book's ownership and typed load errors. Private bounds and
+tick clone/materialization counters live with the owning modules; actual disk
+and native-generation consumer cases are registered in the persistence failure
+live-acquisition topic.
