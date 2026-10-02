@@ -650,7 +650,20 @@ impl MornleaClientBridge {
         self.rust_envelope(value)
     }
 
-    /// One rust-facade call over two marshalled arguments.
+    /// The closed refusal envelope for a marshalling failure: no routine
+    /// runs and no panic can cross the engine boundary, whatever argument
+    /// position refused.
+    fn rust_marshalling_refusal(&mut self) -> VarDictionary {
+        use crate::abi::boundary;
+        use mornlea_client_core::contracts::ClientError;
+        let value = boundary::outcome(Err(ClientError::InvalidInput));
+        self.rust_envelope(value)
+    }
+
+    /// One rust-facade call over two marshalled arguments. The admission is
+    /// the shared engine-free join: a refusal in any position — including a
+    /// late one behind an already-marshalled first argument — answers the
+    /// closed envelope without dispatching.
     fn rust_call2(
         &mut self,
         first: Result<crate::abi::boundary::BoundaryValue, ()>,
@@ -661,17 +674,16 @@ impl MornleaClientBridge {
             &crate::abi::boundary::BoundaryValue,
         ) -> crate::abi::boundary::BoundaryValue,
     ) -> VarDictionary {
-        match (first, second) {
-            (Ok(first), Ok(second)) => {
+        match crate::abi::boundary::join_arguments2(first, second) {
+            Ok((first, second)) => {
                 self.rust_call(Ok(first), move |arena, first| call(arena, first, &second))
             }
-            (first, _) => self.rust_call(first, |_, _| {
-                unreachable!("the refusal arm renders the failure envelope")
-            }),
+            Err(()) => self.rust_marshalling_refusal(),
         }
     }
 
-    /// One rust-facade call over three marshalled arguments.
+    /// One rust-facade call over three marshalled arguments, with the same
+    /// any-position admission rule as [`Self::rust_call2`].
     fn rust_call3(
         &mut self,
         first: Result<crate::abi::boundary::BoundaryValue, ()>,
@@ -684,13 +696,11 @@ impl MornleaClientBridge {
             &crate::abi::boundary::BoundaryValue,
         ) -> crate::abi::boundary::BoundaryValue,
     ) -> VarDictionary {
-        match (first, second, third) {
-            (Ok(first), Ok(second), Ok(third)) => self.rust_call(Ok(first), move |arena, first| {
+        match crate::abi::boundary::join_arguments3(first, second, third) {
+            Ok((first, second, third)) => self.rust_call(Ok(first), move |arena, first| {
                 call(arena, first, &second, &third)
             }),
-            (first, _, _) => self.rust_call(first, |_, _| {
-                unreachable!("the refusal arm renders the failure envelope")
-            }),
+            Err(()) => self.rust_marshalling_refusal(),
         }
     }
 

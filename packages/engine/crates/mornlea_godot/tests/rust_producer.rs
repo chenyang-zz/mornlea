@@ -1932,4 +1932,49 @@ mod rust_producer {
         assert_eq!(text.as_str(), "stone");
         assert_eq!(text.kind(), &TextKind::Target);
     }
+
+    /// A late argument's marshalling refusal closes the whole call: the
+    /// multi-argument facade dispatch admits only fully marshalled argument
+    /// lists, so a hostile leaf in any position — including behind an
+    /// already-marshalled first argument — answers the closed
+    /// invalid-input envelope instead of dispatching (the original defect
+    /// dispatched an `Ok` first argument into a dead closure and panicked
+    /// across the engine boundary).
+    ///
+    /// The admission is pinned through the shared engine-free join the
+    /// bridge's multi-argument dispatch calls; constructing the hostile
+    /// native leaves themselves (packed arrays, vectors, objects, non-finite
+    /// floats) needs the engine, so the native conversion and dictionary
+    /// dispatch remain engine-deferred and are not claimed here.
+    #[test]
+    fn late_argument_marshalling_refusal_closes_the_call() {
+        let ok = || Ok(BoundaryValue::Text("marshalled".to_string()));
+        let refused = || Err(());
+
+        // Two arguments: every refusal permutation, and especially the
+        // first-Ok-second-refused one the defect dispatched on.
+        assert!(boundary::join_arguments2(ok(), refused()).is_err());
+        assert!(boundary::join_arguments2(refused(), ok()).is_err());
+        assert!(boundary::join_arguments2(refused(), refused()).is_err());
+        let joined = boundary::join_arguments2(ok(), ok()).expect("two admitted arguments");
+        assert_eq!(joined.0, BoundaryValue::Text("marshalled".to_string()));
+        assert_eq!(joined.1, BoundaryValue::Text("marshalled".to_string()));
+
+        // Three arguments: a refusal in any of the three positions closes
+        // the call; the reviewed defect reached the dead closure whenever
+        // the first argument marshalled and a later one refused.
+        assert!(boundary::join_arguments3(ok(), ok(), refused()).is_err());
+        assert!(boundary::join_arguments3(ok(), refused(), ok()).is_err());
+        assert!(boundary::join_arguments3(refused(), ok(), ok()).is_err());
+        assert!(boundary::join_arguments3(ok(), refused(), refused()).is_err());
+        assert!(boundary::join_arguments3(refused(), refused(), refused()).is_err());
+        let joined = boundary::join_arguments3(ok(), ok(), ok()).expect("three admitted arguments");
+        assert_eq!(joined.2, BoundaryValue::Text("marshalled".to_string()));
+
+        // The refusal the bridge renders for a joined Err is the closed
+        // invalid-input envelope — the `Internal` class stays reserved for
+        // genuine routine panics caught by the guard.
+        let refusal = boundary::outcome(Err(ClientError::InvalidInput));
+        assert_failure(&refusal, "InvalidInput");
+    }
 }

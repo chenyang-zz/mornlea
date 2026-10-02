@@ -674,6 +674,38 @@ pub mod boundary {
         }
     }
 
+    /// The marshalling admission of a two-argument facade call: the call may
+    /// dispatch only when every argument marshalled. Any refusal — including
+    /// a late one behind an already-marshalled first argument — joins into
+    /// one `Err`, so the bridge answers the closed invalid-input envelope
+    /// without invoking the routine and without ever dispatching on a
+    /// partially marshalled argument list. This decision is engine-free on
+    /// purpose: the bridge marshals the native variants and the engine-free
+    /// tests pin this exact admission, because no engine-free test can
+    /// construct the hostile native leaves themselves.
+    pub fn join_arguments2(
+        first: Result<BoundaryValue, ()>,
+        second: Result<BoundaryValue, ()>,
+    ) -> Result<(BoundaryValue, BoundaryValue), ()> {
+        match (first, second) {
+            (Ok(first), Ok(second)) => Ok((first, second)),
+            (Err(()), _) | (_, Err(())) => Err(()),
+        }
+    }
+
+    /// The three-argument marshalling admission: the same rule as
+    /// [`join_arguments2`] over three marshalled arguments.
+    pub fn join_arguments3(
+        first: Result<BoundaryValue, ()>,
+        second: Result<BoundaryValue, ()>,
+        third: Result<BoundaryValue, ()>,
+    ) -> Result<(BoundaryValue, BoundaryValue, BoundaryValue), ()> {
+        match (first, second, third) {
+            (Ok(first), Ok(second), Ok(third)) => Ok((first, second, third)),
+            (Err(()), _, _) | (_, Err(()), _) | (_, _, Err(())) => Err(()),
+        }
+    }
+
     // ------------------------------------------------------------------
     // Method-argument decoding
     // ------------------------------------------------------------------
