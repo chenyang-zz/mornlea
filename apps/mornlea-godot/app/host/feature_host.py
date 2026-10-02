@@ -35,6 +35,24 @@ HOST_PROTOCOL_MINOR = 0
 BUDGET_CLASSES = frozenset({"bootstrap", "light", "standard", "heavy"})
 RESET_POLICIES = frozenset({"recreate", "reset"})
 
+# The rust-producer facade the host drives in rust mode. `connect` is named
+# exactly as the facade contract spells it even though it shadows the engine
+# Node signal API: the host reaches it only through dynamic `call`, never
+# through the signal entry, so the two surfaces cannot alias.
+RUST_FACADE_METHODS = (
+    "open_core",
+    "connect",
+    "family_table",
+    "step",
+    "pull_typed_frame",
+    "reset",
+    "close",
+)
+RUST_PRODUCER_NAME = "rust-client-core"
+RUST_STEP_MESSAGE_BUDGET = 64
+RUST_STEP_MESH_BUDGET = 32
+U64_MAX = 18_446_744_073_709_551_615
+
 
 @runtime_checkable
 class StringArrayView(Protocol):
@@ -115,6 +133,79 @@ def _allocated_blocks() -> int:
     return 0
 
 
+def _u64_text(value: object) -> int | None:
+    """Parse one canonical decimal u64 text, or refuse it.
+
+    The facade bridges every unsigned 64-bit value through exactly this
+    spelling (digits only, no sign, no leading zero, at most twenty digits),
+    so any other shape is a torn or hostile result, never a usable number.
+    """
+    if not isinstance(value, str) or not value or len(value) > 20:
+        return None
+    if any(character not in "0123456789" for character in value):
+        return None
+    if len(value) > 1 and value[0] == "0":
+        return None
+    number = int(value)
+    return number if number <= U64_MAX else None
+
+
+def _u16_word(value: object) -> int | None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return value if 0 <= value <= 65_535 else None
+
+
+def _rust_error_class(result: object) -> str:
+    """The closed error class name of one facade envelope, for diagnostics."""
+    if isinstance(result, dict):
+        error = result.get("error")
+        if isinstance(error, dict):
+            error_class = error.get("class")
+            if isinstance(error_class, str) and error_class:
+                return error_class
+    return "UnknownError"
+
+
+def _rust_envelope_value(result: object) -> object:
+    """The owned value of one closed facade envelope, or None on any refusal.
+
+    A success envelope is exactly `ok` true with a null error; every other
+    shape — a failed call, a torn envelope, or a non-dictionary — means "no
+    result", and the caller keeps its prior visible state instead of
+    inventing a default value.
+    """
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        return None
+    return result.get("value")
+
+
+def _rust_token_from(result: object) -> dict | None:
+    """One validated core token, passed to the bridge verbatim thereafter.
+
+    The token is an opaque owned value: the host checks only that it is the
+    facade-issued `{slot, generation}` record and then returns the same
+    object on every call, never rebuilding or mutating it.
+    """
+    token = _rust_envelope_value(result)
+    if not isinstance(token, dict):
+        return None
+    slot = token.get("slot")
+    if not isinstance(slot, int) or isinstance(slot, bool) or slot <= 0:
+        return None
+    if _u64_text(token.get("generation")) is None:
+        return None
+    return token
+
+
+def _rust_epoch_text_from(result: object) -> str | None:
+    """One canonical session-epoch text answered by connect or reset."""
+    epoch = _rust_envelope_value(result)
+    if not isinstance(epoch, str) or _u64_text(epoch) is None:
+        return None
+    return epoch
+
+
 @gdclass
 class feature_host(Node):
     """Own the bounded feature lifecycle while remaining feature agnostic.
@@ -123,8 +214,11 @@ class feature_host(Node):
     it acquires the object through `get_node` plus the identity cast above,
     negotiates capability from the bridge's typed family table, and hands the
     bridge's scene path to features so each acquires the same object itself.
-    Session methods belong to features alone, and no code here branches on
-    concrete feature identities.
+    Session ownership is mode explicit: the pilot path leaves session methods
+    to the features, while the rust path keeps the core token, session epoch,
+    and the single step/pull/fan-out tick here so features only submit
+    semantic input and apply output. No code here branches on concrete
+    feature identities.
     """
 
     _instances: dict[str, Node]
@@ -135,6 +229,12 @@ class feature_host(Node):
     _last_process_ns: int
     _last_apply_ns: int
     _last_allocation_delta: int
+    _rust_mode: bool
+    _rust_token: dict | None
+    _rust_epoch: str | None
+    _rust_frame: dict | None
+    _rust_families: dict[str, tuple[int, int]] | None
+    _rust_required: tuple[tuple[str, int, int], ...]
 
     def _ready(self) -> None:
         self._instances = {}
@@ -145,6 +245,14 @@ class feature_host(Node):
         self._last_process_ns = 0
         self._last_apply_ns = 0
         self._last_allocation_delta = 0
+        # Rust-mode session ownership starts absent: the pilot path stays the
+        # default and only an explicit rust activation arms this state.
+        self._rust_mode = False
+        self._rust_token = None
+        self._rust_epoch = None
+        self._rust_frame = None
+        self._rust_families = None
+        self._rust_required = ()
 
     def _exit_tree(self) -> None:
         _deactivate(self)
@@ -156,6 +264,12 @@ class feature_host(Node):
         apply_ns = 0
         try:
             if self._bridge is None:
+                return
+            if self._rust_mode:
+                # Rust mode is an explicit complete path: the host owns the
+                # core token and session epoch, so no feature drives the
+                # session here — features only receive `apply_typed_frame`.
+                apply_ns = _rust_dispatch(self)
                 return
             for feature_id in self._active_order:
                 instance = self._instances.get(feature_id)
@@ -224,7 +338,61 @@ class feature_host(Node):
             return _missing_bridge_result(bridge_path).to_json()
         return _activate(self, catalog_path, bridge, epoch).to_json()
 
+    def activate_rust_catalog(
+        self,
+        catalog_path: str,
+        bridge_path: str,
+        epoch: int,
+        config_json: str,
+        endpoint_json: str,
+        identity_json: str,
+    ) -> str:
+        """Activate the explicit rust-core path with a host-owned session.
+
+        The pilot `activate_catalog` remains the default complete path; this
+        entry never silently substitutes it. The host opens the core, begins
+        the connection and negotiates the producer family table itself, then
+        instantiates features that only submit semantic input and apply the
+        fanned-out frame. Configuration, endpoint, and identity cross as JSON
+        text because script modules exchange strings, not live objects.
+        """
+        bridge = self.get_node(bridge_path)
+        if bridge is None:
+            return _missing_bridge_result(bridge_path).to_json()
+        decoded: list[object] = []
+        errors: list[str] = []
+        for name, text in (
+            ("configuration", config_json),
+            ("endpoint", endpoint_json),
+            ("identity", identity_json),
+        ):
+            value, error = _decoded_json(text)
+            if error:
+                errors.append(f"the rust {name} argument is not valid JSON")
+            decoded.append(value)
+        if errors:
+            return PlanResult(False, tuple(errors), (), ()).to_json()
+        return (
+            _activate_rust(
+                self,
+                catalog_path,
+                bridge,
+                epoch,
+                decoded[0],
+                decoded[1],
+                decoded[2],
+            )
+            .to_json()
+        )
+
+    def rust_session_epoch(self) -> str:
+        """The current host-owned session epoch text, or an empty string."""
+        return self._rust_epoch if self._rust_epoch is not None else ""
+
     def reset_features(self, epoch: int) -> None:
+        if self._rust_mode:
+            _reset_rust(self, epoch)
+            return
         _reset(self, epoch)
 
     def deactivate_features(self) -> None:
@@ -314,6 +482,13 @@ def _parse_version(value: str) -> tuple[int, int] | None:
     return int(parts[0]), int(parts[1])
 
 
+def _decoded_json(text: str) -> tuple[object, str]:
+    try:
+        return json.loads(text), ""
+    except json.JSONDecodeError:
+        return None, "invalid JSON"
+
+
 def _compatible_version(actual: str, required_major: int, required_minor: int) -> bool:
     # Major versions must match; newer compatible minors may satisfy a requirement.
     parsed = _parse_version(actual)
@@ -326,14 +501,14 @@ def _call_text(target: Object, method: str, *arguments: object) -> str:
 
 
 class FamilyTable:
-    """Parsed projection of the bridge's typed feature-family JSON table.
+    """Parsed projection of a negotiated feature-family table.
 
-    The table is keyed by the numeric registry family identifier as a string
-    (the bridge reports ``family`` as an integer), so a manifest requirement
-    must spell its family part as that numeric string, for example ``"2@1.0"``
-    for the connection family. The registry version word is a single contract
-    number, so it projects onto the requirement grammar as that major with an
-    implicit zero minor.
+    The pilot bridge reports its identity table keyed by the numeric registry
+    family identifier as a string (for example ``"2@1.0"`` for the connection
+    family, whose single contract version word projects as major with an
+    implicit zero minor). The rust producer table is keyed by symbolic logical
+    names instead (for example ``"audio-cues@1.0"``); both keyings feed the
+    same requirement grammar, so the host keeps one negotiation core.
     """
 
     def __init__(self, versions: dict[str, tuple[int, int]]) -> None:
@@ -464,6 +639,24 @@ def _build_plan(catalog_path: str, bridge: Node) -> tuple[PlanResult, dict[str, 
     table, bridge_error = _bridge_family_table(bridge)
     if bridge_error:
         errors.append(bridge_error)
+    return _plan_from_manifests(manifests_list, errors, table)
+
+
+def _build_rust_plan(
+    catalog_path: str, table: FamilyTable
+) -> tuple[PlanResult, dict[str, FeatureManifest]]:
+    # Rust manifests spell family requirements as symbolic logical names, so
+    # the same planning core negotiates them against the producer table that
+    # `family_table` answered instead of the pilot identity table.
+    manifests_list, errors = _load_catalog(catalog_path)
+    return _plan_from_manifests(manifests_list, errors, table)
+
+
+def _plan_from_manifests(
+    manifests_list: list[FeatureManifest],
+    errors: list[str],
+    table: FamilyTable | None,
+) -> tuple[PlanResult, dict[str, FeatureManifest]]:
     disabled: list[str] = []
     excluded: set[str] = set()
     manifests: dict[str, FeatureManifest] = {}
@@ -593,6 +786,22 @@ def _activate(host: feature_host, catalog_path: str, bridge: Node, epoch: int) -
     plan, manifests = _build_plan(catalog_path, bridge)
     if not plan.ok:
         return plan
+    return _instantiate_features(host, plan, manifests, epoch)
+
+
+def _instantiate_features(
+    host: feature_host,
+    plan: PlanResult,
+    manifests: dict[str, FeatureManifest],
+    epoch: int,
+) -> PlanResult:
+    """Instantiate one accepted plan in dependency order, with rollback.
+
+    Both the pilot and rust activation paths share this loop: providers enter
+    before consumers, a required failure rolls the already-active reverse
+    trace back through `_deactivate`, and an optional failure is isolated to
+    the affected feature and its dependents.
+    """
     disabled = list(plan.disabled)
     errors: list[str] = []
     for feature_id in plan.order:
@@ -662,5 +871,265 @@ def _deactivate(host: feature_host) -> None:
         _release_instance(instance)
     host._instances.clear()
     host._active_order.clear()
+    # The host-owned rust core releases only after every feature consumer is
+    # down, and `_close_rust` still sees the bound bridge for its one call.
+    _close_rust(host)
     host._bridge = None
     host._bridge_path = ""
+
+
+def _close_rust(host: feature_host) -> None:
+    """Release the host-owned rust core token exactly once per issue.
+
+    The facade's close is idempotent for a repeated token, but the host drops
+    its copy on the first teardown so no later tick or teardown can replay a
+    stale token. The state clears even when the envelope refuses: a token the
+    host decided to release must never be reused as if it were still live.
+    """
+    token = getattr(host, "_rust_token", None)
+    bridge = host._bridge
+    if token is not None and bridge is not None:
+        bridge.call("close", token)
+    host._rust_token = None
+    host._rust_epoch = None
+    host._rust_frame = None
+    host._rust_families = None
+    host._rust_required = ()
+    host._rust_mode = False
+
+
+def _rust_family_table(bridge: Node, token: dict) -> tuple[FamilyTable | None, str]:
+    """Negotiate the rust producer descriptor table for one live core.
+
+    The table is the producer identity the rust manifests negotiate against:
+    symbolic logical names with per-family contract versions, so a duplicate
+    name, an unnamed or unversioned descriptor, or a non-canonical bound is a
+    producer-contract break the host refuses before instantiating features.
+    """
+    result = bridge.call("family_table", token)
+    value = _rust_envelope_value(result)
+    if value is None:
+        return None, f"the rust core did not answer its family table ({_rust_error_class(result)})"
+    if not isinstance(value, dict) or value.get("producer") != RUST_PRODUCER_NAME:
+        return None, "the rust producer identity is not the frozen rust-client-core table"
+    descriptors = value.get("descriptors")
+    if not isinstance(descriptors, list) or not descriptors:
+        return None, "the rust family table reported no descriptors"
+    versions: dict[str, tuple[int, int]] = {}
+    for descriptor in descriptors:
+        if not isinstance(descriptor, dict):
+            return None, "the rust family table reported an unreadable descriptor"
+        name = descriptor.get("logical_name")
+        if not isinstance(name, str) or not name:
+            return None, "the rust family table reported an unnamed descriptor"
+        if name in versions:
+            return None, f"the rust family table reports family {name} twice"
+        major = _u16_word(descriptor.get("major"))
+        minor = _u16_word(descriptor.get("minor"))
+        numeric_id = descriptor.get("numeric_id")
+        if major is None or minor is None or major < 1:
+            return None, f"the rust family table reported an invalid version for {name}"
+        if not isinstance(numeric_id, int) or isinstance(numeric_id, bool) or numeric_id <= 0:
+            return None, f"the rust family table reported an invalid numeric ID for {name}"
+        if _u64_text(descriptor.get("record_limit")) is None or _u64_text(
+            descriptor.get("record_bytes")
+        ) is None:
+            return None, f"the rust family table reported an invalid bound for {name}"
+        versions[name] = (major, minor)
+    return FamilyTable(versions), ""
+
+
+def _required_families(
+    manifests: dict[str, FeatureManifest], active_order: list[str]
+) -> tuple[tuple[str, int, int], ...]:
+    """The deduplicated family requirements of the features that activated."""
+    required: dict[str, tuple[int, int]] = {}
+    for feature_id in active_order:
+        manifest = manifests[feature_id]
+        for family_spec in manifest.required_bridge_families:
+            parts = family_spec.rsplit("@", 1)
+            version = _parse_version(parts[1]) if len(parts) == 2 else None
+            if version is None:
+                continue
+            required[parts[0]] = max(required.get(parts[0], (0, 0)), version)
+    return tuple((name, major, minor) for name, (major, minor) in sorted(required.items()))
+
+
+def _rust_frame_from(
+    result: object,
+    epoch: str,
+    families: dict[str, tuple[int, int]] | None,
+    required: tuple[tuple[str, int, int], ...],
+) -> dict | None:
+    """Validate one whole pulled frame, or refuse it without side effects.
+
+    The facade already validates the frame it renders; this is the host's own
+    closed-shape check so a torn, mixed, or stale scripted or drifted result
+    never reaches a feature: complete scalar fields in canonical spellings,
+    the current session epoch, no duplicate family keys, every key known to
+    the negotiated table at a compatible version, and every family the active
+    manifests declared required present in the same frame.
+    """
+    frame = _rust_envelope_value(result)
+    if not isinstance(frame, dict):
+        return None
+    if _u16_word(frame.get("layout_major")) is None or _u16_word(frame.get("layout_minor")) is None:
+        return None
+    if frame.get("session_epoch") != epoch or _u64_text(frame.get("session_epoch")) is None:
+        return None
+    if _u64_text(frame.get("confirmed_revision")) is None:
+        return None
+    if _u64_text(frame.get("frame_index")) is None:
+        return None
+    families_list = frame.get("families")
+    if not isinstance(families_list, list) or not families_list:
+        return None
+    seen: set[str] = set()
+    for family in families_list:
+        if not isinstance(family, dict) or not isinstance(family.get("records"), list):
+            return None
+        key = family.get("key")
+        if not isinstance(key, dict):
+            return None
+        name = key.get("logical_name")
+        major = _u16_word(key.get("major"))
+        minor = _u16_word(key.get("minor"))
+        if not isinstance(name, str) or not name or name in seen:
+            return None
+        if major is None or minor is None:
+            return None
+        seen.add(name)
+        registered = families.get(name) if families is not None else None
+        if registered is None:
+            return None
+        if major != registered[0] or minor > registered[1]:
+            return None
+    for name, required_major, required_minor in required:
+        if name not in seen:
+            return None
+        registered = families[name] if families is not None else (required_major, required_minor)
+        if required_major != registered[0] or required_minor > registered[1]:
+            return None
+    return frame
+
+
+def _rust_dispatch(host: feature_host) -> int:
+    """One host-owned facade step, pull, validation, and same-frame fan-out.
+
+    Exactly one `step` and one `pull_typed_frame` run per tick regardless of
+    the feature count, and every validated frame is handed to each feature as
+    the same owned object in activation order. Any refused step or refused,
+    torn, mixed, or stale frame returns early: the previous frame and every
+    feature resource stay untouched until a later tick succeeds.
+    """
+    bridge = host._bridge
+    token = host._rust_token
+    epoch = host._rust_epoch
+    if bridge is None or token is None or epoch is None:
+        return 0
+    work = {"messages": RUST_STEP_MESSAGE_BUDGET, "meshes": RUST_STEP_MESH_BUDGET}
+    step_result = bridge.call("step", token, epoch, work)
+    if not isinstance(_rust_envelope_value(step_result), dict):
+        return 0
+    pull_result = bridge.call("pull_typed_frame", token, epoch)
+    frame = _rust_frame_from(pull_result, epoch, host._rust_families, host._rust_required)
+    if frame is None:
+        return 0
+    host._rust_frame = frame
+    apply_started = time.perf_counter_ns()
+    for feature_id in host._active_order:
+        instance = host._instances.get(feature_id)
+        if instance is not None and instance.has_method("apply_typed_frame"):
+            instance.call("apply_typed_frame", frame)
+    return time.perf_counter_ns() - apply_started
+
+
+def _activate_rust(
+    host: feature_host,
+    catalog_path: str,
+    bridge: Node,
+    epoch: int,
+    config: object,
+    endpoint: object,
+    identity: object,
+) -> PlanResult:
+    """Open, connect, negotiate, and instantiate the rust-core host session.
+
+    The host owns the token and epoch for the whole session: it opens the
+    core, begins the connection, negotiates the producer family table, and
+    only then instantiates features against that table. Any refusal releases
+    the opened token, so no half-open session survives a failed activation.
+    """
+    _deactivate(host)
+    host._trace = []
+    host._bridge = bridge
+    host._bridge_path = _absolute_path_text(bridge)
+    missing = next((name for name in RUST_FACADE_METHODS if not bridge.has_method(name)), "")
+    if missing:
+        return PlanResult(
+            False, (f"the bridge is missing the rust facade method {missing}",), (), ()
+        )
+    open_result = bridge.call("open_core", config)
+    token = _rust_token_from(open_result)
+    if token is None:
+        return PlanResult(
+            False,
+            (f"the rust core refused to open ({_rust_error_class(open_result)})",),
+            (),
+            (),
+        )
+    host._rust_token = token
+    host._rust_mode = True
+    connect_result = bridge.call("connect", token, endpoint, identity)
+    epoch_text = _rust_epoch_text_from(connect_result)
+    if epoch_text is None:
+        return _rust_abandon(
+            host,
+            PlanResult(
+                False,
+                (f"the rust core refused the connection ({_rust_error_class(connect_result)})",),
+                (),
+                (),
+            ),
+        )
+    host._rust_epoch = epoch_text
+    table, table_error = _rust_family_table(bridge, token)
+    if table is None:
+        return _rust_abandon(host, PlanResult(False, (table_error,), (), ()))
+    host._rust_families = table.versions
+    plan, manifests = _build_rust_plan(catalog_path, table)
+    if not plan.ok:
+        return _rust_abandon(host, plan)
+    result = _instantiate_features(host, plan, manifests, epoch)
+    if not result.ok:
+        # The instantiation rollback already deactivated the features and
+        # closed the core token through `_deactivate`.
+        return result
+    host._rust_required = _required_families(manifests, host._active_order)
+    return result
+
+
+def _rust_abandon(host: feature_host, result: PlanResult) -> PlanResult:
+    """Release the opened core token of a rust activation that cannot finish."""
+    _close_rust(host)
+    return result
+
+
+def _reset_rust(host: feature_host, epoch: int) -> None:
+    """Move the host-owned session onto a fresh facade epoch, then features."""
+    bridge = host._bridge
+    token = host._rust_token
+    session_epoch = host._rust_epoch
+    if bridge is None or token is None or session_epoch is None:
+        return
+    result = bridge.call("reset", token, session_epoch)
+    fresh = _rust_epoch_text_from(result)
+    if fresh is None:
+        # A refused reset keeps the live epoch and leaves feature state
+        # untouched rather than splitting features from their session epoch.
+        return
+    host._rust_epoch = fresh
+    # Frames of the retired epoch are stale by contract; the retained copy is
+    # dropped so only a validated frame of the fresh epoch can reappear.
+    host._rust_frame = None
+    _reset(host, epoch)
