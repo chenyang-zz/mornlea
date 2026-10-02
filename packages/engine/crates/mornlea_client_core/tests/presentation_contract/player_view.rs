@@ -13,11 +13,14 @@
 //! nothing is projectable until a fresh authority lands, and the fresh
 //! epoch's first authority publishes the authoritative-reset reason — and a
 //! player state or observation from another epoch rejects the whole
-//! projection with no partial output. Mining progress is the exact
-//! authoritative source `MiningState` the latest retained player observation
-//! carried, idle when no player observation is retained: elapsed frame
-//! revisions never advance it, because the provider reconstructs nothing
-//! from local time.
+//! projection with no partial output. Mining progress is the persisted
+//! source `MiningState` of the latest confirmed authority the projection
+//! state carries: it survives a full observation-queue drain unchanged — no
+//! idle flap — always pairs with the confirmed base's own pose rather than a
+//! newer retained observation's, and only an authoritative confirmation
+//! replaces it. Elapsed frame revisions never advance it, because the
+//! provider reconstructs nothing from local time, and no source tick is
+//! invented for the owner-persisted summary the record publishes.
 
 use mornlea_client_core::contracts::{
     ClientError, ClientLimits, ConfirmedRevision, FamilyOperation, ObservationKey, SessionEpoch,
@@ -28,7 +31,7 @@ use mornlea_client_core::presentation::family_player_view::project_player_view;
 use mornlea_client_core::presentation::{
     AcceptedObservation, AudioProjectionState, CorrectionReason, DiagnosticProjectionState,
     ErrorClassCounters, FiniteRay, LifecycleProjectionState, MovementIntent, Pose,
-    ProducerIdentity, ProjectionView, QueueCounters,
+    ProducerIdentity, ProjectionView, PublicationConsumption, QueueCounters,
 };
 use mornlea_client_core::session::mirror::MirrorProvider;
 use mornlea_domain::{
@@ -377,8 +380,8 @@ fn confirmed_pose_stays_authoritative_while_prediction_is_explicit() {
     assert_eq!(record.header().revision(), view.frame_revision());
     assert_eq!(
         record.header().source_tick(),
-        Some(1),
-        "the player observation's own server tick survives"
+        None,
+        "the owner-persisted summary carries no source tick and none is invented"
     );
 }
 
@@ -458,8 +461,8 @@ fn acknowledged_correction_publishes_reason_and_sequence() {
     assert_ne!(predicted.position(), record.confirmed_pose().position());
     assert_eq!(
         record.header().source_tick(),
-        Some(2),
-        "the newer player observation's tick is the header's source tick"
+        None,
+        "the owner-persisted summary carries no source tick and none is invented"
     );
 }
 
@@ -676,11 +679,11 @@ fn look_ray_is_always_inside_the_checked_finite_domain() {
 }
 
 /// The absent-values row: a player state whose ray is absent publishes no
-/// invented ray, and a retained queue with no player observation publishes
-/// the idle mining — no swing exists in the authoritative sources this
-/// frame retained — beside a header with no invented source tick.
+/// invented ray, a directly constructed state's default authority carries
+/// the idle mining, and the header publishes no invented source tick for the
+/// owner-persisted summary.
 #[test]
-fn absent_ray_and_absent_player_observation_publish_no_invented_values() {
+fn absent_ray_and_default_authority_publish_no_invented_values() {
     let mut provider = admitted_mirror(EPOCH);
     let _ = commit(&mut provider, EPOCH, closed_event(9));
 
@@ -709,12 +712,12 @@ fn absent_ray_and_absent_player_observation_publish_no_invented_values() {
     assert_eq!(
         record.mining(),
         &MiningState::Idle,
-        "with no retained player observation the closed-world mining value is idle"
+        "a directly constructed state carries the idle default authority"
     );
     assert_eq!(
         record.header().source_tick(),
         None,
-        "no source tick is invented for a player observation that does not exist"
+        "no source tick is invented for the owner-persisted summary"
     );
     assert_eq!(record.predicted_pose(), None);
 }
@@ -912,13 +915,15 @@ fn epoch_reset_clears_projection_and_republishes_authoritative_reset() {
     );
 }
 
-/// The mining row: the projected mining state is the exact authoritative
-/// source value of the latest retained player observation — active swing
-/// preserved field-for-field, never advanced by the frame revisions that
-/// elapsed after it, and replaced exactly when a newer authoritative player
-/// observation carries the idle swing.
+/// The mining row: the projected mining state is the persisted source value
+/// of the latest confirmed authority the projection state carries — active
+/// swing preserved field-for-field, never advanced by the frame revisions
+/// that elapsed after it, never dropped to idle by a full observation-queue
+/// drain, always paired with the confirmed base's own pose rather than a
+/// newer retained observation's, and replaced exactly when a newer
+/// authoritative confirmation carries the idle swing.
 #[test]
-fn mining_is_the_exact_authoritative_source_state() {
+fn mining_is_the_persisted_source_state_of_the_confirmed_base() {
     let cells = fixture_cells(WALK_DIMS);
     let grid = walking_grid(&cells);
     let environment = StepEnvironment::new(grid, false);
@@ -936,6 +941,7 @@ fn mining_is_the_exact_authoritative_source_state() {
         .predict_step(1, forward(0.4), &environment)
         .expect("journaled prediction step");
     let player = replay.projection().expect("attributable projection state");
+    assert_eq!(player.mining(), &swing);
 
     let fixture = ViewFixture::new();
     let records =
@@ -965,7 +971,37 @@ fn mining_is_the_exact_authoritative_source_state() {
         "elapsed frame revisions never advance authoritative mining progress"
     );
 
-    // A newer authoritative player observation replaces the swing exactly.
+    // The post-consumption persistence row: a FULL observation-queue drain —
+    // the publication cursor consuming every retained observation, including
+    // the player observation that carried the swing — leaves the active
+    // swing and its paired confirmed pose exactly as they were. The persisted
+    // confirmed base, not a retained observation, owns the mining, so no
+    // idle flap can exist.
+    let drained = PublicationConsumption::try_new(provider.observations().len(), 0, 0, 0)
+        .expect("full drain cursor");
+    provider.consume(&drained).expect("full drain consumes");
+    assert!(
+        provider.observations().is_empty(),
+        "the queue is fully drained"
+    );
+    let records =
+        project_player_view(&fixture.view_of(&player, &provider, EPOCH)).expect("projects");
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].mining(),
+        &swing,
+        "a fully drained queue never flips an active swing to idle"
+    );
+    assert_eq!(
+        records[0].confirmed_pose().position(),
+        begin.motion().position().get().map(f64::from),
+        "the mining stays paired with the confirmed base's own pose"
+    );
+
+    // The pairing discipline: a NEWER retained player observation carrying
+    // the idle swing — committed but not yet confirmed onto the projection
+    // owner — changes nothing. The published mining pairs with the confirmed
+    // base's pose, never a newer retained observation's value.
     let stopped = authority(
         2,
         1,
@@ -974,7 +1010,29 @@ fn mining_is_the_exact_authoritative_source_state() {
         true,
         MiningState::Idle,
     );
-    let (_, stopped_key) = commit(&mut provider, EPOCH, Event::PlayerState(stopped));
+    let _ = commit(&mut provider, EPOCH, Event::PlayerState(stopped));
+    let records =
+        project_player_view(&fixture.view_of(&player, &provider, EPOCH)).expect("projects");
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].mining(),
+        &swing,
+        "a newer retained observation alone never replaces the persisted swing"
+    );
+    assert_eq!(
+        records[0].confirmed_pose().position(),
+        begin.motion().position().get().map(f64::from),
+        "the record never pairs the base's mining with a newer observation's pose"
+    );
+
+    // Only an authoritative confirmation replaces the persisted swing: once
+    // the newer observation is confirmed onto the projection owner, the
+    // mining and the confirmed pose move together.
+    let observations = provider.observations().to_vec();
+    let stopped_key = *observations
+        .last()
+        .expect("the newer player observation is retained")
+        .key();
     replay
         .apply_confirmed(&stopped_key, &stopped, &environment)
         .expect("the newer authority admits");
@@ -985,7 +1043,11 @@ fn mining_is_the_exact_authoritative_source_state() {
     assert_eq!(
         records[0].mining(),
         &MiningState::Idle,
-        "the newer authoritative observation ended the swing exactly"
+        "the newer authoritative confirmation ended the swing exactly"
     );
-    assert_eq!(records[0].header().source_tick(), Some(2));
+    assert_eq!(
+        records[0].confirmed_pose().position(),
+        stopped.motion().position().get().map(f64::from),
+        "the replaced mining pairs with the newly confirmed pose"
+    );
 }

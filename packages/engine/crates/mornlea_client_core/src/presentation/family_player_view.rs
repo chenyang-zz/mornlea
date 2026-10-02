@@ -13,26 +13,28 @@
 //! authority left none — a not-ready authority publishes no correction and
 //! no prediction.
 //!
-//! Mining ownership: the authoritative mining progress is the exact
-//! `MiningState` the latest retained player observation carried, in actual
-//! source order, and the idle value when no player observation is retained.
-//! It is never reconstructed from elapsed local time or an advancing frame
-//! revision; the private body observation carries no mirror-store identity,
-//! so this family projects it from the retained observation queue exactly
-//! like the other body families.
+//! Mining ownership: the authoritative mining progress is the persisted
+//! source `MiningState` of the latest confirmed authority, carried by the
+//! prediction projection state itself — the same value the owner's
+//! `source_mining()` reports — not by any retained observation. It therefore
+//! survives a full observation-queue drain unchanged (no idle flap), always
+//! pairs with the confirmed base's own pose, and only an authoritative
+//! confirmation replaces it; a prediction, a rejection, a duplicate delivery
+//! or an advancing frame revision never touches it, and nothing is ever
+//! reconstructed from elapsed local time. Because the record's source is the
+//! owner-persisted summary rather than one retained packet, the header
+//! carries no source tick: none is invented from an observation the
+//! publication cursor may already have consumed.
 //!
 //! Failure policy: a player state or an observation from another epoch
 //! rejects the whole projection with `StaleEpoch` before any record is
 //! returned — an epoch reset clears the projection owner, and nothing of an
-//! old epoch may enter a fresh frame — and a packet that is not a checked
-//! semantic publication rejects with `InvalidInput`. The emitted look ray is
-//! re-derived through the typed `FiniteRay` constructor, whose zero, NaN and
-//! over-range rejections are the boundary gate of every ray this family
-//! publishes. No prediction math runs here: the prediction owner's checked
-//! values are read-only inputs, and the confirmed mirror remains the sole
-//! attribution and state owner.
-
-use mornlea_domain::{Event, MiningState};
+//! old epoch may enter a fresh frame. The emitted look ray is re-derived
+//! through the typed `FiniteRay` constructor, whose zero, NaN and over-range
+//! rejections are the boundary gate of every ray this family publishes. No
+//! prediction math runs here: the prediction owner's checked values are
+//! read-only inputs, and the confirmed mirror remains the sole attribution
+//! and state owner.
 
 use crate::contracts::{ClientError, FamilyOperation, RecordHeader};
 use crate::presentation::frame::PlayerViewRecord;
@@ -44,8 +46,10 @@ use crate::presentation::{FiniteRay, MovementIntent, ProjectionView};
 ///
 /// The singleton record is a whole-view summary, never one record per
 /// observation: the player view a frame publishes is the single checked
-/// state the prediction owner currently attests, beside the mining of the
-/// latest authoritative player observation the frame retained.
+/// state the prediction owner currently attests, including the persisted
+/// source mining of its confirmed base. The retained observation queue is
+/// read only for epoch coherence, never for player facts: the persisted
+/// owner state owns them.
 pub fn project_player_view(
     view: &ProjectionView<'_>,
 ) -> Result<Vec<PlayerViewRecord>, ClientError> {
@@ -56,23 +60,13 @@ pub fn project_player_view(
         // path cleared the owner, so nothing stale may republish.
         return Err(ClientError::StaleEpoch);
     }
-    let mut mining = MiningState::Idle;
-    let mut source_tick = None;
     for observation in view.observations() {
-        let key = *observation.key();
-        if key.epoch() != view.frame_epoch() {
+        if observation.key().epoch() != view.frame_epoch() {
             // An observation from another epoch never enters this frame,
-            // however valid its packet is; old epochs never resurrect.
+            // however valid its packet is; old epochs never resurrect. The
+            // mirror would have refused its commit, so a foreign entry is
+            // a queue-contract violation, not player content to project.
             return Err(ClientError::StaleEpoch);
-        }
-        let event =
-            Event::try_from(observation.packet().clone()).map_err(|_| ClientError::InvalidInput)?;
-        if let Event::PlayerState(state) = event {
-            // The exact authoritative source value, in actual source order:
-            // the last retained player observation wins, and nothing is
-            // ever advanced from elapsed revisions or local time.
-            mining = state.mining();
-            source_tick = observation.source_tick();
         }
     }
     // The emitted ray passes through the typed constructor again, so a
@@ -90,7 +84,10 @@ pub fn project_player_view(
         RecordHeader::try_new(
             view.frame_epoch(),
             view.frame_revision(),
-            source_tick,
+            // The summary's source is the owner-persisted state, which
+            // carries no tick; no tick is invented from a retained
+            // observation the drain may already have consumed.
+            None,
             FamilyOperation::Upsert,
         )?,
         *player.confirmed_pose(),
@@ -98,7 +95,7 @@ pub fn project_player_view(
         look_ray,
         movement,
         player.correction().copied(),
-        mining,
+        *player.mining(),
     )?;
     Ok(vec![record])
 }
