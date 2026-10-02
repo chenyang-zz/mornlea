@@ -18,18 +18,27 @@
 //! of that frozen ABI, mirrored operation-for-operation from the accepted
 //! rule. The world facts the ABI needs beside the control — the borrowed
 //! collision grid and the body-in-fluid bit — are caller-owned mirror facts
-//! supplied per call, because this crate holds no block mirror.
+//! supplied per call, because this crate holds no block mirror. The same
+//! borrowed grid feeds the step-time ray-target recording: each step and
+//! replay walks the accepted engine raycast kernel along the confirmed and
+//! the predicted pose's look rays and records the first target cell each
+//! reaches, stamped with the confirmed base's revision; no grid is read
+//! outside step time and no hit is ever invented.
 
 use crate::contracts::{
     ClientError, ClientLimits, ConfirmedRevision, ObservationKey, SessionEpoch,
 };
 use crate::presentation::{Correction, CorrectionReason, FiniteRay, MovementIntent, Pose};
-use mornlea_domain::{Dimension, MiningState, PlayerControl, PlayerControlParts, PlayerState};
+use mornlea_domain::{
+    BlockPos, Dimension, LookAngles, MiningState, PlayerControl, PlayerControlParts, PlayerState,
+};
+use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::contracts::{
     CollisionGrid, KernelError, PhysicsControls, PhysicsRequest, PhysicsState, PhysicsTuning,
     SweepBounds,
 };
 use mornlea_engine::native::physics::step_physics;
+use mornlea_engine::native::raycast::NativeRaycast;
 
 /// One accepted prediction journal observation, keyed by epoch and local
 /// sequence. A rejected input removes its pending entry; an acknowledged one
@@ -78,6 +87,10 @@ impl JournalEntry {
 /// latest confirmed authority: it survives observation-queue consumption and
 /// every correction replay unchanged, and only an authoritative confirmation
 /// — never a prediction, rejection or duplicate delivery — replaces it.
+/// Beside each pose rides the recorded ray target of that pose's own look
+/// ray, derived at step time against the grid the step borrows: the
+/// confirmed target is confirmed data, the predicted target is explicitly
+/// unconfirmed data whose attribution belongs to the consumer.
 #[derive(Clone, Debug)]
 pub struct PlayerProjectionState {
     epoch: SessionEpoch,
@@ -89,6 +102,8 @@ pub struct PlayerProjectionState {
     look_ray: Option<FiniteRay>,
     movement: MovementIntent,
     mining: MiningState,
+    confirmed_target: Option<RayTarget>,
+    predicted_target: Option<RayTarget>,
 }
 
 impl PlayerProjectionState {
@@ -116,6 +131,8 @@ impl PlayerProjectionState {
             // through `with_mining`, so no caller of the frozen constructor
             // changes behavior.
             mining: MiningState::Idle,
+            confirmed_target: None,
+            predicted_target: None,
         })
     }
 
@@ -125,6 +142,22 @@ impl PlayerProjectionState {
     /// validate here.
     pub fn with_mining(mut self, mining: MiningState) -> Self {
         self.mining = mining;
+        self
+    }
+
+    /// Publishes the recorded target of the confirmed pose's look ray. The
+    /// replay owner derives it at step time against the grid the step
+    /// borrows; a directly constructed state carries no hit.
+    pub fn with_confirmed_target(mut self, target: Option<RayTarget>) -> Self {
+        self.confirmed_target = target;
+        self
+    }
+
+    /// Publishes the recorded target of the predicted pose's look ray. It is
+    /// data only — the attribution of an unconfirmed target is the
+    /// consumer's, never a claim of confirmation.
+    pub fn with_predicted_target(mut self, target: Option<RayTarget>) -> Self {
+        self.predicted_target = target;
         self
     }
 
@@ -163,6 +196,18 @@ impl PlayerProjectionState {
     /// The persisted source mining state of the latest confirmed authority.
     pub fn mining(&self) -> &MiningState {
         &self.mining
+    }
+
+    /// The recorded target of the confirmed pose's look ray, when the
+    /// step-borrowed grid put a target cell on it.
+    pub fn confirmed_target(&self) -> Option<&RayTarget> {
+        self.confirmed_target.as_ref()
+    }
+
+    /// The recorded target of the predicted pose's own look ray, when the
+    /// step-borrowed grid put a target cell on it. Unconfirmed data.
+    pub fn predicted_target(&self) -> Option<&RayTarget> {
+        self.predicted_target.as_ref()
     }
 }
 
@@ -347,10 +392,41 @@ struct PendingStep {
 struct ConfirmedBase {
     revision: ConfirmedRevision,
     state: PhysicsState,
-    look: mornlea_domain::LookAngles,
+    look: LookAngles,
     mining: MiningState,
     hunger: u8,
     ready: bool,
+}
+
+/// One recorded ray-target hit: the world cell the accepted raycast kernel
+/// reached and the confirmed revision of the base whose borrowed grid the
+/// hit was observed against. The position is a checked domain block
+/// position; no face, distance or block identity is invented here, because
+/// the projection seam consumes only the target cell and its source.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RayTarget {
+    position: BlockPos,
+    source_revision: ConfirmedRevision,
+}
+
+impl RayTarget {
+    pub fn try_new(
+        position: BlockPos,
+        source_revision: ConfirmedRevision,
+    ) -> Result<Self, ClientError> {
+        Ok(Self {
+            position,
+            source_revision,
+        })
+    }
+
+    pub fn position(&self) -> BlockPos {
+        self.position
+    }
+
+    pub fn source_revision(&self) -> ConfirmedRevision {
+        self.source_revision
+    }
 }
 
 /// The prediction journal and authoritative correction replay owner.
@@ -377,6 +453,8 @@ pub struct PredictionReplay {
     last_server_tick: u64,
     correction: Option<Correction>,
     frame_steps: u16,
+    confirmed_target: Option<RayTarget>,
+    predicted_target: Option<RayTarget>,
 }
 
 impl PredictionReplay {
@@ -395,6 +473,8 @@ impl PredictionReplay {
             last_server_tick: 0,
             correction: None,
             frame_steps: 0,
+            confirmed_target: None,
+            predicted_target: None,
         })
     }
 
@@ -471,7 +551,12 @@ impl PredictionReplay {
         // The persisted source mining of the confirmed base rides beside the
         // poses so the projection input role carries it; the owner-level
         // accessor reports the same value.
-        .with_mining(base.mining))
+        .with_mining(base.mining)
+        // The step-time recorded ray targets ride beside their poses. The
+        // re-derivation happened inside the step or replay that borrowed the
+        // grid; reporting here is pure, so a repeated projection is equal.
+        .with_confirmed_target(self.confirmed_target)
+        .with_predicted_target(self.predicted_target))
     }
 
     /// Opens the next rendered frame's step budget. The per-frame ceiling
@@ -542,6 +627,13 @@ impl PredictionReplay {
         self.issued_high_water = sequence;
         self.frame_steps += 1;
         self.predicted = Some(state);
+        // The step-time target refresh: both recorded rays are re-derived
+        // against the grid this very step borrowed, so no grid is ever read
+        // outside a step or replay. The ray walk runs over checked inputs —
+        // finite origin, checked angles, the landed reach — so its kernel
+        // refusal is structurally unreachable and still surfaces typed
+        // rather than being swallowed into a silent no-hit.
+        self.refresh_ray_targets(environment)?;
         Ok(witness)
     }
 
@@ -605,6 +697,7 @@ impl PredictionReplay {
             self.correction = None;
             self.issued_high_water = last;
             self.last_acknowledged = self.last_acknowledged.max(last);
+            self.refresh_ray_targets(environment)?;
             return CorrectionWitness::try_new(0, 0, false);
         }
         let reset = self
@@ -666,9 +759,9 @@ impl PredictionReplay {
     }
 
     /// Opens a new epoch: every epoch-scoped owner — journal, sequence
-    /// accounting, confirmed base, predicted pose, correction and tick gate —
-    /// is cleared, so neither an old correction nor an old sequence can
-    /// affect the new epoch.
+    /// accounting, confirmed base, predicted pose, correction, tick gate and
+    /// both recorded ray targets — is cleared, so neither an old correction
+    /// nor an old sequence can affect the new epoch.
     pub fn reset_epoch(&mut self, epoch: SessionEpoch) -> Result<(), ClientError> {
         self.epoch = epoch;
         self.confirmed = None;
@@ -679,6 +772,8 @@ impl PredictionReplay {
         self.last_server_tick = 0;
         self.correction = None;
         self.frame_steps = 0;
+        self.confirmed_target = None;
+        self.predicted_target = None;
         Ok(())
     }
 
@@ -696,6 +791,35 @@ impl PredictionReplay {
             state = kernel_step(state, &step.control, environment)?.0;
         }
         self.predicted = (!self.pending.is_empty()).then_some(state);
+        self.refresh_ray_targets(environment)?;
+        Ok(())
+    }
+
+    /// Re-derives both recorded ray targets against the grid the current
+    /// step or replay borrowed: the confirmed pose's look ray and the
+    /// predicted pose's own look ray, each capped by the landed interaction
+    /// reach, each hit stamped with the confirmed base's revision. No hit
+    /// within the borrowed view records `None`; the walk stops at the first
+    /// cell the grid does not cover, because nothing beyond that view may be
+    /// claimed. The confirmed target is confirmed data; the predicted target
+    /// is data only.
+    fn refresh_ray_targets(
+        &mut self,
+        environment: &StepEnvironment<'_>,
+    ) -> Result<(), ClientError> {
+        let Some(base) = self.confirmed.as_ref() else {
+            self.confirmed_target = None;
+            self.predicted_target = None;
+            return Ok(());
+        };
+        let grid = environment.grid();
+        self.confirmed_target = ray_target(base.state.position, base.look, base.revision, grid)?;
+        self.predicted_target = match (self.predicted, self.pending.last()) {
+            (Some(state), Some(step)) => {
+                ray_target(state.position, step.control.look(), base.revision, grid)?
+            }
+            _ => None,
+        };
         Ok(())
     }
 }
@@ -907,4 +1031,128 @@ fn min3(first: f32, second: f32, third: f32) -> f32 {
 
 fn max3(first: f32, second: f32, third: f32) -> f32 {
     first.max(second).max(third)
+}
+
+/// Walks the accepted engine raycast kernel (`NativeRaycast`, the landed
+/// `RaycastOp` implementation whose DDA the authority's own target walks
+/// drive) along one pose's look ray against the step-borrowed grid, and
+/// records the first target cell it reaches.
+///
+/// The walk mirrors the accepted target-walk shape: a checked cursor over
+/// the normalized look direction, batch-by-batch kernel batches, every
+/// traversed cell classified against the only world data the step borrowed —
+/// a covered, loaded cell carrying at least one collision box is a target
+/// cell, a covered empty cell passes over, and the first cell the grid does
+/// not cover ends the walk with no hit, because nothing beyond the borrowed
+/// view may be claimed. The reach is the landed authority interaction
+/// distance, so the recorded hit is a hit of exactly the ray the projection
+/// publishes. The bounded DDA crosses at most `3 x reach + 2` cells inside
+/// one 64-record kernel batch, so the walk is one bounded kernel call.
+fn ray_target(
+    origin: [f32; 3],
+    look: LookAngles,
+    source_revision: ConfirmedRevision,
+    grid: &CollisionGrid<'_>,
+) -> Result<Option<RayTarget>, ClientError> {
+    let direction = look_direction(look.yaw(), look.pitch());
+    let Some(direction) = normalized_direction(direction) else {
+        // No normalizable direction means no ray to walk; recording no hit
+        // invents nothing.
+        return Ok(None);
+    };
+    let mut cursor = RayCursor::try_new(Ray {
+        origin,
+        direction,
+        maximum: FiniteRay::MAX_REACH,
+    })
+    .map_err(|_| ClientError::Internal)?;
+    loop {
+        let batch = NativeRaycast
+            .next_batch(&mut cursor)
+            .map_err(|_| ClientError::Internal)?;
+        for record in batch.records() {
+            match grid_target_cell(grid, record.cell) {
+                CellView::Uncovered => return Ok(None),
+                CellView::Passes => {}
+                CellView::Target => {
+                    return RayTarget::try_new(
+                        BlockPos::new(record.cell[0], record.cell[1], record.cell[2]),
+                        source_revision,
+                    )
+                    .map(Some);
+                }
+            }
+        }
+        if batch.is_done() {
+            return Ok(None);
+        }
+    }
+}
+
+/// The classification of one traversed cell against the borrowed grid.
+enum CellView {
+    /// Inside the grid's cover, loaded, and carrying at least one collision
+    /// box: a target cell.
+    Target,
+    /// Inside the cover but empty of boxes: the walk passes over it.
+    Passes,
+    /// Outside the grid's cover or unloaded: nothing may be claimed past it.
+    Uncovered,
+}
+
+/// Classifies one world cell against the borrowed collision grid, mirroring
+/// the native physics wrapper's cell order (y-major, then x, then z) with the
+/// same widened relative arithmetic, so the ray walk and the physics solver
+/// read one grid.
+fn grid_target_cell(grid: &CollisionGrid<'_>, cell: [i32; 3]) -> CellView {
+    let origin = grid.origin();
+    let dims = grid.dimensions();
+    let relative = [
+        i64::from(cell[0]) - i64::from(origin[0]),
+        i64::from(cell[1]) - i64::from(origin[1]),
+        i64::from(cell[2]) - i64::from(origin[2]),
+    ];
+    if (0..3).any(|axis| relative[axis] < 0 || relative[axis] >= i64::from(dims[axis])) {
+        return CellView::Uncovered;
+    }
+    let index = ((relative[1] as usize * dims[0] as usize) + relative[0] as usize)
+        * dims[2] as usize
+        + relative[2] as usize;
+    let Some(observed) = grid.cells().get(index) else {
+        return CellView::Uncovered;
+    };
+    if observed.loaded() && observed.used() > 0 {
+        CellView::Target
+    } else {
+        CellView::Passes
+    }
+}
+
+/// The look-ray direction of checked angles, mirrored from the accepted
+/// interaction source the authority's own target walk uses: the f64
+/// trigonometry keeps its float32 casts between the trigonometry and the
+/// multiplication.
+fn look_direction(yaw: f32, pitch: f32) -> [f32; 3] {
+    let cos_pitch = f64::from(pitch).cos() as f32;
+    [
+        -(f64::from(yaw).sin() as f32) * cos_pitch,
+        f64::from(pitch).sin() as f32,
+        -(f64::from(yaw).cos() as f32) * cos_pitch,
+    ]
+}
+
+/// Normalizes a direction without overflowing a float32 squared sum, the
+/// accepted f64-hypot form: a tiny or invalid direction has no unit ray.
+fn normalized_direction(direction: [f32; 3]) -> Option<[f32; 3]> {
+    if direction.iter().any(|component| !component.is_finite()) {
+        return None;
+    }
+    let length = f64::from(direction[0])
+        .hypot(f64::from(direction[1]))
+        .hypot(f64::from(direction[2]));
+    if length < 1e-6 {
+        return None;
+    }
+    let inverse = (1.0 / length) as f32;
+    Some(direction.map(|component| component * inverse))
 }

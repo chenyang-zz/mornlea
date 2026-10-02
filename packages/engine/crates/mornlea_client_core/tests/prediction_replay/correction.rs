@@ -65,7 +65,15 @@ const WALK_DIMS: [u32; 3] = [9, 6, 17];
 const TRANSCRIPT_ORIGIN: [i32; 3] = [-4, 9, -8];
 const TRANSCRIPT_DIMS: [u32; 3] = [9, 3, 17];
 
-fn fixture_cells(dims: [u32; 3], wall: bool) -> Vec<CollisionCell> {
+/// Builds the fixture cells: the floor layer, the optional wall, and any
+/// extra target blocks named by world cell — the last carrying one full cube
+/// each so the ray-target rows have something real to hit.
+fn fixture_cells(
+    origin: [i32; 3],
+    dims: [u32; 3],
+    wall: bool,
+    targets: &[[i32; 3]],
+) -> Vec<CollisionCell> {
     let cube = Aabb {
         minimum: [0.0; 3],
         maximum: [1.0, 1.0, 1.0],
@@ -74,15 +82,21 @@ fn fixture_cells(dims: [u32; 3], wall: bool) -> Vec<CollisionCell> {
         minimum: [0.0; 3],
         maximum: [0.0; 3],
     };
+    // The wall stays offset-addressed (world column x=1 in both fixtures,
+    // which share their x/z origin); the targets convert world to offset
+    // explicitly against the given origin.
+    let offset = |cell: [i32; 3], axis: usize| (cell[axis] - origin[axis]) as u32;
     let mut cells = Vec::new();
     for y in 0..dims[1] {
         for x in 0..dims[0] {
             for z in 0..dims[2] {
-                let _ = z;
                 let floor = y == 0;
                 let wall_cell = wall && x == 5 && (y == 1 || y == 2);
+                let target = targets.iter().any(|cell| {
+                    offset(*cell, 0) == x && offset(*cell, 1) == y && offset(*cell, 2) == z
+                });
                 let mut boxes = [empty; 8];
-                let used = if floor || wall_cell {
+                let used = if floor || wall_cell || target {
                     boxes[0] = cube;
                     1u8
                 } else {
@@ -305,6 +319,19 @@ fn reason_tag(reason: CorrectionReason) -> u8 {
     }
 }
 
+/// The comparable view of one recorded ray target: its world cell beside the
+/// confirmed revision the hit was observed against.
+fn target_view(target: &mornlea_client_core::prediction::RayTarget) -> ([i32; 3], u64) {
+    (
+        [
+            target.position().x(),
+            target.position().y(),
+            target.position().z(),
+        ],
+        target.source_revision().get(),
+    )
+}
+
 /// The comparable outcome of one predicted fixed step.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct StepOutcome {
@@ -340,6 +367,8 @@ struct Snapshot {
     movement_control_present: bool,
     source_mining: Option<MiningState>,
     projection_mining: Option<MiningState>,
+    confirmed_target: Option<([i32; 3], u64)>,
+    predicted_target: Option<([i32; 3], u64)>,
 }
 
 impl Snapshot {
@@ -357,6 +386,8 @@ impl Snapshot {
             movement_control_present: false,
             source_mining: None,
             projection_mining: None,
+            confirmed_target: None,
+            predicted_target: None,
         }
     }
 }
@@ -506,6 +537,10 @@ impl WrongReplayDouble {
             movement_control_present: !self.journal.is_empty(),
             source_mining: self.mining,
             projection_mining: self.mining,
+            // The wrong double never records a ray target: that absence is
+            // one more wrongness its rows refuse.
+            confirmed_target: None,
+            predicted_target: None,
         }
     }
 }
@@ -682,6 +717,8 @@ impl UnderTest {
                     movement_control_present: projection.movement().control().is_some(),
                     source_mining: owner.source_mining(),
                     projection_mining: Some(*projection.mining()),
+                    confirmed_target: projection.confirmed_target().map(target_view),
+                    predicted_target: projection.predicted_target().map(target_view),
                 }
             }
         }
@@ -716,7 +753,7 @@ fn near(actual: f64, expected: f64) {
 /// accepted numerical kernel.
 #[test]
 fn go_transcript_reconcile_replays_two_unconfirmed_steps() {
-    let cells = fixture_cells(TRANSCRIPT_DIMS, false);
+    let cells = fixture_cells(TRANSCRIPT_ORIGIN, TRANSCRIPT_DIMS, false, &[]);
     let grid = transcript_grid(&cells);
     let epoch_one = epoch(1);
     let mut test = UnderTest::new(epoch_one, limits());
@@ -806,7 +843,7 @@ fn go_transcript_reconcile_replays_two_unconfirmed_steps() {
 /// different position than the kernel fold.
 #[test]
 fn correction_replays_remaining_from_confirmed_in_sequence_order() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
     let mut test = UnderTest::new(epoch_one, limits());
@@ -875,7 +912,7 @@ fn correction_replays_remaining_from_confirmed_in_sequence_order() {
 /// projection field bit-for-bit unchanged.
 #[test]
 fn duplicate_acknowledgement_leaves_state_unchanged() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
     let mut test = UnderTest::new(epoch_one, limits());
@@ -917,7 +954,7 @@ fn duplicate_acknowledgement_leaves_state_unchanged() {
 /// state. Re-rejecting the same sequence has nothing left to remove.
 #[test]
 fn rejection_removes_pending_prediction_and_cue_attribution() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
     let mut test = UnderTest::new(epoch_one, limits());
@@ -970,7 +1007,7 @@ fn rejection_removes_pending_prediction_and_cue_attribution() {
 /// kernel, so the clipped result — not the free walk — is what replay renders.
 #[test]
 fn collision_clips_prediction_and_replay_through_kernel() {
-    let cells = fixture_cells(WALK_DIMS, true);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, true, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
     let mut test = UnderTest::new(epoch_one, limits());
@@ -1037,7 +1074,7 @@ fn collision_clips_prediction_and_replay_through_kernel() {
 /// the new epoch's state.
 #[test]
 fn reset_and_old_epoch_correction_cannot_affect_new_epoch() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
     let epoch_two = epoch(2);
@@ -1102,7 +1139,7 @@ fn reset_and_old_epoch_correction_cannot_affect_new_epoch() {
 /// correction that acknowledges the journal drains it and admission resumes.
 #[test]
 fn journal_bound_admits_256_rejects_257_typed() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
     let mut test = UnderTest::new(epoch_one, limits());
@@ -1163,7 +1200,7 @@ fn journal_bound_admits_256_rejects_257_typed() {
 /// with a typed capacity error; the next frame's budget admits again.
 #[test]
 fn frame_bound_admits_five_steps_rejects_sixth_typed() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
     let mut test = UnderTest::new(epoch_one, limits());
@@ -1196,7 +1233,7 @@ fn frame_bound_admits_five_steps_rejects_sixth_typed() {
 /// never-issued input rejects, and a stale server tick is a no-op.
 #[test]
 fn ranged_controls_and_typed_acknowledgements_reject_before_mutation() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
 
@@ -1267,7 +1304,7 @@ fn ranged_controls_and_typed_acknowledgements_reject_before_mutation() {
 /// mining state of the authority.
 #[test]
 fn projection_carries_poses_correction_ray_movement_and_source_mining() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
     let mut test = UnderTest::new(epoch_one, limits());
@@ -1359,7 +1396,7 @@ fn projection_carries_poses_correction_ray_movement_and_source_mining() {
 /// the confirmed base it rode in on.
 #[test]
 fn source_mining_persists_across_replay_and_updates_only_on_authority() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let epoch_one = epoch(1);
     let mut test = UnderTest::new(epoch_one, limits());
@@ -1434,13 +1471,103 @@ fn source_mining_persists_across_replay_and_updates_only_on_authority() {
     );
 }
 
+/// The ray-target seam: at step and replay time the accepted engine raycast
+/// kernel walks the confirmed pose's look ray and the predicted pose's own
+/// look ray against the grid the step borrows. A block in the confirmed
+/// ray's path records that hit with the confirmed base's revision; a
+/// diverging predicted ray records its own hit; a ray with nothing on it
+/// records none; a new confirmed base re-derives both; a reset clears both;
+/// and re-projection is pure.
+#[test]
+fn replay_records_ray_targets_for_both_poses() {
+    // Two target blocks at feet level: one north of the start on the
+    // confirmed ray's path, one west of it on the diverging predicted ray's
+    // path. Neither is inside any walked physics scan of the steps below.
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[[0, 0, -3], [-2, 0, 0]]);
+    let grid = walking_grid(&cells);
+    let epoch_one = epoch(1);
+    let mut test = UnderTest::new(epoch_one, limits());
+
+    // The confirmed pose looks north (yaw 0): its ray walks cells (0, 0, z)
+    // and reaches the block at (0, 0, -3). Nothing is predicted yet.
+    let beginning = authority(1, 0, [0.5, 0.0, 0.5], [0.0, 0.0, 0.0], true, look(0.0, 0.0));
+    test.confirm(&key(epoch_one, 1), &beginning, &grid)
+        .expect("begins");
+    let snapshot = test.snapshot();
+    assert_eq!(
+        snapshot.confirmed_target,
+        Some(([0, 0, -3], 1)),
+        "the confirmed ray's hit carries the confirmed base's revision"
+    );
+    assert_eq!(
+        snapshot.predicted_target, None,
+        "no predicted pose exists yet, so no predicted ray was walked"
+    );
+
+    // The stepped control moves north while LOOKING west (yaw pi/2): the
+    // predicted pose's own ray walks west and reaches the block at
+    // (-2, 0, 0), a different cell from the confirmed ray's hit.
+    let westward = control(0, 1, std::f32::consts::FRAC_PI_2);
+    test.predict(1, westward, &grid).expect("journaled step");
+    let snapshot = test.snapshot();
+    assert_eq!(
+        snapshot.confirmed_target,
+        Some(([0, 0, -3], 1)),
+        "a predicted step never moves the confirmed ray's hit"
+    );
+    assert_eq!(
+        snapshot.predicted_target,
+        Some(([-2, 0, 0], 1)),
+        "the diverging predicted ray records its own hit, stamped with the confirmed base's revision"
+    );
+
+    // A later step looks south (yaw pi): the predicted ray now walks cells
+    // with no block on them, so that half records none — while the confirmed
+    // half keeps its hit.
+    let southward = control(0, 1, std::f32::consts::PI);
+    test.predict(2, southward, &grid)
+        .expect("second journaled step");
+    let snapshot = test.snapshot();
+    assert_eq!(
+        snapshot.predicted_target, None,
+        "a ray with nothing on it records no hit"
+    );
+    assert_eq!(snapshot.confirmed_target, Some(([0, 0, -3], 1)));
+
+    // A correction that acknowledges both steps moves the confirmed base to
+    // just north of the block: the confirmed ray re-derives onto the same
+    // block under the NEW base revision, and with nothing pending the
+    // predicted half is gone.
+    let corrected = authority(
+        2,
+        2,
+        [0.5, 0.0, -1.5],
+        [0.0, 0.0, 0.0],
+        true,
+        look(0.0, 0.0),
+    );
+    test.confirm(&key(epoch_one, 2), &corrected, &grid)
+        .expect("correction re-derives the targets");
+    let snapshot = test.snapshot();
+    assert_eq!(
+        snapshot.confirmed_target,
+        Some(([0, 0, -3], 2)),
+        "the new confirmed base re-derives the hit under its own revision"
+    );
+    assert_eq!(snapshot.predicted_target, None);
+
+    // Re-projection is pure: the recorded targets are step-time data, so a
+    // repeated projection reports them unchanged.
+    assert_eq!(test.snapshot(), snapshot);
+}
+
 /// The executable wrong-behavior artifact: the deliberately wrong double
 /// really does acknowledge twice, keep rejected intent, apply foreign-epoch
 /// corrections, silently clamp out-of-range axes and replay from the
 /// predicted state — exactly what the assertions above refuse.
 #[test]
 fn wrong_double_replay_wrongness_is_executable() {
-    let cells = fixture_cells(WALK_DIMS, false);
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
     let grid = walking_grid(&cells);
     let mut wrong = WrongReplayDouble::new();
     let begin = authority(1, 0, [0.5, 0.0, 0.5], [0.0, 0.0, 0.0], true, look(0.0, 0.0));
