@@ -46,7 +46,7 @@ use mornlea_client_core::presentation::actors::{
     passive::project_passive, projectile::project_projectile, remote_player::project_remote_player,
 };
 use mornlea_client_core::presentation::assembly::{
-    assemble_frame, commit_publication, prepare_publication,
+    assemble_frame, commit_publication, prepare_publication, publication_owners,
 };
 use mornlea_client_core::presentation::family_actors::assemble_actors;
 use mornlea_client_core::presentation::family_audio::project_audio;
@@ -709,7 +709,7 @@ fn owners<'a>(
     fixture: &'a mut FrameFixture,
     visible: &'a mut Arc<PresentationFrame>,
 ) -> PublicationOwners<'a> {
-    PublicationOwners::try_new(
+    publication_owners(
         visible,
         &mut fixture.observations,
         &mut fixture.input_owner,
@@ -1037,13 +1037,15 @@ fn complete_frame_publishes_every_family_atomically() {
     assert_eq!(prepared.frame_index(), 1, "the next index");
     assert_eq!(current.frame_index(), 0, "the current frame never changed");
 
-    // The reservation checks everything, then the transaction commits once.
+    // The reservation checks everything and stages the input-projection
+    // replacement; the owners stay untouched, because prepare is a checked,
+    // mutation-free step over immutable borrows.
     let mut visible = current;
     let old = Arc::clone(&visible);
     let consume = PublicationConsumption::try_new(4, 2, 1, 1).expect("cursors");
     let mut fixture_ref = fixture;
-    let committed = {
-        let mut bundle = owners(&mut fixture_ref, &mut visible);
+    let reservation = {
+        let bundle = owners(&mut fixture_ref, &mut visible);
         let reservation = prepare_publication(
             &bundle,
             build.frame.clone(),
@@ -1052,6 +1054,37 @@ fn complete_frame_publishes_every_family_atomically() {
             &limits(),
         )
         .expect("the reservation checks");
+        // The staged replacement carries the survivors, the drained prefixes
+        // and the advanced hint, ready for the commit's single move.
+        assert_eq!(reservation.staged_input().sequence_hint(), 3);
+        assert!(reservation.staged_input().admitted().is_empty());
+        assert!(reservation.staged_input().rejected().is_empty());
+        assert!(reservation.staged_input().pending_local_cues().is_empty());
+        reservation
+    };
+    assert_eq!(
+        fixture_ref.input_owner.projection().admitted().len(),
+        2,
+        "prepare stages the replacement; it never mutates the owner"
+    );
+    assert_eq!(
+        fixture_ref
+            .input_owner
+            .projection()
+            .pending_local_cues()
+            .len(),
+        1,
+        "prepare stages the replacement; it never mutates the owner"
+    );
+    assert_eq!(
+        fixture_ref.observations.len(),
+        4,
+        "prepare consumes nothing"
+    );
+    assert_eq!(visible.frame_index(), 0, "prepare never touches the Arc");
+    // The commit is the single staged swap plus the one visible Arc swap.
+    let committed = {
+        let mut bundle = owners(&mut fixture_ref, &mut visible);
         commit_publication(&mut bundle, reservation)
     };
     assert!(
@@ -1868,6 +1901,11 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
     assert!(
         fixture.input_owner.projection().rejected().is_empty(),
         "the published rejection metadata is consumed"
+    );
+    assert_eq!(
+        fixture.input_owner.projection().sequence_hint(),
+        2,
+        "the staged swap advanced the hint past the attested sequence"
     );
     assert_eq!(
         fixture.observations.len(),

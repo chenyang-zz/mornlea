@@ -9,24 +9,27 @@
 //! validator under the configured limits), the next frame index, every
 //! consumption cursor as a FIFO prefix of the live queues, and the dequeued
 //! entries' actual source keys against the attributions the candidate and
-//! the dedup delta publish — all before any owner mutates, because the
-//! borrowed bundle is immutable here by construction. [`commit_publication`]
-//! is the final single-owner critical section: it applies the staged dedup
-//! delta, consumes the published queue prefixes, writes the input
-//! projection's halves and then swaps the visible Arc exactly once. No
-//! callbacks, waits or fallible operations exist on that path, and a failure
-//! or panic before it changes no visible frame, index, dedup state or
-//! consumption cursor: events, removals, cancellations and the dedup
-//! proposal stay retry-owned and a valid retry commits once.
+//! the dedup delta publish — and it builds the complete input-projection
+//! replacement and stages it on the reservation. All of that happens before
+//! any owner mutates, because the borrowed bundle is immutable here by
+//! construction. [`commit_publication`] is the final single-owner critical
+//! section: it applies the staged dedup delta, swaps the staged
+//! input-projection replacement into the owner by move, drains the published
+//! observation and lifecycle prefixes and then swaps the visible Arc exactly
+//! once. No callbacks, waits, fallible operations or staging constructions
+//! exist on that path, and a failure or panic before it changes no visible
+//! frame, index, dedup state or consumption cursor: events, removals,
+//! cancellations and the dedup proposal stay retry-owned and a valid retry
+//! commits once.
 //!
 //! Staging surfaces owned here: the audio commit applies the proposed
 //! delta — cancelled keys leave the committed set, insertions join it — and
 //! stages the applied cancellations as the audio state's pending predicted
 //! cancellations, the suppression that outlives the consumed rejection
-//! metadata; the input commit consumes the published metadata prefix
-//! (admitted entries first, then rejected) and the published local cue
-//! prefix, and advances the sequence hint past the sequences the frame
-//! attests. The pending local-cue ceiling stays the admission-owned
+//! metadata; the input commit is a pure staged swap, because the replacement
+//! state (surviving metadata, surviving local cues, the sequence hint
+//! advanced past the sequences the frame attests) is fully built in prepare.
+//! The pending local-cue ceiling stays the admission-owned
 //! `queued_input_events` bound: publication only drains it.
 
 use std::sync::Arc;
@@ -46,7 +49,9 @@ impl<'a> PublicationOwners<'a> {
     /// state and the pending lifecycle state. The bundle grants no authority
     /// over the confirmed mirror; every owner is lent by the controller and
     /// mutated only inside the publication transaction's commit section.
-    pub fn try_new(
+    /// Crate-internal: the bundle is assembled by the publication owner, not
+    /// by external consumers.
+    pub(crate) fn try_new(
         visible: &'a mut Arc<PresentationFrame>,
         observations: &'a mut Vec<AcceptedObservation>,
         input: &'a mut InputAdmissionOwner,
@@ -61,6 +66,24 @@ impl<'a> PublicationOwners<'a> {
             lifecycle,
         })
     }
+}
+
+/// Assembles the controller's owners bundle for drivers outside the crate:
+/// the registered contract table and the future controller driver construct
+/// the bundle here and drive the transaction through the publication
+/// functions. Crate-internal callers use the tightened
+/// [`PublicationOwners::try_new`]. Hidden from the public documentation
+/// surface and flagged for the final review's API triage beside the
+/// unchecked reservation constructor.
+#[doc(hidden)]
+pub fn publication_owners<'a>(
+    visible: &'a mut Arc<PresentationFrame>,
+    observations: &'a mut Vec<AcceptedObservation>,
+    input: &'a mut InputAdmissionOwner,
+    audio: &'a mut AudioProjectionState,
+    lifecycle: &'a mut LifecycleProjectionState,
+) -> Result<PublicationOwners<'a>, ClientError> {
+    PublicationOwners::try_new(visible, observations, input, audio, lifecycle)
 }
 
 /// Checks one complete candidate against the current visible frame: the
@@ -170,6 +193,7 @@ pub fn prepare_publication(
 
     let mut input_attested_admitted: Vec<(u64, ClientIntentKind)> = Vec::new();
     let mut input_attested_rejected: Vec<u64> = Vec::new();
+    let mut attested_hint = 0u64;
     for family in candidate.families() {
         match family.records() {
             FamilyRecords::AudioCues(records) => {
@@ -220,6 +244,11 @@ pub fn prepare_publication(
                         InputReceiptState::Confirmed { .. } => {}
                     }
                 }
+                for record in records {
+                    if let Some(sequence) = record.local_sequence() {
+                        attested_hint = attested_hint.max(sequence);
+                    }
+                }
             }
             _ => {}
         }
@@ -238,17 +267,40 @@ pub fn prepare_publication(
         }
     }
 
-    // Everything checked; the reservation stages the validated state. No
-    // owner has mutated, so this point is unreachable on any failure path.
+    // The input-projection replacement is built here, in prepare, over the
+    // live owner state and the checked cursors, and staged on the
+    // reservation: the critical section swaps it in by move. The frozen
+    // state exposes checked append and stage surfaces only, so the
+    // survivors move through them into the replacement value — construction
+    // belongs to prepare, never to the commit.
+    let admitted_offset = input_count.min(projection.admitted().len());
+    let rejected_offset = input_count - admitted_offset;
+    let hint = projection
+        .sequence_hint()
+        .max(attested_hint.saturating_add(1));
+    let mut staged = InputProjectionState::try_new(hint).expect("checked input projection");
+    for (sequence, kind) in &projection.admitted()[admitted_offset..] {
+        staged.record_admitted(*sequence, *kind);
+    }
+    for (sequence, class) in &projection.rejected()[rejected_offset..] {
+        staged.record_rejected(*sequence, *class);
+    }
+    staged.stage_local_cues(&projection.pending_local_cues()[consume.local_cues()..]);
+
+    // Everything checked and staged; no owner has mutated, so this point is
+    // unreachable on any failure path.
     PublicationReservation::try_new(Arc::new(candidate), audio, consume)
+        .map(|reservation| reservation.with_staged_input(staged))
 }
 
 /// Commits one reserved publication: the final single-owner critical
-/// section. Every operation here is an infallible owner swap or bounded
-/// vector move over state the reservation already checked — no callbacks,
-/// waits, new staging allocations or fallible operations exist on the path —
-/// and the visible Arc swaps exactly once, last. The frame index advances
-/// only because the reservation's Arc carries the checked next index.
+/// section. The staged-swap design puts every construction in prepare: the
+/// input-projection replacement arrives fully built inside the reservation,
+/// so this section performs only infallible owner moves over prepared state
+/// — no construction, no `expect`, no callbacks, waits or fallible
+/// operations — and the visible Arc swaps exactly once, last. The frame
+/// index advances only because the reservation's Arc carries the checked
+/// next index.
 pub fn commit_publication(
     owners: &mut PublicationOwners<'_>,
     reservation: PublicationReservation,
@@ -256,7 +308,7 @@ pub fn commit_publication(
     // The audio state: cancelled keys leave the committed set, insertions
     // join it, and the applied cancellations stage as the pending predicted
     // cancellations — the suppression that outlives the rejection metadata
-    // this same commit consumes.
+    // this same commit consumes. In-place mutation of checked keys only.
     for key in reservation.audio.cancellations() {
         owners.audio.committed.retain(|held| held != key);
         if !owners.audio.pending_cancellations.contains(key) {
@@ -268,36 +320,11 @@ pub fn commit_publication(
         .committed
         .extend(reservation.audio.insertions().iter().copied());
 
-    // The input projection: consume the published metadata prefix (admitted
-    // entries first, then rejected) and the published local cue prefix, and
-    // advance the sequence hint past the sequences the frame attests. The
-    // frozen state exposes checked append and stage surfaces only, so the
-    // survivors move through them into the replacement state.
-    let input_count = reservation.consume.input_records();
-    let taken = std::mem::take(&mut owners.input.projection);
-    let admitted_offset = input_count.min(taken.admitted().len());
-    let rejected_offset = input_count - admitted_offset;
-    let cue_offset = reservation.consume.local_cues();
-    let mut attested_hint = 0u64;
-    for family in reservation.frame.families() {
-        if let FamilyRecords::Input(records) = family.records() {
-            for record in records {
-                if let Some(sequence) = record.local_sequence() {
-                    attested_hint = attested_hint.max(sequence);
-                }
-            }
-        }
-    }
-    let hint = taken.sequence_hint().max(attested_hint.saturating_add(1));
-    let mut survivors = InputProjectionState::try_new(hint).expect("checked input projection");
-    for (sequence, kind) in &taken.admitted()[admitted_offset..] {
-        survivors.record_admitted(*sequence, *kind);
-    }
-    for (sequence, class) in &taken.rejected()[rejected_offset..] {
-        survivors.record_rejected(*sequence, *class);
-    }
-    survivors.stage_local_cues(&taken.pending_local_cues()[cue_offset..]);
-    owners.input.projection = survivors;
+    // The input projection: the single staged swap. The replacement was
+    // fully built and checked in prepare — surviving metadata, surviving
+    // local cues and the advanced sequence hint — so this is one infallible
+    // owner move.
+    owners.input.projection = reservation.staged_input;
 
     // The observation and lifecycle queues: consume exactly the published
     // prefixes.
