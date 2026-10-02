@@ -521,9 +521,10 @@ impl LocalViewValidity {
 /// The C1-owned single-owner admission state: outbound queue, prediction
 /// journal, next sequence, the local view-validity overlay and the pending
 /// local cue-source metadata beside its native local event sequence, all
-/// epoch-scoped beside the frozen `ClientLimits` it was constructed with. No
-/// projection or host callback obtains this owner; `commit` is its only
-/// writer.
+/// epoch-scoped beside the frozen `ClientLimits` it was constructed with,
+/// plus the projection input state the same commit feeds. No projection or
+/// host callback obtains a mutable borrow of this owner; `commit` is its
+/// only writer.
 pub struct InputAdmissionState {
     limits: ClientLimits,
     outbound: Vec<OutboundRecord>,
@@ -533,6 +534,7 @@ pub struct InputAdmissionState {
     overlay: LocalViewValidity,
     pending_local_cues: Vec<LocalCueSource>,
     next_local_event_sequence: u64,
+    projection: InputProjectionState,
 }
 
 impl InputAdmissionState {
@@ -550,6 +552,7 @@ impl InputAdmissionState {
             overlay: LocalViewValidity::try_new(epoch)?,
             pending_local_cues: Vec::new(),
             next_local_event_sequence: 1,
+            projection: InputProjectionState::try_new(1)?,
         })
     }
 
@@ -582,6 +585,14 @@ impl InputAdmissionState {
         &self.pending_local_cues
     }
 
+    /// The input projection state this owner's commit feeds. The read is
+    /// non-consuming: its pending local cue-source events mirror the owner's
+    /// own queue until a successful publication drains them, and no admission
+    /// query mutates either copy.
+    pub fn projection(&self) -> &InputProjectionState {
+        &self.projection
+    }
+
     /// The framed bytes of the queue head, for retry after a transport
     /// `Capacity`/`Io` failure. The whole head is retained, never a partial
     /// record.
@@ -606,6 +617,7 @@ impl InputAdmissionState {
         self.overlay = LocalViewValidity::try_new(epoch)?;
         self.pending_local_cues.clear();
         self.next_local_event_sequence = 1;
+        self.projection = InputProjectionState::try_new(1)?;
         Ok(())
     }
 }
@@ -688,8 +700,9 @@ impl InputTranslator {
     /// simulates the local view-validity overlay over a temporary copy,
     /// encodes all actions into owned reserved temporary buffers, and only
     /// then appends records, journal entries and local cue metadata, advances
-    /// the sequence and swaps the overlay in one critical section. Any
-    /// earlier failure leaves every owner unchanged.
+    /// the sequence and swaps the overlay in one critical section, feeding
+    /// the projection input's pending local cue events in the same section.
+    /// Any earlier failure leaves every owner unchanged.
     pub fn commit(
         batch: ValidatedInputBatch,
         admission: &mut InputAdmissionState,
@@ -821,13 +834,17 @@ impl InputTranslator {
             return Err(ClientError::Capacity);
         }
         // The critical section: all owners change together or not at all.
+        // The projection input is fed inside the same section so the exposed
+        // cue events can never diverge from the owner's own queue; neither
+        // copy is consumed here — publication owns the drain.
         admission.outbound.extend(records);
         admission.outbound_bytes = final_bytes;
         admission.journal.extend(entries);
         admission.next_sequence = sequence_end;
         admission.overlay = simulated;
-        admission.pending_local_cues.extend(cues);
+        admission.pending_local_cues.extend(cues.iter().copied());
         admission.next_local_event_sequence = next_cue;
+        admission.projection.stage_local_cues(&cues);
         Ok(InputReceipt::Queued {
             epoch: batch.epoch(),
             first_sequence,
@@ -980,10 +997,13 @@ fn simulate_local_close(
     Ok(())
 }
 
-/// The private per-batch input projection state owner declared by the
-/// contract landing: checked admitted/rejected input metadata, the sequence
-/// hint and the pending local cue-source events. Its actual owner replaces
-/// the deterministic double before provider acceptance.
+/// The per-batch input projection state owner declared by the contract
+/// landing: checked admitted/rejected input metadata, the sequence hint and
+/// the pending local cue-source events. The admission owner populates the
+/// pending local cue-source half from its commit — appending the emitted
+/// native local events without consuming its own queue — while the
+/// publication wiring owns the per-batch admitted/rejected metadata, the
+/// sequence hint and the consumption of both halves.
 #[derive(Clone, Debug, Default)]
 pub struct InputProjectionState {
     admitted: Vec<(u64, ClientIntentKind)>,
@@ -1024,6 +1044,15 @@ impl InputProjectionState {
 
     pub fn pending_local_cues(&self) -> &[LocalCueSource] {
         &self.pending_local_cues
+    }
+
+    /// Stages the cue events one successful whole-batch commit emitted. The
+    /// admission owner calls this inside its critical section so the exposed
+    /// projection input carries the same native local events its own queue
+    /// holds; the caller has already enforced the shared cue ceiling, and a
+    /// read of either copy consumes nothing — publication owns the drain.
+    pub(crate) fn stage_local_cues(&mut self, cues: &[LocalCueSource]) {
+        self.pending_local_cues.extend_from_slice(cues);
     }
 }
 

@@ -203,6 +203,10 @@ fn assert_untouched(admission: &InputAdmissionState) {
         admission.pending_local_cues().is_empty(),
         "no local cue attribution"
     );
+    assert!(
+        admission.projection().pending_local_cues().is_empty(),
+        "no projection-side cue attribution"
+    );
 }
 
 /// One move inside the fixed player inventory.
@@ -1520,6 +1524,107 @@ fn accepted_collect_water_emits_bounded_native_local_cue_sources() {
     );
     assert_eq!(admission.next_sequence(), before, "no sequence consumed");
     assert_eq!(admission.pending_local_cues().len(), 128, "no partial cue");
+}
+
+/// The input projection state carries the pending local cue-source events the
+/// admission commit emits: a real admitted semantic UI action populates the
+/// projection-side copy with the same native local events, a rejected batch
+/// populates nothing, a read never consumes either copy, and reset clears the
+/// projection side with the rest.
+#[test]
+fn projection_state_carries_pending_local_cues() {
+    let mut admission = owner(1);
+    let mirror = full_mirror(1);
+    let bucket = || plain(ClientIntent::CollectWater(fixture_look()));
+
+    // Before anything is admitted both copies are empty.
+    assert!(
+        admission.projection().pending_local_cues().is_empty(),
+        "a fresh owner's projection state carries no cue events"
+    );
+
+    // A real admitted semantic UI action: the projection state the owner
+    // exposes carries exactly the emitted events, native sequence and kind.
+    assert!(submit(vec![bucket(), bucket()], &mirror, &mut admission).is_ok());
+    let expected = [
+        LocalCueSource {
+            local_event_sequence: 1,
+            kind: ClientIntentKind::CollectWater,
+        },
+        LocalCueSource {
+            local_event_sequence: 2,
+            kind: ClientIntentKind::CollectWater,
+        },
+    ];
+    assert_eq!(
+        admission.projection().pending_local_cues(),
+        &expected,
+        "the projection state carries the emitted native local events"
+    );
+    assert_eq!(
+        admission.pending_local_cues(),
+        &expected,
+        "the owner's own queue holds the same unconsumed events"
+    );
+
+    // Reads never consume: a second read of either copy returns the same
+    // events.
+    assert_eq!(admission.projection().pending_local_cues(), &expected);
+    assert_eq!(admission.pending_local_cues(), &expected);
+
+    // A rejected batch populates nothing on the projection side.
+    assert_eq!(
+        submit(
+            vec![InputAction {
+                intent: ClientIntent::PlaceBlock(
+                    PlacementIntent::try_new(fixture_look(), 3).expect("placement"),
+                ),
+                container: Some(container_token(epoch(1), chest(1), 11)),
+                crafting: None,
+            }],
+            &mirror,
+            &mut admission
+        ),
+        Err(ClientError::InvalidInput)
+    );
+    assert_eq!(
+        admission.projection().pending_local_cues(),
+        &expected,
+        "a rejected batch stages no projection-side cue"
+    );
+
+    // An admitted action outside the source cue inventory populates nothing
+    // either.
+    assert!(
+        submit(
+            vec![plain(ClientIntent::PlayerInput(control(1, 0)))],
+            &mirror,
+            &mut admission
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        admission.projection().pending_local_cues(),
+        &expected,
+        "only cue-source actions populate the projection side"
+    );
+
+    // Reset clears the projection-side cues with the rest, and the new
+    // epoch's first cue restarts at native local sequence one on both
+    // copies.
+    admission.reset_epoch(epoch(2), limits()).expect("reset");
+    assert!(
+        admission.projection().pending_local_cues().is_empty(),
+        "reset clears the projection-side cue events"
+    );
+    let fresh_mirror = full_mirror(2);
+    assert!(submit(vec![bucket()], &fresh_mirror, &mut admission).is_ok());
+    let fresh = [LocalCueSource {
+        local_event_sequence: 1,
+        kind: ClientIntentKind::CollectWater,
+    }];
+    assert_eq!(admission.projection().pending_local_cues(), &fresh);
+    assert_eq!(admission.pending_local_cues(), &fresh);
 }
 
 #[test]
