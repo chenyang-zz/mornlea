@@ -353,3 +353,7 @@ Controller owns the serial prerequisite metadata update. Rollback invalidates th
 
 - Task 2.7a5 fix round 1/5 (1 addressed, 0 open — the AfterConfirmed arm pinned by hand-built envelopes reaching the arm directly, including the binding-value `*sampled` selection via a dedicated mutation; commits `627321459`..`00544e454`).
 - Task 2.7a5: complete (commits `b59c77c7`..`00544e454`; review clean after 1 fix round). One non-blocking polish note deferred (intra-derived tiebreak depth rests on the derived `Ord` without an equal-sampled-revision case).
+
+- Node 2.7b1 review verdict (2026-10-02): spec ✅, quality Approved, zero Critical/Important. Boundary values cross-checked against the real domain source (day 24,000 admit/reject, weather 0-2, season 0-3, season progress full-range u8, world time u64::MAX); the temperature divergence resolved in favor of the accepted Rust domain schema (full-range i8, no clamp anywhere, extremes project exactly) with the Go -40..=45 bound never asserted as contract; verbatim optional tick; whole-rejection tested. One informational minor deferred (per-observation packet clone).
+- Task 2.7b1: complete (commit `859f5b554`, review clean, no fix rounds needed).
+- Orchestration update (user instruction, 2026-10-02): implementation dispatches return to the dedicated `superpower-implementer` agent type (the earlier general-purpose carrier was a quota-outage adaptation); reviews remain on `superpower-resview`.
