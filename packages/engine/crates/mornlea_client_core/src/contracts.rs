@@ -24,7 +24,7 @@ use crate::input::InputBatch;
 use crate::preparation::{
     InvalidationReport, PreparationJob, PreparationResult, PreparationTicket, RejectedPreparation,
 };
-use crate::presentation::{BoundedText, PresentationFrame};
+use crate::presentation::{BoundedText, PresentationFrame, TextKind};
 
 /// The session epoch: a nonzero identity of one connection attempt.
 ///
@@ -817,4 +817,192 @@ pub trait PreparationPort {
     -> Result<PreparationTicket, RejectedPreparation>;
     fn poll_ready(&mut self) -> Option<PreparationResult>;
     fn invalidate(&mut self, epoch: SessionEpoch) -> InvalidationReport;
+}
+
+/// The registered block display-name table, ported verbatim from the Go
+/// registration data.
+///
+/// Source: `packages/shared/core/block_name.go` (sha256
+/// `bf124b00b577b997a9087059306a7d8149b8ed0a9bf5aabb5f98fce190882ef6`, last
+/// touched by source commit `23ae7916f`), indexed by block id in the exact
+/// order the Go `blockDisplayNames` array declares. The table is data only:
+/// labels outside the registry do not exist and no text is invented here.
+/// The bound is the exclusive sentinel the Go `core.RegisteredBlock` gate
+/// applies, which the accepted domain crate publishes as
+/// `mornlea_domain::registered_block` (`BLOCK_ID_MAX` = 90); the lookup
+/// reuses that accepted rule instead of restating the bound.
+static BLOCK_DISPLAY_NAMES: [&str; 90] = [
+    "空气",
+    "屏障",
+    "石头",
+    "泥土",
+    "草方块",
+    "基岩",
+    "石砖",
+    "煤矿石",
+    "铁矿石",
+    "熔炉",
+    "铁块",
+    "箱子",
+    "发光块",
+    "圆石",
+    "平滑石",
+    "沙子",
+    "砾石",
+    "橡木原木",
+    "橡木木板",
+    "树叶",
+    "玻璃",
+    "砖块",
+    "白色羊毛",
+    "红色瓦块",
+    "黏土",
+    "雪块",
+    "苔藓圆石",
+    "水源",
+    "一级流水",
+    "二级流水",
+    "三级流水",
+    "四级流水",
+    "五级流水",
+    "六级流水",
+    "七级流水",
+    "干耕地",
+    "湿耕地",
+    "小麦阶段0",
+    "小麦阶段1",
+    "小麦阶段2",
+    "小麦阶段3",
+    "小麦阶段4",
+    "小麦阶段5",
+    "小麦阶段6",
+    "小麦阶段7",
+    "工作台",
+    "马铃薯阶段0",
+    "马铃薯阶段1",
+    "马铃薯阶段2",
+    "马铃薯阶段3",
+    "马铃薯阶段4",
+    "马铃薯阶段5",
+    "马铃薯阶段6",
+    "马铃薯阶段7",
+    "胡萝卜阶段0",
+    "胡萝卜阶段1",
+    "胡萝卜阶段2",
+    "胡萝卜阶段3",
+    "胡萝卜阶段4",
+    "胡萝卜阶段5",
+    "胡萝卜阶段6",
+    "胡萝卜阶段7",
+    "木门下半_南关",
+    "木门下半_南开",
+    "木门下半_西关",
+    "木门下半_西开",
+    "木门下半_北关",
+    "木门下半_北开",
+    "木门下半_东关",
+    "木门下半_东开",
+    "木门上半",
+    "落地火把",
+    "墙挂火把+X",
+    "墙挂火把-X",
+    "墙挂火把+Z",
+    "墙挂火把-Z",
+    "床尾_南",
+    "床尾_西",
+    "床尾_北",
+    "床尾_东",
+    "床头_南",
+    "床头_西",
+    "床头_北",
+    "床头_东",
+    "短草",
+    "雪层1档",
+    "雪层2档",
+    "雪层3档",
+    "雪层4档",
+    "橡树树苗",
+];
+
+/// The registered display label of one block id, or `None` when the id is
+/// outside the registry. Unregistered ids have no label: the caller renders
+/// no invented text for them.
+pub fn registered_label(block: u16) -> Option<&'static str> {
+    if !mornlea_domain::registered_block(block) {
+        return None;
+    }
+    Some(BLOCK_DISPLAY_NAMES[block as usize])
+}
+
+/// The registered display label as a checked `Target` bounded text, the form
+/// the prompt projection publishes. `None` keeps the unregistered-id absence;
+/// a label the checked boundary rejects surfaces as the typed error instead
+/// of silently disappearing.
+pub fn registered_label_text(block: u16) -> Result<Option<BoundedText>, ClientError> {
+    registered_label(block)
+        .map(|label| BoundedText::try_new(label.to_string(), TextKind::Target))
+        .transpose()
+}
+
+#[cfg(test)]
+mod registered_label_tests {
+    use super::{BoundedText, ClientError, TextKind, registered_label, registered_label_text};
+
+    /// The exact id→label pairs against the Go source values, including the
+    /// first and last registered ids and one from each registered family.
+    #[test]
+    fn registered_label_matches_go_table() {
+        let expected: [(u16, &str); 10] = [
+            (0, "空气"),
+            (2, "石头"),
+            (4, "草方块"),
+            (9, "熔炉"),
+            (11, "箱子"),
+            (27, "水源"),
+            (45, "工作台"),
+            (62, "木门下半_南关"),
+            (76, "床尾_南"),
+            (89, "橡树树苗"),
+        ];
+        for (id, label) in expected {
+            assert_eq!(registered_label(id), Some(label), "id {id} label");
+        }
+        // The registry ends at the last real block; the domain gate and the
+        // table agree on the bound.
+        assert!(registered_label(88).is_some());
+        assert_eq!(registered_label(89), Some("橡树树苗"));
+    }
+
+    /// The no-target/unknown-id path: the sentinel id the Go `RegisteredBlock`
+    /// gate excludes and everything above it have no label, and the checked
+    /// text form keeps that absence instead of inventing text.
+    #[test]
+    fn registered_label_unknown_ids_are_absent() {
+        assert_eq!(registered_label(90), None);
+        assert_eq!(registered_label(91), None);
+        assert_eq!(registered_label(u16::MAX), None);
+        assert_eq!(registered_label_text(90), Ok(None));
+        assert_eq!(registered_label_text(u16::MAX), Ok(None));
+        // A registered id checks through the Target boundary.
+        let checked = registered_label_text(2)
+            .expect("registered id checks")
+            .expect("label");
+        assert_eq!(checked.as_str(), "石头");
+        assert_eq!(checked.kind(), &TextKind::Target);
+    }
+
+    /// The typed rejection at the `BoundedText` boundary: labels are all
+    /// short, so the overlong row uses the checked constructor directly, like
+    /// the sibling boundary rows do.
+    #[test]
+    fn bounded_text_target_rejects_overlong_label() {
+        assert!(registered_label(2).expect("registered").len() <= 64);
+        let overlong = "x".repeat(65);
+        assert_eq!(
+            BoundedText::try_new(overlong, TextKind::Target),
+            Err(ClientError::InvalidInput)
+        );
+        // The 64-byte bound itself is admitted.
+        assert!(BoundedText::try_new("x".repeat(64), TextKind::Target).is_ok());
+    }
 }
