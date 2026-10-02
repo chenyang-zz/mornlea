@@ -4,3 +4,5 @@
 resource_name = "capability_registry"
 metadata/registry_version = 1
 metadata/manifest_paths = PackedStringArray("res://features/menus/feature.tres", "res://features/containers/feature.tres", "res://features/chat/feature.tres", "res://features/audio/feature.tres", "res://features/lod/feature.tres", "res://features/viewmodel/feature.tres", "res://features/companions/feature.tres", "res://features/hostile_mobs/feature.tres", "res://features/passive_cows/feature.tres", "res://features/projectiles/feature.tres", "res://features/drops/feature.tres", "res://features/name_tags/feature.tres", "res://features/particles/feature.tres", "res://features/full_weather/feature.tres")
+metadata/rust_producer = "rust-client-core"
+metadata/rust_producer_families = PackedStringArray("session@1.0:1:4096:0", "input@1.0:2:4096:0", "terrain@1.0:3:4096:0", "actors@1.0:4:4096:0", "player-view@1.0:5:4096:0", "inventory-ui@1.0:6:4096:0", "world-ui@1.0:7:4096:0", "audio-cues@1.0:8:4096:0", "lifecycle@1.0:9:4096:0", "diagnostics@1.0:10:4096:0")
