@@ -315,3 +315,9 @@ Controller owns the serial prerequisite metadata update. Rollback invalidates th
 
 - Node 2.7a1 review verdict (2026-10-02): spec ✅, quality Approved, zero Critical/Important. Named risk verified structurally and behaviorally: the provider reads only the confirmed observation queue (no unconfirmed debit possible) and the rejected-selection row pins authoritative-state preservation; family-pattern parity with the accepted companion precedent confirmed. One minor deferred (part of the malformed-count row pins domain constructors rather than provider behavior — defensible since the checked domain makes malformed counts unrepresentable upstream).
 - Task 2.7a1: complete (commit `cb47c7af`, review clean, no fix rounds needed).
+
+## 2026-10-02 quota interruption and orphan handling
+
+- Orchestration event: the account's rolling five-hour usage cap aborted three in-flight agents simultaneously (the 2.6g fix round 1, the 2.7a2 container implementation ~10 minutes in, and the 2.7a3 crafting dispatch at startup). The cap window rolled past its stated reset before this resumption; no worktree state was lost beyond the agents' contexts.
+- Ruling (orphan adoption, per the parallel-controller handover rules): the 2.7a2 worker's uncommitted partial edits in `inventory_ui/container.rs` + `tests/presentation_contract/inventory_container.rs` are an ORPHAN of unknown coherence — the re-dispatched implementer must empirically review the orphan diff against the brief first and may adopt-and-continue or reset both files to their doc-only stub state and reimplement; either path is recorded in its report with the evidence, and the normal task review remains the acceptance gate. The 2.6g fix and 2.7a3 workers left no edits; both re-dispatch fresh.
+- No tasks.md status changed by this event; node 2.6g's fix round counter resumes at round 1 (the aborted attempt produced no findings-resolution evidence).
