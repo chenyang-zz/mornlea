@@ -105,11 +105,16 @@ class PlanResult:
         errors: tuple[str, ...],
         disabled: tuple[str, ...],
         order: tuple[str, ...],
+        disabled_reasons: dict[str, str] | None = None,
     ) -> None:
         self.ok = ok
         self.errors = errors
         self.disabled = disabled
         self.order = order
+        # Additive diagnostic mapping: why each optionally disabled feature
+        # was dropped. The bare-ID `disabled` list stays the consumed
+        # contract; this payload never feeds a required-failure rollback.
+        self.disabled_reasons = disabled_reasons if disabled_reasons is not None else {}
 
     def to_json(self) -> str:
         return json.dumps(
@@ -117,6 +122,7 @@ class PlanResult:
                 "ok": self.ok,
                 "errors": list(self.errors),
                 "disabled": list(self.disabled),
+                "disabled_reasons": self.disabled_reasons,
                 "order": list(self.order),
             },
             separators=(",", ":"),
@@ -803,6 +809,7 @@ def _instantiate_features(
     the affected feature and its dependents.
     """
     disabled = list(plan.disabled)
+    reasons: dict[str, str] = {}
     errors: list[str] = []
     for feature_id in plan.order:
         manifest = manifests[feature_id]
@@ -822,6 +829,7 @@ def _instantiate_features(
                 errors.append(message)
                 _deactivate(host)
                 return PlanResult(False, tuple(errors), tuple(sorted(disabled)), plan.order)
+            reasons[feature_id] = message
             disabled.append(feature_id)
             continue
         scene_resource = _load_resource(manifest.entry_scene_path)
@@ -845,12 +853,13 @@ def _instantiate_features(
                 errors.append(f"feature {feature_id} {failure}")
                 _deactivate(host)
                 return PlanResult(False, tuple(errors), tuple(sorted(disabled)), plan.order)
+            reasons[feature_id] = f"feature {feature_id} {failure}"
             disabled.append(feature_id)
             continue
         if instance is not None:
             host._instances[feature_id] = instance
             host._active_order.append(feature_id)
-    return PlanResult(True, (), tuple(sorted(set(disabled))), plan.order)
+    return PlanResult(True, (), tuple(sorted(set(disabled))), plan.order, reasons)
 
 
 def _reset(host: feature_host, epoch: int) -> None:

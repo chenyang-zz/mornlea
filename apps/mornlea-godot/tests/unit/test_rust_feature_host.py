@@ -740,6 +740,17 @@ class RustFeatureHostTest(unittest.TestCase):
         result = self.activate_rust(catalog)
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["disabled"], ["dependent", "provider"])
+        # The additive reason mapping names why each optional feature was
+        # disabled, without moving anything into the required-error list.
+        self.assertEqual(
+            result["disabled_reasons"],
+            {
+                "provider": "feature provider activate failed: nope",
+                "dependent": (
+                    "feature dependent cannot activate after dependency provider was disabled"
+                ),
+            },
+        )
         self.assertEqual(self.host.active_count(), 0)
         # The optional feature stays absent from both the active set and the
         # required-failure error list: isolation, not a required rollback.
