@@ -495,6 +495,20 @@ impl PredictionReplay {
         self.confirmed.as_ref().map(|base| base.mining)
     }
 
+    /// The recorded target of the confirmed pose's look ray at the latest
+    /// step-time derivation. Unlike the projection field, this reads even
+    /// while no confirmed base exists, so an emptied owner reports its
+    /// emptiness directly.
+    pub fn confirmed_target(&self) -> Option<RayTarget> {
+        self.confirmed_target
+    }
+
+    /// The recorded target of the predicted pose's own look ray at the
+    /// latest step-time derivation, readable the same way.
+    pub fn predicted_target(&self) -> Option<RayTarget> {
+        self.predicted_target
+    }
+
     /// The immutable projection input for the `player-view` family: the
     /// checked confirmed pose beside the explicitly attributed predicted
     /// pose, the retained correction, the finite look ray, the movement
@@ -800,9 +814,9 @@ impl PredictionReplay {
     /// predicted pose's own look ray, each capped by the landed interaction
     /// reach, each hit stamped with the confirmed base's revision. No hit
     /// within the borrowed view records `None`; the walk stops at the first
-    /// cell the grid does not cover, because nothing beyond that view may be
-    /// claimed. The confirmed target is confirmed data; the predicted target
-    /// is data only.
+    /// cell the grid does not cover or does not load, because nothing beyond
+    /// that view's data may be claimed. The confirmed target is confirmed
+    /// data; the predicted target is data only.
     fn refresh_ray_targets(
         &mut self,
         environment: &StepEnvironment<'_>,
@@ -1042,9 +1056,10 @@ fn max3(first: f32, second: f32, third: f32) -> f32 {
 /// the normalized look direction, batch-by-batch kernel batches, every
 /// traversed cell classified against the only world data the step borrowed —
 /// a covered, loaded cell carrying at least one collision box is a target
-/// cell, a covered empty cell passes over, and the first cell the grid does
-/// not cover ends the walk with no hit, because nothing beyond the borrowed
-/// view may be claimed. The reach is the landed authority interaction
+/// cell, a covered, loaded empty cell passes over, and the first cell the
+/// grid does not cover — outside its extent or not loaded — ends the walk
+/// with no hit, because nothing beyond the borrowed view may be claimed. The
+/// reach is the landed authority interaction
 /// distance, so the recorded hit is a hit of exactly the ray the projection
 /// publishes. The bounded DDA crosses at most `3 x reach + 2` cells inside
 /// one 64-record kernel batch, so the walk is one bounded kernel call.
@@ -1094,7 +1109,8 @@ enum CellView {
     /// Inside the grid's cover, loaded, and carrying at least one collision
     /// box: a target cell.
     Target,
-    /// Inside the cover but empty of boxes: the walk passes over it.
+    /// Inside the cover, loaded, and empty of boxes: the walk passes over
+    /// it.
     Passes,
     /// Outside the grid's cover or unloaded: nothing may be claimed past it.
     Uncovered,
@@ -1103,7 +1119,11 @@ enum CellView {
 /// Classifies one world cell against the borrowed collision grid, mirroring
 /// the native physics wrapper's cell order (y-major, then x, then z) with the
 /// same widened relative arithmetic, so the ray walk and the physics solver
-/// read one grid.
+/// read one grid. An unloaded in-cover cell is a knowledge boundary, not an
+/// empty one: the collision core treats it as unknown and the accepted
+/// target walk terminates at the first unobserved cell, so the ray walk ends
+/// there too instead of claiming a solid cell beyond data the view does not
+/// carry.
 fn grid_target_cell(grid: &CollisionGrid<'_>, cell: [i32; 3]) -> CellView {
     let origin = grid.origin();
     let dims = grid.dimensions();
@@ -1121,7 +1141,10 @@ fn grid_target_cell(grid: &CollisionGrid<'_>, cell: [i32; 3]) -> CellView {
     let Some(observed) = grid.cells().get(index) else {
         return CellView::Uncovered;
     };
-    if observed.loaded() && observed.used() > 0 {
+    if !observed.loaded() {
+        return CellView::Uncovered;
+    }
+    if observed.used() > 0 {
         CellView::Target
     } else {
         CellView::Passes

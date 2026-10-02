@@ -113,6 +113,23 @@ fn walking_grid(cells: &[CollisionCell]) -> CollisionGrid<'_> {
     CollisionGrid::try_new(WALK_ORIGIN, WALK_DIMS, cells).expect("walking fixture grid")
 }
 
+/// Replaces one world cell with an unloaded cell — a hole the borrowed view
+/// carries no data for — in the fixture's own y-major layout order.
+fn unload_cell(cells: &mut [CollisionCell], origin: [i32; 3], dims: [u32; 3], cell: [i32; 3]) {
+    let offset =
+        |axis: usize| usize::try_from(cell[axis] - origin[axis]).expect("inside the fixture");
+    let index = (offset(1) * dims[0] as usize + offset(0)) * dims[2] as usize + offset(2);
+    cells[index] = CollisionCell::try_new(
+        false,
+        [Aabb {
+            minimum: [0.0; 3],
+            maximum: [0.0; 3],
+        }; 8],
+        0,
+    )
+    .expect("checked hole cell");
+}
+
 fn transcript_grid(cells: &[CollisionCell]) -> CollisionGrid<'_> {
     CollisionGrid::try_new(TRANSCRIPT_ORIGIN, TRANSCRIPT_DIMS, cells).expect("transcript grid")
 }
@@ -691,9 +708,16 @@ impl UnderTest {
             Driver::Provider => {
                 let owner = self.provider.as_ref().expect("provider under test");
                 let Ok(projection) = owner.projection() else {
-                    // No confirmed base yet: nothing is attributable at all,
-                    // which is itself the comparable state.
-                    return Snapshot::empty();
+                    // No confirmed base: nothing attributable through the
+                    // projection, but the owner's own recorded seams still
+                    // report their raw state, so a reset pin observes the
+                    // clearing itself rather than the projection refusal.
+                    return Snapshot {
+                        source_mining: owner.source_mining(),
+                        confirmed_target: owner.confirmed_target().as_ref().map(target_view),
+                        predicted_target: owner.predicted_target().as_ref().map(target_view),
+                        ..Snapshot::empty()
+                    };
                 };
                 Snapshot {
                     confirmed_position: Some(projection.confirmed_pose().position()),
@@ -1559,6 +1583,52 @@ fn replay_records_ray_targets_for_both_poses() {
     // Re-projection is pure: the recorded targets are step-time data, so a
     // repeated projection reports them unchanged.
     assert_eq!(test.snapshot(), snapshot);
+
+    // A reset clears both recorded targets with the confirmed base they were
+    // stamped from: the emptied snapshot reports neither.
+    test.reset(epoch(2)).expect("reset drops the base");
+    assert_eq!(
+        test.snapshot(),
+        Snapshot::empty(),
+        "the recorded ray targets leave with the base they were derived from"
+    );
+}
+
+/// The knowledge boundary of the ray walk: an unloaded in-cover cell is a
+/// hole in the borrowed view's data, not an empty cell. A solid block beyond
+/// such a hole must never be recorded — the walk ends at the hole for both
+/// the confirmed and the predicted ray.
+#[test]
+fn ray_targets_stop_at_unloaded_cells() {
+    // The same geometry as the recording row, plus one unloaded hole on each
+    // ray's path before its solid block.
+    let mut cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[[0, 0, -3], [-2, 0, 0]]);
+    unload_cell(&mut cells, WALK_ORIGIN, WALK_DIMS, [0, 0, -1]);
+    unload_cell(&mut cells, WALK_ORIGIN, WALK_DIMS, [-1, 0, 0]);
+    let grid = walking_grid(&cells);
+    let epoch_one = epoch(1);
+    let mut test = UnderTest::new(epoch_one, limits());
+
+    let beginning = authority(1, 0, [0.5, 0.0, 0.5], [0.0, 0.0, 0.0], true, look(0.0, 0.0));
+    test.confirm(&key(epoch_one, 1), &beginning, &grid)
+        .expect("begins");
+    assert_eq!(
+        test.snapshot().confirmed_target,
+        None,
+        "the confirmed ray ends at the unloaded cell, never claiming the block past it"
+    );
+
+    let westward = control(0, 1, std::f32::consts::FRAC_PI_2);
+    test.predict(1, westward, &grid).expect("journaled step");
+    let snapshot = test.snapshot();
+    assert_eq!(
+        snapshot.predicted_target, None,
+        "the predicted ray ends at its own unloaded cell the same way"
+    );
+    assert_eq!(
+        snapshot.confirmed_target, None,
+        "the step-time re-derivation respects the hole too"
+    );
 }
 
 /// The executable wrong-behavior artifact: the deliberately wrong double
