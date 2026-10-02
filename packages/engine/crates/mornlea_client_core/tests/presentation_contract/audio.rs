@@ -294,10 +294,26 @@ impl ViewFixture {
         value: u64,
         revision: ConfirmedRevision,
     ) -> ProjectionView<'a> {
+        self.view_with_input(&self.input, player, mirror, observations, value, revision)
+    }
+
+    /// Builds one immutable projection view over an externally owned input
+    /// projection state — the admission owner's exposed state — beside this
+    /// fixture's other owners.
+    #[allow(clippy::too_many_arguments)]
+    fn view_with_input<'a>(
+        &'a self,
+        input: &'a InputProjectionState,
+        player: &'a mornlea_client_core::prediction::PlayerProjectionState,
+        mirror: &'a ConfirmedMirror,
+        observations: &'a [AcceptedObservation],
+        value: u64,
+        revision: ConfirmedRevision,
+    ) -> ProjectionView<'a> {
         ProjectionView::try_new(
             mirror,
             observations,
-            &self.input,
+            input,
             player,
             &self.audio,
             &self.lifecycle,
@@ -745,6 +761,120 @@ fn local_cue_requires_a_real_native_local_event() {
     // The projection is pure: reading it consumed nothing of the admission
     // owner's pending native local event queue.
     assert_eq!(admission.pending_local_cues().len(), 1);
+}
+
+/// The end-to-end local-provenance row: one real admitted `CollectWater`
+/// semantic UI action drives the admission owner's exposed projection
+/// state, and the projection built from that owner emits exactly one
+/// `Local`-provenance water-splash record keyed by the native local event
+/// sequence — never the input sequence, never a server confirmation. Reads
+/// consume nothing, so a second projection before any commit still sees the
+/// pending cue, and once the Local key is committed the same pending cue is
+/// a duplicate that stays silent.
+#[test]
+fn local_cue_projects_end_to_end_from_real_admission() {
+    let provider = admitted_mirror(EPOCH);
+    let mut admission = InputAdmissionState::try_new(epoch(EPOCH), limits()).expect("owner");
+
+    let action = InputAction {
+        intent: mornlea_client_core::ClientIntent::CollectWater(look(0.0, 0.0)),
+        container: None,
+        crafting: None,
+    };
+    let batch = InputBatch::try_new(epoch(EPOCH), vec![action]).expect("batch");
+    let validated =
+        InputTranslator::validate_batch(&batch, provider.mirror(), &limits()).expect("validated");
+    InputTranslator::commit(validated, &mut admission).expect("admitted");
+    assert_eq!(
+        admission.projection().pending_local_cues(),
+        &[mornlea_client_core::LocalCueSource {
+            local_event_sequence: 1,
+            kind: ClientIntentKind::CollectWater,
+        }],
+        "the admission owner's exposed projection state carries the native event"
+    );
+
+    // The view borrows the admission owner's exposed projection state — the
+    // same input surface the serial assembler borrows at publication time.
+    let player = idle_player(EPOCH);
+    let fixture = ViewFixture::new();
+    let view = fixture.view_with_input(
+        admission.projection(),
+        &player,
+        provider.mirror(),
+        provider.observations(),
+        EPOCH,
+        ConfirmedRevision::new(1),
+    );
+    let projection = project_audio(&view).expect("the admitted action's native cue projects");
+    assert_eq!(projection.records().len(), 1);
+    let record = &projection.records()[0];
+    assert_eq!(
+        record.cue_id(),
+        CueId::try_new(4).expect("water splash cue"),
+        "the bucket action's measured local fixture is the water splash"
+    );
+    assert_eq!(
+        record.category(),
+        &mornlea_client_core::AudioCueCategory::World
+    );
+    assert_eq!(
+        record.provenance(),
+        &CueProvenance::Local {
+            local_event_sequence: 1,
+        }
+    );
+    assert_eq!(record.header().source_tick(), None);
+    let local_key = AudioDedupKey::Local {
+        epoch: epoch(EPOCH),
+        local_event_sequence: 1,
+        cue: CueId::try_new(4).expect("water splash cue"),
+    };
+    assert_eq!(projection.proposed_dedup().insertions(), &[local_key]);
+    assert!(projection.proposed_dedup().cancellations().is_empty());
+
+    // Reads never consume: the exposed cue queue is unchanged and a second
+    // projection before any commit still sees the pending cue.
+    assert_eq!(admission.projection().pending_local_cues().len(), 1);
+    let second = project_audio(&view).expect("valid projection");
+    assert_eq!(
+        second.records().len(),
+        1,
+        "the unconsumed pending cue still projects"
+    );
+    assert_eq!(
+        admission.projection().pending_local_cues().len(),
+        1,
+        "projecting consumed nothing of the owner's exposed queue"
+    );
+
+    // A committed Local key silences the same cue: the native local event
+    // sequence is its whole identity, so the still-pending event is a
+    // duplicate after the publication committed the key.
+    let committed = ViewFixture::with_audio(
+        AudioProjectionState::try_new()
+            .expect("audio state")
+            .with_committed(vec![local_key]),
+    );
+    let view = committed.view_with_input(
+        admission.projection(),
+        &player,
+        provider.mirror(),
+        provider.observations(),
+        EPOCH,
+        ConfirmedRevision::new(1),
+    );
+    let projection = project_audio(&view).expect("valid projection");
+    assert!(
+        projection.records().is_empty(),
+        "the committed local key silences the cue"
+    );
+    assert!(projection.proposed_dedup().insertions().is_empty());
+    assert_eq!(
+        admission.projection().pending_local_cues().len(),
+        1,
+        "the silencing read consumed nothing either"
+    );
 }
 
 /// Dedup keys are epoch-scoped: after a reset the fresh epoch's owner starts
