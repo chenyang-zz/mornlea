@@ -657,6 +657,45 @@ fn container_lifecycle() {
     );
 }
 
+/// `mirror::chat_window_bounded`: the confirmed chat store keeps exactly the
+/// newest 32 accepted chat facts in source order — appending the 33rd evicts
+/// the oldest, the measured chat ring capacity — and reset still clears the
+/// store wholesale, because the controller replaces the mirror owner with a
+/// fresh epoch whose chat store starts empty.
+#[test]
+fn chat_window_bounded() {
+    let mut test = UnderTest::provider();
+    for event_id in 1..=33u64 {
+        test.commit(chat(event_id))
+            .expect("every chat fact is confirmed");
+    }
+    let mirror = test.mirror();
+    let retained = mirror.world_ui().chat();
+    assert_eq!(
+        retained.len(),
+        32,
+        "exactly the chat window capacity is kept"
+    );
+    let ids: Vec<u64> = retained.iter().map(|fact| fact.event_id()).collect();
+    let newest: Vec<u64> = (2..=33).collect();
+    assert_eq!(
+        ids, newest,
+        "the newest 32 facts in source order, the oldest evicted"
+    );
+
+    // Reset clears wholesale: a fresh epoch's mirror holds no chat facts, so
+    // no retained window ever crosses an epoch boundary.
+    let epoch = SessionEpoch::try_new(test.epoch.get() + 1).expect("fresh epoch");
+    let mut fresh = MirrorProvider::new(epoch, ClientLimits::try_new().expect("limits"))
+        .expect("pending mirror");
+    fresh.admit().expect("admitted mirror");
+    assert_eq!(
+        fresh.mirror().world_ui().chat().len(),
+        0,
+        "a fresh epoch holds no confirmed chat facts"
+    );
+}
+
 /// The wrong-behavior artifact: the contract double's mirror path — the
 /// behavior the real provider replaces — keeps no chunk facts, commits
 /// invented-dimension block deltas, commits stale duplicate deltas,

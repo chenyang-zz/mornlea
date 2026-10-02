@@ -1140,7 +1140,10 @@ pub struct PublicationReservation {
 }
 
 impl PublicationReservation {
-    pub fn try_new(
+    /// Crate-only construction: a reservation may only be built by the
+    /// assembly owner's checked `prepare` path, so no external forger can
+    /// bypass its validation and reach the commit critical section.
+    pub(crate) fn try_new(
         frame: Arc<PresentationFrame>,
         audio: AudioDedupDelta,
         consume: PublicationConsumption,

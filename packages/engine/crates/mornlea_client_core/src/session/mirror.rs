@@ -34,10 +34,14 @@
 //! store, matching the accepted close/forget tolerance the Go oracles pin.
 //! The committed observation queue is bounded by the frozen inbound
 //! observation limit and shrinks only through the publication consumption
-//! cursor, so no unbounded packet history is retained.
+//! cursor, so no unbounded packet history is retained. The confirmed chat
+//! store is bounded the same way: it retains at most the measured chat ring
+//! capacity of the most recent accepted chat facts, so no unbounded chat
+//! history survives the session lifetime either.
 
 use mornlea_domain::{
-    ChunkPos, ContainerRef, Dimension, DropId, Event, HostileId, PassiveId, PlayerId, ProjectileId,
+    ChatEvent, ChunkPos, ContainerRef, Dimension, DropId, Event, HostileId, PassiveId, PlayerId,
+    ProjectileId,
 };
 
 use crate::contracts::{
@@ -49,6 +53,15 @@ use crate::session::{
     ActorConfirmed, ConfirmedMirror, ConfirmedMirrorParts, InventoryConfirmed, WorldConfirmed,
     WorldUiConfirmed,
 };
+
+/// The confirmed chat window capacity: the measured client capability
+/// inventory's `chat_event_ring_capacity` row — value 32, class
+/// `existing_fixed_ceiling`, from `packages/client/client/chat.go` line 15
+/// (`ChatEventCapacity = 32`) — the same ring bound the chat world-UI
+/// provider projects its own window from. Retaining beyond it evicts the
+/// oldest accepted fact, so the confirmed store never grows with the session
+/// lifetime.
+const CHAT_WINDOW_CAPACITY: usize = 32;
 
 /// The confirmed mirror state machine: the mirror beside the bounded queue
 /// of committed, not-yet-consumed observations that together form the
@@ -449,7 +462,23 @@ fn stage_event(
             *inventory = inventory.clone().with_crafting_view(state.size(), revision);
         }
         Event::Chat(event) => {
-            *world_ui = world_ui.clone().with_chat(event.clone());
+            // The bounded chat window: the confirmed store keeps at most the
+            // most recent `CHAT_WINDOW_CAPACITY` accepted chat facts in
+            // source order — appending the 33rd evicts the oldest — so the
+            // mirror-commit hot path never accumulates chat history for the
+            // session lifetime. Eviction rebuilds the store through its
+            // checked constructor surface because the frozen store exposes
+            // no removal path; every other store semantic is unchanged.
+            let mut staged = world_ui.clone().with_chat(event.clone());
+            let overflow = staged.chat().len().saturating_sub(CHAT_WINDOW_CAPACITY);
+            if overflow > 0 {
+                let retained: Vec<ChatEvent> = staged.chat()[overflow..].to_vec();
+                staged = WorldUiConfirmed::try_new()?;
+                for fact in retained {
+                    staged = staged.with_chat(fact);
+                }
+            }
+            *world_ui = staged;
         }
         // The private body, command, placement, combat and personal
         // inventory observations carry no mirror-store identity: they are
