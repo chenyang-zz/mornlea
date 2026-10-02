@@ -274,15 +274,21 @@ fn authority(
     )
 }
 
-fn active_mining() -> MiningState {
+/// One checked active swing against the given target block, so persistence
+/// rows can distinguish two different authoritative swings.
+fn active_mining_at(target: BlockPos) -> MiningState {
     MiningState::try_new(MiningStateParts {
         active: true,
-        target: BlockPos::new(2, 0, 3),
+        target,
         progress: 4,
         required: 10,
         harvestable: false,
     })
     .expect("checked active mining fixture")
+}
+
+fn active_mining() -> MiningState {
+    active_mining_at(BlockPos::new(2, 0, 3))
 }
 
 fn key(epoch: SessionEpoch, revision: u64) -> ObservationKey {
@@ -333,6 +339,7 @@ struct Snapshot {
     look_reach: Option<f32>,
     movement_control_present: bool,
     source_mining: Option<MiningState>,
+    projection_mining: Option<MiningState>,
 }
 
 impl Snapshot {
@@ -349,6 +356,7 @@ impl Snapshot {
             look_reach: None,
             movement_control_present: false,
             source_mining: None,
+            projection_mining: None,
         }
     }
 }
@@ -497,6 +505,7 @@ impl WrongReplayDouble {
             look_reach: None,
             movement_control_present: !self.journal.is_empty(),
             source_mining: self.mining,
+            projection_mining: self.mining,
         }
     }
 }
@@ -672,6 +681,7 @@ impl UnderTest {
                     look_reach: projection.look_ray().map(|ray| ray.reach()),
                     movement_control_present: projection.movement().control().is_some(),
                     source_mining: owner.source_mining(),
+                    projection_mining: Some(*projection.mining()),
                 }
             }
         }
@@ -1326,9 +1336,101 @@ fn projection_carries_poses_correction_ray_movement_and_source_mining() {
         "the source mining state stays the authoritative one"
     );
     assert_eq!(
+        snapshot.projection_mining,
+        Some(active_mining()),
+        "the projection state itself carries the persisted source mining"
+    );
+    assert_eq!(
+        snapshot.projection_mining, snapshot.source_mining,
+        "the projection input role and the owner report one value"
+    );
+    assert_eq!(
         snapshot.predicted_on_ground,
         Some(true),
         "grounded replay stays grounded"
+    );
+}
+
+/// The source mining seam the player projection reads: the projection
+/// state's mining equals the confirmed base's mining, persists through every
+/// non-authoritative operation — prediction steps, a rejection replay and a
+/// duplicate delivery, none of which can flap a mid-swing idle — and is
+/// replaced only by a newer authoritative confirmation. A reset drops it with
+/// the confirmed base it rode in on.
+#[test]
+fn source_mining_persists_across_replay_and_updates_only_on_authority() {
+    let cells = fixture_cells(WALK_DIMS, false);
+    let grid = walking_grid(&cells);
+    let epoch_one = epoch(1);
+    let mut test = UnderTest::new(epoch_one, limits());
+
+    let first_swing = active_mining();
+    let beginning = authority_with_mining(
+        1,
+        0,
+        [0.5, 0.0, 0.5],
+        [0.0, 0.0, 0.0],
+        true,
+        look(0.0, 0.0),
+        first_swing,
+    );
+    test.confirm(&key(epoch_one, 1), &beginning, &grid)
+        .expect("begins");
+    let north = control(0, 1, 0.0);
+    test.predict(1, north, &grid).expect("journaled step");
+    test.predict(2, north, &grid).expect("journaled step");
+    assert_eq!(
+        test.snapshot().projection_mining,
+        Some(first_swing),
+        "predicted steps never touch the source mining"
+    );
+
+    test.reject(1, &grid).expect("rejection replays");
+    assert_eq!(
+        test.snapshot().projection_mining,
+        Some(first_swing),
+        "a rejection is not an authority: the swing survives the replay"
+    );
+    test.confirm(&key(epoch_one, 1), &beginning, &grid)
+        .expect("duplicate delivery is a no-op");
+    assert_eq!(
+        test.snapshot().projection_mining,
+        Some(first_swing),
+        "a duplicate acknowledgement never rewrites the source mining"
+    );
+
+    let second_swing = active_mining_at(BlockPos::new(5, 0, 7));
+    let advanced = authority_with_mining(
+        2,
+        1,
+        [0.5, 0.0, 0.4],
+        [0.0, 0.0, 0.0],
+        true,
+        look(0.0, 0.0),
+        second_swing,
+    );
+    test.confirm(&key(epoch_one, 2), &advanced, &grid)
+        .expect("a newer authority replaces the swing");
+    assert_eq!(
+        test.snapshot().projection_mining,
+        Some(second_swing),
+        "the correction's own mining is the new source, persisted through its replay"
+    );
+
+    let idle = authority(3, 2, [0.5, 0.0, 0.3], [0.0, 0.0, 0.0], true, look(0.0, 0.0));
+    test.confirm(&key(epoch_one, 3), &idle, &grid)
+        .expect("an idle authority clears the swing");
+    assert_eq!(
+        test.snapshot().projection_mining,
+        Some(MiningState::Idle),
+        "the latest authority's idle mining is the source"
+    );
+
+    test.reset(epoch(2)).expect("reset drops the base");
+    assert_eq!(
+        test.snapshot(),
+        Snapshot::empty(),
+        "the mining leaves with the confirmed base it rode in on"
     );
 }
 

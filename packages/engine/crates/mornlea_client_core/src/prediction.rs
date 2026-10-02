@@ -74,7 +74,10 @@ impl JournalEntry {
 /// explicitly attributed predicted pose, the correction that caused the last
 /// replay, the finite look ray, the movement intent and the source mining
 /// state. The predicted pose is always tagged; a correction never relabels
-/// it confirmed.
+/// it confirmed. The mining is the persisted source `MiningState` of the
+/// latest confirmed authority: it survives observation-queue consumption and
+/// every correction replay unchanged, and only an authoritative confirmation
+/// — never a prediction, rejection or duplicate delivery — replaces it.
 #[derive(Clone, Debug)]
 pub struct PlayerProjectionState {
     epoch: SessionEpoch,
@@ -85,6 +88,7 @@ pub struct PlayerProjectionState {
     correction: Option<Correction>,
     look_ray: Option<FiniteRay>,
     movement: MovementIntent,
+    mining: MiningState,
 }
 
 impl PlayerProjectionState {
@@ -107,7 +111,21 @@ impl PlayerProjectionState {
             correction,
             look_ray,
             movement,
+            // A directly constructed state carries the idle authority; the
+            // projection owner publishes the persisted confirmed-base value
+            // through `with_mining`, so no caller of the frozen constructor
+            // changes behavior.
+            mining: MiningState::Idle,
         })
+    }
+
+    /// Publishes the persisted source mining state alongside the rest of the
+    /// projection. The replay owner sets it from its confirmed base; the
+    /// value is a checked authority record, so there is nothing further to
+    /// validate here.
+    pub fn with_mining(mut self, mining: MiningState) -> Self {
+        self.mining = mining;
+        self
     }
 
     pub fn epoch(&self) -> SessionEpoch {
@@ -140,6 +158,11 @@ impl PlayerProjectionState {
 
     pub fn movement(&self) -> &MovementIntent {
         &self.movement
+    }
+
+    /// The persisted source mining state of the latest confirmed authority.
+    pub fn mining(&self) -> &MiningState {
+        &self.mining
     }
 }
 
@@ -435,7 +458,7 @@ impl PredictionReplay {
             .map(|state| state.on_ground)
             .unwrap_or(base.state.on_ground);
         let movement = MovementIntent::try_new(last_control, on_ground)?;
-        PlayerProjectionState::try_new(
+        Ok(PlayerProjectionState::try_new(
             self.epoch,
             base.revision,
             confirmed_pose,
@@ -444,7 +467,11 @@ impl PredictionReplay {
             self.correction,
             Some(look_ray),
             movement,
-        )
+        )?
+        // The persisted source mining of the confirmed base rides beside the
+        // poses so the projection input role carries it; the owner-level
+        // accessor reports the same value.
+        .with_mining(base.mining))
     }
 
     /// Opens the next rendered frame's step budget. The per-frame ceiling
