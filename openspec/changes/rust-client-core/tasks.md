@@ -32,7 +32,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 2.6b Publish `player-view@1` semantics.
 - [x] 2.7a1 Project inventory and hotbar state.
 - [x] 2.7a2 Project containers and chest revision.
-- [ ] 2.7a3 Project crafting state.
+- [x] 2.7a3 Project crafting state.
 - [ ] 2.7a4 Project furnace state.
 - [ ] 2.7a5 Assemble `inventory-ui@1`.
 - [ ] 2.7b1 Project environment state.
