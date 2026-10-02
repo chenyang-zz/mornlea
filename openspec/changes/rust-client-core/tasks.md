@@ -34,7 +34,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.7a2 Project containers and chest revision.
 - [x] 2.7a3 Project crafting state.
 - [x] 2.7a4 Project furnace state.
-- [ ] 2.7a5 Assemble `inventory-ui@1`.
+- [x] 2.7a5 Assemble `inventory-ui@1`.
 - [ ] 2.7b1 Project environment state.
 - [ ] 2.7b2 Project survival state.
 - [ ] 2.7b3 Project chat state.
