@@ -324,3 +324,6 @@ Controller owns the serial prerequisite metadata update. Rollback invalidates th
 
 - Task 2.6g fix round 1/5 (1 addressed, 0 open — both malformed-duplicate forms pinned with per-row scratch proofs tracing the rejection to the slot check alone; doc strip-ordering corrected; commits `413460c1`..`02efcf6d`; the first fix attempt aborted on the account quota with no edits and is not counted).
 - Task 2.6g: complete (commits `dc03a575`..`02efcf6d`; review clean after 1 fix round).
+
+- Node 2.7a2 review verdict (2026-10-02): spec ✅, quality Approved, zero Critical/Important — the adopt-and-continue orphan route survived full review: frozen signature exact, no fabricated wire revision verified directly against the mirror's commit/stage path (token revision is genuine mirror attribution, distinct from frame revision), adoption hygiene clean (zero task-ID remnants, every behavior branch exercised by a named test, faithful to the sibling precedent). Three cosmetic minors deferred (dead `matches!` assertion; verbatim `header` helper duplication — hoist when the serial assembler lands; one garbled rewording).
+- Task 2.7a2: complete (commit `b0702be6`, review clean, no fix rounds needed).
