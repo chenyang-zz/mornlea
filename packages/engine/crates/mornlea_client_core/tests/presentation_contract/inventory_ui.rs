@@ -16,6 +16,9 @@
 //! plus one each reject the whole family with the previous output retained.
 //! The per-size crafting grids share one latest-wins topic identity, so
 //! personal and workbench publications interleave by source order alone.
+//! Locally derived `AfterConfirmed` envelopes — admitted by the schema though
+//! no accepted provider emits them today — validate under the same rules and
+//! merge after every confirmed entry at their sampled revision.
 
 use mornlea_client_core::contracts::{
     ClientError, ClientLimits, ConfirmedRevision, FAMILY_INVENTORY_UI, FamilyKey, FamilyOperation,
@@ -331,6 +334,32 @@ fn envelope(
                 0,
             )
             .expect("staged key"),
+            record_ordinal,
+        },
+        stable_key,
+        record,
+    )
+    .expect("checked envelope")
+}
+
+/// One locally derived envelope at the named epoch, sampled revision, local
+/// sequence and packet record ordinal, wrapping the given record under the
+/// given stable identity. No accepted inventory-ui provider emits this order
+/// variant today; the envelope schema admits it, so the assembler's rules
+/// for it stay pinned here.
+fn after_envelope(
+    epoch_value: u64,
+    sampled_revision: u64,
+    local_sequence: u64,
+    record_ordinal: u32,
+    stable_key: StableRecordKey,
+    record: InventoryUiRecord,
+) -> OrderedRecord<InventoryUiRecord> {
+    OrderedRecord::try_new(
+        ProjectionOrder::AfterConfirmed {
+            epoch: SessionEpoch::try_new(epoch_value).expect("epoch"),
+            revision: ConfirmedRevision::new(sampled_revision),
+            local_sequence,
             record_ordinal,
         },
         stable_key,
@@ -1123,6 +1152,123 @@ fn ambiguous_duplicate_or_disagreeing_envelopes_reject_typed() {
         assembled.iter().map(view_tag).collect::<Vec<_>>(),
         vec![InventoryTopic::Furnace, InventoryTopic::Chest],
         "the stable-key tiebreak resolves equal retained order deterministically"
+    );
+}
+
+/// `after-confirmed envelopes`: a locally derived entry under the
+/// `AfterConfirmed` order — a variant no accepted inventory-ui provider
+/// emits today but the envelope schema admits — validates under the same
+/// rules as a confirmed one and merges after every confirmed entry at its
+/// sampled revision, ordered by its own order fields. A foreign epoch inside
+/// the order key is stale and a container attribution naming a revision
+/// other than the sampled one is fabricated; both reject the whole family
+/// beside otherwise valid parts, without partial output.
+#[test]
+fn after_confirmed_envelopes_validate_and_merge_after_confirmed_entries() {
+    let chest = container_ref(ContainerKind::Chest, 9);
+
+    // The accepted shape: two confirmed republications and two locally
+    // derived entries. The derived variant sorts after every confirmed entry
+    // — even after the confirmed revision 5 that exceeds the sampled 4 — and
+    // the derived entries order among themselves by sampled revision, then
+    // local sequence and record ordinal. The derived chest view binds its
+    // attribution to exactly the sampled revision.
+    let mut accepted = empty_parts();
+    accepted[1] = vec![
+        envelope(
+            2,
+            0,
+            inventory_key(InventoryTopic::Chest, Some(chest)),
+            chest_record(chest, Some(view_token(chest, 2))),
+        ),
+        envelope(
+            5,
+            0,
+            inventory_key(InventoryTopic::Chest, Some(chest)),
+            chest_record(chest, Some(view_token(chest, 5))),
+        ),
+    ];
+    accepted[0] = vec![after_envelope(
+        EPOCH,
+        9,
+        2,
+        0,
+        inventory_key(InventoryTopic::Inventory, None),
+        inventory_record(None, None),
+    )];
+    accepted[2] = vec![after_envelope(
+        EPOCH,
+        4,
+        1,
+        0,
+        inventory_key(InventoryTopic::Chest, Some(chest)),
+        chest_record(chest, Some(view_token(chest, 4))),
+    )];
+    let assembled = assemble_hand_built(accepted).expect("derived entries validate and assemble");
+    assert_eq!(
+        assembled.iter().map(view_tag).collect::<Vec<_>>(),
+        vec![
+            InventoryTopic::Chest,
+            InventoryTopic::Chest,
+            InventoryTopic::Chest,
+            InventoryTopic::Inventory,
+        ],
+        "derived entries merge after every confirmed entry, then by sampled revision"
+    );
+    assert_eq!(
+        assembled[0]
+            .token()
+            .map(|token| token.confirmed_revision().get()),
+        Some(2),
+        "the confirmed republications keep their own observation order"
+    );
+    assert_eq!(
+        assembled[2]
+            .token()
+            .map(|token| token.confirmed_revision().get()),
+        Some(4),
+        "a derived view binds its attribution to exactly its sampled revision"
+    );
+    assert_eq!(assembled[3].token(), None);
+
+    // A foreign epoch inside the derived order key is stale, and the whole
+    // family rejects beside an otherwise valid confirmed part, so no partial
+    // output exists.
+    let mut stale = empty_parts();
+    stale[1] = vec![envelope(
+        1,
+        0,
+        inventory_key(InventoryTopic::Chest, Some(chest)),
+        chest_record(chest, Some(view_token(chest, 1))),
+    )];
+    stale[0] = vec![after_envelope(
+        EPOCH + 1,
+        2,
+        1,
+        0,
+        inventory_key(InventoryTopic::Inventory, None),
+        inventory_record(None, None),
+    )];
+    assert_eq!(
+        assemble_hand_built(stale).expect_err("a derived order key from another epoch is stale"),
+        ClientError::StaleEpoch
+    );
+
+    // A derived container attribution naming a revision other than the
+    // sampled one fabricates mirror attribution.
+    let mut fabricated = empty_parts();
+    fabricated[2] = vec![after_envelope(
+        EPOCH,
+        4,
+        1,
+        0,
+        inventory_key(InventoryTopic::Chest, Some(chest)),
+        chest_record(chest, Some(view_token(chest, 5))),
+    )];
+    assert_eq!(
+        assemble_hand_built(fabricated)
+            .expect_err("a derived token naming a foreign sampled revision is fabricated"),
+        ClientError::InvalidInput
     );
 }
 
