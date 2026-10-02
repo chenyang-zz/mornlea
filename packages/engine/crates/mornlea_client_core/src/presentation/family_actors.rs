@@ -27,7 +27,9 @@
 //! output unchanged. The family byte bound is measured through the accepted
 //! frame accounting over a minimal actors-only frame, never a second
 //! accounting. The `OrderedRecord` envelope is stripped only after every
-//! check passes, and the wrapped records are emitted unchanged.
+//! check that inspects the envelopes passes — the family byte bound is
+//! measured over the stripped records in the candidate frame — and the
+//! wrapped records are emitted unchanged.
 
 use crate::contracts::{
     ClientError, ClientLimits, ConfirmedRevision, FAMILY_ACTORS, FamilyKey, FamilyOperation,

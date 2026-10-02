@@ -8,9 +8,10 @@
 //! different tagged identities never collide because the stable key carries
 //! the actor kind and the typed identity; one identity may legally carry
 //! several records (spawn, state, remove and reuse) while a removal without
-//! a live identity, a duplicate removal, an envelope that disagrees with its
-//! record, a foreign epoch or revision, and a family count or frame byte cap
-//! plus one each reject the whole family with the previous output retained.
+//! a live identity, a duplicate removal, two envelopes claiming one retained
+//! order slot, an envelope that disagrees with its record, a foreign epoch or
+//! revision, and a family count or frame byte cap plus one each reject the
+//! whole family with the previous output retained.
 
 use mornlea_client_core::contracts::{
     ClientError, ClientLimits, ConfirmedRevision, FAMILY_ACTORS, FamilyKey, FamilyOperation,
@@ -812,6 +813,41 @@ fn misordered_or_duplicate_removal_rejects_whole_family() {
     ];
     let error = assemble_hand_built(double_remove)
         .expect_err("a duplicated removal after the removal rejects");
+    assert_eq!(error, ClientError::InvalidInput);
+}
+
+/// `ambiguous duplicate slot`: two envelopes claiming one retained order slot
+/// for one identity — the same observation key, record ordinal and stable key
+/// — are indistinguishable source observations. Repeated upserts of a live
+/// identity are legal and an upsert followed by its removal is legal, so in
+/// both rows below the duplicated slot alone is the malformation: the family
+/// rejects instead of letting the parts order silently decide the order of
+/// two records the retained keys cannot tell apart.
+#[test]
+fn duplicate_order_slot_rejects_whole_family() {
+    let id = PassiveId::try_new(79).expect("checked passive identity");
+
+    // Two state samples of one live identity: legal in every other
+    // arrangement, malformed only because they share one order slot.
+    let mut double_upsert = empty_parts();
+    double_upsert[2] = vec![
+        envelope(1, 0, passive_key(id), passive_upsert(id)),
+        envelope(1, 0, passive_key(id), passive_upsert(id)),
+    ];
+    let error = assemble_hand_built(double_upsert)
+        .expect_err("two envelopes claiming one order slot reject");
+    assert_eq!(error, ClientError::InvalidInput);
+
+    // An upsert and its removal in one slot cannot be ordered against each
+    // other — which came first is ambiguous — so the reuse walk alone would
+    // accept the pair and only the slot check rejects it.
+    let mut upsert_remove = empty_parts();
+    upsert_remove[2] = vec![
+        envelope(1, 0, passive_key(id), passive_upsert(id)),
+        envelope(1, 0, passive_key(id), passive_remove(id)),
+    ];
+    let error = assemble_hand_built(upsert_remove)
+        .expect_err("an upsert and a removal in one order slot reject");
     assert_eq!(error, ClientError::InvalidInput);
 }
 
