@@ -47,7 +47,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 ## 3. Serial adapter and real integration
 
 - [x] 3.1a Assign and validate G1 logical-to-numeric descriptors without enabling features.
-- [ ] 3.1b Connect the safe Rust core adapter and migrate Godot-callable methods serially.
+- [x] 3.1b Connect the safe Rust core adapter and migrate Godot-callable methods serially.
 - [ ] 3.2 Implement symbolic family negotiation and one-session feature host activation.
 - [x] 3.3a Implement core reset, reconnect and close with queued-work invalidation.
 - [ ] 3.3b Implement native Godot/Python release ordering and boundary panic containment.
