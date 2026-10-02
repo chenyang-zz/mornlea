@@ -1009,6 +1009,453 @@ pub(crate) fn production_core_calls() -> Box<dyn CoreCalls> {
     })
 }
 
+/// The safe Rust core adapter: the rust-producer half of this module.
+///
+/// The extern mirror above talks to the Go c-shared pilot producer and stays
+/// explicitly pilot-only behind the `session_*` bridge methods. Everything
+/// below owns the other mode: the `rust-client-core` producer whose sessions
+/// are real C1 endpoint values behind a private token arena. Rust mode never
+/// touches the dynamic loader, the resolved vtable or [`CoreCalls`]; opening
+/// a core here cannot load the Go library even incidentally.
+///
+/// The adapter is engine-independent: it consumes and produces
+/// [`abi::boundary::BoundaryValue`] copies, so the exported Godot methods and
+/// the engine-free adapter tests call the identical routines — there is no
+/// test-specific second implementation to drift from.
+pub mod rust_core {
+    use std::panic::AssertUnwindSafe;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use mornlea_client_core::contracts::{
+        ClientConfig, ClientCore, ClientEndpoint, ClientError, ClientIdentity, ClientLimits,
+        ConnectorRegistry, Endpoint, InputReceipt, MonotonicClock, SessionEpoch, StdMonotonicClock,
+    };
+    use mornlea_client_core::input::InputBatch;
+    use mornlea_client_core::session::login::LoginSession;
+
+    use crate::abi::boundary::{self, BoundaryValue, CoreOpenSpec, CoreTokenValue};
+    use crate::feature_negotiation::{
+        RUST_PRODUCER_FAMILIES, RUST_PRODUCER_FAMILY_RECORD_LIMIT, RUST_PRODUCER_NAME,
+    };
+
+    /// One arena slot's live core: the checked C1 configuration owner beside
+    /// the live endpoint provider. The endpoint is the C1 substitution port,
+    /// so the production path stores the real `LoginSession` and
+    /// deterministic wrappers can only wrap a real endpoint, never replace
+    /// the adapter routines themselves.
+    struct CoreSlot {
+        core: ClientCore,
+        endpoint: Box<dyn ClientEndpoint>,
+        limits: ClientLimits,
+        /// The last successfully rendered whole-frame copy. It exists only
+        /// after a pull validated a complete frame, and a failed pull never
+        /// touches it.
+        visible: Option<BoundaryValue>,
+    }
+
+    /// The private core-token arena: nonzero slots, one generation per slot,
+    /// and one release per issued token.
+    ///
+    /// A token addresses a slot only while its generation matches; a stale
+    /// slot or generation fails the lookup with `InvalidState` before any
+    /// core dereference, so a rejected caller observes zero core calls. The
+    /// first close of a live token releases the slot exactly once and
+    /// advances its generation; every later close of the same issued token
+    /// succeeds without another release.
+    #[derive(Default)]
+    pub struct CoreArena {
+        slots: Vec<Option<CoreSlot>>,
+        generations: Vec<u64>,
+        releases: usize,
+    }
+
+    impl CoreArena {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// The number of arena-level releases that ran. One per issued token
+        /// regardless of how many times that token is closed.
+        pub fn releases(&self) -> usize {
+            self.releases
+        }
+
+        /// The live slot index a token addresses, or `None` for an unknown
+        /// slot or a stale generation. This is the one lookup gate every
+        /// core-touching routine runs first.
+        fn live_index(&self, token: CoreTokenValue) -> Option<usize> {
+            let index = token.slot().checked_sub(1)? as usize;
+            let generation = *self.generations.get(index)?;
+            if generation != token.generation() {
+                return None;
+            }
+            self.slots.get(index)?.is_some().then_some(index)
+        }
+
+        fn slot(&self, token: CoreTokenValue) -> Result<&CoreSlot, ClientError> {
+            let index = self.live_index(token).ok_or(ClientError::InvalidState)?;
+            self.slots
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or(ClientError::Internal)
+        }
+
+        fn slot_mut(&mut self, token: CoreTokenValue) -> Result<&mut CoreSlot, ClientError> {
+            let index = self.live_index(token).ok_or(ClientError::InvalidState)?;
+            self.slots
+                .get_mut(index)
+                .and_then(Option::as_mut)
+                .ok_or(ClientError::Internal)
+        }
+
+        /// The production open path: the safe Rust core over the real C1
+        /// login provider. The bridge passes its native clock and connector
+        /// registry; the boundary value carries only checked numbers. The
+        /// checked configuration owner validates first, and the endpoint's
+        /// own configuration is derived from that owner's accessors so both
+        /// halves always agree.
+        pub fn open(
+            &mut self,
+            spec: &CoreOpenSpec,
+            clock: Arc<dyn MonotonicClock>,
+            connectors: Arc<ConnectorRegistry>,
+        ) -> Result<CoreTokenValue, ClientError> {
+            let config = checked_config(spec, clock, connectors)?;
+            let core = ClientCore::new(config)?;
+            let endpoint_config = ClientConfig::try_new(
+                *core.config().limits(),
+                core.config().hello_timeout(),
+                core.config().login_timeout(),
+                Arc::clone(core.config().clock()),
+                Arc::clone(core.config().connectors()),
+            )?;
+            let endpoint = LoginSession::new(endpoint_config)?;
+            self.install(core, Box::new(endpoint))
+        }
+
+        /// The deterministic-substitution open path over the same slot,
+        /// generation and lifecycle code. It accepts a wrapper around a real
+        /// C1 endpoint so call counts, injected frames and caught panics are
+        /// observable without a second copy of any adapter routine.
+        pub fn open_with_endpoint(
+            &mut self,
+            spec: &CoreOpenSpec,
+            endpoint: Box<dyn ClientEndpoint>,
+        ) -> Result<CoreTokenValue, ClientError> {
+            let config = checked_config(
+                spec,
+                Arc::new(StdMonotonicClock),
+                Arc::new(ConnectorRegistry::new()),
+            )?;
+            self.install(ClientCore::new(config)?, endpoint)
+        }
+
+        /// Installs one checked core under a fresh token. The C1 owner has
+        /// already validated the configuration, so a refused open never
+        /// reached here and no token exists.
+        fn install(
+            &mut self,
+            core: ClientCore,
+            endpoint: Box<dyn ClientEndpoint>,
+        ) -> Result<CoreTokenValue, ClientError> {
+            let limits = *core.config().limits();
+            let slot = CoreSlot {
+                core,
+                endpoint,
+                limits,
+                visible: None,
+            };
+            let index = if let Some(free) = self.slots.iter().position(Option::is_none) {
+                free
+            } else {
+                self.slots.push(None);
+                self.generations.push(0);
+                self.slots.len() - 1
+            };
+            let generation = self.generations[index] + 1;
+            self.generations[index] = generation;
+            self.slots[index] = Some(slot);
+            CoreTokenValue::new(
+                u32::try_from(index + 1).map_err(|_| ClientError::Capacity)?,
+                generation,
+            )
+        }
+
+        /// The last successfully rendered whole-frame copy of one slot.
+        pub fn visible_frame(&self, token: CoreTokenValue) -> Result<&BoundaryValue, ClientError> {
+            self.slot(token)?
+                .visible
+                .as_ref()
+                .ok_or(ClientError::InvalidState)
+        }
+
+        /// Begins one connection: a pending admission epoch only.
+        pub fn connect(
+            &mut self,
+            token: CoreTokenValue,
+            endpoint: Endpoint,
+            identity: ClientIdentity,
+        ) -> Result<SessionEpoch, ClientError> {
+            self.slot_mut(token)?.endpoint.connect(endpoint, identity)
+        }
+
+        /// Submits one whole checked input batch.
+        pub fn submit(
+            &mut self,
+            token: CoreTokenValue,
+            batch: InputBatch,
+        ) -> Result<InputReceipt, ClientError> {
+            self.slot_mut(token)?
+                .endpoint
+                .submit_input(batch.epoch(), batch)
+        }
+
+        /// Drives exactly one bounded step.
+        pub fn step(
+            &mut self,
+            token: CoreTokenValue,
+            epoch: SessionEpoch,
+            work: mornlea_client_core::contracts::ClientWorkBudget,
+        ) -> Result<mornlea_client_core::contracts::StepReport, ClientError> {
+            self.slot_mut(token)?.endpoint.step(epoch, work)
+        }
+
+        /// Pulls, validates and renders the whole visible frame as one
+        /// owned boundary copy.
+        ///
+        /// The snapshot is rendered against the slot's frozen limits before
+        /// anything is stored: a frame that fails the whole-frame checks
+        /// (mixed headers, duplicate or missing required family, capacity)
+        /// returns the typed error and leaves the slot's prior visible copy
+        /// untouched. The returned value owns every byte — strings, vectors
+        /// and field lists — so it stays valid after the core's own frame is
+        /// released.
+        pub fn pull_frame(
+            &mut self,
+            token: CoreTokenValue,
+            epoch: SessionEpoch,
+        ) -> Result<BoundaryValue, ClientError> {
+            let slot = self.slot_mut(token)?;
+            let frame = slot.endpoint.snapshot(epoch)?;
+            let rendered = boundary::render_frame(&frame, &slot.limits)?;
+            slot.visible = Some(rendered.clone());
+            Ok(rendered)
+        }
+
+        /// Resets the live session onto a fresh epoch.
+        pub fn reset(
+            &mut self,
+            token: CoreTokenValue,
+            epoch: SessionEpoch,
+        ) -> Result<SessionEpoch, ClientError> {
+            self.slot_mut(token)?.endpoint.reset(epoch)
+        }
+
+        /// Releases one token's core. The first close of a live token drops
+        /// the slot, advances its generation and counts one release; the
+        /// endpoint's own terminal path runs inside that drop-adjacent call,
+        /// and its typed refusal for a session that never connected is not a
+        /// facade failure because there is nothing left to terminate. Every
+        /// later close of the same issued token succeeds without another
+        /// release.
+        pub fn close(&mut self, token: CoreTokenValue) -> Result<(), ClientError> {
+            let Some(index) = self.live_index(token) else {
+                return Ok(());
+            };
+            if let Some(mut slot) = self.slots[index].take() {
+                let _ = slot.endpoint.close();
+                self.generations[index] += 1;
+                self.releases += 1;
+            }
+            Ok(())
+        }
+
+        /// Renders the frozen producer family table for one live core.
+        pub fn family_table(&self, token: CoreTokenValue) -> Result<BoundaryValue, ClientError> {
+            self.slot(token)?;
+            Ok(BoundaryValue::fields([
+                (
+                    "producer",
+                    BoundaryValue::Text(RUST_PRODUCER_NAME.to_string()),
+                ),
+                (
+                    "descriptors",
+                    BoundaryValue::List(
+                        RUST_PRODUCER_FAMILIES
+                            .iter()
+                            .map(|descriptor| {
+                                BoundaryValue::fields([
+                                    (
+                                        "logical_name",
+                                        BoundaryValue::Text(descriptor.logical_name.to_string()),
+                                    ),
+                                    (
+                                        "numeric_id",
+                                        BoundaryValue::Int(i64::from(descriptor.numeric_id)),
+                                    ),
+                                    ("major", BoundaryValue::Int(i64::from(descriptor.major))),
+                                    ("minor", BoundaryValue::Int(i64::from(descriptor.minor))),
+                                    (
+                                        "record_limit",
+                                        boundary::u64_text(RUST_PRODUCER_FAMILY_RECORD_LIMIT),
+                                    ),
+                                    ("record_bytes", boundary::u64_text(descriptor.record_bytes)),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]))
+        }
+    }
+
+    /// Builds the checked configuration one open path hands to the C1 owner.
+    /// The deadline policy is the facade's frozen five- and ten-second
+    /// defaults expressed in the boundary's millisecond fields; a zero
+    /// deadline rejects before any core exists.
+    fn checked_config(
+        spec: &CoreOpenSpec,
+        clock: Arc<dyn MonotonicClock>,
+        connectors: Arc<ConnectorRegistry>,
+    ) -> Result<ClientConfig, ClientError> {
+        ClientConfig::try_new(
+            spec.limits,
+            Duration::from_millis(u64::from(spec.hello_ms)),
+            Duration::from_millis(u64::from(spec.login_ms)),
+            clock,
+            connectors,
+        )
+    }
+
+    /// The panic guard every facade call runs under: a caught panic maps to
+    /// the `Internal` failure through the same closed envelope, and the
+    /// caller's prior visible state is untouched because every routine above
+    /// validates into temporaries before it stores anything.
+    pub fn guarded<T>(call: impl FnOnce() -> Result<T, ClientError>) -> Result<T, ClientError> {
+        std::panic::catch_unwind(AssertUnwindSafe(call)).unwrap_or(Err(ClientError::Internal))
+    }
+
+    impl CoreArena {
+        // -------------------------------------------------------------
+        // The eight facade routines the exported Godot methods call. Each
+        // one decodes its arguments, runs the matching core operation and
+        // renders the closed envelope. The decode happens before any arena
+        // lookup, so a rejected decoding makes zero core calls.
+        // -------------------------------------------------------------
+
+        /// `open_core`: opens the safe Rust core and answers its token.
+        pub fn open_core_routine(
+            &mut self,
+            config: &BoundaryValue,
+            clock: Arc<dyn MonotonicClock>,
+            connectors: Arc<ConnectorRegistry>,
+        ) -> BoundaryValue {
+            boundary::outcome(guarded(|| {
+                let spec = boundary::decode_open_core(config)?;
+                self.open(&spec, clock, connectors)
+                    .map(CoreTokenValue::to_boundary)
+            }))
+        }
+
+        /// `connect`: pending admission only.
+        pub fn connect_routine(
+            &mut self,
+            token: &BoundaryValue,
+            endpoint: &BoundaryValue,
+            identity: &BoundaryValue,
+        ) -> BoundaryValue {
+            boundary::outcome(guarded(|| {
+                let token = CoreTokenValue::from_boundary(token)?;
+                let endpoint = boundary::decode_endpoint(endpoint)?;
+                let identity = boundary::decode_identity(identity)?;
+                self.connect(token, endpoint, identity)
+                    .map(|epoch| boundary::u64_text(epoch.get()))
+            }))
+        }
+
+        /// `submit_typed_input`: one whole checked batch, decoded before any
+        /// core call.
+        pub fn submit_routine(
+            &mut self,
+            token: &BoundaryValue,
+            epoch: &BoundaryValue,
+            batch: &BoundaryValue,
+        ) -> BoundaryValue {
+            boundary::outcome(guarded(|| {
+                let batch = boundary::decode_input_batch(batch)?;
+                let epoch = boundary::decode_epoch(epoch)?;
+                if epoch != batch.epoch() {
+                    return Err(ClientError::StaleEpoch);
+                }
+                let token = CoreTokenValue::from_boundary(token)?;
+                self.submit(token, batch)
+                    .map(|receipt| boundary::render_receipt(&receipt))
+            }))
+        }
+
+        /// `step`: one bounded step and the checked report copy.
+        pub fn step_routine(
+            &mut self,
+            token: &BoundaryValue,
+            epoch: &BoundaryValue,
+            work: &BoundaryValue,
+        ) -> BoundaryValue {
+            boundary::outcome(guarded(|| {
+                let token = CoreTokenValue::from_boundary(token)?;
+                let epoch = boundary::decode_epoch(epoch)?;
+                let work = boundary::decode_work(work)?;
+                self.step(token, epoch, work)
+                    .map(|report| boundary::render_step_report(&report))
+            }))
+        }
+
+        /// `pull_typed_frame`: the validated whole frame as one owned copy.
+        pub fn pull_frame_routine(
+            &mut self,
+            token: &BoundaryValue,
+            epoch: &BoundaryValue,
+        ) -> BoundaryValue {
+            boundary::outcome(guarded(|| {
+                let token = CoreTokenValue::from_boundary(token)?;
+                let epoch = boundary::decode_epoch(epoch)?;
+                self.pull_frame(token, epoch)
+            }))
+        }
+
+        /// `family_table`: the frozen producer descriptor table.
+        pub fn family_table_routine(&mut self, token: &BoundaryValue) -> BoundaryValue {
+            boundary::outcome(guarded(|| {
+                let token = CoreTokenValue::from_boundary(token)?;
+                self.family_table(token)
+            }))
+        }
+
+        /// `reset`: the fresh epoch after invalidation.
+        pub fn reset_routine(
+            &mut self,
+            token: &BoundaryValue,
+            epoch: &BoundaryValue,
+        ) -> BoundaryValue {
+            boundary::outcome(guarded(|| {
+                let token = CoreTokenValue::from_boundary(token)?;
+                let epoch = boundary::decode_epoch(epoch)?;
+                self.reset(token, epoch)
+                    .map(|epoch| boundary::u64_text(epoch.get()))
+            }))
+        }
+
+        /// `close`: releases the token; repeated close of the same issued
+        /// token succeeds without another release.
+        pub fn close_routine(&mut self, token: &BoundaryValue) -> BoundaryValue {
+            boundary::outcome(guarded(|| {
+                let token = CoreTokenValue::from_boundary(token)?;
+                self.close(token).map(|()| BoundaryValue::Null)
+            }))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

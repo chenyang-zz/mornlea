@@ -986,6 +986,9 @@ name = "mornlea_godot"
 version = "0.1.0"
 dependencies = [
  "godot",
+ "mornlea_client_core",
+ "mornlea_domain",
+ "mornlea_protocol",
 ]
 
 [[package]]

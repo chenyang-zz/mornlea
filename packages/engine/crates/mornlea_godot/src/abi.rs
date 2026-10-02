@@ -316,6 +316,1932 @@ pub struct StatusHeader {
     pub reserved: u32,
 }
 
+/// The rust-producer boundary layer: the engine-independent checked value
+/// model, the canonical text and hex codecs, the private core-token value,
+/// the closed failure envelope, and the decode/render routines that turn
+/// host-owned boundary values into real C1/C2 checked values and back.
+///
+/// Nothing in this section names a Godot type. The bridge marshals native
+/// dictionaries into [`BoundaryValue`] copies and calls the routines here,
+/// so the engine-free adapter tests exercise exactly the code the exported
+/// Godot methods run; a test-specific second implementation is structurally
+/// impossible because both sides share these declarations.
+///
+/// Boundary rules frozen by the facade contract:
+/// - every `u64` is canonical decimal text (no sign, no leading zero, `"0"`
+///   for zero, at most twenty digits, at most `u64::MAX`);
+/// - UUID identities are exactly 32 lowercase hex digits and digests are
+///   fixed-length lowercase hex;
+/// - typed leaves never coerce: a boolean field rejects an integer, a float
+///   must be finite, and every struct field set is exact (no extra, no
+///   missing);
+/// - family/type tags are closed and case-sensitive.
+pub mod boundary {
+    use mornlea_client_core::contracts::CloseReason;
+    use mornlea_client_core::contracts::InputReceipt;
+    use mornlea_client_core::contracts::StepReport;
+    use mornlea_client_core::contracts::{
+        ClientError, ClientIdentity, ClientLimits, ClientWorkBudget, ConfirmedRevision, Endpoint,
+        SessionEpoch,
+    };
+    use mornlea_client_core::input::{
+        ClientIntent, ClientIntentKind, ContainerToken, CraftingViewToken, InputAction, InputBatch,
+    };
+    use mornlea_client_core::presentation::frame::{FamilyFrame, FamilyRecords, PresentationFrame};
+    use mornlea_client_core::presentation::{
+        CueProvenance, InputReceiptState, InventoryUiView, WorldUiView,
+    };
+    use mornlea_domain::{
+        ChatBody, ChatIntent, CommandText, ContainerKind, ContainerMove, ContainerRef,
+        CraftingMove, CraftingSize, HeldActions, HotbarSlot, InventoryMove, ItemStack, LookAngles,
+        MiningState, PartialMove, PlacementIntent, PlayerControl, PlayerControlParts, PlayerId,
+        ResyncIntent, StackSource, StackView, TaskState,
+    };
+    use mornlea_protocol::LoginStart;
+
+    // ------------------------------------------------------------------
+    // The engine-neutral value model
+    // ------------------------------------------------------------------
+
+    /// One host-owned boundary leaf, struct, vector or tagged union copied
+    /// out of the native marshalling before any decoding runs.
+    ///
+    /// The closed leaf set is exactly what the facade contract admits:
+    /// booleans, checked integers (every signed or small unsigned field),
+    /// finite floats, text, vectors, struct field lists and tagged unions.
+    /// There is no null-int coercion and no absent-field default: `Null` is
+    /// the option marker only.
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum BoundaryValue {
+        Null,
+        Bool(bool),
+        Int(i64),
+        Float(f64),
+        Text(String),
+        List(Vec<BoundaryValue>),
+        Fields(Vec<(String, BoundaryValue)>),
+    }
+
+    impl BoundaryValue {
+        /// Builds a struct value from field pairs.
+        pub fn fields<const N: usize>(pairs: [(&str, BoundaryValue); N]) -> Self {
+            Self::Fields(
+                pairs
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), value))
+                    .collect(),
+            )
+        }
+
+        /// Builds a tagged union value: exactly `tag` and `value`.
+        pub fn tagged(tag: &str, value: BoundaryValue) -> Self {
+            Self::fields([("tag", Self::Text(tag.to_string())), ("value", value)])
+        }
+
+        /// The named field of a struct value.
+        pub fn field(&self, name: &str) -> Option<&BoundaryValue> {
+            match self {
+                Self::Fields(pairs) => pairs
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value),
+                _ => None,
+            }
+        }
+
+        /// The tag and payload of a tagged union value.
+        pub fn tag(&self) -> Option<(&str, &BoundaryValue)> {
+            let tag = self.field("tag")?;
+            let value = self.field("value")?;
+            let tag = match tag {
+                Self::Text(text) => text.as_str(),
+                _ => return None,
+            };
+            Some((tag, value))
+        }
+
+        /// Rejects a struct value whose field set is not exactly `names`.
+        pub fn exact_fields(&self, names: &[&str]) -> Result<(), ClientError> {
+            let Self::Fields(pairs) = self else {
+                return Err(ClientError::InvalidInput);
+            };
+            if pairs.len() != names.len() {
+                return Err(ClientError::InvalidInput);
+            }
+            for name in names {
+                if !pairs.iter().any(|(key, _)| key == name) {
+                    return Err(ClientError::InvalidInput);
+                }
+            }
+            Ok(())
+        }
+
+        pub fn as_bool(&self) -> Result<bool, ClientError> {
+            match self {
+                Self::Bool(value) => Ok(*value),
+                _ => Err(ClientError::InvalidInput),
+            }
+        }
+
+        /// A checked integer leaf inside `min..=max`; booleans and floats
+        /// never coerce to integers.
+        pub fn as_int_in(&self, min: i64, max: i64) -> Result<i64, ClientError> {
+            match self {
+                Self::Int(value) if min <= *value && *value <= max => Ok(*value),
+                _ => Err(ClientError::InvalidInput),
+            }
+        }
+
+        /// A finite float leaf; NaN and infinities reject the whole batch.
+        pub fn as_finite_float(&self) -> Result<f64, ClientError> {
+            match self {
+                Self::Float(value) if value.is_finite() => Ok(*value),
+                _ => Err(ClientError::InvalidInput),
+            }
+        }
+
+        pub fn as_text(&self) -> Result<&str, ClientError> {
+            match self {
+                Self::Text(value) => Ok(value.as_str()),
+                _ => Err(ClientError::InvalidInput),
+            }
+        }
+
+        pub fn as_list(&self) -> Result<&[BoundaryValue], ClientError> {
+            match self {
+                Self::List(items) => Ok(items.as_slice()),
+                _ => Err(ClientError::InvalidInput),
+            }
+        }
+    }
+
+    /// A required struct field.
+    fn required<'a>(
+        value: &'a BoundaryValue,
+        name: &str,
+    ) -> Result<&'a BoundaryValue, ClientError> {
+        value.field(name).ok_or(ClientError::InvalidInput)
+    }
+
+    /// An optional field: present-and-null and absent are both `None` only
+    /// when the caller says null is legal; the facade carries every optional
+    /// field explicitly, so a missing key is a shape error.
+    fn optional<'a>(
+        value: &'a BoundaryValue,
+        name: &str,
+    ) -> Result<&'a BoundaryValue, ClientError> {
+        value.field(name).ok_or(ClientError::InvalidInput)
+    }
+
+    // ------------------------------------------------------------------
+    // Canonical text and hex codecs
+    // ------------------------------------------------------------------
+
+    /// Decodes one canonical decimal `u64` text: nonempty, at most twenty
+    /// ASCII digits, no sign, and no leading zero unless the value is zero.
+    /// Everything else — including `u64::MAX + 1` — rejects the whole batch.
+    pub fn u64_from_text(value: &BoundaryValue) -> Result<u64, ClientError> {
+        let text = value.as_text()?;
+        if text.is_empty() || text.len() > 20 || !text.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(ClientError::InvalidInput);
+        }
+        if text.len() > 1 && text.starts_with('0') {
+            return Err(ClientError::InvalidInput);
+        }
+        text.parse::<u64>().map_err(|_| ClientError::InvalidInput)
+    }
+
+    /// Renders one `u64` as canonical decimal text; the rendering is
+    /// canonical by construction.
+    pub fn u64_text(value: u64) -> BoundaryValue {
+        BoundaryValue::Text(value.to_string())
+    }
+
+    fn u8_from(value: &BoundaryValue) -> Result<u8, ClientError> {
+        u8::try_from(value.as_int_in(0, i64::from(u8::MAX))?).map_err(|_| ClientError::InvalidInput)
+    }
+
+    fn u16_from(value: &BoundaryValue) -> Result<u16, ClientError> {
+        u16::try_from(value.as_int_in(0, i64::from(u16::MAX))?)
+            .map_err(|_| ClientError::InvalidInput)
+    }
+
+    fn u32_from(value: &BoundaryValue) -> Result<u32, ClientError> {
+        u32::try_from(value.as_int_in(0, i64::from(u32::MAX))?)
+            .map_err(|_| ClientError::InvalidInput)
+    }
+
+    fn i32_from(value: &BoundaryValue) -> Result<i32, ClientError> {
+        i32::try_from(value.as_int_in(i64::from(i32::MIN), i64::from(i32::MAX))?)
+            .map_err(|_| ClientError::InvalidInput)
+    }
+
+    fn i8_from(value: &BoundaryValue) -> Result<i8, ClientError> {
+        i8::try_from(value.as_int_in(i64::from(i8::MIN), i64::from(i8::MAX))?)
+            .map_err(|_| ClientError::InvalidInput)
+    }
+
+    /// Decodes one lowercase hex string of exactly `2 * N` digits into `N`
+    /// bytes. Uppercase digits, dashes, odd lengths and wrong lengths all
+    /// reject: the facade admits exactly one spelling.
+    fn hex_bytes<const N: usize>(value: &BoundaryValue) -> Result<[u8; N], ClientError> {
+        let text = value.as_text()?;
+        if text.len() != 2 * N {
+            return Err(ClientError::InvalidInput);
+        }
+        let mut bytes = [0u8; N];
+        for (index, pair) in text.as_bytes().chunks(2).enumerate() {
+            let high = hex_digit(pair[0])?;
+            let low = hex_digit(pair[1])?;
+            bytes[index] = (high << 4) | low;
+        }
+        Ok(bytes)
+    }
+
+    fn hex_digit(byte: u8) -> Result<u8, ClientError> {
+        match byte {
+            b'0'..=b'9' => Ok(byte - b'0'),
+            b'a'..=b'f' => Ok(byte - b'a' + 10),
+            _ => Err(ClientError::InvalidInput),
+        }
+    }
+
+    /// Renders bytes as fixed-length lowercase hex.
+    pub fn hex_text(bytes: &[u8]) -> BoundaryValue {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let mut text = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+            text.push(char::from(DIGITS[usize::from(byte & 0x0F)]));
+        }
+        BoundaryValue::Text(text)
+    }
+
+    /// A 32-digit lowercase-hex UUID identity.
+    pub fn uuid_from_hex(value: &BoundaryValue) -> Result<[u8; 16], ClientError> {
+        hex_bytes::<16>(value)
+    }
+
+    // ------------------------------------------------------------------
+    // The core token and the closed failure envelope
+    // ------------------------------------------------------------------
+
+    /// The private core token: a nonzero arena slot plus its generation.
+    /// Tokens are values, never pointers, and a stale generation fails the
+    /// lookup before any core dereference.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct CoreTokenValue {
+        slot: u32,
+        generation: u64,
+    }
+
+    impl CoreTokenValue {
+        pub fn new(slot: u32, generation: u64) -> Result<Self, ClientError> {
+            if slot == 0 {
+                return Err(ClientError::InvalidInput);
+            }
+            Ok(Self { slot, generation })
+        }
+
+        pub fn slot(self) -> u32 {
+            self.slot
+        }
+
+        pub fn generation(self) -> u64 {
+            self.generation
+        }
+
+        pub fn to_boundary(self) -> BoundaryValue {
+            BoundaryValue::fields([
+                ("slot", BoundaryValue::Int(i64::from(self.slot))),
+                ("generation", u64_text(self.generation)),
+            ])
+        }
+
+        pub fn from_boundary(value: &BoundaryValue) -> Result<Self, ClientError> {
+            value.exact_fields(&["slot", "generation"])?;
+            let slot = u32_from(required(value, "slot")?)?;
+            let generation = u64_from_text(required(value, "generation")?)?;
+            Self::new(slot, generation)
+        }
+    }
+
+    /// The closed failure class names, one per `ClientError` variant, in the
+    /// contract's declared vocabulary.
+    pub fn client_error_class(error: &ClientError) -> &'static str {
+        match error {
+            ClientError::InvalidInput => "InvalidInput",
+            ClientError::IncompatibleVersion => "IncompatibleVersion",
+            ClientError::InvalidState => "InvalidState",
+            ClientError::StaleEpoch => "StaleEpoch",
+            ClientError::Capacity => "Capacity",
+            ClientError::Timeout => "Timeout",
+            ClientError::Disconnected => "Disconnected",
+            ClientError::Io => "Io",
+            ClientError::Internal => "Internal",
+        }
+    }
+
+    /// The `ErrorValue` of one failure: the closed class name beside null
+    /// detail slots. Capacity detail comes from the owning core; this
+    /// boundary never fabricates a resource, limit or observation value.
+    pub fn error_value(error: &ClientError) -> BoundaryValue {
+        BoundaryValue::fields([
+            (
+                "class",
+                BoundaryValue::Text(client_error_class(error).to_string()),
+            ),
+            ("resource", BoundaryValue::Null),
+            ("limit", BoundaryValue::Null),
+            ("observed", BoundaryValue::Null),
+        ])
+    }
+
+    /// The closed method envelope: success carries `value` and a null
+    /// error; failure carries a null value and the `ErrorValue`.
+    pub fn outcome(result: Result<BoundaryValue, ClientError>) -> BoundaryValue {
+        match result {
+            Ok(value) => BoundaryValue::fields([
+                ("ok", BoundaryValue::Bool(true)),
+                ("value", value),
+                ("error", BoundaryValue::Null),
+            ]),
+            Err(error) => BoundaryValue::fields([
+                ("ok", BoundaryValue::Bool(false)),
+                ("value", BoundaryValue::Null),
+                ("error", error_value(&error)),
+            ]),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Method-argument decoding
+    // ------------------------------------------------------------------
+
+    /// The twelve limit fields of one checked `ClientLimits` value, in the
+    /// frozen constructor order.
+    const LIMIT_FIELDS: [&str; 12] = [
+        "queued_input_events",
+        "inbound_observations",
+        "inbound_bytes",
+        "outbound_commands",
+        "outbound_bytes",
+        "prediction_journal",
+        "message_work",
+        "mesh_work",
+        "preparation_results",
+        "preparation_bytes",
+        "family_records",
+        "frame_bytes",
+    ];
+
+    /// The checked core configuration one `open_core` call carries: the
+    /// accepted limits, the hello/login deadline policy in milliseconds and
+    /// the native connector capability the bridge resolves in its own
+    /// registry. The clock and connector registry never cross the boundary;
+    /// they are native injected ports.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct CoreOpenSpec {
+        pub limits: ClientLimits,
+        pub hello_ms: u32,
+        pub login_ms: u32,
+        pub connector_capability: u64,
+    }
+
+    /// Decodes the `open_core` configuration. Every limit is canonical
+    /// `u64` text and the whole set must pass the accepted frozen ceilings
+    /// (a zero or over-limit field rejects before anything opens).
+    pub fn decode_open_core(value: &BoundaryValue) -> Result<CoreOpenSpec, ClientError> {
+        value.exact_fields(&["limits", "hello_ms", "login_ms", "connector_capability"])?;
+        let limits_value = required(value, "limits")?;
+        limits_value.exact_fields(&LIMIT_FIELDS)?;
+        let mut fields = [0u64; 12];
+        for (index, name) in LIMIT_FIELDS.iter().enumerate() {
+            fields[index] = u64_from_text(required(limits_value, name)?)?;
+        }
+        let limits = ClientLimits::try_new_with(
+            fields[0] as usize,
+            fields[1] as usize,
+            fields[2] as usize,
+            fields[3] as usize,
+            fields[4] as usize,
+            fields[5] as usize,
+            fields[6] as usize,
+            fields[7] as usize,
+            fields[8] as usize,
+            fields[9] as usize,
+            fields[10] as usize,
+            fields[11] as usize,
+        )?;
+        let hello_ms = u32_from(required(value, "hello_ms")?)?;
+        let login_ms = u32_from(required(value, "login_ms")?)?;
+        if hello_ms == 0 || login_ms == 0 {
+            return Err(ClientError::InvalidInput);
+        }
+        let connector_capability = u64_from_text(required(value, "connector_capability")?)?;
+        if connector_capability == 0 {
+            return Err(ClientError::InvalidInput);
+        }
+        Ok(CoreOpenSpec {
+            limits,
+            hello_ms,
+            login_ms,
+            connector_capability,
+        })
+    }
+
+    /// Decodes the checked endpoint union. A TCP host is a validated numeric
+    /// IP literal, never a DNS name: the boundary performs no lookup.
+    pub fn decode_endpoint(value: &BoundaryValue) -> Result<Endpoint, ClientError> {
+        let (tag, payload) = value.tag().ok_or(ClientError::InvalidInput)?;
+        match tag {
+            "Memory" => {
+                payload.exact_fields(&["connector_id"])?;
+                let raw = u64_from_text(required(payload, "connector_id")?)?;
+                let connector_id =
+                    std::num::NonZeroU64::new(raw).ok_or(ClientError::InvalidInput)?;
+                Ok(Endpoint::Memory { connector_id })
+            }
+            "Tcp" => {
+                payload.exact_fields(&["host", "port"])?;
+                let host = required(payload, "host")?.as_text()?.to_string();
+                let port = u16_from(required(payload, "port")?)?;
+                let address: std::net::SocketAddr = format!("{host}:{port}")
+                    .parse()
+                    .map_err(|_| ClientError::InvalidInput)?;
+                Ok(Endpoint::Tcp(address))
+            }
+            _ => Err(ClientError::InvalidInput),
+        }
+    }
+
+    /// Decodes the checked login identity: the exact protocol `LoginStart`
+    /// parts — UUID identity, canonical display name, view distance — with
+    /// the v45 identity rules enforced by the protocol constructor itself.
+    pub fn decode_identity(value: &BoundaryValue) -> Result<ClientIdentity, ClientError> {
+        value.exact_fields(&["login"])?;
+        let login = required(value, "login")?;
+        login.exact_fields(&["player_id", "display_name", "view_distance"])?;
+        let player_id = PlayerId::try_from_bytes(uuid_from_hex(required(login, "player_id")?)?)
+            .map_err(|_| ClientError::InvalidInput)?;
+        let display_name = required(login, "display_name")?.as_text()?.to_string();
+        let view_distance = u8_from(required(login, "view_distance")?)?;
+        let start = LoginStart::new(player_id, display_name, view_distance)
+            .map_err(|_| ClientError::InvalidInput)?;
+        ClientIdentity::try_new(start)
+    }
+
+    /// Decodes the bounded step work request.
+    pub fn decode_work(value: &BoundaryValue) -> Result<ClientWorkBudget, ClientError> {
+        value.exact_fields(&["messages", "meshes"])?;
+        let messages = u16_from(required(value, "messages")?)?;
+        let meshes = u16_from(required(value, "meshes")?)?;
+        ClientWorkBudget::try_new(messages, meshes)
+    }
+
+    /// Decodes the epoch text of an epoch-addressed call.
+    pub fn decode_epoch(value: &BoundaryValue) -> Result<SessionEpoch, ClientError> {
+        SessionEpoch::try_new(u64_from_text(value)?)
+    }
+
+    // ------------------------------------------------------------------
+    // The twenty-action input batch
+    // ------------------------------------------------------------------
+
+    /// Decodes one look-angles pair.
+    fn decode_look(value: &BoundaryValue) -> Result<LookAngles, ClientError> {
+        value.exact_fields(&["yaw", "pitch"])?;
+        let yaw = required(value, "yaw")?.as_finite_float()?;
+        let pitch = required(value, "pitch")?.as_finite_float()?;
+        let (yaw, pitch) = (yaw as f32, pitch as f32);
+        if !yaw.is_finite() || !pitch.is_finite() {
+            return Err(ClientError::InvalidInput);
+        }
+        LookAngles::try_new(yaw, pitch).map_err(|_| ClientError::InvalidInput)
+    }
+
+    /// Decodes one chunk column pair.
+    fn decode_chunk(value: &BoundaryValue) -> Result<mornlea_domain::ChunkPos, ClientError> {
+        value.exact_fields(&["x", "z"])?;
+        let x = i32_from(required(value, "x")?)?;
+        let z = i32_from(required(value, "z")?)?;
+        Ok(mornlea_domain::ChunkPos::new(x, z))
+    }
+
+    /// Decodes one container reference parts value.
+    fn decode_container_ref(value: &BoundaryValue) -> Result<ContainerRef, ClientError> {
+        value.exact_fields(&["chunk", "kind", "slot", "generation"])?;
+        let chunk = decode_chunk(required(value, "chunk")?)?;
+        let kind = match required(value, "kind")?.as_text()? {
+            "Furnace" => ContainerKind::Furnace,
+            "Chest" => ContainerKind::Chest,
+            _ => return Err(ClientError::InvalidInput),
+        };
+        let slot = u8_from(required(value, "slot")?)?;
+        let generation = u32_from(required(value, "generation")?)?;
+        ContainerRef::try_new(chunk, kind, slot, generation).map_err(|_| ClientError::InvalidInput)
+    }
+
+    /// Decodes the container-reference tag the stack views reuse.
+    fn decode_stack_view(value: &BoundaryValue) -> Result<StackView, ClientError> {
+        let (tag, payload) = value.tag().ok_or(ClientError::InvalidInput)?;
+        match tag {
+            "Inventory" => Ok(StackView::Inventory),
+            "Crafting" => Ok(StackView::Crafting),
+            "Container" => Ok(StackView::Container(decode_container_ref(payload)?)),
+            _ => Err(ClientError::InvalidInput),
+        }
+    }
+
+    /// Decodes the nullary-action rule: the payload must be exactly null.
+    fn nullary(value: &BoundaryValue) -> Result<(), ClientError> {
+        match value {
+            BoundaryValue::Null => Ok(()),
+            _ => Err(ClientError::InvalidInput),
+        }
+    }
+
+    /// Decodes one intent payload by its closed tag. The twenty tags are the
+    /// exact `ClientIntent` variant names; the payload parts are the F1
+    /// public parts of each record, and a nullary action carries a null
+    /// payload. No wire bytes are serialized here.
+    fn decode_intent_payload(
+        tag: &str,
+        payload: &BoundaryValue,
+    ) -> Result<ClientIntent, ClientError> {
+        let intent = match tag {
+            "PlayerInput" => {
+                payload.exact_fields(&["movement", "look", "actions"])?;
+                let movement_value = required(payload, "movement")?;
+                movement_value.exact_fields(&["move_x", "move_z", "jump"])?;
+                let movement = mornlea_domain::Movement {
+                    move_x: i8_from(required(movement_value, "move_x")?)?,
+                    move_z: i8_from(required(movement_value, "move_z")?)?,
+                    jump: required(movement_value, "jump")?.as_bool()?,
+                };
+                let look = decode_look(required(payload, "look")?)?;
+                let actions_value = required(payload, "actions")?;
+                actions_value.exact_fields(&["primary", "eating", "sprinting", "sneaking"])?;
+                let actions = HeldActions {
+                    primary: required(actions_value, "primary")?.as_bool()?,
+                    eating: required(actions_value, "eating")?.as_bool()?,
+                    sprinting: required(actions_value, "sprinting")?.as_bool()?,
+                    sneaking: required(actions_value, "sneaking")?.as_bool()?,
+                };
+                ClientIntent::PlayerInput(PlayerControl::new(PlayerControlParts {
+                    movement,
+                    look,
+                    actions,
+                }))
+            }
+            "PlaceBlock" => {
+                payload.exact_fields(&["look", "slot"])?;
+                let look = decode_look(required(payload, "look")?)?;
+                let slot = u8_from(required(payload, "slot")?)?;
+                ClientIntent::PlaceBlock(PlacementIntent::try_new(look, slot).map_err(into_error)?)
+            }
+            "Resync" => {
+                payload.exact_fields(&["dimension", "chunk", "have_revision"])?;
+                let dimension = u8_from(required(payload, "dimension")?)?;
+                let chunk = decode_chunk(required(payload, "chunk")?)?;
+                let have_revision = u64_from_text(required(payload, "have_revision")?)?;
+                ClientIntent::Resync(
+                    ResyncIntent::try_new(dimension, chunk, have_revision).map_err(into_error)?,
+                )
+            }
+            "SelectHotbar" => {
+                payload.exact_fields(&["slot"])?;
+                let slot = u8_from(required(payload, "slot")?)?;
+                ClientIntent::SelectHotbar(HotbarSlot::new(slot).map_err(into_error)?)
+            }
+            "OpenContainer" | "TillSoil" | "BoneMeal" | "CollectWater" | "PlaceWater" => {
+                payload.exact_fields(&["look"])?;
+                let look = decode_look(required(payload, "look")?)?;
+                match tag {
+                    "OpenContainer" => ClientIntent::OpenContainer(look),
+                    "TillSoil" => ClientIntent::TillSoil(look),
+                    "BoneMeal" => ClientIntent::BoneMeal(look),
+                    "CollectWater" => ClientIntent::CollectWater(look),
+                    _ => ClientIntent::PlaceWater(look),
+                }
+            }
+            "MoveInventory" => {
+                payload.exact_fields(&["from", "to"])?;
+                let from = u8_from(required(payload, "from")?)?;
+                let to = u8_from(required(payload, "to")?)?;
+                ClientIntent::MoveInventory(InventoryMove::try_new(from, to).map_err(into_error)?)
+            }
+            "MoveCrafting" => {
+                payload.exact_fields(&["from", "to"])?;
+                let from = u8_from(required(payload, "from")?)?;
+                let to = u8_from(required(payload, "to")?)?;
+                ClientIntent::MoveCrafting(CraftingMove::try_new(from, to).map_err(into_error)?)
+            }
+            "MoveContainer" => {
+                payload.exact_fields(&["container", "from", "to"])?;
+                let container = decode_container_ref(required(payload, "container")?)?;
+                let from = u8_from(required(payload, "from")?)?;
+                let to = u8_from(required(payload, "to")?)?;
+                ClientIntent::MoveContainer(
+                    ContainerMove::try_new(
+                        container.chunk(),
+                        container.kind(),
+                        container.slot(),
+                        container.generation(),
+                        from,
+                        to,
+                    )
+                    .map_err(into_error)?,
+                )
+            }
+            "CloseContainer" => {
+                nullary(payload)?;
+                ClientIntent::CloseContainer
+            }
+            "DropSelectedItem" => {
+                nullary(payload)?;
+                ClientIntent::DropSelectedItem
+            }
+            "TakeCraftingOutput" => {
+                nullary(payload)?;
+                ClientIntent::TakeCraftingOutput
+            }
+            "EquipArmor" => {
+                nullary(payload)?;
+                ClientIntent::EquipArmor
+            }
+            "MovePartial" => {
+                payload.exact_fields(&["view", "from", "to", "single"])?;
+                let view = decode_stack_view(required(payload, "view")?)?;
+                let from = u8_from(required(payload, "from")?)?;
+                let to = u8_from(required(payload, "to")?)?;
+                let single = required(payload, "single")?.as_bool()?;
+                ClientIntent::MovePartial(
+                    PartialMove::try_new(view, from, to, single).map_err(into_error)?,
+                )
+            }
+            "QuickMove" => {
+                payload.exact_fields(&["view", "slot"])?;
+                let view = decode_stack_view(required(payload, "view")?)?;
+                let slot = u8_from(required(payload, "slot")?)?;
+                ClientIntent::QuickMove(StackSource::try_new(view, slot).map_err(into_error)?)
+            }
+            "DropStack" => {
+                payload.exact_fields(&["view", "slot"])?;
+                let view = decode_stack_view(required(payload, "view")?)?;
+                let slot = u8_from(required(payload, "slot")?)?;
+                ClientIntent::DropStack(StackSource::try_new(view, slot).map_err(into_error)?)
+            }
+            "Chat" => {
+                payload.exact_fields(&["text"])?;
+                let text = required(payload, "text")?.as_text()?.to_string();
+                let command = CommandText::try_from_canonical(text).map_err(into_error)?;
+                ClientIntent::Chat(ChatIntent::new(command))
+            }
+            _ => return Err(ClientError::InvalidInput),
+        };
+        Ok(intent)
+    }
+
+    /// Domain rejections collapse to the boundary's invalid-input class.
+    fn into_error(_: mornlea_domain::DomainError) -> ClientError {
+        ClientError::InvalidInput
+    }
+
+    /// Decodes one container view token.
+    fn decode_container_token(value: &BoundaryValue) -> Result<ContainerToken, ClientError> {
+        value.exact_fields(&["epoch", "reference", "confirmed_revision"])?;
+        let epoch = decode_epoch(required(value, "epoch")?)?;
+        let reference = decode_container_ref(required(value, "reference")?)?;
+        let revision = u64_from_text(required(value, "confirmed_revision")?)?;
+        ContainerToken::try_new(epoch, reference, ConfirmedRevision::new(revision))
+    }
+
+    /// Decodes one crafting view token. It deliberately carries no container
+    /// reference and no generation.
+    fn decode_crafting_token(value: &BoundaryValue) -> Result<CraftingViewToken, ClientError> {
+        value.exact_fields(&["epoch", "confirmed_revision", "size"])?;
+        let epoch = decode_epoch(required(value, "epoch")?)?;
+        let revision = u64_from_text(required(value, "confirmed_revision")?)?;
+        let size = match required(value, "size")?.as_text()? {
+            "Personal" => CraftingSize::Personal,
+            "Workbench" => CraftingSize::Workbench,
+            _ => return Err(ClientError::InvalidInput),
+        };
+        CraftingViewToken::try_new(epoch, ConfirmedRevision::new(revision), size)
+    }
+
+    /// Decodes one batch action: the tagged intent plus the optional tokens.
+    /// Every action carries both token keys; an absent key is a shape error
+    /// and a present token is a checked value.
+    fn decode_action(value: &BoundaryValue) -> Result<InputAction, ClientError> {
+        value.exact_fields(&["intent", "container", "crafting"])?;
+        let intent_value = required(value, "intent")?;
+        let (tag, payload) = intent_value.tag().ok_or(ClientError::InvalidInput)?;
+        let intent = decode_intent_payload(tag, payload)?;
+        let container = match optional(value, "container")? {
+            BoundaryValue::Null => None,
+            token => Some(decode_container_token(token)?),
+        };
+        let crafting = match optional(value, "crafting")? {
+            BoundaryValue::Null => None,
+            token => Some(decode_crafting_token(token)?),
+        };
+        Ok(InputAction {
+            intent,
+            container,
+            crafting,
+        })
+    }
+
+    /// Decodes the whole input batch: the epoch text, the action vector and
+    /// every action's checked payload and tokens. The 128-action ceiling is
+    /// the C1 constructor's own; a 129th action rejects the complete batch
+    /// with the typed capacity error before any core call runs.
+    pub fn decode_input_batch(value: &BoundaryValue) -> Result<InputBatch, ClientError> {
+        value.exact_fields(&["epoch", "actions"])?;
+        let epoch = decode_epoch(required(value, "epoch")?)?;
+        let actions_value = required(value, "actions")?;
+        let items = actions_value.as_list()?;
+        let mut actions = Vec::with_capacity(items.len());
+        for item in items {
+            actions.push(decode_action(item)?);
+        }
+        InputBatch::try_new(epoch, actions)
+    }
+
+    // ------------------------------------------------------------------
+    // Result rendering
+    // ------------------------------------------------------------------
+
+    /// Renders the input receipt's closed union.
+    pub fn render_receipt(receipt: &InputReceipt) -> BoundaryValue {
+        match receipt {
+            InputReceipt::Noop => BoundaryValue::tagged("Noop", BoundaryValue::Null),
+            InputReceipt::Queued {
+                epoch,
+                first_sequence,
+                sequenced_count,
+                chat_count,
+            } => BoundaryValue::tagged(
+                "Queued",
+                BoundaryValue::fields([
+                    ("epoch", u64_text(epoch.get())),
+                    (
+                        "first_sequence",
+                        first_sequence.map_or(BoundaryValue::Null, u64_text),
+                    ),
+                    (
+                        "sequenced_count",
+                        BoundaryValue::Int(i64::from(*sequenced_count)),
+                    ),
+                    ("chat_count", BoundaryValue::Int(i64::from(*chat_count))),
+                ]),
+            ),
+        }
+    }
+
+    /// Renders the terminal close reason's closed union.
+    fn render_close_reason(reason: &CloseReason) -> BoundaryValue {
+        match reason {
+            CloseReason::LocalClose => BoundaryValue::tagged("LocalClose", BoundaryValue::Null),
+            CloseReason::Timeout => BoundaryValue::tagged("Timeout", BoundaryValue::Null),
+            CloseReason::Capacity => BoundaryValue::tagged("Capacity", BoundaryValue::Null),
+            CloseReason::Internal => BoundaryValue::tagged("Internal", BoundaryValue::Null),
+            CloseReason::RemoteDisconnect(text) => BoundaryValue::tagged(
+                "RemoteDisconnect",
+                BoundaryValue::Text(text.as_str().to_string()),
+            ),
+            CloseReason::LoginRejected(text) => BoundaryValue::tagged(
+                "LoginRejected",
+                BoundaryValue::Text(text.as_str().to_string()),
+            ),
+        }
+    }
+
+    /// Renders the checked step report copy.
+    pub fn render_step_report(report: &StepReport) -> BoundaryValue {
+        BoundaryValue::fields([
+            ("epoch", u64_text(report.epoch().get())),
+            (
+                "confirmed_revision",
+                u64_text(report.confirmed_revision().get()),
+            ),
+            ("frame_index", u64_text(report.frame_index())),
+            (
+                "processed_messages",
+                BoundaryValue::Int(i64::from(report.processed_messages())),
+            ),
+            (
+                "processed_meshes",
+                BoundaryValue::Int(i64::from(report.processed_meshes())),
+            ),
+            (
+                "pending_input",
+                BoundaryValue::Int(report.pending_input() as i64),
+            ),
+            (
+                "pending_inbound",
+                BoundaryValue::Int(report.pending_inbound() as i64),
+            ),
+            (
+                "pending_preparation",
+                BoundaryValue::Int(report.pending_preparation() as i64),
+            ),
+            (
+                "terminal",
+                report
+                    .terminal()
+                    .map_or(BoundaryValue::Null, render_close_reason),
+            ),
+        ])
+    }
+
+    /// Renders the shared record header every family record carries.
+    fn render_header(header: &mornlea_client_core::contracts::RecordHeader) -> BoundaryValue {
+        BoundaryValue::fields([
+            ("epoch", u64_text(header.epoch().get())),
+            ("revision", u64_text(header.revision().get())),
+            (
+                "source_tick",
+                header.source_tick().map_or(BoundaryValue::Null, u64_text),
+            ),
+            (
+                "operation",
+                BoundaryValue::Text(
+                    match header.operation() {
+                        mornlea_client_core::contracts::FamilyOperation::Upsert => "Upsert",
+                        mornlea_client_core::contracts::FamilyOperation::Remove => "Remove",
+                    }
+                    .to_string(),
+                ),
+            ),
+        ])
+    }
+
+    fn opt_u64(value: Option<u64>) -> BoundaryValue {
+        value.map_or(BoundaryValue::Null, u64_text)
+    }
+
+    fn opt_f64(value: Option<f64>) -> BoundaryValue {
+        value.map_or(BoundaryValue::Null, BoundaryValue::Float)
+    }
+
+    fn vec3(values: [f64; 3]) -> BoundaryValue {
+        BoundaryValue::List(values.into_iter().map(BoundaryValue::Float).collect())
+    }
+
+    fn opt_vec3(values: Option<[f64; 3]>) -> BoundaryValue {
+        values.map_or(BoundaryValue::Null, vec3)
+    }
+
+    /// Renders the block-position triple.
+    fn block_pos(position: mornlea_domain::BlockPos) -> BoundaryValue {
+        BoundaryValue::fields([
+            ("x", BoundaryValue::Int(i64::from(position.x()))),
+            ("y", BoundaryValue::Int(i64::from(position.y()))),
+            ("z", BoundaryValue::Int(i64::from(position.z()))),
+        ])
+    }
+
+    /// Renders one item stack by its public parts.
+    fn stack(value: &ItemStack) -> BoundaryValue {
+        BoundaryValue::fields([
+            ("item", BoundaryValue::Int(i64::from(value.item()))),
+            ("count", BoundaryValue::Int(i64::from(value.count()))),
+            (
+                "durability",
+                BoundaryValue::Int(i64::from(value.durability())),
+            ),
+        ])
+    }
+
+    fn stacks(values: &[ItemStack]) -> BoundaryValue {
+        BoundaryValue::List(values.iter().map(stack).collect())
+    }
+
+    /// Renders the container reference parts.
+    fn container_ref(reference: ContainerRef) -> BoundaryValue {
+        BoundaryValue::fields([
+            (
+                "chunk",
+                BoundaryValue::fields([
+                    ("x", BoundaryValue::Int(i64::from(reference.chunk().x()))),
+                    ("z", BoundaryValue::Int(i64::from(reference.chunk().z()))),
+                ]),
+            ),
+            (
+                "kind",
+                BoundaryValue::Text(
+                    match reference.kind() {
+                        ContainerKind::Furnace => "Furnace",
+                        ContainerKind::Chest => "Chest",
+                    }
+                    .to_string(),
+                ),
+            ),
+            ("slot", BoundaryValue::Int(i64::from(reference.slot()))),
+            (
+                "generation",
+                BoundaryValue::Int(i64::from(reference.generation())),
+            ),
+        ])
+    }
+
+    /// Renders the terrain key union: a near section or a far tile.
+    fn terrain_key(key: &mornlea_client_core::preparation::TerrainKey) -> BoundaryValue {
+        match key {
+            mornlea_client_core::preparation::TerrainKey::Section(section) => {
+                BoundaryValue::tagged(
+                    "Section",
+                    BoundaryValue::fields([
+                        (
+                            "chunk",
+                            BoundaryValue::fields([
+                                ("x", BoundaryValue::Int(i64::from(section.chunk().x()))),
+                                ("z", BoundaryValue::Int(i64::from(section.chunk().z()))),
+                            ]),
+                        ),
+                        ("section", BoundaryValue::Int(i64::from(section.section()))),
+                    ]),
+                )
+            }
+            mornlea_client_core::preparation::TerrainKey::LodTile(tile) => BoundaryValue::tagged(
+                "LodTile",
+                BoundaryValue::fields([
+                    ("x", BoundaryValue::Int(i64::from(tile.x()))),
+                    ("z", BoundaryValue::Int(i64::from(tile.z()))),
+                ]),
+            ),
+        }
+    }
+
+    /// Renders the player-control payload (the F1 public parts).
+    fn player_control(control: &PlayerControl) -> BoundaryValue {
+        let movement = control.movement();
+        let look = control.look();
+        let actions = control.actions();
+        BoundaryValue::fields([
+            (
+                "movement",
+                BoundaryValue::fields([
+                    ("move_x", BoundaryValue::Int(i64::from(movement.move_x))),
+                    ("move_z", BoundaryValue::Int(i64::from(movement.move_z))),
+                    ("jump", BoundaryValue::Bool(movement.jump)),
+                ]),
+            ),
+            (
+                "look",
+                BoundaryValue::fields([
+                    ("yaw", BoundaryValue::Float(f64::from(look.yaw()))),
+                    ("pitch", BoundaryValue::Float(f64::from(look.pitch()))),
+                ]),
+            ),
+            (
+                "actions",
+                BoundaryValue::fields([
+                    ("primary", BoundaryValue::Bool(actions.primary)),
+                    ("eating", BoundaryValue::Bool(actions.eating)),
+                    ("sprinting", BoundaryValue::Bool(actions.sprinting)),
+                    ("sneaking", BoundaryValue::Bool(actions.sneaking)),
+                ]),
+            ),
+        ])
+    }
+
+    /// Renders the checked pose.
+    fn pose(pose: &mornlea_client_core::presentation::Pose) -> BoundaryValue {
+        BoundaryValue::fields([
+            ("position", vec3(pose.position())),
+            ("yaw", BoundaryValue::Float(pose.yaw())),
+            ("pitch", BoundaryValue::Float(pose.pitch())),
+        ])
+    }
+
+    /// Renders the inventory view union.
+    fn inventory_view(view: &InventoryUiView) -> BoundaryValue {
+        match view {
+            InventoryUiView::Inventory(state) => BoundaryValue::tagged(
+                "Inventory",
+                BoundaryValue::fields([
+                    (
+                        "selected",
+                        BoundaryValue::Int(i64::from(state.selected().get())),
+                    ),
+                    ("hotbar", stacks(state.hotbar())),
+                    ("backpack", stacks(state.backpack())),
+                ]),
+            ),
+            InventoryUiView::Crafting(state) => BoundaryValue::tagged(
+                "Crafting",
+                BoundaryValue::fields([
+                    (
+                        "size",
+                        BoundaryValue::Text(
+                            match state.size() {
+                                CraftingSize::Personal => "Personal",
+                                CraftingSize::Workbench => "Workbench",
+                            }
+                            .to_string(),
+                        ),
+                    ),
+                    ("slots", stacks(state.slots())),
+                    ("output", stack(&state.output())),
+                ]),
+            ),
+            InventoryUiView::Furnace(state) => BoundaryValue::tagged(
+                "Furnace",
+                BoundaryValue::fields([
+                    ("container", container_ref(state.container())),
+                    ("input", stack(&state.input())),
+                    ("fuel", stack(&state.fuel())),
+                    ("output", stack(&state.output())),
+                    (
+                        "progress_ticks",
+                        BoundaryValue::Int(i64::from(state.progress_ticks())),
+                    ),
+                    (
+                        "burn_ticks",
+                        BoundaryValue::Int(i64::from(state.burn_ticks())),
+                    ),
+                ]),
+            ),
+            InventoryUiView::Chest(state) => BoundaryValue::tagged(
+                "Chest",
+                BoundaryValue::fields([
+                    ("container", container_ref(state.container())),
+                    ("items", stacks(state.items())),
+                ]),
+            ),
+            InventoryUiView::Closed(reference) => {
+                BoundaryValue::tagged("Closed", container_ref(*reference))
+            }
+            InventoryUiView::Rejected(rejection) => BoundaryValue::tagged(
+                "Rejected",
+                BoundaryValue::fields([
+                    ("sequence", u64_text(rejection.sequence())),
+                    (
+                        "reason",
+                        BoundaryValue::Text(format!("{:?}", rejection.reason())),
+                    ),
+                ]),
+            ),
+        }
+    }
+
+    /// Renders the world view union.
+    fn world_view(view: &WorldUiView) -> BoundaryValue {
+        match view {
+            WorldUiView::Environment(state) => BoundaryValue::tagged(
+                "Environment",
+                BoundaryValue::fields([
+                    (
+                        "day_phase_offset",
+                        BoundaryValue::Int(i64::from(state.day_phase_offset())),
+                    ),
+                    ("world_time_ticks", u64_text(state.world_time_ticks())),
+                    (
+                        "weather",
+                        BoundaryValue::Text(format!("{:?}", state.weather())),
+                    ),
+                    (
+                        "season",
+                        BoundaryValue::Text(format!("{:?}", state.season())),
+                    ),
+                    (
+                        "season_progress",
+                        BoundaryValue::Int(i64::from(state.season_progress())),
+                    ),
+                    (
+                        "temperature",
+                        BoundaryValue::Int(i64::from(state.temperature())),
+                    ),
+                ]),
+            ),
+            WorldUiView::Survival(state) => BoundaryValue::tagged(
+                "Survival",
+                BoundaryValue::fields([
+                    ("health", BoundaryValue::Int(i64::from(state.health()))),
+                    ("oxygen", BoundaryValue::Text(state.oxygen().to_string())),
+                    ("hunger", BoundaryValue::Text(state.hunger().to_string())),
+                    (
+                        "saturation_zero",
+                        BoundaryValue::Bool(state.saturation_zero()),
+                    ),
+                    (
+                        "armor_points",
+                        BoundaryValue::Text(state.armor_points().to_string()),
+                    ),
+                ]),
+            ),
+            WorldUiView::Chat(event) => BoundaryValue::tagged(
+                "Chat",
+                BoundaryValue::fields([
+                    ("event_id", u64_text(event.event_id())),
+                    ("player_id", hex_text(&event.player_id().bytes())),
+                    (
+                        "player_name",
+                        BoundaryValue::Text(event.player_name().as_str().to_string()),
+                    ),
+                    ("body", chat_body(event.body())),
+                ]),
+            ),
+            WorldUiView::Task(task) => BoundaryValue::tagged(
+                "Task",
+                BoundaryValue::fields([
+                    (
+                        "observation",
+                        BoundaryValue::fields([
+                            ("epoch", u64_text(task.observation().epoch().get())),
+                            (
+                                "confirmed_revision",
+                                u64_text(task.observation().confirmed_revision().get()),
+                            ),
+                            (
+                                "ordinal",
+                                BoundaryValue::Int(i64::from(task.observation().ordinal())),
+                            ),
+                        ]),
+                    ),
+                    (
+                        "companion",
+                        BoundaryValue::fields([
+                            ("id", hex_text(&task.companion().id().bytes())),
+                            (
+                                "name",
+                                BoundaryValue::Text(task.companion().name().as_str().to_string()),
+                            ),
+                        ]),
+                    ),
+                    (
+                        "command",
+                        BoundaryValue::Text(task.command().as_str().to_string()),
+                    ),
+                    ("state", task_state(task.state())),
+                ]),
+            ),
+            WorldUiView::Prompt(prompt) => BoundaryValue::tagged(
+                "Prompt",
+                prompt.as_ref().map_or(BoundaryValue::Null, |view| {
+                    BoundaryValue::fields([
+                        ("target", block_pos(view.target())),
+                        (
+                            "label",
+                            BoundaryValue::Text(view.label().as_str().to_string()),
+                        ),
+                    ])
+                }),
+            ),
+        }
+    }
+
+    /// Renders the chat body union by its closed variants.
+    fn chat_body(body: &ChatBody) -> BoundaryValue {
+        fn speaker(
+            companion: &mornlea_domain::CompanionSpeaker,
+            command: &CommandText,
+        ) -> [(&'static str, BoundaryValue); 2] {
+            [
+                ("companion_id", hex_text(&companion.id().bytes())),
+                ("command", BoundaryValue::Text(command.as_str().to_string())),
+            ]
+        }
+        match body {
+            ChatBody::Accepted { companion, command } => BoundaryValue::tagged(
+                "Accepted",
+                BoundaryValue::fields(speaker(companion, command)),
+            ),
+            ChatBody::InvalidFormat => BoundaryValue::tagged("InvalidFormat", BoundaryValue::Null),
+            ChatBody::UnknownCompanion { name } => BoundaryValue::tagged(
+                "UnknownCompanion",
+                BoundaryValue::Text(name.as_str().to_string()),
+            ),
+            ChatBody::QueueFull { companion, command } => BoundaryValue::tagged(
+                "QueueFull",
+                BoundaryValue::fields(speaker(companion, command)),
+            ),
+            ChatBody::NotFollowing { companion, command } => BoundaryValue::tagged(
+                "NotFollowing",
+                BoundaryValue::fields(speaker(companion, command)),
+            ),
+            ChatBody::Task {
+                companion,
+                command,
+                state,
+            } => {
+                let mut fields: Vec<(String, BoundaryValue)> = speaker(companion, command)
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), value))
+                    .collect();
+                fields.push(("state".to_string(), task_state(state)));
+                BoundaryValue::tagged("Task", BoundaryValue::Fields(fields))
+            }
+            ChatBody::Speech { companion, text } => BoundaryValue::tagged(
+                "Speech",
+                BoundaryValue::fields([
+                    ("companion_id", hex_text(&companion.id().bytes())),
+                    ("speech", BoundaryValue::Text(text.as_str().to_string())),
+                ]),
+            ),
+        }
+    }
+
+    /// Renders the task state union.
+    fn task_state(state: &TaskState) -> BoundaryValue {
+        match state {
+            TaskState::Failed(reason) => {
+                BoundaryValue::tagged("Failed", BoundaryValue::Text(format!("{reason:?}")))
+            }
+            TaskState::Started => BoundaryValue::tagged("Started", BoundaryValue::Null),
+            TaskState::Progress => BoundaryValue::tagged("Progress", BoundaryValue::Null),
+            TaskState::Completed => BoundaryValue::tagged("Completed", BoundaryValue::Null),
+            TaskState::TimedOut => BoundaryValue::tagged("TimedOut", BoundaryValue::Null),
+            TaskState::Stopped => BoundaryValue::tagged("Stopped", BoundaryValue::Null),
+        }
+    }
+
+    /// Renders the mining union: `Idle` carries nothing and `Active` carries
+    /// the checked swing fields.
+    fn mining(state: &MiningState) -> BoundaryValue {
+        match state {
+            MiningState::Idle => BoundaryValue::tagged("Idle", BoundaryValue::Null),
+            MiningState::Active(active) => BoundaryValue::tagged(
+                "Active",
+                BoundaryValue::fields([
+                    ("target", block_pos(active.target())),
+                    ("progress", BoundaryValue::Int(i64::from(active.progress()))),
+                    ("required", BoundaryValue::Int(i64::from(active.required()))),
+                    ("harvestable", BoundaryValue::Bool(active.harvestable())),
+                ]),
+            ),
+        }
+    }
+
+    /// Renders the actor identity union.
+    fn actor_id(id: &mornlea_client_core::presentation::frame::ActorId) -> BoundaryValue {
+        use mornlea_client_core::presentation::frame::ActorId;
+        match id {
+            ActorId::RemotePlayer(player) => {
+                BoundaryValue::tagged("RemotePlayer", hex_text(&player.bytes()))
+            }
+            ActorId::Drop(drop) => BoundaryValue::tagged(
+                "Drop",
+                BoundaryValue::fields([
+                    ("dimension", BoundaryValue::Int(i64::from(drop.dimension()))),
+                    ("slot", BoundaryValue::Int(i64::from(drop.slot()))),
+                    ("generation", u64_text(u64::from(drop.generation()))),
+                    (
+                        "chunk",
+                        BoundaryValue::fields([
+                            ("x", BoundaryValue::Int(i64::from(drop.chunk().x()))),
+                            ("z", BoundaryValue::Int(i64::from(drop.chunk().z()))),
+                        ]),
+                    ),
+                ]),
+            ),
+            ActorId::Hostile(id) => BoundaryValue::tagged("Hostile", u64_text(id.get())),
+            ActorId::Passive(id) => BoundaryValue::tagged("Passive", u64_text(id.get())),
+            ActorId::Projectile(id) => BoundaryValue::tagged("Projectile", u64_text(id.get())),
+            ActorId::Companion(id) => BoundaryValue::tagged("Companion", hex_text(&id.bytes())),
+        }
+    }
+
+    /// Renders the actor dimension union.
+    fn actor_dimension(
+        dimension: &mornlea_client_core::presentation::frame::ActorDimension,
+    ) -> BoundaryValue {
+        match dimension {
+            mornlea_client_core::presentation::frame::ActorDimension::Known(known) => {
+                BoundaryValue::tagged("Known", BoundaryValue::Int(i64::from(known.get())))
+            }
+            mornlea_client_core::presentation::frame::ActorDimension::DropRaw(raw) => {
+                BoundaryValue::tagged("DropRaw", BoundaryValue::Int(i64::from(*raw)))
+            }
+        }
+    }
+
+    /// Renders the actor detail union.
+    fn actor_detail(
+        detail: &mornlea_client_core::presentation::frame::ActorDetail,
+    ) -> BoundaryValue {
+        use mornlea_client_core::presentation::frame::ActorDetail;
+        match detail {
+            ActorDetail::RemotePlayer {
+                display_name,
+                reset,
+            } => BoundaryValue::tagged(
+                "RemotePlayer",
+                BoundaryValue::fields([
+                    (
+                        "display_name",
+                        display_name.as_ref().map_or(BoundaryValue::Null, |text| {
+                            BoundaryValue::Text(text.as_str().to_string())
+                        }),
+                    ),
+                    (
+                        "reset",
+                        reset.map_or(BoundaryValue::Null, BoundaryValue::Bool),
+                    ),
+                ]),
+            ),
+            ActorDetail::Drop {
+                block_index,
+                stack: drop_stack,
+            } => BoundaryValue::tagged(
+                "Drop",
+                BoundaryValue::fields([
+                    ("block_index", u64_text(u64::from(*block_index))),
+                    ("stack", stack(drop_stack)),
+                ]),
+            ),
+            ActorDetail::Hostile { archetype, health } => BoundaryValue::tagged(
+                "Hostile",
+                BoundaryValue::fields([
+                    ("archetype", BoundaryValue::Int(i64::from(*archetype))),
+                    ("health", BoundaryValue::Int(i64::from(*health))),
+                ]),
+            ),
+            ActorDetail::Passive {
+                health,
+                grazing,
+                despawn_reason,
+            } => BoundaryValue::tagged(
+                "Passive",
+                BoundaryValue::fields([
+                    (
+                        "health",
+                        health.map_or(BoundaryValue::Null, |v| BoundaryValue::Int(i64::from(v))),
+                    ),
+                    (
+                        "grazing",
+                        grazing.map_or(BoundaryValue::Null, |v| BoundaryValue::Int(i64::from(v))),
+                    ),
+                    (
+                        "despawn_reason",
+                        despawn_reason.map_or(BoundaryValue::Null, |reason| {
+                            BoundaryValue::Text(format!("{reason:?}"))
+                        }),
+                    ),
+                ]),
+            ),
+            ActorDetail::Projectile { archetype } => BoundaryValue::tagged(
+                "Projectile",
+                BoundaryValue::fields([(
+                    "archetype",
+                    archetype.map_or(BoundaryValue::Null, |v| BoundaryValue::Int(i64::from(v))),
+                )]),
+            ),
+            ActorDetail::Companion { name, reset } => BoundaryValue::tagged(
+                "Companion",
+                BoundaryValue::fields([
+                    (
+                        "name",
+                        name.as_ref().map_or(BoundaryValue::Null, |text| {
+                            BoundaryValue::Text(text.as_str().to_string())
+                        }),
+                    ),
+                    (
+                        "reset",
+                        reset.map_or(BoundaryValue::Null, BoundaryValue::Bool),
+                    ),
+                ]),
+            ),
+        }
+    }
+
+    /// Renders the cue provenance union.
+    fn cue_provenance(provenance: &CueProvenance) -> BoundaryValue {
+        match provenance {
+            CueProvenance::Confirmed {
+                observation,
+                authoritative_event_id,
+            } => BoundaryValue::tagged(
+                "Confirmed",
+                BoundaryValue::fields([
+                    ("epoch", u64_text(observation.epoch().get())),
+                    (
+                        "confirmed_revision",
+                        u64_text(observation.confirmed_revision().get()),
+                    ),
+                    (
+                        "ordinal",
+                        BoundaryValue::Int(i64::from(observation.ordinal())),
+                    ),
+                    ("authoritative_event_id", opt_u64(*authoritative_event_id)),
+                ]),
+            ),
+            CueProvenance::Predicted { input_sequence } => BoundaryValue::tagged(
+                "Predicted",
+                BoundaryValue::fields([("input_sequence", u64_text(*input_sequence))]),
+            ),
+            CueProvenance::Local {
+                local_event_sequence,
+            } => BoundaryValue::tagged(
+                "Local",
+                BoundaryValue::fields([("local_event_sequence", u64_text(*local_event_sequence))]),
+            ),
+        }
+    }
+
+    /// Renders the intent kind's closed name.
+    fn intent_kind(kind: &ClientIntentKind) -> BoundaryValue {
+        BoundaryValue::Text(
+            match kind {
+                ClientIntentKind::PlayerInput => "PlayerInput",
+                ClientIntentKind::PlaceBlock => "PlaceBlock",
+                ClientIntentKind::Resync => "Resync",
+                ClientIntentKind::SelectHotbar => "SelectHotbar",
+                ClientIntentKind::OpenContainer => "OpenContainer",
+                ClientIntentKind::TillSoil => "TillSoil",
+                ClientIntentKind::BoneMeal => "BoneMeal",
+                ClientIntentKind::CollectWater => "CollectWater",
+                ClientIntentKind::PlaceWater => "PlaceWater",
+                ClientIntentKind::MoveInventory => "MoveInventory",
+                ClientIntentKind::MoveCrafting => "MoveCrafting",
+                ClientIntentKind::MoveContainer => "MoveContainer",
+                ClientIntentKind::CloseContainer => "CloseContainer",
+                ClientIntentKind::DropSelectedItem => "DropSelectedItem",
+                ClientIntentKind::TakeCraftingOutput => "TakeCraftingOutput",
+                ClientIntentKind::EquipArmor => "EquipArmor",
+                ClientIntentKind::MovePartial => "MovePartial",
+                ClientIntentKind::QuickMove => "QuickMove",
+                ClientIntentKind::DropStack => "DropStack",
+                ClientIntentKind::Chat => "Chat",
+            }
+            .to_string(),
+        )
+    }
+
+    /// Renders one closed family record vector.
+    fn render_records(records: &FamilyRecords) -> BoundaryValue {
+        match records {
+            FamilyRecords::Session(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            (
+                                "phase",
+                                BoundaryValue::Text(format!("{:?}", record.phase())),
+                            ),
+                            (
+                                "player_id",
+                                record.player_id().map_or(BoundaryValue::Null, |id| {
+                                    hex_text(&id.bytes())
+                                }),
+                            ),
+                            (
+                                "terminal",
+                                record
+                                    .terminal()
+                                    .map_or(BoundaryValue::Null, render_close_reason),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+            FamilyRecords::Input(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            ("local_sequence", opt_u64(record.local_sequence())),
+                            ("intent_kind", intent_kind(&record.intent_kind())),
+                            (
+                                "receipt",
+                                match record.receipt() {
+                                    InputReceiptState::Queued => {
+                                        BoundaryValue::tagged("Queued", BoundaryValue::Null)
+                                    }
+                                    InputReceiptState::Rejected { class } => BoundaryValue::tagged(
+                                        "Rejected",
+                                        BoundaryValue::Text(
+                                            client_error_class(class).to_string(),
+                                        ),
+                                    ),
+                                    InputReceiptState::Confirmed { server_tick } => {
+                                        BoundaryValue::tagged(
+                                            "Confirmed",
+                                            BoundaryValue::fields([(
+                                                "server_tick",
+                                                opt_u64(*server_tick),
+                                            )]),
+                                        )
+                                    }
+                                },
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+            FamilyRecords::Terrain(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            (
+                                "dimension",
+                                BoundaryValue::Int(i64::from(record.dimension().get())),
+                            ),
+                            ("key", terrain_key(record.key())),
+                            (
+                                "content_revision",
+                                u64_text(record.content_revision()),
+                            ),
+                            ("generation", u64_text(record.generation())),
+                            (
+                                "material",
+                                BoundaryValue::Text(format!("{:?}", record.material())),
+                            ),
+                            (
+                                "visibility",
+                                BoundaryValue::Text(format!("{:?}", record.visibility())),
+                            ),
+                            (
+                                "light",
+                                BoundaryValue::fields([
+                                    (
+                                        "sky",
+                                        BoundaryValue::Int(i64::from(record.light().sky())),
+                                    ),
+                                    (
+                                        "block",
+                                        BoundaryValue::Int(i64::from(record.light().block())),
+                                    ),
+                                ]),
+                            ),
+                            (
+                                "resource",
+                                record.resource().map_or(BoundaryValue::Null, |key| {
+                                    BoundaryValue::fields([
+                                        ("epoch", u64_text(key.epoch().get())),
+                                        (
+                                            "dimension",
+                                            BoundaryValue::Int(i64::from(key.dimension().get())),
+                                        ),
+                                        ("key", terrain_key(key.key())),
+                                        ("generation", u64_text(key.generation())),
+                                        (
+                                            "content_revision",
+                                            u64_text(key.content_revision()),
+                                        ),
+                                        ("job_id", u64_text(key.job_id().get())),
+                                    ])
+                                }),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+            FamilyRecords::Actors(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            (
+                                "kind",
+                                BoundaryValue::Text(format!("{:?}", record.kind())),
+                            ),
+                            ("id", actor_id(record.id())),
+                            ("dimension", actor_dimension(record.dimension())),
+                            ("position", opt_vec3(record.position())),
+                            ("yaw", opt_f64(record.yaw())),
+                            ("pitch", opt_f64(record.pitch())),
+                            ("velocity", opt_vec3(record.velocity())),
+                            (
+                                "detail",
+                                record
+                                    .detail()
+                                    .map_or(BoundaryValue::Null, actor_detail),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+            FamilyRecords::PlayerView(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            ("confirmed_pose", pose(record.confirmed_pose())),
+                            (
+                                "predicted_pose",
+                                record.predicted_pose().map_or(BoundaryValue::Null, pose),
+                            ),
+                            (
+                                "look_ray",
+                                record.look_ray().map_or(BoundaryValue::Null, |ray| {
+                                    BoundaryValue::fields([
+                                        ("origin", vec3(ray.origin())),
+                                        (
+                                            "look",
+                                            BoundaryValue::fields([
+                                                (
+                                                    "yaw",
+                                                    BoundaryValue::Float(f64::from(
+                                                        ray.look().yaw(),
+                                                    )),
+                                                ),
+                                                (
+                                                    "pitch",
+                                                    BoundaryValue::Float(f64::from(
+                                                        ray.look().pitch(),
+                                                    )),
+                                                ),
+                                            ]),
+                                        ),
+                                        (
+                                            "reach",
+                                            BoundaryValue::Float(f64::from(ray.reach())),
+                                        ),
+                                    ])
+                                }),
+                            ),
+                            (
+                                "movement",
+                                BoundaryValue::fields([
+                                    (
+                                        "control",
+                                        record
+                                            .movement()
+                                            .control()
+                                            .map_or(BoundaryValue::Null, player_control),
+                                    ),
+                                    (
+                                        "on_ground",
+                                        BoundaryValue::Bool(record.movement().on_ground()),
+                                    ),
+                                ]),
+                            ),
+                            (
+                                "correction",
+                                record.correction().map_or(BoundaryValue::Null, |value| {
+                                    BoundaryValue::fields([
+                                        (
+                                            "last_input_sequence",
+                                            u64_text(value.last_input_sequence()),
+                                        ),
+                                        (
+                                            "reason",
+                                            BoundaryValue::Text(format!(
+                                                "{:?}",
+                                                value.reason()
+                                            )),
+                                        ),
+                                    ])
+                                }),
+                            ),
+                            ("mining", mining(record.mining())),
+                        ])
+                    })
+                    .collect(),
+            ),
+            FamilyRecords::InventoryUi(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            ("view", inventory_view(record.view())),
+                            (
+                                "token",
+                                record.token().map_or(BoundaryValue::Null, |token| {
+                                    BoundaryValue::fields([
+                                        ("epoch", u64_text(token.epoch().get())),
+                                        (
+                                            "reference",
+                                            container_ref(token.reference()),
+                                        ),
+                                        (
+                                            "confirmed_revision",
+                                            u64_text(token.confirmed_revision().get()),
+                                        ),
+                                    ])
+                                }),
+                            ),
+                            (
+                                "outcome",
+                                record.outcome().map_or(BoundaryValue::Null, |outcome| {
+                                    match outcome {
+                                        mornlea_client_core::presentation::UiOutcome::Rejected {
+                                            sequence,
+                                            reason,
+                                        } => BoundaryValue::tagged(
+                                            "Rejected",
+                                            BoundaryValue::fields([
+                                                ("sequence", u64_text(*sequence)),
+                                                (
+                                                    "reason",
+                                                    BoundaryValue::Text(format!("{reason:?}")),
+                                                ),
+                                            ]),
+                                        ),
+                                        mornlea_client_core::presentation::UiOutcome::PlacementAccepted {
+                                            sequence,
+                                        } => BoundaryValue::tagged(
+                                            "PlacementAccepted",
+                                            BoundaryValue::fields([(
+                                                "sequence",
+                                                u64_text(*sequence),
+                                            )]),
+                                        ),
+                                    }
+                                }),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+            FamilyRecords::WorldUi(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            ("view", world_view(record.view())),
+                        ])
+                    })
+                    .collect(),
+            ),
+            FamilyRecords::AudioCues(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            (
+                                "cue_id",
+                                BoundaryValue::Int(i64::from(record.cue_id().get())),
+                            ),
+                            ("provenance", cue_provenance(record.provenance())),
+                            (
+                                "category",
+                                BoundaryValue::Text(format!("{:?}", record.category())),
+                            ),
+                            ("position", opt_vec3(record.position())),
+                            (
+                                "gain",
+                                BoundaryValue::Float(f64::from(record.gain().get())),
+                            ),
+                            (
+                                "pitch",
+                                BoundaryValue::Float(f64::from(record.pitch().get())),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+            FamilyRecords::Lifecycle(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            (
+                                "transition",
+                                BoundaryValue::Text(format!("{:?}", record.transition())),
+                            ),
+                            ("generation", u64_text(record.generation())),
+                            (
+                                "resource_order",
+                                BoundaryValue::List(
+                                    record
+                                        .resource_order()
+                                        .iter()
+                                        .map(|key| match key {
+                                            mornlea_client_core::presentation::ResourceKey::InputJournal => BoundaryValue::tagged("InputJournal", BoundaryValue::Null),
+                                            mornlea_client_core::presentation::ResourceKey::PreparationQueue => BoundaryValue::tagged("PreparationQueue", BoundaryValue::Null),
+                                            mornlea_client_core::presentation::ResourceKey::PresentationFrames => BoundaryValue::tagged("PresentationFrames", BoundaryValue::Null),
+                                            mornlea_client_core::presentation::ResourceKey::BridgeHandles => BoundaryValue::tagged("BridgeHandles", BoundaryValue::Null),
+                                            mornlea_client_core::presentation::ResourceKey::Feature(id) => BoundaryValue::tagged("Feature", u64_text(*id)),
+                                        })
+                                        .collect(),
+                                ),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+            FamilyRecords::Diagnostics(records) => BoundaryValue::List(
+                records
+                    .iter()
+                    .map(|record| {
+                        BoundaryValue::fields([
+                            ("header", render_header(record.header())),
+                            (
+                                "producer",
+                                BoundaryValue::fields([
+                                    (
+                                        "source_sha",
+                                        hex_text(&record.producer().source_sha()),
+                                    ),
+                                    (
+                                        "contract_sha",
+                                        hex_text(&record.producer().contract_sha()),
+                                    ),
+                                ]),
+                            ),
+                            ("frame_index", u64_text(record.frame_index())),
+                            // The counter owners publish no public field
+                            // accessors yet, so the exact checked values are
+                            // rendered as their owned debug text; a later
+                            // accessor export replaces these two leaves
+                            // without touching the record's other fields.
+                            (
+                                "queue_high_water",
+                                BoundaryValue::Text(format!(
+                                    "{:?}",
+                                    record.queue_high_water()
+                                )),
+                            ),
+                            (
+                                "rejected",
+                                BoundaryValue::Text(format!("{:?}", record.rejected())),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Renders one whole presentation frame as the owned facade value.
+    ///
+    /// The rendering validates first: the complete frame must pass the
+    /// accepted C2 validator (mixed epoch or revision headers, duplicate
+    /// families, over-cap families and over-cap frames reject) and must
+    /// carry the session family every C1 publication carries. A frame that
+    /// fails never reaches the caller and never replaces a prior visible
+    /// copy, which is the facade's whole-frame atomicity rule.
+    pub fn render_frame(
+        frame: &PresentationFrame,
+        limits: &ClientLimits,
+    ) -> Result<BoundaryValue, ClientError> {
+        frame.validate(limits)?;
+        let has_session = frame
+            .families()
+            .iter()
+            .any(|family| family.key().logical_name == "session");
+        if !has_session {
+            return Err(ClientError::InvalidInput);
+        }
+        Ok(BoundaryValue::fields([
+            (
+                "layout_major",
+                BoundaryValue::Int(i64::from(frame.layout_major())),
+            ),
+            (
+                "layout_minor",
+                BoundaryValue::Int(i64::from(frame.layout_minor())),
+            ),
+            ("session_epoch", u64_text(frame.session_epoch().get())),
+            (
+                "confirmed_revision",
+                u64_text(frame.confirmed_revision().get()),
+            ),
+            ("frame_index", u64_text(frame.frame_index())),
+            (
+                "families",
+                BoundaryValue::List(
+                    frame
+                        .families()
+                        .iter()
+                        .map(|family: &FamilyFrame| {
+                            BoundaryValue::fields([
+                                (
+                                    "key",
+                                    BoundaryValue::fields([
+                                        (
+                                            "logical_name",
+                                            BoundaryValue::Text(
+                                                family.key().logical_name.to_string(),
+                                            ),
+                                        ),
+                                        (
+                                            "major",
+                                            BoundaryValue::Int(i64::from(family.key().major)),
+                                        ),
+                                        (
+                                            "minor",
+                                            BoundaryValue::Int(i64::from(family.key().minor)),
+                                        ),
+                                    ]),
+                                ),
+                                ("records", render_records(family.records())),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+        ]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

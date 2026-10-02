@@ -55,6 +55,106 @@ pub(crate) const IDENTITY_METHODS: [&str; 7] = [
     "supports_godot_api",
 ];
 
+/// The eight rust-producer facade methods in the frozen facade-contract
+/// order. Every one marshals its Godot arguments into owned boundary copies
+/// and calls the shared engine-independent routines in
+/// `client_core::rust_core`; the old `session_*` surface above stays the
+/// explicitly pilot-only Go path.
+#[cfg(test)]
+pub(crate) const RUST_FACADE_METHODS: [&str; 8] = [
+    "open_core",
+    "connect",
+    "submit_typed_input",
+    "step",
+    "pull_typed_frame",
+    "family_table",
+    "reset",
+    "close",
+];
+
+// The rust-producer marshalling half: conversions between Godot-owned
+// variants and the engine-neutral boundary copies the shared adapter
+// routines consume. This code compiles with the extension and only runs
+// inside the engine; the engine-free adapter tests exercise the identical
+// routines through `client_core::rust_core` directly, so no dictionary
+// round-trip is claimed as adapter acceptance here.
+
+/// Converts one Godot variant into the owned boundary copy. Typed leaves
+/// keep their type: booleans never become integers, floats must be finite
+/// to cross, and dictionaries and arrays become owned field lists and
+/// vectors.
+fn boundary_from_variant(variant: &Variant) -> Result<crate::abi::boundary::BoundaryValue, ()> {
+    use crate::abi::boundary::BoundaryValue;
+    use godot::builtin::VariantType;
+    match variant.get_type() {
+        VariantType::NIL => Ok(BoundaryValue::Null),
+        VariantType::BOOL => variant
+            .try_to::<bool>()
+            .map(BoundaryValue::Bool)
+            .map_err(|_| ()),
+        VariantType::INT => variant
+            .try_to::<i64>()
+            .map(BoundaryValue::Int)
+            .map_err(|_| ()),
+        VariantType::FLOAT => {
+            let value = variant.try_to::<f64>().map_err(|_| ())?;
+            if value.is_finite() {
+                Ok(BoundaryValue::Float(value))
+            } else {
+                Err(())
+            }
+        }
+        VariantType::STRING => variant
+            .try_to::<GString>()
+            .map(|text| BoundaryValue::Text(text.to_string()))
+            .map_err(|_| ()),
+        VariantType::ARRAY => {
+            let array = variant.try_to::<VarArray>().map_err(|_| ())?;
+            let mut items = Vec::with_capacity(array.len());
+            for item in array.iter_shared() {
+                items.push(boundary_from_variant(&item)?);
+            }
+            Ok(BoundaryValue::List(items))
+        }
+        VariantType::DICTIONARY => {
+            let dictionary = variant.try_to::<VarDictionary>().map_err(|_| ())?;
+            let mut fields = Vec::with_capacity(dictionary.len());
+            for (key, value) in dictionary.iter_shared() {
+                let key = key.try_to::<GString>().map_err(|_| ())?;
+                fields.push((key.to_string(), boundary_from_variant(&value)?));
+            }
+            Ok(BoundaryValue::Fields(fields))
+        }
+        _ => Err(()),
+    }
+}
+
+/// Converts one owned boundary copy back into a Godot-owned variant.
+fn variant_from_boundary(value: &crate::abi::boundary::BoundaryValue) -> Variant {
+    use crate::abi::boundary::BoundaryValue;
+    match value {
+        BoundaryValue::Null => Variant::nil(),
+        BoundaryValue::Bool(value) => Variant::from(*value),
+        BoundaryValue::Int(value) => Variant::from(*value),
+        BoundaryValue::Float(value) => Variant::from(*value),
+        BoundaryValue::Text(value) => Variant::from(GString::from(value.as_str())),
+        BoundaryValue::List(items) => {
+            let mut array = VarArray::new();
+            for item in items {
+                array.push(&variant_from_boundary(item));
+            }
+            array.to_variant()
+        }
+        BoundaryValue::Fields(fields) => {
+            let mut dictionary = VarDictionary::new();
+            for (name, item) in fields {
+                dictionary.set(name.as_str(), &variant_from_boundary(item));
+            }
+            dictionary.to_variant()
+        }
+    }
+}
+
 /// The Godot-independent lifecycle state of one bridge-held client session.
 ///
 /// The bridge holds at most one producer handle plus one set of reusable
@@ -330,6 +430,10 @@ fn variant_field<T: godot::meta::FromGodot>(dictionary: &VarDictionary, name: &s
 #[class(base=Node)]
 struct MornleaClientBridge {
     session: BridgeSession,
+    /// The rust-producer core arena. It is disjoint from the pilot
+    /// `session` above: rust mode never loads the Go producer and the pilot
+    /// path never touches a core token.
+    rust_cores: crate::client_core::rust_core::CoreArena,
     /// The layered atlas texture the terrain attach built. Bridge-owned and
     /// freed when the node leaves the tree, after the session close reset
     /// every table-owned RID; the borrowed material and scenario RIDs are
@@ -344,6 +448,7 @@ impl INode for MornleaClientBridge {
     fn init(base: Base<Node>) -> Self {
         Self {
             session: BridgeSession::new(production_core_calls()),
+            rust_cores: crate::client_core::rust_core::CoreArena::new(),
             terrain_atlas: None,
             base,
         }
@@ -400,6 +505,193 @@ impl MornleaClientBridge {
     #[func]
     fn supports_godot_api(major: i64, minor: i64) -> bool {
         lifecycle::supports_godot_api(major, minor)
+    }
+
+    // -----------------------------------------------------------------
+    // The rust-producer facade. Each method marshals its Godot arguments
+    // into an owned boundary copy and calls the identical engine-free
+    // routine the adapter tests drive; the result dictionary is the closed
+    // ok/value/error envelope. These paths create the safe Rust core and
+    // never the Go loader or its CoreCalls table.
+    // -----------------------------------------------------------------
+
+    /// Opens the safe Rust client core under a checked configuration and
+    /// answers its private core token.
+    #[func]
+    fn open_core(&mut self, config: VarDictionary) -> VarDictionary {
+        self.rust_call(
+            boundary_from_variant(&config.to_variant()),
+            |arena, config| {
+                arena.open_core_routine(
+                    config,
+                    std::sync::Arc::new(mornlea_client_core::contracts::StdMonotonicClock),
+                    std::sync::Arc::new(mornlea_client_core::contracts::ConnectorRegistry::new()),
+                )
+            },
+        )
+    }
+
+    /// Begins one pending connection against a checked endpoint and
+    /// identity; the answered epoch is admission-pending only.
+    #[func]
+    fn connect(
+        &mut self,
+        token: VarDictionary,
+        endpoint: VarDictionary,
+        identity: VarDictionary,
+    ) -> VarDictionary {
+        self.rust_call3(
+            boundary_from_variant(&token.to_variant()),
+            boundary_from_variant(&endpoint.to_variant()),
+            boundary_from_variant(&identity.to_variant()),
+            |arena, token, endpoint, identity| arena.connect_routine(token, endpoint, identity),
+        )
+    }
+
+    /// Submits one whole checked input batch of up to 128 semantic actions.
+    #[func]
+    fn submit_typed_input(
+        &mut self,
+        token: VarDictionary,
+        epoch: GString,
+        batch: VarDictionary,
+    ) -> VarDictionary {
+        let epoch = boundary_from_variant(&Variant::from(epoch));
+        self.rust_call3(
+            boundary_from_variant(&token.to_variant()),
+            epoch,
+            boundary_from_variant(&batch.to_variant()),
+            |arena, token, epoch, batch| arena.submit_routine(token, epoch, batch),
+        )
+    }
+
+    /// Drives exactly one bounded step and answers the checked report copy.
+    #[func]
+    fn step(&mut self, token: VarDictionary, epoch: GString, work: VarDictionary) -> VarDictionary {
+        let epoch = boundary_from_variant(&Variant::from(epoch));
+        self.rust_call3(
+            boundary_from_variant(&token.to_variant()),
+            epoch,
+            boundary_from_variant(&work.to_variant()),
+            |arena, token, epoch, work| arena.step_routine(token, epoch, work),
+        )
+    }
+
+    /// Pulls, validates and answers the whole visible frame as one owned
+    /// copy.
+    #[func]
+    fn pull_typed_frame(&mut self, token: VarDictionary, epoch: GString) -> VarDictionary {
+        let epoch = boundary_from_variant(&Variant::from(epoch));
+        self.rust_call2(
+            boundary_from_variant(&token.to_variant()),
+            epoch,
+            |arena, token, epoch| arena.pull_frame_routine(token, epoch),
+        )
+    }
+
+    /// Answers the frozen rust-client-core descriptor table.
+    #[func]
+    fn family_table(&mut self, token: VarDictionary) -> VarDictionary {
+        self.rust_call(
+            boundary_from_variant(&token.to_variant()),
+            |arena, token| arena.family_table_routine(token),
+        )
+    }
+
+    /// Resets the live session onto a fresh epoch after invalidation.
+    #[func]
+    fn reset(&mut self, token: VarDictionary, epoch: GString) -> VarDictionary {
+        let epoch = boundary_from_variant(&Variant::from(epoch));
+        self.rust_call2(
+            boundary_from_variant(&token.to_variant()),
+            epoch,
+            |arena, token, epoch| arena.reset_routine(token, epoch),
+        )
+    }
+
+    /// Releases the core token; a repeated close of the same issued token
+    /// succeeds without another release.
+    #[func]
+    fn close(&mut self, token: VarDictionary) -> VarDictionary {
+        self.rust_call(
+            boundary_from_variant(&token.to_variant()),
+            |arena, token| arena.close_routine(token),
+        )
+    }
+
+    /// Renders one closed facade envelope as a Godot dictionary. The
+    /// envelope value is always a field list, so the conversion is total.
+    fn rust_envelope(&mut self, value: crate::abi::boundary::BoundaryValue) -> VarDictionary {
+        match variant_from_boundary(&value).try_to::<VarDictionary>() {
+            Ok(dictionary) => dictionary,
+            Err(_) => VarDictionary::new(),
+        }
+    }
+
+    /// One rust-facade call over one marshalled argument. An off-thread call
+    /// or a marshalling refusal answers the closed envelope's `Internal` or
+    /// `InvalidInput` failure instead of panicking across the engine
+    /// boundary, and the shared routine runs only on the main thread.
+    fn rust_call(
+        &mut self,
+        argument: Result<crate::abi::boundary::BoundaryValue, ()>,
+        call: impl FnOnce(
+            &mut crate::client_core::rust_core::CoreArena,
+            &crate::abi::boundary::BoundaryValue,
+        ) -> crate::abi::boundary::BoundaryValue,
+    ) -> VarDictionary {
+        use crate::abi::boundary;
+        use mornlea_client_core::contracts::ClientError;
+        let value = match argument {
+            Ok(argument) if Self::on_main_thread() => call(&mut self.rust_cores, &argument),
+            Ok(_) => boundary::outcome(Err(ClientError::Internal)),
+            Err(()) => boundary::outcome(Err(ClientError::InvalidInput)),
+        };
+        self.rust_envelope(value)
+    }
+
+    /// One rust-facade call over two marshalled arguments.
+    fn rust_call2(
+        &mut self,
+        first: Result<crate::abi::boundary::BoundaryValue, ()>,
+        second: Result<crate::abi::boundary::BoundaryValue, ()>,
+        call: impl FnOnce(
+            &mut crate::client_core::rust_core::CoreArena,
+            &crate::abi::boundary::BoundaryValue,
+            &crate::abi::boundary::BoundaryValue,
+        ) -> crate::abi::boundary::BoundaryValue,
+    ) -> VarDictionary {
+        match (first, second) {
+            (Ok(first), Ok(second)) => {
+                self.rust_call(Ok(first), move |arena, first| call(arena, first, &second))
+            }
+            (first, _) => self.rust_call(first, |_, _| {
+                unreachable!("the refusal arm renders the failure envelope")
+            }),
+        }
+    }
+
+    /// One rust-facade call over three marshalled arguments.
+    fn rust_call3(
+        &mut self,
+        first: Result<crate::abi::boundary::BoundaryValue, ()>,
+        second: Result<crate::abi::boundary::BoundaryValue, ()>,
+        third: Result<crate::abi::boundary::BoundaryValue, ()>,
+        call: impl FnOnce(
+            &mut crate::client_core::rust_core::CoreArena,
+            &crate::abi::boundary::BoundaryValue,
+            &crate::abi::boundary::BoundaryValue,
+            &crate::abi::boundary::BoundaryValue,
+        ) -> crate::abi::boundary::BoundaryValue,
+    ) -> VarDictionary {
+        match (first, second, third) {
+            (Ok(first), Ok(second), Ok(third)) => self.rust_call(Ok(first), move |arena, first| {
+                call(arena, first, &second, &third)
+            }),
+            (first, _, _) => self.rust_call(first, |_, _| {
+                unreachable!("the refusal arm renders the failure envelope")
+            }),
+        }
     }
 
     /// The pinned pilot feature-family table as JSON, one object per family

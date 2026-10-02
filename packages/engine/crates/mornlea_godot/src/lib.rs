@@ -56,7 +56,7 @@ unsafe impl ExtensionLibrary for MornleaGodotExtension {
 mod tests {
     use super::{
         GODOT_API_MAJOR, GODOT_API_MINOR, GODOT_RUST_VERSION,
-        bridge::{BRIDGE_CLASS_NAME, IDENTITY_METHODS},
+        bridge::{BRIDGE_CLASS_NAME, IDENTITY_METHODS, RUST_FACADE_METHODS},
         lifecycle::{BoundaryFailure, Lifecycle, Stage, catch_boundary, supports_godot_api},
     };
 
@@ -81,6 +81,35 @@ mod tests {
                 "supports_godot_api",
             ]
         );
+    }
+
+    /// The rust-producer facade surface stays exactly the eight
+    /// facade-contract methods: a renamed, added or dropped method fails
+    /// here until the facade contract itself is consciously revised. The
+    /// pilot `session_*` names stay outside this table on purpose.
+    #[test]
+    fn rust_facade_pins_the_eight_method_table() {
+        assert_eq!(
+            RUST_FACADE_METHODS,
+            [
+                "open_core",
+                "connect",
+                "submit_typed_input",
+                "step",
+                "pull_typed_frame",
+                "family_table",
+                "reset",
+                "close",
+            ]
+        );
+        // The pilot-only surface and the rust facade stay disjoint name
+        // spaces: no pilot method name may shadow a facade entry.
+        for pilot in ["session_create", "session_step", "session_close"] {
+            assert!(
+                !RUST_FACADE_METHODS.contains(&pilot),
+                "the pilot name {pilot} is not a facade method"
+            );
+        }
     }
 
     #[test]
