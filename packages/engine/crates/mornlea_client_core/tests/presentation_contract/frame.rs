@@ -26,10 +26,11 @@ use crate::support::{
     DeterministicClock, MemoryConnectorDouble, frame_server_packet, registry_with_memory,
 };
 use mornlea_client_core::contracts::{
-    ClientConfig, ClientError, ClientIdentity, ClientWorkBudget, ConfirmedRevision, FAMILY_ACTORS,
-    FAMILY_AUDIO_CUES, FAMILY_DIAGNOSTICS, FAMILY_INPUT, FAMILY_INVENTORY_UI, FAMILY_LIFECYCLE,
-    FAMILY_PLAYER_VIEW, FAMILY_SESSION, FAMILY_TERRAIN, FAMILY_WORLD_UI, FamilyKey,
-    FamilyOperation, ObservationKey, RecordHeader, SessionEpoch, SessionPhase,
+    ClientConfig, ClientError, ClientIdentity, ClientWorkBudget, ConfirmedRevision,
+    ConnectorRegistry, FAMILY_ACTORS, FAMILY_AUDIO_CUES, FAMILY_DIAGNOSTICS, FAMILY_INPUT,
+    FAMILY_INVENTORY_UI, FAMILY_LIFECYCLE, FAMILY_PLAYER_VIEW, FAMILY_SESSION, FAMILY_TERRAIN,
+    FAMILY_WORLD_UI, FamilyKey, FamilyOperation, ObservationKey, PreparationPort, RecordHeader,
+    SessionEpoch, SessionPhase, TransportTicket,
 };
 use mornlea_client_core::input::{
     ClientIntent, ClientIntentKind, InputAction, InputAdmissionState, InputBatch,
@@ -38,8 +39,8 @@ use mornlea_client_core::input::{
 use mornlea_client_core::prediction::{PlayerProjectionState, PredictionReplay, StepEnvironment};
 use mornlea_client_core::preparation::lod::LodSelection;
 use mornlea_client_core::preparation::{
-    LodConfig, LodStep, OwnedMeshView, PreparationJob, PreparationPayload, PreparationQueue,
-    PreparedResourceKey, SectionKey, TerrainKey,
+    LodConfig, LodStep, OwnedLodRequest, OwnedMeshView, PreparationJob, PreparationPayload,
+    PreparationQueue, PreparedResourceKey, SectionKey, TerrainKey, TilePos,
 };
 use mornlea_client_core::presentation::actors::{
     companion::project_companion, drop::project_drop, hostile::project_hostile,
@@ -74,12 +75,17 @@ use mornlea_client_core::presentation::{
     MovementIntent, Pose, ProducerIdentity, ProjectionView, PublicationConsumption,
     PublicationOwners, QueueCounters, ResourceKey,
 };
+use mornlea_client_core::session::io::MemoryConnector;
+use mornlea_client_core::session::lifecycle::{
+    LifecycleInvalidation, LifecycleOwner, core_resource_order,
+};
 use mornlea_client_core::session::login::LoginSession;
 use mornlea_client_core::session::mirror::MirrorProvider;
 use mornlea_client_core::session::{
-    ActorConfirmed, ConfirmedMirrorParts, InventoryConfirmed, WorldConfirmed, WorldUiConfirmed,
+    ActorConfirmed, ConfirmedMirror, ConfirmedMirrorParts, InventoryConfirmed, WorldConfirmed,
+    WorldUiConfirmed,
 };
-use mornlea_client_core::{ClientEndpoint, CueProvenance};
+use mornlea_client_core::{ClientEndpoint, Connector, CueProvenance};
 use mornlea_domain::{
     ChatBody, ChatEvent, ChatEventParts, ChunkPos, CombatHit, CombatTarget, ContainerKind,
     ContainerRef, Dimension, DisplayName, Event, FiniteVec3, HeldActions, HostileId, HostileKind,
@@ -92,7 +98,8 @@ use mornlea_domain::{
 use mornlea_engine::native::contracts::mesh::{MeshModel, MeshRegistry, MeshRegistryEntry};
 use mornlea_engine::native::contracts::world::WorldgenParams;
 use mornlea_protocol::{
-    ClientHello, LOGIN_SERVER_FULL, LoginReject, LoginStart, ServerPacket, write_frame,
+    ClientHello, LOGIN_SERVER_FULL, LoginReject, LoginStart, LoginSuccess, ServerPacket,
+    write_frame,
 };
 
 /// The epoch every fixture mirror, admission owner and observation key
@@ -2190,6 +2197,365 @@ fn real_lifecycle_terminal_pair_publishes() {
         ],
         "the terminal Invalidate names the real core-owned order"
     );
+}
+
+/// The lifecycle records of one frame in family order.
+fn lifecycle_family(frame: &PresentationFrame) -> Vec<LifecycleRecord> {
+    let mut records = Vec::new();
+    for family in frame.families() {
+        if let FamilyRecords::Lifecycle(family_records) = family.records() {
+            records.extend(family_records.iter().cloned());
+        }
+    }
+    records
+}
+
+/// `frame::complete_lifecycle_family`: Open→Reset→new Open→Close through the
+/// real login provider and the real lifecycle owner, each dying projection
+/// published by one real serial transaction. Every lifecycle family carries
+/// exact nonempty records with the owning epoch's generation and the
+/// core-owned resource order, every epoch-scoped consumer is invalidated
+/// before the next epoch opens, and no old-epoch record or resource survives
+/// into a later epoch.
+#[test]
+fn complete_lifecycle_family() {
+    let (connector, peer) = MemoryConnector::pair(limits(), NonZeroU64::new(1).expect("one"));
+    let registry = {
+        let mut registry = ConnectorRegistry::new();
+        registry
+            .register(NonZeroU64::new(1).expect("one"), connector.clone())
+            .expect("fresh registry");
+        Arc::new(registry)
+    };
+    let clock = Arc::new(DeterministicClock::new());
+    let config = ClientConfig::try_new(
+        limits(),
+        Duration::from_secs(5),
+        Duration::from_secs(10),
+        clock,
+        registry,
+    )
+    .expect("checked config");
+    let identity = ClientIdentity::try_new(LoginStart::new(player(3), "cycle", 8).expect("login"))
+        .expect("identity");
+    let mut session = LoginSession::new(config).expect("login provider");
+    let endpoint = mornlea_client_core::contracts::Endpoint::Memory {
+        connector_id: NonZeroU64::new(1).expect("one"),
+    };
+    let budget = ClientWorkBudget::try_new(16, 0).expect("budget");
+
+    // Open: the real provider's pending epoch publishes exactly one Open
+    // record at revision zero with the checked generation and the
+    // core-owned resource order.
+    let first = session
+        .connect(endpoint, identity.clone())
+        .expect("first epoch");
+    assert_eq!(peer.drain_sent(), vec![hello_frame()]);
+    let open_frame = session.snapshot(first).expect("open frame");
+    let open = lifecycle_family(&open_frame);
+    assert_eq!(open.len(), 1, "exactly one Open record");
+    assert_eq!(open[0].transition(), LifecycleTransition::Open);
+    assert_eq!(open[0].generation(), first.get());
+    assert_eq!(
+        open[0].resource_order(),
+        core_resource_order().as_slice(),
+        "the Open record names the core-owned resource order"
+    );
+    assert_eq!(open[0].header().epoch(), first);
+
+    // A complete login admits the epoch: the generation's records attest a
+    // real confirmed session, not a stub connection.
+    peer.feed(&hello_frame()).expect("server hello fed");
+    session.step(first, budget).expect("handshake step");
+    assert_eq!(peer.drain_sent().len(), 1, "the login start went out");
+    peer.feed(&frame_server_packet(&ServerPacket::LoginSuccess(
+        LoginSuccess::new(player(3), 7),
+    )))
+    .expect("login success fed");
+    session.step(first, budget).expect("admitted step");
+
+    // The controller-side epoch-scoped owners beside the real lifecycle
+    // owner: the real admission path with journal and cue state, the audio
+    // dedup state and the real preparation queue.
+    let mut owner = LifecycleOwner::try_new(limits()).expect("lifecycle owner");
+    owner
+        .adopt(first, None)
+        .expect("adopt the provider's numbering");
+    let mut admission = InputAdmissionState::try_new(first, limits()).expect("admission owner");
+    let mirror = ConfirmedMirror::try_new(ConfirmedMirrorParts {
+        epoch: first,
+        revision: ConfirmedRevision::new(0),
+        phase: SessionPhase::Admitted,
+        world: None,
+        actors: None,
+        inventory: None,
+        world_ui: None,
+    })
+    .expect("admitted mirror");
+    let batch = InputBatch::try_new(first, vec![collect_water(), select_hotbar()]).expect("batch");
+    let validated =
+        InputTranslator::validate_batch(&batch, &mirror, &limits()).expect("validated batch");
+    InputTranslator::commit(validated, &mut admission).expect("admitted batch");
+    assert_eq!(admission.journal_entries(), 2);
+    let mut preparation = PreparationQueue::new(limits());
+    let stale_key = {
+        let key = PreparedResourceKey::try_new(
+            first,
+            Dimension::OVERWORLD,
+            TerrainKey::LodTile(TilePos::new(0, 0)),
+            1,
+            5,
+            1,
+        )
+        .expect("far key");
+        let request =
+            OwnedLodRequest::try_new(fixture_params(), [0, 0], LodStep::Four).expect("request");
+        let job = PreparationJob::try_new(key, PreparationPayload::Far(request)).expect("far job");
+        let key = *job.key();
+        preparation.try_submit(job).expect("admitted job");
+        key
+    };
+
+    // Reset: the real lifecycle owner stages the dying epoch's ordered
+    // Reset/Invalidate pair and invalidates every consumer before the new
+    // epoch exists.
+    let mut observations = Vec::new();
+    let mut audio = AudioProjectionState::try_new()
+        .expect("audio state")
+        .with_committed(vec![AudioDedupKey::Local {
+            epoch: first,
+            local_event_sequence: 1,
+            cue: CueId::try_new(4).expect("water splash cue"),
+        }]);
+    let mut lifecycle_state =
+        LifecycleProjectionState::try_new(first.get()).expect("lifecycle state");
+    {
+        let bundle = LifecycleInvalidation::try_new(
+            &mut observations,
+            &mut admission,
+            &mut audio,
+            &mut lifecycle_state,
+        )
+        .expect("invalidation bundle");
+        let outcome = owner
+            .reset(first, connector.as_ref(), bundle, &mut preparation)
+            .expect("reset projection");
+        assert_eq!(outcome.dying(), first);
+        assert_eq!(outcome.records().len(), 2);
+        assert_eq!(outcome.preparation().jobs_cancelled(), 1);
+    }
+    assert_eq!(admission.journal_entries(), 0, "journal invalidated");
+    assert_eq!(admission.outbound_records(), 0, "outbound invalidated");
+    assert!(admission.pending_local_cues().is_empty(), "cues cleared");
+    assert!(audio.committed().is_empty(), "audio ownership cleared");
+    assert_eq!(preparation.pending_jobs(), 0, "preparation invalidated");
+    assert_eq!(
+        preparation.prepared_resource(&stale_key),
+        Err(ClientError::StaleEpoch),
+        "the dying epoch's resource identities never survive"
+    );
+
+    // The dying pair publishes as one real serial transaction at the dying
+    // epoch's identity and is consumed exactly once.
+    let mut visible = bootstrap(first.get());
+    let mut input_owner =
+        InputAdmissionOwner::try_new(admission.projection().clone()).expect("input owner");
+    let reset_records = lifecycle_state.pending().to_vec();
+    let header = RecordHeader::try_new(
+        first,
+        ConfirmedRevision::new(0),
+        None,
+        FamilyOperation::Upsert,
+    )
+    .expect("header");
+    let candidate = PresentationFrame::try_new(
+        first,
+        ConfirmedRevision::new(0),
+        1,
+        vec![
+            FamilyFrame::try_new(
+                FamilyKey::try_new(FAMILY_SESSION).expect("session key"),
+                FamilyRecords::Session(vec![
+                    SessionRecord::try_new(header, SessionPhase::Admitted, Some(player(3)), None)
+                        .expect("session record"),
+                ]),
+            )
+            .expect("session family"),
+            FamilyFrame::try_new(
+                FamilyKey::try_new(FAMILY_LIFECYCLE).expect("lifecycle key"),
+                FamilyRecords::Lifecycle(reset_records),
+            )
+            .expect("lifecycle family"),
+        ],
+    )
+    .expect("reset candidate frame");
+    let committed_reset = {
+        let consume = PublicationConsumption::try_new(0, 0, 0, lifecycle_state.pending().len())
+            .expect("cursors");
+        let delta = AudioDedupDelta::try_new(Vec::new(), Vec::new()).expect("empty delta");
+        let reservation = {
+            let bundle = publication_owners(
+                &mut visible,
+                &mut observations,
+                &mut input_owner,
+                &mut audio,
+                &mut lifecycle_state,
+            )
+            .expect("owners bundle");
+            prepare_publication(&bundle, candidate, delta, consume, &limits())
+                .expect("the reset candidate reserves")
+        };
+        let mut bundle = publication_owners(
+            &mut visible,
+            &mut observations,
+            &mut input_owner,
+            &mut audio,
+            &mut lifecycle_state,
+        )
+        .expect("owners bundle");
+        commit_publication(&mut bundle, reservation)
+    };
+    assert_eq!(committed_reset.frame_index(), 1);
+    let pair = lifecycle_family(&committed_reset);
+    assert_eq!(pair.len(), 2, "exact nonempty records");
+    assert_eq!(pair[0].transition(), LifecycleTransition::Reset);
+    assert_eq!(pair[1].transition(), LifecycleTransition::Invalidate);
+    assert_eq!(pair[0].generation(), first.get());
+    assert_eq!(
+        pair[1].resource_order(),
+        core_resource_order().as_slice(),
+        "the core-owned resource order, consumers before providers"
+    );
+    assert!(pair[0].header().epoch() == first && pair[1].header().epoch() == first);
+    assert!(
+        lifecycle_state.pending().is_empty(),
+        "the pair is consumed exactly once"
+    );
+
+    // The provider's own reset reconnects with the strictly next epoch and
+    // publishes a fresh Open; no old-epoch record survives into it.
+    let second = session.reset(first).expect("reconnect epoch");
+    assert_eq!(second.get(), first.get() + 1, "continued numbering");
+    let stale_ticket = TransportTicket::try_new(
+        NonZeroU64::new(1).expect("one"),
+        NonZeroU64::new(1).expect("one"),
+    )
+    .expect("dying ticket shape");
+    assert_eq!(
+        connector.close(stale_ticket),
+        Err(ClientError::InvalidState),
+        "the dying transport was released exactly once"
+    );
+    assert_eq!(
+        session.step(first, budget).err(),
+        Some(ClientError::StaleEpoch),
+        "the dead epoch cannot step"
+    );
+    let reopen_frame = session.snapshot(second).expect("fresh open frame");
+    let reopen = lifecycle_family(&reopen_frame);
+    assert_eq!(reopen.len(), 1);
+    assert_eq!(reopen[0].transition(), LifecycleTransition::Open);
+    assert_eq!(reopen[0].generation(), second.get());
+    for family in reopen_frame.families() {
+        if let FamilyRecords::Session(records) = family.records() {
+            for record in records {
+                assert_eq!(record.header().epoch(), second);
+            }
+        }
+        if let FamilyRecords::Lifecycle(records) = family.records() {
+            for record in records {
+                assert_eq!(
+                    record.header().epoch(),
+                    second,
+                    "no old-epoch record survives into the new epoch"
+                );
+            }
+        }
+    }
+
+    // Close: the provider's local close is terminal exactly once and its
+    // ordered terminal pair publishes through one real transaction.
+    session.close().expect("local close");
+    let reconnect_ticket = TransportTicket::try_new(
+        NonZeroU64::new(1).expect("one"),
+        NonZeroU64::new(2).expect("two"),
+    )
+    .expect("reconnect ticket shape");
+    assert_eq!(
+        connector.close(reconnect_ticket),
+        Err(ClientError::InvalidState),
+        "the close released the reconnect transport exactly once"
+    );
+    assert_eq!(
+        session.step(second, budget).err(),
+        Some(ClientError::Disconnected),
+        "terminal exactly once"
+    );
+    let terminal_frame = session.snapshot(second).expect("terminal frame");
+    let terminal = lifecycle_family(&terminal_frame);
+    assert_eq!(terminal.len(), 2);
+    assert_eq!(terminal[0].transition(), LifecycleTransition::Close);
+    assert_eq!(terminal[1].transition(), LifecycleTransition::Invalidate);
+    assert_eq!(terminal[1].generation(), second.get());
+    assert_eq!(
+        terminal[1].resource_order(),
+        core_resource_order().as_slice()
+    );
+
+    let mut close_visible = bootstrap(second.get());
+    let close_candidate = PresentationFrame::try_new(
+        second,
+        ConfirmedRevision::new(0),
+        1,
+        vec![
+            FamilyFrame::try_new(
+                FamilyKey::try_new(FAMILY_LIFECYCLE).expect("lifecycle key"),
+                FamilyRecords::Lifecycle(terminal.clone()),
+            )
+            .expect("lifecycle family"),
+        ],
+    )
+    .expect("close candidate frame");
+    let mut close_observations = Vec::new();
+    let mut close_input =
+        InputAdmissionOwner::try_new(InputProjectionState::try_new(1).expect("projection"))
+            .expect("input owner");
+    let mut close_audio = AudioProjectionState::try_new().expect("audio state");
+    let mut close_lifecycle = LifecycleProjectionState::try_new(second.get())
+        .expect("lifecycle state")
+        .with_pending(terminal.clone());
+    let committed_close = {
+        let consume = PublicationConsumption::try_new(0, 0, 0, 2).expect("cursors");
+        let delta = AudioDedupDelta::try_new(Vec::new(), Vec::new()).expect("empty delta");
+        let reservation = {
+            let bundle = publication_owners(
+                &mut close_visible,
+                &mut close_observations,
+                &mut close_input,
+                &mut close_audio,
+                &mut close_lifecycle,
+            )
+            .expect("owners bundle");
+            prepare_publication(&bundle, close_candidate, delta, consume, &limits())
+                .expect("the terminal candidate reserves")
+        };
+        let mut bundle = publication_owners(
+            &mut close_visible,
+            &mut close_observations,
+            &mut close_input,
+            &mut close_audio,
+            &mut close_lifecycle,
+        )
+        .expect("owners bundle");
+        commit_publication(&mut bundle, reservation)
+    };
+    assert_eq!(committed_close.frame_index(), 1);
+    let close_pair = lifecycle_family(&committed_close);
+    assert_eq!(close_pair.len(), 2);
+    assert_eq!(close_pair[0].transition(), LifecycleTransition::Close);
+    assert_eq!(close_pair[1].transition(), LifecycleTransition::Invalidate);
+    assert_eq!(close_pair[1].generation(), second.get());
+    assert!(close_lifecycle.pending().is_empty());
 }
 
 /// Builds one world-ui task frame of `count` records sized to exactly
