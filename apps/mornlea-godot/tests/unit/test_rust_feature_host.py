@@ -817,6 +817,28 @@ class RustFeatureHostTest(unittest.TestCase):
         self.assertEqual(self.bridge.count("step"), steps)
         self.assertEqual(len(provider.frames), 1)
 
+    def test_refused_close_still_drops_the_token_and_kills_late_ticks(self) -> None:
+        self.register_feature("solo")
+        catalog = self.register_catalog("closerefused", ("solo",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.host._process(1 / 60)
+        steps = self.bridge.count("step")
+        self.bridge.refused.add("close")
+        self.host.deactivate_features()
+        # A refused native release still ends the host's ownership: exactly
+        # one release attempt was made and the token is dropped, so a
+        # released token can never be replayed as if it were live.
+        self.assertEqual(self.bridge.count("close"), 1)
+        self.assertIsNone(self.host._rust_token)
+        self.assertEqual(self.host.active_count(), 0)
+        # Late ticks after the refused close are stale callbacks.
+        self.host._process(1 / 60)
+        self.assertEqual(self.bridge.count("step"), steps)
+        # The dropped token means a repeated teardown makes no second
+        # release attempt.
+        self.host.deactivate_features()
+        self.assertEqual(self.bridge.count("close"), 1)
+
     # ------------------------------------------------------------------
     # The pilot path stays an explicit, unaliased complete path
     # ------------------------------------------------------------------
