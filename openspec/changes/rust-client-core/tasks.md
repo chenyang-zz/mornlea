@@ -41,7 +41,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [ ] 2.7b4 Project task state.
 - [ ] 2.7b5 Project prompts.
 - [ ] 2.7b6 Assemble `world-ui@1`.
-- [ ] 2.8 Publish provenance-aware `audio-cues@1` semantics.
+- [x] 2.8 Publish provenance-aware `audio-cues@1` semantics.
 - [x] 2.9 Publish `diagnostics@1` semantics.
 
 ## 3. Serial adapter and real integration
