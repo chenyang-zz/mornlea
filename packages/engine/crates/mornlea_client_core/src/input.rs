@@ -771,7 +771,7 @@ impl InputTranslator {
         let mut simulated = admission.overlay.clone();
         simulated.retire_confirmed(batch.mirror());
         for action in batch.actions() {
-            simulate_local_close(&action, &mut simulated)?;
+            simulate_local_close(action, &mut simulated)?;
         }
 
         // Tentative encode into reserved temporary buffers; an encoding
@@ -919,10 +919,10 @@ fn check_token_current(action: &InputAction, mirror: &ConfirmedMirror) -> Result
         if token.epoch() != mirror.epoch() {
             return Err(ClientError::StaleEpoch);
         }
-        if let Some(expected) = payload_container_reference(&action.intent) {
-            if expected != token.reference() {
-                return Err(ClientError::InvalidInput);
-            }
+        if let Some(expected) = payload_container_reference(&action.intent)
+            && expected != token.reference()
+        {
+            return Err(ClientError::InvalidInput);
         }
         if mirror.container_revision(&token.reference()) != Some(token.confirmed_revision()) {
             return Err(ClientError::StaleEpoch);
@@ -972,24 +972,24 @@ fn simulate_local_close(
                 }
             }
             ContainerOperation::Partial(partial) => {
-                if let Some(reference) = partial.view().container() {
-                    if overlay.is_closed(&reference) {
-                        return Err(ClientError::InvalidState);
-                    }
+                if let Some(reference) = partial.view().container()
+                    && overlay.is_closed(&reference)
+                {
+                    return Err(ClientError::InvalidState);
                 }
             }
             ContainerOperation::QuickMove(source) => {
-                if let Some(reference) = source.view().container() {
-                    if overlay.is_closed(&reference) {
-                        return Err(ClientError::InvalidState);
-                    }
+                if let Some(reference) = source.view().container()
+                    && overlay.is_closed(&reference)
+                {
+                    return Err(ClientError::InvalidState);
                 }
             }
             ContainerOperation::DropStack(source) => {
-                if let Some(reference) = source.view().container() {
-                    if overlay.is_closed(&reference) {
-                        return Err(ClientError::InvalidState);
-                    }
+                if let Some(reference) = source.view().container()
+                    && overlay.is_closed(&reference)
+                {
+                    return Err(ClientError::InvalidState);
                 }
             }
         }

@@ -672,12 +672,12 @@ fn session_record(
     fixture: &FrameFixture,
     revision: ConfirmedRevision,
 ) -> Result<SessionRecord, ClientError> {
-    Ok(SessionRecord::try_new(
+    SessionRecord::try_new(
         RecordHeader::try_new(fixture.epoch, revision, None, FamilyOperation::Upsert)?,
         *fixture.mirror.mirror().phase(),
         Some(player(3)),
         None,
-    )?)
+    )
 }
 
 /// The bootstrap visible frame: the checked pending-connection publication
@@ -1627,9 +1627,8 @@ fn candidate_defects_reject_typed() {
         "no cancellation staged"
     );
     assert_eq!(visible.frame_index(), 0, "the index never moved");
-    assert_eq!(
+    assert!(
         Arc::ptr_eq(&old, &visible) && old.families().len() == 1,
-        true,
         "the old Arc is still the visible one and fully readable"
     );
 

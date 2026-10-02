@@ -14,9 +14,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use mornlea_domain::{ChunkPos, Dimension};
-use mornlea_engine::native::contracts::mesh::{
-    MeshQuad, MeshRegistry, MeshRegistryEntry, MeshView,
-};
+use mornlea_engine::native::contracts::mesh::{MeshQuad, MeshRegistry, MeshView};
 use mornlea_engine::native::contracts::world::{LodQuad, LodRequest, WorldgenParams};
 use mornlea_protocol::MIN_Y;
 
@@ -655,9 +653,7 @@ impl HighWaterMark {
 /// words and the two scalar ids. This is the frozen convention the contract
 /// landing's doubles charge and its registered case pins.
 fn registry_allocation(registry: &MeshRegistry) -> usize {
-    registry.entries().len() * std::mem::size_of::<MeshRegistryEntry>()
-        + registry.visibility().len() * 8
-        + 4
+    std::mem::size_of_val(registry.entries()) + registry.visibility().len() * 8 + 4
 }
 
 /// The geometry allocation charge of one owned result: the discriminant byte
@@ -779,11 +775,11 @@ impl PreparationQueue {
     /// forget after a supersede, a forget or an invalidation releases
     /// nothing, so ownership is released exactly once.
     pub fn forget(&mut self, key: &PreparedResourceKey) -> Result<u64, ClientError> {
-        if let Some(index) = self.retained.iter().position(|entry| entry.key == *key) {
-            if let Some(released) = self.retained.remove(index) {
-                self.charge -= released.charge;
-                return Ok(released.charge as u64);
-            }
+        if let Some(index) = self.retained.iter().position(|entry| entry.key == *key)
+            && let Some(released) = self.retained.remove(index)
+        {
+            self.charge -= released.charge;
+            return Ok(released.charge as u64);
         }
         Ok(0)
     }
@@ -896,12 +892,11 @@ impl PreparationQueue {
                 .pending
                 .iter()
                 .any(|other| other.references.contains(identity))
+                && let Some(index) = self.shared.iter().position(|(held, _)| held == identity)
             {
-                if let Some(index) = self.shared.iter().position(|(held, _)| held == identity) {
-                    let (_, bytes) = self.shared.remove(index);
-                    released += bytes;
-                    self.charge -= bytes;
-                }
+                let (_, bytes) = self.shared.remove(index);
+                released += bytes;
+                self.charge -= bytes;
             }
         }
         released as u64
@@ -1041,10 +1036,9 @@ impl PreparationPort for PreparationQueue {
                 // allocation takes its place at the same total charge.
                 if let Some(index) = self.retained.iter().position(|entry| {
                     entry.key.dimension() == key.dimension() && *entry.key.key() == *key.key()
-                }) {
-                    if let Some(superseded) = self.retained.remove(index) {
-                        self.charge -= superseded.charge;
-                    }
+                }) && let Some(superseded) = self.retained.remove(index)
+                {
+                    self.charge -= superseded.charge;
                 }
                 self.retained.push_back(RetainedUnit {
                     key,

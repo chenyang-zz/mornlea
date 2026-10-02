@@ -337,10 +337,10 @@ impl ActorRecord {
         if id.kind() != kind {
             return Err(ClientError::InvalidInput);
         }
-        if let Some(detail) = &detail {
-            if detail.kind() != kind {
-                return Err(ClientError::InvalidInput);
-            }
+        if let Some(detail) = &detail
+            && detail.kind() != kind
+        {
+            return Err(ClientError::InvalidInput);
         }
         match (kind, dimension) {
             (ActorKind::Drop, ActorDimension::DropRaw(_))
@@ -984,7 +984,6 @@ fn check_family_headers(
 
 /// Fixed-size helpers: one place owns the byte accounting for the record
 /// payloads, keeping `validated_size` checked and deterministic.
-
 fn owned_bytes_of_header(header: &RecordHeader) -> usize {
     header.owned_bytes()
 }

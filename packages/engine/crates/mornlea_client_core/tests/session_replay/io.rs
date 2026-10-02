@@ -85,7 +85,7 @@ fn small_frames(count: usize) -> Vec<Vec<u8>> {
 /// One frame whose declared body is exactly `body` bytes (packet-id varint
 /// plus `body - 1` payload bytes), at or below the accepted 2 MiB body cap.
 fn frame_with_body(body: usize) -> Vec<u8> {
-    assert!(body >= 1 && body <= 2 << 20, "fixture body within the cap");
+    assert!((1..=2 << 20).contains(&body), "fixture body within the cap");
     write_frame(0, &vec![0xAA; body - 1]).expect("fixture frame")
 }
 

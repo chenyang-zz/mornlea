@@ -401,11 +401,7 @@ impl ContractDouble {
             SessionPhase::Connecting => State::Handshake,
             _ => State::Play,
         };
-        loop {
-            let frame = match read_frame_ref(&self.receive_buffer) {
-                Ok(frame) => frame,
-                Err(_) => break,
-            };
+        while let Ok(frame) = read_frame_ref(&self.receive_buffer) {
             let packet = self
                 .codec
                 .decode_server(state, frame.packet_id, frame.payload)
@@ -490,7 +486,7 @@ impl ContractDouble {
         self.commit_dedup_proposal();
         self.visible = Some(Arc::new(candidate));
         self.frame_index += 1;
-        Ok(StepReport::try_new(
+        StepReport::try_new(
             epoch,
             candidate_revision,
             self.frame_index,
@@ -500,7 +496,7 @@ impl ContractDouble {
             self.pending.len(),
             0,
             self.terminal.clone(),
-        )?)
+        )
     }
 
     /// The visible immutable frame, or an invalid-state error before the
@@ -587,10 +583,10 @@ impl ContractDouble {
     pub fn close(&mut self) -> Result<(), ClientError> {
         self.phase = SessionPhase::Closing;
         self.terminal = Some(mornlea_client_core::contracts::CloseReason::LocalClose);
-        if let Some(connector) = &self.connector {
-            if let Some(ticket) = self.ticket {
-                connector.close(ticket)?;
-            }
+        if let Some(connector) = &self.connector
+            && let Some(ticket) = self.ticket
+        {
+            connector.close(ticket)?;
         }
         Ok(())
     }
@@ -781,7 +777,6 @@ impl ContractDouble {
         Ok(())
     }
 
-    #[allow(clippy::needless_pass_by_ref)]
     fn build_candidate(
         &self,
         epoch: SessionEpoch,
@@ -1086,10 +1081,7 @@ impl PreparationFaucet {
                     0
                 } else {
                     self.seen_registries.push(identity);
-                    near.registry().entries().len()
-                        * std::mem::size_of::<
-                            mornlea_engine::native::contracts::mesh::MeshRegistryEntry,
-                        >()
+                    std::mem::size_of_val(near.registry().entries())
                         + near.registry().visibility().len() * 8
                         + 4
                 };

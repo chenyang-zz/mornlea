@@ -1180,6 +1180,38 @@ impl PublicationReservation {
     }
 }
 
+/// The frozen serial assembly merge: entries sort by their retained
+/// `ProjectionOrder` (confirmed before local at the same sampled revision,
+/// observation revision/ordinal, then record ordinal) with the stable key as
+/// the final tiebreak, so topic vectors interleave by actual source order,
+/// never by parts order or equal source ticks. A duplicate stable record key
+/// or an over-limit total rejects. This is the checked double of the private
+/// assembly contract; each family assembler implements the same rule in its
+/// owning file.
+pub fn merge_ordered<R: Clone>(
+    parts: Vec<Vec<OrderedRecord<R>>>,
+    limit: usize,
+) -> Result<Vec<OrderedRecord<R>>, ClientError> {
+    let mut merged: Vec<OrderedRecord<R>> = parts.into_iter().flatten().collect();
+    if merged.len() > limit {
+        return Err(ClientError::Capacity);
+    }
+    let mut seen: Vec<StableRecordKey> = Vec::new();
+    for entry in &merged {
+        let identity = *entry.stable_key();
+        if seen.contains(&identity) {
+            return Err(ClientError::InvalidInput);
+        }
+        seen.push(identity);
+    }
+    merged.sort_by(|left, right| {
+        left.order()
+            .cmp(right.order())
+            .then_with(|| left.stable_key().cmp(right.stable_key()))
+    });
+    Ok(merged)
+}
+
 #[cfg(test)]
 mod publication_reservation_tests {
     use std::sync::Arc;
@@ -1227,36 +1259,4 @@ mod publication_reservation_tests {
         let _ = InputAdmissionOwner::try_new(InputProjectionState::try_new(1)?)?;
         Ok(())
     }
-}
-
-/// The frozen serial assembly merge: entries sort by their retained
-/// `ProjectionOrder` (confirmed before local at the same sampled revision,
-/// observation revision/ordinal, then record ordinal) with the stable key as
-/// the final tiebreak, so topic vectors interleave by actual source order,
-/// never by parts order or equal source ticks. A duplicate stable record key
-/// or an over-limit total rejects. This is the checked double of the private
-/// assembly contract; each family assembler implements the same rule in its
-/// owning file.
-pub fn merge_ordered<R: Clone>(
-    parts: Vec<Vec<OrderedRecord<R>>>,
-    limit: usize,
-) -> Result<Vec<OrderedRecord<R>>, ClientError> {
-    let mut merged: Vec<OrderedRecord<R>> = parts.into_iter().flatten().collect();
-    if merged.len() > limit {
-        return Err(ClientError::Capacity);
-    }
-    let mut seen: Vec<StableRecordKey> = Vec::new();
-    for entry in &merged {
-        let identity = *entry.stable_key();
-        if seen.contains(&identity) {
-            return Err(ClientError::InvalidInput);
-        }
-        seen.push(identity);
-    }
-    merged.sort_by(|left, right| {
-        left.order()
-            .cmp(right.order())
-            .then_with(|| left.stable_key().cmp(right.stable_key()))
-    });
-    Ok(merged)
 }

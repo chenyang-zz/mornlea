@@ -60,7 +60,7 @@ pub fn near_tile_radius(view_distance: u8) -> u32 {
 /// so a non-dividing configuration leaves no sky gap at the outer edge.
 pub fn far_tile_radius(view_distance: u8, far_multiplier: u8) -> u32 {
     let chunks = u32::from(view_distance) * u32::from(far_multiplier);
-    (chunks + TILE_CHUNKS - 1) / TILE_CHUNKS
+    chunks.div_ceil(TILE_CHUNKS)
 }
 
 /// The static maximum byte charge of one far-tile build at `step`: the

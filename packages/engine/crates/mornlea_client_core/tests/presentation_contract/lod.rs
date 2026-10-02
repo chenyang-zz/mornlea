@@ -256,7 +256,7 @@ fn queue_ring(harness: &mut Harness, center: TilePos) -> usize {
             let inner = u32::from(state.config.view_distance()) / 4 + 1;
             let chunks =
                 u32::from(state.config.view_distance()) * u32::from(state.config.far_multiplier());
-            let outer = (chunks + 3) / 4;
+            let outer = chunks.div_ceil(4);
             let mut queued = 0usize;
             for dz in -(outer as i64)..=(outer as i64) {
                 for dx in -(outer as i64)..=(outer as i64) {

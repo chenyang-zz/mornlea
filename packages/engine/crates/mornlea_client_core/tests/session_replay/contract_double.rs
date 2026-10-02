@@ -1372,7 +1372,7 @@ fn limits_bounds_and_layout_compat() {
             4096,
             4096,
             4096,
-            64 << 20 + 1,
+            64 << (20 + 1),
             4096,
             8 << 20,
         ),
@@ -1408,7 +1408,7 @@ fn limits_bounds_and_layout_compat() {
             4096,
             64 << 20,
             4096,
-            8 << 20 + 1,
+            8 << (20 + 1),
         ),
         Err(ClientError::InvalidInput)
     );

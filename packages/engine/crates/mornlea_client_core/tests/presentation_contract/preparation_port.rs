@@ -140,9 +140,7 @@ impl QueueDouble {
             return 0;
         }
         self.seen_registries.push(identity);
-        registry.entries().len() * std::mem::size_of::<MeshRegistryEntry>()
-            + registry.visibility().len() * 8
-            + 4
+        std::mem::size_of_val(registry.entries()) + registry.visibility().len() * 8 + 4
     }
 
     fn params_charge(&mut self, params: &Arc<WorldgenParams>) -> usize {

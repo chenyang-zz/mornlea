@@ -664,7 +664,7 @@ fn reset_clears_projection_and_stale_inputs_reject_whole() {
     assert_eq!(
         project_chat(&fixture.view(
             reset_provider.mirror(),
-            &[old_epoch_observation.clone()],
+            std::slice::from_ref(&old_epoch_observation),
             next_epoch,
             ConfirmedRevision::new(1)
         )),

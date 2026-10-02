@@ -787,8 +787,7 @@ fn nonfinite_and_out_of_range_payloads_reject_at_checked_types() {
     // extremes ride a valid batch.
     let mut admission = owner(1);
     let mirror = full_mirror(1);
-    let mut expected_sequence = 1u64;
-    for move_x in [i8::MIN, i8::MAX] {
+    for (expected_sequence, move_x) in (1u64..).zip([i8::MIN, i8::MAX]) {
         let receipt = submit(
             vec![plain(ClientIntent::PlayerInput(control(move_x, 0)))],
             &mirror,
@@ -805,7 +804,6 @@ fn nonfinite_and_out_of_range_payloads_reject_at_checked_types() {
             },
             "exact receipt at the axis extreme {move_x}"
         );
-        expected_sequence += 1;
     }
     // The 1024-byte bound is a whole-batch bound too: the maximal text is
     // admitted in full and never partially sent.
@@ -982,7 +980,7 @@ fn outbound_record_and_byte_bounds_admit_n_reject_n_plus_one() {
     let frame = action()
         .intent
         .encode_frame(1, &mut probe)
-        .expect("probe frame") as usize;
+        .expect("probe frame");
     let mut bytes = InputAdmissionState::try_new(epoch(1), tightened(128, 4104, 2 * frame, 256))
         .expect("owner");
     assert!(submit(vec![action()], &mirror, &mut bytes).is_ok());
@@ -1228,17 +1226,13 @@ fn confirmed_close_or_replacement_retires_tombstone_and_admits_fresh_token() {
         )
         .is_ok()
     );
-    let replaced = admitted_mirror(
-        epoch(1),
-        23,
-        (|| {
-            let mut inventory = full_inventory();
-            inventory.retire_container(&furnace(1));
-            inventory
-                .with_container_view(furnace(2), ConfirmedRevision::new(23))
-                .with_container_view(chest(1), ConfirmedRevision::new(22))
-        })(),
-    );
+    let replaced = admitted_mirror(epoch(1), 23, {
+        let mut inventory = full_inventory();
+        inventory.retire_container(&furnace(1));
+        inventory
+            .with_container_view(furnace(2), ConfirmedRevision::new(23))
+            .with_container_view(chest(1), ConfirmedRevision::new(22))
+    });
     let fresh = ContainerMove::try_new(
         furnace(2).chunk(),
         furnace(2).kind(),

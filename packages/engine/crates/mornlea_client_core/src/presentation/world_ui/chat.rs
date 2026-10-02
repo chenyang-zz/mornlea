@@ -115,10 +115,10 @@ pub fn project_chat(
         // duplicate or stale resend never double-emits and leaves the
         // projected output unchanged, exactly as the pilot ring refuses an
         // id not newer than its last accepted one.
-        if let Some(last) = last_accepted_id {
-            if fact.event_id() <= last {
-                continue;
-            }
+        if let Some(last) = last_accepted_id
+            && fact.event_id() <= last
+        {
+            continue;
         }
         last_accepted_id = Some(fact.event_id());
         let record = WorldUiRecord::try_new(

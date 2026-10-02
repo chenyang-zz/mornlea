@@ -229,13 +229,13 @@ fn stage_event(
         Event::ChunkSnapshot(snapshot) => {
             let dimension = snapshot.dimension();
             let chunk = snapshot.chunk();
-            if let Some(stored) = held_revision(world, dimension, chunk) {
-                if snapshot.revision() <= *stored {
-                    // An at-or-below snapshot is an old chunk generation: a
-                    // replaced history cannot come back through the snapshot
-                    // path either.
-                    return Err(ClientError::InvalidInput);
-                }
+            if let Some(stored) = held_revision(world, dimension, chunk)
+                && snapshot.revision() <= *stored
+            {
+                // An at-or-below snapshot is an old chunk generation: a
+                // replaced history cannot come back through the snapshot
+                // path either.
+                return Err(ClientError::InvalidInput);
             }
             *world = world
                 .clone()

@@ -268,10 +268,10 @@ pub fn project_audio(view: &ProjectionView<'_>) -> Result<AudioProjection, Clien
         .iter()
         .map(|(sequence, _)| *sequence)
         .collect();
-    if let Some(correction) = player.correction() {
-        if correction.reason() == CorrectionReason::RejectedInput {
-            refused.push(correction.last_input_sequence());
-        }
+    if let Some(correction) = player.correction()
+        && correction.reason() == CorrectionReason::RejectedInput
+    {
+        refused.push(correction.last_input_sequence());
     }
     refused.sort_unstable();
     refused.dedup();

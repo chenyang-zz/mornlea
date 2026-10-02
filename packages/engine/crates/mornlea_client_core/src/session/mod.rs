@@ -274,7 +274,7 @@ impl ConfirmedMirror {
             && parts
                 .world
                 .as_ref()
-                .map_or(false, |world| world.chunk_count() > 0)
+                .is_some_and(|world| world.chunk_count() > 0)
         {
             return Err(ClientError::InvalidInput);
         }

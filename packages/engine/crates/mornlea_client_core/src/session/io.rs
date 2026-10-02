@@ -363,8 +363,8 @@ impl Connector for MemoryConnector {
     }
 
     fn poll(&self, ticket: TransportTicket) -> TransportPoll {
-        self.with_state(ticket, |state, limits| poll_state(state, limits))
-            .unwrap_or_else(|_| TransportPoll::Closed(ClientError::InvalidState))
+        self.with_state(ticket, poll_state)
+            .unwrap_or(TransportPoll::Closed(ClientError::InvalidState))
     }
 
     fn try_send(&self, ticket: TransportTicket, frame: &[u8]) -> Result<(), ClientError> {
@@ -698,12 +698,12 @@ fn tcp_worker(
                     progressed = true;
                     let mut state = shared.state.lock().expect("tcp state mutex");
                     state.outbound_cursor += written;
-                    if let Some(head) = state.outbound.front() {
-                        if state.outbound_cursor >= head.len() {
-                            state.outbound_bytes -= head.len();
-                            state.outbound.pop_front();
-                            state.outbound_cursor = 0;
-                        }
+                    if let Some(head) = state.outbound.front()
+                        && state.outbound_cursor >= head.len()
+                    {
+                        state.outbound_bytes -= head.len();
+                        state.outbound.pop_front();
+                        state.outbound_cursor = 0;
                     }
                 }
                 Err(error) if is_pacing(error.kind()) => {}
