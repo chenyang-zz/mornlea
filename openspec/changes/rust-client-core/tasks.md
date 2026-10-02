@@ -29,7 +29,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.6f1 Project companions into `actors@1`.
 - [x] 2.6f2 Project item drops into `actors@1`.
 - [x] 2.6g Assemble the complete `actors@1` family.
-- [ ] 2.6b Publish `player-view@1` semantics.
+- [x] 2.6b Publish `player-view@1` semantics.
 - [x] 2.7a1 Project inventory and hotbar state.
 - [x] 2.7a2 Project containers and chest revision.
 - [x] 2.7a3 Project crafting state.
