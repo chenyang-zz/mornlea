@@ -1125,10 +1125,18 @@ impl PublicationConsumption {
 /// preallocated proposed audio dedup state and the consumption cursors. All
 /// bytes and counts are checked and staging state allocated before any owner
 /// mutates; the final commit contains only infallible swaps.
+///
+/// The reservation also carries the staged input-projection replacement: the
+/// rebuilt survivor state is constructed and staged by `prepare`, and `commit`
+/// only swaps it into the owner — the commit path performs no staging
+/// allocation of its own, so it stays allocation-free by construction. A
+/// reservation carries the empty replacement until `with_staged_input` stages
+/// one; staging replaces, never appends.
 pub struct PublicationReservation {
     frame: Arc<PresentationFrame>,
     audio: AudioDedupDelta,
     consume: PublicationConsumption,
+    staged_input: InputProjectionState,
 }
 
 impl PublicationReservation {
@@ -1141,7 +1149,16 @@ impl PublicationReservation {
             frame,
             audio,
             consume,
+            staged_input: InputProjectionState::default(),
         })
+    }
+
+    /// Stages the prebuilt input-projection replacement this reservation's
+    /// commit will swap in. The staged state is already a checked value, so
+    /// staging is total; it replaces any previously staged replacement.
+    pub fn with_staged_input(mut self, staged: InputProjectionState) -> Self {
+        self.staged_input = staged;
+        self
     }
 
     pub fn frame(&self) -> &Arc<PresentationFrame> {
@@ -1154,6 +1171,61 @@ impl PublicationReservation {
 
     pub fn consume(&self) -> &PublicationConsumption {
         &self.consume
+    }
+
+    /// The staged input-projection replacement. Commit swaps this value into
+    /// the owner by move; it allocates nothing.
+    pub fn staged_input(&self) -> &InputProjectionState {
+        &self.staged_input
+    }
+}
+
+#[cfg(test)]
+mod publication_reservation_tests {
+    use std::sync::Arc;
+
+    use super::{
+        AudioDedupDelta, InputAdmissionOwner, InputProjectionState, PublicationConsumption,
+        PublicationReservation,
+    };
+    use crate::contracts::{ClientError, ConfirmedRevision, SessionEpoch};
+    use crate::presentation::PresentationFrame;
+
+    /// The contract pin for the staged input-projection replacement: the
+    /// frozen reservation admits a prebuilt replacement through the additive
+    /// staging builder, exposes it through the commit-facing accessor, and
+    /// keeps the existing fields and their construction path unchanged.
+    #[test]
+    fn reservation_stages_input_replacement() -> Result<(), ClientError> {
+        let epoch = SessionEpoch::try_new(1)?;
+        let frame = PresentationFrame::try_new(epoch, ConfirmedRevision::new(1), 1, vec![])?;
+        let reservation = PublicationReservation::try_new(
+            Arc::new(frame),
+            AudioDedupDelta::try_new(Vec::new(), Vec::new())?,
+            PublicationConsumption::try_new(0, 0, 0, 0)?,
+        )?;
+        // Before staging, the replacement is the empty checked state.
+        assert_eq!(reservation.staged_input().sequence_hint(), 0);
+        assert!(reservation.staged_input().admitted().is_empty());
+
+        // Staging replaces the empty value and is exposed commit-facing.
+        let mut staged = InputProjectionState::try_new(7)?;
+        staged.record_admitted(7, crate::input::ClientIntentKind::PlayerInput);
+        staged.record_rejected(8, ClientError::InvalidInput);
+        let staged_hint = staged.sequence_hint();
+        let staged_admitted = staged.admitted().to_vec();
+        let staged_rejected = staged.rejected().to_vec();
+        let reservation = reservation.with_staged_input(staged);
+        assert_eq!(reservation.staged_input().sequence_hint(), staged_hint);
+        assert_eq!(reservation.staged_input().admitted(), staged_admitted);
+        assert_eq!(reservation.staged_input().rejected(), staged_rejected);
+
+        // Additivity: the existing fields and accessors are unchanged.
+        assert_eq!(reservation.frame().frame_index(), 1);
+        assert!(reservation.audio().insertions().is_empty());
+        assert_eq!(reservation.consume().input_records(), 0);
+        let _ = InputAdmissionOwner::try_new(InputProjectionState::try_new(1)?)?;
+        Ok(())
     }
 }
 
