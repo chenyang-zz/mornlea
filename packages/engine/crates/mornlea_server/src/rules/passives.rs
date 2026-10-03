@@ -697,8 +697,13 @@ fn advance_movement(
     if !finite || next.position[1] < MIN_Y as f32 {
         // A cow that fell out of the world or state-distorted is removed
         // deterministically with no drops and no half-removed state
-        // (`advancePassiveMovement` removal threshold).
+        // (`advancePassiveMovement` removal threshold). This quiet
+        // termination is not death settlement, so it records the tick-local
+        // quiet marker for the vanished reason after staging succeeds.
         stage_dead(ctx, &record)?;
+        if let ActorKey::Passive(id) = key {
+            ctx.record_passive_quiet_removal(id);
+        }
         report.applied += 1;
         return Ok(());
     }

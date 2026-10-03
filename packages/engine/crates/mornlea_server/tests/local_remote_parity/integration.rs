@@ -3367,7 +3367,7 @@ fn hostile_lifecycle_publications_match_across_adapters() {
 }
 
 /// The passive lifecycle scenario: one staged cow publishes its spawn, its
-/// persisting state, and the vanished despawn once removed. Settled body
+/// persisting state, and the died despawn once its death settles. Settled body
 /// values derive from the post-tick committed record, asserted identically
 /// through both adapters.
 fn passive_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
@@ -3419,7 +3419,21 @@ fn passive_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublic
             .any(|event| matches!(event, Event::PassiveSpawn(batch) if *batch == expected)),
         "the staged cow publishes its exact spawn record"
     );
-    let _ = adapter.drain(ada.session);
+    // The drained spawn-tick bytes carry the spawn packet and no despawn.
+    let frames = adapter.drain(ada.session);
+    let decoded: Vec<ServerPacket> = frames.iter().map(|frame| decode_play(frame)).collect();
+    assert!(
+        decoded
+            .iter()
+            .any(|packet| matches!(packet, ServerPacket::PassiveSpawn(_))),
+        "the drained spawn frames carry the spawn packet"
+    );
+    assert!(
+        !decoded
+            .iter()
+            .any(|packet| matches!(packet, ServerPacket::PassiveDespawn(_))),
+        "no despawn leaves before the removal"
+    );
 
     let state_tick = adapter.tick();
     let committed = {
@@ -3461,7 +3475,21 @@ fn passive_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublic
             .any(|event| matches!(event, Event::PassiveState(batch) if *batch == expected)),
         "the persisting batch carries the exact settled body"
     );
-    let _ = adapter.drain(ada.session);
+    // The drained state-tick bytes carry the state packet and no despawn.
+    let frames = adapter.drain(ada.session);
+    let decoded: Vec<ServerPacket> = frames.iter().map(|frame| decode_play(frame)).collect();
+    assert!(
+        decoded
+            .iter()
+            .any(|packet| matches!(packet, ServerPacket::PassiveState(_))),
+        "the drained state frames carry the state packet"
+    );
+    assert!(
+        !decoded
+            .iter()
+            .any(|packet| matches!(packet, ServerPacket::PassiveDespawn(_))),
+        "no despawn leaves before the removal"
+    );
 
     adapter.stage(Box::new(move |context| {
         let mut actor = context
@@ -3476,29 +3504,50 @@ fn passive_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublic
     let events = session_events(&despawn_tick, ada.session);
     let expected = PassiveDespawn::try_new(PassiveDespawnParts {
         server_tick: 2,
-        despawns: vec![PassiveDespawnRecord::new(
-            id,
-            PassiveDespawnReason::Vanished,
-        )]
-        .into_boxed_slice(),
+        despawns: vec![PassiveDespawnRecord::new(id, PassiveDespawnReason::Died)]
+            .into_boxed_slice(),
     })
     .unwrap();
     assert!(
         events
             .iter()
             .any(|event| matches!(event, Event::PassiveDespawn(batch) if *batch == expected)),
-        "the quiet removal publishes the vanished despawn"
+        "the death settlement publishes the died despawn"
     );
     assert!(
         !events
             .iter()
             .any(|event| matches!(event, Event::PassiveState(_)))
     );
-    let _ = adapter.drain(ada.session);
+    // The drained despawn-tick bytes carry exactly the died wire batch.
+    let frames = adapter.drain(ada.session);
+    let decoded: Vec<ServerPacket> = frames.iter().map(|frame| decode_play(frame)).collect();
+    let despawns: Vec<&mornlea_protocol::PassiveDespawn> = decoded
+        .iter()
+        .filter_map(|packet| match packet {
+            ServerPacket::PassiveDespawn(batch) => Some(batch),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        despawns.len(),
+        1,
+        "the death publishes exactly one despawn packet"
+    );
+    assert_eq!(despawns[0].server_tick, 2);
+    assert_eq!(
+        despawns[0].despawns,
+        vec![mornlea_protocol::PassiveDespawnRecord {
+            id,
+            reason: mornlea_protocol::PASSIVE_DESPAWN_DIED,
+        }],
+        "the wire batch carries the died reason"
+    );
 
     // One tick later the departure never repeats on either adapter.
     let after_tick = adapter.tick();
-    let _ = adapter.drain(ada.session);
+    let frames = adapter.drain(ada.session);
+    let decoded: Vec<ServerPacket> = frames.iter().map(|frame| decode_play(frame)).collect();
     assert!(
         !session_events(&after_tick, ada.session)
             .iter()
@@ -3507,13 +3556,19 @@ fn passive_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublic
                 Event::PassiveDespawn(batch)
                     if batch.despawns().iter().any(|record| record.id() == id)
             )),
-        "the vanished passive despawns exactly once"
+        "the died passive despawns exactly once"
+    );
+    assert!(
+        !decoded
+            .iter()
+            .any(|packet| matches!(packet, ServerPacket::PassiveDespawn(_))),
+        "the follow-up drain carries no despawn packet"
     );
 
     vec![spawn_tick, state_tick, despawn_tick, after_tick]
 }
 
-/// The passive spawn, state, and vanished-despawn publications through both
+/// The passive spawn, state, and died-despawn publications through both
 /// real adapters, with identical publications on every tick.
 #[test]
 fn passive_lifecycle_publications_match_across_adapters() {
@@ -3524,6 +3579,253 @@ fn passive_lifecycle_publications_match_across_adapters() {
     assert_eq!(
         memory, tcp,
         "the passive lifecycle publishes identically across the real adapters"
+    );
+}
+
+/// The passive removal-reason scenario: two observing peers share interest
+/// in two cows while a third peer never subscribes to their chunk. One cow
+/// dies while the first observer exits interest (death wins, Died); the
+/// second cow only exits that observer's interest (Vanished). The staying
+/// observer sees only the death, the far peer sees no passive frames and
+/// stays active, and the next tick repeats nothing. Returns every published
+/// tick plus every drained frame per session in login order.
+fn passive_removal_reason_scenario(
+    adapter: &mut dyn ParityAdapter,
+) -> (Vec<TickPublication>, Vec<Vec<Vec<u8>>>) {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    adapter.stage_login(
+        2,
+        stored_player(2, "Bea", [4.5, 65.0, 4.5], 0.0, 0.0, |_| {}),
+    );
+    adapter.stage_login(
+        3,
+        stored_player(3, "Cleo", [400.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+    let bea = adapter.login(2, "Bea");
+    let cleo = adapter.login(3, "Cleo");
+    let dead = PassiveId::try_new(7).unwrap();
+    let live = PassiveId::try_new(11).unwrap();
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Actor(passive_actor(7, [8.5, 65.0, 8.5])))
+            .unwrap();
+        context
+            .stage(RuleEffect::Runtime(passive_runtime(dead)))
+            .unwrap();
+        context
+            .stage(RuleEffect::Actor(passive_actor(11, [9.5, 65.0, 9.5])))
+            .unwrap();
+        context
+            .stage(RuleEffect::Runtime(passive_runtime(live)))
+            .unwrap();
+    }));
+
+    // Decodes one session's drained bytes and keeps the passive despawn
+    // packets in publication order.
+    let despawn_packets = |drained: &[Vec<u8>]| -> Vec<mornlea_protocol::PassiveDespawn> {
+        drained
+            .iter()
+            .map(|frame| decode_play(frame))
+            .filter_map(|packet| match packet {
+                ServerPacket::PassiveDespawn(batch) => Some(batch),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let spawn_tick = adapter.tick();
+    for peer in [&ada, &bea] {
+        assert!(
+            session_events(&spawn_tick, peer.session)
+                .iter()
+                .any(|event| matches!(event, Event::PassiveSpawn(_))),
+            "both observers see the shared spawn batch"
+        );
+    }
+    assert!(
+        !session_events(&spawn_tick, cleo.session)
+            .iter()
+            .any(|event| matches!(
+                event,
+                Event::PassiveSpawn(_) | Event::PassiveState(_) | Event::PassiveDespawn(_)
+            )),
+        "the far peer never subscribes to the cows' chunk"
+    );
+    let mut frames = vec![
+        adapter.drain(ada.session),
+        adapter.drain(bea.session),
+        adapter.drain(cleo.session),
+    ];
+    let cleo_spawn: Vec<ServerPacket> = frames[2].iter().map(|frame| decode_play(frame)).collect();
+    assert!(
+        !cleo_spawn.iter().any(|packet| matches!(
+            packet,
+            ServerPacket::PassiveSpawn(_)
+                | ServerPacket::PassiveState(_)
+                | ServerPacket::PassiveDespawn(_)
+        )),
+        "no passive frame leaks to the non-observer"
+    );
+
+    // One cow dies while Ada walks out of interest: death wins that
+    // simultaneous exit, the living cow's exit stays vanished, and Bea —
+    // who stays — sees only the death.
+    let ada_session = ada.session;
+    adapter.stage(Box::new(move |context| {
+        let mut gone = context
+            .read()
+            .actor(ActorKey::Passive(dead))
+            .cloned()
+            .unwrap();
+        gone.lifecycle = ActorLifecycle::Dead;
+        context.stage(RuleEffect::Actor(gone)).unwrap();
+        let mut walker = context
+            .read()
+            .actor(ActorKey::Player(ada_session))
+            .cloned()
+            .unwrap();
+        walker.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([500.5, 65.0, 4.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        context.stage(RuleEffect::Actor(walker)).unwrap();
+    }));
+    let despawn_tick = adapter.tick();
+    let ada_expected = PassiveDespawn::try_new(PassiveDespawnParts {
+        server_tick: 1,
+        despawns: vec![
+            PassiveDespawnRecord::new(dead, PassiveDespawnReason::Died),
+            PassiveDespawnRecord::new(live, PassiveDespawnReason::Vanished),
+        ]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        session_events(&despawn_tick, ada.session)
+            .iter()
+            .any(|event| matches!(event, Event::PassiveDespawn(batch) if *batch == ada_expected)),
+        "death beats Ada's simultaneous view exit; the live exit stays vanished"
+    );
+    let bea_expected = PassiveDespawn::try_new(PassiveDespawnParts {
+        server_tick: 1,
+        despawns: vec![PassiveDespawnRecord::new(dead, PassiveDespawnReason::Died)]
+            .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        session_events(&despawn_tick, bea.session)
+            .iter()
+            .any(|event| matches!(event, Event::PassiveDespawn(batch) if *batch == bea_expected)),
+        "the staying observer sees only the death"
+    );
+    assert!(
+        !session_events(&despawn_tick, cleo.session)
+            .iter()
+            .any(|event| matches!(event, Event::PassiveDespawn(_))),
+        "only sessions that previously observed them see the despawn"
+    );
+    frames[0].extend(adapter.drain(ada.session));
+    frames[1].extend(adapter.drain(bea.session));
+    frames[2].extend(adapter.drain(cleo.session));
+    // The drained bytes carry the exact died/vanished wire batches in
+    // publication order.
+    let ada_wire = mornlea_protocol::PassiveDespawn::new(
+        1,
+        vec![
+            mornlea_protocol::PassiveDespawnRecord {
+                id: dead,
+                reason: mornlea_protocol::PASSIVE_DESPAWN_DIED,
+            },
+            mornlea_protocol::PassiveDespawnRecord {
+                id: live,
+                reason: mornlea_protocol::PASSIVE_DESPAWN_VANISHED,
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        despawn_packets(&frames[0]),
+        vec![ada_wire],
+        "Ada's drained bytes carry the exact died/vanished batch in order"
+    );
+    let bea_wire = mornlea_protocol::PassiveDespawn::new(
+        1,
+        vec![mornlea_protocol::PassiveDespawnRecord {
+            id: dead,
+            reason: mornlea_protocol::PASSIVE_DESPAWN_DIED,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        despawn_packets(&frames[1]),
+        vec![bea_wire],
+        "Bea's drained bytes carry exactly the died batch"
+    );
+    let cleo_packets: Vec<ServerPacket> =
+        frames[2].iter().map(|frame| decode_play(frame)).collect();
+    assert!(
+        !cleo_packets.iter().any(|packet| matches!(
+            packet,
+            ServerPacket::PassiveSpawn(_)
+                | ServerPacket::PassiveState(_)
+                | ServerPacket::PassiveDespawn(_)
+        )),
+        "no passive frame leaks to the non-observer"
+    );
+    assert_eq!(
+        adapter
+            .endpoint()
+            .authority
+            .session(cleo.session)
+            .unwrap()
+            .phase,
+        SessionPhase::Active,
+        "the unaffected peer remains active"
+    );
+
+    // The subsequent tick repeats no departure on any session.
+    let after_tick = adapter.tick();
+    for peer in [&ada, &bea] {
+        assert!(
+            !session_events(&after_tick, peer.session)
+                .iter()
+                .any(|event| matches!(event, Event::PassiveDespawn(_))),
+            "the departure never repeats"
+        );
+    }
+    frames[0].extend(adapter.drain(ada.session));
+    frames[1].extend(adapter.drain(bea.session));
+    frames[2].extend(adapter.drain(cleo.session));
+    assert!(
+        despawn_packets(&frames[0]).len() == 1 && despawn_packets(&frames[1]).len() == 1,
+        "the follow-up tick publishes no second despawn packet"
+    );
+
+    (vec![spawn_tick, despawn_tick, after_tick], frames)
+}
+
+/// The passive removal reasons publish identically through both real
+/// adapters: exact died/vanished records in publication order, identical
+/// drained bytes, no leak to the non-observer, and no repetition.
+#[test]
+fn passive_removal_reasons_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = passive_removal_reason_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = passive_removal_reason_scenario(&mut tcp);
+    assert_eq!(
+        memory.0, tcp.0,
+        "the removal publications match across the real adapters"
+    );
+    assert_eq!(
+        memory.1, tcp.1,
+        "the drained bytes match across the real adapters"
     );
 }
 

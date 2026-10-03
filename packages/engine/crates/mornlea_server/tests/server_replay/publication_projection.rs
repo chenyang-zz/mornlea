@@ -1132,7 +1132,7 @@ fn projection_hostile_lifecycle_events() {
 }
 
 /// projection::passive_lifecycle_events — the same three shapes for a staged
-/// cow, with the vanished despawn reason for the removal.
+/// cow, with the died despawn reason for the death-settlement removal.
 #[test]
 fn projection_passive_lifecycle_events() {
     let mut state = authority();
@@ -1217,16 +1217,195 @@ fn projection_passive_lifecycle_events() {
     let events = events_for(&tick_c, session);
     let expected = PassiveDespawn::try_new(PassiveDespawnParts {
         server_tick: 2,
-        despawns: vec![PassiveDespawnRecord::new(
-            id,
-            PassiveDespawnReason::Vanished,
-        )]
-        .into_boxed_slice(),
+        despawns: vec![PassiveDespawnRecord::new(id, PassiveDespawnReason::Died)]
+            .into_boxed_slice(),
     })
     .unwrap();
     assert_eq!(
         find_event(&events, |event| matches!(event, Event::PassiveDespawn(_))),
         Some(&Event::PassiveDespawn(expected))
+    );
+}
+
+/// projection::passive_death_beats_simultaneous_view_exit — a killed cow and
+/// a living cow both leave the observer's interest in the same tick: the
+/// death publishes Died, the live exit publishes Vanished, both records ride
+/// one ascending batch, a session that never observed them sees no despawn,
+/// and the next tick repeats nothing.
+#[test]
+fn projection_passive_death_beats_simultaneous_view_exit() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let observer = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let stranger = login(&mut state, 2, "Ben", [200.5, 65.0, 0.5], 0.0, 0.0);
+    let dead = PassiveId::try_new(7).unwrap();
+    let live = PassiveId::try_new(11).unwrap();
+    stage(&mut state, |context| {
+        context
+            .stage(RuleEffect::Actor(passive_actor(7, [8.5, 65.0, 8.5])))
+            .unwrap();
+        context
+            .stage(RuleEffect::Runtime(passive_runtime(dead)))
+            .unwrap();
+        context
+            .stage(RuleEffect::Actor(passive_actor(11, [9.5, 65.0, 9.5])))
+            .unwrap();
+        context
+            .stage(RuleEffect::Runtime(passive_runtime(live)))
+            .unwrap();
+    });
+    let tick_a = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        events_for(&tick_a, observer)
+            .iter()
+            .filter(|event| matches!(event, Event::PassiveSpawn(_)))
+            .count(),
+        1,
+        "both cows ride one spawn batch on the visibility tick"
+    );
+    assert!(
+        !events_for(&tick_a, stranger)
+            .iter()
+            .any(|event| matches!(event, Event::PassiveDespawn(_))),
+        "the distant session observes neither cow"
+    );
+    // Between ticks the observer walks out of interest while one cow dies:
+    // death wins the simultaneous exit for the killed cow only.
+    stage(&mut state, |context| {
+        let mut gone = context
+            .read()
+            .actor(ActorKey::Passive(dead))
+            .cloned()
+            .unwrap();
+        gone.lifecycle = ActorLifecycle::Dead;
+        context.stage(RuleEffect::Actor(gone)).unwrap();
+        let mut walker = context
+            .read()
+            .actor(ActorKey::Player(observer))
+            .cloned()
+            .unwrap();
+        walker.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([500.5, 65.0, 4.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        context.stage(RuleEffect::Actor(walker)).unwrap();
+    });
+    let tick_b = state.advance_tick(TickBudget::full()).unwrap();
+    let events = events_for(&tick_b, observer);
+    let expected = PassiveDespawn::try_new(PassiveDespawnParts {
+        server_tick: 1,
+        despawns: vec![
+            PassiveDespawnRecord::new(dead, PassiveDespawnReason::Died),
+            PassiveDespawnRecord::new(live, PassiveDespawnReason::Vanished),
+        ]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    assert_eq!(
+        find_event(&events, |event| matches!(event, Event::PassiveDespawn(_))),
+        Some(&Event::PassiveDespawn(expected)),
+        "death beats the simultaneous view exit; the live exit stays vanished"
+    );
+    assert!(
+        !events_for(&tick_b, stranger)
+            .iter()
+            .any(|event| matches!(event, Event::PassiveDespawn(_))),
+        "only sessions that previously observed them see the despawn"
+    );
+    // The follow-up tick repeats neither record.
+    let tick_c = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        !events_for(&tick_c, observer)
+            .iter()
+            .any(|event| matches!(event, Event::PassiveDespawn(_))),
+        "the departure publishes exactly once"
+    );
+}
+
+/// projection::passive_quiet_fallout_reports_vanished — a cow staged just
+/// above the world floor with a downward velocity falls through it under the
+/// real movement kernel: the producer marks the quiet removal, so the despawn
+/// publishes Vanished rather than Died, exactly once.
+#[test]
+fn projection_passive_quiet_fallout_reports_vanished() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let session = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let id = PassiveId::try_new(13).unwrap();
+    stage(&mut state, |context| {
+        let falling = ActorRecord::try_new(
+            ActorKey::Passive(id),
+            ActorLifecycle::Active,
+            Dimension::OVERWORLD,
+            MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new([8.5, -60.0, 8.5]).unwrap(),
+                velocity: FiniteVec3::try_new([0.0, -10.0, 0.0]).unwrap(),
+                on_ground: false,
+            }),
+            look(0.0, 0.0),
+            survival(),
+            ActorBody::Passive(PassiveMob {
+                id: 13,
+                dimension: 0,
+                position: [8.5, -60.0, 8.5],
+                velocity: [0.0, -10.0, 0.0],
+                on_ground: false,
+                yaw: 0.0,
+                health: 20,
+            }),
+        )
+        .unwrap();
+        context.stage(RuleEffect::Actor(falling)).unwrap();
+        context
+            .stage(RuleEffect::Runtime(passive_runtime(id)))
+            .unwrap();
+    });
+    let tick_a = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        events_for(&tick_a, session).iter().any(|event| matches!(
+            event,
+            Event::PassiveSpawn(batch) if batch.spawns().iter().any(|record| record.id() == id)
+        )),
+        "the falling cow is visible for one tick before it crosses the floor"
+    );
+    // The kernel crosses the floor within a bounded fall; the first despawn
+    // naming this cow carries vanished, never died.
+    let mut vanished = false;
+    for _ in 0..40 {
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        let events = events_for(&publication, session);
+        if let Some(Event::PassiveDespawn(batch)) = find_event(&events, |event| {
+            matches!(
+                event,
+                Event::PassiveDespawn(batch)
+                    if batch.despawns().iter().any(|record| record.id() == id)
+            )
+        }) {
+            assert_eq!(
+                batch.despawns(),
+                [PassiveDespawnRecord::new(
+                    id,
+                    PassiveDespawnReason::Vanished
+                )],
+                "the real fall-out removal publishes vanished"
+            );
+            vanished = true;
+            break;
+        }
+    }
+    assert!(
+        vanished,
+        "the fall crosses the floor within the bounded ticks"
+    );
+    let follow_up = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        !events_for(&follow_up, session).iter().any(|event| matches!(
+            event,
+            Event::PassiveDespawn(batch)
+                if batch.despawns().iter().any(|record| record.id() == id)
+        )),
+        "the quiet removal publishes exactly once"
     );
 }
 
@@ -2023,7 +2202,7 @@ fn projection_despawn_families_emit_once() {
         matches!(
             event,
             Event::PassiveDespawn(batch)
-                if batch.despawns() == [PassiveDespawnRecord::new(passive, PassiveDespawnReason::Vanished)]
+                if batch.despawns() == [PassiveDespawnRecord::new(passive, PassiveDespawnReason::Died)]
         )
     };
     let projectile_despawn = |event: &Event| {

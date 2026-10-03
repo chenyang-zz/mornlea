@@ -61,6 +61,10 @@ const INTEREST_RADIUS: i32 = 2;
 pub(crate) struct TickOutcome {
     pub(crate) block_batches: Vec<(ChunkKey, u64, u64, Vec<BlockChange>)>,
     pub(crate) resyncs: Vec<(SessionKey, Dimension, ChunkPos)>,
+    /// Tick-local quiet passive removals drained from the tick context:
+    /// identities the movement rule terminated below the world floor this
+    /// tick. Death settlement never appears here.
+    pub(crate) quiet_passive_removals: BTreeSet<PassiveId>,
 }
 
 /// The shared read-only world facts the per-family emitters consume.
@@ -69,6 +73,10 @@ struct WorldInputs<'a> {
     entities: &'a Entities,
     speakers: &'a [Speaker],
     tick: u64,
+    /// Resident death-settlement passive identities for this tick, derived
+    /// once per tick with quiet fall-out removals excluded. Death identity
+    /// is observer-independent: a death wins over a simultaneous view exit.
+    passive_deaths: &'a BTreeSet<PassiveId>,
 }
 
 /// One observer's derived projection inputs for this tick.
@@ -137,8 +145,10 @@ impl AuthorityState {
     ///
     /// Companion despawns are interest-exit diffs alone: this slice has no
     /// companion death path, so a companion leaves a mirror only by leaving
-    /// the observer's wanted columns. Passive removals publish the vanished
-    /// reason, the one that names a quiet removal rather than a death. An
+    /// the observer's wanted columns. Passive despawns publish the died
+    /// reason for resident death-settlement removals (even under a
+    /// simultaneous interest exit) and the vanished reason for live view
+    /// exits, missing actors and quiet movement terminations. An
     /// entity whose checked record cannot be constructed is not published and
     /// stays out of the session's visible set, so the next tick retries its
     /// spawn instead of failing the tick. With no active sessions the
@@ -178,11 +188,28 @@ impl AuthorityState {
             })
             .collect();
         apply_resync_requests(&mut view_list, &observers, self, outcome);
+        // Resident Dead passive identities once per tick, minus the quiet
+        // fall-out removals: death is observer-independent, so Died wins a
+        // simultaneous death plus interest or dimension exit, while live
+        // view exits, missing actors and quiet movement terminations stay
+        // Vanished.
+        let mut passive_deaths = BTreeSet::new();
+        for actor in &actors {
+            if actor.lifecycle != ActorLifecycle::Dead {
+                continue;
+            }
+            if let ActorKey::Passive(id) = actor.key
+                && !outcome.quiet_passive_removals.contains(&id)
+            {
+                passive_deaths.insert(id);
+            }
+        }
         let inputs = WorldInputs {
             actors: &actors,
             entities: &entities,
             speakers: &speakers,
             tick,
+            passive_deaths: &passive_deaths,
         };
         let mut events = Vec::new();
         emit_despawns(&mut view_list, &observers, &visibilities, &mut events);
@@ -1106,7 +1133,8 @@ fn emit_hostiles(
 
 /// Passive spawn, state and despawn batches. Grazing is
 /// the transient observation the actor runtime carries; despawns publish the
-/// vanished reason, the closed reason that names a quiet removal.
+/// died reason for resident death-settlement removals and the vanished reason
+/// otherwise (live view exit, missing actor, or quiet movement termination).
 fn emit_passives(
     view_list: &mut [SessionView],
     observers: &[Observer],
@@ -1181,7 +1209,14 @@ fn emit_passives(
             .visible_passives
             .difference(&visibility.passives)
             .copied()
-            .map(|id| PassiveDespawnRecord::new(id, PassiveDespawnReason::Vanished))
+            .map(|id| {
+                let reason = if inputs.passive_deaths.contains(&id) {
+                    PassiveDespawnReason::Died
+                } else {
+                    PassiveDespawnReason::Vanished
+                };
+                PassiveDespawnRecord::new(id, reason)
+            })
             .collect();
         for group in despawns.chunks(MOB_BATCH_CAP) {
             if let Ok(batch) = PassiveDespawn::try_new(PassiveDespawnParts {

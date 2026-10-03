@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use mornlea_domain::{
     BlockChange, CommandEnvelope, CommandEnvelopeParts, CommandText, ContainerRef, Dimension,
-    DisplayName, EventRecipient, MotionState, PlayerId, RejectReason, RoutedEvent, Weather,
-    WorldState,
+    DisplayName, EventRecipient, MotionState, PassiveId, PlayerId, RejectReason, RoutedEvent,
+    Weather, WorldState,
 };
 use mornlea_protocol::{
     AdmittedLogin, Direction, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket, State,
@@ -2821,6 +2821,12 @@ pub struct TickContext<'a> {
     /// Provider resync requests recorded during dispatch, drained by the
     /// tick-outcome capture before the carried commit.
     resync_lane: Vec<(SessionKey, Dimension, mornlea_domain::ChunkPos)>,
+    /// Tick-local quiet passive removals: identities the passive movement
+    /// rule terminated below the world floor (or with a non-finite pose)
+    /// this tick. Death settlement never marks this lane; the outcome capture
+    /// drains it so the publication projection can report a quiet fall-out
+    /// removal as vanished and a death settlement as died.
+    quiet_passive_removals: BTreeSet<PassiveId>,
     charges: Vec<(ActorKey, ActionKind)>,
     suppressed_mining: BTreeSet<ActorKey>,
     /// Pre-motion actor poses captured at construction. Only source recovery
@@ -3323,6 +3329,7 @@ impl<'a> TickContext<'a> {
             damage_intents: Vec::new(),
             deferred: DeferredCommands::default(),
             resync_lane: Vec::new(),
+            quiet_passive_removals: BTreeSet::new(),
             charges: Vec::new(),
             suppressed_mining: BTreeSet::new(),
             pre_step: BTreeMap::new(),
@@ -3358,6 +3365,15 @@ impl<'a> TickContext<'a> {
         entry: (SessionKey, Dimension, mornlea_domain::ChunkPos),
     ) {
         self.resync_lane.push(entry);
+    }
+
+    /// Records one quiet passive removal after the movement rule's fall-out
+    /// termination stages successfully. Only that branch calls this; death
+    /// settlement leaves the lane untouched so its removals keep the died
+    /// reason. The marker is tick-local: the outcome capture drains it and
+    /// the context owns no cross-tick retention.
+    pub(crate) fn record_passive_quiet_removal(&mut self, id: PassiveId) {
+        self.quiet_passive_removals.insert(id);
     }
 
     /// Captures the publication projection's tick inputs before the carried
@@ -3399,6 +3415,7 @@ impl<'a> TickContext<'a> {
         TickOutcome {
             block_batches,
             resyncs: std::mem::take(&mut self.resync_lane),
+            quiet_passive_removals: std::mem::take(&mut self.quiet_passive_removals),
         }
     }
 
