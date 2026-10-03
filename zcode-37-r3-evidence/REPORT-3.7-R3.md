@@ -4,7 +4,7 @@
 
 ## 1. R2-NUL（P2）— 已修复并以回归覆盖（提交 `74ee37edd`/`1b0367c5a`）
 
-- `manifest_get_batch` 在输出任何字段前检查解码值内嵌 NUL，类型化拒绝 `FAIL invalid_manifest manifest field <name> contains an embedded NUL`（JSON `\u0000` 会解码为字面 NUL，原注释「NUL 不可能出现」已更正）；`cmd_rollback` 7 处与 `previous_binding_validate` 3 处 `IFS= read -rd ''` 全部加 `|| fail "invalid_manifest" "manifest field batch is incomplete"`，截断/短读成为类型化拒绝。
+- `manifest_get_batch` 逐字段（按参数序）检查并输出解码值，内嵌 NUL 的字段在被读到时触发类型化拒绝 `FAIL invalid_manifest manifest field <name> contains an embedded NUL`（JSON `\u0000` 会解码为字面 NUL，原注释「NUL 不可能出现」已更正）；后续字段被拒时先前字段可能已随流输出，消费端将任何短流按 `invalid_manifest` 拒绝，错位流不会被消费——`cmd_rollback` 7 处与 `previous_binding_validate` 3 处 `IFS= read -rd ''` 全部加 `|| fail "invalid_manifest" "manifest field batch is incomplete"`，截断/短读成为类型化拒绝。
 - 回归测试 `activation_verifier::manifest_batch_embedded_nul_and_truncation_refuse`（+157 行）：以**生产文本抽取**（复用 `run_script_functions` 与 `process_termination_shell` 模式，锚点为 `cmd_rollback` 独有读块）覆盖四类——NUL 字段拒绝、空字段占位、正常字段序、截断流拒绝；另有端到端负例：真实 activation manifest 的 `world_path` 写入 `\u0000`，跑真实 `rollback --data-policy compatible`，断言类型化拒绝、manifest 字节不变、世界树不变、无 listen/verifier 产物、租约释放，沿用原 5 秒界。
 - 评审确认：`process_terminated` 字节边界、oracle 字面量、`-S -E`、全部截止与安全检查不变；拒绝不变量「stdout 永不含非分隔 NUL」对所有分支成立（dict/list 经 `json.dumps` 转义）。
 - 本轮只主张「字段错位已杜绝为类型化拒绝」，不宣称更广泛的安全绕过修复。
@@ -22,7 +22,7 @@
 ## 4. 执行身份与 manifest — 干净源码封存 + 自条目纠正
 
 - 25–27 号（第二轮）记录如实保留其历史身份（HEAD `5210448bc` + 两份 dirty 文件），不追溯改写；第三轮 31–34 号在**提交后的干净树**上执行：全部 `sealed=true`，`source=1b0367c5ac6caacefa9aa9274ca9086633e5d121`，`tree=f660a17d34306ffdab586ac63e6e428744165ce9`，`tracked_dirty_at_start=null`。记录器（`zcode-37-r3-evidence/run-record.py`）逐条捕获 HEAD/tree/脏状态/脏 diff 哈希，脏树时拒标 sealed。
-- manifest v3（`gen-manifest.py`）：**排除自身条目**（第二轮自条目为空串 SHA `e3b0c442…` 系生成时重定向截断又被 glob 收入——已定性并纠正），写后逐条复核，17 条目全验证；由证据提交对象绑定（见交付 SHA）。
+- manifest v3（`gen-manifest.py`）：**排除自身条目**（第二轮自条目为空串 SHA `e3b0c442…` 系生成时重定向截断又被 glob 收入——已定性并纠正），写后逐条复核，18 条目全验证；由证据提交对象绑定（见交付 SHA；条数「17」为第三轮笔误，第四轮按 manifest 实文改正）。
 - 选择器身份（`selector-identities.txt`）：previous-server `7ad94532…`、verifier `46f76ffa…`、manifest `3b1e1f44…`、release server `d2219bb6…`、**CARGO_BIN_EXE debug server `6cdf72a2…`**（`rust_bin()` 在 cargo test 下优先取此 debug 二进制）、helper 解释器 `bc56ea9c…`。
 
 ## 5. 执行记录（第三轮，全部 sealed @ `1b0367c5a`）

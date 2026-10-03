@@ -921,7 +921,10 @@ fn rollback_batch_consumer_reads() -> String {
 #[test]
 fn manifest_batch_embedded_nul_and_truncation_refuse() {
     // A JSON `\u0000` escape decodes to a literal NUL inside the field, so
-    // the extracted helper must refuse before emitting any separator.
+    // the extracted helper refuses that field as it is reached; the NUL
+    // sits in the first requested field here, so the refusal precedes any
+    // separator, while a later field's refusal may follow earlier emitted
+    // fields and the consumers' short-batch refusal covers that stream.
     let scope = Scope::fresh("batch-nul");
     let manifest = scope.path("nul.json");
     fs::write(

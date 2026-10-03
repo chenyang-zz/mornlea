@@ -213,8 +213,10 @@ EOF
 # including the empty value for an absent field, so batching removes
 # startup cost only. JSON `\u0000` decodes to a literal NUL inside a
 # string field, so a field carrying one would be treated as a separator
-# and misalign every later consumer; the batch refuses such fields before
-# any output instead.
+# and misalign every later consumer. Fields are checked and emitted one by
+# one in argument order, so refusing a later field can leave earlier
+# fields already printed; the consumers therefore treat any short batch as
+# the typed `invalid_manifest` refusal and never consume a partial stream.
 manifest_get_batch() {
     py "$@" <<'EOF'
 import json, sys
