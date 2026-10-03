@@ -1415,10 +1415,13 @@ impl Drop for ScratchRoot {
     }
 }
 
-/// A TCP disconnect with a save still pending is completed through the real
-/// disk owner: the selected snapshot commits with a real `DiskStore` write
-/// and sync, the retired session's authority acks the real completion, and a
-/// reopened store loads the chunk back with its revisions intact.
+/// A TCP disconnect drops the peer while a save is still pending (selected
+/// but uncommitted); the real disk completion settles after the close. The
+/// selected snapshot then commits with a real `DiskStore` write and sync on
+/// the real exclusive store, the retired session's authority acks the real
+/// completion, and a reopened store loads the chunk back with its revisions
+/// intact. This proves post-close settlement of a pending save; it does not
+/// claim concurrent background-write overlap with the disconnect itself.
 ///
 /// Fixture boundary: the staged chunk snapshot is a synthetic minimal
 /// fixture; the completion, sync, and reload are real `DiskStore` I/O on a
