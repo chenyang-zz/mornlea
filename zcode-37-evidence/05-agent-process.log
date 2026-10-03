@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/agent_process.rs (packages/engine/target/cargo/debug/deps/agent_process-4d8f399ea5c9fb0b)
+
+running 6 tests
+test finalization::held_reconcile_obligation_counts_preserve_owned_work ... ok
+test finalization::real_memory_shutdown_retry_confirms_lost_commit_before_release ... ok
+test integration::real_memory_commit_reconcile ... ok
+test integration::block_cancel_deadline_and_shutdown ... ok
+test integration::release_failure_retains_same_lease ... ok
+test integration::rust_plan_python_mcp_and_authority ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.06s
+

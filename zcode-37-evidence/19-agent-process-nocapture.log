@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/agent_process.rs (packages/engine/target/cargo/debug/deps/agent_process-4d8f399ea5c9fb0b)
+
+running 6 tests
+test finalization::held_reconcile_obligation_counts_preserve_owned_work ... ok
+agent child block start: pid=12465 port=52594 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+agent child block stop: pid=12465 status=Some(ExitStatus(unix_wait_status(9))) stop_ms=12 uptime_ms=3562 stderr_bytes=0 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+test integration::block_cancel_deadline_and_shutdown ... ok
+agent child plan start: pid=12481 port=52629 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+agent child plan stop: pid=12481 status=Some(ExitStatus(unix_wait_status(9))) stop_ms=11 uptime_ms=3579 stderr_bytes=0 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+test integration::rust_plan_python_mcp_and_authority ... ok
+agent child memory start: pid=12482 port=52643 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+agent child memory stop: pid=12482 status=Some(ExitStatus(unix_wait_status(9))) stop_ms=10 uptime_ms=3524 stderr_bytes=0 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+test integration::real_memory_commit_reconcile ... ok
+agent child release start: pid=12485 port=52659 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+agent child release stop: pid=12485 status=Some(ExitStatus(unix_wait_status(9))) stop_ms=12 uptime_ms=3424 stderr_bytes=0 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+test integration::release_failure_retains_same_lease ... ok
+agent child memory-shutdown start: pid=12493 port=52673 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+agent child memory-shutdown stop: pid=12493 status=Some(ExitStatus(unix_wait_status(9))) stop_ms=12 uptime_ms=3580 stderr_bytes=0 source_sha256=6beba9c861f0fbc96466ef2e35df43e56c02be9533e11085118b6a862d6560b2 executable_sha256=bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07
+test finalization::real_memory_shutdown_retry_confirms_lost_commit_before_release ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.68s
+
