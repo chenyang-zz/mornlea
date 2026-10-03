@@ -49,6 +49,14 @@ consume its cancellation and error contracts before joining the real backend.
   Private Snow geometry checks only the source foot-cell floors in axis order,
   without support, height-clamp, probe subtraction or world reads.
 
+- `src/core/actor_snow.rs` owns copied nonplayer speed tuning over the borrowed
+  raw foot cell. Quiet guards precede checked XYZ floors; source outside-height
+  AIR precedes the single raw read. Thick Snow changes only copied walk speed,
+  preserving other tuning bits and caller-owned actor state. Work is at most
+  three checked floors and one read, with no allocation or retained owner.
+  Private scalar doubles qualify this shared contract; actual companion,
+  hostile and passive native integrations remain separately owned.
+
 - `src/core/pending_restore.rs` retains bounded candidate, wanted-key, nearest
   column, fallback and exhausted-revision progress over borrowed placement reads.
   Current waits before Safe; ready columns keep source same-call cadence, and
