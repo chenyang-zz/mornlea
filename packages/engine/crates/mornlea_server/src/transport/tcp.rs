@@ -888,10 +888,14 @@ mod prepared_tests {
                 .unwrap();
         peer.set_write_timeout(Some(Duration::from_secs(5)))
             .unwrap();
-        let id = transport
-            .accept_one(&mut endpoint, &clock)
-            .unwrap()
-            .unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        let id = loop {
+            if let Some(id) = transport.accept_one(&mut endpoint, &clock).unwrap() {
+                break id;
+            }
+            assert!(Instant::now() < until, "loopback acceptance stalled");
+            std::thread::yield_now();
+        };
         let mut player_bytes = [0; 16];
         player_bytes[0] = 1;
         player_bytes[6] = 0x40;
