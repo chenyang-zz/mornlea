@@ -71,31 +71,39 @@ impl Clock for StepClock {
 }
 
 /// Immediately resolving load port: every started ticket holds an absent
-/// stored record, so the next poll loads a canonical new player.
+/// stored record, so the next poll loads a canonical new player. A staged
+/// player record overrides the absent form for that identity's next login,
+/// which is how the publication cases place logged-in players at exact
+/// positions and inventories.
 #[derive(Default)]
 struct ImmediateLoad {
     next_ticket: u64,
-    live: BTreeMap<u64, ()>,
+    live: BTreeMap<u64, Option<mornlea_storage::StoredPlayer>>,
+    staged: BTreeMap<[u8; 16], mornlea_storage::StoredPlayer>,
     last: Option<LoginTicket>,
 }
 
+impl ImmediateLoad {
+    /// Stages one stored record for the named player's next login.
+    fn stage_player(&mut self, player: PlayerId, stored: mornlea_storage::StoredPlayer) {
+        self.staged.insert(player.bytes(), stored);
+    }
+}
+
 impl PlayerLoadPort for ImmediateLoad {
-    fn start(
-        &mut self,
-        _player: PlayerId,
-        _deadline: Deadline,
-    ) -> Result<LoginTicket, ServerError> {
+    fn start(&mut self, player: PlayerId, _deadline: Deadline) -> Result<LoginTicket, ServerError> {
         self.next_ticket += 1;
         let ticket = LoginTicket::try_from_raw(self.next_ticket)
             .expect("load tickets are nonzero by construction");
-        self.live.insert(ticket.get(), ());
+        self.live
+            .insert(ticket.get(), self.staged.get(&player.bytes()).cloned());
         self.last = Some(ticket);
         Ok(ticket)
     }
 
     fn poll(&mut self, ticket: LoginTicket) -> LoadPoll {
-        if self.live.contains_key(&ticket.get()) {
-            LoadPoll::Loaded(None)
+        if let Some(stored) = self.live.get(&ticket.get()) {
+            LoadPoll::Loaded(stored.clone())
         } else {
             LoadPoll::Pending
         }
@@ -1557,4 +1565,2746 @@ fn tcp_disconnect_pending_save_completes_through_real_disk_store() {
     }
     reopened.close().unwrap();
     let _ = client;
+}
+
+// ---------------------------------------------------------------------------
+// Publication projection parity: the per-tick publication families proven
+// through the real Memory and TCP adapters. Both adapters serve one shared
+// driving surface, so every fixture staging, packet submission, and tick runs
+// through the identical code path on both sides and the captured publications
+// must be exactly equal.
+// ---------------------------------------------------------------------------
+
+use mornlea_domain::{
+    self, BlockChange, BlockPos, ChatBody, ChatEvent, ChatEventParts, ChunkPos, CommandText,
+    CompanionDespawn, CompanionId, CompanionName, CompanionSpawn, CompanionSpawnParts,
+    CompanionSpeaker, CompanionState, CompanionStateParts, CompanionStates, ContainerKind,
+    Dimension, DisplayName, DropId, Event, EventRecipient, FiniteVec3, ForgetChunks, HostileId,
+    HostileKind, HostileSpawn, HostileSpawnParts, HostileSpawnRecord, HostileSpawnRecordParts,
+    HostileState, HostileStateParts, HostileStateRecord, HostileStateRecordParts, HotbarSlot,
+    InventoryState, InventoryStateParts, ItemDrop, ItemDropParts, ItemDropUpserts, ItemStack,
+    LookAngles, MotionState, MotionStateParts, PassiveDespawn, PassiveDespawnParts,
+    PassiveDespawnReason, PassiveDespawnRecord, PassiveId, PassiveSpawn, PassiveSpawnParts,
+    PassiveSpawnRecord, PassiveSpawnRecordParts, PassiveState, PassiveStateParts,
+    PassiveStateRecord, PassiveStateRecordParts, ProjectileId, ProjectileKind, ProjectileSpawn,
+    ProjectileSpawnParts, ProjectileSpawnRecord, ProjectileSpawnRecordParts, ProjectileState,
+    ProjectileStateParts, ProjectileStateRecord, ProjectileStateRecordParts, RemotePlayerSpawn,
+    RemotePlayerSpawnParts, RemotePlayerState, RemotePlayerStateParts, RemotePlayerStates,
+    SurvivalState, SurvivalStateParts, Weather,
+};
+use mornlea_protocol::{CONTAINER_KIND_CHEST, STACK_VIEW_CONTAINER};
+use mornlea_server::contracts::{
+    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, ChunkKey, DropRecord,
+    EnvironmentState, ProjectileRecord, RuleEffect, RuleTunables,
+};
+use mornlea_server::core::world::ReadyChunk;
+use mornlea_server::state::TickContext;
+use mornlea_storage::{
+    ChestSlot, Chunk, CompanionBody, ContainerSnapshot, FurnaceSlot, HostileMob, Inventory,
+    ItemStack as StorageStack, PassiveMob, PlayerId as SavePlayerId, PlayerLocation, StorageKind,
+    StoredPlayer,
+};
+
+const GRASS_BLOCK: u16 = 4;
+const DIRT_BLOCK: u16 = 3;
+const CHEST_BLOCK: u16 = 11;
+const FURNACE_BLOCK: u16 = 9;
+const ITEM_DIRT: u16 = 2;
+const ITEM_STONE: u16 = 1;
+const ITEM_STONE_HOE: u16 = 30;
+const ITEM_STICK: u16 = 37;
+const ITEM_RAW_IRON: u16 = 6;
+const ITEM_COAL: u16 = 5;
+const DROP_LIFETIME_MARGIN: u32 = 5_997;
+
+fn uuid(tag: u8) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[0] = tag.max(1);
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    bytes
+}
+
+fn companion_id(tag: u8) -> CompanionId {
+    CompanionId::try_from_bytes(uuid(tag)).unwrap()
+}
+
+/// The deterministic published companion name: `companion-` plus the
+/// lowercase hex of the identity's first eight bytes.
+fn derived_name(id: CompanionId) -> String {
+    let mut text = String::from("companion-");
+    for byte in &id.bytes()[..8] {
+        text.push_str(&format!("{byte:02x}"));
+    }
+    text
+}
+
+fn chunk_key(x: i32, z: i32) -> ChunkKey {
+    ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(x, z),
+    }
+}
+
+fn air_chunk() -> Chunk {
+    Chunk {
+        sections: vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![],
+            };
+            24
+        ],
+        drops: vec![Default::default(); 32],
+        furnaces: vec![FurnaceSlot::default(); 32],
+        chests: vec![ChestSlot::default(); 16],
+    }
+}
+
+/// Writes one block cell into a compact chunk, converting the touched section
+/// to direct storage the way the container fixtures do.
+fn set_cell(chunk: &mut Chunk, pos: BlockPos, block: u16) {
+    let index = mornlea_domain::chunk_block_index(pos) as usize;
+    let section = &mut chunk.sections[index / 4096];
+    if section.kind == StorageKind::Single {
+        *section = ContainerSnapshot {
+            kind: StorageKind::Direct,
+            bits: 15,
+            single: 0,
+            palette: vec![],
+            packed: vec![0; 1024],
+        };
+    }
+    section.packed[(index % 4096) / 4] |= u64::from(block) << ((index % 4) * 15);
+}
+
+/// A walkable chunk: one grass layer at y 64 across the whole column.
+fn ground_chunk() -> Chunk {
+    let mut chunk = air_chunk();
+    for x in 0..16 {
+        for z in 0..16 {
+            set_cell(&mut chunk, BlockPos::new(x, 64, z), GRASS_BLOCK);
+        }
+    }
+    chunk
+}
+
+/// Installs one active chest slot at the given cell and returns its reference.
+fn chest_in_chunk(
+    chunk: &mut Chunk,
+    pos: BlockPos,
+    items: [StorageStack; 27],
+) -> mornlea_domain::ContainerRef {
+    set_cell(chunk, pos, CHEST_BLOCK);
+    let index = mornlea_domain::chunk_block_index(pos) as u32;
+    chunk.chests[0] = ChestSlot {
+        generation: 1,
+        active: true,
+        block_index: index,
+        items,
+    };
+    mornlea_domain::ContainerRef::try_new(
+        ChunkPos::new(pos.x() >> 4, pos.z() >> 4),
+        ContainerKind::Chest,
+        0,
+        1,
+    )
+    .unwrap()
+}
+
+/// Installs one active furnace slot at the given cell and returns its
+/// reference.
+fn furnace_in_chunk(
+    chunk: &mut Chunk,
+    pos: BlockPos,
+    input: StorageStack,
+    fuel: StorageStack,
+    output: StorageStack,
+) -> mornlea_domain::ContainerRef {
+    set_cell(chunk, pos, FURNACE_BLOCK);
+    let index = mornlea_domain::chunk_block_index(pos) as u32;
+    chunk.furnaces[1] = FurnaceSlot {
+        generation: 1,
+        active: true,
+        block_index: index,
+        input,
+        fuel,
+        output,
+        burn_ticks: 0,
+        progress_ticks: 0,
+    };
+    mornlea_domain::ContainerRef::try_new(
+        ChunkPos::new(pos.x() >> 4, pos.z() >> 4),
+        ContainerKind::Furnace,
+        1,
+        1,
+    )
+    .unwrap()
+}
+
+fn day_environment(world_time: u64) -> EnvironmentState {
+    EnvironmentState {
+        seed: WORLD_SEED,
+        next_tick: 0,
+        world_time,
+        day_phase_offset: 0,
+        season_offset: 0,
+        weather: Weather::Clear,
+        weather_remaining: 0,
+        difficulty: 0,
+        tunables: RuleTunables::source_defaults(),
+    }
+}
+
+fn survival() -> SurvivalState {
+    SurvivalState::try_new(SurvivalStateParts {
+        health: 20,
+        oxygen: 300,
+        hunger: 20,
+        saturation_zero: false,
+        armor_points: 0,
+    })
+    .unwrap()
+}
+
+fn look(yaw: f32, pitch: f32) -> LookAngles {
+    LookAngles::try_new(yaw, pitch).unwrap()
+}
+
+fn companion_actor(id: CompanionId, position: [f32; 3], yaw: f32) -> ActorRecord {
+    ActorRecord::try_new(
+        ActorKey::Companion(id),
+        ActorLifecycle::Active,
+        Dimension::OVERWORLD,
+        MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        }),
+        look(yaw, 0.0),
+        survival(),
+        ActorBody::Companion(CompanionBody {
+            id: SavePlayerId::from_bytes(id.bytes()),
+            dimension: 0,
+            position,
+            yaw,
+            pitch: 0.0,
+            inventory: Inventory::default(),
+        }),
+    )
+    .unwrap()
+}
+
+fn hostile_actor(id: u64, position: [f32; 3], kind: u8) -> ActorRecord {
+    ActorRecord::try_new(
+        ActorKey::Hostile(HostileId::try_new(id).unwrap()),
+        ActorLifecycle::Active,
+        Dimension::OVERWORLD,
+        MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        }),
+        look(0.0, 0.0),
+        survival(),
+        ActorBody::Hostile(HostileMob {
+            id,
+            dimension: 0,
+            position,
+            velocity: [0.0; 3],
+            on_ground: true,
+            yaw: 0.0,
+            health: 20,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 20,
+            has_target: false,
+            player_id: SavePlayerId::from_bytes([0; 16]),
+            next_repath_ticks: 0,
+            distant_ticks: 0,
+            kind,
+        }),
+    )
+    .unwrap()
+}
+
+fn passive_actor(id: u64, position: [f32; 3]) -> ActorRecord {
+    ActorRecord::try_new(
+        ActorKey::Passive(PassiveId::try_new(id).unwrap()),
+        ActorLifecycle::Active,
+        Dimension::OVERWORLD,
+        MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        }),
+        look(0.0, 0.0),
+        survival(),
+        ActorBody::Passive(PassiveMob {
+            id,
+            dimension: 0,
+            position,
+            velocity: [0.0; 3],
+            on_ground: true,
+            yaw: 0.0,
+            health: 20,
+        }),
+    )
+    .unwrap()
+}
+
+/// The neutral passive runtime the combat settlement row requires: an
+/// inactive graze lane at home beside the spawn column.
+fn passive_runtime(id: PassiveId) -> ActorRuntime {
+    ActorRuntime {
+        key: ActorKey::Passive(id),
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 0,
+        peak_y: 65.0,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Passive {
+            home: BlockPos::new(8, 65, 8),
+            flee_ticks: 0,
+            flee_from: None,
+            graze_ticks: 0,
+            graze_at: None,
+            fresh: false,
+        },
+    }
+}
+
+fn drop_record(slot: u8, age: u32, position: [f32; 3]) -> DropRecord {
+    DropRecord {
+        id: DropId::try_new(0, ChunkPos::new(0, 0), slot, 1).unwrap(),
+        position: FiniteVec3::try_new(position).unwrap(),
+        stack: StorageStack {
+            item: ITEM_COAL,
+            count: 2,
+            durability: 0,
+        },
+        pickup_delay: 5,
+        age,
+    }
+}
+
+fn stack(item: u16, count: u8) -> ItemStack {
+    ItemStack::try_new(item, count, 0).unwrap()
+}
+
+fn storage(item: u16, count: u8) -> StorageStack {
+    StorageStack {
+        item,
+        count,
+        durability: 0,
+    }
+}
+
+fn storage_array<const N: usize>(filled: &[(usize, u16, u8)]) -> [StorageStack; N] {
+    let mut slots = [StorageStack::default(); N];
+    for (index, item, count) in filled {
+        slots[*index] = storage(*item, *count);
+    }
+    slots
+}
+
+fn item_array<const N: usize>(filled: &[(usize, u16, u8)]) -> [ItemStack; N] {
+    let mut slots = [ItemStack::EMPTY; N];
+    for (index, item, count) in filled {
+        slots[*index] = stack(*item, *count);
+    }
+    slots
+}
+
+/// One stored player the load port hands the login, pinning the exact spawn
+/// pose and inventory the publication cases assert against.
+fn stored_player(
+    tag: u8,
+    name: &str,
+    position: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    customize: impl FnOnce(&mut StoredPlayer),
+) -> StoredPlayer {
+    let mut player = StoredPlayer {
+        player_id: SavePlayerId::from_bytes(uuid(tag)),
+        revision: 1,
+        display_name: name.to_owned(),
+        current: PlayerLocation {
+            dimension: 0,
+            position,
+        },
+        yaw,
+        pitch,
+        safe: None,
+        inventory: Inventory::default(),
+        health: 20,
+        hunger: 20,
+        saturation_milli: 5_000,
+        exhaustion_milli: 0,
+        respawn_present: false,
+        respawn_position: [0.0; 3],
+        respawn_dimension: 0,
+        armor: [StorageStack::default(); 4],
+        needs_rewrite: false,
+    };
+    customize(&mut player);
+    player
+}
+
+/// One tick's events addressed to one session, as exact domain values.
+fn session_events(publication: &TickPublication, session: SessionKey) -> Vec<Event> {
+    publication
+        .events
+        .iter()
+        .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+        .map(|event| event.event().clone())
+        .collect()
+}
+
+/// Decodes one drained frame as a Play-state server packet.
+fn decode_play(frame: &[u8]) -> ServerPacket {
+    let parsed = read_frame_ref(frame).unwrap();
+    ProtocolCodec::new()
+        .unwrap()
+        .decode_server(State::Play, parsed.packet_id, parsed.payload)
+        .unwrap()
+}
+
+/// One admitted player through either real adapter: its transport connection
+/// and the session the authority assigned.
+#[derive(Clone)]
+struct Peer {
+    conn: ConnectionId,
+    session: SessionKey,
+}
+
+/// The shared driving surface behind both real transports: staged stored
+/// logins, client packets through the real transport ingress, one real
+/// authority tick per published output, between-tick fixture staging on the
+/// committed residents, and per-session outbox drains. Every publication
+/// parity case runs the identical scenario through this surface twice.
+trait ParityAdapter {
+    /// The real endpoint the adapter serves.
+    fn endpoint(&mut self) -> &mut RealEndpoint;
+
+    /// Drives one login through the real handshake and returns its handles.
+    fn login(&mut self, tag: u8, name: &str) -> Peer;
+
+    /// Submits one client packet through the real transport ingress.
+    fn send_packet(&mut self, conn: ConnectionId, packet: &ClientPacket);
+
+    /// Drops the peer's connection, retiring its session.
+    fn close_peer(&mut self, conn: ConnectionId);
+
+    /// Stages one stored player for the named tag's next login.
+    fn stage_login(&mut self, tag: u8, stored: StoredPlayer) {
+        self.endpoint().loads.stage_player(player(tag), stored);
+    }
+
+    /// Stages fixtures between ticks through the between-tick restage seam,
+    /// seeded from the committed residents.
+    fn stage(&mut self, staged: Box<dyn FnOnce(&mut TickContext<'_>)>) {
+        let authority = &mut self.endpoint().authority;
+        let mut context = TickContext::restage(authority, TickBudget::full());
+        staged(&mut context);
+        let residents = context.resident_snapshot();
+        drop(context);
+        authority.commit_residents(residents);
+    }
+
+    /// One real tick. `advance_tick` itself publishes the tick's frames
+    /// into the per-session outboxes; re-publishing would duplicate every
+    /// frame, so the default only captures the publication both adapters
+    /// must agree on.
+    fn tick(&mut self) -> TickPublication {
+        self.endpoint()
+            .authority
+            .advance_tick(TickBudget::full())
+            .unwrap()
+    }
+
+    /// Drains one session's published frames under the outbox budgets.
+    fn drain(&mut self, session: SessionKey) -> Vec<Vec<u8>> {
+        self.endpoint().take_outbox(session, 512, 8 << 20).unwrap()
+    }
+}
+
+/// The walker's foot chunk column inside its own dimension.
+fn foot_chunk(adapter: &mut dyn ParityAdapter, session: SessionKey) -> ChunkPos {
+    let residents = adapter.endpoint().authority.residents();
+    let actor = residents
+        .actors
+        .iter()
+        .find(|actor| actor.key == ActorKey::Player(session))
+        .expect("the player actor stays resident");
+    let position = actor.motion.position().get();
+    ChunkPos::new(
+        (position[0].floor() as i32) >> 4,
+        (position[2].floor() as i32) >> 4,
+    )
+}
+
+/// Submits one eastbound sprint through the real ingress, then ticks until
+/// the walker's foot chunk reaches `target_x`, publishing and draining every
+/// tick so the walk stays inside the outbox bounds. Returns every walk
+/// publication in order; the last one carries the interest transition.
+fn walk_east(
+    adapter: &mut dyn ParityAdapter,
+    peers: &[Peer],
+    walker: &Peer,
+    sequence: u64,
+    target_x: i32,
+    max_ticks: usize,
+) -> Vec<TickPublication> {
+    adapter.send_packet(
+        walker.conn,
+        &ClientPacket::PlayerInput(
+            mornlea_protocol::PlayerInput::new(
+                sequence,
+                0,
+                1,
+                false,
+                -std::f32::consts::FRAC_PI_2,
+                0.0,
+                false,
+                false,
+                true,
+                false,
+            )
+            .unwrap(),
+        ),
+    );
+    let mut publications = Vec::new();
+    for _ in 0..max_ticks {
+        let publication = adapter.tick();
+        for peer in peers {
+            adapter.drain(peer.session);
+        }
+        let reached = foot_chunk(adapter, walker.session).x() >= target_x;
+        publications.push(publication);
+        if reached {
+            return publications;
+        }
+    }
+    panic!("the eastbound walk never reached chunk x {target_x} within {max_ticks} ticks");
+}
+
+/// The memory adapter: the real in-process transport link in front of the
+/// same real endpoint.
+struct MemoryParity {
+    link: MemoryTransport,
+    endpoint: RealEndpoint,
+    clock: StepClock,
+}
+
+impl MemoryParity {
+    fn new() -> Self {
+        Self {
+            link: MemoryTransport::new(),
+            endpoint: RealEndpoint::new(),
+            clock: StepClock::new(),
+        }
+    }
+}
+
+impl ParityAdapter for MemoryParity {
+    fn endpoint(&mut self) -> &mut RealEndpoint {
+        &mut self.endpoint
+    }
+
+    fn login(&mut self, tag: u8, name: &str) -> Peer {
+        let id = self.link.connect(self.clock.monotonic()).unwrap();
+        assert_eq!(
+            self.link
+                .send(id, frame(&hello_packet()), &mut self.endpoint, &self.clock),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        let hello_out = self.link.receive(id, 8, 1 << 20);
+        assert_eq!(hello_out.len(), 1);
+        assert_eq!(
+            self.link.acknowledge(id, 1, &mut self.endpoint),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        assert_eq!(
+            self.link.send(
+                id,
+                frame(&login_packet(tag, name)),
+                &mut self.endpoint,
+                &self.clock
+            ),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        let ticket = self.endpoint.loads.last.expect("login started");
+        assert_eq!(
+            self.link.poll(id, &mut self.endpoint, &self.clock),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        let success_out = self.link.receive(id, 8, 1 << 20);
+        assert_eq!(success_out.len(), 1);
+        assert_eq!(
+            decode_server(&success_out[0]),
+            ServerPacket::LoginSuccess(LoginSuccess::new(player(tag), WORLD_SEED as u64))
+        );
+        assert_eq!(
+            self.link.acknowledge(id, 1, &mut self.endpoint),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        Peer {
+            conn: id,
+            session: self.endpoint.committed_session(ticket),
+        }
+    }
+
+    fn send_packet(&mut self, conn: ConnectionId, packet: &ClientPacket) {
+        assert_eq!(
+            self.link
+                .send(conn, frame(packet), &mut self.endpoint, &self.clock),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+    }
+
+    fn close_peer(&mut self, conn: ConnectionId) {
+        self.link
+            .close(conn, CloseReason::PeerGone, &mut self.endpoint);
+    }
+}
+
+/// The TCP adapter: the real loopback listener in front of the same real
+/// endpoint, holding each peer's client socket for wire reads.
+struct TcpParity {
+    harness: TcpHarness,
+    clients: BTreeMap<u64, ClientConn>,
+}
+
+impl TcpParity {
+    fn new() -> Self {
+        Self {
+            harness: TcpHarness::new(),
+            clients: BTreeMap::new(),
+        }
+    }
+
+    /// Forwards one session's published frames onto the live socket and reads
+    /// them back through the client's frame reader.
+    fn socket_frames(&mut self, peer: &Peer, count: usize) -> Vec<Vec<u8>> {
+        let forwarded = self
+            .harness
+            .server
+            .forward_outbox(
+                peer.conn,
+                peer.session,
+                &mut self.harness.endpoint,
+                64,
+                1 << 20,
+            )
+            .unwrap();
+        assert_eq!(forwarded.len(), count, "the socket receives every frame");
+        let client = self.clients.get_mut(&peer.conn.get()).unwrap();
+        (0..count).map(|_| client.next_frame()).collect()
+    }
+}
+
+impl ParityAdapter for TcpParity {
+    fn endpoint(&mut self) -> &mut RealEndpoint {
+        &mut self.harness.endpoint
+    }
+
+    fn login(&mut self, tag: u8, name: &str) -> Peer {
+        let mut client = ClientConn::connect(self.harness.addr());
+        let id = accept_next(&mut self.harness);
+        client.send(&hello_frame());
+        spin_frames(&mut self.harness, id, 1);
+        let (sent, _) = self
+            .harness
+            .server
+            .flush_out(id, &mut self.harness.endpoint);
+        assert_eq!(sent, 1, "hello answer flushes exactly one frame");
+        assert_eq!(
+            client.next_frame(),
+            control_frame(&ServerPacket::ServerHello(
+                ServerHello::new(protocol()).unwrap()
+            ))
+        );
+        client.send(&login_start_frame(tag, name));
+        spin_frames(&mut self.harness, id, 1);
+        let ticket = self.harness.endpoint.loads.last.expect("login started");
+        match self
+            .harness
+            .server
+            .poll(id, &mut self.harness.endpoint, &self.harness.clock)
+        {
+            ConnectionProgress::Advanced { frames } => assert_eq!(frames, 1),
+            other => panic!("ready load queues the success frame, got {other:?}"),
+        }
+        let (sent, _) = self
+            .harness
+            .server
+            .flush_out(id, &mut self.harness.endpoint);
+        assert_eq!(sent, 1, "success flushes exactly once");
+        assert_eq!(
+            client.next_frame(),
+            control_frame(&ServerPacket::LoginSuccess(LoginSuccess::new(
+                player(tag),
+                WORLD_SEED as u64
+            )))
+        );
+        self.clients.insert(id.get(), client);
+        Peer {
+            conn: id,
+            session: self.harness.endpoint.committed_session(ticket),
+        }
+    }
+
+    fn send_packet(&mut self, conn: ConnectionId, packet: &ClientPacket) {
+        let bytes = frame(packet);
+        self.clients
+            .get_mut(&conn.get())
+            .expect("the peer socket stays owned")
+            .send(&bytes);
+        spin_frames(&mut self.harness, conn, 1);
+    }
+
+    fn close_peer(&mut self, conn: ConnectionId) {
+        self.harness
+            .server
+            .close(conn, CloseReason::PeerGone, &mut self.harness.endpoint);
+    }
+}
+
+/// Seeds the shared world: the day environment and the standing ground chunk
+/// under the spawn column.
+fn seed_day_world(adapter: &mut dyn ParityAdapter) {
+    adapter.stage(Box::new(|context| {
+        context
+            .stage(RuleEffect::Environment(day_environment(1_000)))
+            .unwrap();
+        context.preload_ready_chunk(
+            ReadyChunk::try_new(chunk_key(0, 0), 1, 1, ground_chunk()).unwrap(),
+        );
+    }));
+}
+
+/// One decoded publication packet's family name, for ordered-wire
+/// assertions over the frozen family order.
+fn family(packet: &ServerPacket) -> &'static str {
+    match packet {
+        ServerPacket::ServerHello(_) => "server-hello",
+        ServerPacket::HandshakeReject(_) => "handshake-reject",
+        ServerPacket::LoginSuccess(_) => "login-success",
+        ServerPacket::LoginReject(_) => "login-reject",
+        ServerPacket::ChunkSnapshot(_) => "chunk-snapshot",
+        ServerPacket::BlockChanges(_) => "block-changes",
+        ServerPacket::ForgetChunks(_) => "forget-chunks",
+        ServerPacket::PlayerState(_) => "player-state",
+        ServerPacket::CommandRejected(_) => "command-rejected",
+        ServerPacket::KeepAlive(_) => "keep-alive",
+        ServerPacket::Disconnect(_) => "disconnect",
+        ServerPacket::RemotePlayerSpawn(_) => "remote-spawn",
+        ServerPacket::RemotePlayerDespawn(_) => "remote-despawn",
+        ServerPacket::RemotePlayerStates(_) => "remote-states",
+        ServerPacket::InventoryState(_) => "inventory-state",
+        ServerPacket::ItemDropUpserts(_) => "drop-upserts",
+        ServerPacket::ItemDropRemoves(_) => "drop-removes",
+        ServerPacket::FurnaceState(_) => "furnace-state",
+        ServerPacket::ContainerClosed(_) => "container-closed",
+        ServerPacket::ChestState(_) => "chest-state",
+        ServerPacket::ChatEvent(_) => "chat",
+        ServerPacket::CompanionSpawn(_) => "companion-spawn",
+        ServerPacket::CompanionStates(_) => "companion-states",
+        ServerPacket::CompanionDespawn(_) => "companion-despawn",
+        ServerPacket::PlaceBlockSucceeded(_) => "place-block-succeeded",
+        ServerPacket::CraftingState(_) => "crafting-state",
+        ServerPacket::HostileSpawn(_) => "hostile-spawn",
+        ServerPacket::HostileState(_) => "hostile-state",
+        ServerPacket::HostileDespawn(_) => "hostile-despawn",
+        ServerPacket::CombatHit(_) => "combat-hit",
+        ServerPacket::PassiveSpawn(_) => "passive-spawn",
+        ServerPacket::PassiveState(_) => "passive-state",
+        ServerPacket::PassiveDespawn(_) => "passive-despawn",
+        ServerPacket::ProjectileSpawn(_) => "projectile-spawn",
+        ServerPacket::ProjectileState(_) => "projectile-state",
+        ServerPacket::ProjectileDespawn(_) => "projectile-despawn",
+    }
+}
+
+/// Builds Ada's chat event with the exact published identity.
+fn ada_chat(event_id: u64, body: ChatBody) -> Event {
+    Event::Chat(
+        ChatEvent::try_new(ChatEventParts {
+            event_id,
+            player_id: player(1),
+            player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
+            body,
+        })
+        .unwrap(),
+    )
+}
+
+/// The chat parity scenario: two logged-in players and one staged companion
+/// exchange malformed, unknown, and accepted chat in one tick, then one more
+/// accepted chat on the next tick. Returns both published ticks plus the
+/// frames each session drained after the first tick.
+struct ChatCapture {
+    ticks: Vec<TickPublication>,
+    sender_frames: Vec<Vec<u8>>,
+    peer_frames: Vec<Vec<u8>>,
+}
+
+fn chat_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture {
+    seed_day_world(adapter);
+    let ada = adapter.login(1, "Ada");
+    let bea = adapter.login(2, "Bea");
+    let id = companion_id(9);
+    let name = derived_name(id);
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Actor(companion_actor(
+                id,
+                [8.5, 65.0, 8.5],
+                0.0,
+            )))
+            .unwrap();
+        context.preload_drop(drop_record(3, DROP_LIFETIME_MARGIN, [0.5, 65.5, 2.5]));
+    }));
+    let accepted_name = CompanionName::try_from_canonical(name).unwrap();
+
+    let chat =
+        |text: String| ClientPacket::ChatCommand(mornlea_protocol::ChatCommand::new(text).unwrap());
+    adapter.send_packet(ada.conn, &chat("hello".to_owned()));
+    adapter.send_packet(ada.conn, &chat("@nobody dig".to_owned()));
+    adapter.send_packet(
+        ada.conn,
+        &chat(format!("@{} mine stone", accepted_name.as_str())),
+    );
+    let tick_a = adapter.tick();
+    let sender_frames = adapter.drain(ada.session);
+    let peer_frames = adapter.drain(bea.session);
+
+    adapter.send_packet(ada.conn, &chat(format!("@{} dig", accepted_name.as_str())));
+    let tick_b = adapter.tick();
+    let _ = adapter.drain(ada.session);
+    let _ = adapter.drain(bea.session);
+
+    // The exact published bodies, addressed exactly.
+    assert_eq!(
+        tick_counters(&tick_a),
+        (0, 0, 0),
+        "chat enqueues no commands"
+    );
+    let sender_events = session_events(&tick_a, ada.session);
+    assert_eq!(
+        sender_events
+            .iter()
+            .filter(|event| matches!(event, Event::Chat(_)))
+            .count(),
+        2,
+        "the sender observes both rejects; the accepted chat is broadcast"
+    );
+    let malformed = ada_chat(1, ChatBody::InvalidFormat);
+    let unknown = ada_chat(
+        2,
+        ChatBody::UnknownCompanion {
+            name: CompanionName::try_from_canonical("nobody".to_owned()).unwrap(),
+        },
+    );
+    let accepted = ada_chat(
+        3,
+        ChatBody::Accepted {
+            companion: CompanionSpeaker::new(id, accepted_name.clone()),
+            command: CommandText::try_from_canonical("mine stone".to_owned()).unwrap(),
+        },
+    );
+    assert!(
+        sender_events.contains(&malformed),
+        "the malformed chat rejects with the exact event"
+    );
+    assert!(
+        sender_events.contains(&unknown),
+        "the unknown companion rejects with the exact event"
+    );
+    let chats: Vec<&mornlea_domain::ChatEvent> = tick_a
+        .events
+        .iter()
+        .filter_map(|event| match event.event() {
+            Event::Chat(chat_event) => Some(chat_event),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(chats.len(), 3);
+    for pair in chats.windows(2) {
+        assert!(
+            pair[0].event_id() < pair[1].event_id(),
+            "event ids increase"
+        );
+    }
+    let broadcast = tick_a
+        .events
+        .iter()
+        .find(|event| event.event() == &accepted)
+        .expect("the accepted chat broadcasts");
+    assert_eq!(broadcast.recipient(), EventRecipient::Broadcast);
+
+    // The peer's drained frames carry the broadcast but neither reject.
+    let reject_ids: Vec<u64> = chats.iter().map(|chat| chat.event_id()).collect();
+    assert_eq!(reject_ids, vec![1, 2, 3]);
+    let decoded: Vec<ServerPacket> = peer_frames.iter().map(|f| decode_play(f)).collect();
+    assert!(
+        decoded.iter().any(|packet| matches!(packet,
+            ServerPacket::ChatEvent(event) if event.event_id == 3)),
+        "the peer receives the broadcast chat"
+    );
+    assert!(
+        decoded.iter().all(|packet| !matches!(packet,
+            ServerPacket::ChatEvent(event) if event.event_id == 1 || event.event_id == 2)),
+        "the peer never receives the sender-only rejects"
+    );
+
+    // The chat family sits after the mob and drop families and before the
+    // record-state and private observation families.
+    let chat_index = tick_a
+        .events
+        .iter()
+        .position(|event| matches!(event.event(), Event::Chat(_)))
+        .unwrap();
+    let drop_index = tick_a
+        .events
+        .iter()
+        .position(|event| matches!(event.event(), Event::ItemDropUpserts(_)))
+        .expect("the staged drop publishes before chat");
+    let player_index = tick_a
+        .events
+        .iter()
+        .position(|event| matches!(event.event(), Event::PlayerState(_)))
+        .unwrap();
+    assert!(drop_index < chat_index && chat_index < player_index);
+
+    // The second tick continues the id sequence with one more accepted chat.
+    assert_eq!(tick_counters(&tick_b), (0, 0, 0));
+    let continued = ada_chat(
+        4,
+        ChatBody::Accepted {
+            companion: CompanionSpeaker::new(id, accepted_name),
+            command: CommandText::try_from_canonical("dig".to_owned()).unwrap(),
+        },
+    );
+    let tick_b_chats: Vec<&Event> = tick_b
+        .events
+        .iter()
+        .map(|event| event.event())
+        .filter(|event| matches!(event, Event::Chat(_)))
+        .collect();
+    assert_eq!(tick_b_chats, vec![&continued]);
+
+    ChatCapture {
+        ticks: vec![tick_a, tick_b],
+        sender_frames,
+        peer_frames,
+    }
+}
+
+/// Chat addressing through both real adapters: malformed and unknown
+/// addressing reject to the sender only, a valid command broadcasts to both
+/// sessions, ids stay strictly increasing across ticks, chat never enqueues a
+/// sequenced command, and the family order keeps chat after the drop family
+/// and before the record-state families.
+#[test]
+fn chat_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = chat_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = chat_scenario(&mut tcp);
+    assert_eq!(
+        memory.ticks, tcp.ticks,
+        "chat publications are identical across the real adapters"
+    );
+    assert_eq!(
+        memory.sender_frames, tcp.sender_frames,
+        "the sender's drained frames match byte for byte"
+    );
+    assert_eq!(
+        memory.peer_frames, tcp.peer_frames,
+        "the peer's drained frames match byte for byte"
+    );
+}
+
+/// The remote-player lifecycle scenario: Ada ticks alone, Bea logs in nearby,
+/// both exchange the exact spawn then state batches, and Bea's close despawns
+/// her on Ada's next tick while the retired Bea receives nothing.
+fn remote_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+
+    // Ada alone publishes no remote family at all.
+    let solo = adapter.tick();
+    assert!(
+        !solo.events.iter().any(|event| matches!(
+            event.event(),
+            Event::RemotePlayerSpawn(_)
+                | Event::RemotePlayerStates(_)
+                | Event::RemotePlayerDespawn(_)
+        )),
+        "a lone session exchanges no remote events"
+    );
+    let _ = adapter.drain(ada.session);
+
+    // Bea logs in nearby: the spawn tick carries the exact spawn record and
+    // no state batch.
+    adapter.stage_login(
+        2,
+        stored_player(2, "Bea", [4.5, 65.0, 4.5], 0.75, -0.25, |_| {}),
+    );
+    let bea = adapter.login(2, "Bea");
+    let spawn_tick = adapter.tick();
+    let expected_spawn = RemotePlayerSpawn::new(RemotePlayerSpawnParts {
+        player_id: player(2),
+        display_name: DisplayName::try_from_canonical("Bea".to_owned()).unwrap(),
+        server_tick: 1,
+        dimension: Dimension::OVERWORLD,
+        position: FiniteVec3::try_new([4.5, 65.0, 4.5]).unwrap(),
+        look: look(0.75, -0.25),
+    });
+    let ada_events = session_events(&spawn_tick, ada.session);
+    assert_eq!(
+        ada_events
+            .iter()
+            .filter(|event| matches!(event, Event::RemotePlayerSpawn(_)))
+            .count(),
+        1
+    );
+    assert!(
+        ada_events.iter().any(
+            |event| matches!(event, Event::RemotePlayerSpawn(spawn) if *spawn == expected_spawn)
+        ),
+        "Ada sees Bea's exact spawn record"
+    );
+    assert!(
+        !ada_events
+            .iter()
+            .any(|event| matches!(event, Event::RemotePlayerStates(_))),
+        "the spawn tick publishes no remote state batch"
+    );
+    let bea_events = session_events(&spawn_tick, bea.session);
+    assert!(
+        bea_events
+            .iter()
+            .any(|event| matches!(event, Event::RemotePlayerSpawn(spawn)
+                if spawn.player_id() == player(1) && spawn.server_tick() == 1)),
+        "Bea sees Ada spawn on the same tick"
+    );
+    for peer in [&ada, &bea] {
+        let _ = adapter.drain(peer.session);
+    }
+
+    // The next tick carries one exact persisting state batch and no respawn.
+    let state_tick = adapter.tick();
+    let expected_states = RemotePlayerStates::try_new(mornlea_domain::RemotePlayerStatesParts {
+        server_tick: 2,
+        states: vec![RemotePlayerState::new(RemotePlayerStateParts {
+            player_id: player(2),
+            dimension: Dimension::OVERWORLD,
+            position: FiniteVec3::try_new([4.5, 65.0, 4.5]).unwrap(),
+            look: look(0.75, -0.25),
+            reset: false,
+        })]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    let ada_events = session_events(&state_tick, ada.session);
+    assert_eq!(
+        ada_events
+            .iter()
+            .filter(|event| matches!(event, Event::RemotePlayerStates(_)))
+            .count(),
+        1
+    );
+    assert!(
+        ada_events.iter().any(
+            |event| matches!(event, Event::RemotePlayerStates(batch) if *batch == expected_states)
+        ),
+        "the persisting batch carries Bea's exact static pose"
+    );
+    for peer in [&ada, &bea] {
+        let _ = adapter.drain(peer.session);
+    }
+
+    // Bea drops: the next tick despawns her on Ada's side, ordered before the
+    // same tick's new snapshot and the private observation, and the retired
+    // session receives nothing at all.
+    adapter.close_peer(bea.conn);
+    adapter.stage(Box::new(|context| {
+        context.preload_ready_chunk(
+            ReadyChunk::try_new(chunk_key(1, 0), 1, 1, ground_chunk()).unwrap(),
+        );
+    }));
+    let despawn_tick = adapter.tick();
+    let ada_events = session_events(&despawn_tick, ada.session);
+    let despawn = ada_events
+        .iter()
+        .position(|event| matches!(event, Event::RemotePlayerDespawn(despawn) if despawn.player_id() == player(2)))
+        .expect("Ada learns Bea left");
+    let snapshot = ada_events
+        .iter()
+        .position(|event| matches!(event, Event::ChunkSnapshot(_)))
+        .expect("the same tick carries a new snapshot");
+    assert!(
+        despawn < snapshot,
+        "the despawn precedes the same tick's snapshot"
+    );
+    assert!(
+        ada_events
+            .iter()
+            .any(|event| matches!(event, Event::PlayerState(_))),
+        "the private observation closes the tick"
+    );
+    assert!(
+        !ada_events
+            .iter()
+            .any(|event| matches!(event, Event::RemotePlayerStates(_))),
+        "the despawn tick publishes no remote state batch"
+    );
+    assert!(
+        !despawn_tick
+            .events
+            .iter()
+            .any(|event| event.recipient() == EventRecipient::Session(bea.session.get())),
+        "the retired session receives nothing"
+    );
+    let _ = adapter.drain(ada.session);
+
+    // One tick later the departure never repeats: the despawn family stays
+    // silent for the departed remote on every adapter.
+    let after_tick = adapter.tick();
+    let _ = adapter.drain(ada.session);
+    assert!(
+        !session_events(&after_tick, ada.session)
+            .iter()
+            .any(|event| matches!(
+                event,
+                Event::RemotePlayerDespawn(despawn) if despawn.player_id() == player(2)
+            )),
+        "the departed remote despawns exactly once"
+    );
+
+    vec![solo, spawn_tick, state_tick, despawn_tick, after_tick]
+}
+
+/// The remote-player spawn, state, and despawn publications through both real
+/// adapters, with the exact spawn records, the despawn-before-snapshot family
+/// order, and identical publications on every tick.
+#[test]
+fn remote_player_lifecycle_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = remote_lifecycle_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = remote_lifecycle_scenario(&mut tcp);
+    assert_eq!(
+        memory, tcp,
+        "the remote lifecycle publishes identically across the real adapters"
+    );
+}
+
+/// The companion lifecycle scenario: one staged companion near Ada publishes
+/// its derived-name spawn, a static state batch, and a despawn once Ada's
+/// real eastbound walk carries her interest square past the companion's
+/// column.
+fn companion_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+    let id = companion_id(9);
+    let name = derived_name(id);
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Actor(companion_actor(
+                id,
+                [8.5, 65.0, 8.5],
+                1.25,
+            )))
+            .unwrap();
+    }));
+
+    let spawn_tick = adapter.tick();
+    let events = session_events(&spawn_tick, ada.session);
+    let expected = CompanionSpawn::try_new(CompanionSpawnParts {
+        id,
+        name: CompanionName::try_from_canonical(name.clone()).unwrap(),
+        server_tick: 0,
+        dimension: Dimension::OVERWORLD,
+        position: FiniteVec3::try_new([8.5, 65.0, 8.5]).unwrap(),
+        look: look(1.25, 0.0),
+    })
+    .unwrap();
+    assert_eq!(name, "companion-0900000000004000");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::CompanionSpawn(_)))
+            .count(),
+        1
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::CompanionSpawn(spawn) if *spawn == expected)),
+        "the spawn carries the exact derived name {name}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::CompanionStates(_)))
+    );
+    let _ = adapter.drain(ada.session);
+
+    let state_tick = adapter.tick();
+    let events = session_events(&state_tick, ada.session);
+    let expected_states = CompanionStates::try_new(mornlea_domain::CompanionStatesParts {
+        server_tick: 1,
+        states: vec![
+            CompanionState::try_new(CompanionStateParts {
+                id,
+                dimension: Dimension::OVERWORLD,
+                position: FiniteVec3::try_new([8.5, 65.0, 8.5]).unwrap(),
+                look: look(1.25, 0.0),
+                reset: false,
+            })
+            .unwrap(),
+        ]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        events.iter().any(
+            |event| matches!(event, Event::CompanionStates(batch) if *batch == expected_states)
+        )
+    );
+    let _ = adapter.drain(ada.session);
+
+    // Walk east through staged ground so the companion's column leaves the
+    // interest square; the transition tick publishes the despawn.
+    adapter.stage(Box::new(|context| {
+        for x in 1..=4 {
+            context.preload_ready_chunk(
+                ReadyChunk::try_new(chunk_key(x, 0), 1, 1, ground_chunk()).unwrap(),
+            );
+        }
+    }));
+    let walk = walk_east(adapter, std::slice::from_ref(&ada), &ada, 1, 3, 700);
+    let transition = walk.last().unwrap();
+    let events = session_events(transition, ada.session);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::CompanionDespawn(despawn) if *despawn == CompanionDespawn::new(id)))
+            .count(),
+        1,
+        "the interest exit despawns the companion exactly once"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::CompanionStates(_))),
+        "the despawn tick carries no companion state batch"
+    );
+
+    // One tick later the departure never repeats: the interest exit despawns
+    // the companion exactly once on every adapter.
+    let after_tick = adapter.tick();
+    let _ = adapter.drain(ada.session);
+    assert!(
+        !session_events(&after_tick, ada.session)
+            .iter()
+            .any(|event| matches!(event, Event::CompanionDespawn(despawn) if *despawn == CompanionDespawn::new(id))),
+        "the departed companion despawns exactly once"
+    );
+
+    let mut ticks = vec![spawn_tick, state_tick];
+    ticks.extend(walk);
+    ticks.push(after_tick);
+    ticks
+}
+
+/// The companion spawn, state, and interest-exit despawn publications through
+/// both real adapters, with the exact derived name and identical
+/// publications on every tick of the walk.
+#[test]
+fn companion_lifecycle_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = companion_lifecycle_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = companion_lifecycle_scenario(&mut tcp);
+    assert_eq!(
+        memory, tcp,
+        "the companion lifecycle publishes identically across the real adapters"
+    );
+}
+
+/// One real placement command through the adapter with Ada's preloaded dirt.
+fn place_dirt(adapter: &mut dyn ParityAdapter, peer: &Peer, sequence: u64) {
+    adapter.send_packet(
+        peer.conn,
+        &ClientPacket::PlaceBlock(
+            mornlea_protocol::PlaceBlock::new(
+                sequence,
+                std::f32::consts::PI,
+                -std::f32::consts::FRAC_PI_4,
+                0,
+            )
+            .unwrap(),
+        ),
+    );
+}
+
+/// The chunk publication scenario: the first Ready contact publishes the
+/// exact snapshot, real placements publish exact contiguous deltas, a late
+/// subscriber two revisions behind gets a snapshot instead of a delta, and a
+/// real eastbound walk forgets the exact sorted exited columns.
+fn chunk_publication_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |player| {
+            player.inventory.hotbar.slots[0] = storage(ITEM_DIRT, 3);
+        }),
+    );
+    let ada = adapter.login(1, "Ada");
+
+    // First contact: the exact staged column.
+    let tick_a = adapter.tick();
+    let events = session_events(&tick_a, ada.session);
+    let snapshot = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ChunkSnapshot(snapshot) => Some(snapshot.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(snapshot.dimension(), Dimension::OVERWORLD);
+    assert_eq!(snapshot.chunk(), ChunkPos::new(0, 0));
+    assert_eq!(snapshot.revision(), 1);
+    for (x, z) in [(0, 0), (7, 3), (15, 15)] {
+        let index = mornlea_domain::chunk_block_index(BlockPos::new(x, 64, z)) as usize;
+        assert_eq!(
+            snapshot.sections()[8].block_at(index % 4096),
+            Some(GRASS_BLOCK)
+        );
+    }
+    assert_eq!(snapshot.sections()[0].block_at(0), Some(0));
+    let _ = adapter.drain(ada.session);
+
+    // One real placement becomes one exact contiguous delta.
+    place_dirt(adapter, &ada, 1);
+    let tick_b = adapter.tick();
+    let events = session_events(&tick_b, ada.session);
+    let expected = mornlea_domain::BlockChanges::try_new(mornlea_domain::BlockChangesParts {
+        dimension: Dimension::OVERWORLD,
+        chunk: ChunkPos::new(0, 0),
+        base_revision: 1,
+        new_revision: 2,
+        changes: vec![BlockChange::try_new(BlockPos::new(0, 65, 2), DIRT_BLOCK).unwrap()]
+            .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::BlockChanges(batch) if *batch == expected)),
+        "the first placement publishes the exact delta"
+    );
+    let _ = adapter.drain(ada.session);
+
+    // A second placement, then Ben logs in two revisions late: his first
+    // contact is a snapshot, not a delta.
+    place_dirt(adapter, &ada, 2);
+    adapter.stage_login(
+        2,
+        stored_player(2, "Ben", [1.5, 65.0, 1.5], 0.0, 0.0, |_| {}),
+    );
+    let ben = adapter.login(2, "Ben");
+    let tick_c = adapter.tick();
+    let ben_events = session_events(&tick_c, ben.session);
+    let late = ben_events
+        .iter()
+        .find_map(|event| match event {
+            Event::ChunkSnapshot(snapshot) => Some(snapshot.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(late.chunk(), ChunkPos::new(0, 0));
+    assert_eq!(late.revision(), 3, "the late subscriber sees a snapshot");
+    assert!(
+        !ben_events
+            .iter()
+            .any(|event| matches!(event, Event::BlockChanges(_)))
+    );
+    let ada_events = session_events(&tick_c, ada.session);
+    let expected = mornlea_domain::BlockChanges::try_new(mornlea_domain::BlockChangesParts {
+        dimension: Dimension::OVERWORLD,
+        chunk: ChunkPos::new(0, 0),
+        base_revision: 2,
+        new_revision: 3,
+        changes: vec![BlockChange::try_new(BlockPos::new(0, 65, 1), DIRT_BLOCK).unwrap()]
+            .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        ada_events
+            .iter()
+            .any(|event| matches!(event, Event::BlockChanges(batch) if *batch == expected)),
+        "the contiguous subscriber keeps receiving deltas"
+    );
+    for peer in [&ada, &ben] {
+        let _ = adapter.drain(peer.session);
+    }
+
+    // Both observers see one more contiguous delta after the late snapshot.
+    place_dirt(adapter, &ada, 3);
+    let tick_d = adapter.tick();
+    for peer in [&ada, &ben] {
+        let events = session_events(&tick_d, peer.session);
+        let delta = events
+            .iter()
+            .find_map(|event| match event {
+                Event::BlockChanges(batch) => Some(batch.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(delta.base_revision(), 3);
+        assert_eq!(delta.new_revision(), 4);
+        assert_eq!(
+            delta.changes(),
+            &[BlockChange::try_new(BlockPos::new(0, 66, 1), DIRT_BLOCK).unwrap()]
+        );
+        let _ = adapter.drain(peer.session);
+    }
+
+    // A real eastbound walk: the first interest transition forgets exactly
+    // the exited x -2 column, addressed to the walker alone.
+    adapter.stage(Box::new(|context| {
+        for x in 1..=2 {
+            context.preload_ready_chunk(
+                ReadyChunk::try_new(chunk_key(x, 0), 1, 1, ground_chunk()).unwrap(),
+            );
+        }
+    }));
+    let walk = walk_east(adapter, &[ada.clone(), ben.clone()], &ada, 4, 1, 700);
+    let transition = walk.last().expect("the walk published at least one tick");
+    let ada_events = session_events(transition, ada.session);
+    let mut exited = Vec::new();
+    for z in -2..=2 {
+        exited.push(ChunkPos::new(-2, z));
+    }
+    let expected = ForgetChunks::try_new(mornlea_domain::ForgetChunksParts {
+        dimension: Dimension::OVERWORLD,
+        chunks: exited.into_boxed_slice(),
+    })
+    .unwrap();
+    assert_eq!(
+        ada_events
+            .iter()
+            .filter(|event| matches!(event, Event::ForgetChunks(batch) if *batch == expected))
+            .count(),
+        1,
+        "the first interest exit forgets the exact sorted column list"
+    );
+    assert!(
+        !session_events(transition, ben.session)
+            .iter()
+            .any(|event| matches!(event, Event::ForgetChunks(_))),
+        "the forget batch belongs to the walker alone"
+    );
+
+    let mut ticks = vec![tick_a, tick_b, tick_c, tick_d];
+    ticks.extend(walk);
+    ticks
+}
+
+/// Chunk interest through both real adapters: the exact first snapshot, exact
+/// contiguous deltas from real placements, a snapshot for a late subscriber,
+/// and the exact forget batch from a real walk, with identical publications
+/// on every tick.
+#[test]
+fn chunk_snapshot_block_changes_forget_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = chunk_publication_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = chunk_publication_scenario(&mut tcp);
+    assert_eq!(
+        memory, tcp,
+        "chunk publications are identical across the real adapters"
+    );
+}
+
+/// The provider resync scenario: a wanted Ready column re-sends its full
+/// current snapshot regardless of `HaveRevision`, before the ordinary
+/// first-send snapshots of the same tick, while out-of-interest and unready
+/// requests publish nothing yet still consume their sequences.
+fn resync_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+    let first = adapter.tick();
+    assert_eq!(
+        session_events(&first, ada.session)
+            .iter()
+            .filter(|event| matches!(event, Event::ChunkSnapshot(_)))
+            .count(),
+        1,
+        "the first contact snapshots the seeded column"
+    );
+    let _ = adapter.drain(ada.session);
+
+    // One newly ready column beside the resync target, so the same tick
+    // carries one resync answer and one first send.
+    adapter.stage(Box::new(|context| {
+        context.preload_ready_chunk(
+            ReadyChunk::try_new(chunk_key(1, 0), 1, 1, ground_chunk()).unwrap(),
+        );
+    }));
+    let resync = |adapter: &mut dyn ParityAdapter,
+                  conn: ConnectionId,
+                  sequence: u64,
+                  x: i32,
+                  z: i32,
+                  have: u64| {
+        adapter.send_packet(
+            conn,
+            &ClientPacket::RequestChunkResync(RequestChunkResync::new(
+                sequence,
+                Dimension::OVERWORLD,
+                x,
+                z,
+                have,
+            )),
+        );
+    };
+    resync(adapter, ada.conn, 1, 0, 0, 999);
+    resync(adapter, ada.conn, 2, 9, 9, 1);
+    resync(adapter, ada.conn, 3, 2, 0, 1);
+    let tick_b = adapter.tick();
+    assert_eq!(
+        tick_counters(&tick_b),
+        (3, 0, 0),
+        "every resync consumes its command slot"
+    );
+    assert_eq!(
+        adapter
+            .endpoint()
+            .authority
+            .session(ada.session)
+            .unwrap()
+            .last_applied_sequence,
+        3,
+        "every resync advances the watermark"
+    );
+    let events = session_events(&tick_b, ada.session);
+    let snapshots: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ChunkSnapshot(snapshot) => Some(snapshot.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(snapshots.len(), 2, "only the wanted ready columns answer");
+    assert_eq!(snapshots[0].chunk(), ChunkPos::new(0, 0));
+    assert_eq!(snapshots[0].revision(), 1);
+    assert_eq!(snapshots[1].chunk(), ChunkPos::new(1, 0));
+    let _ = adapter.drain(ada.session);
+
+    // A second resync with a different HaveRevision replies the identical
+    // payload; `HaveRevision` is ignored.
+    resync(adapter, ada.conn, 4, 0, 0, 1);
+    let tick_c = adapter.tick();
+    assert_eq!(
+        tick_counters(&tick_c),
+        (1, 0, 0),
+        "the silently dropped requests still consume their command slots"
+    );
+    assert_eq!(
+        adapter
+            .endpoint()
+            .authority
+            .session(ada.session)
+            .unwrap()
+            .last_applied_sequence,
+        4
+    );
+    let events = session_events(&tick_c, ada.session);
+    let snapshots: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ChunkSnapshot(snapshot) => Some(snapshot.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].chunk(), ChunkPos::new(0, 0));
+    assert_eq!(snapshots[0].revision(), 1);
+    let first_answer = session_events(&tick_b, ada.session)
+        .into_iter()
+        .find_map(|event| match event {
+            Event::ChunkSnapshot(snapshot) if snapshot.chunk() == ChunkPos::new(0, 0) => {
+                Some(snapshot)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        snapshots[0], first_answer,
+        "the resync payload ignores HaveRevision"
+    );
+    let _ = adapter.drain(ada.session);
+
+    vec![first, tick_b, tick_c]
+}
+
+/// The provider resync lane through both real adapters: same-tick full
+/// snapshots at the current revision, `HaveRevision` ignored, silent drops
+/// for out-of-interest and unready columns, and advancing watermarks.
+#[test]
+fn request_chunk_resync_provider_matches_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = resync_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = resync_scenario(&mut tcp);
+    assert_eq!(
+        memory, tcp,
+        "the resync provider publishes identically across the real adapters"
+    );
+}
+
+/// The hostile lifecycle scenario under a staged night environment: one
+/// staged nightwalker publishes its exact spawn, a later motion tick its
+/// exact persisting state, and a staged lethal outcome publishes only the
+/// despawn. The wandering body derives from the post-tick committed record,
+/// asserted identically through both adapters.
+fn hostile_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    adapter.stage(Box::new(|context| {
+        context
+            .stage(RuleEffect::Environment(day_environment(14_000)))
+            .unwrap();
+        context.preload_ready_chunk(
+            ReadyChunk::try_new(chunk_key(0, 0), 1, 1, ground_chunk()).unwrap(),
+        );
+    }));
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+    let id = HostileId::try_new(31).unwrap();
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Actor(hostile_actor(31, [8.5, 65.0, 8.5], 0)))
+            .unwrap();
+    }));
+
+    let spawn_tick = adapter.tick();
+    let events = session_events(&spawn_tick, ada.session);
+    let expected = HostileSpawn::try_new(HostileSpawnParts {
+        server_tick: 0,
+        spawns: vec![
+            HostileSpawnRecord::try_new(HostileSpawnRecordParts {
+                id,
+                dimension: Dimension::OVERWORLD,
+                position: FiniteVec3::try_new([8.5, 65.0, 8.5]).unwrap(),
+                yaw: 0.0,
+                health: 20,
+                kind: HostileKind::Nightwalker,
+            })
+            .unwrap(),
+        ]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::HostileSpawn(batch) if *batch == expected)),
+        "the staged nightwalker publishes its exact spawn record"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::HostileState(_)))
+    );
+    let _ = adapter.drain(ada.session);
+
+    // One motion tick: the persisting batch carries the committed body.
+    let state_tick = adapter.tick();
+    let committed = {
+        let residents = adapter.endpoint().authority.residents();
+        residents
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Hostile(id))
+            .cloned()
+            .unwrap()
+    };
+    let expected = HostileState::try_new(HostileStateParts {
+        server_tick: 1,
+        states: vec![
+            HostileStateRecord::try_new(HostileStateRecordParts {
+                id,
+                position: committed.motion.position(),
+                velocity: committed.motion.velocity(),
+                yaw: committed.look.yaw(),
+                health: committed.survival.health(),
+                kind: HostileKind::Nightwalker,
+            })
+            .unwrap(),
+        ]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    let events = session_events(&state_tick, ada.session);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::HostileState(_)))
+            .count(),
+        1
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::HostileState(batch) if *batch == expected)),
+        "the persisting batch carries the exact committed body"
+    );
+    let _ = adapter.drain(ada.session);
+
+    // The staged lethal outcome: only the despawn remains.
+    adapter.stage(Box::new(move |context| {
+        let mut actor = context
+            .read()
+            .actor(ActorKey::Hostile(id))
+            .cloned()
+            .unwrap();
+        actor.lifecycle = ActorLifecycle::Dead;
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+    }));
+    let despawn_tick = adapter.tick();
+    let events = session_events(&despawn_tick, ada.session);
+    let expected = mornlea_domain::HostileDespawn::try_new(mornlea_domain::HostileDespawnParts {
+        server_tick: 2,
+        ids: vec![id].into_boxed_slice(),
+    })
+    .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::HostileDespawn(_)))
+            .count(),
+        1
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::HostileDespawn(batch) if *batch == expected)),
+        "the death publishes the exact despawn batch"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::HostileState(_))),
+        "the dead hostile is absent from the state family"
+    );
+    let _ = adapter.drain(ada.session);
+
+    // One tick later the departure never repeats on either adapter.
+    let after_tick = adapter.tick();
+    let _ = adapter.drain(ada.session);
+    assert!(
+        !session_events(&after_tick, ada.session)
+            .iter()
+            .any(|event| matches!(
+                event,
+                Event::HostileDespawn(batch) if batch.ids().contains(&id)
+            )),
+        "the dead hostile despawns exactly once"
+    );
+
+    vec![spawn_tick, state_tick, despawn_tick, after_tick]
+}
+
+/// The hostile spawn, state, and death-despawn publications through both real
+/// adapters under the night environment, with identical publications on every
+/// tick.
+#[test]
+fn hostile_lifecycle_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = hostile_lifecycle_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = hostile_lifecycle_scenario(&mut tcp);
+    assert_eq!(
+        memory, tcp,
+        "the hostile lifecycle publishes identically across the real adapters"
+    );
+}
+
+/// The passive lifecycle scenario: one staged cow publishes its spawn, its
+/// persisting state, and the vanished despawn once removed. Settled body
+/// values derive from the post-tick committed record, asserted identically
+/// through both adapters.
+fn passive_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+    let id = PassiveId::try_new(7).unwrap();
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Actor(passive_actor(7, [8.5, 65.0, 8.5])))
+            .unwrap();
+        context
+            .stage(RuleEffect::Runtime(passive_runtime(id)))
+            .unwrap();
+    }));
+
+    let spawn_tick = adapter.tick();
+    let committed = {
+        let residents = adapter.endpoint().authority.residents();
+        residents
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Passive(id))
+            .cloned()
+            .unwrap()
+    };
+    let events = session_events(&spawn_tick, ada.session);
+    let expected = PassiveSpawn::try_new(PassiveSpawnParts {
+        server_tick: 0,
+        spawns: vec![
+            PassiveSpawnRecord::try_new(PassiveSpawnRecordParts {
+                id,
+                dimension: Dimension::OVERWORLD,
+                position: committed.motion.position(),
+                yaw: committed.look.yaw(),
+                health: committed.survival.health(),
+            })
+            .unwrap(),
+        ]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::PassiveSpawn(batch) if *batch == expected)),
+        "the staged cow publishes its exact spawn record"
+    );
+    let _ = adapter.drain(ada.session);
+
+    let state_tick = adapter.tick();
+    let committed = {
+        let residents = adapter.endpoint().authority.residents();
+        residents
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Passive(id))
+            .cloned()
+            .unwrap()
+    };
+    let expected = PassiveState::try_new(PassiveStateParts {
+        server_tick: 1,
+        states: vec![
+            PassiveStateRecord::try_new(PassiveStateRecordParts {
+                id,
+                position: committed.motion.position(),
+                velocity: committed.motion.velocity(),
+                yaw: committed.look.yaw(),
+                health: committed.survival.health(),
+                grazing: false,
+            })
+            .unwrap(),
+        ]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    let events = session_events(&state_tick, ada.session);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::PassiveState(_)))
+            .count(),
+        1
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::PassiveState(batch) if *batch == expected)),
+        "the persisting batch carries the exact settled body"
+    );
+    let _ = adapter.drain(ada.session);
+
+    adapter.stage(Box::new(move |context| {
+        let mut actor = context
+            .read()
+            .actor(ActorKey::Passive(id))
+            .cloned()
+            .unwrap();
+        actor.lifecycle = ActorLifecycle::Dead;
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+    }));
+    let despawn_tick = adapter.tick();
+    let events = session_events(&despawn_tick, ada.session);
+    let expected = PassiveDespawn::try_new(PassiveDespawnParts {
+        server_tick: 2,
+        despawns: vec![PassiveDespawnRecord::new(
+            id,
+            PassiveDespawnReason::Vanished,
+        )]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::PassiveDespawn(batch) if *batch == expected)),
+        "the quiet removal publishes the vanished despawn"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::PassiveState(_)))
+    );
+    let _ = adapter.drain(ada.session);
+
+    // One tick later the departure never repeats on either adapter.
+    let after_tick = adapter.tick();
+    let _ = adapter.drain(ada.session);
+    assert!(
+        !session_events(&after_tick, ada.session)
+            .iter()
+            .any(|event| matches!(
+                event,
+                Event::PassiveDespawn(batch)
+                    if batch.despawns().iter().any(|record| record.id() == id)
+            )),
+        "the vanished passive despawns exactly once"
+    );
+
+    vec![spawn_tick, state_tick, despawn_tick, after_tick]
+}
+
+/// The passive spawn, state, and vanished-despawn publications through both
+/// real adapters, with identical publications on every tick.
+#[test]
+fn passive_lifecycle_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = passive_lifecycle_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = passive_lifecycle_scenario(&mut tcp);
+    assert_eq!(
+        memory, tcp,
+        "the passive lifecycle publishes identically across the real adapters"
+    );
+}
+
+/// The projectile lifecycle scenario: one staged shard publishes its spawn,
+/// its flight state each later tick, and its age-expiry despawn. Flight
+/// values derive from the post-tick committed record, asserted identically
+/// through both adapters.
+fn projectile_lifecycle_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+    let id = ProjectileId::try_new(5).unwrap();
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Projectile {
+                before: None,
+                after: Some(ProjectileRecord {
+                    id,
+                    owner: ActorKey::Player(ada.session),
+                    dimension: Dimension::OVERWORLD,
+                    position: FiniteVec3::try_new([4.5, 100.0, 4.5]).unwrap(),
+                    velocity: FiniteVec3::try_new([0.0, 0.0, 0.0]).unwrap(),
+                    kind: ProjectileKind::Shard,
+                    damage: 3,
+                    age: 97,
+                }),
+            })
+            .unwrap();
+    }));
+
+    let spawn_tick = adapter.tick();
+    let committed = {
+        let residents = adapter.endpoint().authority.residents();
+        residents
+            .projectiles
+            .iter()
+            .find(|record| record.id == id)
+            .cloned()
+            .unwrap()
+    };
+    let events = session_events(&spawn_tick, ada.session);
+    let expected = ProjectileSpawn::try_new(ProjectileSpawnParts {
+        server_tick: 0,
+        spawns: vec![ProjectileSpawnRecord::new(ProjectileSpawnRecordParts {
+            id,
+            kind: ProjectileKind::Shard,
+            dimension: Dimension::OVERWORLD,
+            position: committed.position,
+            velocity: committed.velocity,
+        })]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ProjectileSpawn(batch) if *batch == expected)),
+        "the staged shard publishes its exact spawn record"
+    );
+    let _ = adapter.drain(ada.session);
+
+    let state_tick = adapter.tick();
+    let committed = {
+        let residents = adapter.endpoint().authority.residents();
+        residents
+            .projectiles
+            .iter()
+            .find(|record| record.id == id)
+            .cloned()
+            .unwrap()
+    };
+    let expected = ProjectileState::try_new(ProjectileStateParts {
+        server_tick: 1,
+        states: vec![ProjectileStateRecord::new(ProjectileStateRecordParts {
+            id,
+            position: committed.position,
+        })]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    let events = session_events(&state_tick, ada.session);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::ProjectileState(_)))
+            .count(),
+        1
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ProjectileState(batch) if *batch == expected)),
+        "the flight tick publishes the exact flight body"
+    );
+    let _ = adapter.drain(ada.session);
+
+    // The age ceiling removes the projectile: the despawn publishes and the
+    // state family falls silent.
+    let settle_tick = adapter.tick();
+    let _ = adapter.drain(ada.session);
+    let despawn_tick = adapter.tick();
+    let events = session_events(&despawn_tick, ada.session);
+    let expected =
+        mornlea_domain::ProjectileDespawn::try_new(mornlea_domain::ProjectileDespawnParts {
+            server_tick: 3,
+            ids: vec![id].into_boxed_slice(),
+        })
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ProjectileDespawn(batch) if *batch == expected)),
+        "the age expiry publishes the exact despawn batch"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::ProjectileState(_)))
+    );
+    let _ = adapter.drain(ada.session);
+
+    // One tick later the departure never repeats on either adapter.
+    let after_tick = adapter.tick();
+    let _ = adapter.drain(ada.session);
+    assert!(
+        !session_events(&after_tick, ada.session)
+            .iter()
+            .any(|event| matches!(
+                event,
+                Event::ProjectileDespawn(batch) if batch.ids().contains(&id)
+            )),
+        "the expired projectile despawns exactly once"
+    );
+
+    vec![
+        spawn_tick,
+        state_tick,
+        settle_tick,
+        despawn_tick,
+        after_tick,
+    ]
+}
+
+/// The projectile spawn, flight-state, and expiry-despawn publications
+/// through both real adapters, with identical publications on every tick.
+#[test]
+fn projectile_lifecycle_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = projectile_lifecycle_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = projectile_lifecycle_scenario(&mut tcp);
+    assert_eq!(
+        memory, tcp,
+        "the projectile lifecycle publishes identically across the real adapters"
+    );
+}
+
+/// The pickup scene: one fresh staged drop publishes its exact upsert, a
+/// real southbound walk onto it removes it through the pickup, and the next
+/// tick republishes nothing for the departed identity.
+fn drop_pickup_scene(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+    adapter.stage(Box::new(|context| {
+        context.preload_drop(drop_record(2, 40, [1.5, 65.5, 2.5]));
+    }));
+
+    let upsert_tick = adapter.tick();
+    let events = session_events(&upsert_tick, ada.session);
+    let expected = ItemDropUpserts::try_new(mornlea_domain::ItemDropUpsertsParts {
+        server_tick: 0,
+        drops: vec![
+            ItemDrop::try_new(ItemDropParts {
+                id: DropId::try_new(0, ChunkPos::new(0, 0), 2, 1).unwrap(),
+                block_index: mornlea_domain::chunk_block_index(BlockPos::new(1, 65, 2)),
+                stack: stack(ITEM_COAL, 2),
+            })
+            .unwrap(),
+        ]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ItemDropUpserts(batch) if *batch == expected)),
+        "the fresh drop publishes its exact upsert"
+    );
+    let _ = adapter.drain(ada.session);
+
+    // A real walk south onto the drop removes it through the pickup.
+    adapter.send_packet(
+        ada.conn,
+        &ClientPacket::PlayerInput(
+            mornlea_protocol::PlayerInput::new(
+                1,
+                0,
+                1,
+                false,
+                std::f32::consts::PI,
+                0.0,
+                false,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
+        ),
+    );
+    let mut ticks = vec![upsert_tick];
+    let mut pickup_tick = None;
+    for _ in 0..40 {
+        let publication = adapter.tick();
+        let _ = adapter.drain(ada.session);
+        let picked = session_events(&publication, ada.session)
+            .into_iter()
+            .any(|event| matches!(event, Event::ItemDropRemoves(_)));
+        ticks.push(publication.clone());
+        if picked {
+            pickup_tick = Some(publication);
+            break;
+        }
+    }
+    let pickup_tick = pickup_tick.expect("the walk reaches the drop within the window");
+    let departed = DropId::try_new(0, ChunkPos::new(0, 0), 2, 1).unwrap();
+    let expected = mornlea_domain::ItemDropRemoves::try_new(mornlea_domain::ItemDropRemovesParts {
+        server_tick: pickup_tick.tick,
+        ids: vec![departed].into_boxed_slice(),
+    })
+    .unwrap();
+    let pickup_events = session_events(&pickup_tick, ada.session);
+    let removes: Vec<&Event> = pickup_events
+        .iter()
+        .filter(|event| matches!(event, Event::ItemDropRemoves(_)))
+        .collect();
+    assert_eq!(
+        removes.len(),
+        1,
+        "the pickup tick publishes one removes batch"
+    );
+    assert!(
+        matches!(removes[0], Event::ItemDropRemoves(batch) if *batch == expected),
+        "the pickup removes exactly the walked-onto drop"
+    );
+
+    // One tick later the departure never repeats: neither drop family
+    // mentions the picked-up identity again on either adapter.
+    let after_tick = adapter.tick();
+    let _ = adapter.drain(ada.session);
+    let after_events = session_events(&after_tick, ada.session);
+    assert!(
+        !after_events
+            .iter()
+            .any(|event| matches!(event, Event::ItemDropRemoves(_))),
+        "the picked-up drop is never removed twice"
+    );
+    assert!(
+        !after_events.iter().any(|event| matches!(
+            event,
+            Event::ItemDropUpserts(batch)
+                if batch.drops().iter().any(|drop| drop.id() == departed)
+        )),
+        "the picked-up drop never re-upserts"
+    );
+    ticks.push(after_tick);
+    ticks
+}
+
+/// The expiry scene: one aged staged drop publishes its exact upsert, the
+/// lifetime ceiling removes it, and the next tick republishes nothing for the
+/// departed identity.
+fn drop_expiry_scene(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+    adapter.stage(Box::new(|context| {
+        context.preload_drop(drop_record(3, DROP_LIFETIME_MARGIN, [3.5, 65.5, 3.5]));
+    }));
+
+    let upsert_tick = adapter.tick();
+    let events = session_events(&upsert_tick, ada.session);
+    let expected = ItemDropUpserts::try_new(mornlea_domain::ItemDropUpsertsParts {
+        server_tick: 0,
+        drops: vec![
+            ItemDrop::try_new(ItemDropParts {
+                id: DropId::try_new(0, ChunkPos::new(0, 0), 3, 1).unwrap(),
+                block_index: mornlea_domain::chunk_block_index(BlockPos::new(3, 65, 3)),
+                stack: stack(ITEM_COAL, 2),
+            })
+            .unwrap(),
+        ]
+        .into_boxed_slice(),
+    })
+    .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ItemDropUpserts(batch) if *batch == expected)),
+        "the aged drop publishes its exact upsert"
+    );
+    let _ = adapter.drain(ada.session);
+
+    let mut ticks = vec![upsert_tick];
+    let mut expiry_tick = None;
+    for _ in 0..6 {
+        let publication = adapter.tick();
+        let _ = adapter.drain(ada.session);
+        let expired = session_events(&publication, ada.session)
+            .into_iter()
+            .any(|event| matches!(event, Event::ItemDropRemoves(_)));
+        ticks.push(publication.clone());
+        if expired {
+            expiry_tick = Some(publication);
+            break;
+        }
+    }
+    let expiry_tick = expiry_tick.expect("the aged drop expires within the window");
+    let departed = DropId::try_new(0, ChunkPos::new(0, 0), 3, 1).unwrap();
+    let expected = mornlea_domain::ItemDropRemoves::try_new(mornlea_domain::ItemDropRemovesParts {
+        server_tick: expiry_tick.tick,
+        ids: vec![departed].into_boxed_slice(),
+    })
+    .unwrap();
+    let expiry_events = session_events(&expiry_tick, ada.session);
+    let removes: Vec<&Event> = expiry_events
+        .iter()
+        .filter(|event| matches!(event, Event::ItemDropRemoves(_)))
+        .collect();
+    assert_eq!(
+        removes.len(),
+        1,
+        "the expiry tick publishes one removes batch"
+    );
+    assert!(
+        matches!(removes[0], Event::ItemDropRemoves(batch) if *batch == expected),
+        "the expiry removes exactly the aged drop"
+    );
+
+    // One tick later the departure never repeats: neither drop family
+    // mentions the expired identity again on either adapter.
+    let after_tick = adapter.tick();
+    let _ = adapter.drain(ada.session);
+    let after_events = session_events(&after_tick, ada.session);
+    assert!(
+        !after_events
+            .iter()
+            .any(|event| matches!(event, Event::ItemDropRemoves(_))),
+        "the expired drop is never removed twice"
+    );
+    assert!(
+        !after_events.iter().any(|event| matches!(
+            event,
+            Event::ItemDropUpserts(batch)
+                if batch.drops().iter().any(|drop| drop.id() == departed)
+        )),
+        "the expired drop never re-upserts"
+    );
+    ticks.push(after_tick);
+    ticks
+}
+
+/// The item-drop upsert and removal publications through both real adapters:
+/// the exact staged upsert, a real-input walk pickup, and an aged expiry,
+/// each removal observed on its first publication, with identical
+/// publications on every tick.
+#[test]
+fn item_drop_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory_pickup = drop_pickup_scene(&mut memory);
+    let mut memory = MemoryParity::new();
+    let memory_expiry = drop_expiry_scene(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp_pickup = drop_pickup_scene(&mut tcp);
+    let mut tcp = TcpParity::new();
+    let tcp_expiry = drop_expiry_scene(&mut tcp);
+    assert_eq!(
+        memory_pickup, tcp_pickup,
+        "the pickup publications are identical across the real adapters"
+    );
+    assert_eq!(
+        memory_expiry, tcp_expiry,
+        "the expiry publications are identical across the real adapters"
+    );
+}
+
+/// The wire form of one domain container reference.
+fn wire_container(
+    chunk_x: i32,
+    chunk_z: i32,
+    kind: u8,
+    slot: u8,
+) -> mornlea_protocol::ContainerRef {
+    mornlea_protocol::ContainerRef {
+        dimension: 0,
+        chunk_x,
+        chunk_z,
+        kind,
+        slot,
+        generation: 1,
+    }
+}
+
+/// The record-state scenario: real commands publish the exact owner-only
+/// inventory, chest, crafting, and furnace states, a close publishes the
+/// container-closed notice, and one refused command publishes no record
+/// event at all.
+fn record_state_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
+    // The world: standing ground with a furnace behind Ada, and a chest
+    // chunk in front of her.
+    adapter.stage(Box::new(|context| {
+        context
+            .stage(RuleEffect::Environment(day_environment(1_000)))
+            .unwrap();
+        let mut front = ground_chunk();
+        chest_in_chunk(
+            &mut front,
+            BlockPos::new(0, 66, -1),
+            [StorageStack::default(); 27],
+        );
+        context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, front).unwrap());
+        let mut home = ground_chunk();
+        furnace_in_chunk(
+            &mut home,
+            BlockPos::new(0, 66, 1),
+            storage(ITEM_RAW_IRON, 2),
+            storage(ITEM_COAL, 2),
+            StorageStack::default(),
+        );
+        context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, 0), 1, 1, home).unwrap());
+    }));
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |player| {
+            player.inventory.backpack[0] = storage(ITEM_DIRT, 5);
+        }),
+    );
+    let ada = adapter.login(1, "Ada");
+    adapter.stage_login(
+        2,
+        stored_player(2, "Bea", [4.5, 65.0, 4.5], 0.0, 0.0, |_| {}),
+    );
+    let bea = adapter.login(2, "Bea");
+    let tick_zero = adapter.tick();
+    for peer in [&ada, &bea] {
+        let _ = adapter.drain(peer.session);
+    }
+
+    let chest_domain =
+        mornlea_domain::ContainerRef::try_new(ChunkPos::new(0, -1), ContainerKind::Chest, 0, 1)
+            .unwrap();
+    let chest_wire = wire_container(0, -1, CONTAINER_KIND_CHEST, 0);
+    let furnace_domain =
+        mornlea_domain::ContainerRef::try_new(ChunkPos::new(0, 0), ContainerKind::Furnace, 1, 1)
+            .unwrap();
+
+    // A hotbar selection publishes the exact owner-only inventory; the
+    // refused drop from the lease-less peer publishes no record event.
+    adapter.send_packet(
+        ada.conn,
+        &ClientPacket::SelectHotbar(mornlea_protocol::SelectHotbar::new(1, 2).unwrap()),
+    );
+    adapter.send_packet(
+        bea.conn,
+        &ClientPacket::DropStack(
+            mornlea_protocol::DropStack::new(1, chest_wire, STACK_VIEW_CONTAINER, 36).unwrap(),
+        ),
+    );
+    let tick_one = adapter.tick();
+    assert_eq!(
+        tick_counters(&tick_one),
+        (2, 0, 0),
+        "the selection and the refused drop both consume their commands"
+    );
+    let expected_inventory = InventoryState::new(InventoryStateParts {
+        selected: HotbarSlot::new(2).unwrap(),
+        hotbar: item_array(&[]),
+        backpack: item_array(&[(0, ITEM_DIRT, 5)]),
+    });
+    let ada_events = session_events(&tick_one, ada.session);
+    assert_eq!(
+        ada_events
+            .iter()
+            .filter(|event| matches!(event, Event::InventoryState(_)))
+            .count(),
+        1
+    );
+    assert!(
+        ada_events.iter().any(
+            |event| matches!(event, Event::InventoryState(state) if *state == expected_inventory)
+        ),
+        "the selection publishes the exact inventory to the owner"
+    );
+    let bea_events = session_events(&tick_one, bea.session);
+    assert!(
+        !bea_events.iter().any(|event| matches!(
+            event,
+            Event::InventoryState(_)
+                | Event::ChestState(_)
+                | Event::FurnaceState(_)
+                | Event::CraftingState(_)
+                | Event::ContainerClosed(_)
+        )),
+        "the refused command publishes no record event"
+    );
+    for peer in [&ada, &bea] {
+        let _ = adapter.drain(peer.session);
+    }
+
+    // Opening the chest publishes its exact (empty) contents.
+    adapter.send_packet(
+        ada.conn,
+        &ClientPacket::OpenContainer(mornlea_protocol::OpenContainer::new(2, 0.0, 0.0).unwrap()),
+    );
+    let tick_two = adapter.tick();
+    let expected_chest = mornlea_domain::ChestState::try_new(mornlea_domain::ChestStateParts {
+        container: chest_domain,
+        items: item_array(&[]),
+    })
+    .unwrap();
+    assert!(
+        session_events(&tick_two, ada.session)
+            .iter()
+            .any(|event| matches!(event, Event::ChestState(state) if *state == expected_chest))
+    );
+    let _ = adapter.drain(ada.session);
+    let _ = adapter.drain(bea.session);
+
+    // One partial move publishes the moved chest contents.
+    adapter.send_packet(
+        ada.conn,
+        &ClientPacket::MoveStackPartial(
+            MoveStackPartial::new(3, chest_wire, STACK_VIEW_CONTAINER, 9, 36, true).unwrap(),
+        ),
+    );
+    let tick_three = adapter.tick();
+    let expected_chest = mornlea_domain::ChestState::try_new(mornlea_domain::ChestStateParts {
+        container: chest_domain,
+        items: item_array(&[(0, ITEM_DIRT, 1)]),
+    })
+    .unwrap();
+    assert!(
+        session_events(&tick_three, ada.session)
+            .iter()
+            .any(|event| matches!(event, Event::ChestState(state) if *state == expected_chest)),
+        "the partial move publishes the moved chest contents"
+    );
+    let _ = adapter.drain(ada.session);
+    let _ = adapter.drain(bea.session);
+
+    // Closing publishes the exact released reference.
+    adapter.send_packet(
+        ada.conn,
+        &ClientPacket::CloseContainer(mornlea_protocol::CloseContainer::new(4)),
+    );
+    let tick_four = adapter.tick();
+    assert!(
+        session_events(&tick_four, ada.session)
+            .iter()
+            .any(|event| matches!(event, Event::ContainerClosed(closed)
+                if *closed == mornlea_domain::ContainerClosed::new(chest_domain)))
+    );
+    let _ = adapter.drain(ada.session);
+    let _ = adapter.drain(bea.session);
+
+    // The staged personal stone-hoe grid publishes with its exact matched
+    // output; the atomic output take empties it.
+    adapter.stage(Box::new(move |context| {
+        let actor = ActorKey::Player(ada.session);
+        let mut record = context.read().inventory(actor).cloned().unwrap();
+        record.crafting = storage_array(&[
+            (0, ITEM_STONE, 1),
+            (1, ITEM_STICK, 1),
+            (2, ITEM_STONE, 1),
+            (3, ITEM_STICK, 1),
+        ]);
+        context.preload_inventory(actor, record);
+    }));
+    let tick_five = adapter.tick();
+    let expected_crafting =
+        mornlea_domain::CraftingState::try_new(mornlea_domain::CraftingStateParts {
+            size: mornlea_domain::CraftingSize::Personal,
+            slots: item_array(&[
+                (0, ITEM_STONE, 1),
+                (1, ITEM_STICK, 1),
+                (2, ITEM_STONE, 1),
+                (3, ITEM_STICK, 1),
+            ]),
+            output: ItemStack::try_new(ITEM_STONE_HOE, 1, 131).unwrap(),
+        })
+        .unwrap();
+    assert!(
+        session_events(&tick_five, ada.session).iter().any(
+            |event| matches!(event, Event::CraftingState(state) if *state == expected_crafting)
+        ),
+        "the staged grid publishes the exact stone-hoe output"
+    );
+    let _ = adapter.drain(ada.session);
+    let _ = adapter.drain(bea.session);
+
+    adapter.send_packet(
+        ada.conn,
+        &ClientPacket::TakeCraftingOutput(mornlea_protocol::TakeCraftingOutput::new(5).unwrap()),
+    );
+    let tick_six = adapter.tick();
+    let expected_crafting =
+        mornlea_domain::CraftingState::try_new(mornlea_domain::CraftingStateParts {
+            size: mornlea_domain::CraftingSize::Personal,
+            slots: item_array(&[]),
+            output: ItemStack::EMPTY,
+        })
+        .unwrap();
+    assert!(
+        session_events(&tick_six, ada.session).iter().any(
+            |event| matches!(event, Event::CraftingState(state) if *state == expected_crafting)
+        ),
+        "the atomic take empties the published grid"
+    );
+    let _ = adapter.drain(ada.session);
+    let _ = adapter.drain(bea.session);
+
+    // Opening the furnace publishes its burning body exactly: ignition ran
+    // on tick zero and every later tick advanced both timers.
+    adapter.send_packet(
+        ada.conn,
+        &ClientPacket::OpenContainer(
+            mornlea_protocol::OpenContainer::new(6, std::f32::consts::PI, 0.0).unwrap(),
+        ),
+    );
+    let tick_seven = adapter.tick();
+    let expected_furnace =
+        mornlea_domain::FurnaceState::try_new(mornlea_domain::FurnaceStateParts {
+            container: furnace_domain,
+            input: stack(ITEM_RAW_IRON, 2),
+            fuel: stack(ITEM_COAL, 1),
+            output: ItemStack::EMPTY,
+            progress_ticks: 8,
+            burn_ticks: 1_600 - 8,
+        })
+        .unwrap();
+    assert!(
+        session_events(&tick_seven, ada.session)
+            .iter()
+            .any(|event| matches!(event, Event::FurnaceState(state) if *state == expected_furnace)),
+        "the furnace publishes its exact ignited body"
+    );
+    let _ = adapter.drain(ada.session);
+    let _ = adapter.drain(bea.session);
+
+    vec![
+        tick_zero, tick_one, tick_two, tick_three, tick_four, tick_five, tick_six, tick_seven,
+    ]
+}
+
+/// The owner-only record states through both real adapters: exact inventory,
+/// chest, crafting, and furnace publications from real commands, the exact
+/// container-closed notice, a refused command publishing nothing, and
+/// identical publications on every tick.
+#[test]
+fn record_state_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory = record_state_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp = record_state_scenario(&mut tcp);
+    assert_eq!(
+        memory, tcp,
+        "the record-state publications are identical across the real adapters"
+    );
+}
+
+/// One combined scene: two sessions, one ready chunk, one companion, and one
+/// staged drop, published on the first tick. Returns the publication with
+/// both peers; the outboxes stay undrained for the caller's wire capture.
+fn combined_scene(adapter: &mut dyn ParityAdapter) -> (TickPublication, Peer, Peer) {
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login(1, "Ada");
+    adapter.stage_login(
+        2,
+        stored_player(2, "Bea", [4.5, 65.0, 4.5], 0.0, 0.0, |_| {}),
+    );
+    let bea = adapter.login(2, "Bea");
+    let id = companion_id(9);
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Actor(companion_actor(
+                id,
+                [8.5, 65.0, 8.5],
+                0.0,
+            )))
+            .unwrap();
+        context.preload_drop(drop_record(3, 40, [0.5, 65.5, 2.5]));
+    }));
+    (adapter.tick(), ada, bea)
+}
+
+/// The frozen family order one session observes on the wire for the combined
+/// scene's first tick.
+const COMBINED_FIRST_TICK_ORDER: [&str; 7] = [
+    "chunk-snapshot",
+    "companion-spawn",
+    "remote-spawn",
+    "drop-upserts",
+    "inventory-state",
+    "crafting-state",
+    "player-state",
+];
+
+/// Asserts one session's captured frames decode to exactly that session's
+/// publication order under the frozen family order.
+fn assert_wire_order(label: &str, tick: &TickPublication, peer: &Peer, frames: &[Vec<u8>]) {
+    let events = session_events(tick, peer.session);
+    assert_eq!(
+        frames.len(),
+        events.len(),
+        "{label} receives one frame per session event"
+    );
+    let decoded: Vec<ServerPacket> = frames.iter().map(|f| decode_play(f)).collect();
+    let families: Vec<&str> = decoded.iter().map(|packet| family(packet)).collect();
+    assert_eq!(
+        families, COMBINED_FIRST_TICK_ORDER,
+        "{label} observes the frozen family order on the wire"
+    );
+    for (packet, event) in decoded.iter().zip(&events) {
+        assert_eq!(
+            packet,
+            &ServerPacket::try_from(event.clone()).unwrap(),
+            "{label}'s frames carry the exact publication packets in order"
+        );
+    }
+}
+
+/// One combined scene's first tick through both real adapters: each session's
+/// drained frames decode to exactly that session's publication order under
+/// the frozen family order, the memory frames come from the per-session
+/// outbox drain, the TCP frames come through the client's live socket reader,
+/// and the two frame sets are byte-for-byte identical.
+#[test]
+fn publication_wire_delivery_reaches_each_session_in_order() {
+    let mut memory = MemoryParity::new();
+    let (memory_tick, memory_ada, memory_bea) = combined_scene(&mut memory);
+    let memory_ada_frames =
+        MemoryTransport::drain_session(&mut memory.endpoint, memory_ada.session, 16, 1 << 20)
+            .unwrap();
+    let memory_bea_frames =
+        MemoryTransport::drain_session(&mut memory.endpoint, memory_bea.session, 16, 1 << 20)
+            .unwrap();
+
+    let mut tcp = TcpParity::new();
+    let (tcp_tick, tcp_ada, tcp_bea) = combined_scene(&mut tcp);
+    let tcp_ada_frames =
+        tcp.socket_frames(&tcp_ada, session_events(&tcp_tick, tcp_ada.session).len());
+    let tcp_bea_frames =
+        tcp.socket_frames(&tcp_bea, session_events(&tcp_tick, tcp_bea.session).len());
+
+    assert_wire_order("memory Ada", &memory_tick, &memory_ada, &memory_ada_frames);
+    assert_wire_order("memory Bea", &memory_tick, &memory_bea, &memory_bea_frames);
+    assert_wire_order("tcp Ada", &tcp_tick, &tcp_ada, &tcp_ada_frames);
+    assert_wire_order("tcp Bea", &tcp_tick, &tcp_bea, &tcp_bea_frames);
+    assert_eq!(
+        memory_tick, tcp_tick,
+        "the combined scene publishes identically across the real adapters"
+    );
+    assert_eq!(
+        memory_ada_frames, tcp_ada_frames,
+        "Ada's memory and socket frames are byte-for-byte identical"
+    );
+    assert_eq!(
+        memory_bea_frames, tcp_bea_frames,
+        "Bea's memory and socket frames are byte-for-byte identical"
+    );
 }

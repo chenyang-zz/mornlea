@@ -49,6 +49,8 @@ mod player_motion;
 mod player_survival;
 #[path = "server_replay/projectiles.rs"]
 mod projectiles;
+#[path = "server_replay/publication_projection.rs"]
+mod publication_projection;
 #[path = "server_replay/random_blocks.rs"]
 mod random_blocks;
 #[path = "server_replay/sleep.rs"]

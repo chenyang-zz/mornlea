@@ -494,10 +494,18 @@ fn live_pending_player_observation_is_private_and_retirement_stops_it() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(
-        authority.take_outbox(session, 16, 1_048_576).unwrap().len(),
-        1
-    );
+    // Beside the owner-only record states, exactly one private observation
+    // reaches the session's own wire and nothing reaches the peer's.
+    let observation_frames = authority
+        .take_outbox(session, 16, 1_048_576)
+        .unwrap()
+        .iter()
+        .filter(|bytes| {
+            let frame = mornlea_protocol::read_frame_ref(bytes).unwrap();
+            frame.packet_id == 3
+        })
+        .count();
+    assert_eq!(observation_frames, 1);
     authority.retire(session, CloseReason::PeerGone).unwrap();
     let publication = authority.advance_tick(TickBudget::full()).unwrap();
     assert!(
@@ -574,6 +582,7 @@ fn live_projectile_hit_publishes_final_player_state_before_confirmation() {
     let ids: Vec<_> = wire
         .iter()
         .map(|frame| mornlea_protocol::read_frame_ref(frame).unwrap().packet_id)
+        .filter(|id| matches!(id, 3 | 25))
         .collect();
     assert_eq!(ids, [3, 25]);
 }
