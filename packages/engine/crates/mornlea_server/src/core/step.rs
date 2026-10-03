@@ -442,7 +442,8 @@ fn dispatch_rows(
             actor,
             player_survival::run,
         )?;
-        // Sample landed pose after fall settlement, before later players or death can reset it.
+        // Capture coordinates and sample Safe after fall settlement, before later death resets the pose.
+        source_player_restore::capture_trample(source_players, context, session)?;
         source_player_restore::checkpoint_safe(source_players, context, session)?;
     }
     companions::run(context, batch_call(RulePhase::CompanionMotion))?;
@@ -538,9 +539,9 @@ fn dispatch_rows(
     feed_farmland_schedule(farmland_schedule, context, tick);
     farmland::advance(farmland_schedule, context, &scope, tick)?;
     crops::run(context, batch_call(RulePhase::Trample))?;
-    // Footprints stay fresh: the batch collects landing edges from the
-    // staged players every call and never carries, so changed blocks are
-    // not an input here.
+    source_player_restore::settle_tramples(source_players, context)?;
+    // Source candidates settle from captured coordinates; legacy collection stays late.
+    // The generic schedule is recreated here, leaving source Snow tracker lifetime open.
     let mut footprints = crops::FootprintSchedule::new();
     crops::settle_tramples(&mut footprints, context)?;
     crops::run(context, batch_call(RulePhase::SnowFootprint))?;

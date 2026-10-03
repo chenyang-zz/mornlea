@@ -43,22 +43,16 @@
 //!   accepted transaction, silently skipping non-snow, unobserved and
 //!   refused cells.
 //!
-//! Rust adaptation of the two-phase split. The Go source splits collection
-//! (physics phase) from settlement (write region) because its stage-order
-//! contract forbids block writes before reconciliation; here both phases run
-//! inside the write region and the context already carries each actor's
-//! pre-step pose beside its post-motion pose, so each body call collects the
-//! landing edges (or stride samples) from the staged actors and settles them
-//! in the same call. Pending cells and the per-actor snow trackers live in a
-//! caller-owned [`FootprintSchedule`] because the frozen [`RuleCall`] record
-//! cannot carry queue contents and [`TickContext`] exposes no queue port;
-//! the serial tick reducer owns the schedule value across ticks, the same
-//! way the fluid and farmland schedules travel. Actors are enumerated in the
-//! staged slice order — the frozen session-ascending order Go collects in
-//! (`advanceActivePlayers`), which the reducer owns at staging; the provider
-//! preserves it. Snow settlement runs after trample settlement in the tick
-//! order, and both precede random sampling, so a cell this provider reverts
-//! is no longer farmland when the sampler visits it.
+//! Actual source-player landing capture runs after native motion and fall settlement,
+//! before Safe and late death. Its private fixed batch travels with the exclusive
+//! source player book and settles copied coordinates here in the original write region.
+//! The legacy public collector excludes those sessions and retains its fixture contract
+//! for other players. Every settlement reads fresh, preserving duplicate idempotence.
+//! A caller may retain the generic schedule and its Snow trackers across calls, but
+//! the actual reducer recreates that schedule each tick. Source Snow/passive tracker
+//! lifetime, sampling order and rounding remain open integration ownership.
+//! Snow settlement follows trample settlement and precedes random sampling, so a
+//! reverted cell is no longer farmland when the sampler visits it.
 //!
 //! Environmental plant removal owns its exact output policy. The accepted
 //! world transaction settles the crop write and output batch together; the
@@ -219,11 +213,9 @@ impl SnowTracker {
     }
 }
 
-/// Caller-owned footprint schedule: the pending candidate cells of both
-/// phases plus the per-actor snow trackers. The serial tick reducer holds
-/// this value across ticks; each body call removes the work it settles and
-/// leaves the rest untouched, mirroring the Go engine-owned pending buffers
-/// that clear every settlement.
+/// Caller-owned legacy footprint candidates and per-actor Snow trackers.
+/// A caller may retain this value across calls; the actual reducer recreates it each tick.
+/// Actual source-player trample coordinates travel in a separate private fixed batch.
 #[derive(Clone, Debug, Default)]
 pub struct FootprintSchedule {
     trample_pending: Vec<FootprintCell>,
@@ -267,11 +259,9 @@ pub enum TrampleCommit {
 
 /// The frozen batch entry for both footprint phases.
 ///
-/// The schedule value travels with the serial reducer rather than the tick
-/// context, so this entry stages nothing and reports zero work for the
-/// well-shaped batch calls, exactly like the fluid, acquisition and farmland
-/// entries whose pending work arrives through caller-owned values. Any other
-/// shape is the shared no-effect refusal: no staging, no commit, no charge.
+/// Actual source trample candidates arrive through the private source book; legacy
+/// footprints use a caller-owned schedule. This entry stages no work, like the other
+/// batch entries. Any other shape retains the shared no-effect refusal.
 pub fn run(_ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport, ServerError> {
     if (!matches!(call.phase, RulePhase::Trample | RulePhase::SnowFootprint))
         || call.actor.is_some()
@@ -293,8 +283,8 @@ pub fn run(_ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport
     })
 }
 
-/// Trample-phase body: collects the landing edges of every staged active
-/// player in slice order and settles the whole pending batch, then clears the
+/// Legacy trample body: collects landing edges of staged active players outside actual
+/// source sessions in slice order and settles the whole pending batch, then clears the
 /// pending buffer (never carried across ticks, like Go `settleTramples`).
 ///
 /// Each candidate is examined with fresh reads, so a candidate whose ground
@@ -359,7 +349,7 @@ pub fn settle_snow_footprints(
     })
 }
 
-/// Collects the landing edges of every staged active player in slice order
+/// Collects legacy landing edges in slice order, excluding actual source sessions
 /// (`noteTrampleLanding`, called on the same edge as fall damage). The
 /// post-motion pose supplies the landed position; the pre-step snapshot
 /// supplies the airborne prior tick. Candidates append X outer then Z inner,
@@ -370,11 +360,14 @@ fn collect_trample_landings(schedule: &mut FootprintSchedule, ctx: &TickContext<
         if actor.lifecycle != ActorLifecycle::Active || !actor.motion.on_ground() {
             continue;
         }
-        let ActorKey::Player(_) = actor.key else {
+        let ActorKey::Player(session) = actor.key else {
             // Only players trample farmland; passives graze it (Go collects
             // landing edges in the player advance loop only).
             continue;
         };
+        if ctx.source_player_death_deferred(session) {
+            continue;
+        }
         let Some(pre) = view.pre_step_motion(actor.key) else {
             // No certified pre-step pose: the landing edge cannot be judged.
             continue;
@@ -451,6 +444,36 @@ fn collect_snow_samples(schedule: &mut FootprintSchedule, ctx: &TickContext<'_>)
             pos: cell,
         });
     }
+}
+
+/// Settles copied source candidates in order through the existing fresh-cell transactions.
+/// Environment and capacity refusal precede all reads; actor eligibility belongs to capture.
+pub(crate) fn settle_captured_tramples(
+    cells: &[FootprintCell],
+    ctx: &mut TickContext<'_>,
+) -> Result<PhaseReport, ServerError> {
+    if ctx.read().environment().is_none() {
+        return Err(ServerError::InvalidInput {
+            field: "environment",
+        });
+    }
+    if cells.len() > 32 {
+        return Err(ServerError::Internal {
+            invariant: "source player trample capacity",
+        });
+    }
+    let mut applied = 0;
+    for cell in cells {
+        if settle_trample_cell(ctx, cell) {
+            applied += 1;
+        }
+    }
+    Ok(PhaseReport {
+        examined: cells.len(),
+        applied,
+        carried: 0,
+        rejected: 0,
+    })
 }
 
 /// Settles one trample candidate with fresh reads (`settleTrampleCell`).
@@ -580,4 +603,227 @@ pub fn commit_trample(
         return TrampleCommit::GroundOnly;
     }
     TrampleCommit::Complete
+}
+
+#[cfg(test)]
+mod source_trample_tests {
+    use super::*;
+    use crate::core::contracts::{
+        ChunkKey, EnvironmentState, FixtureState, RuleEffect, RuleTunables, ServerLimits,
+        SleepState, TickBudget, WorkState,
+    };
+    use crate::core::state::AuthorityState;
+    use crate::core::world::ReadyChunk;
+    use mornlea_domain::{ChunkPos, Season, Weather, WorldState, WorldStateParts};
+    use mornlea_storage::{Chunk, ContainerSnapshot, StorageKind};
+    fn source_trample_world() -> WorldState {
+        WorldState::try_new(WorldStateParts {
+            world_time_ticks: 0,
+            day_phase_offset: 0,
+            weather: Weather::Clear,
+            season: Season::Spring,
+            season_progress: 0,
+            temperature: 0,
+        })
+        .unwrap()
+    }
+    fn source_trample_authority() -> AuthorityState {
+        AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap()
+    }
+    fn source_trample_context(a: &mut AuthorityState) -> TickContext<'_> {
+        let f = FixtureState {
+            runtime: vec![],
+            actors: vec![],
+            chunks: vec![],
+            inventories: vec![],
+            containers: vec![],
+            work: WorkState::default(),
+            sleep: SleepState {
+                beds: vec![],
+                day_phase_offset: 0,
+                pending_offset: None,
+            },
+            projectiles: vec![],
+            drops: vec![],
+            world: source_trample_world(),
+        };
+        let mut c = TickContext::from_fixture(a, &f, TickBudget::full());
+        let mut sections = vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ];
+        for (pos, block) in [
+            (BlockPos::ORIGIN, 36),
+            (BlockPos::new(0, 1, 0), 44),
+            (BlockPos::new(5, 0, 0), 35),
+        ] {
+            let section = ((pos.y() + 64) / 16) as usize;
+            if sections[section].kind == StorageKind::Single {
+                sections[section] = ContainerSnapshot {
+                    kind: StorageKind::Direct,
+                    bits: 15,
+                    single: 0,
+                    palette: vec![],
+                    packed: vec![0; 1024],
+                };
+            }
+            let index =
+                (((pos.y() + 64) % 16) * 256 + (pos.z() & 15) * 16 + (pos.x() & 15)) as usize;
+            sections[section].packed[index / 4] |= u64::from(block as u16) << ((index % 4) * 15);
+        }
+        c.preload_ready_chunk(
+            ReadyChunk::try_new(
+                ChunkKey {
+                    dimension: Dimension::OVERWORLD,
+                    pos: ChunkPos::new(0, 0),
+                },
+                1,
+                1,
+                Chunk {
+                    sections,
+                    drops: vec![Default::default(); 32],
+                    furnaces: vec![Default::default(); 32],
+                    chests: vec![Default::default(); 16],
+                },
+            )
+            .unwrap(),
+        );
+        c.stage(RuleEffect::Environment(EnvironmentState {
+            seed: 7,
+            next_tick: 0,
+            world_time: 0,
+            day_phase_offset: 0,
+            season_offset: 0,
+            weather: Weather::Clear,
+            weather_remaining: 0,
+            difficulty: 0,
+            tunables: RuleTunables::source_defaults(),
+        }))
+        .unwrap();
+        c
+    }
+    fn source_trample_cell(pos: BlockPos) -> FootprintCell {
+        FootprintCell {
+            dimension: Dimension::OVERWORLD,
+            pos,
+        }
+    }
+    fn source_trample_snapshot(c: &TickContext<'_>) -> String {
+        format!("{:?}", c.snapshot_state(source_trample_world()))
+    }
+    #[test]
+    fn source_trample_captured_cells_use_fresh_transactions() {
+        let mut a = source_trample_authority();
+        let mut c = source_trample_context(&mut a);
+        assert!(c.read().actors().is_empty());
+        assert!(
+            c.read()
+                .runtime(ActorKey::Player(
+                    crate::core::contracts::SessionKey::from_raw(1).unwrap()
+                ))
+                .is_none()
+        );
+        let cells = [
+            source_trample_cell(BlockPos::ORIGIN),
+            source_trample_cell(BlockPos::ORIGIN),
+            source_trample_cell(BlockPos::new(5, 0, 0)),
+        ];
+        let before = cells;
+        assert_eq!(
+            settle_captured_tramples(&cells, &mut c).unwrap(),
+            PhaseReport {
+                examined: 3,
+                applied: 2,
+                carried: 0,
+                rejected: 0
+            }
+        );
+        for pos in [BlockPos::ORIGIN, BlockPos::new(5, 0, 0)] {
+            assert_eq!(c.read().block(Dimension::OVERWORLD, pos), Some(3));
+        }
+        assert_eq!(
+            c.read().block(Dimension::OVERWORLD, BlockPos::new(0, 1, 0)),
+            Some(0)
+        );
+        let drops = c
+            .read()
+            .drops(ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            })
+            .iter()
+            .map(|d| d.stack)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            drops,
+            vec![
+                ItemStack {
+                    item: 35,
+                    count: 1,
+                    durability: 0
+                },
+                ItemStack {
+                    item: 34,
+                    count: 1,
+                    durability: 0
+                }
+            ]
+        );
+        assert_eq!(cells, before);
+    }
+    #[test]
+    fn source_trample_refusal_and_silent_skips() {
+        let mut a = source_trample_authority();
+        let c = source_trample_context(&mut a);
+        let env = c.read().environment().unwrap().clone();
+        // A detached context permits an explicit missing-environment fixture.
+        let f = c.snapshot_state(source_trample_world());
+        drop(c);
+        let mut c = TickContext::from_fixture(&mut a, &f, TickBudget::full());
+        let cells = [source_trample_cell(BlockPos::ORIGIN)];
+        let before = source_trample_snapshot(&c);
+        let error = ServerError::InvalidInput {
+            field: "environment",
+        };
+        assert_eq!(settle_captured_tramples(&cells, &mut c), Err(error));
+        assert_eq!(settle_captured_tramples(&[], &mut c), Err(error));
+        assert_eq!(source_trample_snapshot(&c), before);
+        c.stage(RuleEffect::Environment(env)).unwrap();
+        let before = source_trample_snapshot(&c);
+        let oversized = [cells[0]; 33];
+        assert_eq!(
+            settle_captured_tramples(&oversized, &mut c),
+            Err(ServerError::Internal {
+                invariant: "source player trample capacity"
+            })
+        );
+        assert_eq!(source_trample_snapshot(&c), before);
+        let quiet = [
+            source_trample_cell(BlockPos::new(32, 0, 0)),
+            source_trample_cell(BlockPos::new(2, 0, 0)),
+        ];
+        let copy = quiet;
+        assert_eq!(
+            settle_captured_tramples(&quiet, &mut c).unwrap(),
+            PhaseReport {
+                examined: 2,
+                applied: 0,
+                carried: 0,
+                rejected: 0
+            }
+        );
+        assert_eq!(source_trample_snapshot(&c), before);
+        assert_eq!(quiet, copy);
+        assert_eq!(cells, [source_trample_cell(BlockPos::ORIGIN)]);
+    }
 }

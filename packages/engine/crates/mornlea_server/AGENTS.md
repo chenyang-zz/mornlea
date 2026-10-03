@@ -44,6 +44,8 @@ consume its cancellation and error contracts before joining the real backend.
   at most twelve body and four complete-support cells, with no retained owner
   or heap allocation. It preserves source float collapse, outside-height AIR
   and supported fluid eligibility independently of restore height limits.
+  Private trample geometry copies at most four source-f32 support-layer cells
+  with checked endpoints and no world reads, body-height or restore predicates.
 
 - `src/core/pending_restore.rs` retains bounded candidate, wanted-key, nearest
   column, fallback and exhausted-revision progress over borrowed placement reads.
@@ -115,9 +117,14 @@ consume its cancellation and error contracts before joining the real backend.
   context updates only the existing heap-free Safe field, preserving body/path
   allocations and the same scan; prior accepted checkpoints survive later
   context abandonment. Actual healthy/lethal landing and top-floor native
-  recipes qualify this owner. Source subscriptions, later footprint timing,
-  publication, automatic actor save/cache eligibility and executable runtime
-  acceptance remain separately owned.
+  recipes qualify this owner. A keyed ever-spawned qualification captures actual
+  airborne-to-grounded edges after native/fall settlement and before Safe. One
+  private fixed 32-cell batch retains copied coordinates through death/reset and
+  abandoned context loans, without cloning actor bodies or scan allocations.
+  Successful late settlement drains only its length through existing crop transactions;
+  missing environment retains the prefix. This bounds only candidate retention.
+  Source Snow/passive timing, subscriptions, publication, automatic actor save/cache
+  eligibility and executable runtime acceptance remain separately owned.
 
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
   inventory/runtime overlays to produce checked existing storage values. Player
@@ -519,7 +526,12 @@ consume its cancellation and error contracts before joining the real backend.
   ordered two-commit stage — never a two-write transaction. Snow reduces
   one tier per landing before random sampling. Crop removal and its actual
   output batch commit together after the separate ground write. Environment
-  must exist before collecting or draining landing events.
+  must exist before collecting or draining landing events. Actual source-player
+  capture owns a private fixed coordinate batch before Safe and late death;
+  the late consumer reuses these unchanged transactions with fresh reads. Legacy
+  collection excludes actual source sessions and preserves disabled fixture behavior.
+  The reducer recreates the generic schedule each tick; source Snow/passive tracker
+  lifetime, order and rounding remain open.
 - `src/rules/sleep.rs` owns sleep settlement on its batch phase: authority
   bed-ray entry with the Go refusal order, the exact seasonal morning
   transition (`EffectiveMorningOffset` with `DayArcTicks`/`YearPhaseAt`

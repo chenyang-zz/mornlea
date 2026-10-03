@@ -1,4 +1,4 @@
-//! Bounded borrowed source geometry for restoration, Safe checkpoints and single-column spawn reads.
+//! Bounded borrowed source geometry for restoration, Safe checkpoints, trample capture and spawn reads.
 //! Actor lifecycle, subscriptions and scan cadence remain caller-owned.
 
 use super::contracts::{ChunkKey, ServerError};
@@ -247,6 +247,23 @@ pub(crate) fn safe_location(
     let space = body_space(world, dimension, position)?;
     let contact = support_contact(world, dimension, position)?;
     Ok(space.ready && space.free && contact.complete)
+}
+
+/// Copies source-f32 support-layer coverage without world reads or retained allocation.
+/// Checked endpoints refuse before narrowing, including collapsed spans at the integer limits.
+pub(crate) fn trample_cells(position: [f32; 3]) -> Result<([BlockPos; 4], usize), ServerError> {
+    let y = checked_floor(position[1] - GROUND_PROBE)?;
+    let x = span(position[0] - HALF_WIDTH, position[0] + HALF_WIDTH, 2)?;
+    let z = span(position[2] - HALF_WIDTH, position[2] + HALF_WIDTH, 2)?;
+    let mut cells = [BlockPos::ORIGIN; 4];
+    let mut len = 0;
+    for x in x.lower..=x.upper {
+        for z in z.lower..=z.upper {
+            cells[len] = BlockPos::new(x as i32, y, z as i32);
+            len += 1;
+        }
+    }
+    Ok((cells, len))
 }
 
 /// Checked source enumeration is bounded before allocation and nearest-first.
@@ -1585,5 +1602,59 @@ mod tests {
         w.reset();
         assert_eq!(safe_location(&w, D, [f32::MAX, 64., 8.5]), Err(INVALID));
         assert_eq!(w.counts(), (0, 0, 0));
+    }
+
+    #[test]
+    fn trample_geometry_exact_source_coverage() {
+        for (pose, expected) in [
+            ([8.5, 64., 8.5], vec![BlockPos::new(8, 63, 8)]),
+            ([0.3, 1., 0.3], vec![BlockPos::ORIGIN]),
+            (
+                [-0.1, 0.9375, -0.1],
+                vec![
+                    BlockPos::new(-1, 0, -1),
+                    BlockPos::new(-1, 0, 0),
+                    BlockPos::new(0, 0, -1),
+                    BlockPos::ORIGIN,
+                ],
+            ),
+            (
+                [15.9, 63.9375, 15.9],
+                vec![
+                    BlockPos::new(15, 63, 15),
+                    BlockPos::new(15, 63, 16),
+                    BlockPos::new(16, 63, 15),
+                    BlockPos::new(16, 63, 16),
+                ],
+            ),
+            ([16777216., 64., 8.5], vec![]),
+        ] {
+            let (cells, len) = trample_cells(pose).unwrap();
+            assert_eq!(&cells[..len], expected);
+            assert!(cells[len..].iter().all(|p| *p == BlockPos::ORIGIN));
+        }
+    }
+    #[test]
+    fn trample_geometry_refuses_unrepresentable_without_panic() {
+        for pose in [
+            [f32::MAX, 64., 8.5],
+            [f32::NAN, 64., 8.5],
+            [f32::INFINITY, 64., 8.5],
+            [2147483648., 64., 8.5],
+            [-2147483648., 64., 8.5],
+            [8.5, f32::MAX, 8.5],
+            [8.5, f32::NAN, 8.5],
+            [8.5, f32::INFINITY, 8.5],
+            [8.5, 64., f32::MAX],
+        ] {
+            let result = std::panic::catch_unwind(|| trample_cells(pose));
+            assert_eq!(
+                result.unwrap(),
+                Err(ServerError::InvalidInput {
+                    field: "actor_geometry"
+                })
+            );
+        }
+        assert_eq!(trample_cells([2147483520., 64., 8.5]).unwrap().1, 0);
     }
 }

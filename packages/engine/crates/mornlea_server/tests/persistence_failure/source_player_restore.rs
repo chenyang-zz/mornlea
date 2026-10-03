@@ -1,4 +1,4 @@
-//! Actual disk, Memory login, Acquire and native restoration, recovery, death and Safe recipes.
+//! Actual disk, Memory login, Acquire and native restoration, recovery, death, Safe and trample recipes.
 //! Manual wants qualify the caller without accepting a source subscription producer.
 use mornlea_domain::{
     BlockPos, ChunkPos, CompanionId, Dimension, FiniteVec3, HostileId, Identities, LookAngles,
@@ -2164,5 +2164,277 @@ fn safe_actual_top_floor_accepts_out_of_height_head() {
     death_no_hit(&publication);
     assert!(death_ground(&state).is_empty());
     safe_actual_expect(&state, session, [0.5, 319., 0.5]);
+    fixture.close();
+}
+
+fn trample_actual_fixture(
+    crop: bool,
+    activation: bool,
+) -> (Fixture, AuthorityState, SessionKey, TickPublication) {
+    let position = [8.5, if activation { 63.9375 } else { 65. }, 8.5];
+    let mut save = height_player_save(position);
+    save.health = 1;
+    save.safe = None;
+    save.inventory.hotbar.selected = 3;
+    save.inventory.hotbar.slots[3] = ItemStack {
+        item: 1,
+        count: 7,
+        durability: 0,
+    };
+    assert!(!save.respawn_present);
+    let current = key(Dimension::OVERWORLD, 0, 0);
+    let mut chunk = height_floor(63);
+    death_chunk_cell(&mut chunk, BlockPos::new(8, 63, 8), 35);
+    if crop {
+        death_chunk_cell(&mut chunk, BlockPos::new(8, 64, 8), 44);
+    }
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save),
+        Dimension::DEPTHS,
+        ChunkPos::new(-2, 3),
+        vec![
+            (current, chunk),
+            (key(Dimension::OVERWORLD, -2, 3), height_floor(64)),
+        ],
+    );
+    let (mut login, mut transport, connection, session, clock) =
+        handshake(&mut fixture, &mut state);
+    let publication = fixture.acquire(&mut state, current);
+    assert!(local(&publication).ready() && local(&publication).reset());
+    let (actor, runtime, inv) = recovery_observed(&state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), position);
+    assert!(!runtime.reset);
+    assert_eq!(inv.slots[3].count, 7);
+    assert_eq!(local(&publication).last_input_sequence(), 0);
+    if !activation {
+        let mut residents = state.residents();
+        let player_key = ActorKey::Player(session);
+        let actor = residents
+            .actors
+            .iter_mut()
+            .find(|a| a.key == player_key)
+            .unwrap();
+        actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new([0., -40., 0.]).unwrap(),
+            on_ground: false,
+        });
+        actor.survival = SurvivalState::try_new(SurvivalStateParts {
+            health: 1,
+            hunger: 20,
+            oxygen: 300,
+            saturation_zero: false,
+            armor_points: 0,
+        })
+        .unwrap();
+        let runtime = residents.runtimes.get_mut(&player_key).unwrap();
+        runtime.controls = None;
+        runtime.reset = false;
+        runtime.peak_y = if crop { 68. } else { 67. };
+        runtime.attack_cooldown = 0;
+        runtime.hurt_cooldown = 0;
+        runtime.burn_cooldown = 0;
+        runtime.oxygen = 300;
+        runtime.saturation_milli = 5000;
+        runtime.exhaustion_milli = 0;
+        runtime.since_damage_ticks = 0;
+        runtime.starvation_ticks = 0;
+        runtime.drown_ticks = 0;
+        runtime.eating = None;
+        runtime.bow = None;
+        runtime.aux = ActorAux::Player {
+            respawn: None,
+            workbench: None,
+        };
+        state.commit_residents(residents);
+    }
+    let input = ClientPacket::PlayerInput(
+        PlayerInput::new(3, 0, 0, false, 0., 0., false, false, false, false).unwrap(),
+    );
+    assert!(!matches!(
+        transport.send(
+            connection,
+            MemoryTransport::encode_frame(&input).unwrap(),
+            &mut login.bind(&mut state, &mut fixture.store),
+            &clock
+        ),
+        ConnectionProgress::Closed { .. }
+    ));
+    (fixture, state, session, publication)
+}
+fn trample_actual_cells(state: &AuthorityState, ground: u16, crop: u16) {
+    let view = state.settled_read().unwrap();
+    assert_eq!(
+        view.block(Dimension::OVERWORLD, BlockPos::new(8, 63, 8)),
+        Some(ground)
+    );
+    assert_eq!(
+        view.block(Dimension::OVERWORLD, BlockPos::new(8, 64, 8)),
+        Some(crop)
+    );
+}
+fn trample_actual_conserved(state: &AuthorityState, session: SessionKey) {
+    trample_actual_cells(state, 3, 0);
+    let inv = recovery_observed(state, session).2;
+    assert_eq!(inv.selected.get(), 3);
+    assert!(
+        inv.slots
+            .iter()
+            .chain(inv.armor.iter())
+            .chain(inv.crafting.iter())
+            .all(|s| *s == ItemStack::default())
+    );
+    let mut totals = std::collections::BTreeMap::new();
+    for drop in death_ground(state) {
+        *totals.entry(drop.stack.item).or_insert(0u32) += u32::from(drop.stack.count);
+        assert_eq!(drop.stack.durability, 0);
+    }
+    assert_eq!(
+        totals,
+        std::collections::BTreeMap::from([(1, 7), (35, 3), (34, 3)])
+    );
+}
+fn trample_actual_pending(
+    state: &AuthorityState,
+    session: SessionKey,
+    publication: &TickPublication,
+) {
+    pending(state, session, Dimension::OVERWORLD, [-31.5, 321., 48.5]);
+    let (actor, runtime, _) = recovery_observed(state, session);
+    assert_eq!(
+        (
+            actor.survival.health(),
+            actor.survival.hunger(),
+            actor.survival.oxygen()
+        ),
+        (20, 20, 300)
+    );
+    assert_eq!(
+        (runtime.saturation_milli, runtime.exhaustion_milli),
+        (5000, 0)
+    );
+    assert!(!runtime.reset);
+    assert_eq!(local(publication).last_input_sequence(), 3);
+    assert!(!local(publication).ready() && !local(publication).reset());
+    trample_actual_conserved(state, session);
+}
+fn trample_actual_activation(
+    state: &AuthorityState,
+    session: SessionKey,
+    publication: &TickPublication,
+) {
+    let (actor, runtime, _) = recovery_observed(state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), [-31.5, 65., 48.5]);
+    assert_eq!(actor.motion.velocity().get(), [0.; 3]);
+    assert_eq!(
+        (
+            actor.survival.health(),
+            actor.survival.hunger(),
+            actor.survival.oxygen()
+        ),
+        (20, 20, 300)
+    );
+    assert!(local(publication).ready() && local(publication).reset());
+    assert!(!runtime.reset);
+    assert_eq!(local(publication).last_input_sequence(), 3);
+    death_no_hit(publication);
+    trample_actual_conserved(state, session);
+}
+#[test]
+fn trample_actual_lethal_native_crop_landing() {
+    let (mut fixture, mut state, session, _) = trample_actual_fixture(true, false);
+    assert_eq!(state.next_tick(), 1);
+    let tick = state.next_tick();
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let hits = publication
+        .events
+        .iter()
+        .filter(|e| matches!(e.event(), mornlea_domain::Event::CombatHit(_)))
+        .collect::<Vec<_>>();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].recipient(),
+        mornlea_domain::EventRecipient::Session(session.get())
+    );
+    let mornlea_domain::Event::CombatHit(hit) = hits[0].event() else {
+        unreachable!()
+    };
+    assert_eq!(hit.damage(), 1);
+    assert_eq!(hit.server_tick(), tick);
+    safe_actual_expect(&state, session, [8.5, 63.9375, 8.5]);
+    trample_actual_pending(&state, session, &publication);
+    let drops = death_ground(&state);
+    let waiting = state.advance_tick(TickBudget::full()).unwrap();
+    trample_actual_pending(&state, session, &waiting);
+    death_no_hit(&waiting);
+    assert_eq!(death_ground(&state), drops);
+    let acquired = fixture.acquire(&mut state, key(Dimension::OVERWORLD, -2, 3));
+    trample_actual_activation(&state, session, &acquired);
+    assert_eq!(death_ground(&state), drops);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(local(&following).ready() && !local(&following).reset());
+    assert_eq!(local(&following).last_input_sequence(), 3);
+    death_no_hit(&following);
+    trample_actual_conserved(&state, session);
+    assert_eq!(death_ground(&state), drops);
+    fixture.close();
+}
+#[test]
+fn trample_actual_surviving_native_bare_landing() {
+    let (mut fixture, mut state, session, _) = trample_actual_fixture(false, false);
+    assert_eq!(state.next_tick(), 1);
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let (actor, _, inv) = recovery_observed(&state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.survival.health(), 1);
+    assert!(actor.motion.on_ground());
+    assert_eq!(actor.motion.position().get(), [8.5, 63.9375, 8.5]);
+    safe_actual_expect(&state, session, [8.5, 63.9375, 8.5]);
+    assert_eq!(inv.slots[3].count, 7);
+    assert_eq!(local(&publication).last_input_sequence(), 3);
+    death_no_hit(&publication);
+    assert!(death_ground(&state).is_empty());
+    trample_actual_cells(&state, 3, 0);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    let (actor, _, inv) = recovery_observed(&state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.survival.health(), 1);
+    assert!(actor.motion.on_ground());
+    assert_eq!(actor.motion.position().get(), [8.5, 64., 8.5]);
+    assert_eq!(inv.slots[3].count, 7);
+    assert_eq!(local(&following).last_input_sequence(), 3);
+    assert!(!local(&following).reset());
+    death_no_hit(&following);
+    assert!(death_ground(&state).is_empty());
+    trample_actual_cells(&state, 3, 0);
+    fixture.close();
+}
+#[test]
+fn trample_actual_activation_is_not_a_landing() {
+    let (mut fixture, mut state, session, activated) = trample_actual_fixture(true, true);
+    assert!(recovery_observed(&state, session).0.motion.on_ground());
+    assert_eq!(safe_actual_value(&state, session), None);
+    assert!(local(&activated).ready() && local(&activated).reset());
+    trample_actual_cells(&state, 35, 44);
+    assert!(death_ground(&state).is_empty());
+    assert_eq!(recovery_observed(&state, session).2.slots[3].count, 7);
+    assert_eq!(state.next_tick(), 1);
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let (actor, runtime, inv) = recovery_observed(&state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert!(actor.motion.on_ground());
+    assert_eq!(actor.motion.position().get(), [8.5, 63.9375, 8.5]);
+    assert_eq!(inv.slots[3].count, 7);
+    assert!(!runtime.reset);
+    assert!(local(&publication).ready() && !local(&publication).reset());
+    assert_eq!(local(&publication).last_input_sequence(), 3);
+    safe_actual_expect(&state, session, [8.5, 63.9375, 8.5]);
+    trample_actual_cells(&state, 35, 44);
+    assert!(death_ground(&state).is_empty());
+    death_no_hit(&publication);
     fixture.close();
 }

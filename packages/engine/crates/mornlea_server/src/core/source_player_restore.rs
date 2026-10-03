@@ -1,4 +1,4 @@
-//! Source login registration, exclusive restore scans and keyed per-player Safe qualification.
+//! Source login registration, exclusive restore scans, keyed Safe qualification and fixed trample capture.
 use super::actor_placement::RestoreCandidate;
 use super::contracts::{
     ActorAux, ActorKey, ActorLifecycle, ActorRuntime, RuleEffect, ServerError, SessionKey,
@@ -14,6 +14,56 @@ use std::collections::BTreeMap;
 #[derive(Default)]
 pub(crate) struct SourcePlayerBook {
     pub(crate) entries: BTreeMap<SessionKey, SourcePlayerEntry>,
+    tramples: SourceTrampleBatch,
+}
+/// Fixed copied coordinates survive actor reset and abandoned context loans.
+/// Eight live source players contribute at most four cells each; inactive tail stays retained.
+struct SourceTrampleBatch {
+    cells: [crate::rules::crops::FootprintCell; 32],
+    len: usize,
+}
+impl Default for SourceTrampleBatch {
+    fn default() -> Self {
+        Self {
+            cells: [crate::rules::crops::FootprintCell {
+                dimension: Dimension::OVERWORLD,
+                pos: BlockPos::ORIGIN,
+            }; 32],
+            len: 0,
+        }
+    }
+}
+impl SourceTrampleBatch {
+    fn append(&mut self, dimension: Dimension, positions: &[BlockPos]) -> Result<(), ServerError> {
+        if positions.len() > 4 {
+            return Err(ServerError::Internal {
+                invariant: "source player trample cells",
+            });
+        }
+        let len = self
+            .len
+            .checked_add(positions.len())
+            .filter(|len| *len <= 32)
+            .ok_or(ServerError::Internal {
+                invariant: "source player trample capacity",
+            })?;
+        for (cell, pos) in self.cells[self.len..len].iter_mut().zip(positions) {
+            *cell = crate::rules::crops::FootprintCell {
+                dimension,
+                pos: *pos,
+            };
+        }
+        self.len = len;
+        Ok(())
+    }
+}
+impl SourcePlayerBook {
+    #[cfg(test)]
+    pub(crate) fn trample_test_snapshot(
+        &self,
+    ) -> ([crate::rules::crops::FootprintCell; 32], usize) {
+        (self.tramples.cells, self.tramples.len)
+    }
 }
 pub(crate) struct SourcePlayerEntry {
     pub(crate) restore: PendingRestore,
@@ -241,6 +291,42 @@ pub(crate) fn checkpoint_safe(
     context.checkpoint_source_player_safe(session)
 }
 
+/// A keyed registration check precedes borrowing one player's landing certificate.
+pub(crate) fn capture_trample(
+    book: &mut SourcePlayerBook,
+    context: &TickContext<'_>,
+    session: SessionKey,
+) -> Result<(), ServerError> {
+    if !book
+        .entries
+        .get(&session)
+        .is_some_and(|entry| entry.ever_spawned)
+    {
+        return Ok(());
+    }
+    if let Some((dimension, positions, len)) = context.capture_source_player_trample(session)? {
+        book.tramples.append(dimension, &positions[..len])?;
+    }
+    Ok(())
+}
+/// Only successful fresh-cell settlement drains the prefix; missing environment retains it.
+pub(crate) fn settle_tramples(
+    book: &mut SourcePlayerBook,
+    context: &mut TickContext<'_>,
+) -> Result<crate::core::contracts::PhaseReport, ServerError> {
+    if book.tramples.len > 32 {
+        return Err(ServerError::Internal {
+            invariant: "source player trample capacity",
+        });
+    }
+    let report = crate::rules::crops::settle_captured_tramples(
+        &book.tramples.cells[..book.tramples.len],
+        context,
+    )?;
+    book.tramples.len = 0;
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +386,66 @@ mod tests {
         save.respawn_position = [0.; 3];
         save.respawn_present = false;
         assert_eq!(source_bed(&save), None);
+    }
+
+    #[test]
+    fn trample_batch_preserves_order_and_duplicates() {
+        let mut batch = SourceTrampleBatch::default();
+        let first = [
+            BlockPos::new(2, 3, 4),
+            BlockPos::ORIGIN,
+            BlockPos::new(2, 3, 4),
+            BlockPos::new(-1, 8, 9),
+        ];
+        let second = [BlockPos::new(5, 6, 7); 4];
+        batch.append(Dimension::OVERWORLD, &first).unwrap();
+        batch.append(Dimension::DEPTHS, &second).unwrap();
+        assert_eq!(batch.len, 8);
+        for (i, pos) in first.iter().chain(second.iter()).enumerate() {
+            assert_eq!(
+                batch.cells[i],
+                crate::rules::crops::FootprintCell {
+                    dimension: if i < 4 {
+                        Dimension::OVERWORLD
+                    } else {
+                        Dimension::DEPTHS
+                    },
+                    pos: *pos
+                }
+            );
+        }
+        assert_eq!(batch.cells[8..], SourceTrampleBatch::default().cells[8..]);
+        assert!(
+            std::mem::size_of::<SourceTrampleBatch>()
+                <= 32 * std::mem::size_of::<crate::rules::crops::FootprintCell>()
+                    + std::mem::size_of::<usize>()
+        );
+    }
+    #[test]
+    fn trample_batch_capacity_is_atomic() {
+        let mut batch = SourceTrampleBatch::default();
+        for i in 0..8 {
+            batch
+                .append(Dimension::DEPTHS, &[BlockPos::new(i, 3, 4); 4])
+                .unwrap();
+        }
+        assert_eq!(batch.len, 32);
+        let before = (batch.cells, batch.len);
+        assert_eq!(
+            batch.append(Dimension::OVERWORLD, &[BlockPos::ORIGIN]),
+            Err(ServerError::Internal {
+                invariant: "source player trample capacity"
+            })
+        );
+        assert_eq!((batch.cells, batch.len), before);
+        assert_eq!(batch.append(Dimension::OVERWORLD, &[]), Ok(()));
+        assert_eq!((batch.cells, batch.len), before);
+        assert_eq!(
+            batch.append(Dimension::OVERWORLD, &[BlockPos::ORIGIN; 5]),
+            Err(ServerError::Internal {
+                invariant: "source player trample cells"
+            })
+        );
+        assert_eq!((batch.cells, batch.len), before);
     }
 }

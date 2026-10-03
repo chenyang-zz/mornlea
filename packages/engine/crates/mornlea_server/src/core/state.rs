@@ -3439,6 +3439,59 @@ impl<'a> TickContext<'a> {
         Ok(Some(dimension))
     }
 
+    /// Borrows the original landing-edge certificate before later death can replace the pose.
+    /// Qualification and geometry read no world owners and mutate no context state.
+    pub(crate) fn capture_source_player_trample(
+        &self,
+        session: SessionKey,
+    ) -> Result<Option<(Dimension, [mornlea_domain::BlockPos; 4], usize)>, ServerError> {
+        if let Some(error) = self.authority.tick_failure {
+            return Err(error);
+        }
+        if self.authority.phase == ServerPhase::Closed {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed,
+            });
+        }
+        if self.authority.source_player_radius.is_none()
+            || !self.source_player_session_active(session)
+        {
+            return Ok(None);
+        }
+        let invalid = ServerError::InvalidInput {
+            field: "source_player_trample",
+        };
+        let slot = *self.player_slots.get(&session).ok_or(invalid)?;
+        let actor = self.actors.get(slot).ok_or(invalid)?;
+        let key = ActorKey::Player(session);
+        if actor.key != key {
+            return Err(invalid);
+        }
+        if actor.lifecycle != ActorLifecycle::Active || !actor.motion.on_ground() {
+            return Ok(None);
+        }
+        if !matches!(actor.body, ActorBody::Player(_)) {
+            return Err(invalid);
+        }
+        let runtime = self.runtimes.get(&key).ok_or(invalid)?;
+        if runtime.key != key || !matches!(runtime.aux, ActorAux::Player { .. }) {
+            return Err(invalid);
+        }
+        if runtime.reset {
+            return Ok(None);
+        }
+        let Some(pre_step) = self.pre_step.get(&key) else {
+            return Ok(None);
+        };
+        if pre_step.on_ground() {
+            return Ok(None);
+        }
+        let dimension = actor.dimension;
+        let position = actor.motion.position().get();
+        let (cells, len) = super::actor_placement::trample_cells(position)?;
+        Ok((len != 0).then_some((dimension, cells, len)))
+    }
+
     /// Updates only the indexed player's heap-free Safe value after ordinary native motion.
     /// Refusal preserves every owner, and an earlier player's accepted write survives abandonment.
     pub(crate) fn checkpoint_source_player_safe(
@@ -13454,6 +13507,310 @@ mod source_player_restore_tests {
             ],
             scans
         );
+    }
+    fn ctx_trample_motion(position: [f32; 3], grounded: bool) -> MotionState {
+        MotionState::new(mornlea_domain::MotionStateParts {
+            position: mornlea_domain::FiniteVec3::try_new(position).unwrap(),
+            velocity: mornlea_domain::FiniteVec3::try_new([0.; 3]).unwrap(),
+            on_ground: grounded,
+        })
+    }
+    fn ctx_trample_airborne(a: &mut AuthorityState, sessions: &[SessionKey]) {
+        for s in sessions {
+            a.residents.actors[a.residents.player_slots[s]].motion =
+                ctx_trample_motion([15.9, 67., 15.9], false);
+        }
+    }
+    fn ctx_trample_edge(c: &mut TickContext<'_>, s: SessionKey) {
+        c.actors[c.player_slots[&s]].motion = ctx_trample_motion([15.9, 64., 15.9], true);
+    }
+    fn ctx_trample_positions() -> [BlockPos; 4] {
+        [
+            BlockPos::new(15, 63, 15),
+            BlockPos::new(15, 63, 16),
+            BlockPos::new(16, 63, 15),
+            BlockPos::new(16, 63, 16),
+        ]
+    }
+    #[test]
+    fn ctx_trample_borrowed_edge_and_legacy_exclusion() {
+        for healthless in [false, true] {
+            let (mut a, s, _) = ctx_safe_fixture(false);
+            ctx_add_allocations(&mut a, s);
+            ctx_trample_airborne(&mut a, &[s]);
+            let mut book = std::mem::take(&mut a.source_players);
+            let scan = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_trample_edge(&mut c, s);
+            ctx_seed_transients(&mut c, &[s]);
+            if healthless {
+                c.actors[c.player_slots[&s]].survival = ctx_survival(0, 9, 3);
+                c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().has_view = false;
+            }
+            let env = c.environment.take();
+            c.ready.clear();
+            c.blocks = Default::default();
+            let before = ctx_death_snapshot(&c);
+            let pointers = ctx_allocations(
+                &c.actors[c.player_slots[&s]],
+                &c.runtimes[&ActorKey::Player(s)],
+            );
+            assert_eq!(
+                c.capture_source_player_trample(s),
+                Ok(Some((Dimension::DEPTHS, ctx_trample_positions(), 4)))
+            );
+            super::super::source_player_restore::capture_trample(&mut book, &c, s).unwrap();
+            let (cells, len) = book.trample_test_snapshot();
+            assert_eq!(len, 4);
+            for (cell, pos) in cells[..4].iter().zip(ctx_trample_positions()) {
+                assert_eq!(
+                    *cell,
+                    crate::rules::crops::FootprintCell {
+                        dimension: Dimension::DEPTHS,
+                        pos
+                    }
+                );
+            }
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+            assert_eq!(
+                ctx_allocations(
+                    &c.actors[c.player_slots[&s]],
+                    &c.runtimes[&ActorKey::Player(s)]
+                ),
+                pointers
+            );
+            c.environment = env;
+            let before = ctx_death_snapshot(&c);
+            let batch = book.trample_test_snapshot();
+            let mut legacy = crate::rules::crops::FootprintSchedule::new();
+            let r = crate::rules::crops::settle_tramples(&mut legacy, &mut c).unwrap();
+            assert_eq!((r.examined, r.applied), (0, 0));
+            assert_eq!(book.trample_test_snapshot(), batch);
+            assert_eq!(ctx_death_snapshot(&c), before);
+            c.authority.source_player_radius = None;
+            let r = crate::rules::crops::settle_tramples(&mut legacy, &mut c).unwrap();
+            assert_eq!((r.examined, r.applied), (4, 0));
+        }
+    }
+    #[test]
+    fn ctx_trample_ineligible_is_quiet() {
+        for row in 0..12 {
+            let (mut a, s) = if row == 1 {
+                fixture()
+            } else {
+                let (a, s, _) = ctx_safe_fixture(false);
+                (a, s)
+            };
+            ctx_trample_airborne(&mut a, &[s]);
+            if row == 2 {
+                a.source_player_radius = None;
+            }
+            if row == 3 {
+                a.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired;
+            }
+            if row == 4 {
+                a.sessions.remove(&s);
+            }
+            let mut book = std::mem::take(&mut a.source_players);
+            if row == 0 {
+                book.entries.remove(&s);
+            }
+            if row == 1 {
+                assert!(!book.entries[&s].ever_spawned);
+            }
+            let scans = book
+                .entries
+                .keys()
+                .map(|s| ctx_book_snapshot(&book, *s))
+                .collect::<Vec<_>>();
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_trample_edge(&mut c, s);
+            let slot = c.player_slots[&s];
+            match row {
+                5 => c.actors[slot].lifecycle = ActorLifecycle::Pending,
+                6 => c.actors[slot].lifecycle = ActorLifecycle::Respawning,
+                7 => c.actors[slot].lifecycle = ActorLifecycle::Dead,
+                8 => c.actors[slot].motion = ctx_trample_motion([15.9, 64., 15.9], false),
+                9 => c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().reset = true,
+                10 => {
+                    c.pre_step.remove(&ActorKey::Player(s));
+                }
+                11 => {
+                    c.pre_step.insert(
+                        ActorKey::Player(s),
+                        ctx_trample_motion([15.9, 64., 15.9], true),
+                    );
+                }
+                _ => {}
+            }
+            c.environment = None;
+            c.ready.clear();
+            c.blocks = Default::default();
+            if (2..=4).contains(&row) {
+                c.actors.clear();
+                c.player_slots.clear();
+            }
+            if row <= 8 {
+                c.runtimes.remove(&ActorKey::Player(s));
+            }
+            let before = ctx_death_snapshot(&c);
+            let batch = book.trample_test_snapshot();
+            if row > 1 {
+                assert_eq!(c.capture_source_player_trample(s), Ok(None), "row {row}");
+            }
+            assert_eq!(
+                super::super::source_player_restore::capture_trample(&mut book, &c, s),
+                Ok(()),
+                "row {row}"
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(book.trample_test_snapshot(), batch);
+            assert_eq!(
+                book.entries
+                    .keys()
+                    .map(|s| ctx_book_snapshot(&book, *s))
+                    .collect::<Vec<_>>(),
+                scans
+            );
+        }
+    }
+    #[test]
+    fn ctx_trample_refusal_and_prefix_drop() {
+        for row in 0..10 {
+            let (mut a, s, other) = ctx_safe_fixture(true);
+            let other = other.unwrap();
+            ctx_trample_airborne(&mut a, &[s, other]);
+            let mut book = std::mem::take(&mut a.source_players);
+            let scan = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_trample_edge(&mut c, s);
+            let slot = c.player_slots[&s];
+            match row {
+                0 => {
+                    c.player_slots.remove(&s);
+                }
+                1 => {
+                    c.player_slots.insert(s, c.actors.len());
+                }
+                2 => c.actors[slot].key = ActorKey::Player(other),
+                3 => {
+                    c.actors[slot].body = ActorBody::Passive(mornlea_storage::PassiveMob {
+                        id: 1,
+                        dimension: 0,
+                        position: [0., 64., 0.],
+                        velocity: [0.; 3],
+                        on_ground: true,
+                        yaw: 0.,
+                        health: 7,
+                    })
+                }
+                4 => {
+                    c.runtimes.remove(&ActorKey::Player(s));
+                }
+                5 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().key = ActorKey::Player(other)
+                }
+                6 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().aux = ActorAux::Hostile {
+                        distant_ticks: 1,
+                        shoot_cooldown: 2,
+                        fresh: true,
+                    }
+                }
+                7 => c.actors[slot].motion = ctx_trample_motion([f32::MAX, 64., 8.5], true),
+                8 | 9 => {
+                    c.authority.phase = ServerPhase::Closed;
+                    c.authority.source_player_radius = None;
+                    if row == 9 {
+                        c.authority.tick_failure = Some(ServerError::Disconnected);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let err = match row {
+                7 => ServerError::InvalidInput {
+                    field: "actor_geometry",
+                },
+                8 => ServerError::InvalidState {
+                    phase: ServerPhase::Closed,
+                },
+                9 => ServerError::Disconnected,
+                _ => ServerError::InvalidInput {
+                    field: "source_player_trample",
+                },
+            };
+            let before = ctx_death_snapshot(&c);
+            let batch = book.trample_test_snapshot();
+            assert_eq!(c.capture_source_player_trample(s), Err(err));
+            assert_eq!(
+                super::super::source_player_restore::capture_trample(&mut book, &c, s),
+                Err(err)
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(book.trample_test_snapshot(), batch);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+        }
+        let (mut a, s, other) = ctx_safe_fixture(true);
+        let other = other.unwrap();
+        ctx_add_allocations(&mut a, s);
+        ctx_trample_airborne(&mut a, &[s, other]);
+        let mut book = std::mem::take(&mut a.source_players);
+        let scans = [ctx_book_snapshot(&book, s), ctx_book_snapshot(&book, other)];
+        let pointers = ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]);
+        let batch;
+        let environment = a.residents.environment.clone();
+        {
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_trample_edge(&mut c, s);
+            ctx_trample_edge(&mut c, other);
+            super::super::source_player_restore::capture_trample(&mut book, &c, s).unwrap();
+            batch = book.trample_test_snapshot();
+            assert_eq!(batch.1, 4);
+            c.runtimes.get_mut(&ActorKey::Player(other)).unwrap().key = ActorKey::Player(s);
+            let before = ctx_death_snapshot(&c);
+            assert_eq!(
+                super::super::source_player_restore::capture_trample(&mut book, &c, other),
+                Err(ServerError::InvalidInput {
+                    field: "source_player_trample"
+                })
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(book.trample_test_snapshot(), batch);
+            c.environment = None;
+            assert_eq!(
+                super::super::source_player_restore::settle_tramples(&mut book, &mut c),
+                Err(ServerError::InvalidInput {
+                    field: "environment"
+                })
+            );
+            assert_eq!(book.trample_test_snapshot(), batch);
+        }
+        a.source_players = book;
+        a.residents.environment = environment;
+        assert_eq!(a.source_players.trample_test_snapshot(), batch);
+        assert_eq!(
+            [
+                ctx_book_snapshot(&a.source_players, s),
+                ctx_book_snapshot(&a.source_players, other)
+            ],
+            scans
+        );
+        assert_eq!(
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]),
+            pointers
+        );
+        let mut book = std::mem::take(&mut a.source_players);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        c.ready.clear();
+        c.blocks = Default::default();
+        let before = ctx_death_snapshot(&c);
+        let r = super::super::source_player_restore::settle_tramples(&mut book, &mut c).unwrap();
+        assert_eq!((r.examined, r.applied, r.carried, r.rejected), (4, 0, 0, 0));
+        let drained = book.trample_test_snapshot();
+        assert_eq!(drained.1, 0);
+        assert_eq!(drained.0, batch.0);
+        assert_eq!(ctx_death_snapshot(&c), before);
     }
 }
 

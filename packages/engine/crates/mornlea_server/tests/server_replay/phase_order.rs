@@ -13,7 +13,8 @@
 //! depends on. Actual source-player death recipes in persistence failure
 //! execute five damage producers and the consumer between projectile and
 //! passive advancement. Actual native landing and top-floor Safe recipes qualify
-//! the per-player checkpoint after fall settlement and before late death. These
+//! per-player checkpoint after fall settlement and before late death. Trample markers
+//! pin capture before Safe and copied-cell settlement before legacy collection. These
 //! source guards separately qualify call order; other provider integration
 //! coverage retains its existing owners.
 //!
@@ -202,6 +203,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "player_survival::run",
     "player_motion::run",
     "player_survival::run",
+    "source_player_restore::capture_trample",
     "source_player_restore::checkpoint_safe",
     "companions::run",
     "hostile_actions::plan",
@@ -229,6 +231,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "farmland::run",
     "farmland::advance",
     "crops::run",
+    "source_player_restore::settle_tramples",
     "crops::settle_tramples",
     "crops::run",
     "crops::settle_snow_footprints",
@@ -757,4 +760,41 @@ fn safe_checkpoint_rejects_early_or_repeated_dispatch() {
     }
     let repeated = format!("{body}\n{marker}");
     assert!(std::panic::catch_unwind(|| assert_eq!(marker_count(&repeated, marker), 1)).is_err());
+}
+
+#[test]
+fn trample_capture_order() {
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let capture = "source_player_restore::capture_trample";
+    let settle = "source_player_restore::settle_tramples";
+    let chain = [
+        "player_motion::run",
+        "RulePhase::PlayerPostPhysics",
+        capture,
+        "source_player_restore::checkpoint_safe",
+        "RulePhase::CompanionMotion",
+        "source_player_restore::settle_deaths",
+        "RulePhase::Trample",
+        settle,
+        "crops::settle_tramples",
+        "RulePhase::SnowFootprint",
+        "random_blocks::advance",
+    ];
+    chain_positions(body, &chain);
+    for marker in [capture, settle] {
+        assert_eq!(marker_count(body, marker), 1);
+    }
+    for (first, last) in [
+        ("player_motion::run", capture),
+        (capture, "RulePhase::CompanionMotion"),
+        (settle, "random_blocks::advance"),
+    ] {
+        let swapped = swap_markers(body, first, last);
+        assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
+    }
+    for marker in [capture, settle] {
+        let repeat = format!("{body}\n{marker}");
+        assert!(std::panic::catch_unwind(|| assert_eq!(marker_count(&repeat, marker), 1)).is_err());
+    }
 }
