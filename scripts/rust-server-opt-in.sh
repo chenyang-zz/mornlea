@@ -211,9 +211,10 @@ EOF
 # interpreter start and prints one decoded value per field, NUL-separated,
 # in the argument order. Decoding matches `manifest_get` exactly,
 # including the empty value for an absent field, so batching removes
-# startup cost only.
-# NUL cannot occur in the decoded field domains (POSIX paths, hex hashes,
-# enums, integers), so it separates fields exactly.
+# startup cost only. JSON `\u0000` decodes to a literal NUL inside a
+# string field, so a field carrying one would be treated as a separator
+# and misalign every later consumer; the batch refuses such fields before
+# any output instead.
 manifest_get_batch() {
     py "$@" <<'EOF'
 import json, sys
@@ -229,6 +230,9 @@ for name in sys.argv[2:]:
         text = json.dumps(value, sort_keys=True)
     else:
         text = str(value)
+    if "\0" in text:
+        print("FAIL invalid_manifest manifest field %s contains an embedded NUL" % name, file=sys.stderr)
+        sys.exit(1)
     sys.stdout.write(text + "\0")
 EOF
 }
@@ -712,10 +716,12 @@ EOF
 previous_binding_validate() {
     local manifest="$1" world="$2" backup="$3" run="$4"
     local package_path previous recorded
+    # A short or failed batch read leaves later fields empty and misaligned,
+    # so each read must refuse instead of proceeding with partial bindings.
     {
-        IFS= read -rd '' package_path
-        IFS= read -rd '' previous
-        IFS= read -rd '' recorded
+        IFS= read -rd '' package_path || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' previous || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' recorded || fail "invalid_manifest" "manifest field batch is incomplete"
     } < <(manifest_get_batch "$manifest" "previous_manifest" "previous_executable" "previous_sha256")
     local current
     current="$(previous_package_validate "$package_path" "$previous" "$recorded" "$world" "$backup" "$run")" || exit 1
@@ -1285,16 +1291,17 @@ cmd_rollback() {
     # One batched read fetches every manifest field the straight-line
     # prework consults; per-field decoding matches `manifest_get`, and the
     # consumers below keep their original check order and refusals. The
-    # NUL-delimited split keeps an empty field value in its own slot.
+    # NUL-delimited split keeps an empty field value in its own slot, and
+    # any short read refuses rather than silently emptying later fields.
     local world backup socket nonce previous recorded_previous phase
     {
-        IFS= read -rd '' world
-        IFS= read -rd '' backup
-        IFS= read -rd '' socket
-        IFS= read -rd '' nonce
-        IFS= read -rd '' previous
-        IFS= read -rd '' recorded_previous
-        IFS= read -rd '' phase
+        IFS= read -rd '' world || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' backup || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' socket || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' nonce || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' previous || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' recorded_previous || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' phase || fail "invalid_manifest" "manifest field batch is incomplete"
     } < <(manifest_get_batch "$manifest" "world_path" "backup_path" "control_socket" "start_nonce" "previous_executable" "previous_sha256" "phase")
     local run_canon
     run_canon="$(canon "$(dirname "$manifest_canon")")"
