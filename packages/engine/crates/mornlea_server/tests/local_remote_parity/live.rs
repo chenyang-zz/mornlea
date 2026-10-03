@@ -198,13 +198,17 @@ impl DiskBackend for GatedDisk {
 
 #[test]
 fn held_actual_player_read_returns_login_pump_before_release() {
-    held_read(TransportKind::Memory);
+    held_read(TransportKind::Memory, false);
 }
 #[test]
 fn held_actual_player_read_returns_tcp_login_pump_before_release() {
-    held_read(TransportKind::Tcp);
+    held_read(TransportKind::Tcp, false);
 }
-fn held_read(kind: TransportKind) {
+#[test]
+fn held_actual_player_read_advances_unread_tcp_login_before_return() {
+    held_read(TransportKind::Tcp, true);
+}
+fn held_read(kind: TransportKind, defer_login_input: bool) {
     let root = Root::new();
     seed(&root);
     let (g, entered, release) = gate();
@@ -220,12 +224,35 @@ fn held_read(kind: TransportKind) {
         });
         let clock = StepClock(Instant::now());
         let mut transport = Wire::open(kind, &mut driver.bind(&mut state, &mut scheduler), &clock);
-        begin_wire(
-            &mut transport,
-            &mut driver.bind(&mut state, &mut scheduler),
-            &clock,
-            1,
-        );
+        if defer_login_input {
+            begin_hello(
+                &mut transport,
+                &mut driver.bind(&mut state, &mut scheduler),
+                &clock,
+            );
+            let Wire::Tcp { peer, .. } = &mut transport else {
+                unreachable!()
+            };
+            peer.set_nonblocking(false).unwrap();
+            peer.write_all(&login(1)).unwrap();
+            peer.set_nonblocking(true).unwrap();
+            assert_eq!(driver.pending(), 0);
+        } else {
+            begin_wire(
+                &mut transport,
+                &mut driver.bind(&mut state, &mut scheduler),
+                &clock,
+                1,
+            );
+        }
+        let until = Instant::now() + BOUND;
+        while driver.pending() == 0 {
+            let progress = transport.poll(&mut driver.bind(&mut state, &mut scheduler), &clock);
+            assert!(!matches!(progress, ConnectionProgress::Closed { .. }));
+            assert!(Instant::now() < until, "login input admission stalled");
+            thread::yield_now();
+        }
+        assert_eq!(driver.pending(), 1);
         scheduler.drive_workers();
         transport.poll(&mut driver.bind(&mut state, &mut scheduler), &clock);
         tx.send((driver, state, scheduler, transport)).unwrap();
@@ -459,10 +486,14 @@ fn wait_frames(
     wire: &mut Wire,
     expected: usize,
     endpoint: &mut dyn TransportAuthority,
+    clock: &StepClock,
 ) -> Vec<Vec<u8>> {
     let until = Instant::now() + BOUND;
     let mut frames = Vec::new();
     while frames.len() < expected {
+        // Advance actual input and core ownership even after a one-shot send
+        // observes WouldBlock or endpoint readiness precedes core delivery.
+        wire.poll(endpoint, clock);
         wire.flush(endpoint);
         frames.extend(wire.receive());
         assert!(Instant::now() < until, "peer frame delivery stalled");
@@ -471,9 +502,50 @@ fn wait_frames(
     assert_eq!(frames.len(), expected);
     frames
 }
-fn begin_wire(wire: &mut Wire, endpoint: &mut dyn TransportAuthority, clock: &StepClock, tag: u8) {
+#[test]
+fn actual_receive_advances_unread_tcp_hello() {
+    let root = Root::new();
+    let disk = DiskStore::open(&root.0, options()).unwrap();
+    let mut state =
+        AuthorityState::try_new_with_metadata(limits(), disk.metadata().clone()).unwrap();
+    let mut driver = LoginDriver::new();
+    let mut scheduler = scheduler(disk);
+    let clock = StepClock(Instant::now());
+    let mut wire = Wire::open(
+        TransportKind::Tcp,
+        &mut driver.bind(&mut state, &mut scheduler),
+        &clock,
+    );
+    let Wire::Tcp { peer, .. } = &mut wire else {
+        unreachable!()
+    };
+    peer.set_nonblocking(false).unwrap();
+    peer.write_all(&hello()).unwrap();
+    peer.set_nonblocking(true).unwrap();
+    wire.flush(&mut driver.bind(&mut state, &mut scheduler));
+    assert!(wire.receive().is_empty());
+    let frames = wait_frames(
+        &mut wire,
+        1,
+        &mut driver.bind(&mut state, &mut scheduler),
+        &clock,
+    );
+    assert_eq!(
+        frames,
+        vec![server_frame(&ServerPacket::ServerHello(
+            mornlea_protocol::ServerHello::new(Identities::current().protocol).unwrap()
+        ))]
+    );
+    wire.acknowledge(1, &mut driver.bind(&mut state, &mut scheduler));
+    wire.close(&mut driver.bind(&mut state, &mut scheduler));
+    assert_eq!(driver.cancel_pending(&mut state, &mut scheduler), Ok(0));
+    close_scheduler(&mut scheduler);
+    let mut reopened = DiskStore::open(&root.0, options()).unwrap();
+    reopened.close().unwrap();
+}
+fn begin_hello(wire: &mut Wire, endpoint: &mut dyn TransportAuthority, clock: &StepClock) {
     wire.send(hello(), endpoint, clock);
-    let frames = wait_frames(wire, 1, endpoint);
+    let frames = wait_frames(wire, 1, endpoint, clock);
     assert_eq!(
         frames,
         vec![server_frame(&ServerPacket::ServerHello(
@@ -481,6 +553,9 @@ fn begin_wire(wire: &mut Wire, endpoint: &mut dyn TransportAuthority, clock: &St
         ))]
     );
     wire.acknowledge(1, endpoint);
+}
+fn begin_wire(wire: &mut Wire, endpoint: &mut dyn TransportAuthority, clock: &StepClock, tag: u8) {
+    begin_hello(wire, endpoint, clock);
     wire.send(login(tag), endpoint, clock);
 }
 fn wait_ready<B: DiskBackend>(
@@ -535,11 +610,12 @@ fn delivered_publication<B: DiskBackend>(
     scheduler: &mut AutosaveScheduler<B>,
     session: SessionKey,
     expected: usize,
+    clock: &StepClock,
 ) -> Vec<Vec<u8>> {
     let mut endpoint = driver.bind(state, scheduler);
     let frames = wire.drain(&mut endpoint, session);
     if matches!(wire, Wire::Tcp { .. }) {
-        wait_frames(wire, expected, &mut endpoint)
+        wait_frames(wire, expected, &mut endpoint, clock)
     } else {
         assert_eq!(frames.len(), expected);
         frames
@@ -608,7 +684,12 @@ fn real_transcript(kind: TransportKind) -> Transcript {
                 .is_err()
         );
         assert!(state.residents().actors.is_empty());
-        let success_bytes = wait_frames(&mut wire, 1, &mut driver.bind(&mut state, &mut scheduler));
+        let success_bytes = wait_frames(
+            &mut wire,
+            1,
+            &mut driver.bind(&mut state, &mut scheduler),
+            &clock,
+        );
         assert_eq!(success_bytes, vec![server_frame(&success)]);
         wire.acknowledge(1, &mut driver.bind(&mut state, &mut scheduler));
         assert_eq!(state.session(session).unwrap().phase, SessionPhase::Active);
@@ -701,6 +782,7 @@ fn real_transcript(kind: TransportKind) -> Transcript {
             &mut scheduler,
             *session,
             expected,
+            &clock,
         ));
     }
     peers[0].send(
@@ -743,6 +825,7 @@ fn real_transcript(kind: TransportKind) -> Transcript {
             &mut scheduler,
             *session,
             expected,
+            &clock,
         ));
         wire.close(&mut driver.bind(&mut state, &mut scheduler));
     }
@@ -804,7 +887,12 @@ fn actual_corrupt_and_future_players_reject_across_memory_and_tcp() {
             assert!(
                 matches!(progress,ConnectionProgress::Closed { class:Some(ServerError::Storage { family:"player",kind:observed }),.. } if observed == failure)
             );
-            let frames = wait_frames(&mut wire, 1, &mut driver.bind(&mut state, &mut scheduler));
+            let frames = wait_frames(
+                &mut wire,
+                1,
+                &mut driver.bind(&mut state, &mut scheduler),
+                &clock,
+            );
             let ServerPacket::LoginReject(reject) = decode(&frames[0]) else {
                 panic!("expected login rejection")
             };
@@ -899,7 +987,12 @@ fn actual_reconnects_release_committed_driver_history_across_transports() {
                 &clock,
                 LoginTicket::try_from_raw(index).unwrap(),
             );
-            let bytes = wait_frames(&mut wire, 1, &mut driver.bind(&mut state, &mut scheduler));
+            let bytes = wait_frames(
+                &mut wire,
+                1,
+                &mut driver.bind(&mut state, &mut scheduler),
+                &clock,
+            );
             assert_eq!(bytes, vec![server_frame(&success)]);
             wire.acknowledge(1, &mut driver.bind(&mut state, &mut scheduler));
             assert_eq!(driver.pending(), 0);
@@ -1016,7 +1109,12 @@ fn background_owner_failures_keep_exact_error_and_wire_class() {
             assert!(
                 matches!(progress,ConnectionProgress::Closed { class:Some(observed),.. } if observed == error)
             );
-            let frames = wait_frames(&mut wire, 1, &mut driver.bind(&mut state, &mut scheduler));
+            let frames = wait_frames(
+                &mut wire,
+                1,
+                &mut driver.bind(&mut state, &mut scheduler),
+                &clock,
+            );
             let ServerPacket::LoginReject(reject) = decode(&frames[0]) else {
                 panic!("login failure")
             };
