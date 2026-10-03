@@ -17,18 +17,25 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use mornlea_domain::{Identities, PlayerId};
 use mornlea_protocol::{
-    AdmittedLogin, ClientHello, ClientPacket, CloseContainer, LoginStart, LoginSuccess, PlayIntent,
-    ProtocolCodec, ServerHello, ServerPacket, State, encode_uvarint, read_frame_ref, write_frame,
+    AdmittedLogin, BoneMeal, CONTAINER_KIND_FURNACE, ChatCommand, ClientHello, ClientPacket,
+    CloseContainer, CollectWater, ContainerRef, DropSelectedItem, DropStack, EquipArmor,
+    KeepAliveReply, LoginStart, LoginSuccess, MoveContainerStack, MoveCraftingStack,
+    MoveInventoryStack, MoveStackPartial, OpenContainer, PlaceBlock, PlaceWater, PlayIntent,
+    PlayerInput, ProtocolCodec, QuickMoveStack, RequestChunkResync, SelectHotbar, ServerHello,
+    ServerPacket, State, TakeCraftingOutput, TillSoil, admit_login, encode_uvarint, read_frame_ref,
+    write_frame,
 };
 use mornlea_server::contracts::{
     Clock, CloseReason, CompanionActionEnvelope, CompanionReceipt, ConnectionId,
     ConnectionProgress, Deadline, LoadPoll, LoginPoll, LoginTicket, PlayerLoadPort,
-    PublicationPort, ServerEndpoint, ServerError, ServerLimits, SessionKey, SessionPhase,
-    ShutdownFailure, SubmissionReceipt, TickBudget, TickPublication, TransportKind,
+    PublicationPort, ServerEndpoint, ServerError, ServerLimits, SessionFacts, SessionKey,
+    SessionPhase, ShutdownFailure, SubmissionReceipt, TickBudget, TickPublication, TransportKind,
 };
 use mornlea_server::state::AuthorityState;
 use mornlea_server::transport::common::TransportAuthority;
@@ -858,5 +865,693 @@ fn tcp_disconnect_during_pending_save_keeps_save_in_flight() {
     assert_eq!(report.acked, 1, "pending save acks after disconnect");
     assert!(report.retry.is_empty());
     assert_eq!(harness.endpoint.authority.save_stats().in_flight, 0);
+    let _ = client;
+}
+
+/// Number of inventory packets submitted before the first tick; the
+/// remaining packets plus one stale resubmission land between the two ticks.
+const INVENTORY_FIRST_TICK_PACKETS: usize = 12;
+
+/// One valid wire packet for every `command.protocol.client.*` row of the
+/// capability inventory: the nineteen sequenced command families, the chat
+/// channel, and the keep alive reply. Every record comes from its family's
+/// checked constructor with the parameters the protocol crate's own suites
+/// pin, so admission can never depend on a hand-packed byte. Ownership
+/// alternates Ada (tag 1) and Bea (tag 2) in row order, so each player's
+/// sequenced families carry strictly increasing sequence numbers.
+fn inventory_packets() -> Vec<(&'static str, u8, ClientPacket)> {
+    let furnace = ContainerRef {
+        dimension: 0,
+        chunk_x: -1,
+        chunk_z: 2,
+        kind: CONTAINER_KIND_FURNACE,
+        slot: 31,
+        generation: 1,
+    };
+    vec![
+        (
+            "BoneMeal",
+            1,
+            ClientPacket::BoneMeal(BoneMeal::new(1, -0.0, 1.5).unwrap()),
+        ),
+        (
+            "ChatCommand",
+            1,
+            ClientPacket::ChatCommand(ChatCommand::new("chop oak".to_owned()).unwrap()),
+        ),
+        (
+            "CloseContainer",
+            2,
+            ClientPacket::CloseContainer(CloseContainer::new(1)),
+        ),
+        (
+            "CollectWater",
+            1,
+            ClientPacket::CollectWater(CollectWater::new(2, -0.0, 1.5).unwrap()),
+        ),
+        (
+            "DropSelectedItem",
+            2,
+            ClientPacket::DropSelectedItem(DropSelectedItem::new(2)),
+        ),
+        (
+            "DropStack",
+            1,
+            ClientPacket::DropStack(DropStack::new(3, ContainerRef::NONE, 0, 35).unwrap()),
+        ),
+        (
+            "EquipArmor",
+            2,
+            ClientPacket::EquipArmor(EquipArmor::new(3)),
+        ),
+        (
+            "KeepAliveReply",
+            2,
+            ClientPacket::KeepAliveReply(KeepAliveReply::new(6).unwrap()),
+        ),
+        (
+            "MoveContainerStack",
+            1,
+            ClientPacket::MoveContainerStack(MoveContainerStack::new(4, furnace, 0, 37).unwrap()),
+        ),
+        (
+            "MoveCraftingStack",
+            2,
+            ClientPacket::MoveCraftingStack(MoveCraftingStack::new(4, 8, 44).unwrap()),
+        ),
+        (
+            "MoveInventoryStack",
+            1,
+            ClientPacket::MoveInventoryStack(MoveInventoryStack::new(5, 0, 35).unwrap()),
+        ),
+        (
+            "MoveStackPartial",
+            2,
+            ClientPacket::MoveStackPartial(
+                MoveStackPartial::new(5, ContainerRef::NONE, 1, 9, 44, false).unwrap(),
+            ),
+        ),
+        (
+            "OpenContainer",
+            1,
+            ClientPacket::OpenContainer(OpenContainer::new(6, -0.0, 1.5).unwrap()),
+        ),
+        (
+            "PlaceBlock",
+            2,
+            ClientPacket::PlaceBlock(PlaceBlock::new(6, 1.25, -0.0, 8).unwrap()),
+        ),
+        (
+            "PlaceWater",
+            1,
+            ClientPacket::PlaceWater(PlaceWater::new(7, -0.0, 1.5).unwrap()),
+        ),
+        (
+            "PlayerInput",
+            2,
+            ClientPacket::PlayerInput(
+                PlayerInput::new(7, 1, -1, true, -0.0, 1.5, true, false, true, false).unwrap(),
+            ),
+        ),
+        (
+            "QuickMoveStack",
+            1,
+            ClientPacket::QuickMoveStack(
+                QuickMoveStack::new(8, ContainerRef::NONE, 1, 44).unwrap(),
+            ),
+        ),
+        (
+            "RequestChunkResync",
+            2,
+            ClientPacket::RequestChunkResync(RequestChunkResync::new(
+                8,
+                mornlea_domain::Dimension::OVERWORLD,
+                -2,
+                5,
+                9,
+            )),
+        ),
+        (
+            "SelectHotbar",
+            1,
+            ClientPacket::SelectHotbar(SelectHotbar::new(9, 8).unwrap()),
+        ),
+        (
+            "TakeCraftingOutput",
+            2,
+            ClientPacket::TakeCraftingOutput(TakeCraftingOutput::new(9).unwrap()),
+        ),
+        (
+            "TillSoil",
+            1,
+            ClientPacket::TillSoil(TillSoil::new(10, -0.0, 1.5).unwrap()),
+        ),
+    ]
+}
+
+/// Submits one slice of the inventory transcript through the endpoint seam,
+/// converting each packet with the same packet-to-intent conversion the
+/// transports run, so the transport-free replay feeds the authority
+/// identical intents with the identical sequence layout.
+fn submit_inventory_slice(
+    endpoint: &mut RealEndpoint,
+    packets: &[(&'static str, u8, ClientPacket)],
+    ada: SessionKey,
+    bea: SessionKey,
+) {
+    for (_, owner, packet) in packets {
+        let session = if *owner == 1 { ada } else { bea };
+        let intent = PlayIntent::try_from(packet.clone()).unwrap();
+        endpoint.submit(session, intent).unwrap();
+    }
+}
+
+/// Runs the complete command inventory over the memory adapter: both logins,
+/// the first packet slice, a real tick, the remaining packets plus Ada's
+/// stale resubmission of her already-applied CollectWater sequence, a second
+/// real tick, and an outbox drain per session.
+fn run_inventory_memory() -> (Transcript, Vec<SessionFacts>) {
+    let mut link = MemoryTransport::new();
+    let mut endpoint = RealEndpoint::new();
+    let clock = StepClock::new();
+
+    let mut sessions = Vec::new();
+    let mut actives = Vec::new();
+    for (tag, name) in [(1u8, "Ada"), (2u8, "Bea")] {
+        let id = link.connect(clock.monotonic()).unwrap();
+        assert_eq!(
+            link.send(id, frame(&hello_packet()), &mut endpoint, &clock),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        let hello_out = link.receive(id, 8, 1 << 20);
+        assert_eq!(hello_out.len(), 1);
+        assert_eq!(
+            hello_out[0],
+            control_frame(&ServerPacket::ServerHello(
+                ServerHello::new(protocol()).unwrap()
+            ))
+        );
+        assert_eq!(
+            link.acknowledge(id, 1, &mut endpoint),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        assert_eq!(
+            link.send(id, frame(&login_packet(tag, name)), &mut endpoint, &clock),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        let ticket = endpoint.loads.last.expect("login started");
+        assert_eq!(
+            link.poll(id, &mut endpoint, &clock),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        let success_out = link.receive(id, 8, 1 << 20);
+        assert_eq!(success_out.len(), 1);
+        assert_eq!(
+            decode_server(&success_out[0]),
+            ServerPacket::LoginSuccess(LoginSuccess::new(player(tag), WORLD_SEED as u64))
+        );
+        assert_eq!(
+            link.acknowledge(id, 1, &mut endpoint),
+            ConnectionProgress::Advanced { frames: 1 }
+        );
+        let session = endpoint.committed_session(ticket);
+        assert_eq!(
+            endpoint.authority.session(session).unwrap().phase,
+            SessionPhase::Active
+        );
+        sessions.push(session.get());
+        actives.push((id, session));
+    }
+    assert_eq!(sessions, vec![1, 2], "session numbering starts at one");
+
+    let packets = inventory_packets();
+    let (ada_id, ada) = actives[0];
+    let (bea_id, bea) = actives[1];
+    for (family, owner, packet) in &packets[..INVENTORY_FIRST_TICK_PACKETS] {
+        let (id, _) = if *owner == 1 {
+            (ada_id, ada)
+        } else {
+            (bea_id, bea)
+        };
+        assert_eq!(
+            link.send(id, frame(packet), &mut endpoint, &clock),
+            ConnectionProgress::Advanced { frames: 1 },
+            "the memory adapter admits the {family} family"
+        );
+    }
+
+    // Ten sequenced commands drain in the first tick with nothing stale.
+    let first = endpoint.authority.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(first.tick, 0);
+    assert_eq!(tick_counters(&first), (10, 0, 0));
+    let first_events = event_order(&first);
+    endpoint.authority.publish(first).unwrap();
+
+    for (family, owner, packet) in &packets[INVENTORY_FIRST_TICK_PACKETS..] {
+        let (id, _) = if *owner == 1 {
+            (ada_id, ada)
+        } else {
+            (bea_id, bea)
+        };
+        assert_eq!(
+            link.send(id, frame(packet), &mut endpoint, &clock),
+            ConnectionProgress::Advanced { frames: 1 },
+            "the memory adapter admits the {family} family"
+        );
+    }
+    // Ada resubmits her already-applied CollectWater sequence, which sits
+    // below her applied watermark, so the second tick reports exactly one
+    // stale refusal beside nine fresh commands.
+    let (_, _, stale) = &packets[3];
+    assert_eq!(
+        link.send(ada_id, frame(stale), &mut endpoint, &clock),
+        ConnectionProgress::Advanced { frames: 1 },
+        "the stale resubmit still enters the memory adapter"
+    );
+    assert_eq!(endpoint.submits.len(), 22);
+    let second = endpoint.authority.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(second.tick, 1);
+    assert_eq!(tick_counters(&second), (10, 0, 1));
+    let second_events = event_order(&second);
+    endpoint.authority.publish(second).unwrap();
+
+    let mut drained = Vec::new();
+    for (_, session) in &actives {
+        drained.push(MemoryTransport::drain_session(&mut endpoint, *session, 64, 4 << 20).unwrap());
+    }
+    let facts = vec![
+        endpoint.authority.session(ada).unwrap(),
+        endpoint.authority.session(bea).unwrap(),
+    ];
+
+    for (id, session) in actives {
+        link.close(id, CloseReason::PeerGone, &mut endpoint);
+        assert_eq!(
+            endpoint.authority.session(session).unwrap().phase,
+            SessionPhase::Retired
+        );
+    }
+    assert_eq!(endpoint.closes, vec![ada, bea]);
+
+    (
+        Transcript {
+            sessions,
+            submits: endpoint.submits,
+            ticks: vec![0, 1],
+            commands: vec![10, 10],
+            carried: vec![0, 0],
+            stale: vec![0, 1],
+            events: vec![first_events, second_events],
+            drained,
+        },
+        facts,
+    )
+}
+
+/// Runs the same command inventory over the TCP adapter with the same packet
+/// split and tick structure, so the transcript stays byte-comparable with
+/// the memory run.
+fn run_inventory_tcp() -> (Transcript, Vec<SessionFacts>) {
+    let mut harness = TcpHarness::new();
+
+    let (ada_id, mut ada_client, ada) = tcp_login(&mut harness, 1, "Ada");
+    let (bea_id, mut bea_client, bea) = tcp_login(&mut harness, 2, "Bea");
+    assert_eq!(ada.get(), 1, "first login takes the first number");
+    assert_eq!(bea.get(), 2, "numbering continues across logins");
+
+    let packets = inventory_packets();
+    for (family, owner, packet) in &packets[..INVENTORY_FIRST_TICK_PACKETS] {
+        let (id, client) = if *owner == 1 {
+            (ada_id, &mut ada_client)
+        } else {
+            (bea_id, &mut bea_client)
+        };
+        let before = harness.endpoint.submits.len();
+        client.send(&frame(packet));
+        spin_frames(&mut harness, id, 1);
+        assert_eq!(
+            harness.endpoint.submits.len(),
+            before + 1,
+            "the TCP adapter admits the {family} family"
+        );
+    }
+
+    let first = harness
+        .endpoint
+        .authority
+        .advance_tick(TickBudget::full())
+        .unwrap();
+    assert_eq!(first.tick, 0);
+    assert_eq!(tick_counters(&first), (10, 0, 0));
+    let first_events = event_order(&first);
+    harness.endpoint.authority.publish(first).unwrap();
+
+    for (family, owner, packet) in &packets[INVENTORY_FIRST_TICK_PACKETS..] {
+        let (id, client) = if *owner == 1 {
+            (ada_id, &mut ada_client)
+        } else {
+            (bea_id, &mut bea_client)
+        };
+        let before = harness.endpoint.submits.len();
+        client.send(&frame(packet));
+        spin_frames(&mut harness, id, 1);
+        assert_eq!(
+            harness.endpoint.submits.len(),
+            before + 1,
+            "the TCP adapter admits the {family} family"
+        );
+    }
+    let (_, _, stale) = &packets[3];
+    ada_client.send(&frame(stale));
+    spin_frames(&mut harness, ada_id, 1);
+    assert_eq!(harness.endpoint.submits.len(), 22);
+    let second = harness
+        .endpoint
+        .authority
+        .advance_tick(TickBudget::full())
+        .unwrap();
+    assert_eq!(second.tick, 1);
+    assert_eq!(tick_counters(&second), (10, 0, 1));
+    let second_events = event_order(&second);
+    harness.endpoint.authority.publish(second).unwrap();
+
+    let mut drained = Vec::new();
+    for session in [ada, bea] {
+        drained.push(harness.endpoint.take_outbox(session, 64, 4 << 20).unwrap());
+    }
+    let facts = vec![
+        harness.endpoint.authority.session(ada).unwrap(),
+        harness.endpoint.authority.session(bea).unwrap(),
+    ];
+
+    harness
+        .server
+        .close(ada_id, CloseReason::PeerGone, &mut harness.endpoint);
+    harness
+        .server
+        .close(bea_id, CloseReason::PeerGone, &mut harness.endpoint);
+    assert_eq!(
+        harness.endpoint.authority.session(ada).unwrap().phase,
+        SessionPhase::Retired
+    );
+    assert_eq!(
+        harness.endpoint.authority.session(bea).unwrap().phase,
+        SessionPhase::Retired
+    );
+    assert_eq!(harness.endpoint.closes, vec![ada, bea]);
+
+    (
+        Transcript {
+            sessions: vec![ada.get(), bea.get()],
+            submits: harness.endpoint.submits,
+            ticks: vec![0, 1],
+            commands: vec![10, 10],
+            carried: vec![0, 0],
+            stale: vec![0, 1],
+            events: vec![first_events, second_events],
+            drained,
+        },
+        facts,
+    )
+}
+
+/// Replays the same command inventory against a third endpoint with no
+/// transport at all: sessions rise through the same login seams, packets
+/// enter through the same conversion the adapters run, and the replay keeps
+/// only logical facts — per-tick ordered events and session facts.
+fn run_inventory_direct() -> (Vec<Vec<String>>, Vec<SessionFacts>) {
+    let mut endpoint = RealEndpoint::new();
+    let clock = StepClock::new();
+
+    let mut sessions = Vec::new();
+    for (tag, name) in [(1u8, "Ada"), (2u8, "Bea")] {
+        let start = LoginStart::new(player(tag), name, 8).unwrap();
+        let inbound = LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
+        let admitted = admit_login(inbound).unwrap();
+        let deadline = Deadline::after(clock.monotonic(), CLIENT_TIMEOUT).unwrap();
+        let ticket = endpoint
+            .begin_login(admitted, TransportKind::Memory, deadline)
+            .unwrap();
+        let session = match endpoint.poll_login(ticket) {
+            LoginPoll::Ready { session, .. } => session,
+            other => panic!("the immediate load resolves on the first poll: {other:?}"),
+        };
+        assert_eq!(endpoint.commit_login(ticket).unwrap(), session);
+        sessions.push(session);
+    }
+
+    let packets = inventory_packets();
+    let (ada, bea) = (sessions[0], sessions[1]);
+    submit_inventory_slice(
+        &mut endpoint,
+        &packets[..INVENTORY_FIRST_TICK_PACKETS],
+        ada,
+        bea,
+    );
+    let first = endpoint.authority.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(first.tick, 0);
+    assert_eq!(tick_counters(&first), (10, 0, 0));
+    let first_events = event_order(&first);
+    endpoint.authority.publish(first).unwrap();
+
+    submit_inventory_slice(
+        &mut endpoint,
+        &packets[INVENTORY_FIRST_TICK_PACKETS..],
+        ada,
+        bea,
+    );
+    let (_, _, stale) = &packets[3];
+    let intent = PlayIntent::try_from(stale.clone()).unwrap();
+    endpoint.submit(ada, intent).unwrap();
+    let second = endpoint.authority.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(second.tick, 1);
+    assert_eq!(tick_counters(&second), (10, 0, 1));
+    let second_events = event_order(&second);
+    endpoint.authority.publish(second).unwrap();
+
+    let facts = vec![
+        endpoint.authority.session(ada).unwrap(),
+        endpoint.authority.session(bea).unwrap(),
+    ];
+    (vec![first_events, second_events], facts)
+}
+
+/// The complete client-command inventory — one packet per
+/// `command.protocol.client.*` row of the capability inventory — flows
+/// through both real adapters with identical ordered outputs and identical
+/// authority state, and a transport-free replay of the same transcript
+/// produces the same ordered domain events and the same logical session
+/// facts.
+#[test]
+fn inventory_command_transcripts_match_across_adapters() {
+    let (memory, memory_facts) = run_inventory_memory();
+    let (tcp, tcp_facts) = run_inventory_tcp();
+    let (direct_events, direct_facts) = run_inventory_direct();
+
+    assert_eq!(
+        memory, tcp,
+        "adapters serve the command inventory identically"
+    );
+    assert_eq!(
+        tcp_facts, memory_facts,
+        "both adapters leave the same session facts"
+    );
+    assert_eq!(
+        direct_events, memory.events,
+        "the direct replay produces the same ordered domain events"
+    );
+    assert_eq!(
+        direct_facts, memory_facts,
+        "the direct replay leaves the same logical session facts"
+    );
+
+    assert_eq!(memory_facts[0].phase, SessionPhase::Active);
+    assert_eq!(
+        memory_facts[0].last_applied_sequence, 10,
+        "Ada applied her highest sequence"
+    );
+    assert_eq!(
+        memory_facts[0].next_arrival, 11,
+        "the stale resubmit still consumed an arrival slot"
+    );
+    assert_eq!(memory_facts[1].phase, SessionPhase::Active);
+    assert_eq!(memory_facts[1].last_applied_sequence, 9);
+    assert_eq!(memory_facts[1].next_arrival, 9);
+    assert_eq!(
+        memory
+            .submits
+            .iter()
+            .filter(|receipt| matches!(receipt, SubmissionReceipt::ControlAccepted))
+            .count(),
+        2,
+        "chat and keep alive are the only control receipts"
+    );
+}
+
+/// One-shot scratch world directory for the real disk owner, removed on
+/// drop so a failed case never leaks a world directory behind it.
+struct ScratchRoot(PathBuf);
+
+impl ScratchRoot {
+    fn new(tag: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "mornlea-parity-disk-{}-{}-{tag}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir(&path).expect("scratch world directory creates");
+        Self(path)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A TCP disconnect with a save still pending is completed through the real
+/// disk owner: the selected snapshot commits with a real `DiskStore` write
+/// and sync, the retired session's authority acks the real completion, and a
+/// reopened store loads the chunk back with its revisions intact.
+///
+/// Fixture boundary: the staged chunk snapshot is a synthetic minimal
+/// fixture; the completion, sync, and reload are real `DiskStore` I/O on a
+/// one-shot temp directory.
+#[test]
+fn tcp_disconnect_pending_save_completes_through_real_disk_store() {
+    use mornlea_domain::{ChunkPos, Dimension};
+    use mornlea_server::contracts::{
+        ChunkKey, DiskBackend, LoadedValue, OwnedSnapshot, SaveBudget, SaveKey, SaveMode,
+        SaveRequest, SaveTicket, SaveUrgency, SaveValue,
+    };
+    use mornlea_server::store::disk::{DiskOptions, DiskStore};
+    use mornlea_storage::{
+        ChestSlot, Chunk, ContainerSnapshot, DropSlot, FurnaceSlot, METADATA_CURRENT_VERSION,
+        Metadata, MetadataChunkPos, StorageKind,
+    };
+
+    let options = |seed: i64| DiskOptions {
+        create: Metadata {
+            format_version: METADATA_CURRENT_VERSION,
+            seed,
+            spawn_dimension: 0,
+            spawn_anchor: MetadataChunkPos { x: 0, z: 0 },
+            world_time_ticks: 0,
+            day_phase_offset: 0,
+            weather_kind: 0,
+            weather_ticks_remaining: 0,
+            depths_spawn_anchor: MetadataChunkPos { x: 0, z: 0 },
+            depths_seed_salt: 0,
+            difficulty: 0,
+        },
+        region_handle_cap: 1,
+    };
+
+    // The setup of the in-flight case: one login, one play submit, one chunk
+    // save staged through the real dirty lane and selected, then the peer
+    // drops while the save is in flight.
+    let mut harness = TcpHarness::new();
+    let (id, mut client, session) = tcp_login(&mut harness, 1, "Ada");
+    client.send(&tcp_play_frame(5));
+    spin_frames(&mut harness, id, 1);
+    assert_eq!(harness.endpoint.submits.len(), 1);
+
+    let key = SaveKey::Chunk(ChunkKey {
+        dimension: Dimension::OVERWORLD,
+        pos: ChunkPos::new(0, 0),
+    });
+    let snapshot = OwnedSnapshot::try_new(
+        key.clone(),
+        9,
+        1024,
+        SaveUrgency::Autosave,
+        SaveValue::Chunk(mornlea_storage::ChunkSave {
+            key: mornlea_storage::ChunkKey {
+                dimension: 0,
+                x: 0,
+                z: 0,
+            },
+            revision: 9,
+            chunk: Chunk {
+                sections: vec![
+                    ContainerSnapshot {
+                        kind: StorageKind::Single,
+                        bits: 0,
+                        single: 2,
+                        palette: Vec::new(),
+                        packed: Vec::new(),
+                    };
+                    24
+                ],
+                drops: vec![DropSlot::default(); 32],
+                furnaces: vec![FurnaceSlot::default(); 32],
+                chests: vec![ChestSlot::default(); 16],
+            },
+        }),
+    )
+    .unwrap();
+    harness.endpoint.authority.remember_dirty(snapshot).unwrap();
+    let selected = harness.endpoint.authority.select(
+        SaveMode::All,
+        SaveBudget {
+            chunks: 8,
+            estimated_bytes: 4 << 20,
+        },
+    );
+    assert_eq!(selected.len(), 1, "one chunk save is pending");
+    assert_eq!(harness.endpoint.authority.save_stats().in_flight, 1);
+
+    harness
+        .server
+        .close(id, CloseReason::PeerGone, &mut harness.endpoint);
+    assert_eq!(
+        harness.endpoint.authority.session(session).unwrap().phase,
+        SessionPhase::Retired,
+        "disconnect retires the session"
+    );
+    assert_eq!(
+        harness.endpoint.authority.save_stats().in_flight,
+        1,
+        "the pending save survives the disconnect"
+    );
+
+    // The real disk leg: the exclusive owner commits the selected snapshot,
+    // syncs, and the authority acks the real completion after the close.
+    let root = ScratchRoot::new("tcp-pending-save");
+    let mut disk = DiskStore::open(root.path(), options(WORLD_SEED)).unwrap();
+    let completion = disk.write(
+        SaveTicket::try_from_raw(1).unwrap(),
+        SaveRequest {
+            snapshots: selected,
+        },
+    );
+    assert!(
+        completion.error.is_none(),
+        "the real commit reports no error"
+    );
+    disk.sync().unwrap();
+    let report = harness.endpoint.authority.apply_completion(completion);
+    assert_eq!(report.acked, 1, "the real completion acks the pending save");
+    assert!(report.retry.is_empty());
+    assert_eq!(harness.endpoint.authority.save_stats().in_flight, 0);
+
+    // Durability: the owner closes, a fresh owner reopens the same
+    // directory, and the chunk loads back with its logical revisions.
+    disk.close().unwrap();
+    let mut reopened = DiskStore::open(root.path(), options(99)).unwrap();
+    match reopened.load(key).expect("the chunk loads after reopen") {
+        LoadedValue::Chunk(recovered) => {
+            assert_eq!(recovered.revision, 9);
+            assert_eq!(recovered.persisted_revision, 9);
+        }
+        other => panic!("chunk key loaded another family: {other:?}"),
+    }
+    reopened.close().unwrap();
     let _ = client;
 }
