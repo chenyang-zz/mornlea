@@ -1,4 +1,4 @@
-//! Source login registration, exclusive restore scans, keyed Safe qualification and fixed trample capture.
+//! Source login registration, exclusive scans, keyed Safe and retained trample/Snow capture.
 use super::actor_placement::RestoreCandidate;
 use super::contracts::{
     ActorAux, ActorKey, ActorLifecycle, ActorRuntime, RuleEffect, ServerError, SessionKey,
@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 pub(crate) struct SourcePlayerBook {
     pub(crate) entries: BTreeMap<SessionKey, SourcePlayerEntry>,
     tramples: SourceTrampleBatch,
+    snow_pending: SourceSnowBatch,
 }
 /// Fixed copied coordinates survive actor reset and abandoned context loans.
 /// Eight live source players contribute at most four cells each; inactive tail stays retained.
@@ -65,9 +66,146 @@ impl SourcePlayerBook {
         (self.tramples.cells, self.tramples.len)
     }
 }
+/// Inline travel and dimensionless cell memory belongs to one live player entry.
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct SourceSnowTracker {
+    travel: f32,
+    cell: BlockPos,
+    cell_valid: bool,
+}
+impl Default for SourceSnowTracker {
+    fn default() -> Self {
+        Self {
+            travel: 0.,
+            cell: BlockPos::ORIGIN,
+            cell_valid: false,
+        }
+    }
+}
+impl SourceSnowTracker {
+    fn preview(
+        &self,
+        before: [f32; 3],
+        after: [f32; 3],
+    ) -> Result<(Self, Option<BlockPos>), ServerError> {
+        let mut next = *self;
+        let dx = after[0] - before[0];
+        let dz = after[2] - before[2];
+        // Preserve source float squares and accumulation, with its widened square root.
+        let distance = (f64::from(dx * dx + dz * dz).sqrt()) as f32;
+        next.travel += distance;
+        if next.travel < 0.6 {
+            return Ok((next, None));
+        }
+        next.travel = 0.;
+        let cell = super::actor_placement::snow_cell(after)?;
+        if next.cell_valid && next.cell == cell {
+            return Ok((next, None));
+        }
+        next.cell = cell;
+        next.cell_valid = true;
+        Ok((next, Some(cell)))
+    }
+}
+/// Copied candidates retain original coordinates through reset and abandoned loans.
+struct SourceSnowBatch {
+    cells: [crate::rules::crops::FootprintCell; 8],
+    len: usize,
+}
+impl Default for SourceSnowBatch {
+    fn default() -> Self {
+        Self {
+            cells: [crate::rules::crops::FootprintCell {
+                dimension: Dimension::OVERWORLD,
+                pos: BlockPos::ORIGIN,
+            }; 8],
+            len: 0,
+        }
+    }
+}
+impl SourceSnowBatch {
+    fn append(&mut self, dimension: Dimension, pos: BlockPos) -> Result<(), ServerError> {
+        if self.len >= 8 {
+            return Err(ServerError::Internal {
+                invariant: "source player snow capacity",
+            });
+        }
+        self.cells[self.len] = crate::rules::crops::FootprintCell { dimension, pos };
+        self.len += 1;
+        Ok(())
+    }
+}
+impl SourcePlayerBook {
+    #[cfg(test)]
+    pub(crate) fn snow_test_snapshot(&self) -> ([crate::rules::crops::FootprintCell; 8], usize) {
+        (self.snow_pending.cells, self.snow_pending.len)
+    }
+    #[cfg(test)]
+    pub(crate) fn snow_test_state(&self, session: SessionKey) -> Option<(f32, BlockPos, bool)> {
+        self.entries
+            .get(&session)
+            .map(|e| (e.snow.travel, e.snow.cell, e.snow.cell_valid))
+    }
+    #[cfg(test)]
+    pub(crate) fn snow_test_set_state(
+        &mut self,
+        session: SessionKey,
+        travel: f32,
+        cell: BlockPos,
+        cell_valid: bool,
+    ) {
+        self.entries.get_mut(&session).unwrap().snow = SourceSnowTracker {
+            travel,
+            cell,
+            cell_valid,
+        };
+    }
+}
+/// Preview and candidate acceptance precede committing retained travel.
+pub(crate) fn capture_snow(
+    book: &mut SourcePlayerBook,
+    context: &TickContext<'_>,
+    session: SessionKey,
+) -> Result<(), ServerError> {
+    let Some(entry) = book
+        .entries
+        .get_mut(&session)
+        .filter(|entry| entry.ever_spawned)
+    else {
+        return Ok(());
+    };
+    let Some((dimension, before, after)) = context.capture_source_player_snow(session)? else {
+        return Ok(());
+    };
+    let (next, candidate) = entry.snow.preview(before, after)?;
+    if let Some(pos) = candidate {
+        book.snow_pending.append(dimension, pos)?;
+    }
+    entry.snow = next;
+    Ok(())
+}
+/// Successful fresh-cell settlement drains only the active candidate prefix.
+pub(crate) fn settle_snow(
+    book: &mut SourcePlayerBook,
+    context: &mut TickContext<'_>,
+) -> Result<crate::core::contracts::PhaseReport, ServerError> {
+    if book.snow_pending.len > 8 {
+        return Err(ServerError::Internal {
+            invariant: "source player snow capacity",
+        });
+    }
+    let report = crate::rules::crops::settle_captured_source_snow(
+        &book.snow_pending.cells[..book.snow_pending.len],
+        context,
+    )?;
+    book.snow_pending.len = 0;
+    Ok(report)
+}
+
 pub(crate) struct SourcePlayerEntry {
     pub(crate) restore: PendingRestore,
     pub(crate) ever_spawned: bool,
+    snow: SourceSnowTracker,
 }
 pub(crate) struct PreparedSourcePlayer {
     pub(crate) seeded: SeededPlayer,
@@ -125,6 +263,7 @@ pub(crate) fn prepare(
                 candidates,
             )?,
             ever_spawned: false,
+            snow: SourceSnowTracker::default(),
         },
     })
 }
@@ -252,6 +391,7 @@ pub(crate) fn recover(
     let Some(dimension) = context.recover_source_player(session, &entry.restore)? else {
         return Ok(false);
     };
+    entry.snow = SourceSnowTracker::default();
     entry.restore.restart_player(dimension, Vec::new())?;
     Ok(true)
 }
@@ -267,6 +407,7 @@ pub(crate) fn settle_deaths(
             continue;
         }
         if let Some(reset) = context.settle_source_player_death(*session, &entry.restore)? {
+            entry.snow = SourceSnowTracker::default();
             entry
                 .restore
                 .restart_player(reset.dimension, reset.candidate.into_iter().collect())?;
@@ -444,6 +585,88 @@ mod tests {
             batch.append(Dimension::OVERWORLD, &[BlockPos::ORIGIN; 5]),
             Err(ServerError::Internal {
                 invariant: "source player trample cells"
+            })
+        );
+        assert_eq!((batch.cells, batch.len), before);
+    }
+    #[test]
+    fn snow_tracker_source_stride_and_memory() {
+        let mut tracker = SourceSnowTracker::default();
+        let mut x = 8.1f32;
+        for tick in 1..=18 {
+            let next = x + f32::from_bits(0x3d999980);
+            let (updated, cell) = tracker.preview([x, 64., 8.5], [next, 64., 8.5]).unwrap();
+            tracker = updated;
+            x = next;
+            if tick == 8 {
+                assert_eq!(tracker.travel.to_bits(), 0x3f199980);
+            }
+            if tick == 9 || tick == 18 {
+                assert_eq!(
+                    cell,
+                    Some(BlockPos::new(if tick == 9 { 8 } else { 9 }, 64, 8))
+                );
+                assert_eq!(tracker.travel, 0.);
+            } else {
+                assert_eq!(cell, None);
+            }
+        }
+        let (next, cell) = tracker.preview([9., 64., 8.5], [9.7, 64., 8.5]).unwrap();
+        assert_eq!(cell, None);
+        assert_eq!(next.travel, 0.);
+        let (next, cell) = next.preview([9.7, 64., 8.5], [10.4, 64., 8.5]).unwrap();
+        assert_eq!(cell, Some(BlockPos::new(10, 64, 8)));
+        assert_eq!(next.cell, cell.unwrap());
+    }
+    #[test]
+    fn snow_tracker_checked_preview_is_atomic() {
+        let tracker = SourceSnowTracker {
+            travel: 0.55,
+            cell: BlockPos::new(4, 64, 8),
+            cell_valid: true,
+        };
+        let before = tracker;
+        assert_eq!(
+            tracker.preview([8., 64., 8.], [f32::MAX, 64., 8.]),
+            Err(ServerError::InvalidInput {
+                field: "actor_geometry"
+            })
+        );
+        assert_eq!(tracker, before);
+        let (next, cell) = tracker.preview([8., 64., 8.], [8.1, 64., 8.]).unwrap();
+        assert_eq!(cell, Some(BlockPos::new(8, 64, 8)));
+        assert_eq!(next.travel, 0.);
+        assert_eq!(next.cell, cell.unwrap());
+        assert_eq!(tracker, before);
+    }
+    #[test]
+    fn snow_batch_order_and_capacity() {
+        let mut batch = SourceSnowBatch::default();
+        let cells: Vec<_> = (0..8)
+            .map(|i| crate::rules::crops::FootprintCell {
+                dimension: if i % 2 == 0 {
+                    Dimension::OVERWORLD
+                } else {
+                    Dimension::DEPTHS
+                },
+                pos: BlockPos::new(i / 2, 64, 8),
+            })
+            .collect();
+        for cell in &cells {
+            batch.append(cell.dimension, cell.pos).unwrap();
+        }
+        assert_eq!(batch.len, 8);
+        assert_eq!(batch.cells.as_slice(), cells.as_slice());
+        assert!(
+            std::mem::size_of::<SourceSnowBatch>()
+                <= 8 * std::mem::size_of::<crate::rules::crops::FootprintCell>()
+                    + std::mem::size_of::<usize>()
+        );
+        let before = (batch.cells, batch.len);
+        assert_eq!(
+            batch.append(Dimension::OVERWORLD, BlockPos::ORIGIN),
+            Err(ServerError::Internal {
+                invariant: "source player snow capacity"
             })
         );
         assert_eq!((batch.cells, batch.len), before);

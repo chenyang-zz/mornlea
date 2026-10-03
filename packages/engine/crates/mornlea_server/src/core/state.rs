@@ -3492,6 +3492,56 @@ impl<'a> TickContext<'a> {
         Ok((len != 0).then_some((dimension, cells, len)))
     }
 
+    /// Copies grounded source motion before Safe and death without reading world owners.
+    // Keep the private copied-motion tuple at this single producer boundary.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn capture_source_player_snow(
+        &self,
+        session: SessionKey,
+    ) -> Result<Option<(Dimension, [f32; 3], [f32; 3])>, ServerError> {
+        if let Some(error) = self.authority.tick_failure {
+            return Err(error);
+        }
+        if self.authority.phase == ServerPhase::Closed {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed,
+            });
+        }
+        if self.authority.source_player_radius.is_none()
+            || !self.source_player_session_active(session)
+        {
+            return Ok(None);
+        }
+        let invalid = ServerError::InvalidInput {
+            field: "source_player_snow",
+        };
+        let slot = *self.player_slots.get(&session).ok_or(invalid)?;
+        let actor = self.actors.get(slot).ok_or(invalid)?;
+        let key = ActorKey::Player(session);
+        if actor.key != key {
+            return Err(invalid);
+        }
+        if actor.lifecycle != ActorLifecycle::Active || !actor.motion.on_ground() {
+            return Ok(None);
+        }
+        if !matches!(actor.body, ActorBody::Player(_)) {
+            return Err(invalid);
+        }
+        let runtime = self.runtimes.get(&key).ok_or(invalid)?;
+        if runtime.key != key || !matches!(runtime.aux, ActorAux::Player { .. }) {
+            return Err(invalid);
+        }
+        if runtime.reset {
+            return Ok(None);
+        }
+        let Some(pre_step) = self.pre_step.get(&key) else {
+            return Ok(None);
+        };
+        let dimension = actor.dimension;
+        let position = actor.motion.position().get();
+        Ok(Some((dimension, pre_step.position().get(), position)))
+    }
+
     /// Updates only the indexed player's heap-free Safe value after ordinary native motion.
     /// Refusal preserves every owner, and an earlier player's accepted write survives abandonment.
     pub(crate) fn checkpoint_source_player_safe(
@@ -13811,6 +13861,383 @@ mod source_player_restore_tests {
         assert_eq!(drained.1, 0);
         assert_eq!(drained.0, batch.0);
         assert_eq!(ctx_death_snapshot(&c), before);
+    }
+    fn ctx_snow_before(a: &mut AuthorityState, sessions: &[SessionKey]) {
+        for s in sessions {
+            a.residents.actors[a.residents.player_slots[s]].motion =
+                ctx_trample_motion([8., 64., 8.], true);
+        }
+    }
+    fn ctx_snow_after(c: &mut TickContext<'_>, s: SessionKey) {
+        c.actors[c.player_slots[&s]].motion = ctx_trample_motion([8.7, 64., 8.], true);
+    }
+    fn ctx_snow_error() -> ServerError {
+        ServerError::InvalidInput {
+            field: "source_player_snow",
+        }
+    }
+    #[test]
+    fn ctx_snow_borrowed_motion_and_legacy_exclusion() {
+        for healthless in [false, true] {
+            let (mut a, s, _) = ctx_safe_fixture(false);
+            ctx_add_allocations(&mut a, s);
+            ctx_snow_before(&mut a, &[s]);
+            let mut book = std::mem::take(&mut a.source_players);
+            let scan = ctx_book_snapshot(&book, s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_snow_after(&mut c, s);
+            ctx_seed_transients(&mut c, &[s]);
+            if healthless {
+                c.actors[c.player_slots[&s]].survival = ctx_survival(0, 9, 3);
+                c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().has_view = false;
+            }
+            c.environment = None;
+            c.ready.clear();
+            c.blocks = Default::default();
+            let before = ctx_death_snapshot(&c);
+            let pointers = ctx_allocations(
+                &c.actors[c.player_slots[&s]],
+                &c.runtimes[&ActorKey::Player(s)],
+            );
+            assert_eq!(
+                c.capture_source_player_snow(s),
+                Ok(Some((Dimension::DEPTHS, [8., 64., 8.], [8.7, 64., 8.])))
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            super::super::source_player_restore::capture_snow(&mut book, &c, s).unwrap();
+            let batch = book.snow_test_snapshot();
+            assert_eq!(batch.1, 1);
+            assert_eq!(
+                batch.0[0],
+                crate::rules::crops::FootprintCell {
+                    dimension: Dimension::DEPTHS,
+                    pos: BlockPos::new(8, 64, 8)
+                }
+            );
+            assert_eq!(
+                book.snow_test_state(s),
+                Some((0., BlockPos::new(8, 64, 8), true))
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+            assert_eq!(
+                ctx_allocations(
+                    &c.actors[c.player_slots[&s]],
+                    &c.runtimes[&ActorKey::Player(s)]
+                ),
+                pointers
+            );
+            let mut legacy = crate::rules::crops::FootprintSchedule::new();
+            let r = crate::rules::crops::settle_snow_footprints(&mut legacy, &mut c).unwrap();
+            assert_eq!((r.examined, r.applied), (0, 0));
+            assert_eq!(book.snow_test_snapshot(), batch);
+            assert_eq!(ctx_death_snapshot(&c), before);
+            c.actors[c.player_slots[&s]].dimension = Dimension::OVERWORLD;
+            super::super::source_player_restore::capture_snow(&mut book, &c, s).unwrap();
+            assert_eq!(book.snow_test_snapshot(), batch);
+            c.authority.source_player_radius = None;
+            let r = crate::rules::crops::settle_snow_footprints(&mut legacy, &mut c).unwrap();
+            assert_eq!((r.examined, r.applied), (1, 0));
+        }
+    }
+    #[test]
+    fn ctx_snow_quiet_and_refusal_precedence() {
+        for row in 0..11 {
+            let (mut a, s) = if row == 1 {
+                fixture()
+            } else {
+                let (a, s, _) = ctx_safe_fixture(false);
+                (a, s)
+            };
+            ctx_snow_before(&mut a, &[s]);
+            if row == 2 {
+                a.source_player_radius = None;
+            }
+            if row == 3 {
+                a.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired;
+            }
+            if row == 4 {
+                a.sessions.remove(&s);
+            }
+            let mut book = std::mem::take(&mut a.source_players);
+            if row == 0 {
+                book.entries.remove(&s);
+            }
+            if row == 1 {
+                assert!(!book.entries[&s].ever_spawned);
+            }
+            let scans = book
+                .entries
+                .keys()
+                .map(|s| ctx_book_snapshot(&book, *s))
+                .collect::<Vec<_>>();
+            if book.entries.contains_key(&s) {
+                book.snow_test_set_state(s, 0.4, BlockPos::new(3, 64, 8), true);
+            }
+            let tracker = book.snow_test_state(s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_snow_after(&mut c, s);
+            let slot = c.player_slots[&s];
+            match row {
+                5 => c.actors[slot].lifecycle = ActorLifecycle::Pending,
+                6 => c.actors[slot].lifecycle = ActorLifecycle::Respawning,
+                7 => c.actors[slot].lifecycle = ActorLifecycle::Dead,
+                8 => c.actors[slot].motion = ctx_trample_motion([8.7, 64., 8.], false),
+                9 => c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().reset = true,
+                10 => {
+                    c.pre_step.remove(&ActorKey::Player(s));
+                }
+                _ => {}
+            }
+            c.environment = None;
+            c.ready.clear();
+            c.blocks = Default::default();
+            if (2..=4).contains(&row) {
+                c.actors.clear();
+                c.player_slots.clear();
+            }
+            if row <= 8 {
+                c.runtimes.remove(&ActorKey::Player(s));
+            }
+            let before = ctx_death_snapshot(&c);
+            let batch = book.snow_test_snapshot();
+            if row > 1 {
+                assert_eq!(c.capture_source_player_snow(s), Ok(None), "row {row}");
+            }
+            assert_eq!(
+                super::super::source_player_restore::capture_snow(&mut book, &c, s),
+                Ok(()),
+                "row {row}"
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(book.snow_test_snapshot(), batch);
+            assert_eq!(book.snow_test_state(s), tracker);
+            assert_eq!(
+                book.entries
+                    .keys()
+                    .map(|s| ctx_book_snapshot(&book, *s))
+                    .collect::<Vec<_>>(),
+                scans
+            );
+        }
+
+        for row in 0..9 {
+            let (mut a, s, other) = ctx_safe_fixture(true);
+            let other = other.unwrap();
+            ctx_snow_before(&mut a, &[s, other]);
+            let mut book = std::mem::take(&mut a.source_players);
+            let scan = ctx_book_snapshot(&book, s);
+            if book.entries.contains_key(&s) {
+                book.snow_test_set_state(s, 0.4, BlockPos::new(3, 64, 8), true);
+            }
+            let tracker = book.snow_test_state(s);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_snow_after(&mut c, s);
+            let slot = c.player_slots[&s];
+            match row {
+                0 => {
+                    c.player_slots.remove(&s);
+                }
+                1 => {
+                    c.player_slots.insert(s, c.actors.len());
+                }
+                2 => c.actors[slot].key = ActorKey::Player(other),
+                3 => {
+                    c.actors[slot].body = ActorBody::Passive(mornlea_storage::PassiveMob {
+                        id: 1,
+                        dimension: 0,
+                        position: [0., 64., 0.],
+                        velocity: [0.; 3],
+                        on_ground: true,
+                        yaw: 0.,
+                        health: 7,
+                    })
+                }
+                4 => {
+                    c.runtimes.remove(&ActorKey::Player(s));
+                }
+                5 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().key = ActorKey::Player(other)
+                }
+                6 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().aux = ActorAux::Hostile {
+                        distant_ticks: 1,
+                        shoot_cooldown: 2,
+                        fresh: true,
+                    }
+                }
+                7 | 8 => {
+                    c.authority.phase = ServerPhase::Closed;
+                    c.authority.source_player_radius = None;
+                    if row == 8 {
+                        c.authority.tick_failure = Some(ServerError::Disconnected);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let err = match row {
+                7 => ServerError::InvalidState {
+                    phase: ServerPhase::Closed,
+                },
+                8 => ServerError::Disconnected,
+                _ => ServerError::InvalidInput {
+                    field: "source_player_snow",
+                },
+            };
+            let before = ctx_death_snapshot(&c);
+            let batch = book.snow_test_snapshot();
+            assert_eq!(c.capture_source_player_snow(s), Err(err));
+            assert_eq!(
+                super::super::source_player_restore::capture_snow(&mut book, &c, s),
+                Err(err)
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(book.snow_test_snapshot(), batch);
+            assert_eq!(book.snow_test_state(s), tracker);
+            assert_eq!(ctx_book_snapshot(&book, s), scan);
+        }
+    }
+
+    #[test]
+    fn ctx_snow_prefix_drop_and_atomic_capacity() {
+        // Prepared context evidence qualifies copied-prefix ownership independently of native motion.
+        let (mut a, s, other) = ctx_safe_fixture(true);
+        let other = other.unwrap();
+        ctx_add_allocations(&mut a, s);
+        ctx_snow_before(&mut a, &[s, other]);
+        let mut book = std::mem::take(&mut a.source_players);
+        let scans = [ctx_book_snapshot(&book, s), ctx_book_snapshot(&book, other)];
+        let pointers = ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]);
+        let batch;
+        {
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_snow_after(&mut c, s);
+            ctx_snow_after(&mut c, other);
+            super::super::source_player_restore::capture_snow(&mut book, &c, s).unwrap();
+            batch = book.snow_test_snapshot();
+            assert_eq!(batch.1, 1);
+            c.runtimes.get_mut(&ActorKey::Player(other)).unwrap().key = ActorKey::Player(s);
+            let before = ctx_death_snapshot(&c);
+            let trackers = [book.snow_test_state(s), book.snow_test_state(other)];
+            assert_eq!(
+                super::super::source_player_restore::capture_snow(&mut book, &c, other),
+                Err(ctx_snow_error())
+            );
+            assert_eq!(ctx_death_snapshot(&c), before);
+            assert_eq!(book.snow_test_snapshot(), batch);
+            assert_eq!(
+                [book.snow_test_state(s), book.snow_test_state(other)],
+                trackers
+            );
+        }
+        a.source_players = book;
+        assert_eq!(a.source_players.snow_test_snapshot(), batch);
+        assert_eq!(
+            [
+                ctx_book_snapshot(&a.source_players, s),
+                ctx_book_snapshot(&a.source_players, other)
+            ],
+            scans
+        );
+        assert_eq!(
+            ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]),
+            pointers
+        );
+        let mut book = std::mem::take(&mut a.source_players);
+        let tracker = book.snow_test_state(s);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        c.environment = None;
+        c.ready.clear();
+        c.blocks = Default::default();
+        let before = ctx_death_snapshot(&c);
+        let r = super::super::source_player_restore::settle_snow(&mut book, &mut c).unwrap();
+        assert_eq!((r.examined, r.applied, r.carried, r.rejected), (1, 0, 0, 0));
+        assert_eq!(book.snow_test_snapshot(), (batch.0, 0));
+        assert_eq!(book.snow_test_state(s), tracker);
+        assert_eq!(ctx_death_snapshot(&c), before);
+        for i in 0..8 {
+            c.pre_step.insert(
+                ActorKey::Player(s),
+                ctx_trample_motion([i as f32 + 10., 64., 8.], true),
+            );
+            c.actors[c.player_slots[&s]].motion =
+                ctx_trample_motion([i as f32 + 10.7, 64., 8.], true);
+            super::super::source_player_restore::capture_snow(&mut book, &c, s).unwrap();
+        }
+        let prefix = book.snow_test_snapshot();
+        assert_eq!(prefix.1, 8);
+        let tracker = book.snow_test_state(s);
+        c.pre_step.insert(
+            ActorKey::Player(s),
+            ctx_trample_motion([30., 64., 8.], true),
+        );
+        c.actors[c.player_slots[&s]].motion = ctx_trample_motion([30.7, 64., 8.], true);
+        let before = ctx_death_snapshot(&c);
+        assert_eq!(
+            super::super::source_player_restore::capture_snow(&mut book, &c, s),
+            Err(ServerError::Internal {
+                invariant: "source player snow capacity"
+            })
+        );
+        assert_eq!(book.snow_test_snapshot(), prefix);
+        assert_eq!(book.snow_test_state(s), tracker);
+        assert_eq!(ctx_death_snapshot(&c), before);
+    }
+    #[test]
+    fn ctx_snow_reset_clears_tracker_keeps_candidates() {
+        for death in [false, true] {
+            let (mut a, s, other) = ctx_safe_fixture(true);
+            let other = other.unwrap();
+            ctx_snow_before(&mut a, &[s, other]);
+            let mut book = std::mem::take(&mut a.source_players);
+            book.snow_test_set_state(other, 0.4, BlockPos::new(3, 64, 8), true);
+            let other_scan = ctx_book_snapshot(&book, other);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            ctx_snow_after(&mut c, s);
+            super::super::source_player_restore::capture_snow(&mut book, &c, s).unwrap();
+            let batch = book.snow_test_snapshot();
+            assert_eq!(batch.1, 1);
+            book.snow_test_set_state(s, 0.55, BlockPos::new(4, 64, 8), true);
+            let quiet = book.snow_test_state(s);
+            assert!(!super::super::source_player_restore::recover(&mut book, &mut c, s).unwrap());
+            super::super::source_player_restore::settle_deaths(&mut book, &mut c).unwrap();
+            assert_eq!(book.snow_test_state(s), quiet);
+            let radius = c.authority.source_player_radius.take();
+            assert_eq!(
+                super::super::source_player_restore::recover(&mut book, &mut c, s),
+                Err(ServerError::InvalidInput {
+                    field: "source_player_reset"
+                })
+            );
+            assert_eq!(book.snow_test_state(s), quiet);
+            c.authority.source_player_radius = radius;
+            if death {
+                c.actors[c.player_slots[&s]].survival = ctx_survival(0, 20, 300);
+                c.inventories
+                    .get_mut(&ActorKey::Player(s))
+                    .unwrap()
+                    .slots
+                    .fill(Default::default());
+                c.inventories
+                    .get_mut(&ActorKey::Player(s))
+                    .unwrap()
+                    .crafting
+                    .fill(Default::default());
+                super::super::source_player_restore::settle_deaths(&mut book, &mut c).unwrap();
+            } else {
+                c.actors[c.player_slots[&s]].motion = ctx_trample_motion([8.7, -81., 8.], true);
+                assert!(
+                    super::super::source_player_restore::recover(&mut book, &mut c, s).unwrap()
+                );
+            }
+            assert_eq!(book.snow_test_state(s), Some((0., BlockPos::ORIGIN, false)));
+            assert_eq!(book.snow_test_snapshot(), batch);
+            assert_eq!(
+                book.snow_test_state(other),
+                Some((0.4, BlockPos::new(3, 64, 8), true))
+            );
+            assert_eq!(ctx_book_snapshot(&book, other), other_scan);
+        }
     }
 }
 

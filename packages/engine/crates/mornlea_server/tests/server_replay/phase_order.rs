@@ -15,6 +15,7 @@
 //! passive advancement. Actual native landing and top-floor Safe recipes qualify
 //! per-player checkpoint after fall settlement and before late death. Trample markers
 //! pin capture before Safe and copied-cell settlement before legacy collection. These
+//! Snow markers pin its retained player capture and bounded copied-cell settlement. These
 //! source guards separately qualify call order; other provider integration
 //! coverage retains its existing owners.
 //!
@@ -204,6 +205,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "player_motion::run",
     "player_survival::run",
     "source_player_restore::capture_trample",
+    "source_player_restore::capture_snow",
     "source_player_restore::checkpoint_safe",
     "companions::run",
     "hostile_actions::plan",
@@ -234,6 +236,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "source_player_restore::settle_tramples",
     "crops::settle_tramples",
     "crops::run",
+    "source_player_restore::settle_snow",
     "crops::settle_snow_footprints",
     "random_blocks::run",
     "random_blocks::advance",
@@ -789,6 +792,45 @@ fn trample_capture_order() {
         ("player_motion::run", capture),
         (capture, "RulePhase::CompanionMotion"),
         (settle, "random_blocks::advance"),
+    ] {
+        let swapped = swap_markers(body, first, last);
+        assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
+    }
+    for marker in [capture, settle] {
+        let repeat = format!("{body}\n{marker}");
+        assert!(std::panic::catch_unwind(|| assert_eq!(marker_count(&repeat, marker), 1)).is_err());
+    }
+}
+
+#[test]
+fn snow_capture_order() {
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let capture = "source_player_restore::capture_snow";
+    let settle = "source_player_restore::settle_snow";
+    let chain = [
+        "RulePhase::PlayerPostPhysics",
+        "source_player_restore::capture_trample",
+        capture,
+        "source_player_restore::checkpoint_safe",
+        "source_player_restore::settle_deaths",
+        "RulePhase::Trample",
+        "source_player_restore::settle_tramples",
+        "crops::settle_tramples",
+        "RulePhase::SnowFootprint",
+        settle,
+        "crops::settle_snow_footprints",
+        "RulePhase::RandomBlock",
+    ];
+    chain_positions(body, &chain);
+    for marker in [capture, settle] {
+        assert_eq!(marker_count(body, marker), 1);
+    }
+    for (first, last) in [
+        ("source_player_restore::capture_trample", capture),
+        (capture, "source_player_restore::checkpoint_safe"),
+        ("RulePhase::SnowFootprint", settle),
+        (settle, "crops::settle_snow_footprints"),
     ] {
         let swapped = swap_markers(body, first, last);
         assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());

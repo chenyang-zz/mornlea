@@ -1,5 +1,7 @@
 //! Actual disk, Memory login, Acquire and native restoration, recovery, death, Safe and trample recipes.
 //! Manual wants qualify the caller without accepting a source subscription producer.
+//! Source Snow recipes execute retained native travel, lethal original-cell settlement and quiet activation.
+
 use mornlea_domain::{
     BlockPos, ChunkPos, CompanionId, Dimension, FiniteVec3, HostileId, Identities, LookAngles,
     MotionState, MotionStateParts, PassiveId, PlayerId, SurvivalState, SurvivalStateParts,
@@ -2437,4 +2439,298 @@ fn trample_actual_activation_is_not_a_landing() {
     assert!(death_ground(&state).is_empty());
     death_no_hit(&publication);
     fixture.close();
+}
+
+fn snow_actual_fixture() -> (
+    Fixture,
+    AuthorityState,
+    SessionKey,
+    TickPublication,
+    LoginDriver,
+    MemoryTransport,
+    ConnectionId,
+    StepClock,
+) {
+    let mut save = height_player_save([8.1, 64., 8.5]);
+    save.health = 20;
+    save.safe = None;
+    save.armor = Default::default();
+    save.hunger = 20;
+    save.saturation_milli = 5000;
+    save.exhaustion_milli = 0;
+    save.respawn_present = false;
+    save.inventory.hotbar.selected = 3;
+    save.inventory.hotbar.slots[3] = ItemStack {
+        item: 1,
+        count: 7,
+        durability: 0,
+    };
+    let current = key(Dimension::OVERWORLD, 0, 0);
+    let mut chunk = height_floor(63);
+    for x in [8, 9] {
+        death_chunk_cell(&mut chunk, BlockPos::new(x, 64, 8), 87);
+    }
+    let (mut f, mut state) = Fixture::new(
+        Some(save),
+        Dimension::DEPTHS,
+        ChunkPos::new(-2, 3),
+        vec![
+            (current, chunk),
+            (key(Dimension::OVERWORLD, -2, 3), height_floor(64)),
+        ],
+    );
+    let (login, transport, connection, session, clock) = handshake(&mut f, &mut state);
+    let publication = f.acquire(&mut state, current);
+    let (actor, runtime, inv) = recovery_observed(&state, session);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), [8.1, 64., 8.5]);
+    assert!(actor.motion.on_ground());
+    assert!(!runtime.reset);
+    assert_eq!(inv.slots[3].count, 7);
+    assert!(local(&publication).ready() && local(&publication).reset());
+    assert_eq!(local(&publication).last_input_sequence(), 0);
+    (
+        f,
+        state,
+        session,
+        publication,
+        login,
+        transport,
+        connection,
+        clock,
+    )
+}
+fn snow_actual_input(
+    f: &mut Fixture,
+    state: &mut AuthorityState,
+    login: &mut LoginDriver,
+    transport: &mut MemoryTransport,
+    connection: ConnectionId,
+    clock: &StepClock,
+    sequence: u64,
+) {
+    let input = ClientPacket::PlayerInput(
+        PlayerInput::new(sequence, 0, 0, false, 0., 0., false, false, false, false).unwrap(),
+    );
+    assert!(!matches!(
+        transport.send(
+            connection,
+            MemoryTransport::encode_frame(&input).unwrap(),
+            &mut login.bind(state, &mut f.store),
+            clock
+        ),
+        ConnectionProgress::Closed { .. }
+    ));
+}
+fn snow_actual_velocity(state: &mut AuthorityState, session: SessionKey) {
+    let mut r = state.residents();
+    let actor = r
+        .actors
+        .iter_mut()
+        .find(|a| a.key == ActorKey::Player(session))
+        .unwrap();
+    let old = actor.motion;
+    actor.motion = MotionState::new(MotionStateParts {
+        position: old.position(),
+        velocity: FiniteVec3::try_new([4., 0., 0.]).unwrap(),
+        on_ground: old.on_ground(),
+    });
+    state.commit_residents(r);
+}
+fn snow_actual_cells(state: &AuthorityState) -> (u16, u16) {
+    let view = state.settled_read().unwrap();
+    (
+        view.block(Dimension::OVERWORLD, BlockPos::new(8, 64, 8))
+            .unwrap(),
+        view.block(Dimension::OVERWORLD, BlockPos::new(9, 64, 8))
+            .unwrap(),
+    )
+}
+#[test]
+fn snow_actual_native_travel_crosses_two_cells() {
+    let (mut f, mut state, s, _, mut login, mut transport, connection, clock) =
+        snow_actual_fixture();
+    for tick in 1..=18 {
+        snow_actual_velocity(&mut state, s);
+        snow_actual_input(
+            &mut f,
+            &mut state,
+            &mut login,
+            &mut transport,
+            connection,
+            &clock,
+            tick + 2,
+        );
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        let (actor, runtime, inv) = recovery_observed(&state, s);
+        assert!(actor.motion.on_ground());
+        let p = actor.motion.position().get();
+        assert_eq!((p[1], p[2]), (64., 8.5));
+        assert_eq!(inv.slots[3].count, 7);
+        assert!(!runtime.reset);
+        assert!(local(&publication).ready() && !local(&publication).reset());
+        assert_eq!(local(&publication).last_input_sequence(), tick + 2);
+        death_no_hit(&publication);
+        assert!(death_ground(&state).is_empty());
+        if tick == 9 {
+            assert_eq!(p[0].to_bits(), 0x410c6665);
+            assert_eq!(snow_actual_cells(&state), (86, 87));
+        }
+        if tick == 18 {
+            assert_eq!(p[0].to_bits(), 0x41173330);
+            assert_eq!(snow_actual_cells(&state), (86, 86));
+        }
+    }
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(snow_actual_cells(&state), (86, 86));
+    assert_eq!(local(&publication).last_input_sequence(), 20);
+    death_no_hit(&publication);
+    assert!(death_ground(&state).is_empty());
+    f.close();
+}
+#[test]
+fn snow_actual_lethal_landing_settles_original_cell() {
+    let (mut f, mut state, s, _, mut login, mut transport, connection, clock) =
+        snow_actual_fixture();
+    for tick in 1..=8 {
+        snow_actual_velocity(&mut state, s);
+        snow_actual_input(
+            &mut f,
+            &mut state,
+            &mut login,
+            &mut transport,
+            connection,
+            &clock,
+            tick + 2,
+        );
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        assert!(recovery_observed(&state, s).0.motion.on_ground());
+    }
+    let warm = snow_actual_cells(&state);
+    let mut r = state.residents();
+    let k = ActorKey::Player(s);
+    let actor = r.actors.iter_mut().find(|a| a.key == k).unwrap();
+    actor.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new([9.1, 65., 8.5]).unwrap(),
+        velocity: FiniteVec3::try_new([4., -40., 0.]).unwrap(),
+        on_ground: false,
+    });
+    actor.survival = SurvivalState::try_new(SurvivalStateParts {
+        health: 1,
+        hunger: 20,
+        oxygen: 300,
+        saturation_zero: false,
+        armor_points: 0,
+    })
+    .unwrap();
+    let runtime = r.runtimes.get_mut(&k).unwrap();
+    runtime.peak_y = 68.;
+    runtime.reset = false;
+    runtime.controls = None;
+    state.commit_residents(r);
+    snow_actual_input(
+        &mut f,
+        &mut state,
+        &mut login,
+        &mut transport,
+        connection,
+        &clock,
+        11,
+    );
+    assert_eq!(state.next_tick(), 9);
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let hits: Vec<_> = publication
+        .events
+        .iter()
+        .filter(|e| matches!(e.event(), mornlea_domain::Event::CombatHit(_)))
+        .collect();
+    assert_eq!(hits.len(), 1);
+    let mornlea_domain::Event::CombatHit(hit) = hits[0].event() else {
+        unreachable!()
+    };
+    assert_eq!((hit.damage(), hit.server_tick()), (1, 9));
+    let safe = safe_actual_value(&state, s).unwrap();
+    assert_eq!(safe.dimension, 0);
+    assert!((9.0..10.0).contains(&safe.position[0]));
+    assert_eq!((safe.position[1], safe.position[2]), (64., 8.5));
+    let (actor, runtime, inv) = recovery_observed(&state, s);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Pending);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), [-31.5, 321., 48.5]);
+    assert_eq!(
+        (
+            actor.survival.health(),
+            actor.survival.hunger(),
+            actor.survival.oxygen()
+        ),
+        (20, 20, 300)
+    );
+    assert_eq!(
+        (runtime.saturation_milli, runtime.exhaustion_milli),
+        (5000, 0)
+    );
+    assert!(!runtime.reset);
+    assert!(inv.slots.iter().all(|i| i.count == 0));
+    assert_eq!(local(&publication).last_input_sequence(), 11);
+    assert!(!local(&publication).ready() && !local(&publication).reset());
+    assert_eq!(snow_actual_cells(&state).1, 86);
+    assert_eq!(warm, (87, 87));
+    let drops = death_ground(&state);
+    assert_eq!(
+        drops.iter().map(|d| d.stack).collect::<Vec<_>>(),
+        vec![ItemStack {
+            item: 1,
+            count: 7,
+            durability: 0
+        }]
+    );
+    let waiting = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(snow_actual_cells(&state).1, 86);
+    assert_eq!(death_ground(&state), drops);
+    death_no_hit(&waiting);
+    assert!(!local(&waiting).ready());
+    assert_eq!(local(&waiting).last_input_sequence(), 11);
+    let acquired = f.acquire(&mut state, key(Dimension::OVERWORLD, -2, 3));
+    assert!(local(&acquired).ready() && local(&acquired).reset());
+    assert_eq!(local(&acquired).last_input_sequence(), 11);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(local(&following).ready() && !local(&following).reset());
+    assert_eq!(local(&following).last_input_sequence(), 11);
+    assert_eq!(snow_actual_cells(&state).1, 86);
+    assert_eq!(death_ground(&state), drops);
+    death_no_hit(&following);
+    f.close();
+}
+#[test]
+fn snow_actual_activation_is_quiet() {
+    let (mut f, mut state, s, activated, mut login, mut transport, connection, clock) =
+        snow_actual_fixture();
+    assert_eq!(safe_actual_value(&state, s), None);
+    assert_eq!(local(&activated).last_input_sequence(), 0);
+    assert_eq!(snow_actual_cells(&state), (87, 87));
+    assert!(death_ground(&state).is_empty());
+    snow_actual_input(
+        &mut f,
+        &mut state,
+        &mut login,
+        &mut transport,
+        connection,
+        &clock,
+        3,
+    );
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let (actor, runtime, inv) = recovery_observed(&state, s);
+    assert!(actor.motion.on_ground());
+    assert_eq!(actor.motion.position().get(), [8.1, 64., 8.5]);
+    assert!(!runtime.reset);
+    assert_eq!(inv.slots[3].count, 7);
+    assert!(local(&publication).ready() && !local(&publication).reset());
+    assert_eq!(local(&publication).last_input_sequence(), 3);
+    safe_actual_expect(&state, s, [8.1, 64., 8.5]);
+    assert_eq!(snow_actual_cells(&state), (87, 87));
+    assert!(death_ground(&state).is_empty());
+    death_no_hit(&publication);
+    f.close();
 }

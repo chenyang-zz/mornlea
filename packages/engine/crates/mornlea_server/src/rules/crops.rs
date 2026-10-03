@@ -48,9 +48,11 @@
 //! source player book and settles copied coordinates here in the original write region.
 //! The legacy public collector excludes those sessions and retains its fixture contract
 //! for other players. Every settlement reads fresh, preserving duplicate idempotence.
-//! A caller may retain the generic schedule and its Snow trackers across calls, but
-//! the actual reducer recreates that schedule each tick. Source Snow/passive tracker
-//! lifetime, sampling order and rounding remain open integration ownership.
+//! Actual source players retain an inline travel/cell tracker and at most eight copied
+//! Snow candidates in their exclusive book. Capture precedes Safe/death; reset clears
+//! only the tracker, and fresh late settlement preserves original coordinates.
+//! Legacy collection excludes actual source players. The per-tick generic schedule
+//! retains source-disabled fixture behavior; passive Snow integration remains open.
 //! Snow settlement follows trample settlement and precedes random sampling, so a
 //! reverted cell is no longer farmland when the sampler visits it.
 //!
@@ -413,6 +415,11 @@ fn collect_snow_samples(schedule: &mut FootprintSchedule, ctx: &TickContext<'_>)
         if actor.lifecycle != ActorLifecycle::Active || !actor.motion.on_ground() {
             continue;
         }
+        if let ActorKey::Player(session) = actor.key
+            && ctx.source_player_death_deferred(session)
+        {
+            continue;
+        }
         let Some(pre) = view.pre_step_motion(actor.key) else {
             continue;
         };
@@ -505,6 +512,30 @@ fn settle_trample_cell(ctx: &mut TickContext<'_>, cell: &FootprintCell) -> bool 
         return commit_trample(ctx, ground, None) == TrampleCommit::Complete;
     };
     commit_trample(ctx, ground, Some(crop)) != TrampleCommit::Refused
+}
+
+/// Settles original copied cells through the existing fresh Snow transaction.
+pub(crate) fn settle_captured_source_snow(
+    cells: &[FootprintCell],
+    ctx: &mut TickContext<'_>,
+) -> Result<PhaseReport, ServerError> {
+    if cells.len() > 8 {
+        return Err(ServerError::Internal {
+            invariant: "source player snow capacity",
+        });
+    }
+    let mut applied = 0;
+    for cell in cells {
+        if settle_snow_cell(ctx, cell) {
+            applied += 1;
+        }
+    }
+    Ok(PhaseReport {
+        examined: cells.len(),
+        applied,
+        carried: 0,
+        rejected: 0,
+    })
 }
 
 /// Settles one snow candidate with a fresh read (`settleSnowFootprintCell`):
@@ -825,5 +856,169 @@ mod source_trample_tests {
         assert_eq!(source_trample_snapshot(&c), before);
         assert_eq!(quiet, copy);
         assert_eq!(cells, [source_trample_cell(BlockPos::ORIGIN)]);
+    }
+}
+
+#[cfg(test)]
+mod source_snow_tests {
+    use super::*;
+    use crate::core::contracts::{
+        ChunkKey, FixtureState, ServerLimits, SleepState, TickBudget, WorkState,
+    };
+    use crate::core::state::AuthorityState;
+    use crate::core::world::ReadyChunk;
+    use mornlea_domain::{ChunkPos, Season, Weather, WorldState, WorldStateParts};
+    use mornlea_storage::{Chunk, ContainerSnapshot, StorageKind};
+    fn source_snow_world() -> WorldState {
+        WorldState::try_new(WorldStateParts {
+            world_time_ticks: 0,
+            day_phase_offset: 0,
+            weather: Weather::Clear,
+            season: Season::Spring,
+            season_progress: 0,
+            temperature: 0,
+        })
+        .unwrap()
+    }
+    fn source_snow_authority() -> AuthorityState {
+        AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap()
+    }
+    fn source_snow_context(a: &mut AuthorityState) -> TickContext<'_> {
+        let f = FixtureState {
+            runtime: vec![],
+            actors: vec![],
+            chunks: vec![],
+            inventories: vec![],
+            containers: vec![],
+            work: WorkState::default(),
+            sleep: SleepState {
+                beds: vec![],
+                day_phase_offset: 0,
+                pending_offset: None,
+            },
+            projectiles: vec![],
+            drops: vec![],
+            world: source_snow_world(),
+        };
+        let mut c = TickContext::from_fixture(a, &f, TickBudget::full());
+        let mut sections = vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ];
+        for (pos, block) in [
+            (BlockPos::ORIGIN, 1),
+            (BlockPos::new(0, 1, 0), 87),
+            (BlockPos::new(5, 1, 0), 1),
+        ] {
+            let section = ((pos.y() + 64) / 16) as usize;
+            if sections[section].kind == StorageKind::Single {
+                sections[section] = ContainerSnapshot {
+                    kind: StorageKind::Direct,
+                    bits: 15,
+                    single: 0,
+                    palette: vec![],
+                    packed: vec![0; 1024],
+                };
+            }
+            let index =
+                (((pos.y() + 64) % 16) * 256 + (pos.z() & 15) * 16 + (pos.x() & 15)) as usize;
+            sections[section].packed[index / 4] |= u64::from(block as u16) << ((index % 4) * 15);
+        }
+        c.preload_ready_chunk(
+            ReadyChunk::try_new(
+                ChunkKey {
+                    dimension: Dimension::OVERWORLD,
+                    pos: ChunkPos::new(0, 0),
+                },
+                1,
+                1,
+                Chunk {
+                    sections,
+                    drops: vec![Default::default(); 32],
+                    furnaces: vec![Default::default(); 32],
+                    chests: vec![Default::default(); 16],
+                },
+            )
+            .unwrap(),
+        );
+        c
+    }
+    fn source_snow_cell(pos: BlockPos) -> FootprintCell {
+        FootprintCell {
+            dimension: Dimension::OVERWORLD,
+            pos,
+        }
+    }
+    fn source_snow_snapshot(c: &TickContext<'_>) -> String {
+        format!(
+            "{:?}/{:?}/{:?}",
+            c.snapshot_state(source_snow_world()),
+            c.events(),
+            c.resident_snapshot().ready_snapshot()
+        )
+    }
+
+    #[test]
+    fn source_snow_captured_cells_are_fresh_and_bounded() {
+        let mut a = source_snow_authority();
+        let mut c = source_snow_context(&mut a);
+        assert!(c.read().actors().is_empty());
+        assert!(c.read().environment().is_none());
+        let pos = BlockPos::new(0, 1, 0);
+        let cells = [source_snow_cell(pos); 3];
+        let copy = cells;
+        assert_eq!(
+            settle_captured_source_snow(&cells, &mut c).unwrap(),
+            PhaseReport {
+                examined: 3,
+                applied: 3,
+                carried: 0,
+                rejected: 0
+            }
+        );
+        assert_eq!(c.read().block(Dimension::OVERWORLD, pos), Some(0));
+        assert_eq!(cells, copy);
+        assert!(
+            c.read()
+                .drops(ChunkKey {
+                    dimension: Dimension::OVERWORLD,
+                    pos: ChunkPos::new(0, 0)
+                })
+                .is_empty()
+        );
+        let before = source_snow_snapshot(&c);
+        let quiet = [
+            source_snow_cell(BlockPos::new(32, 1, 0)),
+            source_snow_cell(BlockPos::new(5, 1, 0)),
+        ];
+        let copy = quiet;
+        assert_eq!(
+            settle_captured_source_snow(&quiet, &mut c).unwrap(),
+            PhaseReport {
+                examined: 2,
+                applied: 0,
+                carried: 0,
+                rejected: 0
+            }
+        );
+        assert_eq!(quiet, copy);
+        assert_eq!(source_snow_snapshot(&c), before);
+        assert_eq!(
+            settle_captured_source_snow(&[cells[0]; 9], &mut c),
+            Err(ServerError::Internal {
+                invariant: "source player snow capacity"
+            })
+        );
+        assert_eq!(source_snow_snapshot(&c), before);
     }
 }

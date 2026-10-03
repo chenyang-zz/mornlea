@@ -1,4 +1,4 @@
-//! Bounded borrowed source geometry for restoration, Safe checkpoints, trample capture and spawn reads.
+//! Bounded borrowed source geometry for restoration, Safe checkpoints, trample/Snow capture and spawn reads.
 //! Actor lifecycle, subscriptions and scan cadence remain caller-owned.
 
 use super::contracts::{ChunkKey, ServerError};
@@ -264,6 +264,15 @@ pub(crate) fn trample_cells(position: [f32; 3]) -> Result<([BlockPos; 4], usize)
         }
     }
     Ok((cells, len))
+}
+
+/// Copies a checked source foot cell without support or world reads.
+pub(crate) fn snow_cell(position: [f32; 3]) -> Result<BlockPos, ServerError> {
+    Ok(BlockPos::new(
+        checked_floor(position[0])?,
+        checked_floor(position[1])?,
+        checked_floor(position[2])?,
+    ))
 }
 
 /// Checked source enumeration is bounded before allocation and nearest-first.
@@ -1656,5 +1665,41 @@ mod tests {
             );
         }
         assert_eq!(trample_cells([2147483520., 64., 8.5]).unwrap().1, 0);
+    }
+    #[test]
+    fn snow_geometry_source_foot_cell() {
+        for (p, cell) in [
+            ([8.5, 64., 8.5], BlockPos::new(8, 64, 8)),
+            ([-0.1, 0.9375, -0.1], BlockPos::new(-1, 0, -1)),
+            ([0., -64., 0.], BlockPos::new(0, -64, 0)),
+            ([0., 320., 0.], BlockPos::new(0, 320, 0)),
+            ([i32::MIN as f32, 0., 0.], BlockPos::new(i32::MIN, 0, 0)),
+            ([2147483520., 0., 0.], BlockPos::new(2147483520, 0, 0)),
+        ] {
+            assert_eq!(snow_cell(p), Ok(cell));
+        }
+    }
+    #[test]
+    fn snow_geometry_checked_refusal() {
+        for axis in 0..3 {
+            for bad in [f32::MAX, f32::NAN, f32::INFINITY] {
+                let mut p = [8.5, 64., 8.5];
+                p[axis] = bad;
+                for _ in 0..2 {
+                    assert_eq!(
+                        snow_cell(p),
+                        Err(ServerError::InvalidInput {
+                            field: "actor_geometry"
+                        })
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            snow_cell([2147483648., 0., 0.]),
+            Err(ServerError::InvalidInput {
+                field: "actor_geometry"
+            })
+        );
     }
 }

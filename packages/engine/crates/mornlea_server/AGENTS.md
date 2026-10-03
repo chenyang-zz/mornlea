@@ -46,6 +46,8 @@ consume its cancellation and error contracts before joining the real backend.
   and supported fluid eligibility independently of restore height limits.
   Private trample geometry copies at most four source-f32 support-layer cells
   with checked endpoints and no world reads, body-height or restore predicates.
+  Private Snow geometry checks only the source foot-cell floors in axis order,
+  without support, height-clamp, probe subtraction or world reads.
 
 - `src/core/pending_restore.rs` retains bounded candidate, wanted-key, nearest
   column, fallback and exhausted-revision progress over borrowed placement reads.
@@ -123,7 +125,12 @@ consume its cancellation and error contracts before joining the real backend.
   abandoned context loans, without cloning actor bodies or scan allocations.
   Successful late settlement drains only its length through existing crop transactions;
   missing environment retains the prefix. This bounds only candidate retention.
-  Source Snow/passive timing, subscriptions, publication, automatic actor save/cache
+  One inline travel/cell tracker per entry and an eight-cell copied Snow batch
+  preserve source stride and dimensionless memory across ticks. Capture follows
+  trample before Safe/death; accepted resets clear only the tracker. Capacity
+  preflight preserves both tracker and accepted prefix on refusal; settlement
+  drains length only after fresh ordered Snow transactions succeed.
+  Passive Snow timing, subscriptions, publication, automatic actor save/cache
   eligibility and executable runtime acceptance remain separately owned.
 
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
@@ -524,14 +531,17 @@ consume its cancellation and error contracts before joining the real backend.
   the frozen capacity preflight (full capacity keeps the whole cell
   silently), and the one exceptional second-write fault mirroring Go's
   ordered two-commit stage — never a two-write transaction. Snow reduces
-  one tier per landing before random sampling. Crop removal and its actual
+  one tier per captured stride sample before random sampling. Crop removal and its actual
   output batch commit together after the separate ground write. Environment
   must exist before collecting or draining landing events. Actual source-player
   capture owns a private fixed coordinate batch before Safe and late death;
   the late consumer reuses these unchanged transactions with fresh reads. Legacy
   collection excludes actual source sessions and preserves disabled fixture behavior.
-  The reducer recreates the generic schedule each tick; source Snow/passive tracker
-  lifetime, order and rounding remain open.
+  Actual source players retain their Snow tracker and fixed eight-cell batch in
+  the moved book; checked capture precedes Safe/death and late fresh settlement
+  needs no environment. Resets clear only the tracker and preserve queued cells.
+  Legacy Snow excludes actual source sessions. The reducer recreates the generic
+  schedule each tick; passive Snow lifetime, order and rounding remain open.
 - `src/rules/sleep.rs` owns sleep settlement on its batch phase: authority
   bed-ray entry with the Go refusal order, the exact seasonal morning
   transition (`EffectiveMorningOffset` with `DayArcTicks`/`YearPhaseAt`
