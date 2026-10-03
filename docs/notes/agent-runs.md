@@ -130,3 +130,18 @@
   3. `codex/b36-axes-shovels` 未认领在途分支与脏 worktree（改动含本表与 golden）连续五轮无收敛，认领登记与处置属控制会话裁决。
   4. 无 backlog 行但已合入 `main` 的控制会话 change 是否追溯补履历行，待用户裁决（维持不补先例）。
   5. 遗留未动项：重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、torch proposal 延期章节占位符、F-04 仍无本机 worktree 可核对；待澄清累计清单见上轮第 6 项（本轮无新增）。
+
+## 2026-10-03（规划者第九轮）
+
+- **读取输入**：`docs/feature-backlog.md`、`docs/notes/agent-runs.md`（上轮 2026-10-02 第八轮）、`docs/notes/progress.md`、根 `AGENTS.md`（版本矩阵仍为协议 v45、玩家 schema v9、区块 schema v9、metadata v6、`companions.ai` v5、`hostile_mobs` v2、`passive_mobs` v1、engine ABI v11、client ABI v19、benchmark scenario v23）、`openspec/config.yaml`、Discussion #71（`gh api graphql` 撞未认证共享限流 403；改经旧 URL `channing771/mornlea` 公开页读取：可见日期止于 2026-09-13（B-35 完成），正文仍缺 B-47 起新行——**上轮以来无新评论、无正文更新**）、`origin/main`（HTTPS fetch 失败：HTTP2 framing 层错误与 Empty reply；经 SSH 取远端头：上轮以来仅两笔 planner 自身提交 `cfca1080`/`e9b5ea60`、零功能合入）、`git branch -a`/`git worktree list`（12 个 worktree，含 B-36 脏 worktree）及 B-36 worktree 头 SHA 与脏状态、归档横扫（`git log --all --since=2026-10-02 -- openspec/changes/archive/` 零结果，最新归档仍为 `2026-09-27-rust-native-numerical-closure`）。
+- **变更行**：**无新增行**——讨论零新评论、零新归档、MC 覆盖此前已全量复核（本轮无变化）。校对（仅备注、状态不变）：`B-36`（`codex/b36-axes-shovels` 头仍 `2a745374`、最后提交仍 2026-09-15，`.worktrees/codex-b36-axes-shovels` 脏改动未收敛（含本表与 golden）→ 连续第六轮维持排队不晋升）；其余行状态与 git 一致，无待标完成行（`origin/main` 上轮以来无功能合入）。晋升检查：串行队首 B-36 前序已完成、版本槽空闲，但 worktree 证据不一致，按规则不晋升；各组尾号不变（B-52/D-21/E-21/F-11/C-11）。
+- **未落行（判定）**：本轮三通道均为空，无新请求可判定；待澄清累计清单继续挂起（讨论通道仍不可用，无法补挂评论）。
+- **提交**：两笔均在临时 detached worktree（`/tmp/mornlea-planner-r8`，沿上轮先例，不触碰 `dev` 工作区与其在途提交）制作。首轮推送因远端已前进被拒（另一规划者会话的 10-02 第八轮 `cfca1080`/`e9b5ea60` 先合入）——按规则不强推，将本轮复核重放于新头 `e9b5ea60` 之上：`docs: plan B-36 recheck 2026-10-03` + 本运行记录提交。
+- **推送**：（重放后）两笔快进提交以 SSH URL `ssh://git@github.com/chenyang-zz/mornlea.git HEAD:main` 推送（HTTPS 凭据不可用沿既有先例）；推送结果以 `origin/main` 实际头为准。
+- **讨论同步**：**未执行**——`gh` token 失效（连续第九轮）且未认证 REST/GraphQL 撞共享限流；正文 `--update` 与状态变更评论（本轮仅 B-36 备注复核）均发不出；正文镜像已落后八轮，以仓库文件为准。
+- **留给下一轮 / 用户**：
+  1. `gh` 凭据连续第九轮不可用；Discussion 镜像与评论积压待恢复后补发；`chenyang-zz/mornlea/discussions/71` 可达性仍待确认。
+  2. 每日规划轮次疑似在两个会话并行运行（本轮与 10-02 第八轮同日窗口不知对方存在，均建了同名 `/tmp/mornlea-planner-r8` 临时 worktree 且都只做 B-36 复核）——若为定时调度重复投递，建议用户检查调度配置，避免同轮重复提交。
+  3. `codex/b36-axes-shovels` 未认领在途分支与脏 worktree（改动含本表与 golden）连续六轮无收敛，认领登记与处置属控制会话裁决。
+  4. 无 backlog 行但已合入 `main` 的控制会话 change 是否追溯补履历行，待用户裁决（维持不补先例）。
+  5. 遗留未动项：重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、torch proposal 延期章节占位符、F-04 仍无本机 worktree 可核对；待澄清累计清单见 09-29 轮第 6 项（本轮无新增）。
