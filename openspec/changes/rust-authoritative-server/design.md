@@ -281,3 +281,5 @@ Packet96 reuses the existing bounded4096 transient receipt lane, adding one succ
 
 
 The late-cost actual Till fixture uses pitch-0.65, corrected from-0.95 after real NativeRaycast demonstrated adjacent floor occlusion. It preserves the full floor63, dirt(8,63,6), separate mining pitch-0.5 and all source outcomes. Native setup failures are retained and excluded from RED; the corrected firstsolid native proof precedes the full inert rerun. No gameplay algorithm or old fixture is changed.
+
+Late action costs are accepted at integrated f9afd5b93a88cda9b5017c96177191bebb77beba, byte-identical across the exact nine paths to independently reviewed bc1d068c31eda6a0ab195cbead494b8c32f4d3ee. Corrected compiled baseline10assertionRED/2GREEN controls, author/reviewer1220actual+3docs and ROOT1408actual+3docs pass. All49 activation cases select the fresh0eba2b79 executable and unchanged previous-v2 package. Only3.7l3ac closes; actual successful human melee endpoint evidence, configured tunables and the broader runtime/save/publication/every-outcome joins remain open. Architecture skill: no change.
