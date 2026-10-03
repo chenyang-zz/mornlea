@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use mornlea_domain::{
-    BlockPos, ChunkPos, CommandEnvelope, CommandOrderScratch, ContainerRef, Dimension,
+    BlockPos, ChunkPos, Command, CommandEnvelope, CommandOrderScratch, ContainerRef, Dimension,
     order_commands,
 };
 
@@ -266,8 +266,12 @@ fn reduce_tick_inner(
             carried: drained.carried,
             stale: drained.stale,
         };
+        // The publication outcome leaves the context before the carried
+        // commit: its block batches pair each chunk's committed revision with
+        // the pending one the commit is about to finalize.
+        let outcome = context.capture_publication_outcome();
         context.commit_carried();
-        Ok::<_, ServerError>((overlay, hits, events, counters))
+        Ok::<_, ServerError>((overlay, hits, events, counters, outcome))
     }));
     // Context recovery precedes restoration of all three exclusively moved owners.
     drop(context);
@@ -275,7 +279,7 @@ fn reduce_tick_inner(
     *state.farmland_schedule_mut() = farmland_schedule;
     *state.source_players_mut() = source_players;
     state.prune_source_players();
-    let (mut overlay, hits, mut events, counters) = match result {
+    let (mut overlay, hits, mut events, counters, outcome) = match result {
         Ok(result) => result?,
         Err(panic) => std::panic::resume_unwind(panic),
     };
@@ -283,6 +287,9 @@ fn reduce_tick_inner(
         |key, _| matches!(state.session(*key), Some(facts) if facts.phase == SessionPhase::Active),
     );
     state.commit_viewers(overlay);
+    // The publication families precede the private player observation and the
+    // combat confirmations that close the tick.
+    events.extend(state.project_tick_publication(tick, &outcome));
     events.extend(state.project_player_updates(tick));
     events.extend(hits);
     let publication = TickPublication {
@@ -576,9 +583,11 @@ fn batch_call(phase: RulePhase) -> RuleCall<'static> {
 
 /// Admits one sorted envelope into the intake providers. Every admit whose
 /// gate accepts the envelope runs: an open lands in both the container and
-/// the workbench bags. Resource and sequencing failures stop the tick; gate
-/// refusals fall through. An envelope no intake owns rides the ordered
-/// interaction bag the combat-close loop drains.
+/// the workbench bags. A `Command::Resync` envelope is provider-owned intake:
+/// it records its resync request on the tick outcome's lane and counts as
+/// applied here, never riding the interaction bag. Resource and sequencing
+/// failures stop the tick; gate refusals fall through. An envelope no intake
+/// owns rides the ordered interaction bag the combat-close loop drains.
 fn admit_command(
     context: &mut TickContext<'_>,
     envelope: &CommandEnvelope,
@@ -601,6 +610,12 @@ fn admit_command_with(
     envelope: &CommandEnvelope,
     admits: [ProviderCall; 4],
 ) -> Result<(), ServerError> {
+    if let Command::Resync(intent) = envelope.command() {
+        if let Some(session) = SessionKey::from_raw(envelope.session()) {
+            context.record_resync((session, intent.dimension(), intent.chunk()));
+        }
+        return Ok(());
+    }
     let call = RuleCall {
         phase: RulePhase::PlayerCommand,
         actor: None,

@@ -708,7 +708,12 @@ fn covers(
 /// effective cells refuses, the trim keeps interior holes, recipes compare
 /// in ascending order, and the mirror retries once only where the flag
 /// allows it. Rotations and vertical flips are never in the semantics.
-fn match_grid(size: u8, slots: &[ItemStack; CRAFTING_GRID_SLOTS]) -> Option<(usize, ItemStack)> {
+/// This is the frozen recipe matcher shared by the take provider and the
+/// crafting publication.
+pub(crate) fn match_grid(
+    size: u8,
+    slots: &[ItemStack; CRAFTING_GRID_SLOTS],
+) -> Option<(usize, ItemStack)> {
     if size != 2 && size != 3 {
         return None;
     }

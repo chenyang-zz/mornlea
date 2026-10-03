@@ -1,0 +1,57 @@
+//! Per-session publication view state for the tick-end projection.
+//!
+//! One [`SessionView`] exists per admitted session inside the authority. It
+//! carries the previous tick's derived interest and published snapshots, so
+//! the projection can diff chunk interest, entity visibility and record
+//! families without touching the resident state it observes. Entries are
+//! created lazily by the projection and removed when a session retires.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use mornlea_domain::{
+    CompanionId, ContainerRef, CraftingSize, DropId, HostileId, PassiveId, PlayerId, ProjectileId,
+};
+
+use crate::contracts::{ChunkKey, ContainerRecord, InventoryRecord, ViewLease};
+
+/// One chunk column's publication state on a single session's mirror.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ChunkPublication {
+    /// Whether the session ever received a full snapshot for this column.
+    pub(crate) snapshot_sent: bool,
+    /// The revision the session's mirror holds for this column.
+    pub(crate) last_revision: u64,
+    /// A provider resync is waiting to re-send the full snapshot this tick.
+    pub(crate) resync_queued: bool,
+}
+
+/// The previous tick's derived interest and published snapshots of one
+/// session. All fields are owned copies; the projection replaces them in
+/// place after it has emitted this tick's events.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SessionView {
+    /// This session's chunk interest as derived from its player actor.
+    pub(crate) wanted: BTreeSet<ChunkKey>,
+    /// Publication state per wanted chunk column.
+    pub(crate) chunks: BTreeMap<ChunkKey, ChunkPublication>,
+    /// Last tick's visible companion identities.
+    pub(crate) visible_companions: BTreeSet<CompanionId>,
+    /// Last tick's visible remote player identities.
+    pub(crate) visible_remotes: BTreeSet<PlayerId>,
+    /// Last tick's visible hostile identities.
+    pub(crate) visible_hostiles: BTreeSet<HostileId>,
+    /// Last tick's visible passive identities.
+    pub(crate) visible_passives: BTreeSet<PassiveId>,
+    /// Last tick's visible projectile identities.
+    pub(crate) visible_projectiles: BTreeSet<ProjectileId>,
+    /// Last tick's visible dropped-stack identities.
+    pub(crate) visible_drops: BTreeSet<DropId>,
+    /// Last published full inventory snapshot of the owning actor.
+    pub(crate) last_inventory: Option<InventoryRecord>,
+    /// Last published crafting grid and size.
+    pub(crate) last_crafting: Option<([mornlea_storage::ItemStack; 9], CraftingSize)>,
+    /// Last published record per container this session holds a lease on.
+    pub(crate) leased_containers: BTreeMap<ContainerRef, ContainerRecord>,
+    /// Last tick's committed viewer lease, if any.
+    pub(crate) last_lease: Option<ViewLease>,
+}

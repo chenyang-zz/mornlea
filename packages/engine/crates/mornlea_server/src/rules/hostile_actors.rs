@@ -197,8 +197,10 @@ const GROUND_PROBE: f32 = 1e-4;
 const PRISM_MAX_CELLS: u64 = 4096;
 
 /// Hostile kind bytes (`HostileKindNightwalker` / `HostileKindBoneThrower`).
-const NIGHTWALKER: u8 = 0;
-const HURLER: u8 = 1;
+/// Shared with the publication projection so the wire kind mapping has one
+/// owner.
+pub(crate) const NIGHTWALKER: u8 = 0;
+pub(crate) const HURLER: u8 = 1;
 
 /// Settles one hostile batch: the `HostileMotion` phase (spawn admission then
 /// movement) or the `HostileBurnDistant` phase (burn then distant despawn).

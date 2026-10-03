@@ -11,8 +11,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use mornlea_domain::{
-    CommandEnvelope, CommandEnvelopeParts, ContainerRef, Dimension, EventRecipient, MotionState,
-    PlayerId, RejectReason, RoutedEvent, Weather, WorldState,
+    BlockChange, CommandEnvelope, CommandEnvelopeParts, CommandText, ContainerRef, Dimension,
+    DisplayName, EventRecipient, MotionState, PlayerId, RejectReason, RoutedEvent, Weather,
+    WorldState,
 };
 use mornlea_protocol::{
     AdmittedLogin, Direction, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket, State,
@@ -30,12 +31,39 @@ use super::deferred_commands::DeferredCommands;
 use super::drop_store::{self, DropState};
 use super::login_seed::{SeededPlayer, seed_player};
 use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
+use super::publication_project::TickOutcome;
+use super::session_view::SessionView;
 use super::source_player_restore::SourcePlayerBook;
 use super::world::ReadyChunk;
 use crate::rules::farmland::FarmlandSchedule;
 use crate::rules::fluids::FluidSchedule;
 
 const COMPANION_INBOX: usize = 4;
+
+/// Chat intake bound: normal entries stop at this count, and one overflow
+/// marker may ride past it so the blocked sender still learns the refusal in
+/// the same drain. The queue is fully drained every tick, so the marker bound
+/// is structural rather than cumulative.
+const CHAT_QUEUE_CAP: usize = 256;
+
+/// One chat instruction staged between two ticks, waiting for the next
+/// projection drain. The overflow flag marks the queue-full marker staged in
+/// place of a normal entry.
+pub(crate) struct StagedChat {
+    pub(crate) session: SessionKey,
+    pub(crate) player_id: PlayerId,
+    pub(crate) display_name: DisplayName,
+    pub(crate) text: CommandText,
+    pub(crate) overflow: bool,
+}
+
+/// One Active session's published identity, the projection-side speaker
+/// facts the chat and remote families read.
+pub(crate) struct Speaker {
+    pub(crate) session: SessionKey,
+    pub(crate) player_id: PlayerId,
+    pub(crate) display_name: DisplayName,
+}
 
 static SETTLED_PRE_STEP: BTreeMap<ActorKey, MotionState> = BTreeMap::new();
 
@@ -191,6 +219,14 @@ pub struct AuthorityState {
     residents: ResidentTickState,
     source_player_radius: Option<u8>,
     source_players: SourcePlayerBook,
+    /// Per-session publication view state for the tick-end projection.
+    /// Entries appear lazily during projection and leave at retirement.
+    session_views: BTreeMap<SessionKey, SessionView>,
+    /// Chat instructions staged between ticks, drained by the projection.
+    chat_queue: VecDeque<StagedChat>,
+    /// Next chat event id, strictly increasing from one; zero is the absent
+    /// form the chat event constructor rejects.
+    next_chat_event_id: u64,
 }
 
 impl AuthorityState {
@@ -259,6 +295,9 @@ impl AuthorityState {
             residents: ResidentTickState::default(),
             source_player_radius: None,
             source_players: SourcePlayerBook::default(),
+            session_views: BTreeMap::new(),
+            chat_queue: VecDeque::new(),
+            next_chat_event_id: 1,
         })
     }
 
@@ -778,6 +817,8 @@ impl AuthorityState {
         record.outbox_closed = true;
         self.current_sessions.remove(&key);
         self.occupied = self.occupied.saturating_sub(1);
+        // The publication view belongs to the live session only.
+        self.session_views.remove(&key);
         // Sleep participation belongs to the live session. Durable respawn
         // anchors and the other resident lanes keep their persistence owner.
         if let Some(sleep) = &mut self.residents.sleep_record {
@@ -814,9 +855,14 @@ impl AuthorityState {
         };
         let _ = phase;
         match intent {
-            PlayIntent::Chat(_) | PlayIntent::KeepAliveReply { .. } => {
+            // Chat keeps its existing wire receipt while the staged entry
+            // waits for the next projection drain, which owns the addressing
+            // outcome and the sender-only rejects.
+            PlayIntent::Chat(chat) => {
+                self.stage_chat(session, chat.text().clone());
                 Ok(SubmissionReceipt::ControlAccepted)
             }
+            PlayIntent::KeepAliveReply { .. } => Ok(SubmissionReceipt::ControlAccepted),
             PlayIntent::Sequenced { sequence, command } => {
                 // Intake order is seam-fixed: validate the whole payload before
                 // queue or arrival capacity, so a combined violation reports
@@ -864,6 +910,161 @@ impl AuthorityState {
         }
         record.last_applied_sequence = sequence;
         true
+    }
+
+    /// Stages one chat instruction on the bounded FIFO. Normal entries stop
+    /// at [`CHAT_QUEUE_CAP`]; the arrival that finds the queue full stages a
+    /// queue-full marker for its sender instead, and one marker is the
+    /// structural maximum because the queue drains fully every tick. A chat
+    /// staged before the sender's session is Active (or while no session is
+    /// Active) stays queued, bounded by the cap, and is drained on the first
+    /// tick with an Active session or dropped with the session at retire.
+    fn stage_chat(&mut self, session: SessionKey, text: CommandText) {
+        let Some(record) = self.sessions.get(&session) else {
+            return;
+        };
+        let player_id = record.player_id;
+        let raw_name = record.display_name.clone();
+        let entry = |overflow| {
+            Some(StagedChat {
+                session,
+                player_id,
+                display_name: DisplayName::try_from_canonical(raw_name.clone()).ok()?,
+                text: text.clone(),
+                overflow,
+            })
+        };
+        if self.chat_queue.len() < CHAT_QUEUE_CAP {
+            if let Some(staged) = entry(false) {
+                self.chat_queue.push_back(staged);
+            }
+        } else if self.chat_queue.len() == CHAT_QUEUE_CAP
+            && let Some(staged) = entry(true)
+        {
+            self.chat_queue.push_back(staged);
+        }
+    }
+
+    /// Active sessions' published identities in ascending session order.
+    pub(crate) fn active_speakers(&self) -> Vec<Speaker> {
+        self.sessions
+            .iter()
+            .filter(|(_, record)| record.phase == SessionPhase::Active)
+            .filter_map(|(session, record)| {
+                Some(Speaker {
+                    session: *session,
+                    player_id: record.player_id,
+                    display_name: DisplayName::try_from_canonical(record.display_name.clone())
+                        .ok()?,
+                })
+            })
+            .collect()
+    }
+
+    /// Whether the named session is still an active chat sender.
+    pub(crate) fn session_active(&self, session: SessionKey) -> bool {
+        self.sessions
+            .get(&session)
+            .is_some_and(|record| record.phase == SessionPhase::Active)
+    }
+
+    /// Takes the whole staged chat FIFO for one projection drain.
+    pub(crate) fn take_chat_queue(&mut self) -> Vec<StagedChat> {
+        self.chat_queue.drain(..).collect()
+    }
+
+    /// Allocates the next strictly increasing chat event id, publishing
+    /// nothing further once the id space is exhausted.
+    pub(crate) fn allocate_chat_event_id(&mut self) -> Option<u64> {
+        let id = self.next_chat_event_id;
+        let next = id.checked_add(1)?;
+        self.next_chat_event_id = next;
+        Some(id)
+    }
+
+    /// Takes the per-session publication views for one projection pass.
+    pub(crate) fn take_session_views(&mut self) -> BTreeMap<SessionKey, SessionView> {
+        std::mem::take(&mut self.session_views)
+    }
+
+    /// Returns the projection-updated publication views.
+    pub(crate) fn restore_session_views(&mut self, views: BTreeMap<SessionKey, SessionView>) {
+        self.session_views = views;
+    }
+
+    /// Committed resident actor records in physical slot order.
+    pub(crate) fn resident_actors(&self) -> &[ActorRecord] {
+        &self.residents.actors
+    }
+
+    /// Committed resident inventory records.
+    pub(crate) fn resident_inventories(&self) -> &BTreeMap<ActorKey, InventoryRecord> {
+        &self.residents.inventories
+    }
+
+    /// Committed resident projectile records.
+    pub(crate) fn resident_projectiles(&self) -> &[ProjectileRecord] {
+        &self.residents.projectiles
+    }
+
+    /// Every committed drop record across all chunk owners.
+    pub(crate) fn resident_drop_records(&self) -> Vec<DropRecord> {
+        self.residents.drop_records()
+    }
+
+    /// The live container record a reference names, Ready-chunk state before
+    /// any sparse fixture owner.
+    pub(crate) fn resident_container(&self, reference: ContainerRef) -> Option<ContainerRecord> {
+        let key = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: reference.chunk(),
+        };
+        if let Some(state) = self.residents.container_chunks.get(&key) {
+            return state.record(key, reference);
+        }
+        self.residents.containers.get(&reference).cloned()
+    }
+
+    /// The committed viewer lease one session holds, if any.
+    pub(crate) fn committed_lease(&self, session: SessionKey) -> Option<ViewLease> {
+        self.views.get(&session).copied()
+    }
+
+    /// The committed revision of a Ready chunk column, if it is resident.
+    pub(crate) fn ready_chunk_current_revision(&self, key: ChunkKey) -> Option<u64> {
+        self.residents.ready.get(&key).map(|chunk| chunk.revision)
+    }
+
+    /// The transient grazing observation of one passive actor.
+    pub(crate) fn resident_grazing(&self, id: mornlea_domain::PassiveId) -> bool {
+        self.residents
+            .runtimes
+            .get(&ActorKey::Passive(id))
+            .is_some_and(|runtime| {
+                matches!(
+                    &runtime.aux,
+                    ActorAux::Passive {
+                        graze_at: Some(_),
+                        ..
+                    }
+                )
+            })
+    }
+
+    /// Builds the wire-shaped chunk snapshot event of one Ready column from
+    /// the authoritative body. The sections equal the committed blocks; a
+    /// column that cannot cross the checked network boundary yields no event
+    /// so a publication never fails at encode time.
+    pub(crate) fn chunk_snapshot_event(
+        &self,
+        key: ChunkKey,
+    ) -> Option<mornlea_domain::ChunkSnapshot> {
+        let chunk = self.residents.ready.get(&key)?;
+        let view = chunk.capture(
+            self.residents.drops.get(&key),
+            self.residents.container_chunks.get(&key),
+        );
+        view.network_snapshot().ok().map(|(snapshot, _)| snapshot)
     }
 
     pub fn freeze_eligible(&mut self, tick: u64) -> Vec<CommandEnvelope> {
@@ -2617,6 +2818,9 @@ pub struct TickContext<'a> {
     projectiles: Vec<ProjectileRecord>,
     damage_intents: Vec<DamageIntent>,
     deferred: DeferredCommands,
+    /// Provider resync requests recorded during dispatch, drained by the
+    /// tick-outcome capture before the carried commit.
+    resync_lane: Vec<(SessionKey, Dimension, mornlea_domain::ChunkPos)>,
     charges: Vec<(ActorKey, ActionKind)>,
     suppressed_mining: BTreeSet<ActorKey>,
     /// Pre-motion actor poses captured at construction. Only source recovery
@@ -2968,6 +3172,15 @@ impl<'a> TickContext<'a> {
         Self::from_parts(authority, budget)
     }
 
+    /// Between-tick staging context seeded from the committed residents,
+    /// mirroring the production tick's seeding so fixtures staged between two
+    /// ticks preserve every resident lane. The caller commits through
+    /// `resident_snapshot` plus `commit_residents`, exactly like the harness
+    /// staging path; dropping the context restores the untouched residents.
+    pub fn restage(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
+        Self::for_tick(authority, budget)
+    }
+
     /// Production tick context. The serial reducer owns the only call; the
     /// frozen tick inputs (mailbox batch, companion feed, environment
     /// snapshot) arrive through the narrow ports below, never through this
@@ -3109,6 +3322,7 @@ impl<'a> TickContext<'a> {
             projectiles: Vec::new(),
             damage_intents: Vec::new(),
             deferred: DeferredCommands::default(),
+            resync_lane: Vec::new(),
             charges: Vec::new(),
             suppressed_mining: BTreeSet::new(),
             pre_step: BTreeMap::new(),
@@ -3136,6 +3350,56 @@ impl<'a> TickContext<'a> {
     /// own snapshot so their writes cannot recursively extend that pass.
     pub fn changed_blocks(&self) -> Vec<BlockObservation> {
         self.changed.values().copied().collect()
+    }
+
+    /// Records one provider resync request from the command intake.
+    pub(crate) fn record_resync(
+        &mut self,
+        entry: (SessionKey, Dimension, mornlea_domain::ChunkPos),
+    ) {
+        self.resync_lane.push(entry);
+    }
+
+    /// Captures the publication projection's tick inputs before the carried
+    /// commit: block batches grouped per Ready chunk whose revision advances
+    /// this tick, plus the dispatch resync lane. The base revision is the
+    /// pre-commit committed revision and the new one includes this tick's
+    /// accepted work, exactly the transition the commit finalizes. A chunk
+    /// whose revision advanced without block changes (slots-only work) emits
+    /// no block batch; mirrors may then take the gap-resnapshot path on the
+    /// next real change, which is safe because container and drop content
+    /// travels in its own families.
+    pub(crate) fn capture_publication_outcome(&mut self) -> TickOutcome {
+        let mut batches: BTreeMap<ChunkKey, Vec<BlockChange>> = BTreeMap::new();
+        for observed in self.changed_blocks() {
+            // Unregistered fixture cells cannot cross the checked boundary;
+            // skipping the cell keeps the tick alive while the batch stays a
+            // prefix of the committed work.
+            if let Ok(change) = BlockChange::try_new(observed.pos, observed.block) {
+                batches.entry(observed.key).or_default().push(change);
+            }
+        }
+        let mut block_batches = Vec::with_capacity(batches.len());
+        for (key, changes) in batches {
+            let Some(chunk) = self.ready.get(&key) else {
+                continue;
+            };
+            let slots_dirty = self.drops.get(&key).is_some_and(|state| state.dirty)
+                || self
+                    .container_chunks
+                    .get(&key)
+                    .is_some_and(|state| state.dirty);
+            let base = chunk.revision;
+            let new = chunk.pending_revision(slots_dirty);
+            if new == base {
+                continue;
+            }
+            block_batches.push((key, base, new, changes));
+        }
+        TickOutcome {
+            block_batches,
+            resyncs: std::mem::take(&mut self.resync_lane),
+        }
     }
 
     /// Stages one container record for fixture-driven resolver preflight,
