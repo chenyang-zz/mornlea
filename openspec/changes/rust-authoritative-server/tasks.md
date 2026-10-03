@@ -85,7 +85,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.6c Implement Agent task, dialogue and memory ownership ([packet](plans/04-refined-nodes.md)).
 - [x] 3.6d Execute Rust integration with the actual Python Agent and MCP ([packet](plans/04-refined-nodes.md)).
 - [x] 3.7a Implement tick hydration for live adapter flows ([packet](plans/28-tick-hydration.md)).
-- [ ] 3.7 Prove real local/remote, save/restart and Agent integration against the full inventory ([packet](plans/01-server-slices.md)) — pending review: Mac evidence rounds 2026-10-03 by ZCode close the review gaps (78/78 row bindings, full persistence 271/271 after the bounded rollback repair); remote re-verification blocked; see ledger.
+- [ ] 3.7 Prove real local/remote, save/restart and Agent integration against the full inventory ([packet](plans/01-server-slices.md)) — pending review: three Mac rounds 2026-10-03 by ZCode; precise row bindings 71 bound / 7 open implementation gaps, sealed full persistence 272/272 on `1b0367c5a`; remote re-verification blocked; see ledger.
 - [x] 3.7p0 Retain canonical packet identity through owned Memory/TCP publication ([packet](plans/44-owned-wire-publication.md)).
 - [x] 3.7s0 Run durable store work on a bounded background owner ([packet](plans/46-background-store-owner.md)).
 - [x] 3.7p1 Publish final authoritative player state each tick ([packet](plans/47-final-player-publication.md)).
