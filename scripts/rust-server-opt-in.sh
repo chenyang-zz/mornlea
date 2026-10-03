@@ -558,7 +558,7 @@ previous_package_validate() {
 import hashlib, json, os, re, stat, sys
 package_path, previous_bin, previous_hash, world, backup, run = sys.argv[1:]
 source = "d042982d33bb1694d768b75b01c297bd02534a08"
-oracle = "193cc6abae4918f9376e5943717a5c6d7ad84ecc0476b740d3cd9bb5ee926020"
+oracle = "e1a98fea6276b7efb35e6945c5d7c31dda5dedbca734ccf6d4edbef87388d9c9"
 schemas = {"player": 9, "chunk": 9, "world_metadata": 6, "companions_ai": 5, "hostile_mobs": 2, "passive_mobs": 1}
 
 class Refusal(Exception):

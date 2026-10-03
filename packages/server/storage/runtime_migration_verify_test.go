@@ -224,7 +224,7 @@ func runtimeMigrationVerifyWorld(root, output string) runtimeMigrationReport {
 	return runtimeMigrationVerifyWorldWithWrite(root, output, os.WriteFile)
 }
 
-// Normal qualification uses `os.WriteFile`; the private operation seam exercises actual output I/O failures.
+// Normal qualification writes through the standard library; the private seam exercises actual output I/O failures.
 func runtimeMigrationVerifyWorldWithWrite(root, output string, writeFile func(string, []byte, os.FileMode) error) runtimeMigrationReport {
 	report := runtimeMigrationReport{SchemaVersion: 1, SourceSHA: runtimeMigrationSourceSHA, Errors: []string{}}
 	add := func(path, operation string, err error) {

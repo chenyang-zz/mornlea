@@ -60,3 +60,16 @@ Original five-path72bd36372f8c7ec7fff5a27c41f934b387d2c77c integrated as05975745
 Root rebuilt the actual release binary at2e37bdb0 and ran the entire server crate with explicit actual Agent Python, accepted sealed previous package/server/native and actual Rust binary fixtures. All1006 cases passed:100 library,1 binary,5 actual Python,36 transport parity,169 persistence,255 contracts and440 replay; no failures or ignores,45 adopted children reaped by the external supervisor. Real script self-test passed compatible rollback, restored backup, immutable dry-run and default-start checks with3 adopted children reaped. All-target clippy -D warnings, Bash syntax, workspace format and diff checks passed. Retained package server/verifier/native hashes independently match the frozen identities. Strict OpenSpec128/128 passed after integration. Root's first self-test invocation omitted its explicit binary/package environment and refused before activation; rerun with the required fixtures passed. Direct openspec was absent from PATH; the pinned repository npx command passed without changing dependencies or bypassing validation.
 
 Evidence: /workspace/scratch/previous-consumer-integrated-{build,server,clippy,self-test}.log; previous-consumer-independent-review-fifo{,-interaction,-checks}.log; previous-consumer-fifo-{red,green,targeted,full-activation,self-test,clippy,format}.log; server-round60-openspec.log. Only3.8v2 closes. Parent3.8 retains full runtime/restart and restore lease-span findings; real DiskStore mutation is storage consumer evidence, not production gameplay. Architecture skill: no change.
+
+## Continuation identity addendum, 2026-10-03
+
+The historical accepted oracle identity above remains the original evidence.
+The continuation's separately reviewed comment-only audit repair updates the
+current tracked oracle and script pin to
+`e1a98fea6276b7efb35e6945c5d7c31dda5dedbca734ccf6d4edbef87388d9c9`.
+Verifier non-comment source bytes, the sealed previous release, native ownership,
+manifest shape, failure policy and every acceptance case remain unchanged.
+Current-source consumer acceptance requires a new package produced after the
+joint commit; the old package is retained for immutable baseline evidence and
+must fail against the new consumer pin. Record the actual rebuild and consumer
+results in the ledger before acceptance; a digest update alone is insufficient.
