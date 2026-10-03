@@ -1330,7 +1330,45 @@ fn projection_passive_death_beats_simultaneous_view_exit() {
 #[test]
 fn projection_passive_quiet_fallout_reports_vanished() {
     let mut state = authority();
-    seed_world(&mut state);
+    // Managed acquisition for the standing column: tick 0 installs it Ready
+    // so the real movement kernel falls through open air instead of
+    // colliding with an unmanaged sparse cell at the floor.
+    state.enable_live_chunks().unwrap();
+    stage(&mut state, |context| {
+        context
+            .stage(RuleEffect::Environment(environment(1_000)))
+            .unwrap();
+    });
+    let key = chunk_key(0, 0);
+    state
+        .replace_chunk_wants(std::collections::BTreeSet::from([key]))
+        .unwrap();
+    let reservation = state.reserve_chunk_load(key).unwrap();
+    let request = mornlea_server::contracts::ChunkRequestId::try_new(1).unwrap();
+    state.bind_chunk_load(reservation, request).unwrap();
+    let prepared = mornlea_server::core::world::PreparedChunk::try_new(
+        key,
+        reservation.generation(),
+        mornlea_server::contracts::RecoveredChunk {
+            chunk: ground_chunk(),
+            revision: 1,
+            persisted_revision: 1,
+            needs_rewrite: false,
+            recovered: false,
+        },
+    )
+    .unwrap();
+    state
+        .offer_acquired(
+            mornlea_server::core::acquisition::AcquiredChunkEvent::Load {
+                key,
+                generation: reservation.generation(),
+                request,
+                result: Ok(Some(prepared)),
+            },
+        )
+        .unwrap();
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
     let session = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
     let id = PassiveId::try_new(13).unwrap();
     stage(&mut state, |context| {

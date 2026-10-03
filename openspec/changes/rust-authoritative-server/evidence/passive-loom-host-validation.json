@@ -1,0 +1,417 @@
+{
+  "task_id": "mornlea-r4-passive-20261003",
+  "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+  "prior_evidence_sha": "585e28d79cd9b89f0c35d1036432d4a2df710179",
+  "overall_3_7_accepted": false,
+  "host_runtime_pass": true,
+  "source_file_hashes": {
+    "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+    "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+    "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+    "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+    "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+  },
+  "red": {
+    "argv": [
+      "/Users/chen/work/loom-rust-passive-20261003/evidence/baseline-probe",
+      "projection_passive_lifecycle_events",
+      "--exact",
+      "--nocapture"
+    ],
+    "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+    "source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+    "exit": 101,
+    "expected_exit": 101,
+    "pass_": true,
+    "elapsed": 1.121877908706665,
+    "log_sha256": "a42d1ca9ed8e9e05f12575b12f0450764bddb3aa31a29ded4aa27a49e5e7d1e4"
+  },
+  "new_tests_red": {
+    "argv": [
+      "rustup",
+      "run",
+      "1.97.1",
+      "cargo",
+      "test",
+      "--manifest-path",
+      "packages/engine/Cargo.toml",
+      "-p",
+      "mornlea_server",
+      "--locked",
+      "--offline",
+      "--test",
+      "server_replay",
+      "publication_projection::projection_passive",
+      "--",
+      "--nocapture"
+    ],
+    "cwd": "/Users/chen/work/loom-rust-passive-20261003/red-fixture",
+    "exit": 101,
+    "expected_exit": 101,
+    "passed": true,
+    "elapsed_seconds": 32.011,
+    "test_counts": [
+      {
+        "passed": 1,
+        "failed": 2,
+        "ignored": 0,
+        "filtered": 465
+      }
+    ],
+    "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/new-tests-original-production-RED.log",
+    "log_sha256": "9fdba6b594f433e1c3fe3e7f142532aeddba1cdc320070ffd5e9eae9b99384ff",
+    "log_result_tail": "   Compiling mornlea_engine v0.1.0 (/Users/chen/work/loom-rust-passive-20261003/red-fixture/packages/engine/crates/mornlea_engine)\n   Compiling mornlea_server v0.1.0 (/Users/chen/work/loom-rust-passive-20261003/red-fixture/packages/engine/crates/mornlea_server)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.78s\n     Running tests/server_replay.rs (/Users/chen/work/loom-rust-passive-20261003/cargo-target/debug/deps/server_replay-1b6a4663cd0381ad)\n\nrunning 3 tests\n\nthread 'publication_projection::projection_passive_death_beats_simultaneous_view_exit' (62806633) panicked at crates/mornlea_server/tests/server_replay/publication_projection.rs:1305:5:\nassertion `left == right` failed: death beats the simultaneous view exit; the live exit stays vanished\n  left: Some(PassiveDespawn(PassiveDespawn { server_tick: 1, despawns: [PassiveDespawnRecord { id: PassiveId(7), reason: Vanished }, PassiveDespawnRecord { id: PassiveId(11), reason: Vanished }] }))\n right: Some(PassiveDespawn(PassiveDespawn { server_tick: 1, despawns: [PassiveDespawnRecord { id: PassiveId(7), reason: Died }, PassiveDespawnRecord { id: PassiveId(11), reason: Vanished }] }))\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nthread 'publication_projection::projection_passive_lifecycle_events' (62806634) panicked at crates/mornlea_server/tests/server_replay/publication_projection.rs:1224:5:\nassertion `left == right` failed\n  left: Some(PassiveDespawn(PassiveDespawn { server_tick: 2, despawns: [PassiveDespawnRecord { id: PassiveId(7), reason: Vanished }] }))\n right: Some(PassiveDespawn(PassiveDespawn { server_tick: 2, despawns: [PassiveDespawnRecord { id: PassiveId(7), reason: Died }] }))\ntest publication_projection::projection_passive_death_beats_simultaneous_view_exit ... FAILED\ntest publication_projection::projection_passive_lifecycle_events ... FAILED\ntest publication_projection::projection_passive_quiet_fallout_reports_vanished ... ok\n\nfailures:\n\nfailures:\n    publication_projection::projection_passive_death_beats_simultaneous_view_exit\n    publication_projection::projection_passive_lifecycle_events\n\ntest result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 465 filtered out; finished in 0.01s\n\nerror: test failed, to rerun pass `-p mornlea_server --test server_replay`\n",
+    "tested_file_hashes": {
+      "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+      "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+      "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+      "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+      "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+    },
+    "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+    "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+  },
+  "receipts": {
+    "green-replay-focused": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--test",
+        "server_replay",
+        "publication_projection"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 0.387,
+      "test_counts": [
+        {
+          "passed": 16,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 452
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/green-replay-focused.log",
+      "log_sha256": "74483d90ec0ac178ca16269b66f738c6de778071ffe2aafea89266db60af99e2",
+      "log_result_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s\n     Running tests/server_replay.rs (/Users/chen/work/loom-rust-passive-20261003/cargo-target/debug/deps/server_replay-1b6a4663cd0381ad)\n\nrunning 16 tests\ntest publication_projection::projection_idle_authority_publishes_nothing ... ok\ntest publication_projection::projection_item_drop_upserts_and_removes ... ok\ntest publication_projection::projection_batch_splitting_respects_wire_caps ... ok\ntest publication_projection::projection_hostile_lifecycle_events ... ok\ntest publication_projection::projection_companion_lifecycle_spawn_states_despawn ... ok\ntest publication_projection::projection_despawn_families_emit_once ... ok\ntest publication_projection::projection_projectile_lifecycle_events ... ok\ntest publication_projection::projection_chunk_snapshot_then_block_changes_then_forget ... ok\ntest publication_projection::projection_chat_accepted_broadcast_and_rejects_sender_only ... ok\ntest publication_projection::projection_passive_quiet_fallout_reports_vanished ... ok\ntest publication_projection::projection_passive_death_beats_simultaneous_view_exit ... ok\ntest publication_projection::projection_first_send_snapshots_ascend_across_ticks ... ok\ntest publication_projection::projection_passive_lifecycle_events ... ok\ntest publication_projection::projection_resync_replies_full_snapshot_and_ignores_have_revision ... ok\ntest publication_projection::projection_record_states_inventory_chest_container_crafting_furnace ... ok\ntest publication_projection::projection_remote_lifecycle_spawn_states_despawn_order ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.05s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+        "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+      },
+      "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "green-parity-passive": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--test",
+        "local_remote_parity",
+        "passive"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 0.218,
+      "test_counts": [
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 54
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/green-parity-passive.log",
+      "log_sha256": "42eca69487779ba36537007c352382308b9b727fc034e975fc694b282bb8e97d",
+      "log_result_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s\n     Running tests/local_remote_parity.rs (/Users/chen/work/loom-rust-passive-20261003/cargo-target/debug/deps/local_remote_parity-57f89c0584f7e961)\n\nrunning 2 tests\ntest integration::passive_lifecycle_publications_match_across_adapters ... ok\ntest integration::passive_removal_reasons_match_across_adapters ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 54 filtered out; finished in 0.05s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+        "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+      },
+      "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "green-replay-full": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--test",
+        "server_replay"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 4.902,
+      "test_counts": [
+        {
+          "passed": 468,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/green-replay-full.log",
+      "log_sha256": "c268f09a2e8df8a7fa790946589afc82b3ed8d4610e144cc878c7fceb0c6d117",
+      "log_result_tail": "ped ... ok\ntest supports::changed_support_removes_bed_pair_with_one_drop ... ok\ntest supports::grass_pass_does_not_recursively_clear_newly_exposed_grass ... ok\ntest supports::later_pass_observes_removed_grass_but_grass_pass_does_not_recurse ... ok\ntest supports::loaded_air_counterpart_is_cleared_without_pair_form_check ... ok\ntest supports::cross_chunk_bed_requires_counterpart_then_clears_both_once ... ok\ntest supports::cross_chunk_bed_max_revision_refuses_atomically ... ok\ntest supports::ready_reload_clears_changed_ledger_and_wrong_calls_leave_state ... ok\ntest supports::restored_support_holds_all_four_targets ... ok\ntest supports::torch_orientations_and_glass_support_policy ... ok\ntest supports::partial_slot_merges_with_delay_and_f1_reload ... ok\ntest tick_state::committed_overlay_round_trips_every_map ... ok\ntest tick_state::consecutive_live_ticks_carry_residents ... ok\ntest tick_state::empty_live_ticks_stay_empty ... ok\ntest tick_state::live_pending_player_observation_is_private_and_retirement_stops_it ... ok\ntest tick_state::live_player_state_reaches_owned_wire_after_environment_settlement ... ok\ntest supports::full_slots_clear_grass_but_preserve_drop_bearing_targets ... ok\ntest tick_state::live_player_state_retains_last_input_sequence_after_invalid_controls ... ok\ntest tick_state::live_reset_keeps_physics_lanes_while_regen_and_actions_advance ... ok\ntest tick_state::live_ticks_advance_committed_environment ... ok\ntest tick_state::live_ticks_retain_sleep_anchors_and_eligibility ... ok\ntest tick_state::live_projectile_hit_publishes_final_player_state_before_confirmation ... ok\ntest tick_state::login_mapping_carries_every_save_default ... ok\ntest tick_state::login_without_body_or_activation_never_becomes_actor ... ok\ntest tick_state::login_session_becomes_actor_on_live_tick ... ok\ntest tick_state::actual_full_open_batch_reaches_environment_end ... ok\ntest tick_state::login_zero_health_restores_full_health ... ok\ntest tools::bone_meal_one_stage ... ok\ntest tools::bucket_failure_conservation ... ok\ntest tools::bucket_full_suppression_capacity_preserves_state ... ok\ntest tick_state::retired_sleep_anchor_frees_replacement_capacity_across_ticks ... ok\ntest tools::bucket_source_and_flowing ... ok\ntest tools::foreign_actor_call_refuses_without_effect ... ok\ntest tick_state::retirement_prunes_sleep_without_rewriting_residents ... ok\ntest tools::hoe_full_charge_capacity_preserves_state ... ok\ntest tools::readiness_and_selected_tool_refusal ... ok\ntest tools::hoe_last_point ... ok\ntest tools::tool_rays_pass_transparent_cells_and_stop_at_closed_doors ... ok\ntest world_acquisition::ready_result_cap_plus_one ... ok\ntest world_acquisition::drained_repeat_not_reinstalled ... ok\ntest world_acquisition::wanted_cancel_duplicate ... ok\ntest world_mutation::human_companion_collision_first_wins ... ok\ntest world_mutation::held_sneak_refuses_door_after_target_classification ... ok\ntest world_mutation::mutation_before_fluid_support_order ... ok\ntest world_mutation::door_pair_and_internal_toggle ... ok\ntest world_mutation::stale_missing_protected_duplicate_refused ... ok\ntest tick_state::full_residents_carry_within_caps ... ok\ntest generation::dense_and_compact_chunks_match_go_and_reuse_scratch ... ok\ntest tick_state::actual_full_invalid_control_batch_preserves_both_roles_and_clock ... ok\ntest full_corpus::real_agent_candidate_admitted_and_stale_refused ... ok\n\ntest result: ok. 468 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.74s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+        "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+      },
+      "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "green-parity-full": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--test",
+        "local_remote_parity"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 0.663,
+      "test_counts": [
+        {
+          "passed": 56,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/green-parity-full.log",
+      "log_sha256": "393b81b85e868d2fb4a642c98927270a5f2be92fa9cb708363fb38f61c0ef7de",
+      "log_result_tail": ":wrong_version_truncated_expired_refused ... ok\ntest common::terminal_connection_churn_is_bounded ... ok\ntest common::coalesced_then_ingest_cap ... ok\ntest integration::hostile_lifecycle_publications_match_across_adapters ... ok\ntest integration::passive_removal_reasons_match_across_adapters ... ok\ntest integration::inventory_command_transcripts_match_across_adapters ... ok\ntest integration::chat_publications_match_across_adapters ... ok\ntest integration::item_drop_publications_match_across_adapters ... ok\ntest integration::passive_lifecycle_publications_match_across_adapters ... ok\ntest integration::projectile_lifecycle_publications_match_across_adapters ... ok\ntest integration::tcp_disconnect_during_pending_save_keeps_save_in_flight ... ok\ntest integration::shared_transcript_matches_across_adapters ... ok\ntest integration::publication_wire_delivery_reaches_each_session_in_order ... ok\ntest integration::remote_player_lifecycle_publications_match_across_adapters ... ok\ntest integration::request_chunk_resync_provider_matches_across_adapters ... ok\ntest integration::record_state_publications_match_across_adapters ... ok\ntest live::actual_receive_advances_unread_tcp_hello ... ok\ntest integration::chunk_snapshot_block_changes_forget_match_across_adapters ... ok\ntest live::actual_handoff_timeout_cancels_before_activation_across_transports ... ok\ntest integration::tcp_disconnect_pending_save_completes_through_real_disk_store ... ok\ntest live::held_actual_player_read_advances_unread_tcp_login_before_return ... ok\ntest live::held_actual_player_read_returns_tcp_login_pump_before_release ... ok\ntest memory::local_direct_mutation_impossible ... ok\ntest memory::login_play_close_round_trip ... ok\ntest memory::outbox_pressure_512_513 ... ok\ntest memory::stale_session_refused ... ok\ntest live::actual_saved_and_missing_players_share_memory_tcp_login_tick_and_bytes ... ok\ntest live::scheduler_delegates_chunk_loads_to_same_actual_owner ... ok\ntest live::held_actual_player_read_returns_login_pump_before_release ... ok\ntest prepared_delivery::actual_closed_admission_does_not_transfer_an_owner ... ok\ntest prepared_delivery::actual_background_store_tcp_and_memory_canonical_fifo_and_budgets ... ok\ntest tcp::forwarding_into_held_socket_queue_keeps_authority_suffix ... ok\ntest tcp::absent_delivery_expires_without_advancing_protocol_clock ... ok\ntest integration::companion_lifecycle_publications_match_across_adapters ... ok\ntest tcp::fragmented_frame_reassembled ... ok\ntest tcp::forwarding_wrong_connection_preserves_authority_outbox ... ok\ntest prepared_delivery::actual_identity_refusals_preserve_other_active_fifo_before_and_after_login_close ... ok\ntest prepared_delivery::actual_receive_advances_ready_login_before_core_handoff ... ok\ntest tcp::hello_login_timeouts ... ok\ntest tcp::terminal_eof_releases_socket ... ok\ntest tcp::terminal_poll_expiry_releases_socket ... ok\ntest tcp::mixed_publication_has_identical_owned_memory_and_tcp_frames ... ok\ntest tcp::terminal_rejection_flushes_then_releases_socket ... ok\ntest tcp::peer_reset_recovers ... ok\ntest tcp::slow_receiver_isolated ... ok\ntest tcp::transcript_matches_memory ... ok\ntest live::actual_corrupt_and_future_players_reject_across_memory_and_tcp ... ok\ntest live::background_owner_failures_keep_exact_error_and_wire_class ... ok\ntest live::actual_reconnects_release_committed_driver_history_across_transports ... ok\n\ntest result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+        "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+      },
+      "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "clippy": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "clippy",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 47.316,
+      "test_counts": [],
+      "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/clippy.log",
+      "log_sha256": "0678070555136762e31574fe34fbb1a4adfd10ef69a5a557c18d5a295d32fdf6",
+      "log_result_tail": "   Compiling libc v0.2.189\n   Compiling jobserver v0.1.35\n   Compiling cc v1.4.3\n   Compiling zstd-sys v2.0.16+zstd.1.5.7\n   Compiling zstd-safe v7.2.4\n    Checking typenum v1.19.0\n    Checking generic-array v0.14.7\n    Checking zstd v0.13.3\n    Checking cfg-if v1.0.4\n   Compiling mornlea_engine v0.1.0 (/Users/chen/work/loom-rust-passive-20261003/candidate/packages/engine/crates/mornlea_engine)\n    Checking mornlea_domain v0.1.0 (/Users/chen/work/loom-rust-passive-20261003/candidate/packages/engine/crates/mornlea_domain)\n    Checking zmij v1.0.23\n    Checking serde_core v1.0.229\n    Checking memchr v2.8.3\n    Checking itoa v1.0.18\n    Checking serde_json v1.0.151\n    Checking getrandom v0.3.4\n    Checking mornlea_storage v0.1.0 (/Users/chen/work/loom-rust-passive-20261003/candidate/packages/engine/crates/mornlea_storage)\n    Checking mornlea_protocol v0.1.0 (/Users/chen/work/loom-rust-passive-20261003/candidate/packages/engine/crates/mornlea_protocol)\n    Checking crypto-common v0.1.7\n    Checking block-buffer v0.10.4\n    Checking digest v0.10.7\n    Checking cpufeatures v0.2.17\n    Checking sha2 v0.10.9\n    Checking mornlea_server v0.1.0 (/Users/chen/work/loom-rust-passive-20261003/candidate/packages/engine/crates/mornlea_server)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 47.10s\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+        "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+      },
+      "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "fmt": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "fmt",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "--all",
+        "--check"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 2.886,
+      "test_counts": [],
+      "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "log_result_tail": "",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+        "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+      },
+      "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "diff-check": {
+      "argv": [
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--check"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 0.05,
+      "test_counts": [],
+      "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/diff-check.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "log_result_tail": "",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+        "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+      },
+      "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "r4-probe-compile": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "rustc",
+        "--edition=2024",
+        "--test",
+        "/Users/chen/work/loom-rust-passive-20261003/evidence/R4-go-contract-probes.rs",
+        "-L",
+        "dependency=/Users/chen/work/loom-rust-passive-20261003/cargo-target/debug/deps",
+        "-o",
+        "/Users/chen/work/loom-rust-passive-20261003/evidence/green-probe",
+        "--extern",
+        "mornlea_domain=/Users/chen/work/loom-rust-passive-20261003/cargo-target/debug/deps/libmornlea_domain-d396894ba1414210.rlib",
+        "--extern",
+        "mornlea_protocol=/Users/chen/work/loom-rust-passive-20261003/cargo-target/debug/deps/libmornlea_protocol-90af55d6d74ad14e.rlib",
+        "--extern",
+        "mornlea_storage=/Users/chen/work/loom-rust-passive-20261003/cargo-target/debug/deps/libmornlea_storage-cfd4a779dfcc22f4.rlib",
+        "--extern",
+        "mornlea_server=/Users/chen/work/loom-rust-passive-20261003/cargo-target/debug/libmornlea_server.rlib"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 0.905,
+      "test_counts": [],
+      "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/green-r4-probe-compile.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "log_result_tail": "",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+        "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+      },
+      "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "r4-passive-probe": {
+      "argv": [
+        "/Users/chen/work/loom-rust-passive-20261003/evidence/green-probe",
+        "projection_passive_lifecycle_events",
+        "--exact",
+        "--nocapture"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-passive-20261003/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 1.2,
+      "test_counts": [
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 15
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-passive-20261003/evidence/green-r4-passive-probe.log",
+      "log_sha256": "9f3822d05c113982f0e7bca15154a115b41c62e50f6f56f8e6909acf0e9b7cf6",
+      "log_result_tail": "\nrunning 1 test\ntest projection_passive_lifecycle_events ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.01s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "93837be6f6c98778c82a07d3c3fa5edca8abfb700f77c386ca6a6d4702cda57d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "8ed37f5d484987cf062c8c4868de71776207f62d13d085edf03045ab6f4fde1b",
+        "packages/engine/crates/mornlea_server/src/rules/passives.rs": "11f66d5f2c565ceea40b65054af09f05d415464c45aeb7ab5c099c7ab7060b12",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "8c85076fd5c087c1436a28f8162f69ec8857bbc55ff0259a672ff49ddbe4b0ef",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "03894476ed8400c93a7ea4cded619f854fa7a4ee0d46c49ef1d5df5d2bf8e382"
+      },
+      "baseline_source_sha": "29f853d4326a614b2af8e5aa60c943a9ee1e0704",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    }
+  },
+  "static_review_only": true,
+  "controller_hash": "89a86e9d6c00cdb824ae92f4f98634b35af7ae7f6a5135324e33f51aedeefe22"
+}
