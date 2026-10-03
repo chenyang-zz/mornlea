@@ -96,6 +96,10 @@ An explicit user prohibition or higher-priority runtime restriction always contr
 
 See `docs/development-process.md`, `docs/openspec.md`, and `docs/test-organization.md` for detailed workflow guidance.
 
+## GitHub task handoff
+
+Read [`mornlea-github-handoff`](.codex/skills/mornlea-github-handoff/SKILL.md) when starting an authorized task, preparing delivery, receiving review feedback, changing the candidate source SHA, or publishing an acceptance verdict. Use one task Issue, linked code PRs and immutable source-SHA review records; keep the Claude skill copy synchronized. OpenSpec remains the plan/status authority. Roles retain their existing user-authorized scope; unavailable or unauthorized GitHub access produces a copyable local record and explicit blocker.
+
 ## Validation
 
 Choose validation in increasing order of risk. Editing loops and task closure normally stop at the lowest proportionate T0/T1 level. Run `dev-check`, `test-race-short` (T2), and full gates (T3) only at stage boundaries such as before push or commit, or when reproducing CI failures. Validation already recorded in a change ledger may be reused for the same baseline SHA. Focused commands and test tiers are documented in `docs/notes/test-quickstart.md`:
