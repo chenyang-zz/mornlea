@@ -79,6 +79,7 @@ thread_local! {
 struct SessionRecord {
     player_id: PlayerId,
     display_name: String,
+    view_distance: u8,
     phase: SessionPhase,
     last_applied_sequence: u64,
     last_input_sequence: u64,
@@ -504,6 +505,17 @@ impl AuthorityState {
 
     pub fn limits(&self) -> ServerLimits {
         self.limits
+    }
+
+    /// Returns the authoritative per-session publication radius.
+    ///
+    /// The admitted declared distance plus one, clamped to the server view
+    /// bound. Absent sessions yield no wanted set.
+    pub(crate) fn session_view_radius(&self, session: SessionKey) -> Option<u8> {
+        let record = self.sessions.get(&session)?;
+        let derived = usize::from(record.view_distance).saturating_add(1);
+        let clamped = derived.min(self.limits.view_radius());
+        u8::try_from(clamped).ok()
     }
 
     pub fn admit(
@@ -2104,6 +2116,7 @@ impl AuthorityState {
             SessionRecord {
                 player_id: login.player_id(),
                 display_name: login.display_name().as_str().to_owned(),
+                view_distance: login.view_distance(),
                 phase,
                 last_applied_sequence: 0,
                 last_input_sequence: 0,
@@ -5733,6 +5746,7 @@ mod owned_resident_tests {
                     ])
                     .unwrap(),
                     display_name: "Ada".into(),
+                    view_distance: 8,
                     phase: SessionPhase::Active,
                     last_applied_sequence: 0,
                     last_input_sequence: 0,

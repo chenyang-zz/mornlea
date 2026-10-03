@@ -48,10 +48,6 @@ const DROP_BATCH_CAP: usize = 32;
 const BLOCK_CHANGES_CAP: usize = 4_096;
 const FORGET_CHUNKS_CAP: usize = 4_096;
 
-/// Interest radius around each observer's foot chunk, matching the shared
-/// active-key derivation the world providers use.
-const INTEREST_RADIUS: i32 = 2;
-
 /// The per-tick captured facts the projection consumes beside the committed
 /// residents: block batches grouped per chunk and the provider resync lane.
 ///
@@ -82,8 +78,8 @@ struct WorldInputs<'a> {
 /// One observer's derived projection inputs for this tick.
 struct Observer {
     session: SessionKey,
-    /// Radius-two interest around the actor's foot chunk, empty without an
-    /// Active player actor.
+    /// Per-session wanted around the actor's foot chunk, empty without an
+    /// Active player actor or without an admitted session radius.
     wanted: BTreeSet<ChunkKey>,
     /// Whether the session has an Active player actor this tick.
     has_actor: bool,
@@ -171,7 +167,8 @@ impl AuthorityState {
         let mut observers = Vec::with_capacity(speakers.len());
         let mut view_list: Vec<SessionView> = Vec::with_capacity(speakers.len());
         for speaker in &speakers {
-            observers.push(observer_of(&actors, speaker, &entities));
+            let radius = self.session_view_radius(speaker.session);
+            observers.push(observer_of(&actors, speaker, &entities, radius));
             view_list.push(views.remove(&speaker.session).unwrap_or_default());
         }
         let visibilities: Vec<Visibility> = observers
@@ -464,21 +461,30 @@ fn parse_chat_address(text: &str, names: &BTreeMap<String, CompanionId>) -> Addr
     }
 }
 
-/// One observer's inputs: identity plus interest derived from its player
-/// actor. The session view keeps the previous tick's wanted set until the
-/// closing commit, so the forget diff can read it.
-fn observer_of(actors: &[ActorRecord], speaker: &Speaker, entities: &Entities) -> Observer {
+/// One observer's inputs: identity plus per-session wanted derived from its
+/// player actor and the authoritative session radius. The session view keeps
+/// the previous tick's wanted set until the closing commit, so the forget
+/// diff can read it.
+fn observer_of(
+    actors: &[ActorRecord],
+    speaker: &Speaker,
+    entities: &Entities,
+    radius: Option<u8>,
+) -> Observer {
     let has_actor = entities.players.iter().any(|&index| {
         actors[index].key == ActorKey::Player(speaker.session)
             && actors[index].lifecycle == ActorLifecycle::Active
     });
-    let wanted = entities
-        .players
-        .iter()
-        .copied()
-        .find(|&index| actors[index].key == ActorKey::Player(speaker.session))
-        .filter(|&index| actors[index].lifecycle == ActorLifecycle::Active)
-        .map(|index| wanted_columns(&actors[index]))
+    let wanted = radius
+        .and_then(|radius| {
+            entities
+                .players
+                .iter()
+                .copied()
+                .find(|&index| actors[index].key == ActorKey::Player(speaker.session))
+                .filter(|&index| actors[index].lifecycle == ActorLifecycle::Active)
+                .map(|index| wanted_columns(&actors[index], radius))
+        })
         .unwrap_or_default();
     Observer {
         session: speaker.session,
@@ -487,15 +493,17 @@ fn observer_of(actors: &[ActorRecord], speaker: &Speaker, entities: &Entities) -
     }
 }
 
-/// The radius-two chunk columns around one actor's foot position in its own
-/// dimension, reusing the derivation the shared active-key set applies.
-fn wanted_columns(actor: &ActorRecord) -> BTreeSet<ChunkKey> {
+/// The per-session wanted chunk columns around one actor's foot position in
+/// its own dimension: the inclusive square centered on floor(X/Z) >> 4 with
+/// the given radius.
+fn wanted_columns(actor: &ActorRecord, radius: u8) -> BTreeSet<ChunkKey> {
     let position = actor.motion.position().get();
     let center_x = (position[0].floor() as i32) >> 4;
     let center_z = (position[2].floor() as i32) >> 4;
+    let bound = i32::from(radius);
     let mut keys = BTreeSet::new();
-    for dz in -INTEREST_RADIUS..=INTEREST_RADIUS {
-        for dx in -INTEREST_RADIUS..=INTEREST_RADIUS {
+    for dz in -bound..=bound {
+        for dx in -bound..=bound {
             keys.insert(ChunkKey {
                 dimension: actor.dimension,
                 pos: ChunkPos::new(center_x.saturating_add(dx), center_z.saturating_add(dz)),

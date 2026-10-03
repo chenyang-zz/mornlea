@@ -2456,3 +2456,11 @@ Loom scoped round paused after two calls: first output_limit (cleanup succeeded)
 
 
 Explicit remaining-call authorization: call3 original developer UUID corrected only quiet replay setup to managed acquisition/PreparedChunk; all production bytes frozen. Original baseline with corrected tests is RED for death lifecycle and death-plus-exit while quiet passes. Candidate focused projection16/16, actual Memory/TCP passive2/2, full replay468/468, full real parity56/56, all-target server clippy-Dwarnings, workspace fmt/diff checks and original R4 passive probe1/1 pass. First full replay missing MORNLEA_AGENT_PYTHON failed467/1; raw evidence preserved and existingPython3.12.14 reused, bytecode writes disabled, no install. Source feature/log hashes and exact commands are in evidence/passive-loom-host-validation.json; external final clean-source attestation avoids self-reference. This local candidate awaits final independent readonly call4; no merge/push/deploy and no overall3.7 acceptance. Architecture skill: no change.
+
+
+## Loom R4 wanted isolated repair
+
+User-approved basee1480d85; prior evidence585e28d retained separately. Plan101 fixes declared per-session subscription radius min(declared+1,serverbound), default33/zero-center, independent of active/spawn radius. Host owns RED/GREEN evidence and clean-source binding; frozen Loom controller89a86e9 runs Claude implementation and fresh readonly review. Existing legacy fixture cap2 remains explicit; new tests use correct default/bounds. No chat/schema/full-binary/overall3.7 expansion or integration. Architecture skill: no change.
+
+
+Call1 output_limit cleaned successfully; call2 same developer UUID resumed, new wanted replay13/13 and full projection29/29 passed. Actual parity target failed compilation E0308 Peer vs SessionKey (Cleo). Host found new tests sort received forget arrays, weakening ordering assertions, and missing stale-tick frame decoding. Preserve all failures. A local UNQUALIFIED diagnostic checkpoint enables source-bound original-session feedback; no model review is launched on red gates. Call3 limited to these new test corrections, production readonly. Final qualified candidate and review only after full GREEN. No overall3.7 acceptance.

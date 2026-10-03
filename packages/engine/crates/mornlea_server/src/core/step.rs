@@ -49,9 +49,10 @@ const COMPANION_FEED: usize = 4;
 /// Chunk-column radius around each active player for the shared active-key
 /// set. Eight players cap the set at two hundred columns structurally.
 const ACTIVE_KEY_RADIUS: i32 = 2;
-/// Projectile scope radius per active player. The frozen contract fixes the
-/// radius-two columns as the shared observation set; each flight square uses
-/// the same bound until a session subscription radius lands in the contract.
+/// Projectile scope radius per active player. This fixed simulation radius is
+/// independent of per-session subscription wanted: flights use this bound
+/// while publication uses each session's declared view distance clamped to
+/// the server view bound.
 const PROJECTILE_SCOPE_RADIUS: u64 = 2;
 /// Scope ceiling mirroring the eight-player structural bound.
 const MAX_SCOPES: usize = 8;

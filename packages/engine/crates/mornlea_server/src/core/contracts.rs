@@ -363,7 +363,11 @@ pub struct ServerLimits {
     ready_chunk_results: usize,
     snapshot_chunks: usize,
     snapshot_bytes: usize,
+    view_radius: usize,
 }
+
+/// The default server view bound matching the frozen Go `DefaultConfig`.
+const DEFAULT_VIEW_RADIUS: usize = 33;
 
 impl ServerLimits {
     pub fn try_new(
@@ -397,7 +401,22 @@ impl ServerLimits {
             ready_chunk_results,
             snapshot_chunks,
             snapshot_bytes,
+            view_radius: DEFAULT_VIEW_RADIUS,
         })
+    }
+
+    /// Overrides the server view bound for subscription clamping.
+    ///
+    /// The bound is immutable once the authority is constructed. A zero bound
+    /// publishes only the observer's center column.
+    pub fn with_view_radius(mut self, radius: usize) -> Self {
+        self.view_radius = radius;
+        self
+    }
+
+    /// Returns the server view bound used to clamp per-session wanted.
+    pub fn view_radius(self) -> usize {
+        self.view_radius
     }
 
     pub fn max_players(self) -> u8 {

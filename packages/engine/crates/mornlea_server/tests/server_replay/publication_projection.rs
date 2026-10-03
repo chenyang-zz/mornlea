@@ -50,7 +50,19 @@ const ITEM_COAL: u16 = 5;
 
 fn authority() -> AuthorityState {
     AuthorityState::try_new(
-        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(2),
+        7,
+    )
+    .unwrap()
+}
+
+fn authority_with_view_radius(cap: usize) -> AuthorityState {
+    AuthorityState::try_new(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(cap),
         7,
     )
     .unwrap()
@@ -65,8 +77,12 @@ fn uuid(tag: u8) -> [u8; 16] {
 }
 
 fn admitted(tag: u8, name: &str) -> AdmittedLogin {
+    admitted_with_view(tag, name, 8)
+}
+
+fn admitted_with_view(tag: u8, name: &str, view: u8) -> AdmittedLogin {
     let id = PlayerId::try_from_bytes(uuid(tag)).unwrap();
-    let start = LoginStart::new(id, name, 8).unwrap();
+    let start = LoginStart::new(id, name, view).unwrap();
     let inbound = LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
     admit_login(inbound).unwrap()
 }
@@ -131,6 +147,53 @@ fn login_with(
     state.install(session, Some(stored)).unwrap();
     state.activate(session).unwrap();
     session
+}
+
+fn login_declared(
+    state: &mut AuthorityState,
+    tag: u8,
+    name: &str,
+    position: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    view: u8,
+) -> SessionKey {
+    let login = admitted_with_view(tag, name, view);
+    let stored = stored_with(tag, name, position, yaw, pitch, |_| {});
+    let session = state.prepare(login, TransportKind::Memory).unwrap();
+    state.install(session, Some(stored)).unwrap();
+    state.activate(session).unwrap();
+    session
+}
+
+fn snapshot_positions(events: &[Event]) -> Vec<ChunkPos> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ChunkSnapshot(snapshot) => Some(snapshot.chunk()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn forget_positions(events: &[Event]) -> Vec<ChunkPos> {
+    let mut positions = Vec::new();
+    for event in events {
+        if let Event::ForgetChunks(batch) = event {
+            positions.extend(batch.chunks().iter().copied());
+        }
+    }
+    positions
+}
+
+fn preload_keys(state: &mut AuthorityState, keys: &[(i32, i32)]) {
+    stage(state, |context| {
+        for (x, z) in keys {
+            context.preload_ready_chunk(
+                ReadyChunk::try_new(chunk_key(*x, *z), 1, 1, ground_chunk()).unwrap(),
+            );
+        }
+    });
 }
 
 fn chunk_key(x: i32, z: i32) -> ChunkKey {
@@ -2392,4 +2455,395 @@ fn projection_first_send_snapshots_ascend_across_ticks() {
         ],
         "retained and newly wanted first sends ascend together"
     );
+}
+
+fn authority_default() -> AuthorityState {
+    AuthorityState::try_new(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+        7,
+    )
+    .unwrap()
+}
+
+/// projection_wanted_default_bound_and_builder_values — the true default
+/// server view bound is 33, the builder overrides it, and the protocol
+/// constructors refuse declared distances 1 and 65.
+#[test]
+fn projection_wanted_default_bound_and_builder_values() {
+    let defaults = ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap();
+    assert_eq!(defaults.view_radius(), 33);
+    assert_eq!(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(0)
+            .view_radius(),
+        0
+    );
+    assert_eq!(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(2)
+            .view_radius(),
+        2
+    );
+    assert_eq!(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(33)
+            .view_radius(),
+        33
+    );
+    assert_eq!(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(usize::MAX)
+            .view_radius(),
+        usize::MAX
+    );
+    let id = PlayerId::try_from_bytes(uuid(1)).unwrap();
+    assert!(LoginStart::new(id, "Ada", 1).is_err());
+    assert!(LoginStart::new(id, "Ada", 65).is_err());
+}
+
+/// projection_wanted_default_includes_chunk_three — true default 33 with a
+/// declared 8 publishes Ready (3, 0), which the old radius-two derivation
+/// never published.
+#[test]
+fn projection_wanted_default_includes_chunk_three() {
+    let mut state = authority_default();
+    assert_eq!(state.limits().view_radius(), 33);
+    seed_world(&mut state);
+    let session = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 8);
+    preload_keys(&mut state, &[(3, 0)]);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sent = snapshot_positions(&events_for(&tick, session));
+    assert!(sent.contains(&ChunkPos::new(0, 0)));
+    assert!(
+        sent.contains(&ChunkPos::new(3, 0)),
+        "declared 8 under default 33 publishes (3, 0)"
+    );
+}
+
+/// projection_wanted_declared_minimum_boundary — declared 2 (effective 3)
+/// covers (3, -3) but not (4, 0).
+#[test]
+fn projection_wanted_declared_minimum_boundary() {
+    let mut state = authority_with_view_radius(33);
+    seed_world(&mut state);
+    let session = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 2);
+    preload_keys(&mut state, &[(3, -3), (4, 0)]);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sent = snapshot_positions(&events_for(&tick, session));
+    assert!(sent.contains(&ChunkPos::new(3, -3)));
+    assert!(
+        !sent.contains(&ChunkPos::new(4, 0)),
+        "declared 2 stops before (4, 0)"
+    );
+}
+
+/// projection_wanted_declared_max_clamped_to_default — declared 64 under
+/// default 33 (effective 33) includes (33, 0) but excludes (34, 0).
+#[test]
+fn projection_wanted_declared_max_clamped_to_default() {
+    let mut state = authority_with_view_radius(33);
+    seed_world(&mut state);
+    let session = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 64);
+    preload_keys(&mut state, &[(33, 0), (34, 0)]);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sent = snapshot_positions(&events_for(&tick, session));
+    assert!(sent.contains(&ChunkPos::new(33, 0)));
+    assert!(!sent.contains(&ChunkPos::new(34, 0)));
+}
+
+/// projection_wanted_unbounded_cap_supports_sixty_five — cap usize::MAX
+/// with declared 64 (effective 65) includes (65, 0) but excludes (66, 0).
+#[test]
+fn projection_wanted_unbounded_cap_supports_sixty_five() {
+    let mut state = authority_with_view_radius(usize::MAX);
+    seed_world(&mut state);
+    let session = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 64);
+    preload_keys(&mut state, &[(65, 0), (66, 0)]);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sent = snapshot_positions(&events_for(&tick, session));
+    assert!(sent.contains(&ChunkPos::new(65, 0)));
+    assert!(!sent.contains(&ChunkPos::new(66, 0)));
+}
+
+/// projection_wanted_cap_two_clamps_wide_declaration — cap 2 clamps
+/// declared 8 to radius 2: (2, 0) publishes, (3, 0) does not.
+#[test]
+fn projection_wanted_cap_two_clamps_wide_declaration() {
+    let mut state = authority_with_view_radius(2);
+    seed_world(&mut state);
+    let session = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 8);
+    preload_keys(&mut state, &[(2, 0), (3, 0)]);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sent = snapshot_positions(&events_for(&tick, session));
+    assert!(sent.contains(&ChunkPos::new(2, 0)));
+    assert!(!sent.contains(&ChunkPos::new(3, 0)));
+}
+
+/// projection_wanted_two_sessions_differ_and_resync_isolated — co-located
+/// declared 2 and 8: Ready (4, 0) publishes only in the wide session, each
+/// session's resync answers only its own wanted, and no mirror leaks across
+/// sessions.
+#[test]
+fn projection_wanted_two_sessions_differ_and_resync_isolated() {
+    let mut state = authority_with_view_radius(33);
+    seed_world(&mut state);
+    let narrow = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 2);
+    let wide = login_declared(&mut state, 2, "Bea", [0.5, 65.0, 0.5], 0.0, 0.0, 8);
+    preload_keys(&mut state, &[(4, 0)]);
+    let tick_a = state.advance_tick(TickBudget::full()).unwrap();
+    let narrow_sent = snapshot_positions(&events_for(&tick_a, narrow));
+    let wide_sent = snapshot_positions(&events_for(&tick_a, wide));
+    assert!(narrow_sent.contains(&ChunkPos::new(0, 0)));
+    assert!(
+        !narrow_sent.contains(&ChunkPos::new(4, 0)),
+        "declared 2 never mirrors (4, 0)"
+    );
+    assert!(wide_sent.contains(&ChunkPos::new(0, 0)));
+    assert!(
+        wide_sent.contains(&ChunkPos::new(4, 0)),
+        "declared 8 publishes (4, 0)"
+    );
+    submit(
+        &mut state,
+        narrow,
+        1,
+        Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(4, 0), 1).unwrap()),
+    );
+    submit(
+        &mut state,
+        wide,
+        1,
+        Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(4, 0), 1).unwrap()),
+    );
+    let tick_b = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(state.session(narrow).unwrap().last_applied_sequence, 1);
+    assert_eq!(state.session(wide).unwrap().last_applied_sequence, 1);
+    let narrow_resync = snapshot_positions(&events_for(&tick_b, narrow));
+    let wide_resync = snapshot_positions(&events_for(&tick_b, wide));
+    assert!(
+        !narrow_resync.contains(&ChunkPos::new(4, 0)),
+        "the narrow resync stays silent outside its wanted"
+    );
+    assert_eq!(
+        wide_resync,
+        vec![ChunkPos::new(4, 0)],
+        "the wide resync answers its own wanted alone"
+    );
+}
+
+/// projection_wanted_late_join_gets_own_first_snapshot — a shared Ready
+/// column gives the late subscriber its own first snapshot without a
+/// duplicate for the existing subscriber.
+#[test]
+fn projection_wanted_late_join_gets_own_first_snapshot() {
+    let mut state = authority_with_view_radius(33);
+    seed_world(&mut state);
+    let first = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 8);
+    let tick_a = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(snapshot_positions(&events_for(&tick_a, first)).contains(&ChunkPos::new(0, 0)));
+    let late = login_declared(&mut state, 2, "Bea", [0.5, 65.0, 0.5], 0.0, 0.0, 8);
+    let tick_b = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        snapshot_positions(&events_for(&tick_b, late)),
+        vec![ChunkPos::new(0, 0)],
+        "the late joiner snapshots the shared Ready column"
+    );
+    assert!(
+        snapshot_positions(&events_for(&tick_b, first)).is_empty(),
+        "the existing subscriber sees no duplicate"
+    );
+}
+
+/// projection_wanted_unready_skips_then_snapshots_once — a wanted but
+/// unready key publishes nothing, then snapshots exactly once when Ready.
+#[test]
+fn projection_wanted_unready_skips_then_snapshots_once() {
+    let mut state = authority_with_view_radius(33);
+    seed_world(&mut state);
+    let session = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 8);
+    let tick_a = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(!snapshot_positions(&events_for(&tick_a, session)).contains(&ChunkPos::new(3, 0)));
+    preload_keys(&mut state, &[(3, 0)]);
+    let tick_b = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        snapshot_positions(&events_for(&tick_b, session)),
+        vec![ChunkPos::new(3, 0)]
+    );
+    let tick_c = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        snapshot_positions(&events_for(&tick_c, session)).is_empty(),
+        "the Ready column never resnapshots"
+    );
+}
+
+/// projection_wanted_move_forgets_old_and_snapshots_new — declared 2 moves
+/// from chunk 0 to chunk 1: the exited x -3 column forgets sorted, the new
+/// x 4 boundary snapshots first, and retained (3, 0) never resnapshots.
+#[test]
+fn projection_wanted_move_forgets_old_and_snapshots_new() {
+    let mut state = authority_with_view_radius(33);
+    seed_world(&mut state);
+    let session = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 2);
+    let mut exited: Vec<(i32, i32)> = Vec::new();
+    for z in -3..=3 {
+        exited.push((-3, z));
+    }
+    let mut first_keys = exited.clone();
+    first_keys.push((3, 0));
+    preload_keys(
+        &mut state,
+        &first_keys.iter().map(|(x, z)| (*x, *z)).collect::<Vec<_>>(),
+    );
+    let tick_a = state.advance_tick(TickBudget::full()).unwrap();
+    let sent_a = snapshot_positions(&events_for(&tick_a, session));
+    assert!(sent_a.contains(&ChunkPos::new(-3, 0)));
+    assert!(sent_a.contains(&ChunkPos::new(3, 0)));
+    assert!(!sent_a.contains(&ChunkPos::new(4, 0)));
+    stage(&mut state, |context| {
+        let mut actor = context
+            .read()
+            .actor(ActorKey::Player(session))
+            .cloned()
+            .unwrap();
+        actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([16.5, 65.0, 0.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+        context.preload_ready_chunk(
+            ReadyChunk::try_new(chunk_key(4, 0), 1, 1, ground_chunk()).unwrap(),
+        );
+    });
+    let tick_b = state.advance_tick(TickBudget::full()).unwrap();
+    let events_b = events_for(&tick_b, session);
+    let mut expected: Vec<ChunkPos> = (-3..=3).map(|z| ChunkPos::new(-3, z)).collect();
+    expected.sort();
+    let mut forgets = forget_positions(&events_b);
+    forgets.sort();
+    assert_eq!(forgets, expected, "the exited column forgets sorted");
+    for event in &events_b {
+        if let Event::ChunkSnapshot(snapshot) = event {
+            assert_eq!(
+                snapshot.dimension(),
+                Dimension::OVERWORLD,
+                "wanted stays in the actor's own dimension"
+            );
+        }
+    }
+    assert_eq!(
+        snapshot_positions(&events_b),
+        vec![ChunkPos::new(4, 0)],
+        "only the new boundary first-sends"
+    );
+}
+
+/// projection_wanted_negative_center — a negative foot chunk center keeps
+/// the inclusive square semantics: (-4, -4) publishes, (3, 0) does not.
+#[test]
+fn projection_wanted_negative_center() {
+    let mut state = authority_with_view_radius(33);
+    stage(&mut state, |context| {
+        context
+            .stage(RuleEffect::Environment(environment(1_000)))
+            .unwrap();
+    });
+    let session = login_declared(&mut state, 1, "Ada", [-0.5, 65.0, -0.5], 0.0, 0.0, 2);
+    preload_keys(&mut state, &[(-4, -4), (3, 0)]);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sent = snapshot_positions(&events_for(&tick, session));
+    assert!(sent.contains(&ChunkPos::new(-4, -4)));
+    assert!(!sent.contains(&ChunkPos::new(3, 0)));
+}
+
+/// projection_wanted_resync_order_watermark_and_stale — a wanted Ready
+/// resync answers before an ordinary first send even with HaveRevision above
+/// the server revision; nonwanted and unready resyncs stay silent while
+/// consuming their sequences; repeat sequences stay stale.
+#[test]
+fn projection_wanted_resync_order_watermark_and_stale() {
+    let mut state = authority_with_view_radius(33);
+    seed_world(&mut state);
+    let session = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 8);
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    preload_keys(&mut state, &[(1, 0), (4, 0), (10, 0)]);
+    submit(
+        &mut state,
+        session,
+        1,
+        Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(0, 0), 999).unwrap()),
+    );
+    submit(
+        &mut state,
+        session,
+        2,
+        Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(10, 0), 1).unwrap()),
+    );
+    submit(
+        &mut state,
+        session,
+        3,
+        Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(2, 0), 1).unwrap()),
+    );
+    submit(
+        &mut state,
+        session,
+        4,
+        Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(4, 0), 1).unwrap()),
+    );
+    let tick_b = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(tick_b.counters.commands, 4);
+    assert_eq!(state.session(session).unwrap().last_applied_sequence, 4);
+    let snapshots = snapshot_positions(&events_for(&tick_b, session));
+    assert_eq!(
+        snapshots,
+        vec![
+            ChunkPos::new(0, 0),
+            ChunkPos::new(4, 0),
+            ChunkPos::new(1, 0),
+        ],
+        "wanted Ready resyncs answer before the ordinary first send"
+    );
+    submit(
+        &mut state,
+        session,
+        4,
+        Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(0, 0), 1).unwrap()),
+    );
+    let tick_c = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(tick_c.counters.stale, 1);
+    assert_eq!(state.session(session).unwrap().last_applied_sequence, 4);
+    assert!(
+        snapshot_positions(&events_for(&tick_c, session)).is_empty(),
+        "the repeated sequence stays stale"
+    );
+    submit(
+        &mut state,
+        session,
+        5,
+        Command::Resync(ResyncIntent::try_new(0, ChunkPos::new(0, 0), 1).unwrap()),
+    );
+    let tick_d = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(state.session(session).unwrap().last_applied_sequence, 5);
+    assert_eq!(
+        snapshot_positions(&events_for(&tick_d, session)),
+        vec![ChunkPos::new(0, 0)]
+    );
+}
+/// projection_wanted_cap_zero_is_center_only — cap 0 publishes only the
+/// center column.
+#[test]
+fn projection_wanted_cap_zero_is_center_only() {
+    let mut state = authority_with_view_radius(0);
+    seed_world(&mut state);
+    let session = login_declared(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, 8);
+    preload_keys(&mut state, &[(1, 0)]);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sent = snapshot_positions(&events_for(&tick, session));
+    assert!(sent.contains(&ChunkPos::new(0, 0)));
+    assert!(!sent.contains(&ChunkPos::new(1, 0)));
 }

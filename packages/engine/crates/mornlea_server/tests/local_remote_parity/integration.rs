@@ -134,7 +134,9 @@ struct RealEndpoint {
 
 impl RealEndpoint {
     fn new() -> Self {
-        let limits = ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap();
+        let limits = ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(2);
         Self {
             authority: AuthorityState::try_new(limits, WORLD_SEED).unwrap(),
             loads: ImmediateLoad::default(),
@@ -294,9 +296,13 @@ fn hello_packet() -> ClientPacket {
     ClientPacket::ClientHello(ClientHello::decode_inbound(&payload).unwrap())
 }
 
-fn login_packet(tag: u8, name: &str) -> ClientPacket {
-    let start = LoginStart::new(player(tag), name, 8).unwrap();
+fn login_packet_with_view(tag: u8, name: &str, view: u8) -> ClientPacket {
+    let start = LoginStart::new(player(tag), name, view).unwrap();
     ClientPacket::LoginStart(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap())
+}
+
+fn login_packet(tag: u8, name: &str) -> ClientPacket {
+    login_packet_with_view(tag, name, 8)
 }
 
 fn play_packet(sequence: u64) -> ClientPacket {
@@ -624,9 +630,13 @@ fn hello_frame() -> Vec<u8> {
     write_frame(0, &encode_uvarint(protocol())).unwrap()
 }
 
-fn login_start_frame(tag: u8, name: &str) -> Vec<u8> {
-    let start = LoginStart::new(player(tag), name, 8).unwrap();
+fn login_start_frame_with_view(tag: u8, name: &str, view: u8) -> Vec<u8> {
+    let start = LoginStart::new(player(tag), name, view).unwrap();
     write_frame(0, &start.encode().unwrap()).unwrap()
+}
+
+fn login_start_frame(tag: u8, name: &str) -> Vec<u8> {
+    login_start_frame_with_view(tag, name, 8)
 }
 
 fn tcp_play_frame(sequence: u64) -> Vec<u8> {
@@ -2003,7 +2013,12 @@ trait ParityAdapter {
     fn endpoint(&mut self) -> &mut RealEndpoint;
 
     /// Drives one login through the real handshake and returns its handles.
-    fn login(&mut self, tag: u8, name: &str) -> Peer;
+    fn login_with_view(&mut self, tag: u8, name: &str, view: u8) -> Peer;
+
+    /// Drives one login with the legacy radius-two fixture view distance.
+    fn login(&mut self, tag: u8, name: &str) -> Peer {
+        self.login_with_view(tag, name, 8)
+    }
 
     /// Submits one client packet through the real transport ingress.
     fn send_packet(&mut self, conn: ConnectionId, packet: &ClientPacket);
@@ -2127,7 +2142,7 @@ impl ParityAdapter for MemoryParity {
         &mut self.endpoint
     }
 
-    fn login(&mut self, tag: u8, name: &str) -> Peer {
+    fn login_with_view(&mut self, tag: u8, name: &str, view: u8) -> Peer {
         let id = self.link.connect(self.clock.monotonic()).unwrap();
         assert_eq!(
             self.link
@@ -2143,7 +2158,7 @@ impl ParityAdapter for MemoryParity {
         assert_eq!(
             self.link.send(
                 id,
-                frame(&login_packet(tag, name)),
+                frame(&login_packet_with_view(tag, name, view)),
                 &mut self.endpoint,
                 &self.clock
             ),
@@ -2224,7 +2239,7 @@ impl ParityAdapter for TcpParity {
         &mut self.harness.endpoint
     }
 
-    fn login(&mut self, tag: u8, name: &str) -> Peer {
+    fn login_with_view(&mut self, tag: u8, name: &str, view: u8) -> Peer {
         let mut client = ClientConn::connect(self.harness.addr());
         let id = accept_next(&mut self.harness);
         client.send(&hello_frame());
@@ -2240,7 +2255,7 @@ impl ParityAdapter for TcpParity {
                 ServerHello::new(protocol()).unwrap()
             ))
         );
-        client.send(&login_start_frame(tag, name));
+        client.send(&login_start_frame_with_view(tag, name, view));
         spin_frames(&mut self.harness, id, 1);
         let ticket = self.harness.endpoint.loads.last.expect("login started");
         match self
@@ -4608,5 +4623,410 @@ fn publication_wire_delivery_reaches_each_session_in_order() {
     assert_eq!(
         memory_bea_frames, tcp_bea_frames,
         "Bea's memory and socket frames are byte-for-byte identical"
+    );
+}
+
+/// Replaces the legacy radius-two fixture authority with a freshly
+/// constructed true-default authority (view bound 33) before any login.
+fn replace_with_default_authority(adapter: &mut dyn ParityAdapter) {
+    adapter.endpoint().authority = AuthorityState::try_new(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+        WORLD_SEED,
+    )
+    .unwrap();
+    assert_eq!(
+        adapter.endpoint().authority.limits().view_radius(),
+        33,
+        "the wanted fixtures run under the true default bound"
+    );
+}
+
+fn snapshot_keys(events: &[Event]) -> Vec<ChunkPos> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ChunkSnapshot(snapshot) => Some(snapshot.chunk()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn forget_keys(events: &[Event]) -> Vec<ChunkPos> {
+    let mut keys = Vec::new();
+    for event in events {
+        if let Event::ForgetChunks(batch) = event {
+            keys.extend(batch.chunks().iter().copied());
+        }
+    }
+    keys
+}
+
+fn snapshot_revisions(events: &[Event]) -> Vec<(ChunkPos, u64)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ChunkSnapshot(snapshot) => Some((snapshot.chunk(), snapshot.revision())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Decodes every drained frame as Play-state packets and checks the frames
+/// carry exactly the session's publication events in order.
+fn assert_frames_match_events(
+    label: &str,
+    tick: &TickPublication,
+    peer: &Peer,
+    frames: &[Vec<u8>],
+) {
+    let events = session_events(tick, peer.session);
+    assert_eq!(
+        frames.len(),
+        events.len(),
+        "{label} drains one frame per session event"
+    );
+    let decoded: Vec<ServerPacket> = frames.iter().map(|frame| decode_play(frame)).collect();
+    for (packet, event) in decoded.iter().zip(&events) {
+        assert_eq!(
+            packet,
+            &ServerPacket::try_from(event.clone()).unwrap(),
+            "{label}'s frames carry the exact publication packets in order"
+        );
+    }
+}
+
+/// The wanted subscription scenario through a real adapter: true-default
+/// authority, narrow (declared 2) and wide (declared 8) co-located sessions
+/// through the real handshake, Ready (3, 0)/(4, 0) first contact, a late join,
+/// and a staged chunk-0 to chunk-1 move with its sorted forget. Returns the
+/// tick publications and the complete ordered drain transcript bytes.
+fn wanted_subscription_scenario(
+    adapter: &mut dyn ParityAdapter,
+) -> (Vec<TickPublication>, Vec<Vec<u8>>) {
+    replace_with_default_authority(adapter);
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    adapter.stage_login(
+        2,
+        stored_player(2, "Bea", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login_with_view(1, "Ada", 2);
+    let bea = adapter.login_with_view(2, "Bea", 8);
+    adapter.stage(Box::new(|context| {
+        for (x, z) in [(3, 0), (4, 0)] {
+            context.preload_ready_chunk(
+                ReadyChunk::try_new(chunk_key(x, z), 1, 1, ground_chunk()).unwrap(),
+            );
+        }
+    }));
+    let tick_a = adapter.tick();
+    let ada_events = session_events(&tick_a, ada.session);
+    let bea_events = session_events(&tick_a, bea.session);
+    assert!(snapshot_keys(&ada_events).contains(&ChunkPos::new(3, 0)));
+    assert!(
+        !snapshot_keys(&ada_events).contains(&ChunkPos::new(4, 0)),
+        "the narrow session never mirrors (4, 0)"
+    );
+    assert!(snapshot_keys(&bea_events).contains(&ChunkPos::new(3, 0)));
+    assert!(
+        snapshot_keys(&bea_events).contains(&ChunkPos::new(4, 0)),
+        "the wide session publishes the (4, 0) boundary"
+    );
+    for event in ada_events.iter().chain(&bea_events) {
+        if let Event::ChunkSnapshot(snapshot) = event {
+            assert_eq!(snapshot.dimension(), Dimension::OVERWORLD);
+            assert_eq!(snapshot.revision(), 1);
+        }
+    }
+    let ada_frames_a = adapter.drain(ada.session);
+    let bea_frames_a = adapter.drain(bea.session);
+    assert_frames_match_events("narrow first contact", &tick_a, &ada, &ada_frames_a);
+    assert_frames_match_events("wide first contact", &tick_a, &bea, &bea_frames_a);
+
+    adapter.stage_login(
+        3,
+        stored_player(3, "Cleo", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let cleo = adapter.login_with_view(3, "Cleo", 8);
+    let tick_b = adapter.tick();
+    assert_eq!(
+        snapshot_keys(&session_events(&tick_b, cleo)),
+        vec![
+            ChunkPos::new(0, 0),
+            ChunkPos::new(3, 0),
+            ChunkPos::new(4, 0),
+        ],
+        "the late joiner snapshots the shared Ready columns"
+    );
+    assert!(
+        snapshot_keys(&session_events(&tick_b, ada.session)).is_empty(),
+        "the existing narrow subscriber sees no duplicate"
+    );
+    assert!(
+        snapshot_keys(&session_events(&tick_b, bea.session)).is_empty(),
+        "the existing wide subscriber sees no duplicate"
+    );
+    let ada_frames_b = adapter.drain(ada.session);
+    let bea_frames_b = adapter.drain(bea.session);
+    let cleo_frames_b = adapter.drain(cleo.session);
+    assert_frames_match_events("narrow steady", &tick_b, &ada, &ada_frames_b);
+    assert_frames_match_events("wide steady", &tick_b, &bea, &bea_frames_b);
+    assert_frames_match_events("late join", &tick_b, &cleo, &cleo_frames_b);
+
+    let walker = ada.session;
+    adapter.stage(Box::new(move |context| {
+        let mut actor = context
+            .read()
+            .actor(ActorKey::Player(walker))
+            .cloned()
+            .unwrap();
+        actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([16.5, 65.0, 0.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+    }));
+    let tick_c = adapter.tick();
+    let ada_move_events = session_events(&tick_c, ada.session);
+    let mut expected: Vec<ChunkPos> = (-3..=3).map(|z| ChunkPos::new(-3, z)).collect();
+    expected.sort();
+    let mut forgets = forget_keys(&ada_move_events);
+    forgets.sort();
+    assert_eq!(
+        forgets, expected,
+        "the move forgets the exact sorted column"
+    );
+    assert_eq!(
+        snapshot_keys(&ada_move_events),
+        vec![ChunkPos::new(4, 0)],
+        "the move first-sends only the new boundary"
+    );
+    assert!(
+        snapshot_keys(&session_events(&tick_c, bea.session)).is_empty(),
+        "the forget belongs to the walker alone"
+    );
+    let ada_frames_c = adapter.drain(ada.session);
+    let bea_frames_c = adapter.drain(bea.session);
+    let cleo_frames_c = adapter.drain(cleo.session);
+    assert_frames_match_events("narrow move", &tick_c, &ada, &ada_frames_c);
+    assert_frames_match_events("wide steady after move", &tick_c, &bea, &bea_frames_c);
+    assert_frames_match_events("late steady after move", &tick_c, &cleo, &cleo_frames_c);
+
+    let mut transcript = Vec::new();
+    for frames in [
+        ada_frames_a,
+        bea_frames_a,
+        ada_frames_b,
+        bea_frames_b,
+        cleo_frames_b,
+        ada_frames_c,
+        bea_frames_c,
+        cleo_frames_c,
+    ] {
+        transcript.extend(frames);
+    }
+    (vec![tick_a, tick_b, tick_c], transcript)
+}
+
+/// Wanted subscriptions through both real adapters: per-session first
+/// contact, late-join isolation, and the staged move/forget transition agree
+/// exactly, down to the ordered transcript bytes.
+#[test]
+fn wanted_subscription_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let (memory_ticks, memory_bytes) = wanted_subscription_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let (tcp_ticks, tcp_bytes) = wanted_subscription_scenario(&mut tcp);
+    assert_eq!(
+        memory_ticks, tcp_ticks,
+        "wanted subscriptions publish identically across the real adapters"
+    );
+    assert_eq!(
+        memory_bytes, tcp_bytes,
+        "wanted subscription transcript bytes are identical across adapters"
+    );
+}
+
+/// The wanted resync scenario through a real adapter: Ready (3, 0)/(4, 0),
+/// a new (9, 0) first send, nonwanted Ready (10, 0), and unready (6, 0);
+/// real RequestChunkResync ingress with watermark and stale handling; then
+/// (6, 0) becomes Ready and first-sends once. Returns the publications and
+/// the complete ordered drain transcript bytes.
+fn wanted_resync_scenario(adapter: &mut dyn ParityAdapter) -> (Vec<TickPublication>, Vec<Vec<u8>>) {
+    replace_with_default_authority(adapter);
+    seed_day_world(adapter);
+    adapter.stage_login(
+        1,
+        stored_player(1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    adapter.stage_login(
+        2,
+        stored_player(2, "Bo", [0.5, 65.0, 0.5], 0.0, 0.0, |_| {}),
+    );
+    let ada = adapter.login_with_view(1, "Ada", 8);
+    let bo = adapter.login_with_view(2, "Bo", 2);
+    let first = adapter.tick();
+    assert_eq!(
+        snapshot_keys(&session_events(&first, ada.session)),
+        vec![ChunkPos::new(0, 0)],
+    );
+    let ada_frames_first = adapter.drain(ada.session);
+    let bo_frames_first = adapter.drain(bo.session);
+    assert_frames_match_events("wide first contact", &first, &ada, &ada_frames_first);
+    assert_frames_match_events("narrow first contact", &first, &bo, &bo_frames_first);
+
+    adapter.stage(Box::new(|context| {
+        for (x, z) in [(3, 0), (4, 0), (9, 0), (10, 0)] {
+            context.preload_ready_chunk(
+                ReadyChunk::try_new(chunk_key(x, z), 1, 1, ground_chunk()).unwrap(),
+            );
+        }
+    }));
+    let resync = |adapter: &mut dyn ParityAdapter,
+                  conn: ConnectionId,
+                  sequence: u64,
+                  x: i32,
+                  z: i32,
+                  have: u64| {
+        adapter.send_packet(
+            conn,
+            &ClientPacket::RequestChunkResync(RequestChunkResync::new(
+                sequence,
+                Dimension::OVERWORLD,
+                x,
+                z,
+                have,
+            )),
+        );
+    };
+    resync(adapter, ada.conn, 1, 4, 0, 999);
+    resync(adapter, ada.conn, 2, 10, 0, 1);
+    resync(adapter, ada.conn, 3, 6, 0, 1);
+    resync(adapter, bo.conn, 1, 4, 0, 1);
+    let tick_b = adapter.tick();
+    assert_eq!(tick_counters(&tick_b), (4, 0, 0));
+    assert_eq!(
+        adapter
+            .endpoint()
+            .authority
+            .session(ada.session)
+            .unwrap()
+            .last_applied_sequence,
+        3
+    );
+    assert_eq!(
+        adapter
+            .endpoint()
+            .authority
+            .session(bo.session)
+            .unwrap()
+            .last_applied_sequence,
+        1
+    );
+    let ada_events = session_events(&tick_b, ada.session);
+    assert_eq!(
+        snapshot_keys(&ada_events),
+        vec![
+            ChunkPos::new(4, 0),
+            ChunkPos::new(3, 0),
+            ChunkPos::new(9, 0),
+        ],
+        "the wanted Ready resync answers before ordinary first sends"
+    );
+    assert_eq!(
+        snapshot_revisions(&ada_events),
+        vec![
+            (ChunkPos::new(4, 0), 1),
+            (ChunkPos::new(3, 0), 1),
+            (ChunkPos::new(9, 0), 1),
+        ],
+    );
+    assert!(
+        !snapshot_keys(&ada_events).contains(&ChunkPos::new(10, 0)),
+        "nonwanted Ready (10, 0) stays silent"
+    );
+    assert!(
+        !snapshot_keys(&ada_events).contains(&ChunkPos::new(6, 0)),
+        "unready (6, 0) stays silent"
+    );
+    assert!(
+        snapshot_keys(&session_events(&tick_b, bo.session)).is_empty()
+            || !snapshot_keys(&session_events(&tick_b, bo.session)).contains(&ChunkPos::new(4, 0)),
+        "the narrow session never mirrors (4, 0)"
+    );
+    let ada_frames_b = adapter.drain(ada.session);
+    let bo_frames_b = adapter.drain(bo.session);
+    assert_frames_match_events("wide resync", &tick_b, &ada, &ada_frames_b);
+    assert_frames_match_events("narrow resync silence", &tick_b, &bo, &bo_frames_b);
+
+    resync(adapter, ada.conn, 3, 0, 0, 1);
+    let tick_c = adapter.tick();
+    assert_eq!(tick_counters(&tick_c), (0, 0, 1));
+    assert_eq!(
+        adapter
+            .endpoint()
+            .authority
+            .session(ada.session)
+            .unwrap()
+            .last_applied_sequence,
+        3,
+        "the repeated sequence stays stale"
+    );
+    assert!(snapshot_keys(&session_events(&tick_c, ada.session)).is_empty());
+    let ada_frames_c = adapter.drain(ada.session);
+    let bo_frames_c = adapter.drain(bo.session);
+
+    adapter.stage(Box::new(|context| {
+        context.preload_ready_chunk(
+            ReadyChunk::try_new(chunk_key(6, 0), 1, 1, ground_chunk()).unwrap(),
+        );
+    }));
+    resync(adapter, ada.conn, 4, 6, 0, 1);
+    let tick_d = adapter.tick();
+    assert_eq!(
+        snapshot_keys(&session_events(&tick_d, ada.session)),
+        vec![ChunkPos::new(6, 0)],
+        "the newly Ready column first-sends once"
+    );
+    let ada_frames_d = adapter.drain(ada.session);
+    let bo_frames_d = adapter.drain(bo.session);
+    assert_frames_match_events("wide newly ready", &tick_d, &ada, &ada_frames_d);
+    assert_frames_match_events("narrow newly ready silence", &tick_d, &bo, &bo_frames_d);
+
+    let mut transcript = Vec::new();
+    for frames in [
+        ada_frames_first,
+        bo_frames_first,
+        ada_frames_b,
+        bo_frames_b,
+        ada_frames_c,
+        bo_frames_c,
+        ada_frames_d,
+        bo_frames_d,
+    ] {
+        transcript.extend(frames);
+    }
+    (vec![first, tick_b, tick_c, tick_d], transcript)
+}
+
+/// Wanted resyncs through both real adapters: identical publications,
+/// identical watermarks, and identical ordered transcript bytes.
+#[test]
+fn wanted_resync_publications_match_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let (memory_ticks, memory_bytes) = wanted_resync_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let (tcp_ticks, tcp_bytes) = wanted_resync_scenario(&mut tcp);
+    assert_eq!(
+        memory_ticks, tcp_ticks,
+        "wanted resyncs publish identically across the real adapters"
+    );
+    assert_eq!(
+        memory_bytes, tcp_bytes,
+        "wanted resync transcript bytes are identical across adapters"
     );
 }
