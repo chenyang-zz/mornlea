@@ -102,3 +102,19 @@ Read all four owned production files (inventory425 lines, containers1432, crafti
 - Missing actor retirement, command-loss/error swallowing, environment resets, absent chunk acquisition, persistence snapshots, sleep ingress, dynamic projection and furnace-interest dimension reduction were already reported. They are not duplicated as provider-local findings.
 
 Current acceptance inventory therefore still cannot support zero-gap F2. Passing existing provider suites plus source identity checks miss valid command families, lifecycle gates, dimensional behavior and phase-sensitive source order.
+
+## Continuation source census, 2026-10-03
+
+The continuation starts from remote92ccbb45 and independently rechecks the current consumers. Packet94 corrects source-player trample capture only. The following joins remain open; existing component tests and checked task totals do not accept them:
+
+- Source Snow needs a retained per-player/passive tracker and source capture timing before Safe/death. The reducer still creates a new generic FootprintSchedule each tick and collects late. Source reset clears the player tracker. External actual-native calibration with neutral input and velocity4 reset each tick reaches travel0.599998474 after eight grounded ticks, below the f32 stride threshold; an eight-tick crossing expectation would be incorrect. Exhaustive positive-finite-f32 radicand comparison found no sqrt narrowing difference on this platform, so the different arithmetic expression alone is not a demonstrated mismatch.
+- Source subscription reconciliation and visibility ownership remain absent. Manually supplied chunk wants and the fixed source radius do not implement the source pending/active/reset, companion, retry and revision policies.
+- Final terrain/entity/inventory/crafting/container dirty publication lacks the production visible-set scheduler. Component encoders and player-state output are separate evidence.
+- Successful late till costs are queued after the existing post-physics receipt drain and are not carried to another tick; production mining has no corresponding cost receipt. Exact successful-action settlement and final publication order still require integration.
+- The four actor projections have no automatic live save-target consumer. Actor revision/ACK eligibility, retired-player cache/relogin handoff and disconnect/final-flush projection remain open. Managed live selection currently owns chunk targets.
+- Actual startup loading and resident installation of nonempty companion/hostile/passive families remain absent from the background player/chunk load owner.
+- The selected executable still reserves the game listener and serves control without assembling gameplay admissions, ticks, subscriptions, publication and automatic saves. Control/lease/rollback component acceptance does not establish an authoritative gameplay endpoint.
+
+The current full-corpus source mappings and Rust-versus-Rust repeat tests do not execute every supported Go-versus-Rust outcome. Inventory mapping reconciliation, nonempty save/restart and real endpoint acceptance remain required under3.7/3.8/4.1. Source and calibration reports are retained in continuation scratch; this appendix records verified scope rather than a new implementation plan or task closure.
+
+The Linux supported-package quality script passes in this environment. The required generic make dev-check fails while importing the Darwin-only client app, before its Rust stages. Native macOS dependency checks also fail for missing codesign/install_name_tool. These are platform acceptance blockers; the supported Linux gate cannot replace the full six-module/macOS stage evidence, and4.2 remains open. No client or Godot changes are authorized to bypass them.
