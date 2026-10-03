@@ -1,0 +1,6 @@
+7ad94532eb799d07ded5b2c24f028968c90865f86ad15f11d88598a8f48951fc  /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3/previous-server
+46f76ffaf14e4b58fb08078d798a8eec84fe597c3ad1509a227926a539c309aa  /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3/previous-verifier
+3b1e1f447036f1baedd602ffdf60efe07a8ecf23324849f225f3bc5b59678c85  /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3/previous-runtime.json
+d2219bb649977aa0a0b78ca8307cf0c558d2e49f0bda8a7b698bd9bdd3469d9a  /Users/chen/work/mornlea-f2-37-zcode/packages/engine/target/cargo/release/mornlea-server
+6cdf72a23935e32ec4d054f64b53f38eab083be60bd36c468a1b344be80c7a97  /Users/chen/work/mornlea-f2-37-zcode/packages/engine/target/cargo/debug/mornlea-server
+bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07  /Users/chen/work/mornlea/packages/agent/.venv/bin/python

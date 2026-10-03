@@ -1,0 +1,197 @@
+# 3.7 capability-inventory row bindings
+
+Generated from `capability-inventory.json` (78 rows) against recorded passing test logs.
+A row is BOUND only when every named test line (`test <name> ... ok`) exists in the referenced log.
+
+- **command.internal.bed** — BOUND
+  - ✓ `sleep::bed_partner_coordinate_edges_keep_representable_pairs` in `02-server-replay.log`
+  - ✓ `sleep::non_bed_target_is_silent_noop` in `02-server-replay.log`
+- **command.internal.door** — BOUND
+  - ✓ `world_mutation::door_pair_and_internal_toggle` in `02-server-replay.log`
+  - ✓ `world_mutation::held_sneak_refuses_door_after_target_classification` in `02-server-replay.log`
+- **command.protocol.client.BoneMeal** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `tools::` in `02-server-replay.log`
+- **command.protocol.client.ChatCommand** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+- **command.protocol.client.CloseContainer** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `integration::shared_transcript_matches_across_adapters` in `01-local-remote-parity.log`
+- **command.protocol.client.CollectWater** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `tools::` in `02-server-replay.log`
+- **command.protocol.client.DropSelectedItem** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `drops::` in `02-server-replay.log`
+- **command.protocol.client.DropStack** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `drops::` in `02-server-replay.log`
+- **command.protocol.client.EquipArmor** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `inventory::` in `02-server-replay.log`
+- **command.protocol.client.KeepAliveReply** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `common::` in `01-local-remote-parity.log`
+- **command.protocol.client.MoveContainerStack** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `containers::` in `02-server-replay.log`
+- **command.protocol.client.MoveCraftingStack** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `crafting::` in `02-server-replay.log`
+- **command.protocol.client.MoveInventoryStack** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `inventory::` in `02-server-replay.log`
+- **command.protocol.client.MoveStackPartial** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `inventory::` in `02-server-replay.log`
+- **command.protocol.client.OpenContainer** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `containers::` in `02-server-replay.log`
+- **command.protocol.client.PlaceBlock** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `world_mutation::` in `02-server-replay.log`
+- **command.protocol.client.PlaceWater** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `tools::` in `02-server-replay.log`
+- **command.protocol.client.PlayerInput** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `player_motion::` in `02-server-replay.log`
+- **command.protocol.client.QuickMoveStack** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `containers::` in `02-server-replay.log`
+- **command.protocol.client.RequestChunkResync** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `world_acquisition::` in `02-server-replay.log`
+- **command.protocol.client.SelectHotbar** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `inventory::` in `02-server-replay.log`
+- **command.protocol.client.TakeCraftingOutput** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `crafting::` in `02-server-replay.log`
+- **command.protocol.client.TillSoil** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+  - ✓ `tools::` in `02-server-replay.log`
+- **companion.action.mine-hold** — BOUND
+  - ✓ `full_corpus::real_agent_candidate_admitted_and_stale_refused` in `02-server-replay.log`
+  - ✓ `companions::mining_intents_stage_nothing_here` in `02-server-replay.log`
+  - ✓ `integration::rust_plan_python_mcp_and_authority` in `19-agent-process-nocapture.log`
+- **companion.action.mine-release** — BOUND
+  - ✓ `full_corpus::real_agent_candidate_admitted_and_stale_refused` in `02-server-replay.log`
+  - ✓ `companions::neutral_hold_release_and_container_atomic` in `02-server-replay.log`
+- **companion.action.move** — BOUND
+  - ✓ `full_corpus::real_agent_candidate_admitted_and_stale_refused` in `02-server-replay.log`
+  - ✓ `companions::motion_steps_move_and_retains_yaw_neutral` in `02-server-replay.log`
+- **companion.action.place** — BOUND
+  - ✓ `full_corpus::real_agent_candidate_admitted_and_stale_refused` in `02-server-replay.log`
+  - ✓ `companions::placement_settles_in_id_order_with_atomic_refusals` in `02-server-replay.log`
+- **control.protocol.client.ClientHello** — BOUND
+  - ✓ `common::` in `01-local-remote-parity.log`
+- **control.protocol.client.KeepAliveReply** — BOUND
+  - ✓ `common::` in `01-local-remote-parity.log`
+- **control.protocol.client.LoginStart** — BOUND
+  - ✓ `common::` in `01-local-remote-parity.log`
+  - ✓ `integration::shared_transcript_matches_across_adapters` in `01-local-remote-parity.log`
+- **control.protocol.server.Disconnect** — BOUND
+  - ✓ `tcp::terminal_rejection_flushes_then_releases_socket` in `01-local-remote-parity.log`
+  - ✓ `tcp::terminal_poll_expiry_releases_socket` in `01-local-remote-parity.log`
+- **control.protocol.server.HandshakeReject** — BOUND
+  - ✓ `common::` in `01-local-remote-parity.log`
+- **control.protocol.server.KeepAlive** — BOUND
+  - ✓ `common::` in `01-local-remote-parity.log`
+- **control.protocol.server.LoginReject** — BOUND
+  - ✓ `common::` in `01-local-remote-parity.log`
+- **control.protocol.server.LoginSuccess** — BOUND
+  - ✓ `integration::shared_transcript_matches_across_adapters` in `01-local-remote-parity.log`
+- **control.protocol.server.ServerHello** — BOUND
+  - ✓ `common::` in `01-local-remote-parity.log`
+- **event.domain.block-changes** — BOUND
+  - ✓ `world_mutation::` in `02-server-replay.log`
+- **event.domain.chat** — BOUND
+  - ✓ `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+- **event.domain.chest-state** — BOUND
+  - ✓ `containers::` in `02-server-replay.log`
+- **event.domain.chunk-snapshot** — BOUND
+  - ✓ `generation::` in `02-server-replay.log`
+- **event.domain.combat-hit** — BOUND
+  - ✓ `hostile_outcomes::` in `02-server-replay.log`
+- **event.domain.command-rejected** — BOUND
+  - ✓ `integration::shared_transcript_matches_across_adapters` in `01-local-remote-parity.log`
+- **event.domain.companion-despawn** — BOUND
+  - ✓ `companions::` in `02-server-replay.log`
+- **event.domain.companion-spawn** — BOUND
+  - ✓ `companions::` in `02-server-replay.log`
+- **event.domain.companion-states** — BOUND
+  - ✓ `companions::` in `02-server-replay.log`
+- **event.domain.container-closed** — BOUND
+  - ✓ `integration::shared_transcript_matches_across_adapters` in `01-local-remote-parity.log`
+- **event.domain.crafting-state** — BOUND
+  - ✓ `crafting::` in `02-server-replay.log`
+- **event.domain.forget-chunks** — BOUND
+  - ✓ `world_acquisition::` in `02-server-replay.log`
+- **event.domain.furnace-state** — BOUND
+  - ✓ `furnaces::` in `02-server-replay.log`
+- **event.domain.hostile-despawn** — BOUND
+  - ✓ `hostile_actors::` in `02-server-replay.log`
+- **event.domain.hostile-spawn** — BOUND
+  - ✓ `hostile_actors::` in `02-server-replay.log`
+- **event.domain.hostile-state** — BOUND
+  - ✓ `hostile_actors::` in `02-server-replay.log`
+- **event.domain.inventory-state** — BOUND
+  - ✓ `inventory::` in `02-server-replay.log`
+- **event.domain.item-drop-removes** — BOUND
+  - ✓ `drops::` in `02-server-replay.log`
+- **event.domain.item-drop-upserts** — BOUND
+  - ✓ `drops::` in `02-server-replay.log`
+- **event.domain.passive-despawn** — BOUND
+  - ✓ `passives::` in `02-server-replay.log`
+- **event.domain.passive-spawn** — BOUND
+  - ✓ `passives::` in `02-server-replay.log`
+- **event.domain.passive-state** — BOUND
+  - ✓ `passives::` in `02-server-replay.log`
+- **event.domain.place-block-succeeded** — BOUND
+  - ✓ `world_mutation::` in `02-server-replay.log`
+- **event.domain.player-state** — BOUND
+  - ✓ `player_survival::` in `02-server-replay.log`
+- **event.domain.projectile-despawn** — BOUND
+  - ✓ `projectiles::` in `02-server-replay.log`
+- **event.domain.projectile-spawn** — BOUND
+  - ✓ `projectiles::` in `02-server-replay.log`
+- **event.domain.projectile-state** — BOUND
+  - ✓ `projectiles::` in `02-server-replay.log`
+- **event.domain.remote-player-despawn** — BOUND
+  - ✓ `live::actual_reconnects_release_committed_driver_history_across_transports` in `01-local-remote-parity.log`
+- **event.domain.remote-player-spawn** — BOUND
+  - ✓ `integration::shared_transcript_matches_across_adapters` in `01-local-remote-parity.log`
+- **event.domain.remote-player-states** — BOUND
+  - ✓ `integration::shared_transcript_matches_across_adapters` in `01-local-remote-parity.log`
+- **save.chunk** — BOUND
+  - ✓ `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+- **save.companion** — BOUND
+  - ✓ `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+  - ✓ `actor_projection::` in `23-persistence-failure-fixtures-v2.log`
+- **save.hostile** — BOUND
+  - ✓ `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+  - ✓ `actor_projection::` in `23-persistence-failure-fixtures-v2.log`
+- **save.passive** — BOUND
+  - ✓ `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+  - ✓ `actor_projection::` in `23-persistence-failure-fixtures-v2.log`
+- **save.player** — BOUND
+  - ✓ `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+- **save.region** — BOUND
+  - ✓ `region_io::` in `23-persistence-failure-fixtures-v2.log`
+  - ✓ `recovery::` in `23-persistence-failure-fixtures-v2.log`
+- **save.world-metadata** — BOUND
+  - ✓ `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+  - ✓ `metadata_live::` in `23-persistence-failure-fixtures-v2.log`
+- **tick.phase.01.player-commands** — BOUND
+  - ✓ `phase_order::dispatch_chain_runs_in_frozen_order` in `02-server-replay.log`
+  - ✓ `phase_order::dispatch_guard_rejects_a_swapped_row` in `02-server-replay.log`
+- **tick.phase.02.companion-actions** — BOUND
+  - ✓ `phase_order::` in `02-server-replay.log`
+- **tick.phase.03.physics-advance** — BOUND
+  - ✓ `player_motion::` in `02-server-replay.log`
+- **tick.phase.04.hostile-advance** — BOUND
+  - ✓ `hostile_actions::` in `02-server-replay.log`
+- **tick.phase.05.block-updates** — BOUND
+  - ✓ `world_mutation::mutation_before_fluid_support_order` in `02-server-replay.log`
+  - ✓ `phase_order::budget_carry_over_two_ticks` in `02-server-replay.log`
