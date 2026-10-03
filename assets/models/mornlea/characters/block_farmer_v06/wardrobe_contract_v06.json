@@ -1,0 +1,58 @@
+{
+  "version": "v06-transition",
+  "rig_contract": "Mornlea_BlockFarmer_v04_21",
+  "units": "meters",
+  "authoring_axes": {
+    "up": "+Z",
+    "forward": "-Y"
+  },
+  "gltf_axes": {
+    "up": "+Y",
+    "forward": "+Z"
+  },
+  "joint_count": 21,
+  "animation_owner": "one shared master skeleton",
+  "base_body": "runtime/block_farmer_base_body_v06.glb",
+  "dressed_master": "runtime/block_farmer_animated_v06.glb",
+  "slots": [
+    "hair",
+    "shirt",
+    "overalls",
+    "boots",
+    "hat",
+    "pouch"
+  ],
+  "slot_files": {
+    "hair": "runtime/block_farmer_hair_v06.glb",
+    "shirt": "runtime/block_farmer_shirt_v06.glb",
+    "overalls": "runtime/block_farmer_overalls_v06.glb",
+    "boots": "runtime/block_farmer_boots_v06.glb",
+    "hat": "runtime/block_farmer_hat_v06.glb",
+    "pouch": "runtime/block_farmer_pouch_v06.glb"
+  },
+  "rules": [
+    "Keep common rest skeleton and inverse-bind matrices unchanged",
+    "Bind replacement slot meshes to the shared skeleton; do not run separate slot skeleton animations",
+    "Hide the default covered body regions only when the corresponding outfit is worn",
+    "Preserve base body when changing clothes; the articulated joint forms are intentional",
+    "Do not mix v03 rounded garments with v04 block garments without fitting and revalidation"
+  ],
+  "body_masking": {
+    "shirt": [
+      "torso"
+    ],
+    "overalls": [
+      "pelvis",
+      "upper leg",
+      "lower leg",
+      "hip hinge",
+      "knee hinge"
+    ],
+    "boots": [
+      "foot",
+      "ankle"
+    ]
+  },
+  "clothing_geometry": "Independent modular shells with intentional articulated hip/knee interfaces; not a cloth simulation",
+  "compatibility_status": "Native Blender and fresh GLB imports verified; engine controller integration not performed"
+}

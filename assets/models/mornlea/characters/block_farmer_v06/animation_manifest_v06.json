@@ -1,0 +1,131 @@
+{
+  "rig": "Mornlea_BlockFarmer_v04_21",
+  "joint_count": 21,
+  "clips": [
+    {
+      "name": "Idle",
+      "frames": [
+        1,
+        91
+      ],
+      "fps": 30,
+      "duration": 3.0,
+      "loop": true
+    },
+    {
+      "name": "Walk",
+      "frames": [
+        1,
+        31
+      ],
+      "fps": 30,
+      "duration": 1.0,
+      "loop": true
+    },
+    {
+      "name": "Run",
+      "frames": [
+        1,
+        21
+      ],
+      "fps": 30,
+      "duration": 0.6666666666666666,
+      "loop": true
+    },
+    {
+      "name": "Crouch_Down",
+      "frames": [
+        1,
+        37
+      ],
+      "fps": 30,
+      "duration": 1.2,
+      "loop": false
+    },
+    {
+      "name": "Crouch_Idle",
+      "frames": [
+        1,
+        76
+      ],
+      "fps": 30,
+      "duration": 2.5,
+      "loop": true
+    },
+    {
+      "name": "Crouch_Up",
+      "frames": [
+        1,
+        37
+      ],
+      "fps": 30,
+      "duration": 1.2,
+      "loop": false
+    },
+    {
+      "name": "Prone_Down",
+      "frames": [
+        1,
+        121
+      ],
+      "fps": 30,
+      "duration": 4.0,
+      "loop": false
+    },
+    {
+      "name": "Prone_Idle",
+      "frames": [
+        1,
+        91
+      ],
+      "fps": 30,
+      "duration": 3.0,
+      "loop": true
+    },
+    {
+      "name": "Prone_Up",
+      "frames": [
+        1,
+        121
+      ],
+      "fps": 30,
+      "duration": 4.0,
+      "loop": false
+    },
+    {
+      "name": "Sleep_Enter",
+      "frames": [
+        1,
+        136
+      ],
+      "fps": 30,
+      "duration": 4.5,
+      "loop": false
+    },
+    {
+      "name": "Sleep_Loop",
+      "frames": [
+        1,
+        121
+      ],
+      "fps": 30,
+      "duration": 4.0,
+      "loop": true
+    },
+    {
+      "name": "Sleep_Exit",
+      "frames": [
+        1,
+        136
+      ],
+      "fps": 30,
+      "duration": 4.5,
+      "loop": false
+    }
+  ],
+  "walk_speed_m_s": 0.4166666666666667,
+  "run_speed_m_s": 1.575,
+  "root": "root fixed identity, pelvis carries pose height only",
+  "support": "authored ground-plane contacts; no automatic terrain adaptation",
+  "style": "original articulated block farmer"
+}
