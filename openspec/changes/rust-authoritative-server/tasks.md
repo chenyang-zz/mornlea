@@ -150,6 +150,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9l7 Count retained semantic and cancellation-join memory obligations after timeout ([packet](plans/85-memory-timeout-obligation-fixture.md)).
 - [x] 3.9l8 Drive actual live TCP input during delivery and held-login admission ([packet](plans/98-live-tcp-fixture-progress.md)).
 - [x] 3.9l9 Await actual nonblocking loopback acceptance in the prepared-owner fixture ([packet](plans/99-prepared-tcp-accept-fixture.md)).
+- [ ] 3.9l10 Preserve actual noncanonical paths and valid bank handoff in verifier fixtures ([packet](plans/100-storage-verifier-fixtures.md)).
 
 - [x] 3.9a Preserve player runtime lanes through movement.
 - [x] 3.9b Carry environment and sleep state across live ticks.
