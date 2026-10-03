@@ -130,6 +130,10 @@ consume its cancellation and error contracts before joining the real backend.
   trample before Safe/death; accepted resets clear only the tracker. Capacity
   preflight preserves both tracker and accepted prefix on refusal; settlement
   drains length only after fresh ordered Snow transactions succeed.
+  Sorted ever-spawned registrations settle late action costs after Interaction
+  and Mining through scalar-only indexed context borrows. Each accepted player
+  consumes only its own bounded receipts; later refusal preserves that scalar
+  prefix and foreign receipt order until context Drop.
   Passive Snow timing, subscriptions, publication, automatic actor save/cache
   eligibility and executable runtime acceptance remain separately owned.
 
@@ -465,11 +469,15 @@ consume its cancellation and error contracts before joining the real backend.
 - `src/rules/player_survival.rs` owns survival on the three actor phases:
   regen/starvation with the exact counter gates, pre-physics oxygen and
   drowning, post-physics exhaustion from motion charges (jump/swim/sprint
-  against the pre-step snapshot, mining/till/melee through the action
-  receipt seam) and fall damage, death-once with bed-preserving respawn,
+  against the pre-step snapshot and direct-fixture action receipts) and fall
+  damage, death-once with bed-preserving respawn,
   and damage-event emission that the sleep node consumes for wake. The
   serial reducer must construct contexts from pre-motion authority so the
-  pre-step snapshot holds.
+  pre-step snapshot holds. Source players consume bounded late Till and human
+  Mining receipts after their two source regions through indexed scalar borrows,
+  reusing the same arithmetic without replaying survival timers or motion.
+  Sorted live registrations preserve accepted scalar prefixes on later refusal;
+  unconsumed receipts keep order until context Drop destroys their transient lane.
 - `src/core/player_publication.rs` owns the live tick-end private player
   projection after final movement, actions, damage and climate settlement.
   It derives mining, armor, saturation and per-height temperature from final
@@ -568,6 +576,9 @@ consume its cancellation and error contracts before joining the real backend.
   restarts at 1, completions through the 1.6 transaction exactly once, human
   failure clearing vs companion-full retaining saturated progress, the
   human-only snow clear without drop capacity, and bow-draw suppression.
+  Successful human completion preflights the bounded charge lane before its
+  transaction and earns one Mining receipt after progress clears; companion,
+  incomplete and refused work earns none.
   Harvest outputs use the shared deterministic samplers at completion; an
   empty output list imposes no drop-capacity gate. Human door/bed footprints
   clear atomically, while companions retain the source single-cell door

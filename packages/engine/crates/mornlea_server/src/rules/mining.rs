@@ -246,8 +246,9 @@ fn advance_progress(
 
 /// Settles one human actor tick: held primary after combat precedence drives
 /// the progress key, and saturation completes exactly once through the
-/// accepted resolver and transaction. Any refusal after the attempt clears the
-/// human record before the collapsed error shape surfaces.
+/// accepted resolver and transaction. Transaction refusal clears the human
+/// record before the collapsed error shape surfaces; receipt capacity refusal
+/// precedes the transaction and retains the current attempt.
 fn run_human(
     ctx: &mut TickContext<'_>,
     actor: ActorKey,
@@ -317,9 +318,12 @@ fn run_human(
             return Err(REFUSAL);
         }
     };
+    // Capacity refusal preserves the completed attempt before any transaction.
+    ctx.check_charge_capacity()?;
     match ctx.transaction().try_mine(resolved) {
         Ok(_) => {
             stage_clear(ctx, actor, prior)?;
+            ctx.note_charge(actor, crate::core::state::ActionKind::Mining)?;
             Ok(PhaseReport {
                 examined: 1,
                 applied: 1,

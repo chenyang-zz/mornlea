@@ -2868,12 +2868,13 @@ fn check_effect_work(effect: &RuleEffect) -> Result<(), RuleReject> {
 }
 
 /// Exhaustion charge receipt one action provider notes for the survival
-/// provider to settle.
+/// provider or late source-player consumer to settle.
 ///
 /// Mining and till receipts fire exactly on their successful completion forks
 /// (refused or interrupted work notes nothing); melee receipts fire exactly on
-/// a successful hit. Each receipt settles through the shared threshold loop at
-/// the next post-physics pass, so writers never touch hunger state directly.
+/// a successful hit in direct fixtures. Source players settle late receipts after
+/// Interaction and Mining; public direct fixtures retain next post-physics
+/// settlement. The existing direct melee debit remains separate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActionKind {
     Mining,
@@ -3348,6 +3349,113 @@ impl<'a> TickContext<'a> {
             dirty_chunks: std::mem::take(&mut self.dirty_chunks),
             sleep_record,
         };
+    }
+
+    /// Settles only late action scalars through the indexed source player owners.
+    /// All qualification and arithmetic precede writes; foreign receipts retain order.
+    pub(crate) fn settle_source_player_action_costs(
+        &mut self,
+        session: SessionKey,
+    ) -> Result<PhaseReport, ServerError> {
+        let mut report = PhaseReport {
+            examined: 0,
+            applied: 0,
+            carried: 0,
+            rejected: 0,
+        };
+        if let Some(error) = self.authority.tick_failure {
+            return Err(error);
+        }
+        if self.authority.phase == ServerPhase::Closed {
+            return Err(ServerError::InvalidState {
+                phase: ServerPhase::Closed,
+            });
+        }
+        if self.authority.source_player_radius.is_none()
+            || !self.source_player_session_active(session)
+        {
+            return Ok(report);
+        }
+        let invalid = ServerError::InvalidInput {
+            field: "source_player_action_costs",
+        };
+        let slot = *self.player_slots.get(&session).ok_or(invalid)?;
+        let actor = self.actors.get(slot).ok_or(invalid)?;
+        let key = ActorKey::Player(session);
+        if actor.key != key {
+            return Err(invalid);
+        }
+        if actor.lifecycle != ActorLifecycle::Active {
+            return Ok(report);
+        }
+        // Reject a corrupt lane before scanning, including foreign-only work.
+        if self.charges.len() > 4096 {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: 4096,
+                observed: self.charges.len(),
+            });
+        }
+        if !self.charges.iter().any(|(owner, _)| *owner == key) {
+            return Ok(report);
+        }
+        if !matches!(actor.body, ActorBody::Player(_)) {
+            return Err(invalid);
+        }
+        let runtime = self.runtimes.get(&key).ok_or(invalid)?;
+        if runtime.key != key || !matches!(runtime.aux, ActorAux::Player { .. }) {
+            return Err(invalid);
+        }
+        if runtime.reset {
+            return Ok(report);
+        }
+        let threshold = self
+            .environment
+            .as_ref()
+            .ok_or(ServerError::Internal {
+                invariant: "tick environment snapshot",
+            })?
+            .tunables
+            .exhaustion_threshold_milli();
+        // Match survival's compatibility narrowing before the shared wide loop.
+        let mut hunger = actor.survival.hunger();
+        let mut saturation = runtime.saturation_milli.min(u32::from(u16::MAX)) as u16;
+        let mut exhaustion = runtime.exhaustion_milli.min(u32::from(u16::MAX)) as u16;
+        for (_, kind) in self.charges.iter().filter(|(owner, _)| *owner == key) {
+            (hunger, saturation, exhaustion) = crate::rules::player_survival::exhausted_state(
+                hunger,
+                saturation,
+                exhaustion,
+                crate::rules::player_survival::charge_milli(*kind),
+                threshold,
+            );
+            report.examined += 1;
+        }
+        let survival = mornlea_domain::SurvivalState::try_new(mornlea_domain::SurvivalStateParts {
+            health: actor.survival.health(),
+            hunger,
+            oxygen: actor.survival.oxygen(),
+            saturation_zero: saturation == 0,
+            armor_points: actor.survival.armor_points(),
+        })
+        .map_err(|_| ServerError::Internal {
+            invariant: "source player action cost survival",
+        })?;
+        // No fallible work remains: the checked indexed pair stays exclusively borrowed.
+        let actor = &mut self.actors[slot];
+        let ActorBody::Player(body) = &mut actor.body else {
+            unreachable!("checked player body")
+        };
+        body.hunger = hunger;
+        body.saturation_milli = saturation;
+        body.exhaustion_milli = exhaustion;
+        actor.survival = survival;
+        let runtime = self.runtimes.get_mut(&key).expect("checked player runtime");
+        runtime.saturation_milli = u32::from(saturation);
+        runtime.exhaustion_milli = u32::from(exhaustion);
+        self.charges.retain(|(owner, _)| *owner != key);
+        report.applied = report.examined;
+        Ok(report)
     }
 
     /// Recovers one indexed Active source player before native motion.
@@ -4145,7 +4253,7 @@ impl<'a> TickContext<'a> {
     }
 
     /// Notes one exhaustion charge receipt for an actor, to be settled by the
-    /// survival provider's post-physics pass. Writers own the firing rule (see
+    /// survival pass or the late source-player scalar consumer. Writers own the firing rule (see
     /// the `ActionKind` contract); the log itself only bounds memory.
     pub fn note_charge(&mut self, actor: ActorKey, kind: ActionKind) -> Result<(), ServerError> {
         self.check_charge_capacity()?;
@@ -14238,6 +14346,466 @@ mod source_player_restore_tests {
             );
             assert_eq!(ctx_book_snapshot(&book, other), other_scan);
         }
+    }
+    fn ctx_action_seed(
+        c: &mut TickContext<'_>,
+        session: SessionKey,
+        saturation: u32,
+        exhaustion: u32,
+    ) {
+        let slot = c.player_slots[&session];
+        c.actors[slot].survival = ctx_survival(20, 20, 300);
+        let ActorBody::Player(body) = &mut c.actors[slot].body else {
+            unreachable!()
+        };
+        body.hunger = 20;
+        body.saturation_milli = saturation.min(65535) as u16;
+        body.exhaustion_milli = exhaustion.min(65535) as u16;
+        let r = c.runtimes.get_mut(&ActorKey::Player(session)).unwrap();
+        r.saturation_milli = saturation;
+        r.exhaustion_milli = exhaustion;
+        r.reset = false;
+    }
+    fn ctx_action_lanes(c: &TickContext<'_>, session: SessionKey) -> (u8, u32, u32) {
+        let a = &c.actors[c.player_slots[&session]];
+        let r = &c.runtimes[&ActorKey::Player(session)];
+        let ActorBody::Player(body) = &a.body else {
+            unreachable!()
+        };
+        assert_eq!(
+            (
+                body.hunger,
+                u32::from(body.saturation_milli),
+                u32::from(body.exhaustion_milli)
+            ),
+            (a.survival.hunger(), r.saturation_milli, r.exhaustion_milli)
+        );
+        assert_eq!(a.survival.saturation_zero(), r.saturation_milli == 0);
+        (a.survival.hunger(), r.saturation_milli, r.exhaustion_milli)
+    }
+    fn ctx_action_threshold(threshold: u16) -> RuleTunables {
+        let d = RuleTunables::source_defaults();
+        RuleTunables::try_new(
+            d.physics(),
+            d.regen_delay_ticks(),
+            d.regen_interval_ticks(),
+            d.drown_interval_ticks(),
+            d.starvation_interval_ticks(),
+            d.regen_hunger_threshold(),
+            threshold,
+            d.eating_ticks(),
+            d.furnace_burn_ticks(),
+            d.furnace_smelt_ticks(),
+            d.fluid_delay(),
+            d.random_attempts(),
+            d.crop_growth_percent(),
+            d.interaction_reach(),
+            d.eye_height(),
+            d.drop_pickup_delay_ticks(),
+            d.player_drop_pickup_delay_ticks(),
+            d.drop_lifetime_ticks(),
+            d.drop_pickup_range(),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn ctx_action_costs_scalar_borrow_and_order() {
+        let (mut a, s, other) = ctx_safe_fixture(true);
+        let other = other.unwrap();
+        ctx_add_allocations(&mut a, s);
+        let book = std::mem::take(&mut a.source_players);
+        let scans = [ctx_book_snapshot(&book, s), ctx_book_snapshot(&book, other)];
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        c.freeze_environment(0);
+        ctx_seed_transients(&mut c, &[s, other]);
+        ctx_action_seed(&mut c, s, 500, 3999);
+        c.charges = vec![
+            (ActorKey::Player(s), ActionKind::Till),
+            (ActorKey::Player(other), ActionKind::Melee),
+            (ActorKey::Player(s), ActionKind::Mining),
+            (ActorKey::Player(other), ActionKind::Till),
+        ];
+        let pointers = ctx_allocations(
+            &c.actors[c.player_slots[&s]],
+            &c.runtimes[&ActorKey::Player(s)],
+        );
+        let before = ctx_death_snapshot(&c);
+        let old_actor = c.actors[c.player_slots[&s]].clone();
+        let old_runtime = c.runtimes[&ActorKey::Player(s)].clone();
+        let old_charges = c.charges.clone();
+        let report = c.settle_source_player_action_costs(s).unwrap();
+        assert_eq!((report.examined, report.applied), (2, 2));
+        assert_eq!(ctx_action_lanes(&c, s), (20, 0, 9));
+        assert_eq!(
+            c.charges,
+            vec![
+                (ActorKey::Player(other), ActionKind::Melee),
+                (ActorKey::Player(other), ActionKind::Till)
+            ]
+        );
+        assert_eq!(
+            ctx_allocations(
+                &c.actors[c.player_slots[&s]],
+                &c.runtimes[&ActorKey::Player(s)]
+            ),
+            pointers
+        );
+        let accepted_survival = c.actors[c.player_slots[&s]].survival;
+        let accepted_charges = c.charges.clone();
+        assert_eq!(
+            (
+                accepted_survival.health(),
+                accepted_survival.oxygen(),
+                accepted_survival.armor_points()
+            ),
+            (
+                old_actor.survival.health(),
+                old_actor.survival.oxygen(),
+                old_actor.survival.armor_points()
+            )
+        );
+        c.actors[c.player_slots[&s]].survival = old_actor.survival;
+        let ActorBody::Player(body) = &mut c.actors[c.player_slots[&s]].body else {
+            unreachable!()
+        };
+        let ActorBody::Player(old_body) = &old_actor.body else {
+            unreachable!()
+        };
+        body.hunger = old_body.hunger;
+        body.saturation_milli = old_body.saturation_milli;
+        body.exhaustion_milli = old_body.exhaustion_milli;
+        let runtime = c.runtimes.get_mut(&ActorKey::Player(s)).unwrap();
+        runtime.saturation_milli = old_runtime.saturation_milli;
+        runtime.exhaustion_milli = old_runtime.exhaustion_milli;
+        c.charges = old_charges;
+        assert_eq!(ctx_death_snapshot(&c), before);
+        c.actors[c.player_slots[&s]].survival = accepted_survival;
+        let ActorBody::Player(body) = &mut c.actors[c.player_slots[&s]].body else {
+            unreachable!()
+        };
+        body.hunger = 20;
+        body.saturation_milli = 0;
+        body.exhaustion_milli = 9;
+        let runtime = c.runtimes.get_mut(&ActorKey::Player(s)).unwrap();
+        runtime.saturation_milli = 0;
+        runtime.exhaustion_milli = 9;
+        c.charges = accepted_charges;
+        let accepted = ctx_death_snapshot(&c);
+        assert_eq!(
+            c.settle_source_player_action_costs(s),
+            Ok(PhaseReport {
+                examined: 0,
+                applied: 0,
+                carried: 0,
+                rejected: 0
+            })
+        );
+        assert_eq!(ctx_death_snapshot(&c), accepted);
+        assert_eq!(
+            [ctx_book_snapshot(&book, s), ctx_book_snapshot(&book, other)],
+            scans
+        );
+    }
+    #[test]
+    fn ctx_action_costs_source_threshold_table() {
+        for kind in [ActionKind::Till, ActionKind::Mining] {
+            for (sat, exh, threshold, want) in [
+                (500, 3999, 4000, (20, 0, 4)),
+                (0, 3999, 4000, (19, 0, 4)),
+                (500, 3999, 8000, (20, 500, 4004)),
+                (500, 3999, 0, (0, 0, 0)),
+                (500, 3999, 1, (0, 0, 0)),
+                (500, 65535, 65535, (20, 0, 5)),
+                (u32::MAX, u32::MAX, 4000, (20, 49535, 1540)),
+            ] {
+                let (mut a, s, _) = ctx_safe_fixture(false);
+                let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+                c.freeze_environment(0);
+                c.environment.as_mut().unwrap().tunables = ctx_action_threshold(threshold);
+                ctx_action_seed(&mut c, s, sat, exh);
+                c.charges = vec![(ActorKey::Player(s), kind)];
+                let health = c.actors[c.player_slots[&s]].survival.health();
+                let r = c.settle_source_player_action_costs(s).unwrap();
+                assert_eq!((r.examined, r.applied), (1, 1));
+                assert_eq!(
+                    ctx_action_lanes(&c, s),
+                    want,
+                    "{kind:?} threshold {threshold}"
+                );
+                assert_eq!(c.actors[c.player_slots[&s]].survival.health(), health);
+                assert!(c.charges.is_empty());
+            }
+        }
+    }
+    #[test]
+    fn ctx_action_costs_quiet_and_refusal_precedence() {
+        for row in 0..25 {
+            let (mut a, s, other) = ctx_safe_fixture(true);
+            let other = other.unwrap();
+            let mut book = std::mem::take(&mut a.source_players);
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            c.freeze_environment(0);
+            ctx_action_seed(&mut c, s, 500, 3999);
+            let slot = c.player_slots[&s];
+            c.charges = vec![(ActorKey::Player(s), ActionKind::Till)];
+            let invalid = ServerError::InvalidInput {
+                field: "source_player_action_costs",
+            };
+            let expected = match row {
+                0 => {
+                    c.authority.source_player_radius = None;
+                    c.player_slots.remove(&s);
+                    Ok(PhaseReport {
+                        examined: 0,
+                        applied: 0,
+                        carried: 0,
+                        rejected: 0,
+                    })
+                }
+                1 => {
+                    c.authority.sessions.remove(&s);
+                    c.player_slots.remove(&s);
+                    Ok(PhaseReport {
+                        examined: 0,
+                        applied: 0,
+                        carried: 0,
+                        rejected: 0,
+                    })
+                }
+                2 => {
+                    c.authority.sessions.get_mut(&s).unwrap().phase = SessionPhase::Retired;
+                    Ok(PhaseReport {
+                        examined: 0,
+                        applied: 0,
+                        carried: 0,
+                        rejected: 0,
+                    })
+                }
+                3..=5 => {
+                    c.actors[slot].lifecycle = match row {
+                        3 => ActorLifecycle::Pending,
+                        4 => ActorLifecycle::Respawning,
+                        _ => ActorLifecycle::Dead,
+                    };
+                    c.charges
+                        .resize(4097, (ActorKey::Player(s), ActionKind::Till));
+                    Ok(PhaseReport {
+                        examined: 0,
+                        applied: 0,
+                        carried: 0,
+                        rejected: 0,
+                    })
+                }
+                6 => {
+                    c.charges.clear();
+                    c.runtimes.remove(&ActorKey::Player(s));
+                    c.environment = None;
+                    Ok(PhaseReport {
+                        examined: 0,
+                        applied: 0,
+                        carried: 0,
+                        rejected: 0,
+                    })
+                }
+                7 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().reset = true;
+                    c.environment = None;
+                    Ok(PhaseReport {
+                        examined: 0,
+                        applied: 0,
+                        carried: 0,
+                        rejected: 0,
+                    })
+                }
+                8 => {
+                    book.entries.remove(&s);
+                    book.entries.remove(&other);
+                    Ok(PhaseReport {
+                        examined: 0,
+                        applied: 0,
+                        carried: 0,
+                        rejected: 0,
+                    })
+                }
+                9 => {
+                    for e in book.entries.values_mut() {
+                        e.ever_spawned = false;
+                    }
+                    Ok(PhaseReport {
+                        examined: 0,
+                        applied: 0,
+                        carried: 0,
+                        rejected: 0,
+                    })
+                }
+                10 => {
+                    c.authority.tick_failure = Some(ServerError::Disconnected);
+                    c.authority.phase = ServerPhase::Closed;
+                    Err(ServerError::Disconnected)
+                }
+                11 => {
+                    c.authority.phase = ServerPhase::Closed;
+                    c.authority.source_player_radius = None;
+                    Err(ServerError::InvalidState {
+                        phase: ServerPhase::Closed,
+                    })
+                }
+                12 => {
+                    c.player_slots.remove(&s);
+                    Err(invalid)
+                }
+                13 => {
+                    c.player_slots.insert(s, c.actors.len());
+                    Err(invalid)
+                }
+                14 => {
+                    c.actors[slot].key = ActorKey::Player(other);
+                    Err(invalid)
+                }
+                15..=19 => {
+                    c.charges = vec![(ActorKey::Player(other), ActionKind::Till); 4097];
+                    match row {
+                        15 => {}
+                        16 => {
+                            c.actors[slot].body = c.actors[c.player_slots[&other]].body.clone();
+                            if let ActorBody::Player(b) = &c.actors[slot].body {
+                                c.actors[slot].body =
+                                    ActorBody::Passive(mornlea_storage::PassiveMob {
+                                        id: 1,
+                                        dimension: 0,
+                                        position: b.current.position,
+                                        velocity: [0.; 3],
+                                        on_ground: true,
+                                        yaw: 0.,
+                                        health: 7,
+                                    });
+                            }
+                        }
+                        17 => {
+                            c.runtimes.remove(&ActorKey::Player(s));
+                        }
+                        18 => c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().reset = true,
+                        _ => c.environment = None,
+                    };
+                    Err(ServerError::Capacity {
+                        resource: Resource::Commands,
+                        limit: 4096,
+                        observed: 4097,
+                    })
+                }
+                20 => {
+                    c.actors[slot].body = ActorBody::Passive(mornlea_storage::PassiveMob {
+                        id: 1,
+                        dimension: 0,
+                        position: [0., 64., 0.],
+                        velocity: [0.; 3],
+                        on_ground: true,
+                        yaw: 0.,
+                        health: 7,
+                    });
+                    Err(invalid)
+                }
+                21 => {
+                    c.runtimes.remove(&ActorKey::Player(s));
+                    Err(invalid)
+                }
+                22 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().key = ActorKey::Player(other);
+                    Err(invalid)
+                }
+                23 => {
+                    c.runtimes.get_mut(&ActorKey::Player(s)).unwrap().aux = ActorAux::Hostile {
+                        distant_ticks: 1,
+                        shoot_cooldown: 2,
+                        fresh: true,
+                    };
+                    Err(invalid)
+                }
+                _ => {
+                    c.environment = None;
+                    Err(ServerError::Internal {
+                        invariant: "tick environment snapshot",
+                    })
+                }
+            };
+            let book_before = book
+                .entries
+                .keys()
+                .map(|s| ctx_book_snapshot(&book, *s))
+                .collect::<Vec<_>>();
+            let before = ctx_death_snapshot(&c);
+            let result = if row == 8 || row == 9 {
+                super::super::source_player_restore::settle_action_costs(&book, &mut c)
+            } else {
+                c.settle_source_player_action_costs(s)
+            };
+            assert_eq!(result, expected, "row {row}");
+            assert_eq!(ctx_death_snapshot(&c), before, "row {row}");
+            assert_eq!(
+                book.entries
+                    .keys()
+                    .map(|s| ctx_book_snapshot(&book, *s))
+                    .collect::<Vec<_>>(),
+                book_before
+            );
+        }
+    }
+    #[test]
+    fn ctx_action_costs_accepted_prefix_survives_drop() {
+        let (mut a, s, other) = ctx_safe_fixture(true);
+        let other = other.unwrap();
+        ctx_add_allocations(&mut a, s);
+        let book = std::mem::take(&mut a.source_players);
+        let scans = [ctx_book_snapshot(&book, s), ctx_book_snapshot(&book, other)];
+        let pointers = ctx_allocations(player(&a, s), &a.residents.runtimes[&ActorKey::Player(s)]);
+        {
+            let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+            c.freeze_environment(0);
+            ctx_action_seed(&mut c, s, 500, 3999);
+            ctx_action_seed(&mut c, other, 500, 3999);
+            let foreign = ActorKey::Player(SessionKey::from_raw(99).unwrap());
+            c.charges = vec![
+                (foreign, ActionKind::Melee),
+                (ActorKey::Player(s), ActionKind::Till),
+                (ActorKey::Player(other), ActionKind::Mining),
+                (foreign, ActionKind::Till),
+                (ActorKey::Player(s), ActionKind::Mining),
+            ];
+            c.runtimes.get_mut(&ActorKey::Player(other)).unwrap().key = ActorKey::Player(s);
+            assert_eq!(
+                super::super::source_player_restore::settle_action_costs(&book, &mut c),
+                Err(ServerError::InvalidInput {
+                    field: "source_player_action_costs"
+                })
+            );
+            assert_eq!(ctx_action_lanes(&c, s), (20, 0, 9));
+            assert_eq!(
+                c.charges,
+                vec![
+                    (foreign, ActionKind::Melee),
+                    (ActorKey::Player(other), ActionKind::Mining),
+                    (foreign, ActionKind::Till)
+                ]
+            );
+        }
+        a.source_players = book;
+        let r = &a.residents.runtimes[&ActorKey::Player(s)];
+        assert_eq!(
+            (
+                player(&a, s).survival.hunger(),
+                r.saturation_milli,
+                r.exhaustion_milli
+            ),
+            (20, 0, 9)
+        );
+        assert_eq!(ctx_allocations(player(&a, s), r), pointers);
+        assert_eq!(
+            [
+                ctx_book_snapshot(&a.source_players, s),
+                ctx_book_snapshot(&a.source_players, other)
+            ],
+            scans
+        );
     }
 }
 

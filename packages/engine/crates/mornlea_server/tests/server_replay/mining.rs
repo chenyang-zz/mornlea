@@ -1818,3 +1818,184 @@ fn progress_pins_target_behind_transparent_cells() {
     assert_eq!(report.applied, 0);
     assert_eq!(context.read().mining(actor), None);
 }
+
+use mornlea_server::state::ActionKind;
+
+fn action_costs_human_scene<'a>(
+    a: &'a mut AuthorityState,
+    block: u16,
+    held: ItemStack,
+) -> (TickContext<'a>, ActorKey, BlockPos) {
+    let s = a
+        .admit(admitted(1, "Costs"), TransportKind::Memory)
+        .unwrap();
+    let mut c = harness_context(a);
+    let target = BlockPos::new(0, 65, 1);
+    let cells = if block == u16::MAX {
+        vec![]
+    } else {
+        vec![(target, block)]
+    };
+    let key = south_scene(&mut c, s, held, &cells);
+    (c, key, target)
+}
+#[test]
+fn action_costs_human_completion_receipt() {
+    for (block, held, ticks, wear) in [
+        (
+            STONE,
+            tool(ITEM_STONE_PICKAXE, 1),
+            15,
+            ITEM_BROKEN_STONE_PICKAXE,
+        ),
+        (SNOW_LAYER1, tool(ITEM_STONE_HOE, 2), 1, ITEM_STONE_HOE),
+        (SHORT_GRASS, tool(ITEM_STONE_HOE, 2), 1, ITEM_STONE_HOE),
+    ] {
+        let mut a = authority();
+        let (mut c, key, target) = action_costs_human_scene(&mut a, block, held);
+        let old = c.read().actor(key).unwrap().survival;
+        let body = c.read().actor(key).unwrap().body.clone();
+        for _ in 0..ticks {
+            provider::run(&mut c, mine_call(key)).unwrap();
+        }
+        assert_eq!(c.read().block(Dimension::OVERWORLD, target), Some(AIR));
+        assert!(c.read().mining(key).is_none());
+        assert_eq!(c.read().inventory(key).unwrap().slots[0].item, wear);
+        assert_eq!(c.read().actor(key).unwrap().survival, old);
+        assert_eq!(c.read().actor(key).unwrap().body, body);
+        assert_eq!(c.take_charges(), vec![(key, ActionKind::Mining)]);
+        provider::run(&mut c, mine_call(key)).unwrap();
+        assert!(c.take_charges().is_empty());
+    }
+    let mut a = authority();
+    let mut c = harness_context(&mut a);
+    let id = companion_id();
+    let target = BlockPos::new(2, 65, 2);
+    let key = companion_scene(
+        &mut c,
+        id,
+        target,
+        InventoryRecord::empty(),
+        &[(target, DIRT)],
+    );
+    for _ in 0..5 {
+        provider::run(&mut c, mine_call(key)).unwrap();
+    }
+    assert_eq!(c.read().block(Dimension::OVERWORLD, target), Some(AIR));
+    assert!(c.take_charges().is_empty());
+}
+#[test]
+fn action_costs_refusals_do_not_earn_receipts() {
+    for row in 0..6 {
+        let mut a = authority();
+        let block = match row {
+            0 => STONE,
+            2 => u16::MAX,
+            4 => BEDROCK,
+            5 => DIRT,
+            _ => SNOW_LAYER1,
+        };
+        let (mut c, key, target) = action_costs_human_scene(
+            &mut a,
+            block,
+            if row == 5 {
+                tool(ITEM_IRON_PICKAXE, 2)
+            } else {
+                tool(ITEM_STONE_HOE, 2)
+            },
+        );
+        c.note_charge(key, ActionKind::Till).unwrap();
+        match row {
+            1 => {
+                let mut r = c.read().runtime(key).unwrap().clone();
+                r.controls = Some(control(false, std::f32::consts::PI, 0.));
+                c.stage(RuleEffect::Runtime(r)).unwrap();
+            }
+            2 => {}
+            3 => {
+                c.preload_block(observation(target, AIR));
+            }
+            5 => fill_drop_table(&mut c, target),
+            _ => {}
+        }
+        if (1..=4).contains(&row) {
+            c.preload_mining(MiningProgress {
+                actor: key,
+                dimension: Dimension::OVERWORLD,
+                target,
+                observed_block: SNOW_LAYER1,
+                tool_slot: HotbarSlot::new(0).unwrap(),
+                tool: tool(ITEM_STONE_HOE, 2),
+                elapsed: 1,
+                required: 5,
+                last_tick: c.read().tick(),
+            });
+        }
+        let before = probe(&c, &[target], &[key]);
+        let ticks = if row == 5 { 5 } else { 1 };
+        for _ in 0..ticks {
+            let r = provider::run(&mut c, mine_call(key));
+            if row == 5 && c.read().mining(key).is_none() {
+                assert!(r.is_err());
+            } else {
+                r.unwrap();
+            }
+        }
+        let mut want = before.clone();
+        if (1..=4).contains(&row) {
+            want.progress = vec![(key, None)];
+        }
+        if row == 0 {
+            want.progress = vec![(key, c.read().mining(key).cloned())];
+            assert_eq!(want.progress[0].1.as_ref().unwrap().elapsed, 1);
+        }
+        assert_eq!(probe(&c, &[target], &[key]), want);
+        assert_eq!(c.take_charges(), vec![(key, ActionKind::Till)]);
+    }
+}
+#[test]
+fn action_costs_capacity_precedes_completion() {
+    for row in 0..3 {
+        let incomplete = row == 1;
+        let mut a = authority();
+        let (mut c, key, target) = action_costs_human_scene(
+            &mut a,
+            if row == 0 { SNOW_LAYER1 } else { STONE },
+            if row == 2 {
+                tool(ITEM_STONE_PICKAXE, 2)
+            } else {
+                tool(ITEM_STONE_HOE, 2)
+            },
+        );
+        if row == 2 {
+            for _ in 0..14 {
+                provider::run(&mut c, mine_call(key)).unwrap();
+            }
+            assert_eq!(c.read().mining(key).unwrap().elapsed, 14);
+        }
+        let prefix = vec![(key, ActionKind::Till); 4096];
+        for (actor, kind) in &prefix {
+            c.note_charge(*actor, *kind).unwrap();
+        }
+        let before = probe(&c, &[target], &[key]);
+        let result = provider::run(&mut c, mine_call(key));
+        if incomplete {
+            result.unwrap();
+            let mut want = before;
+            want.progress = vec![(key, c.read().mining(key).cloned())];
+            assert_eq!(want.progress[0].1.as_ref().unwrap().elapsed, 1);
+            assert_eq!(probe(&c, &[target], &[key]), want);
+        } else {
+            assert_eq!(
+                result,
+                Err(ServerError::Capacity {
+                    resource: Resource::Commands,
+                    limit: 4096,
+                    observed: 4097
+                })
+            );
+            assert_eq!(probe(&c, &[target], &[key]), before);
+        }
+        assert_eq!(c.take_charges(), prefix);
+    }
+}

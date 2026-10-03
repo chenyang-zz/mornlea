@@ -219,6 +219,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "passives::run",
     "companions::run",
     "route_interaction",
+    "source_player_restore::settle_action_costs",
     "route_door",
     "sleep::enter",
     "sleep::settle",
@@ -242,6 +243,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "random_blocks::advance",
     "containers::run",
     "mining::run",
+    "source_player_restore::settle_action_costs",
     "crafting::run",
     "supports::run",
     "environment::run",
@@ -839,4 +841,32 @@ fn snow_capture_order() {
         let repeat = format!("{body}\n{marker}");
         assert!(std::panic::catch_unwind(|| assert_eq!(marker_count(&repeat, marker), 1)).is_err());
     }
+}
+
+#[test]
+fn action_costs_source_regions_order() {
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let marker = "source_player_restore::settle_action_costs";
+    assert_eq!(marker_count(body, marker), 2);
+    let chain = [
+        "source_player_restore::settle_deaths",
+        "for envelope in context.deferred(RulePhase::Interaction)",
+        "route_interaction",
+        marker,
+        "route_door",
+        "sleep::enter",
+        "sleep::settle",
+        "mining::run",
+        marker,
+        "RulePhase::WorkbenchLifecycle",
+    ];
+    chain_positions(body, &chain);
+    let swapped = body
+        .replacen("route_interaction", "costs_swap", 1)
+        .replacen(marker, "route_interaction", 1)
+        .replacen("costs_swap", marker, 1);
+    assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
+    let duplicate = body.replacen(marker, &format!("{marker} {marker}"), 1);
+    assert_ne!(marker_count(&duplicate, marker), 2);
 }

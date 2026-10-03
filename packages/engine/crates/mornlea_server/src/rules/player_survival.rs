@@ -420,7 +420,8 @@ fn take_own_charges(
 /// Charge amount per receipt kind, from the fixed exhaustion table in
 /// `packages/server/sim/entity/hunger.go` (deliberately not tunable: the
 /// ratios are the gameplay).
-fn charge_milli(kind: ActionKind) -> u16 {
+/// The late source-player consumer reuses these exact provider charge units.
+pub(crate) fn charge_milli(kind: ActionKind) -> u16 {
     match kind {
         ActionKind::Mining => MINING_EXHAUSTION_MILLI,
         ActionKind::Till => TILL_EXHAUSTION_MILLI,

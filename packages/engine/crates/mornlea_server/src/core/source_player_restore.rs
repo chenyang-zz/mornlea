@@ -1,4 +1,4 @@
-//! Source login registration, exclusive scans, keyed Safe and retained trample/Snow capture.
+//! Source login registration, exclusive scans, keyed Safe, retained trample/Snow capture and late action scalars.
 use super::actor_placement::RestoreCandidate;
 use super::contracts::{
     ActorAux, ActorKey, ActorLifecycle, ActorRuntime, RuleEffect, ServerError, SessionKey,
@@ -465,6 +465,31 @@ pub(crate) fn settle_tramples(
         context,
     )?;
     book.tramples.len = 0;
+    Ok(report)
+}
+
+/// Sorted live registrations qualify late costs without moving any scan owner.
+/// Earlier scalar acceptance survives a later refusal; receipts remain tick-local.
+pub(crate) fn settle_action_costs(
+    book: &SourcePlayerBook,
+    context: &mut TickContext<'_>,
+) -> Result<crate::core::contracts::PhaseReport, ServerError> {
+    let mut report = crate::core::contracts::PhaseReport {
+        examined: 0,
+        applied: 0,
+        carried: 0,
+        rejected: 0,
+    };
+    for (session, entry) in &book.entries {
+        if !entry.ever_spawned {
+            continue;
+        }
+        let next = context.settle_source_player_action_costs(*session)?;
+        report.examined += next.examined;
+        report.applied += next.applied;
+        report.carried += next.carried;
+        report.rejected += next.rejected;
+    }
     Ok(report)
 }
 

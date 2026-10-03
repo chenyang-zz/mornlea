@@ -2734,3 +2734,275 @@ fn snow_actual_activation_is_quiet() {
     death_no_hit(&publication);
     f.close();
 }
+
+use mornlea_protocol::TillSoil;
+
+struct ActionCostFixture {
+    fixture: Fixture,
+    state: AuthorityState,
+    session: SessionKey,
+    login: LoginDriver,
+    transport: MemoryTransport,
+    connection: ConnectionId,
+    clock: StepClock,
+}
+impl ActionCostFixture {
+    fn new(saturation: u16, exhaustion: u16, held: ItemStack, mining_block: u16) -> Self {
+        let mut save = height_player_save([8.5, 64., 8.5]);
+        save.health = 20;
+        save.hunger = 20;
+        save.saturation_milli = saturation;
+        save.exhaustion_milli = exhaustion;
+        save.safe = None;
+        save.armor = Default::default();
+        save.respawn_present = false;
+        save.inventory.hotbar.selected = 3;
+        save.inventory.hotbar.slots[3] = held;
+        let current = key(Dimension::OVERWORLD, 0, 0);
+        let mut chunk = height_floor(63);
+        death_chunk_cell(&mut chunk, BlockPos::new(8, 63, 6), 3);
+        death_chunk_cell(&mut chunk, BlockPos::new(8, 64, 6), 0);
+        death_chunk_cell(&mut chunk, BlockPos::new(8, 64, 5), mining_block);
+        let (mut fixture, mut state) = Fixture::new(
+            Some(save),
+            Dimension::DEPTHS,
+            ChunkPos::new(-2, 3),
+            vec![
+                (current, chunk),
+                (key(Dimension::OVERWORLD, -2, 3), height_floor(64)),
+            ],
+        );
+        let (mut login, transport, connection, session, clock) =
+            handshake(&mut fixture, &mut state);
+        let publication = fixture.acquire(&mut state, current);
+        let (actor, runtime, inventory) = recovery_observed(&state, session);
+        assert_eq!(actor.motion.position().get(), [8.5, 64., 8.5]);
+        assert!(actor.motion.on_ground());
+        assert!(!runtime.reset);
+        assert_eq!(inventory.slots[3], held);
+        assert!(local(&publication).ready() && local(&publication).reset());
+        MemoryTransport::drain_session(
+            &mut login.bind(&mut state, &mut fixture.store),
+            session,
+            512,
+            1 << 20,
+        )
+        .unwrap();
+        Self {
+            fixture,
+            state,
+            session,
+            login,
+            transport,
+            connection,
+            clock,
+        }
+    }
+    fn send(&mut self, packet: ClientPacket) {
+        assert!(!matches!(
+            self.transport.send(
+                self.connection,
+                MemoryTransport::encode_frame(&packet).unwrap(),
+                &mut self.login.bind(&mut self.state, &mut self.fixture.store),
+                &self.clock
+            ),
+            ConnectionProgress::Closed { .. }
+        ));
+    }
+    fn input(&mut self, sequence: u64, mining: bool) {
+        self.send(ClientPacket::PlayerInput(
+            PlayerInput::new(sequence, 0, 0, false, 0., -0.5, mining, false, false, false).unwrap(),
+        ));
+    }
+    fn till(&mut self) {
+        self.send(ClientPacket::TillSoil(TillSoil::new(4, 0., -0.65).unwrap()));
+    }
+    fn tick(&mut self) -> TickPublication {
+        self.state.advance_tick(TickBudget::full()).unwrap()
+    }
+    fn cell(&self, pos: BlockPos) -> u16 {
+        self.state
+            .settled_read()
+            .unwrap()
+            .block(Dimension::OVERWORLD, pos)
+            .unwrap()
+    }
+    fn assert_cost(&mut self, p: &TickPublication, want: (u8, u32, u32), ack: u64) {
+        let (a, r, _) = recovery_observed(&self.state, self.session);
+        let ActorBody::Player(body) = &a.body else {
+            panic!("player")
+        };
+        assert_eq!(
+            (a.survival.hunger(), r.saturation_milli, r.exhaustion_milli),
+            want,
+            "late action scalar settlement"
+        );
+        assert_eq!(
+            (
+                body.hunger,
+                u32::from(body.saturation_milli),
+                u32::from(body.exhaustion_milli)
+            ),
+            want
+        );
+        assert_eq!(a.survival.saturation_zero(), want.1 == 0);
+        let local = local(p);
+        assert!(local.ready());
+        assert_eq!(local.last_input_sequence(), ack);
+        assert_eq!(local.survival().hunger(), want.0);
+        assert_eq!(local.survival().saturation_zero(), want.1 == 0);
+        let frames = MemoryTransport::drain_session(
+            &mut self.login.bind(&mut self.state, &mut self.fixture.store),
+            self.session,
+            512,
+            1 << 20,
+        )
+        .unwrap();
+        let mut found = false;
+        for bytes in frames {
+            let frame = read_frame_ref(&bytes).unwrap();
+            let packet = ProtocolCodec::new()
+                .unwrap()
+                .decode_server(State::Play, frame.packet_id, frame.payload)
+                .unwrap();
+            if let ServerPacket::PlayerState(wire) = packet {
+                assert_eq!(wire.hunger, want.0);
+                assert_eq!(wire.saturation_zero, want.1 == 0);
+                found = true;
+            }
+        }
+        assert!(found, "queued PlayerState");
+    }
+    fn no_drops(&self) {
+        assert!(
+            self.state
+                .settled_read()
+                .unwrap()
+                .drops(key(Dimension::OVERWORLD, 0, 0))
+                .is_empty()
+        );
+    }
+    fn release_and_idle(&mut self, want: (u8, u32, u32), sequence: u64) {
+        self.input(sequence, false);
+        let p = self.tick();
+        self.assert_cost(&p, want, sequence);
+        assert!(
+            self.state
+                .settled_read()
+                .unwrap()
+                .mining(ActorKey::Player(self.session))
+                .is_none()
+        );
+        let p = self.tick();
+        self.assert_cost(&p, want, sequence);
+    }
+}
+#[test]
+fn action_costs_actual_late_till() {
+    for saturation in [500, 0] {
+        let mut f = ActionCostFixture::new(
+            saturation,
+            3999,
+            ItemStack {
+                item: 30,
+                count: 1,
+                durability: 1,
+            },
+            0,
+        );
+        f.input(3, false);
+        f.till();
+        let p = f.tick();
+        assert_eq!(f.cell(BlockPos::new(8, 63, 6)), 35, "native Till target");
+        assert_eq!(
+            recovery_observed(&f.state, f.session).2.slots[3],
+            ItemStack {
+                item: 32,
+                count: 1,
+                durability: 0
+            }
+        );
+        f.no_drops();
+        let want = (if saturation == 0 { 19 } else { 20 }, 0, 4);
+        f.assert_cost(&p, want, 3);
+        let p = f.tick();
+        f.assert_cost(&p, want, 3);
+    }
+}
+#[test]
+fn action_costs_actual_clear_only_mining() {
+    let mut f = ActionCostFixture::new(
+        500,
+        3999,
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 2,
+        },
+        85,
+    );
+    f.input(3, true);
+    let p = f.tick();
+    assert_eq!(f.cell(BlockPos::new(8, 64, 5)), 0, "native Snow target");
+    assert_eq!(
+        recovery_observed(&f.state, f.session).2.slots[3],
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 1
+        }
+    );
+    f.no_drops();
+    f.assert_cost(&p, (20, 0, 4), 3);
+    f.release_and_idle((20, 0, 4), 4);
+}
+#[test]
+fn action_costs_actual_till_then_mining() {
+    let mut f = ActionCostFixture::new(
+        0,
+        3994,
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 3,
+        },
+        85,
+    );
+    f.input(3, true);
+    f.till();
+    let p = f.tick();
+    assert_eq!(f.cell(BlockPos::new(8, 63, 6)), 35, "native Till target");
+    assert_eq!(f.cell(BlockPos::new(8, 64, 5)), 0, "native Snow target");
+    assert_eq!(
+        recovery_observed(&f.state, f.session).2.slots[3],
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 1
+        }
+    );
+    f.no_drops();
+    f.assert_cost(&p, (19, 0, 4), 3);
+    f.release_and_idle((19, 0, 4), 5);
+}
+#[test]
+fn action_costs_actual_refused_and_incomplete() {
+    let held = ItemStack {
+        item: 1,
+        count: 7,
+        durability: 0,
+    };
+    let mut f = ActionCostFixture::new(500, 3999, held, 2);
+    f.input(3, true);
+    f.till();
+    let p = f.tick();
+    assert_eq!(f.cell(BlockPos::new(8, 63, 6)), 3);
+    assert_eq!(f.cell(BlockPos::new(8, 64, 5)), 2);
+    assert_eq!(recovery_observed(&f.state, f.session).2.slots[3], held);
+    f.no_drops();
+    let view = f.state.settled_read().unwrap();
+    let progress = view.mining(ActorKey::Player(f.session)).unwrap();
+    assert_eq!((progress.elapsed, progress.required), (1, 30));
+    f.assert_cost(&p, (20, 500, 3999), 3);
+    f.release_and_idle((20, 500, 3999), 5);
+}

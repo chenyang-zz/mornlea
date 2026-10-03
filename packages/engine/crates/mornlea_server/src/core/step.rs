@@ -472,6 +472,8 @@ fn dispatch_rows(
     for envelope in context.deferred(RulePhase::Interaction) {
         route_interaction(context, &envelope)?;
     }
+    // Late Till costs precede every later interaction-region hunger consumer.
+    source_player_restore::settle_action_costs(source_players, context)?;
     for interaction in context.read().interactions().to_vec() {
         if interaction.kind != InteractionKind::Door {
             continue;
@@ -554,6 +556,8 @@ fn dispatch_rows(
     for actor in mining_actors(context) {
         per_actor(context, RulePhase::MiningStep, actor, mining::run)?;
     }
+    // Completed human Mining costs are visible to final player projection.
+    source_player_restore::settle_action_costs(source_players, context)?;
     crafting::run(context, batch_call(RulePhase::WorkbenchLifecycle))?;
     supports::run(context, batch_call(RulePhase::Support))?;
     environment::run(context, batch_call(RulePhase::EnvironmentEnd))?;
