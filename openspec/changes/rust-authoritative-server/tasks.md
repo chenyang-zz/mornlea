@@ -113,7 +113,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7l3d Integrate actual source player death after all damage and restart retained scans ([packet](plans/92-source-player-death-consumer.md)).
 - [x] 3.7l3sf Record actual post-native supported player Safe checkpoints in place ([packet](plans/93-source-player-safe-checkpoint.md)).
 - [x] 3.7l3tr Capture actual source player trample candidates before death and settle fixed coordinates ([packet](plans/94-source-player-trample-capture.md)).
-- [ ] 3.7l3sn Retain actual source player Snow travel, capture before death and settle original cells ([packet](plans/95-source-player-snow-capture.md)).
+- [x] 3.7l3sn Retain actual source player Snow travel, capture before death and settle original cells ([packet](plans/95-source-player-snow-capture.md)).
 - [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
 - [x] 3.7r0 Move resident ownership through live ticks and finalize changed chunks only ([packet](plans/52-owned-resident-tick.md)).
 - [x] 3.7r1 Bound defensive compound rollback to touched resident keys ([packet](plans/53-bounded-compound-undo.md)).
