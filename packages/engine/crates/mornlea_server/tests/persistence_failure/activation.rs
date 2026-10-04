@@ -991,7 +991,7 @@ fn activation_refuses_damaged_backup_identity(case: &str, probe: &str, identity:
     let rust_text = rust.to_string_lossy();
     let previous_text = previous.to_string_lossy();
     let package_text = package.to_string_lossy();
-    let (code, output) = run_script(&[
+    let (dry_code, dry_output) = run_script(&[
         "activate",
         "--world",
         &world_text,
@@ -1009,11 +1009,6 @@ fn activation_refuses_damaged_backup_identity(case: &str, probe: &str, identity:
         &package_text,
         "--dry-run",
     ]);
-    assert_ne!(code, 0, "dry-run must refuse the damaged backup: {output}");
-    assert!(
-        output.contains("backup_mismatch"),
-        "dry-run refusal names the backup: {output}"
-    );
     let (code, output) = run_script(&[
         "activate",
         "--world",
@@ -1077,6 +1072,14 @@ fn activation_refuses_damaged_backup_identity(case: &str, probe: &str, identity:
     );
     let _lease = mornlea_server::store::lease::WorldLease::acquire(&world)
         .expect("refusal leaves the world lock free");
+    assert_ne!(
+        dry_code, 0,
+        "dry-run must refuse the damaged backup: {dry_output}"
+    );
+    assert!(
+        dry_output.contains("backup_mismatch"),
+        "dry-run refusal names the backup: {dry_output}"
+    );
 }
 
 #[test]
@@ -1150,6 +1153,14 @@ fn confine_paths_rejects_overlapping_managed_trees() {
         &[&world_text, &backup_text, &run_text],
     );
     assert_eq!(code, 0, "sibling world and backup confine: {output}");
+
+    let prefix_sibling = run.join("world-copy");
+    let (code, output) = run_script_functions(
+        &scope,
+        "confine_paths \"$1\" \"$2\" \"$3\"",
+        &[&world_text, &prefix_sibling.to_string_lossy(), &run_text],
+    );
+    assert_eq!(code, 0, "near-prefix sibling names confine: {output}");
 
     let (code, output) = run_script_functions(
         &scope,
