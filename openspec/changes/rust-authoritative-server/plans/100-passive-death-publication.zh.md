@@ -1,7 +1,7 @@
-# R4 passive 移除原因恢复
+# R4 passive removal-cause recovery
 
-授权基线29f853d4326a614b2af8e5aa60c943a9ee1e0704，R4证据585e28d79cd9b89f0c35d1036432d4a2df710179。英文同名计划为精确执行契约。仅五个Rust文件可由Claude修改。宿主管理计划与证据，不勾选3.7整体。
+Authorized baseline 29f853d4326a614b2af8e5aa60c943a9ee1e0704; R4 evidence 585e28d79cd9b89f0c35d1036432d4a2df710179. The same-named English plan is the precise execution contract. Only five Rust files may be modified by Claude. The host manages plans and evidence and does not check overall 3.7.
 
-Go死亡比同tick视野退出优先，但运动坠出世界是Vanished。Rust两者均为Dead，因此TickContext仅在运动成功终止后记quiet身份，随TickOutcome转交并清空；发布侧一次分类Dead身份并排除quiet，再按会话镜像差集选择原因。保留协议、批上限64、排序及会话隔离，不修chat/wanted/其他P1。
+In Go, death takes priority over a same-tick vision exit, but movement falling out of the world is Vanished. In Rust both are Dead, so TickContext records the quiet identity only after movement terminates successfully, hands it over with TickOutcome, and clears it; the publication side classifies Dead identities once and excludes quiet, then selects the cause via the session-mirror set difference. Keep the protocol, batch cap 64, ordering, and session isolation; do not fix chat/wanted/other P1.
 
-基线R4反例先RED；补真实运动quiet、死亡+视野退出、普通退出、重复抑制、混合ID及双方实际Memory/TCP有序字节/非观察者隔离验证。宿主执行锁定离线单编译进程Cargo测试、clippy与fmt，保留命令/数量/日志hash/源码hash。静态review只检查实现与证据；最终clean SHA通过外部attestation绑定，不嵌入自身提交hash。最多四次调用、两轮、budget null；超时或清理拒绝停止，不自动重试。无push/merge/deploy，架构skill不变。
+The baseline R4 counterexamples go RED first; add real-movement quiet, death+vision exit, ordinary exit, duplicate suppression, mixed IDs, and both sides' actual Memory/TCP ordered-byte / non-observer isolation verification. The host executes locked offline single-compile-process Cargo tests, clippy, and fmt, retaining commands/counts/log hash/source hash. Static review only checks implementation and evidence; the final clean SHA is bound through external attestation and does not embed its own commit hash. At most four calls, two rounds, budget null; on timeout or cleanup refusal stop, with no automatic retry. No push/merge/deploy; architecture skill unchanged.
