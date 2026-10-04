@@ -50,8 +50,9 @@ use mornlea_domain::{
     SurvivalStateParts, Weather,
 };
 use mornlea_server::contracts::{
-    ActorAux, ActorBody, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation, ChunkKey,
-    EnvironmentState, RuleEffect, RulePhase, RuleTunables, SessionKey, TransportKind,
+    ActorAux, ActorBody, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation, BlockWrite,
+    ChunkKey, EnvironmentState, RuleEffect, RulePhase, RuleTunables, SessionKey, SystemRule,
+    TransportKind,
 };
 use mornlea_server::rules::hostile_actors as provider;
 use mornlea_storage::{HostileMob, ItemStack, PlayerId as StoredPlayerId};
@@ -1373,10 +1374,10 @@ fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want
     let mut context = TickContext::harness(&mut state, TickBudget::full());
     stage_environment(&mut context, 1000, 0);
     preload_band_world(&mut context);
-    // Repair the hostile fixture: stage the foot block through a live Ready
-    // transaction before the first chase/path search consumes it.
+    // The foot block is staged through a live Ready transaction so the first
+    // chase/path search runs against the real native scene.
     let foot_cell = mornlea_domain::BlockPos::new(100, 40, 100);
-    if foot != mornlea_domain::Block::AIR {
+    if foot != AIR {
         let observed = context
             .read()
             .observation(Dimension::OVERWORLD, foot_cell)
@@ -1504,11 +1505,14 @@ fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want
 
 /// Thick Snow (87 and 88) under the foot cell consumes the shared snow
 /// tuning for both hostile kinds inside the actual native motion pass; the
-/// AIR control scene keeps the uncut walk speed.
+/// thin Snow controls (85 and 86) and the AIR control scene keep the uncut
+/// walk speed.
 #[test]
 fn motion_snow_thick_native_displacement() {
     for kind in [NIGHTWALKER, HURLER] {
         for (foot, want_z, want_vz) in [
+            (85, 100.285, -4.3),
+            (86, 100.285, -4.3),
             (87, 100.349_5, -3.01),
             (88, 100.349_5, -3.01),
             (AIR, 100.285, -4.3),
