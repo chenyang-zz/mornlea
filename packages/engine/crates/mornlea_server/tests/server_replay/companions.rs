@@ -659,11 +659,7 @@ fn snow_walk_tick(
             .transaction()
             .try_system(SystemRule::Support, vec![write])
             .expect("foot system write");
-        assert_eq!(
-            outcome.changed_blocks.len(),
-            1,
-            "exactly the foot cell changes"
-        );
+        assert_eq!(outcome.changed.len(), 1, "exactly the foot cell changes");
     }
     context.preload_companion_action(envelope(mover, 10, mover_action));
     context.preload_companion_action(envelope(idler, 10, move_action(1, 0, false, 0.0)));
@@ -691,7 +687,7 @@ fn snow_walk_tick(
             .read()
             .observation(Dimension::OVERWORLD, foot_pos)
             .expect("foot after motion")
-            .block(),
+            .block,
         foot.1.unwrap_or(foot.0)
     );
     assert_eq!(
@@ -699,10 +695,13 @@ fn snow_walk_tick(
             .read()
             .observation(Dimension::OVERWORLD, BlockPos::new(2, 0, 0))
             .expect("floor after motion")
-            .block(),
+            .block,
         support
     );
-    assert_eq!(context.read().tunables(), RuleTunables::source_defaults());
+    assert_eq!(
+        context.read().environment().expect("environment").tunables,
+        RuleTunables::source_defaults()
+    );
     (
         baseline,
         context.read().actor(mover_key).expect("mover").clone(),
