@@ -1421,7 +1421,10 @@ fn assert_motion_snow_case(kind: u8, scene: SnowScene, foot: u16, want_z: f32, w
     // attack range and the coincident hurler retreat both produce a genuine
     // zero move intent.
     if scene.stationary {
-        stage_actors(&mut context, &[player_actor(anchor, 1, [100.5, 40.0, 100.5])]);
+        stage_actors(
+            &mut context,
+            &[player_actor(anchor, 1, [100.5, 40.0, 100.5])],
+        );
     }
     // Restage the chased hostile at the start pose with the scene's ground
     // contact and speed; the established target, repath deadline and runtime
@@ -1456,7 +1459,9 @@ fn assert_motion_snow_case(kind: u8, scene: SnowScene, foot: u16, want_z: f32, w
         .expect("player record");
     let support_cell = mornlea_domain::BlockPos::new(100, 39, 100);
     let foot_observed = context.read().observation(Dimension::OVERWORLD, foot_cell);
-    let support_observed = context.read().observation(Dimension::OVERWORLD, support_cell);
+    let support_observed = context
+        .read()
+        .observation(Dimension::OVERWORLD, support_cell);
     let events = context.events().to_vec();
 
     provider::run(&mut context, motion_call()).expect("snow motion tick");
@@ -1518,7 +1523,9 @@ fn assert_motion_snow_case(kind: u8, scene: SnowScene, foot: u16, want_z: f32, w
         "the borrowed foot cell is unchanged"
     );
     assert_eq!(
-        context.read().observation(Dimension::OVERWORLD, support_cell),
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, support_cell),
         support_observed,
         "the support cell is unchanged"
     );
@@ -1608,6 +1615,29 @@ fn motion_snow_thick_native_displacement() {
         100.349_5,
         -3.01,
     );
+}
+
+// The isolated tests each qualify one native consumer directly, so a negative
+// control shows the snow scaling for both kinds before the first failure
+// stops the composite fixture.
+#[test]
+fn motion_snow_isolated_nightwalker_87() {
+    assert_motion_snow_native_displacement(NIGHTWALKER, 87, 100.349_5, -3.01);
+}
+
+#[test]
+fn motion_snow_isolated_nightwalker_88() {
+    assert_motion_snow_native_displacement(NIGHTWALKER, 88, 100.349_5, -3.01);
+}
+
+#[test]
+fn motion_snow_isolated_hurler_87() {
+    assert_motion_snow_native_displacement(HURLER, 87, 100.349_5, -3.01);
+}
+
+#[test]
+fn motion_snow_isolated_hurler_88() {
+    assert_motion_snow_native_displacement(HURLER, 88, 100.349_5, -3.01);
 }
 
 /// Sixteen blocks out, the hurler dispatches a path and steps toward the

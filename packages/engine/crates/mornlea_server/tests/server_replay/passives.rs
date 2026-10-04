@@ -708,21 +708,16 @@ fn assert_motion_snow_case(scene: SnowScene, foot: u16, want_z: f32, want_vz: f3
         .find(|actor| matches!(actor.key, ActorKey::Player(_)))
         .cloned()
         .expect("player record");
-    let inventory = context
-        .read()
-        .inventory(ActorKey::Player(session))
-        .cloned();
+    let inventory = context.read().inventory(ActorKey::Player(session)).cloned();
     let foot_observed = context.read().observation(Dimension::OVERWORLD, foot_cell);
-    let support_observed = context.read().observation(Dimension::OVERWORLD, support_cell);
+    let support_observed = context
+        .read()
+        .observation(Dimension::OVERWORLD, support_cell);
     let events = context.events().to_vec();
 
     provider::run(&mut context, passive_call()).expect("snow motion tick");
 
-    let next = context
-        .read()
-        .actor(passive_key(cow))
-        .expect("cow")
-        .clone();
+    let next = context.read().actor(passive_key(cow)).expect("cow").clone();
     let position = next.motion.position().get();
     let velocity = next.motion.velocity().get();
     assert_eq!(position[0], 2.5, "foot {foot}");
@@ -769,10 +764,7 @@ fn assert_motion_snow_case(scene: SnowScene, foot: u16, want_z: f32, want_vz: f3
         "the unrelated player record is unchanged"
     );
     assert_eq!(
-        context
-            .read()
-            .inventory(ActorKey::Player(session))
-            .cloned(),
+        context.read().inventory(ActorKey::Player(session)).cloned(),
         inventory,
         "temptation consumes no wheat"
     );
@@ -783,7 +775,9 @@ fn assert_motion_snow_case(scene: SnowScene, foot: u16, want_z: f32, want_vz: f3
         "the borrowed foot cell is unchanged"
     );
     assert_eq!(
-        context.read().observation(Dimension::OVERWORLD, support_cell),
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, support_cell),
         support_observed,
         "the support cell is unchanged"
     );
@@ -888,6 +882,19 @@ fn motion_snow_thick_native_displacement() {
         2.349_5,
         -3.01,
     );
+}
+
+// The isolated tests each qualify one foot cell directly, so a negative
+// control shows the snow scaling before the first failure stops the
+// composite fixture.
+#[test]
+fn motion_snow_isolated_87() {
+    assert_motion_snow_native_displacement(87, 2.349_5, -3.01);
+}
+
+#[test]
+fn motion_snow_isolated_88() {
+    assert_motion_snow_native_displacement(88, 2.349_5, -3.01);
 }
 
 fn first_hit_id(seed: i64, tick: u64, from: u64) -> u64 {
