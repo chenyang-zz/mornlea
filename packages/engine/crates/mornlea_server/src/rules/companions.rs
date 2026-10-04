@@ -57,6 +57,7 @@ use mornlea_engine::native::contracts::physics::{
 };
 use mornlea_engine::native::physics::NativePhysics;
 
+use crate::core::actor_snow::apply_snow_slowdown;
 use crate::core::contracts::{
     ActorKey, ActorLifecycle, ActorRecord, CompanionAction, PhaseReport, RuleCall, RuleEffect,
     RulePhase, ServerError,
@@ -320,6 +321,17 @@ fn step_companion(
     };
     let view = ctx.read();
     let (body_in_fluid, _) = submersion_flags(&view, dimension, position, eye_height)?;
+    // Deep native snow in the foot cell retunes the shared walk: the
+    // shadowed copy feeds the sweep bounds and the native step alike, so
+    // displacement and collision agree on one tuning.
+    let tuning = apply_snow_slowdown(
+        &view,
+        dimension,
+        position,
+        on_ground,
+        [move_x, move_z],
+        tuning,
+    )?;
     let (sweep_min, sweep_max) = sweep_bounds(velocity, on_ground, step, body_in_fluid, tuning);
     let (origin, dimensions) = step_prism(position, sweep_min, sweep_max, tuning.step_height)?;
     let view = ctx.read();

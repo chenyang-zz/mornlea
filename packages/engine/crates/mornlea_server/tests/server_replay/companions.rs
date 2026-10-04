@@ -51,6 +51,8 @@ const GRASS: u16 = 4; // `core.GrassID`
 // for both blocks while the thin snow ids 85/86 stay zero-collision.
 const DEEP_SNOW_87: u16 = 87;
 const DEEP_SNOW_88: u16 = 88;
+const THIN_SNOW_85: u16 = 85;
+const THIN_SNOW_86: u16 = 86;
 const CHEST: u16 = 11; // `core.ChestID`
 // Stable item numbers, mirrored from the frozen const block in
 // `packages/shared/core/item.go`.
@@ -606,14 +608,17 @@ const AIR_VX_BITS: u32 = 0x4089_999a; // vx 4.3
 /// the mover re-staged at [2.5, 1.0, 0.5] yaw 0 walking +X at vx 4.3
 /// (`mover_on_ground` per row) under `mover_action`, and the idler
 /// re-staged at [4.5, 1.0, 2.5] yaw 0 walking +X at vx 4.3 on its own air
-/// foot cell. `foot` is preloaded at the mover's foot cell (2, 1, 0) and
-/// `support` at the floor cell (2, 0, 0). Returns the staged mover
-/// baseline plus both post-tick records; the caller pins the bits.
+/// foot cell. `foot` is `(base, optional_write)`: the base block is
+/// preloaded at the mover's foot cell (2, 1, 0), and `Some(new)` swaps
+/// that cell through the public support transaction before the step so
+/// motion reads the current block. `support` is preloaded at the floor
+/// cell (2, 0, 0). Returns the staged mover baseline plus both post-tick
+/// records; the caller pins the bits.
 fn snow_walk_tick(
     context: &mut TickContext<'_>,
     mover: CompanionId,
     idler: CompanionId,
-    foot: u16,
+    foot: (u16, Option<u16>),
     support: u16,
     mover_on_ground: bool,
     mover_action: CompanionAction,
@@ -638,8 +643,28 @@ fn snow_walk_tick(
     context
         .stage(RuleEffect::Actor(idler_staged))
         .expect("moving idler");
-    context.preload_block(observation(BlockPos::new(2, 1, 0), foot));
+    let foot_pos = BlockPos::new(2, 1, 0);
+    context.preload_block(observation(foot_pos, foot.0));
     context.preload_block(observation(BlockPos::new(2, 0, 0), support));
+    // An optional current write swaps the foot cell through the public
+    // support transaction before motion, so the step reads the new block
+    // and exactly that cell lands in the changed-block set.
+    if let Some(new) = foot.1 {
+        let before = context
+            .read()
+            .observation(Dimension::OVERWORLD, foot_pos)
+            .expect("foot before write");
+        let write = BlockWrite::try_new(before, new).expect("foot write");
+        let outcome = context
+            .transaction()
+            .try_system(SystemRule::Support, vec![write])
+            .expect("foot system write");
+        assert_eq!(
+            outcome.changed_blocks.len(),
+            1,
+            "exactly the foot cell changes"
+        );
+    }
     context.preload_companion_action(envelope(mover, 10, mover_action));
     context.preload_companion_action(envelope(idler, 10, move_action(1, 0, false, 0.0)));
     assert_eq!(
@@ -658,6 +683,26 @@ fn snow_walk_tick(
     assert_eq!(context.read().mining(mover_key), None);
     assert_eq!(context.read().mining(idler_key), None);
     assert_eq!(context.events().len(), 0);
+    // Motion reads terrain without rewriting it: the foot cell keeps the
+    // staged or written block, the floor keeps its support, and the
+    // environment tunables stay at the source defaults.
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, foot_pos)
+            .expect("foot after motion")
+            .block(),
+        foot.1.unwrap_or(foot.0)
+    );
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(2, 0, 0))
+            .expect("floor after motion")
+            .block(),
+        support
+    );
+    assert_eq!(context.read().tunables(), RuleTunables::source_defaults());
     (
         baseline,
         context.read().actor(mover_key).expect("mover").clone(),
@@ -670,8 +715,8 @@ fn snow_walk_tick(
 /// untouched by the snow step.
 fn assert_only_motion_changed(baseline: &ActorRecord, moved: &ActorRecord) {
     let mut expected = baseline.clone();
-    expected.motion = moved.motion.clone();
-    assert_eq!(expected, moved, "snow step changes motion only");
+    expected.motion = moved.motion;
+    assert_eq!(&expected, moved, "snow step changes motion only");
 }
 
 /// Grounded Move[1,0] over deep native snow retunes the shared companion
@@ -685,9 +730,9 @@ fn assert_only_motion_changed(baseline: &ActorRecord, moved: &ActorRecord) {
 #[test]
 fn motion_snow_thick_native_displacement() {
     for (foot, x_bits, vx_bits) in [
-        (DEEP_SNOW_87, SNOW_X_BITS, SNOW_VX_BITS),
-        (DEEP_SNOW_88, SNOW_X_BITS, SNOW_VX_BITS),
-        (AIR, AIR_X_BITS, AIR_VX_BITS),
+        ((DEEP_SNOW_87, None), SNOW_X_BITS, SNOW_VX_BITS),
+        ((DEEP_SNOW_88, None), SNOW_X_BITS, SNOW_VX_BITS),
+        ((AIR, None), AIR_X_BITS, AIR_VX_BITS),
     ] {
         let mut state = authority();
         let mut context = harness_context(&mut state);
@@ -703,12 +748,14 @@ fn motion_snow_thick_native_displacement() {
         assert_eq!(
             moved.motion.position().get()[0].to_bits(),
             x_bits,
-            "grounded walk over foot block {foot}"
+            "grounded walk over foot block {}",
+            foot.0
         );
         assert_eq!(
             moved.motion.velocity().get()[0].to_bits(),
             vx_bits,
-            "grounded walk over foot block {foot}"
+            "grounded walk over foot block {}",
+            foot.0
         );
         assert_eq!(moved.motion.position().get()[1], 1.0);
         assert_eq!(moved.motion.position().get()[2], 0.5);
@@ -727,15 +774,56 @@ fn motion_snow_thick_native_displacement() {
 }
 
 /// Guard rows keep the source native controls around the snow step:
-/// airborne movers keep the air horizontal exit over deep snow, neutral
-/// grounded input decelerates at the source ground decel 50 (4.3 - 2.5 =
-/// 1.8) whether or not snow fills the foot cell, and jumping over deep
-/// snow still pays the copied snow scale on the way up.
+/// thin snow and plain air share the source grounded walk, airborne
+/// movers and neutral input match the air control exit over deep snow
+/// for the whole motion state, and jumping over deep snow still pays
+/// the copied snow scale on the way up.
 #[test]
 fn motion_snow_guards_preserve_native_controls() {
-    // Airborne: the same entry state off the ground gives the air control
-    // horizontal exit over snow; the vertical result is whatever the
-    // kernel integrates from rest, so only y never rising is pinned.
+    // Thin snow 85/86 is zero-collision: the grounded walk keeps the
+    // source tune just like plain air.
+    for base in [AIR, THIN_SNOW_85, THIN_SNOW_86] {
+        let mut state = authority();
+        let mut context = harness_context(&mut state);
+        let (baseline, moved, idle) = snow_walk_tick(
+            &mut context,
+            companion_id(1),
+            companion_id(2),
+            (base, None),
+            GRASS,
+            true,
+            move_action(1, 0, false, 0.0),
+        );
+        assert_eq!(
+            moved.motion.position().get()[0].to_bits(),
+            AIR_X_BITS,
+            "grounded walk over foot block {base}"
+        );
+        assert_eq!(
+            moved.motion.velocity().get()[0].to_bits(),
+            AIR_VX_BITS,
+            "grounded walk over foot block {base}"
+        );
+        assert!(moved.motion.on_ground());
+        assert_only_motion_changed(&baseline, &moved);
+        assert!((idle.motion.position().get()[0] - 4.715).abs() < 1e-3);
+        assert!(idle.motion.on_ground());
+    }
+
+    // Airborne: deep snow rows reproduce the air control motion state in
+    // full, not just the horizontal bits; the kernel owns the vertical
+    // result, so only y never rising is pinned separately.
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let (_, air_airborne, _) = snow_walk_tick(
+        &mut context,
+        companion_id(1),
+        companion_id(2),
+        (AIR, None),
+        GRASS,
+        false,
+        move_action(1, 0, false, 0.0),
+    );
     for foot in [DEEP_SNOW_87, DEEP_SNOW_88] {
         let mut state = authority();
         let mut context = harness_context(&mut state);
@@ -743,20 +831,14 @@ fn motion_snow_guards_preserve_native_controls() {
             &mut context,
             companion_id(1),
             companion_id(2),
-            foot,
+            (foot, None),
             GRASS,
             false,
             move_action(1, 0, false, 0.0),
         );
         assert_eq!(
-            moved.motion.position().get()[0].to_bits(),
-            AIR_X_BITS,
-            "airborne over foot block {foot} keeps the air walk"
-        );
-        assert_eq!(
-            moved.motion.velocity().get()[0].to_bits(),
-            AIR_VX_BITS,
-            "airborne over foot block {foot} keeps the air velocity"
+            moved.motion, air_airborne.motion,
+            "airborne over foot block {foot} equals the air control exit"
         );
         assert!(moved.motion.position().get()[1] <= 1.0);
         assert_only_motion_changed(&baseline, &moved);
@@ -764,8 +846,19 @@ fn motion_snow_guards_preserve_native_controls() {
         assert!(idle.motion.on_ground());
     }
 
-    // Neutral grounded: no steering decelerates to vx 1.8 and drifts to
-    // x 2.59 over deep snow exactly like air neutral, keeping look yaw.
+    // Neutral grounded: deep snow rows match the air neutral exit (vx 1.8
+    // drifting to x 2.59 at ground decel 50) and keep look yaw.
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let (_, air_neutral, _) = snow_walk_tick(
+        &mut context,
+        companion_id(1),
+        companion_id(2),
+        (AIR, None),
+        GRASS,
+        true,
+        move_action(0, 0, false, 0.0),
+    );
     for foot in [DEEP_SNOW_87, DEEP_SNOW_88] {
         let mut state = authority();
         let mut context = harness_context(&mut state);
@@ -773,10 +866,14 @@ fn motion_snow_guards_preserve_native_controls() {
             &mut context,
             companion_id(1),
             companion_id(2),
-            foot,
+            (foot, None),
             GRASS,
             true,
             move_action(0, 0, false, 0.0),
+        );
+        assert_eq!(
+            moved.motion, air_neutral.motion,
+            "neutral over foot block {foot} equals the air neutral exit"
         );
         assert!(
             (moved.motion.velocity().get()[0] - 1.8).abs() < 1e-6,
@@ -804,7 +901,7 @@ fn motion_snow_guards_preserve_native_controls() {
             &mut context,
             companion_id(1),
             companion_id(2),
-            foot,
+            (foot, None),
             GRASS,
             true,
             move_action(1, 0, true, 0.0),
@@ -841,7 +938,7 @@ fn motion_snow_reads_foot_not_support() {
         &mut context,
         companion_id(1),
         companion_id(2),
-        AIR,
+        (AIR, None),
         DEEP_SNOW_87,
         true,
         move_action(1, 0, false, 0.0),
@@ -867,7 +964,7 @@ fn motion_snow_reads_foot_not_support() {
         &mut context,
         companion_id(1),
         companion_id(2),
-        DEEP_SNOW_87,
+        (DEEP_SNOW_87, None),
         GRASS,
         true,
         move_action(1, 0, false, 0.0),
@@ -884,6 +981,43 @@ fn motion_snow_reads_foot_not_support() {
     );
     assert!(moved.motion.on_ground());
     assert_only_motion_changed(&baseline, &moved);
+}
+
+/// Current block writes steer the very next step: a support-system swap
+/// of the foot cell from air to deep snow slows the same tick, and the
+/// reverse swap restores the source walk. The write lands in the changed
+/// block set with exactly the foot cell changed (asserted in the
+/// fixture), and nothing else in the terrain moves.
+#[test]
+fn motion_snow_current_write_controls_native_step() {
+    for (base, new, x_bits, vx_bits) in [
+        (AIR, DEEP_SNOW_87, SNOW_X_BITS, SNOW_VX_BITS),
+        (DEEP_SNOW_87, AIR, AIR_X_BITS, AIR_VX_BITS),
+    ] {
+        let mut state = authority();
+        let mut context = harness_context(&mut state);
+        let (baseline, moved, _idle) = snow_walk_tick(
+            &mut context,
+            companion_id(1),
+            companion_id(2),
+            (base, Some(new)),
+            GRASS,
+            true,
+            move_action(1, 0, false, 0.0),
+        );
+        assert_eq!(
+            moved.motion.position().get()[0].to_bits(),
+            x_bits,
+            "current write {base} -> {new} retunes the same tick"
+        );
+        assert_eq!(
+            moved.motion.velocity().get()[0].to_bits(),
+            vx_bits,
+            "current write {base} -> {new} retunes the same tick"
+        );
+        assert!(moved.motion.on_ground());
+        assert_only_motion_changed(&baseline, &moved);
+    }
 }
 
 /// Mining selections never stage through this provider: a `MineHold`
