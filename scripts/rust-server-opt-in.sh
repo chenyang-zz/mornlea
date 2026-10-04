@@ -525,6 +525,35 @@ if world_canon == backup_canon:
     refuse("world and backup coincide")
 if world_canon == run_canon:
     refuse("world coincides with the run directory")
+# Realpath keeps the spelling an operator typed, so on a case-insensitive
+# filesystem one directory can answer to WORLD and world while every text
+# comparison above still sees two names. Overlap therefore also carries a
+# native device/inode ancestry check beside the textual prefixes.
+def native_ancestor(root, path):
+    try:
+        root_info = os.stat(root)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        refuse("managed path cannot be inspected: " + str(error))
+    ancestor = path
+    while True:
+        try:
+            info = os.stat(ancestor)
+        except FileNotFoundError:
+            info = None
+        except OSError as error:
+            refuse("managed path cannot be inspected: " + str(error))
+        if info is not None and (info.st_dev, info.st_ino) == (root_info.st_dev, root_info.st_ino):
+            return True
+        if os.path.dirname(ancestor) == ancestor:
+            return False
+        ancestor = os.path.dirname(ancestor)
+if (world_canon.startswith(backup_canon + "/")
+        or backup_canon.startswith(world_canon + "/")
+        or native_ancestor(world_canon, backup_canon)
+        or native_ancestor(backup_canon, world_canon)):
+    refuse("world and backup trees overlap")
 for path in (world, backup, run_dir):
     if os.path.islink(path):
         refuse("symlink alias in " + path)
@@ -954,6 +983,7 @@ EOF
         if [ -e "$backup_canon" ]; then
             local current
             adopted_tree="$(tree_hash "$backup_canon" "$BACKUP_SKIP")" || fail "backup_mismatch" "pre-existing backup does not hash"
+            backup_verify "$backup_canon" "$adopted_tree"
             current="$(tree_hash "$world_canon" "$LOCK_BASENAME")" || fail "invalid_manifest" "world does not hash"
             [ "$adopted_tree" = "$current" ] || fail "backup_mismatch" "pre-existing backup diverges from the world"
         fi

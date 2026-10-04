@@ -1199,6 +1199,83 @@ fn confine_paths_rejects_overlapping_managed_trees() {
 }
 
 #[test]
+fn confine_paths_rejects_native_directory_alias_overlap() {
+    use std::os::unix::fs::MetadataExt;
+
+    let scope = Scope::fresh("case-alias");
+    let run = scope.path("run");
+    let world = run.join("world");
+    let backup = run.join("backup");
+    fs::create_dir_all(&world).expect("create world");
+    fs::create_dir_all(backup.join("world")).expect("create nested backup world");
+    let run_text = run.to_string_lossy();
+    let world_text = world.to_string_lossy();
+    let backup_text = backup.to_string_lossy();
+    let world_meta = fs::metadata(&world).expect("stat world");
+    let world_identity = (world_meta.dev(), world_meta.ino());
+    let upper_world = run.join("WORLD");
+    let upper_world_text = upper_world.to_string_lossy();
+    let alias_matches = fs::metadata(&upper_world)
+        .map(|meta| (meta.dev(), meta.ino()) == world_identity)
+        .unwrap_or(false);
+    if !alias_matches {
+        // A case-sensitive filesystem keeps each spelling as its own absent
+        // path, so the shared-inode refusals cannot be observed here; prove
+        // the distinct spellings instead of pretending alias coverage.
+        assert!(
+            fs::metadata(&upper_world).is_err(),
+            "upper-case world stays a distinct path"
+        );
+        assert!(
+            fs::metadata(run.join("BACKUP")).is_err(),
+            "upper-case backup stays a distinct path"
+        );
+        return;
+    }
+    let upper_backup = upper_world.join("backup");
+    let (code, output) = run_script_functions(
+        &scope,
+        "confine_paths \"$1\" \"$2\" \"$3\"",
+        &[&world_text, &upper_backup.to_string_lossy(), &run_text],
+    );
+    assert_ne!(code, 0, "case-aliased nested backup refuses: {output}");
+    assert!(
+        output.contains("invalid_manifest"),
+        "refusal names invalid_manifest: {output}"
+    );
+
+    let upper_nested_world = run.join("BACKUP").join("world");
+    let (code, output) = run_script_functions(
+        &scope,
+        "confine_paths \"$1\" \"$2\" \"$3\"",
+        &[
+            &upper_nested_world.to_string_lossy(),
+            &backup_text,
+            &run_text,
+        ],
+    );
+    assert_ne!(code, 0, "case-aliased nested world refuses: {output}");
+    assert!(
+        output.contains("invalid_manifest"),
+        "refusal names invalid_manifest: {output}"
+    );
+
+    let (code, output) = run_script_functions(
+        &scope,
+        "confine_paths \"$1\" \"$2\" \"$3\"",
+        &[&world_text, &upper_world_text, &run_text],
+    );
+    assert_ne!(
+        code, 0,
+        "one directory under two spellings refuses: {output}"
+    );
+    assert!(
+        output.contains("invalid_manifest"),
+        "refusal names invalid_manifest: {output}"
+    );
+}
+
+#[test]
 fn manifest_fixture_shape() {
     let fixture = repo_root()
         .join("testdata")
