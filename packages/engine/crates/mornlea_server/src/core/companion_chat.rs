@@ -577,9 +577,10 @@ mod tests {
     #[test]
     fn generation_exhaustion_refuses_before_promotion_mutation() {
         let (mut book, id) = configured_book();
-        assert!(book
-            .try_admit(id, test_command("dig"), test_issuer(), 7)
-            .unwrap());
+        assert!(
+            book.try_admit(id, test_command("dig"), test_issuer(), 7)
+                .unwrap()
+        );
         book.slots.get_mut(&id).expect("slot").generation = u64::MAX;
         let snapshot = book.clone();
         assert_eq!(
@@ -601,9 +602,10 @@ mod tests {
     #[test]
     fn last_usable_generation_promotes_once_with_receipt() {
         let (mut book, id) = configured_book();
-        assert!(book
-            .try_admit(id, test_command("dig"), test_issuer(), 7)
-            .unwrap());
+        assert!(
+            book.try_admit(id, test_command("dig"), test_issuer(), 7)
+                .unwrap()
+        );
         book.slots.get_mut(&id).expect("slot").generation = u64::MAX - 1;
         book.promote_heads().unwrap();
         let slot = book.slots.get(&id).expect("slot");

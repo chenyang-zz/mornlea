@@ -16337,8 +16337,11 @@ mod companion_chat_boundary_tests {
         let start = mornlea_protocol::LoginStart::new(player, "Ada", 8).unwrap();
         let inbound =
             mornlea_protocol::LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
-        a.admit(mornlea_protocol::admit_login(inbound).unwrap(), TransportKind::Memory)
-            .unwrap()
+        a.admit(
+            mornlea_protocol::admit_login(inbound).unwrap(),
+            TransportKind::Memory,
+        )
+        .unwrap()
     }
 
     fn amu() -> (CompanionId, CompanionName) {
@@ -16479,26 +16482,37 @@ mod companion_chat_boundary_tests {
             .insert(ActorKey::Companion(id), companion_runtime(id));
         a.submit(session, chat("@阿木 dig")).unwrap();
         a.prepare_companion_chat().unwrap();
+        // Model the real publication drain: the initial Accepted fact leaves
+        // the decided buffer before planning proceeds.
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
         a.take_companion_chat_planning(id)
             .unwrap()
             .expect("planning receipt");
-        a.next_chat_event_id = u64::MAX;
+        // One genuinely staged input is now pending beside the planning task.
+        a.submit(session, chat("@阿木 queued")).unwrap();
+        a.next_chat_event_id = u64::MAX - 1;
         let book = a.companion_chat.clone();
-        assert!(a
-            .install_companion_chat_plan(id, 1, follow_plan())
-            .is_err());
-        assert_eq!(a.companion_chat, book);
         let runtime = a
             .residents
             .runtimes
             .get(&ActorKey::Companion(id))
-            .expect("companion runtime");
-        assert!(matches!(
-            runtime.aux,
-            ActorAux::Companion { generation: 0, .. }
-        ));
+            .expect("companion runtime")
+            .clone();
+        let view = a.companion_chat_queue(id).unwrap();
+        // One staged input plus the new fact exceeds the single usable id.
+        assert!(a.install_companion_chat_plan(id, 1, follow_plan()).is_err());
+        assert_eq!(a.companion_chat, book);
+        assert_eq!(
+            a.residents
+                .runtimes
+                .get(&ActorKey::Companion(id))
+                .expect("companion runtime"),
+            &runtime
+        );
+        assert_eq!(a.companion_chat_queue(id).unwrap(), view);
         assert_eq!(a.companion_chat.decided.len(), 0);
-        assert_eq!(a.next_chat_event_id, u64::MAX);
+        assert_eq!(a.next_chat_event_id, u64::MAX - 1);
+        assert_eq!(a.chat_queue.len(), 1);
         assert!(a
             .finish_companion_chat_task(
                 id,
@@ -16507,11 +16521,22 @@ mod companion_chat_boundary_tests {
             )
             .is_err());
         assert_eq!(a.companion_chat, book);
+        assert_eq!(
+            a.residents
+                .runtimes
+                .get(&ActorKey::Companion(id))
+                .expect("companion runtime"),
+            &runtime
+        );
+        assert_eq!(a.companion_chat_queue(id).unwrap(), view);
+        assert_eq!(a.companion_chat.decided.len(), 0);
+        assert_eq!(a.next_chat_event_id, u64::MAX - 1);
+        assert_eq!(a.chat_queue.len(), 1);
 
-        a.next_chat_event_id = u64::MAX - 2;
-        assert!(a
-            .install_companion_chat_plan(id, 1, follow_plan())
-            .unwrap());
+        // Headroom for the staged input plus both lifecycle facts lets the
+        // install and the terminal finish succeed in order.
+        a.next_chat_event_id = u64::MAX - 3;
+        assert!(a.install_companion_chat_plan(id, 1, follow_plan()).unwrap());
         assert_eq!(a.companion_chat.decided.len(), 1);
         assert!(a
             .finish_companion_chat_task(
@@ -16520,6 +16545,7 @@ mod companion_chat_boundary_tests {
                 TaskState::Failed(TaskFailure::PlannerUnavailable),
             )
             .unwrap());
+        assert_eq!(a.chat_queue.len(), 1);
     }
 
     /// Preparing at the extreme tick captures that exact source tick with

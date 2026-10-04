@@ -2475,3 +2475,6 @@ Main design uses Superpowers brainstorming and writing-plans; precise bounded pl
 
 
 Partial binding diagnostic checkpoint only: third real call completed192s, source module/config/query/planning-take compiles, but actual configured idle-stop probe still RED0pass1fail/exit101. Not task acceptance, no independent review executed. Local checkpoint exists solely to bind observed failure and resume original dev session under controller clean-source feedback invariant. Static defect: same_configuration length+all can mistake repeated[A,A] for existing[A,B], duplicate idempotent request must reject. Remaining original admission/capture/stop/publication/tests still pending. Architecture skill: no change.
+
+
+Chat host gates PASS. Original frozen R4 idle-stop counterexample RED on qualified wanted source2e553148; explicitly configured same-ID/same-name adapted fixture GREEN, original frozen hash preserved separately. Actual chat replay/MemoryTCP and full replay/parity/lib, prior wanted/passive, clippy/fmt/diff all GREEN. Exact receipts in evidence/chat-loom-host-validation.json; fresh readonly review pending and clean source externally bound. No full Agent/binary/overall3.7 acceptance or push/merge/deploy. Architecture skill: no change.

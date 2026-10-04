@@ -1,0 +1,512 @@
+{
+  "task_id": "mornlea-r4-chat-20261004",
+  "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+  "prior_evidence_sha": "585e28d79cd9b89f0c35d1036432d4a2df710179",
+  "overall_3_7_accepted": false,
+  "host_runtime_pass": true,
+  "source_file_hashes": {
+    "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+    "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+    "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+    "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+    "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+    "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+    "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+  },
+  "red": {
+    "argv": [
+      "/Users/chen/work/loom-rust-chat-20261004/evidence/baseline-probe",
+      "review_idle_stop_must_not_report_accepted",
+      "--exact",
+      "--nocapture"
+    ],
+    "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+    "exit": 101,
+    "expected_exit": 101,
+    "passed": true,
+    "elapsed_seconds": 1.191,
+    "test_counts": [
+      {
+        "passed": 0,
+        "failed": 1,
+        "ignored": 0,
+        "filtered": 15
+      }
+    ],
+    "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/baseline-idle-stop-probe.log",
+    "log_sha256": "ea1fac5de495febf4c0a63ec543ea273503f176f8286f8f76d5b8d8c20c2c5af",
+    "log_result_tail": "\nrunning 1 test\n\nthread 'review_idle_stop_must_not_report_accepted' (63367497) panicked at /Users/chen/work/loom-rust-chat-20261004/evidence/R4-go-contract-probes.rs:2190:5:\nidle stop must preserve Go NotFollowing, got Accepted { companion: CompanionSpeaker { id: CompanionId([9, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 0]), name: CompanionName(\"companion-0900000000004000\") }, command: CommandText(\"\u505c\u6b62\") }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\ntest review_idle_stop_must_not_report_accepted ... FAILED\n\nfailures:\n\nfailures:\n    review_idle_stop_must_not_report_accepted\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.01s\n\n",
+    "tested_file_hashes": {
+      "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": null,
+      "packages/engine/crates/mornlea_server/src/core/mod.rs": "9f268b07ca79b40a202cb7227ab34d81eae40000953c02f0fe9f3e818787f62f",
+      "packages/engine/crates/mornlea_server/src/core/state.rs": "fdeda9350b9e259646e2d0b7c9e5430480daff197b54e7ee3b069ff359b46df4",
+      "packages/engine/crates/mornlea_server/src/core/step.rs": "9bf2cfa7d507cc986c63f82ad755260b54fd17760a334d07f02b8ededfee45ef",
+      "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "8408d610acbba278201cdc786998bf1fc8d7e3ec7f8eca8d298618700d14d851",
+      "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "66a055850721525bb28ed76d629c6b3552d748cdd07a67b649be2245434737b8",
+      "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "8cbf214b2946fc270cb9ba5efc86cdcf002d26148c499cca57926201a4c6b2de"
+    },
+    "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+    "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+  },
+  "receipts": {
+    "green-chat-replay": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--test",
+        "server_replay",
+        "projection_chat_contract_"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 4.357,
+      "test_counts": [
+        {
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 481
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-green-chat-replay.log",
+      "log_sha256": "cec2510d185924566df2162a3f12d46ec93841d040c3903787bdec2339974a35",
+      "log_result_tail": "   Compiling mornlea_server v0.1.0 (/Users/chen/work/loom-rust-chat-20261004/candidate/packages/engine/crates/mornlea_server)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.33s\n     Running tests/server_replay.rs (/Users/chen/work/loom-rust-chat-20261004/cargo-target/debug/deps/server_replay-1b6a4663cd0381ad)\n\nrunning 9 tests\ntest publication_projection::projection_chat_contract_config_atomic_bounds_and_idempotence ... ok\ntest publication_projection::projection_chat_contract_inactive_admission_and_unknown ... ok\ntest publication_projection::projection_chat_contract_stop_rejections_and_take_once ... ok\ntest publication_projection::projection_chat_contract_intake_limit_and_stop_phrases ... ok\ntest publication_projection::projection_chat_contract_install_stop_runtime_fence ... ok\ntest publication_projection::projection_chat_contract_fifo_capacity_two_slots ... ok\ntest publication_projection::projection_chat_contract_terminal_finish_and_quota ... ok\ntest publication_projection::projection_chat_contract_stored_failure_reasons ... ok\ntest publication_projection::projection_chat_contract_issuer_capture_and_ray ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.06s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "green-replay-focused": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--test",
+        "server_replay",
+        "publication_projection"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 0.205,
+      "test_counts": [
+        {
+          "passed": 38,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 452
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-green-replay-focused.log",
+      "log_sha256": "4db4e923ddedc9478bb05f3bffbd350851d592bd2efd4ae2e461905e719683eb",
+      "log_result_tail": "r_replay.rs (/Users/chen/work/loom-rust-chat-20261004/cargo-target/debug/deps/server_replay-1b6a4663cd0381ad)\n\nrunning 38 tests\ntest publication_projection::projection_chat_contract_config_atomic_bounds_and_idempotence ... ok\ntest publication_projection::projection_batch_splitting_respects_wire_caps ... ok\ntest publication_projection::projection_chat_accepted_broadcast_and_rejects_sender_only ... ok\ntest publication_projection::projection_chat_contract_inactive_admission_and_unknown ... ok\ntest publication_projection::projection_chat_contract_stop_rejections_and_take_once ... ok\ntest publication_projection::projection_companion_lifecycle_spawn_states_despawn ... ok\ntest publication_projection::projection_chat_contract_fifo_capacity_two_slots ... ok\ntest publication_projection::projection_chat_contract_terminal_finish_and_quota ... ok\ntest publication_projection::projection_chat_contract_install_stop_runtime_fence ... ok\ntest publication_projection::projection_idle_authority_publishes_nothing ... ok\ntest publication_projection::projection_despawn_families_emit_once ... ok\ntest publication_projection::projection_hostile_lifecycle_events ... ok\ntest publication_projection::projection_item_drop_upserts_and_removes ... ok\ntest publication_projection::projection_chat_contract_intake_limit_and_stop_phrases ... ok\ntest publication_projection::projection_passive_death_beats_simultaneous_view_exit ... ok\ntest publication_projection::projection_first_send_snapshots_ascend_across_ticks ... ok\ntest publication_projection::projection_chunk_snapshot_then_block_changes_then_forget ... ok\ntest publication_projection::projection_passive_lifecycle_events ... ok\ntest publication_projection::projection_projectile_lifecycle_events ... ok\ntest publication_projection::projection_wanted_cap_zero_is_center_only ... ok\ntest publication_projection::projection_wanted_cap_two_clamps_wide_declaration ... ok\ntest publication_projection::projection_chat_contract_stored_failure_reasons ... ok\ntest publication_projection::projection_wanted_default_bound_and_builder_values ... ok\ntest publication_projection::projection_record_states_inventory_chest_container_crafting_furnace ... ok\ntest publication_projection::projection_passive_quiet_fallout_reports_vanished ... ok\ntest publication_projection::projection_resync_replies_full_snapshot_and_ignores_have_revision ... ok\ntest publication_projection::projection_wanted_declared_minimum_boundary ... ok\ntest publication_projection::projection_remote_lifecycle_spawn_states_despawn_order ... ok\ntest publication_projection::projection_wanted_declared_max_clamped_to_default ... ok\ntest publication_projection::projection_wanted_negative_center ... ok\ntest publication_projection::projection_wanted_default_includes_chunk_three ... ok\ntest publication_projection::projection_wanted_late_join_gets_own_first_snapshot ... ok\ntest publication_projection::projection_wanted_resync_order_watermark_and_stale ... ok\ntest publication_projection::projection_wanted_two_sessions_differ_and_resync_isolated ... ok\ntest publication_projection::projection_wanted_unready_skips_then_snapshots_once ... ok\ntest publication_projection::projection_wanted_move_forgets_old_and_snapshots_new ... ok\ntest publication_projection::projection_chat_contract_issuer_capture_and_ray ... ok\ntest publication_projection::projection_wanted_unbounded_cap_supports_sixty_five ... ok\n\ntest result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.08s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "green-chat-parity": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--test",
+        "local_remote_parity",
+        "chat_contract_"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 2.09,
+      "test_counts": [
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 58
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-green-chat-parity.log",
+      "log_sha256": "d6724bfbc902a1c0b64835baf530392919e4de3e2bbfac2479d0a465138e1df9",
+      "log_result_tail": "   Compiling mornlea_server v0.1.0 (/Users/chen/work/loom-rust-chat-20261004/candidate/packages/engine/crates/mornlea_server)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.33s\n     Running tests/local_remote_parity.rs (/Users/chen/work/loom-rust-chat-20261004/cargo-target/debug/deps/local_remote_parity-57f89c0584f7e961)\n\nrunning 2 tests\ntest integration::chat_contract_phrases_finite_across_adapters ... ok\ntest integration::chat_contract_matrix_across_adapters ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 58 filtered out; finished in 0.06s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "green-replay-full": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--test",
+        "server_replay"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 2.712,
+      "test_counts": [
+        {
+          "passed": 490,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-green-replay-full.log",
+      "log_sha256": "bbebfbe88c42dea419554fc6e3767930b4b230bc2359f3be4a90da5116eeb79f",
+      "log_result_tail": "t supports::later_pass_observes_removed_grass_but_grass_pass_does_not_recurse ... ok\ntest supports::loaded_air_counterpart_is_cleared_without_pair_form_check ... ok\ntest supports::cross_chunk_bed_max_revision_refuses_atomically ... ok\ntest random_blocks::all_crop_families_require_wet_support_and_sky ... ok\ntest supports::restored_support_holds_all_four_targets ... ok\ntest supports::torch_orientations_and_glass_support_policy ... ok\ntest supports::cross_chunk_bed_requires_counterpart_then_clears_both_once ... ok\ntest supports::full_slots_clear_grass_but_preserve_drop_bearing_targets ... ok\ntest tick_state::committed_overlay_round_trips_every_map ... ok\ntest supports::ready_reload_clears_changed_ledger_and_wrong_calls_leave_state ... ok\ntest tick_state::empty_live_ticks_stay_empty ... ok\ntest supports::partial_slot_merges_with_delay_and_f1_reload ... ok\ntest tick_state::live_pending_player_observation_is_private_and_retirement_stops_it ... ok\ntest random_blocks::two_ready_keys_permutation_and_duplicates_repeat_full_snapshot ... ok\ntest tick_state::live_player_state_reaches_owned_wire_after_environment_settlement ... ok\ntest tick_state::live_player_state_retains_last_input_sequence_after_invalid_controls ... ok\ntest tick_state::consecutive_live_ticks_carry_residents ... ok\ntest tick_state::actual_full_open_batch_reaches_environment_end ... ok\ntest tick_state::live_ticks_advance_committed_environment ... ok\ntest tick_state::login_mapping_carries_every_save_default ... ok\ntest tick_state::live_reset_keeps_physics_lanes_while_regen_and_actions_advance ... ok\ntest tick_state::login_without_body_or_activation_never_becomes_actor ... ok\ntest tick_state::login_zero_health_restores_full_health ... ok\ntest tick_state::live_ticks_retain_sleep_anchors_and_eligibility ... ok\ntest tick_state::login_session_becomes_actor_on_live_tick ... ok\ntest tools::bone_meal_one_stage ... ok\ntest tick_state::retirement_prunes_sleep_without_rewriting_residents ... ok\ntest tools::bucket_failure_conservation ... ok\ntest tools::bucket_full_suppression_capacity_preserves_state ... ok\ntest tools::foreign_actor_call_refuses_without_effect ... ok\ntest tools::bucket_source_and_flowing ... ok\ntest tools::hoe_full_charge_capacity_preserves_state ... ok\ntest tools::hoe_last_point ... ok\ntest tools::readiness_and_selected_tool_refusal ... ok\ntest world_acquisition::drained_repeat_not_reinstalled ... ok\ntest tools::tool_rays_pass_transparent_cells_and_stop_at_closed_doors ... ok\ntest world_acquisition::ready_result_cap_plus_one ... ok\ntest world_acquisition::wanted_cancel_duplicate ... ok\ntest world_mutation::held_sneak_refuses_door_after_target_classification ... ok\ntest world_mutation::human_companion_collision_first_wins ... ok\ntest world_mutation::door_pair_and_internal_toggle ... ok\ntest world_mutation::mutation_before_fluid_support_order ... ok\ntest world_mutation::stale_missing_protected_duplicate_refused ... ok\ntest tick_state::live_projectile_hit_publishes_final_player_state_before_confirmation ... ok\ntest tick_state::retired_sleep_anchor_frees_replacement_capacity_across_ticks ... ok\ntest tick_state::full_residents_carry_within_caps ... ok\ntest generation::dense_and_compact_chunks_match_go_and_reuse_scratch ... ok\ntest tick_state::actual_full_invalid_control_batch_preserves_both_roles_and_clock ... ok\ntest full_corpus::real_agent_candidate_admitted_and_stale_refused ... ok\n\ntest result: ok. 490 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "green-parity-full": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--test",
+        "local_remote_parity"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 0.474,
+      "test_counts": [
+        {
+          "passed": 60,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-green-parity-full.log",
+      "log_sha256": "0202eadf3d4fb54a9db9b6527f0164a72ab47dfade4acf5fae24c1e88f1ff807",
+      "log_result_tail": "ross_adapters ... ok\ntest integration::inventory_command_transcripts_match_across_adapters ... ok\ntest integration::chat_publications_match_across_adapters ... ok\ntest integration::chat_contract_phrases_finite_across_adapters ... ok\ntest integration::item_drop_publications_match_across_adapters ... ok\ntest integration::projectile_lifecycle_publications_match_across_adapters ... ok\ntest integration::chat_contract_matrix_across_adapters ... ok\ntest integration::shared_transcript_matches_across_adapters ... ok\ntest integration::tcp_disconnect_during_pending_save_keeps_save_in_flight ... ok\ntest integration::passive_removal_reasons_match_across_adapters ... ok\ntest integration::publication_wire_delivery_reaches_each_session_in_order ... ok\ntest integration::remote_player_lifecycle_publications_match_across_adapters ... ok\ntest integration::request_chunk_resync_provider_matches_across_adapters ... ok\ntest integration::record_state_publications_match_across_adapters ... ok\ntest integration::wanted_subscription_publications_match_across_adapters ... ok\ntest integration::wanted_resync_publications_match_across_adapters ... ok\ntest integration::chunk_snapshot_block_changes_forget_match_across_adapters ... ok\ntest live::actual_receive_advances_unread_tcp_hello ... ok\ntest integration::tcp_disconnect_pending_save_completes_through_real_disk_store ... ok\ntest live::held_actual_player_read_advances_unread_tcp_login_before_return ... ok\ntest live::actual_handoff_timeout_cancels_before_activation_across_transports ... ok\ntest integration::companion_lifecycle_publications_match_across_adapters ... ok\ntest memory::local_direct_mutation_impossible ... ok\ntest live::actual_reconnects_release_committed_driver_history_across_transports ... ok\ntest memory::login_play_close_round_trip ... ok\ntest live::held_actual_player_read_returns_login_pump_before_release ... ok\ntest live::actual_saved_and_missing_players_share_memory_tcp_login_tick_and_bytes ... ok\ntest memory::stale_session_refused ... ok\ntest memory::outbox_pressure_512_513 ... ok\ntest live::scheduler_delegates_chunk_loads_to_same_actual_owner ... ok\ntest live::held_actual_player_read_returns_tcp_login_pump_before_release ... ok\ntest tcp::absent_delivery_expires_without_advancing_protocol_clock ... ok\ntest tcp::forwarding_into_held_socket_queue_keeps_authority_suffix ... ok\ntest tcp::forwarding_wrong_connection_preserves_authority_outbox ... ok\ntest prepared_delivery::actual_closed_admission_does_not_transfer_an_owner ... ok\ntest prepared_delivery::actual_background_store_tcp_and_memory_canonical_fifo_and_budgets ... ok\ntest tcp::fragmented_frame_reassembled ... ok\ntest prepared_delivery::actual_identity_refusals_preserve_other_active_fifo_before_and_after_login_close ... ok\ntest prepared_delivery::actual_receive_advances_ready_login_before_core_handoff ... ok\ntest tcp::terminal_poll_expiry_releases_socket ... ok\ntest tcp::mixed_publication_has_identical_owned_memory_and_tcp_frames ... ok\ntest tcp::terminal_eof_releases_socket ... ok\ntest tcp::hello_login_timeouts ... ok\ntest tcp::terminal_rejection_flushes_then_releases_socket ... ok\ntest tcp::peer_reset_recovers ... ok\ntest tcp::slow_receiver_isolated ... ok\ntest tcp::transcript_matches_memory ... ok\ntest live::actual_corrupt_and_future_players_reject_across_memory_and_tcp ... ok\ntest live::background_owner_failures_keep_exact_error_and_wire_class ... ok\n\ntest result: ok. 60 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "chat-boundary-lib": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--lib",
+        "companion_chat"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 2.785,
+      "test_counts": [
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 369
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-green-chat-boundary-lib.log",
+      "log_sha256": "0e00afa217dd3ff873587e01d79a209d20555e1306eaa49a67c9cfd2fb6be839",
+      "log_result_tail": "   Compiling mornlea_server v0.1.0 (/Users/chen/work/loom-rust-chat-20261004/candidate/packages/engine/crates/mornlea_server)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.07s\n     Running unittests src/lib.rs (/Users/chen/work/loom-rust-chat-20261004/cargo-target/debug/deps/mornlea_server-a59cbe4d585970e4)\n\nrunning 5 tests\ntest core::companion_chat::tests::last_usable_generation_promotes_once_with_receipt ... ok\ntest core::companion_chat::tests::generation_exhaustion_refuses_before_promotion_mutation ... ok\ntest core::state::companion_chat_boundary_tests::extreme_tick_captures_max_source_tick_without_wrap ... ok\ntest core::state::companion_chat_boundary_tests::id_exhaustion_refuses_ingress_before_mutation ... ok\ntest core::state::companion_chat_boundary_tests::lifecycle_refusals_preserve_state_under_id_pressure ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 369 filtered out; finished in 0.00s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "server-lib": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "test",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--lib"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 3.585,
+      "test_counts": [
+        {
+          "passed": 374,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-green-server-lib.log",
+      "log_sha256": "187167e6e37245bec170f1ade9e44890b9a25266ce1850828572da09c4993d48",
+      "log_result_tail": "er_rolls_match_go_known_answers ... ok\ntest rules::hostile_outcomes::tests::intent_ceiling_zero_refuses_one_attack ... ok\ntest rules::hostile_outcomes::tests::reach_and_parallel_box ... ok\ntest rules::hostile_outcomes::tests::ring_key_orders_by_ring_then_column ... ok\ntest rules::hostile_outcomes::tests::walker_batch_is_single_flesh ... ok\ntest rules::random_blocks::tests::climate_source_anchors ... ok\ntest store::background::chunk_view_tests::actual_materialization_runs_only_on_reusable_backend_owner ... ok\ntest store::loads::tests::exhausted_player_identity_never_admits_or_wraps ... ok\ntest core::world::chunk_view_tests::every_page_and_world_boundary_materializes_final_values_without_history ... ok\ntest store::loads::tests::zero_generation_precedes_exhausted_chunk_identity ... ok\ntest transport::live::tests::activation_refusal_keeps_ready_alias_for_cancellation ... ok\ntest transport::live::tests::cancel_pending_visits_whole_batch_in_order_and_retains_first_exact_error ... ok\ntest transport::live::tests::cancelled_alias_suppresses_late_ready_and_retries_same_owner ... ok\ntest transport::live::tests::duplicate_ticket_preserves_older_alias_and_new_capacity_is_reusable ... ok\ntest transport::live::tests::install_failure_retires_and_deadline_is_forwarded_without_clock_policy ... ok\ntest transport::live::tests::prepare_precedence_and_actual_player_ceiling_are_preserved ... ok\ntest transport::live::tests::ready_is_owned_repeatable_and_commits_once_without_history ... ok\ntest transport::live::tests::sixteen_cancelled_aliases_charge_limit_before_prepare_or_start ... ok\ntest transport::live::tests::start_refusal_retires_reservation_and_returns_original_error ... ok\ntest transport::live::tests::typed_load_failures_preserve_original_error_and_never_install_absence ... ok\ntest transport::tcp::prepared_tests::prepared_actual_byte_cap_keeps_partial_owned_head ... ok\ntest transport::tcp::prepared_tests::prepared_interrupted_attempt_cap_retains_owner ... ok\ntest transport::tcp::prepared_tests::prepared_mixed_lanes_settle_only_completed_core_before_fatal ... ok\ntest transport::tcp::prepared_tests::prepared_partial_interrupted_would_block_keeps_identity_and_exact_suffix ... ok\ntest transport::tcp::prepared_tests::prepared_private_full_queue_and_zero_count_never_drain_authority ... ok\ntest transport::tcp::tests::drain_broken_pipe_is_fatal ... ok\ntest transport::tcp::tests::drain_byte_budget_keeps_partial_head ... ok\ntest transport::tcp::tests::drain_completed_core_survives_later_fatal ... ok\ntest transport::tcp::tests::drain_interrupted_consumes_attempt_budget ... ok\ntest transport::tcp::tests::drain_would_block_keeps_partial_head ... ok\ntest transport::tcp::tests::drain_zero_write_is_fatal ... ok\ntest store::loads::tests::full_owner_channel_preserves_queued_identity_and_active_ceiling ... ok\ntest core::world::payload_estimate_tests::actual_unchanged_go_new_chunk_set_compact_matches_ready_sequence ... ok\ntest core::state::live_acquisition_tests::live_save_thousand_clean_records_have_bounded_work ... ok\ntest core::state::live_acquisition_tests::retirement_private_rewant_prefix_limits_and_idle_work ... ok\ntest core::world::network_view_tests::actual_unchanged_go_build_snapshot_matches_every_captured_stage ... ok\ntest core::pending_restore::tests::maximum_complete_water ... ok\ntest core::pending_restore::tests::maximum_wanted_unions_and_companion_bounds ... ok\n\ntest result: ok. 374 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.44s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "clippy": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "clippy",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "-p",
+        "mornlea_server",
+        "--locked",
+        "--offline",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 12.545,
+      "test_counts": [],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-clippy.log",
+      "log_sha256": "1e0d5c076fe435b6b23571e8e73743811f96e619742aa99ff8abe1c797f54504",
+      "log_result_tail": "    Checking mornlea_server v0.1.0 (/Users/chen/work/loom-rust-chat-20261004/candidate/packages/engine/crates/mornlea_server)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.45s\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "fmt": {
+      "argv": [
+        "rustup",
+        "run",
+        "1.97.1",
+        "cargo",
+        "fmt",
+        "--manifest-path",
+        "packages/engine/Cargo.toml",
+        "--all",
+        "--check"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 1.941,
+      "test_counts": [],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "log_result_tail": "",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "diff-check": {
+      "argv": [
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--check"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 0.027,
+      "test_counts": [],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-diff-check.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "log_result_tail": "",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    },
+    "r4-configured-idle-stop-probe": {
+      "argv": [
+        "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-green-probe",
+        "review_idle_stop_must_not_report_accepted",
+        "--exact",
+        "--nocapture"
+      ],
+      "cwd": "/Users/chen/work/loom-rust-chat-20261004/candidate",
+      "exit": 0,
+      "expected_exit": 0,
+      "passed": true,
+      "elapsed_seconds": 0.609,
+      "test_counts": [
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 15
+        }
+      ],
+      "log_path": "/Users/chen/work/loom-rust-chat-20261004/evidence/final18-chat-green-idle-stop-probe.log",
+      "log_sha256": "a9024c553a7c38ce22fbec41462cadff912e2de5992beccc4bcbc72e63ad384c",
+      "log_result_tail": "\nrunning 1 test\ntest review_idle_stop_must_not_report_accepted ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.01s\n\n",
+      "tested_file_hashes": {
+        "packages/engine/crates/mornlea_server/src/core/companion_chat.rs": "dae3447bcfc4173527567fe016cfc8715db5519d0c819a1012e0b455c98b2e4d",
+        "packages/engine/crates/mornlea_server/src/core/mod.rs": "413562d2f74b8677521d846fa63682e3509928e7e0d1cb74f74c8519f869da9d",
+        "packages/engine/crates/mornlea_server/src/core/state.rs": "46ab045d8fa928484dbc79ede8001d8da86592f89f008ba22ceb1b5861e9de8f",
+        "packages/engine/crates/mornlea_server/src/core/step.rs": "da2ddfb6e41b3080f73555e392caa758d28e7e44a0a83288704839fe516a0aa0",
+        "packages/engine/crates/mornlea_server/src/core/publication_project.rs": "098c46f75e311e1ad0fd55a76b18e525f21c8229a2d233aa32def72163887822",
+        "packages/engine/crates/mornlea_server/tests/server_replay/publication_projection.rs": "0a330d0cec41eb5aee2dfd74af2453d70a6ba1b3e5c21326e38eff68f91d180b",
+        "packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs": "f8600b637f9b6c984db88ac371d9af4119b1d65341925e3b7f4b9f4769119fa7"
+      },
+      "source_stable": true,
+      "baseline_source_sha": "2e5531484677aa2fdd10ad8abd9f0a5400040479",
+      "source_identity_basis": "final candidate bound externally after scoped local commit; feature hashes captured before each command"
+    }
+  },
+  "static_review_only": true,
+  "controller_hash": "e5ca4036f80d98b7b35bb274f243f23f711f2f7cff58f681026aa8681c3acdd8"
+}

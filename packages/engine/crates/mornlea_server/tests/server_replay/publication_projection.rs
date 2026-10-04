@@ -38,12 +38,12 @@ use mornlea_server::core::companion_chat::CompanionChatPhase;
 use mornlea_server::core::world::ReadyChunk;
 use mornlea_server::state::{AuthorityState, TickContext};
 use mornlea_storage::{
-    COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_INVALID_PLAN, COMPANION_TASK_FAIL_INVENTORY_FULL,
+    COMPANION_TASK_FAIL_INVALID_PLAN, COMPANION_TASK_FAIL_INVENTORY_FULL,
     COMPANION_TASK_FAIL_PATH_UNREACHABLE, COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
-    COMPANION_TASK_FAIL_WORLD_CHANGED, COMPANION_TASK_RUNNING, COMPANION_TASK_STOPPED, ChestSlot,
-    Chunk, CompanionBody, ContainerSnapshot, FurnaceSlot, HostileMob, Inventory,
-    ItemStack as StorageStack, PassiveMob, PlayerId as SavePlayerId, PlayerLocation, StorageKind,
-    StoredCompanionTask, StoredPlayer,
+    COMPANION_TASK_FAIL_WORLD_CHANGED, COMPANION_TASK_FAILED, COMPANION_TASK_RUNNING,
+    COMPANION_TASK_STOPPED, ChestSlot, Chunk, CompanionBody, ContainerSnapshot, FurnaceSlot,
+    HostileMob, Inventory, ItemStack as StorageStack, PassiveMob, PlayerId as SavePlayerId,
+    PlayerLocation, StorageKind, StoredCompanionTask, StoredPlayer,
 };
 
 const GRASS: u16 = 4;
@@ -2786,10 +2786,7 @@ fn projection_chat_contract_stored_failure_reasons() {
             TaskFailure::PlannerUnavailable,
             COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
         ),
-        (
-            TaskFailure::InvalidPlan,
-            COMPANION_TASK_FAIL_INVALID_PLAN,
-        ),
+        (TaskFailure::InvalidPlan, COMPANION_TASK_FAIL_INVALID_PLAN),
         (
             TaskFailure::PathUnreachable,
             COMPANION_TASK_FAIL_PATH_UNREACHABLE,
@@ -2835,7 +2832,10 @@ fn projection_chat_contract_stored_failure_reasons() {
             .find(|event| {
                 matches!(
                     event.body(),
-                    ChatBody::Task { state: TaskState::Failed(_), .. }
+                    ChatBody::Task {
+                        state: TaskState::Failed(_),
+                        ..
+                    }
                 )
             })
             .expect("failed broadcast");
@@ -2903,7 +2903,10 @@ fn projection_chat_contract_stored_failure_reasons() {
         .find(|event| {
             matches!(
                 event.body(),
-                ChatBody::Task { state: TaskState::Failed(_), .. }
+                ChatBody::Task {
+                    state: TaskState::Failed(_),
+                    ..
+                }
             )
         })
         .expect("failed broadcast without an active actor");
