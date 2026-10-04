@@ -20,7 +20,11 @@ use mornlea_protocol::{
     AdmittedLogin, Direction, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket, State,
 };
 use mornlea_storage::{
-    Chunk, Metadata, PlayerLocation, PlayerSave, StoredPlayer, COMPANION_TASK_STOPPED,
+    Chunk, Metadata, PlayerId as StoredPlayerId, PlanStep as StoredPlanStep, PlayerLocation,
+    PlayerSave, StoredCompanionTask, StoredPlayer, COMPANION_PLAN_STEP_FOLLOW,
+    COMPANION_PLAN_STEP_GO_TO, COMPANION_PLAN_STEP_MINE, COMPANION_PLAN_STEP_PLACE,
+    COMPANION_TASK_COMPLETED, COMPANION_TASK_FAILED, COMPANION_TASK_RUNNING,
+    COMPANION_TASK_STOPPED, COMPANION_TASK_TIMED_OUT,
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
@@ -32,7 +36,7 @@ use super::acquisition::{
 use super::block_observations::ChunkBlockObservations;
 use super::companion_chat::{
     Addressed, CompanionChatBook, CompanionChatIssuer, CompanionChatQueueView, CompanionChatTask,
-    DecidedChatFact, MAX_DECIDED_FACTS, STOP_COMMAND, parse_chat_address,
+    DecidedChatFact, MAX_DECIDED_FACTS, MAX_EXTERNAL_LIFECYCLE, STOP_COMMAND, parse_chat_address,
 };
 use super::container_store::ContainerState;
 use super::contracts::*;
@@ -1358,6 +1362,318 @@ impl AuthorityState {
             return Ok(None);
         }
         Ok(self.companion_chat.take_queued_for_planning(id))
+    }
+
+    /// Installs an already validated agent plan onto a planning chat task.
+    ///
+    /// Requires a configured companion with a current `Planning` task of the
+    /// same generation, a live `Active` companion actor, and an existing
+    /// companion runtime; stale or duplicate installs return `false` without
+    /// mutation. The public plan is revalidated through `AgentPlan::try_new`
+    /// before any mutation, and the input must already be PlanHost validated:
+    /// provenance and reachability validation stay the caller's obligation.
+    /// On success the task runs with the checked plan, the runtime records
+    /// the generation and the mapped stored task (the provider-owned attempt
+    /// is left unchanged), and the original captured issuer and command emit
+    /// a broadcast started fact. No model, deadline, or task-runner policy is
+    /// invented here and the storage wire format is unchanged.
+    pub fn install_companion_chat_plan(
+        &mut self,
+        id: CompanionId,
+        generation: u64,
+        plan: AgentPlan,
+    ) -> Result<bool, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        if !self.companion_chat.is_configured(id) {
+            return Ok(false);
+        }
+        if self
+            .companion_chat
+            .peek_installable(id, generation)
+            .is_none()
+        {
+            return Ok(false);
+        }
+        if !self.residents.actors.iter().any(|actor| {
+            actor.key == ActorKey::Companion(id) && actor.lifecycle == ActorLifecycle::Active
+        }) {
+            return Ok(false);
+        }
+        if !matches!(
+            self.residents.runtimes.get(&ActorKey::Companion(id)),
+            Some(runtime) if matches!(runtime.aux, ActorAux::Companion { .. })
+        ) {
+            return Ok(false);
+        }
+        let checked = AgentPlan::try_new(plan.summary.clone(), plan.steps.clone())?;
+        self.reserve_chat_lifecycle_slot()?;
+        let Some(installed) = self
+            .companion_chat
+            .commit_install(id, generation, checked.clone())
+        else {
+            return Ok(false);
+        };
+        let start_tick = self
+            .residents
+            .environment
+            .as_ref()
+            .map(|environment| environment.world_time)
+            .unwrap_or(self.next_tick);
+        let stored = Self::map_chat_plan_to_stored(&checked, &installed.command, start_tick);
+        if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id)) {
+            if let ActorAux::Companion {
+                generation: current,
+                task: running,
+                ..
+            } = &mut runtime.aux
+            {
+                *current = generation;
+                *running = stored;
+            }
+        }
+        let companion = self
+            .companion_chat
+            .speaker(id)
+            .expect("configured companion has a speaker");
+        self.companion_chat.push_decided(DecidedChatFact::broadcast(
+            installed.issuer.player_id,
+            installed.issuer.player_name,
+            ChatBody::Task {
+                companion,
+                command: installed.command,
+                state: TaskState::Started,
+            },
+        ))?;
+        self.companion_chat.reserve_external_lifecycle()?;
+        Ok(true)
+    }
+
+    /// Finishes a chat task with a terminal lifecycle state.
+    ///
+    /// Only completed and timed-out finish a `Running` task while failed
+    /// finishes a `Planning` or `Running` task; any other state is refused
+    /// before mutation and stale generations return `false`. The original
+    /// captured issuer and command emit the terminal broadcast even when the
+    /// issuer has since retired. Success clears the current task, this
+    /// companion's held controls, path, mining target and progress, running
+    /// task state, and already queued action envelopes, while the pending
+    /// FIFO is preserved for the next tick's promotion. No deadline policy
+    /// or model outcome is fabricated here.
+    pub fn finish_companion_chat_task(
+        &mut self,
+        id: CompanionId,
+        generation: u64,
+        state: TaskState,
+    ) -> Result<bool, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        match state {
+            TaskState::Completed | TaskState::TimedOut | TaskState::Failed(_) => {}
+            TaskState::Started | TaskState::Progress | TaskState::Stopped => {
+                return Err(ServerError::InvalidInput {
+                    field: "companion_chat_state",
+                });
+            }
+        }
+        if !self.companion_chat.is_configured(id) {
+            return Ok(false);
+        }
+        if self
+            .companion_chat
+            .peek_finishable(id, generation, state)
+            .is_none()
+        {
+            return Ok(false);
+        }
+        if !self.residents.actors.iter().any(|actor| {
+            actor.key == ActorKey::Companion(id) && actor.lifecycle == ActorLifecycle::Active
+        }) {
+            return Ok(false);
+        }
+        if !matches!(
+            self.residents.runtimes.get(&ActorKey::Companion(id)),
+            Some(runtime) if matches!(runtime.aux, ActorAux::Companion { .. })
+        ) {
+            return Ok(false);
+        }
+        self.reserve_chat_lifecycle_slot()?;
+        let Some(finished) = self.companion_chat.commit_finish(id, generation, state) else {
+            return Ok(false);
+        };
+        let stored_state = match state {
+            TaskState::Completed => COMPANION_TASK_COMPLETED,
+            TaskState::TimedOut => COMPANION_TASK_TIMED_OUT,
+            TaskState::Failed(_) => COMPANION_TASK_FAILED,
+            TaskState::Started | TaskState::Progress | TaskState::Stopped => {
+                unreachable!("terminal state validated above")
+            }
+        };
+        self.clear_finished_companion_runtime(id, stored_state);
+        let companion = self
+            .companion_chat
+            .speaker(id)
+            .expect("configured companion has a speaker");
+        self.companion_chat.push_decided(DecidedChatFact::broadcast(
+            finished.issuer.player_id,
+            finished.issuer.player_name,
+            ChatBody::Task {
+                companion,
+                command: finished.command,
+                state,
+            },
+        ))?;
+        self.companion_chat.reserve_external_lifecycle()?;
+        Ok(true)
+    }
+
+    /// Reserves one external lifecycle fact slot before any task mutation.
+    ///
+    /// Checks the four-fact quota, the decided buffer ceiling for the already
+    /// staged chat plus the new fact, and the event-id headroom for the same
+    /// bound. Stale or invalid callers never reach this reservation, so they
+    /// consume no quota.
+    fn reserve_chat_lifecycle_slot(&self) -> Result<(), ServerError> {
+        if self.companion_chat.external_lifecycle_used() >= MAX_EXTERNAL_LIFECYCLE {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: MAX_EXTERNAL_LIFECYCLE,
+                observed: self.companion_chat.external_lifecycle_used() + 1,
+            });
+        }
+        let staged = self.chat_queue.len();
+        let decided = self.companion_chat.decided.len();
+        let total = decided
+            .checked_add(staged)
+            .and_then(|pending| pending.checked_add(1))
+            .ok_or(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: MAX_DECIDED_FACTS,
+                observed: usize::MAX,
+            })?;
+        if total > MAX_DECIDED_FACTS {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: MAX_DECIDED_FACTS,
+                observed: total,
+            });
+        }
+        let usable = u64::MAX.checked_sub(self.next_chat_event_id).unwrap_or(0);
+        if (total as u64) > usable {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: usize::MAX,
+                observed: usize::MAX,
+            });
+        }
+        Ok(())
+    }
+
+    /// Maps a checked agent plan into the stored companion task shape.
+    ///
+    /// Go-to, mine, place, and terminal-follow steps become stored kinds
+    /// 1..4 through the shared place-block table. The deadline stays zero:
+    /// no deadline policy lives on this seam, so the existing runner
+    /// composition owns it until it is composed.
+    fn map_chat_plan_to_stored(
+        plan: &AgentPlan,
+        command: &CommandText,
+        start_tick: u64,
+    ) -> StoredCompanionTask {
+        let steps = plan
+            .steps
+            .iter()
+            .map(|step| match step {
+                PlanStep::GoTo { x, y, z } => StoredPlanStep {
+                    kind: COMPANION_PLAN_STEP_GO_TO,
+                    x: *x,
+                    y: *y,
+                    z: *z,
+                    block: 0,
+                    player_id: StoredPlayerId::from_bytes([0; 16]),
+                },
+                PlanStep::Mine { x, y, z } => StoredPlanStep {
+                    kind: COMPANION_PLAN_STEP_MINE,
+                    x: *x,
+                    y: *y,
+                    z: *z,
+                    block: 0,
+                    player_id: StoredPlayerId::from_bytes([0; 16]),
+                },
+                PlanStep::Place { x, y, z, block } => StoredPlanStep {
+                    kind: COMPANION_PLAN_STEP_PLACE,
+                    x: *x,
+                    y: *y,
+                    z: *z,
+                    block: Self::chat_plan_block_id(*block),
+                    player_id: StoredPlayerId::from_bytes([0; 16]),
+                },
+                PlanStep::Follow { player_id } => StoredPlanStep {
+                    kind: COMPANION_PLAN_STEP_FOLLOW,
+                    x: 0,
+                    y: 0,
+                    z: 0,
+                    block: 0,
+                    player_id: StoredPlayerId::from_bytes(player_id.bytes()),
+                },
+            })
+            .collect();
+        StoredCompanionTask {
+            command: command.as_str().to_owned(),
+            plan_steps: steps,
+            step_index: 0,
+            state: COMPANION_TASK_RUNNING,
+            start_tick,
+            deadline_ticks: 0,
+            fail_reason: 0,
+        }
+    }
+
+    /// Place-block table shared with the agent host mapping.
+    ///
+    /// Values are the frozen core block ids in declaration order, copied
+    /// read-only from the agent host's plan mapping.
+    fn chat_plan_block_id(block: PlanBlock) -> u16 {
+        match block {
+            PlanBlock::Brick => 21,
+            PlanBlock::Chest => 11,
+            PlanBlock::Clay => 24,
+            PlanBlock::Cobblestone => 13,
+            PlanBlock::Dirt => 3,
+            PlanBlock::Furnace => 9,
+            PlanBlock::Glass => 20,
+            PlanBlock::Grass => 4,
+            PlanBlock::Gravel => 16,
+            PlanBlock::IronBlock => 10,
+            PlanBlock::Leaves => 19,
+            PlanBlock::LightBlock => 12,
+            PlanBlock::MossyCobblestone => 26,
+            PlanBlock::OakLog => 17,
+            PlanBlock::OakPlanks => 18,
+            PlanBlock::RoofTile => 23,
+            PlanBlock::Sand => 15,
+            PlanBlock::SmoothStone => 14,
+            PlanBlock::SnowBlock => 25,
+            PlanBlock::Stone => 2,
+            PlanBlock::StoneBrick => 6,
+            PlanBlock::WhiteWool => 22,
+            PlanBlock::Workbench => 45,
+        }
+    }
+
+    /// Clears one companion's terminal-scoped runtime and queued envelopes.
+    ///
+    /// Reuses the stop-scoped clearing, then records the exact terminal
+    /// stored task state.
+    fn clear_finished_companion_runtime(&mut self, id: CompanionId, stored_state: u8) {
+        self.clear_stopped_companion_runtime(id);
+        if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id)) {
+            if let ActorAux::Companion { task, .. } = &mut runtime.aux {
+                task.state = stored_state;
+            }
+        }
     }
 
     /// Takes the per-session publication views for one projection pass.

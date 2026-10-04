@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use mornlea_domain::{
     BlockPos, ChatBody, CommandText, CompanionId, CompanionName, CompanionSpeaker, DisplayName,
-    FiniteVec3, LookAngles, PlayerId,
+    FiniteVec3, LookAngles, PlayerId, TaskState,
 };
 
 use super::contracts::{AgentPlan, PlanStep, ServerError, SessionKey};
@@ -24,6 +24,11 @@ pub const MAX_PENDING_COMMANDS: usize = 16;
 pub const MAX_CHAT_INGRESS: usize = 256;
 /// Decided fact ceiling: ingress facts plus external lifecycle facts.
 pub const MAX_DECIDED_FACTS: usize = MAX_CHAT_INGRESS + 4;
+/// External lifecycle facts allowed between two publication drains.
+///
+/// Install-started and terminal facts reserve this quota; tick-boundary
+/// ingress facts (including successful stop facts) never consume it.
+pub const MAX_EXTERNAL_LIFECYCLE: usize = 4;
 /// Exact trimmed stop instruction.
 pub const STOP_COMMAND: &str = "停止";
 
@@ -136,6 +141,7 @@ pub struct CompanionChatBook {
     slots: BTreeMap<CompanionId, ChatSlot>,
     pub(crate) decided: Vec<DecidedChatFact>,
     pub(crate) ever_configured: bool,
+    external_lifecycle: usize,
 }
 
 impl CompanionChatBook {
@@ -265,8 +271,34 @@ impl CompanionChatBook {
     }
 
     /// Drains decided facts for one publication pass.
+    ///
+    /// Draining also resets the external lifecycle quota: a new budget of
+    /// install and terminal facts opens after every publication.
     pub(crate) fn take_decided(&mut self) -> Vec<DecidedChatFact> {
+        self.external_lifecycle = 0;
         std::mem::take(&mut self.decided)
+    }
+
+    /// External lifecycle facts reserved since the last drain.
+    pub(crate) fn external_lifecycle_used(&self) -> usize {
+        self.external_lifecycle
+    }
+
+    /// Reserves one external lifecycle fact without mutating any task.
+    ///
+    /// Refuses once four external facts are already reserved. Decided-buffer
+    /// and event-id headroom stay the caller's atomic preflight, which covers
+    /// the already staged chat plus the new fact before any mutation.
+    pub(crate) fn reserve_external_lifecycle(&mut self) -> Result<(), ServerError> {
+        if self.external_lifecycle >= MAX_EXTERNAL_LIFECYCLE {
+            return Err(ServerError::Capacity {
+                resource: super::contracts::Resource::Commands,
+                limit: MAX_EXTERNAL_LIFECYCLE,
+                observed: self.external_lifecycle + 1,
+            });
+        }
+        self.external_lifecycle += 1;
+        Ok(())
     }
 
     /// Moves the current queued task into planning, returning it exactly once.
@@ -384,6 +416,90 @@ impl CompanionChatBook {
                 current.phase == CompanionChatPhase::Running && current.generation == generation
             })
         })
+    }
+
+    /// Returns the installable current task without mutation.
+    ///
+    /// Only a current `Planning` task with a matching generation is
+    /// installable; anything else (including unconfigured ids) yields `None`.
+    pub(crate) fn peek_installable(
+        &self,
+        id: CompanionId,
+        generation: u64,
+    ) -> Option<CompanionChatTask> {
+        let current = self.slots.get(&id)?.current.as_ref()?;
+        if current.phase != CompanionChatPhase::Planning || current.generation != generation {
+            return None;
+        }
+        Some(current.clone())
+    }
+
+    /// Marks an installable task running with its checked plan.
+    ///
+    /// Revalidates the same conditions as [`Self::peek_installable`]; the
+    /// pending FIFO, the generation counter, and every other companion are
+    /// untouched.
+    pub(crate) fn commit_install(
+        &mut self,
+        id: CompanionId,
+        generation: u64,
+        plan: AgentPlan,
+    ) -> Option<CompanionChatTask> {
+        let current = self.slots.get_mut(&id)?.current.as_mut()?;
+        if current.phase != CompanionChatPhase::Planning || current.generation != generation {
+            return None;
+        }
+        current.phase = CompanionChatPhase::Running;
+        current.plan = Some(plan);
+        Some(current.clone())
+    }
+
+    /// Whether one terminal state may finish the current task.
+    ///
+    /// Completed and timed-out finish only a `Running` task; failed finishes
+    /// a `Planning` or `Running` task. Queued tasks never complete or fail
+    /// here, and the generation must match.
+    fn finishable_phase(phase: CompanionChatPhase, state: TaskState) -> bool {
+        match state {
+            TaskState::Completed | TaskState::TimedOut => phase == CompanionChatPhase::Running,
+            TaskState::Failed(_) => {
+                phase == CompanionChatPhase::Planning || phase == CompanionChatPhase::Running
+            }
+            TaskState::Started | TaskState::Progress | TaskState::Stopped => false,
+        }
+    }
+
+    /// Returns the finishable current task without mutation.
+    pub(crate) fn peek_finishable(
+        &self,
+        id: CompanionId,
+        generation: u64,
+        state: TaskState,
+    ) -> Option<CompanionChatTask> {
+        let current = self.slots.get(&id)?.current.as_ref()?;
+        if current.generation != generation
+            || !Self::finishable_phase(current.phase, state)
+        {
+            return None;
+        }
+        Some(current.clone())
+    }
+
+    /// Clears a finishable current task, returning the original task facts.
+    ///
+    /// Revalidates the same conditions as [`Self::peek_finishable`]; the
+    /// pending FIFO, the generation counter, and every other companion are
+    /// untouched, so the next tick can promote the pending head.
+    pub(crate) fn commit_finish(
+        &mut self,
+        id: CompanionId,
+        generation: u64,
+        state: TaskState,
+    ) -> Option<CompanionChatTask> {
+        if self.peek_finishable(id, generation, state).is_none() {
+            return None;
+        }
+        self.slots.get_mut(&id)?.current.take()
     }
 }
 
