@@ -846,8 +846,345 @@ fn activation_rejects_backup_nested_in_world() {
         sockets.is_empty(),
         "refusal leaves no control socket: {sockets:?}"
     );
-    let _lease = activation_restore_lease::WorldLease::acquire(&world)
+    let _lease = mornlea_server::store::lease::WorldLease::acquire(&world)
         .expect("refusal leaves the world lock free");
+}
+
+#[test]
+fn activation_rejects_world_nested_in_backup() {
+    // The world lives inside the named backup, the inverse of the nested
+    // backup case, so adoption would manage overlapping trees.
+    let _scope = Scope::fresh("world-in-backup");
+    let run = _scope.path("run");
+    let backup = run.join("backup");
+    let world = backup.join("world");
+    let previous = previous_bin();
+    let (mut go, _, _, _) = prepare_go_world(&previous, &world, "inverse-probe");
+    stop_child(&mut go, "preparing previous binary");
+
+    let world_before = tree_hash(&world, &[LOCK_BASENAME]);
+    let backup_before = tree_hash(&backup, &[LOCK_BASENAME]);
+    let rust = rust_bin();
+    let previous_hash = sha256_file(&previous);
+    let package = previous_package();
+    let (code, output) = run_script(&[
+        "activate",
+        "--world",
+        &world.to_string_lossy(),
+        "--backup",
+        &backup.to_string_lossy(),
+        "--run-dir",
+        &run.to_string_lossy(),
+        "--rust-bin",
+        &rust.to_string_lossy(),
+        "--previous-bin",
+        &previous.to_string_lossy(),
+        "--previous-sha256",
+        &previous_hash,
+        "--previous-manifest",
+        &package.to_string_lossy(),
+    ]);
+    let manifest = run.join(MANIFEST_BASENAME);
+    let manifest_present = manifest.is_file();
+    let sockets: Vec<String> = fs::read_dir(&run)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".sock"))
+                .collect()
+        })
+        .unwrap_or_default();
+    // A baseline script may already have started Rust before failing; prove
+    // it exits before any failing assertion so this case never leaks a writer.
+    if manifest_present
+        && read_manifest(&manifest)
+            .get("pid")
+            .and_then(|value| value.as_u64())
+            .is_some()
+    {
+        quiesce_rust(&manifest);
+    }
+    assert_ne!(
+        code, 0,
+        "activation with the world inside the backup must fail: {output}"
+    );
+    assert!(
+        output.contains("invalid_manifest"),
+        "refusal names invalid_manifest: {output}"
+    );
+    assert_eq!(
+        tree_hash(&world, &[LOCK_BASENAME]),
+        world_before,
+        "refusal leaves the world bytes untouched"
+    );
+    assert_eq!(
+        tree_hash(&backup, &[LOCK_BASENAME]),
+        backup_before,
+        "refusal leaves the backup bytes untouched"
+    );
+    assert!(!manifest_present, "refusal writes no manifest");
+    assert!(
+        sockets.is_empty(),
+        "refusal leaves no control socket: {sockets:?}"
+    );
+    let _lease = mornlea_server::store::lease::WorldLease::acquire(&world)
+        .expect("refusal leaves the world lock free");
+}
+
+#[test]
+fn activation_rejects_missing_backup_identity() {
+    activation_refuses_damaged_backup_identity("missing-identity", "identity-probe", None);
+}
+
+#[test]
+fn activation_rejects_malformed_backup_identity() {
+    activation_refuses_damaged_backup_identity(
+        "malformed-identity",
+        "identity-probe",
+        Some("{ truncated identity"),
+    );
+}
+
+/// Prepares a real named backup through the script's own `backup_copy`,
+/// damages its identity record, and proves both the dry-run inspection and
+/// the actual activation refuse the adoption before any mutation, writer,
+/// or artifact. `identity` is `None` to drop the record and `Some(text)` to
+/// replace it with bytes that do not decode.
+fn activation_refuses_damaged_backup_identity(case: &str, probe: &str, identity: Option<&str>) {
+    let _scope = Scope::fresh(case);
+    let run = _scope.path("run");
+    let world = run.join("world");
+    let backup = run.join("backup");
+    let previous = previous_bin();
+    let (mut go, _, _, _) = prepare_go_world(&previous, &world, probe);
+    stop_child(&mut go, "preparing previous binary");
+    let world_before = tree_hash(&world, &[LOCK_BASENAME]);
+    let world_text = world.to_string_lossy();
+    let backup_text = backup.to_string_lossy();
+    let (code, output) = run_script_functions(
+        &_scope,
+        "backup_copy \"$1\" \"$2\" \"$3\"",
+        &[&world_text, &backup_text, &world_before],
+    );
+    assert_eq!(
+        code, 0,
+        "actual backup_copy prepares the named backup: {output}"
+    );
+    match identity {
+        None => {
+            fs::remove_file(backup.join(BACKUP_IDENTITY_BASENAME))
+                .expect("drop the backup identity record");
+        }
+        Some(damaged) => {
+            fs::write(backup.join(BACKUP_IDENTITY_BASENAME), damaged)
+                .expect("write the damaged identity record");
+        }
+    }
+    // The damaged record stays inside the digest so any repair or rewrite
+    // of the backup during the refusal would diverge the captured bytes.
+    let backup_before = tree_hash(&backup, &[LOCK_BASENAME]);
+    let rust = rust_bin();
+    let previous_hash = sha256_file(&previous);
+    let package = previous_package();
+    let run_text = run.to_string_lossy();
+    let rust_text = rust.to_string_lossy();
+    let previous_text = previous.to_string_lossy();
+    let package_text = package.to_string_lossy();
+    let (code, output) = run_script(&[
+        "activate",
+        "--world",
+        &world_text,
+        "--backup",
+        &backup_text,
+        "--run-dir",
+        &run_text,
+        "--rust-bin",
+        &rust_text,
+        "--previous-bin",
+        &previous_text,
+        "--previous-sha256",
+        &previous_hash,
+        "--previous-manifest",
+        &package_text,
+        "--dry-run",
+    ]);
+    assert_ne!(code, 0, "dry-run must refuse the damaged backup: {output}");
+    assert!(
+        output.contains("backup_mismatch"),
+        "dry-run refusal names the backup: {output}"
+    );
+    let (code, output) = run_script(&[
+        "activate",
+        "--world",
+        &world_text,
+        "--backup",
+        &backup_text,
+        "--run-dir",
+        &run_text,
+        "--rust-bin",
+        &rust_text,
+        "--previous-bin",
+        &previous_text,
+        "--previous-sha256",
+        &previous_hash,
+        "--previous-manifest",
+        &package_text,
+    ]);
+    let manifest = run.join(MANIFEST_BASENAME);
+    let manifest_present = manifest.is_file();
+    let sockets: Vec<String> = fs::read_dir(&run)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".sock"))
+                .collect()
+        })
+        .unwrap_or_default();
+    // A baseline script may already have started Rust before failing; prove
+    // it exits before any failing assertion so this case never leaks a writer.
+    if manifest_present
+        && read_manifest(&manifest)
+            .get("pid")
+            .and_then(|value| value.as_u64())
+            .is_some()
+    {
+        quiesce_rust(&manifest);
+    }
+    assert_ne!(
+        code, 0,
+        "activation adopting a damaged backup must fail: {output}"
+    );
+    assert!(
+        output.contains("backup_mismatch"),
+        "refusal names the backup: {output}"
+    );
+    assert_eq!(
+        tree_hash(&world, &[LOCK_BASENAME]),
+        world_before,
+        "refusal leaves the world bytes untouched"
+    );
+    assert_eq!(
+        tree_hash(&backup, &[LOCK_BASENAME]),
+        backup_before,
+        "refusal leaves the damaged backup untouched"
+    );
+    assert!(!manifest_present, "refusal writes no manifest");
+    assert!(
+        sockets.is_empty(),
+        "refusal leaves no control socket: {sockets:?}"
+    );
+    let _lease = mornlea_server::store::lease::WorldLease::acquire(&world)
+        .expect("refusal leaves the world lock free");
+}
+
+#[test]
+fn activation_accepts_valid_existing_backup() {
+    let scope = Scope::fresh("adopt-existing");
+    let run = scope.path("run");
+    let world = run.join("world");
+    let backup = run.join("backup");
+    let previous = previous_bin();
+    let (mut go, _, _, _) = prepare_go_world(&previous, &world, "adopt-probe");
+    stop_child(&mut go, "preparing previous binary");
+    let world_before = tree_hash(&world, &[LOCK_BASENAME]);
+    let world_text = world.to_string_lossy();
+    let backup_text = backup.to_string_lossy();
+    let (code, output) = run_script_functions(
+        &scope,
+        "backup_copy \"$1\" \"$2\" \"$3\"",
+        &[&world_text, &backup_text, &world_before],
+    );
+    assert_eq!(
+        code, 0,
+        "actual backup_copy prepares the named backup: {output}"
+    );
+    assert!(
+        backup.join(BACKUP_IDENTITY_BASENAME).is_file(),
+        "prepared backup carries its identity record"
+    );
+
+    let manifest_path = script_activate(&scope, &world, &backup, &run, &[]);
+    let manifest = read_manifest(&manifest_path);
+    assert_eq!(
+        manifest.get("phase").and_then(|v| v.as_str()),
+        Some("RustRunning")
+    );
+    assert_eq!(
+        manifest.get("backup_tree_sha256").and_then(|v| v.as_str()),
+        Some(world_before.as_str()),
+        "adoption binds the existing backup tree"
+    );
+    let socket = PathBuf::from(manifest_str(&manifest, "control_socket"));
+    assert_single_rust_owner(&manifest, &socket);
+    assert_eq!(
+        tree_hash(&backup, &[LOCK_BASENAME, BACKUP_IDENTITY_BASENAME]),
+        world_before,
+        "adoption never mutates the named backup"
+    );
+    let manifest = quiesce_rust(&manifest_path);
+    assert_eq!(
+        manifest.get("phase").and_then(|v| v.as_str()),
+        Some("Quiescent")
+    );
+    assert_eq!(
+        tree_hash(&world, &[LOCK_BASENAME]),
+        world_before,
+        "rust tenure writes no world bytes"
+    );
+}
+
+#[test]
+fn confine_paths_rejects_overlapping_managed_trees() {
+    let scope = Scope::fresh("confine");
+    let run = scope.path("run");
+    let world = run.join("world");
+    let backup = run.join("backup");
+    let world_text = world.to_string_lossy();
+    let backup_text = backup.to_string_lossy();
+    let run_text = run.to_string_lossy();
+    let (code, output) = run_script_functions(
+        &scope,
+        "confine_paths \"$1\" \"$2\" \"$3\"",
+        &[&world_text, &backup_text, &run_text],
+    );
+    assert_eq!(code, 0, "sibling world and backup confine: {output}");
+
+    let (code, output) = run_script_functions(
+        &scope,
+        "confine_paths \"$1\" \"$2\" \"$3\"",
+        &[&world_text, &world_text, &run_text],
+    );
+    assert_ne!(code, 0, "coinciding world and backup refuse: {output}");
+    assert!(
+        output.contains("invalid_manifest"),
+        "refusal names invalid_manifest: {output}"
+    );
+
+    let nested_backup = world.join("backup");
+    let (code, output) = run_script_functions(
+        &scope,
+        "confine_paths \"$1\" \"$2\" \"$3\"",
+        &[&world_text, &nested_backup.to_string_lossy(), &run_text],
+    );
+    assert_ne!(code, 0, "backup nested inside the world refuses: {output}");
+    assert!(
+        output.contains("invalid_manifest"),
+        "refusal names invalid_manifest: {output}"
+    );
+
+    let nested_world = backup.join("world");
+    let (code, output) = run_script_functions(
+        &scope,
+        "confine_paths \"$1\" \"$2\" \"$3\"",
+        &[&nested_world.to_string_lossy(), &backup_text, &run_text],
+    );
+    assert_ne!(code, 0, "world nested inside the backup refuses: {output}");
+    assert!(
+        output.contains("invalid_manifest"),
+        "refusal names invalid_manifest: {output}"
+    );
 }
 
 #[test]
