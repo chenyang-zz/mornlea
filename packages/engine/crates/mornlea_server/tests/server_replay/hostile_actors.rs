@@ -1368,26 +1368,40 @@ fn hurler_runtime_path(context: &TickContext<'_>, id: u64) -> bool {
 /// settles at walk 3.01 over thick Snow (cells 87 and 88, which carry zero
 /// collision) and keeps 4.3 over AIR: displacement 0.1505 thick / 0.215 AIR
 /// from [100.5, 40, 100.5].
-fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want_vz: f32) {
+/// Scene configuration for one native motion guard: the starting ground
+/// contact, a stationary variant and the foot block present before the first
+/// chase/path search runs.
+struct SnowScene {
+    grounded: bool,
+    stationary: bool,
+    initial_foot: u16,
+}
+
+fn assert_motion_snow_case(kind: u8, scene: SnowScene, foot: u16, want_z: f32, want_vz: f32) {
     let mut state = authority();
     let anchor = anchor_session(&mut state);
     let mut context = TickContext::harness(&mut state, TickBudget::full());
     stage_environment(&mut context, 1000, 0);
     preload_band_world(&mut context);
-    // The foot block is staged through a live Ready transaction so the first
-    // chase/path search runs against the real native scene.
+    // The foot block is staged through live Ready transactions so the first
+    // chase/path search runs against the real native scene; a requested foot
+    // that differs from the staged one rewrites the cell on the same tick.
     let foot_cell = mornlea_domain::BlockPos::new(100, 40, 100);
-    if foot != AIR {
-        let observed = context
-            .read()
-            .observation(Dimension::OVERWORLD, foot_cell)
-            .expect("ready foot observation");
-        let write = BlockWrite::try_new(observed, foot).expect("foot block write");
-        let outcome = context
-            .transaction()
-            .try_system(SystemRule::Support, vec![write])
-            .expect("support system write");
-        assert_eq!(outcome.changed.len(), 1);
+    let mut staged_foot = AIR;
+    for target in [scene.initial_foot, foot] {
+        if target != staged_foot {
+            let observed = context
+                .read()
+                .observation(Dimension::OVERWORLD, foot_cell)
+                .expect("ready foot observation");
+            let write = BlockWrite::try_new(observed, target).expect("foot block write");
+            let outcome = context
+                .transaction()
+                .try_system(SystemRule::Support, vec![write])
+                .expect("support system write");
+            assert_eq!(outcome.changed.len(), 1);
+            staged_foot = target;
+        }
     }
     stage_actors(
         &mut context,
@@ -1403,13 +1417,21 @@ fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want
         (chased[0] - 100.5).abs() < 1e-6 && chased[2] < 100.5,
         "fixture chase must point exactly -z, got {chased:?}"
     );
-    // Restage the chased hostile at the start pose with full -z speed; the
-    // established target, repath deadline and runtime path stay live.
+    // The stationary guard parks the holder on the hostile itself: within the
+    // attack range and the coincident hurler retreat both produce a genuine
+    // zero move intent.
+    if scene.stationary {
+        stage_actors(&mut context, &[player_actor(anchor, 1, [100.5, 40.0, 100.5])]);
+    }
+    // Restage the chased hostile at the start pose with the scene's ground
+    // contact and speed; the established target, repath deadline and runtime
+    // path stay live.
+    let speed = if scene.stationary { 0.0 } else { -4.3 };
     let mut prepared = find_hostile(&context, 21).clone();
     prepared.motion = MotionState::new(MotionStateParts {
         position: FiniteVec3::try_new([100.5, 40.0, 100.5]).expect("position"),
-        velocity: FiniteVec3::try_new([0.0, 0.0, -4.3]).expect("velocity"),
-        on_ground: true,
+        velocity: FiniteVec3::try_new([0.0, 0.0, speed]).expect("velocity"),
+        on_ground: scene.grounded,
     });
     prepared.look = LookAngles::try_new(0.0, 0.0).expect("look");
     {
@@ -1417,8 +1439,8 @@ fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want
             unreachable!();
         };
         body.position = [100.5, 40.0, 100.5];
-        body.velocity = [0.0, 0.0, -4.3];
-        body.on_ground = true;
+        body.velocity = [0.0, 0.0, speed];
+        body.on_ground = scene.grounded;
         body.yaw = 0.0;
     }
     stage_actors(&mut context, std::slice::from_ref(&prepared));
@@ -1503,10 +1525,26 @@ fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want
     assert_eq!(context.events(), events);
 }
 
-/// Thick Snow (87 and 88) under the foot cell consumes the shared snow
-/// tuning for both hostile kinds inside the actual native motion pass; the
-/// thin Snow controls (85 and 86) and the AIR control scene keep the uncut
-/// walk speed.
+/// The grounded wrapper: the foot cell holds air when the first chase runs.
+fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want_vz: f32) {
+    assert_motion_snow_case(
+        kind,
+        SnowScene {
+            grounded: true,
+            stationary: false,
+            initial_foot: AIR,
+        },
+        foot,
+        want_z,
+        want_vz,
+    );
+}
+
+/// Thick Snow (87 and 88) under the foot cell consumes the shared snow tuning
+/// for both hostile kinds inside the actual native motion pass; the thin Snow
+/// controls (85 and 86), the AIR control scene, airborne starts, stationary
+/// intents and same-tick foot rewrites keep the uncut walk speed or hold the
+/// start pose.
 #[test]
 fn motion_snow_thick_native_displacement() {
     for kind in [NIGHTWALKER, HURLER] {
@@ -1519,7 +1557,57 @@ fn motion_snow_thick_native_displacement() {
         ] {
             assert_motion_snow_native_displacement(kind, foot, want_z, want_vz);
         }
+        // An airborne start ignores the foot block until it lands, and a
+        // holder on the hostile itself holds the start pose for both kinds.
+        for foot in [AIR, 87, 88] {
+            assert_motion_snow_case(
+                kind,
+                SnowScene {
+                    grounded: false,
+                    stationary: false,
+                    initial_foot: AIR,
+                },
+                foot,
+                100.285,
+                -4.3,
+            );
+            assert_motion_snow_case(
+                kind,
+                SnowScene {
+                    grounded: true,
+                    stationary: true,
+                    initial_foot: AIR,
+                },
+                foot,
+                100.5,
+                0.0,
+            );
+        }
     }
+    // Same-tick foot rewrites through the Ready transaction: clearing thick
+    // Snow keeps the uncut speed, writing it mid-tick consumes the tuning.
+    assert_motion_snow_case(
+        NIGHTWALKER,
+        SnowScene {
+            grounded: true,
+            stationary: false,
+            initial_foot: 87,
+        },
+        AIR,
+        100.285,
+        -4.3,
+    );
+    assert_motion_snow_case(
+        NIGHTWALKER,
+        SnowScene {
+            grounded: true,
+            stationary: false,
+            initial_foot: AIR,
+        },
+        88,
+        100.349_5,
+        -3.01,
+    );
 }
 
 /// Sixteen blocks out, the hurler dispatches a path and steps toward the
