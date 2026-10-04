@@ -1605,8 +1605,8 @@ use mornlea_domain::{
 use mornlea_protocol::{CONTAINER_KIND_CHEST, STACK_VIEW_CONTAINER};
 use mornlea_server::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, AgentPlan,
-    AgentRequestId, ChunkKey, CompanionAction, CompanionActionEnvelope, DropRecord,
-    EnvironmentState, PlanStep, ProjectileRecord, RuleEffect, RuleTunables, RunId, SnapshotId,
+    AgentRequestId, ChunkKey, CompanionAction, DropRecord, EnvironmentState, PlanStep,
+    ProjectileRecord, RuleEffect, RuleTunables, RunId, SnapshotId,
 };
 use mornlea_server::core::companion_chat::CompanionChatPhase;
 use mornlea_server::core::world::ReadyChunk;
