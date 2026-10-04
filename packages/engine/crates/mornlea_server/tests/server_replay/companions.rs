@@ -590,6 +590,121 @@ fn motion_steps_move_and_retains_yaw_neutral() {
     assert_eq!(context.events().len(), 0);
 }
 
+/// Thick native snow under a grounded mover retunes the shared companion
+/// motion exit toward the copied snow walk (4.3 * 0.7 = 3.01) while every
+/// other part of the record carries over untouched. Expected bits come
+/// from the accepted calibration, not the Snow helper: dt 0.05, walk 4.3,
+/// ground accel 40, snow scale copied-walk * 0.7, so one tick of
+/// Move[1,0] from x 2.5 at vx 4.3 snaps velocity to 3.01 and advances x
+/// to 2.6505.
+#[test]
+fn motion_snow_thick_native_displacement() {
+    // Thick snow (block 87) fills the mover's foot cell; the grass floor
+    // and the surrounding air come from the shared motion scene.
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let mover = companion_id(1);
+    let idler = companion_id(2);
+    let (mover_key, idler_key) = motion_scene(&mut context, mover, idler);
+    let mut actor = companion_actor(mover, [2.5, 1.0, 0.5], 0.0, ActorLifecycle::Active);
+    actor.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new([2.5, 1.0, 0.5]).expect("position"),
+        velocity: FiniteVec3::try_new([4.3, 0.0, 0.0]).expect("velocity"),
+        on_ground: true,
+    });
+    let baseline = actor.clone();
+    context
+        .stage(RuleEffect::Actor(actor))
+        .expect("moving mover");
+    context.preload_block(observation(BlockPos::new(2, 1, 0), 87));
+    context.preload_companion_action(envelope(mover, 10, move_action(1, 0, false, 0.0)));
+    let report = provider::run(&mut context, motion_call()).expect("motion report");
+    assert_eq!(
+        report,
+        PhaseReport {
+            examined: 2,
+            applied: 2,
+            carried: 0,
+            rejected: 0,
+        }
+    );
+    let moved = context.read().actor(mover_key).expect("mover").clone();
+    assert_eq!(moved.motion.position().get()[0].to_bits(), 0x4029a1cb);
+    assert_eq!(moved.motion.velocity().get()[0].to_bits(), 0x4040a3d7);
+    assert_eq!(moved.motion.position().get()[1], 1.0);
+    assert_eq!(moved.motion.position().get()[2], 0.5);
+    assert!(moved.motion.on_ground());
+    assert_eq!(moved.look.yaw(), 0.0);
+    // Everything outside motion carries over exactly: the staged record
+    // with only motion replaced still equals the post-tick actor, which
+    // pins body mirror, survival, and lifecycle in one comparison.
+    let mut expected = baseline;
+    expected.motion = moved.motion.clone();
+    assert_eq!(
+        expected, moved,
+        "thick snow retunes motion without touching the rest of the record"
+    );
+    // The snow preload is read-only terrain: no runtime, mining, or events.
+    assert_eq!(context.read().runtime(mover_key), None);
+    assert_eq!(context.read().runtime(idler_key), None);
+    assert_eq!(context.read().mining(mover_key), None);
+    assert_eq!(context.events().len(), 0);
+
+    // Air control in a fresh scene: the same entry state on plain air
+    // keeps the walked tune, so velocity stays 4.3 and x advances to
+    // 2.715. The idler walks too, showing per-actor tuning stays
+    // independent inside one shared call.
+    let mut state = authority();
+    let mut context = harness_context(&mut state);
+    let (mover_key, idler_key) = motion_scene(&mut context, mover, idler);
+    let mut actor = companion_actor(mover, [2.5, 1.0, 0.5], 0.0, ActorLifecycle::Active);
+    actor.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new([2.5, 1.0, 0.5]).expect("position"),
+        velocity: FiniteVec3::try_new([4.3, 0.0, 0.0]).expect("velocity"),
+        on_ground: true,
+    });
+    context
+        .stage(RuleEffect::Actor(actor))
+        .expect("moving mover");
+    let mut idler_actor = companion_actor(idler, [4.5, 1.0, 2.5], 0.0, ActorLifecycle::Active);
+    idler_actor.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new([4.5, 1.0, 2.5]).expect("position"),
+        velocity: FiniteVec3::try_new([4.3, 0.0, 0.0]).expect("velocity"),
+        on_ground: true,
+    });
+    context
+        .stage(RuleEffect::Actor(idler_actor))
+        .expect("moving idler");
+    context.preload_companion_action(envelope(mover, 10, move_action(1, 0, false, 0.0)));
+    context.preload_companion_action(envelope(idler, 10, move_action(1, 0, false, 0.0)));
+    let report = provider::run(&mut context, motion_call()).expect("motion report");
+    assert_eq!(
+        report,
+        PhaseReport {
+            examined: 2,
+            applied: 2,
+            carried: 0,
+            rejected: 0,
+        }
+    );
+    let moved = context.read().actor(mover_key).expect("mover").clone();
+    assert_eq!(moved.motion.position().get()[0].to_bits(), 0x402dc28f);
+    assert_eq!(moved.motion.velocity().get()[0].to_bits(), 0x4089999a);
+    assert!(moved.motion.on_ground());
+    let idle = context.read().actor(idler_key).expect("idler").clone();
+    assert!(
+        (idle.motion.position().get()[0] - 4.715).abs() < 1e-3,
+        "idler keeps its own air walk: {:?}",
+        idle.motion.position().get()
+    );
+    assert!((idle.motion.velocity().get()[0] - 4.3).abs() < 1e-4);
+    assert_eq!(idle.look.yaw(), 0.0);
+    assert_eq!(context.read().runtime(mover_key), None);
+    assert_eq!(context.read().runtime(idler_key), None);
+    assert_eq!(context.read().mining(mover_key), None);
+    assert_eq!(context.events().len(), 0);
+}
+
 /// Mining selections never stage through this provider: a `MineHold`
 /// selects at intent, steps neutrally at motion, settles nothing at
 /// placement, and leaves mining progress to the accepted consumer.
