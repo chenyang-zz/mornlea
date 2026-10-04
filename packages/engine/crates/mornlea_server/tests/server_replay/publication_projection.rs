@@ -476,11 +476,14 @@ fn all_chats(
 }
 
 /// Every chat event addressed to one session, in publication order.
-fn session_chats(events: &[Event]) -> Vec<&ChatEvent> {
+///
+/// Returns owned clones (test-only, bounded by the 256 intake ceiling) so
+/// callers can borrow the temporary session view without escaping it.
+fn session_chats(events: &[Event]) -> Vec<ChatEvent> {
     events
         .iter()
         .filter_map(|event| match event {
-            Event::Chat(event) => Some(event),
+            Event::Chat(event) => Some(event.clone()),
             _ => None,
         })
         .collect()
@@ -499,7 +502,7 @@ fn assert_sender_only_rejection(
     assert_eq!(sender_chats.len(), 1);
     assert_eq!(
         sender_chats[0],
-        &ChatEvent::try_new(ChatEventParts {
+        ChatEvent::try_new(ChatEventParts {
             event_id: id,
             player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
             player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
@@ -1960,7 +1963,7 @@ fn projection_chat_contract_inactive_admission_and_unknown() {
         },
     })
     .unwrap();
-    assert_eq!(sender_chats, vec![&unknown]);
+    assert_eq!(sender_chats, vec![unknown]);
     assert!(session_chats(&events_for(&tick, listener)).is_empty());
     assert!(state.companion_chat_queue(id).is_none());
 
