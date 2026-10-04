@@ -65,6 +65,7 @@ use mornlea_engine::native::contracts::physics::{
 use mornlea_engine::native::physics::NativePhysics;
 use mornlea_storage::{ItemStack, PassiveMob};
 
+use crate::core::actor_snow::apply_snow_slowdown;
 use crate::core::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, BlockWrite, ChunkKey,
     DropBatch, DropSource, EnvironmentState, PhaseReport, RuleCall, RuleEffect, RulePhase,
@@ -652,6 +653,16 @@ fn advance_movement(
         yaw_sin: f64::from(lane.yaw).sin() as f32,
         yaw_cos: f64::from(lane.yaw).cos() as f32,
     };
+    // Thick Snow under the foot cell consumes the shared snow tuning; the
+    // sweep, prism and native step all run against the snow-adjusted copy.
+    let tuning = apply_snow_slowdown(
+        &ctx.read(),
+        record.dimension,
+        pose.position,
+        pose.on_ground,
+        [step.move_x, step.move_z],
+        tuning,
+    )?;
     let (sweep_min, sweep_max) =
         sweep_bounds(pose.velocity, pose.on_ground, step, body_in_fluid, tuning);
     let (origin, dimensions) = step_prism(pose.position, sweep_min, sweep_max, tuning.step_height)?;
