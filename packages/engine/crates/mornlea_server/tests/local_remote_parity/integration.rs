@@ -2393,10 +2393,7 @@ fn chat_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture {
     adapter
         .endpoint()
         .authority
-        .configure_companion_chat(&[(
-            id,
-            CompanionName::try_from_canonical(name.clone()).unwrap(),
-        )])
+        .configure_companion_chat(&[(id, CompanionName::try_from_canonical(name.clone()).unwrap())])
         .unwrap();
     adapter.stage(Box::new(move |context| {
         context
@@ -2698,11 +2695,11 @@ fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture
     let mut sender_frames: Vec<Vec<u8>> = Vec::new();
     let mut peer_frames: Vec<Vec<u8>> = Vec::new();
     let collect = |adapter: &mut dyn ParityAdapter,
-                       ticks: &mut Vec<TickPublication>,
-                       sender_frames: &mut Vec<Vec<u8>>,
-                       peer_frames: &mut Vec<Vec<u8>>,
-                       ada: &Peer,
-                       bea: &Peer| {
+                   ticks: &mut Vec<TickPublication>,
+                   sender_frames: &mut Vec<Vec<u8>>,
+                   peer_frames: &mut Vec<Vec<u8>>,
+                   ada: &Peer,
+                   bea: &Peer| {
         ticks.push(adapter.tick());
         sender_frames.extend(adapter.drain(ada.session));
         peer_frames.extend(adapter.drain(bea.session));
@@ -2719,7 +2716,14 @@ fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture
 
     // Phase 0: idle exact stop rejects sender-only with no queue effect.
     adapter.send_packet(ada.conn, &chat("@阿木 停止".to_owned()));
-    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    collect(
+        &mut *adapter,
+        &mut ticks,
+        &mut sender_frames,
+        &mut peer_frames,
+        &ada,
+        &bea,
+    );
     let tick = ticks.last().expect("phase tick");
     assert_eq!(tick_counters(tick), (0, 0, 0));
     let rejects = session_chats(tick, ada.session);
@@ -2744,7 +2748,14 @@ fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture
 
     // Phase 1: normal admission broadcasts, queues, and captures Ada.
     adapter.send_packet(ada.conn, &chat("@阿木 mine stone".to_owned()));
-    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    collect(
+        &mut *adapter,
+        &mut ticks,
+        &mut sender_frames,
+        &mut peer_frames,
+        &ada,
+        &bea,
+    );
     let tick = ticks.last().expect("phase tick");
     let accepted = broadcast_chats(tick);
     assert_eq!(accepted.len(), 1);
@@ -2773,23 +2784,29 @@ fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture
         .expect("planning receipt");
     assert_eq!(planned.generation, 1);
     assert_eq!(planned.issuer.player_name.as_str(), "Ada");
-    assert!(adapter
-        .endpoint()
-        .authority
-        .take_companion_chat_planning(amu_id)
-        .unwrap()
-        .is_none());
+    assert!(
+        adapter
+            .endpoint()
+            .authority
+            .take_companion_chat_planning(amu_id)
+            .unwrap()
+            .is_none()
+    );
 
     // Phase 2: a planning stop preserves the queue for the other session.
     adapter.send_packet(bea.conn, &chat("@阿木 停止".to_owned()));
-    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    collect(
+        &mut *adapter,
+        &mut ticks,
+        &mut sender_frames,
+        &mut peer_frames,
+        &ada,
+        &bea,
+    );
     let tick = ticks.last().expect("phase tick");
     let rejects = session_chats(tick, bea.session);
     assert_eq!(rejects.len(), 1);
-    assert!(matches!(
-        rejects[0].body(),
-        ChatBody::NotFollowing { .. }
-    ));
+    assert!(matches!(rejects[0].body(), ChatBody::NotFollowing { .. }));
     assert!(session_chats(tick, ada.session).is_empty());
     let view = adapter
         .endpoint()
@@ -2814,12 +2831,25 @@ fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture
             .install_companion_chat_plan(amu_id, 1, contract_follow_plan())
             .unwrap()
     );
-    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    collect(
+        &mut *adapter,
+        &mut ticks,
+        &mut sender_frames,
+        &mut peer_frames,
+        &ada,
+        &bea,
+    );
     let tick = ticks.last().expect("phase tick");
     let started = broadcast_chats(tick)
         .into_iter()
         .find(|event| {
-            matches!(event.body(), ChatBody::Task { state: TaskState::Started, .. })
+            matches!(
+                event.body(),
+                ChatBody::Task {
+                    state: TaskState::Started,
+                    ..
+                }
+            )
         })
         .expect("started broadcast");
     assert_eq!(
@@ -2836,7 +2866,14 @@ fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture
     for n in 0..16 {
         adapter.send_packet(ada.conn, &chat(format!("@阿木 task-{}", n)));
     }
-    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    collect(
+        &mut *adapter,
+        &mut ticks,
+        &mut sender_frames,
+        &mut peer_frames,
+        &ada,
+        &bea,
+    );
     let tick = ticks.last().expect("phase tick");
     assert_eq!(broadcast_chats(tick).len(), 16);
     let view = adapter
@@ -2850,18 +2887,28 @@ fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture
     // full FIFO with the original Ada issuer and command.
     adapter.send_packet(ada.conn, &chat("@阿木 task-overflow".to_owned()));
     adapter.send_packet(bea.conn, &chat("@阿木 停止".to_owned()));
-    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    collect(
+        &mut *adapter,
+        &mut ticks,
+        &mut sender_frames,
+        &mut peer_frames,
+        &ada,
+        &bea,
+    );
     let tick = ticks.last().expect("phase tick");
     let rejects = session_chats(tick, ada.session);
     assert_eq!(rejects.len(), 1);
-    assert!(matches!(
-        rejects[0].body(),
-        ChatBody::QueueFull { .. }
-    ));
+    assert!(matches!(rejects[0].body(), ChatBody::QueueFull { .. }));
     let stopped = broadcast_chats(tick)
         .into_iter()
         .find(|event| {
-            matches!(event.body(), ChatBody::Task { state: TaskState::Stopped, .. })
+            matches!(
+                event.body(),
+                ChatBody::Task {
+                    state: TaskState::Stopped,
+                    ..
+                }
+            )
         })
         .expect("stopped broadcast");
     assert_eq!(
@@ -2885,12 +2932,15 @@ fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture
 
     // Phase 6: the delayed stale generation refuses at the fence.
     assert_eq!(
-        adapter.endpoint().authority.submit_companion(contract_envelope(
-            amu_id,
-            1,
-            50,
-            CompanionAction::MineRelease,
-        )),
+        adapter
+            .endpoint()
+            .authority
+            .submit_companion(contract_envelope(
+                amu_id,
+                1,
+                50,
+                CompanionAction::MineRelease,
+            )),
         Err(mornlea_server::contracts::ServerError::InvalidInput {
             field: "companion_generation",
         })

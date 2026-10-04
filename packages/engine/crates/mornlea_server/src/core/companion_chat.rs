@@ -105,11 +105,7 @@ pub(crate) struct DecidedChatFact {
 }
 
 impl DecidedChatFact {
-    pub(crate) fn broadcast(
-        player_id: PlayerId,
-        player_name: DisplayName,
-        body: ChatBody,
-    ) -> Self {
+    pub(crate) fn broadcast(player_id: PlayerId, player_name: DisplayName, body: ChatBody) -> Self {
         Self {
             player_id,
             player_name,
@@ -246,10 +242,7 @@ impl CompanionChatBook {
 
     /// Speaker for one configured companion.
     pub(crate) fn speaker(&self, id: CompanionId) -> Option<CompanionSpeaker> {
-        Some(CompanionSpeaker::new(
-            id,
-            self.configured.get(&id)?.clone(),
-        ))
+        Some(CompanionSpeaker::new(id, self.configured.get(&id)?.clone()))
     }
 
     /// Pushes one decided fact within the bounded buffer.
@@ -355,11 +348,14 @@ impl CompanionChatBook {
             if slot.current.is_some() || slot.pending.is_empty() {
                 continue;
             }
-            let next = slot.generation.checked_add(1).ok_or(ServerError::Capacity {
-                resource: super::contracts::Resource::Commands,
-                limit: usize::MAX,
-                observed: usize::MAX,
-            })?;
+            let next = slot
+                .generation
+                .checked_add(1)
+                .ok_or(ServerError::Capacity {
+                    resource: super::contracts::Resource::Commands,
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
             let (command, issuer, source_tick) =
                 slot.pending.pop_front().expect("checked pending head");
             slot.generation = next;
@@ -386,7 +382,10 @@ impl CompanionChatBook {
         if current.phase != CompanionChatPhase::Running {
             return None;
         }
-        if !matches!(current.plan.as_ref()?.steps.last(), Some(PlanStep::Follow { .. })) {
+        if !matches!(
+            current.plan.as_ref()?.steps.last(),
+            Some(PlanStep::Follow { .. })
+        ) {
             return None;
         }
         Some(current.clone())
@@ -398,9 +397,7 @@ impl CompanionChatBook {
     /// the pending FIFO, the generation counter, and every other companion
     /// are untouched.
     pub(crate) fn stop_current(&mut self, id: CompanionId) -> Option<CompanionChatTask> {
-        if self.peek_stoppable(id).is_none() {
-            return None;
-        }
+        self.peek_stoppable(id)?;
         self.slots.get_mut(&id)?.current.take()
     }
 
@@ -472,9 +469,7 @@ impl CompanionChatBook {
         state: TaskState,
     ) -> Option<CompanionChatTask> {
         let current = self.slots.get(&id)?.current.as_ref()?;
-        if current.generation != generation
-            || !Self::finishable_phase(current.phase, state)
-        {
+        if current.generation != generation || !Self::finishable_phase(current.phase, state) {
             return None;
         }
         Some(current.clone())
@@ -491,9 +486,7 @@ impl CompanionChatBook {
         generation: u64,
         state: TaskState,
     ) -> Option<CompanionChatTask> {
-        if self.peek_finishable(id, generation, state).is_none() {
-            return None;
-        }
+        self.peek_finishable(id, generation, state)?;
         self.slots.get_mut(&id)?.current.take()
     }
 }
@@ -502,7 +495,9 @@ impl CompanionChatBook {
 #[derive(Debug)]
 pub(crate) enum Addressed {
     Invalid,
-    Unknown { name: CompanionName },
+    Unknown {
+        name: CompanionName,
+    },
     Matched {
         id: CompanionId,
         name: CompanionName,
@@ -517,10 +512,7 @@ pub(crate) enum Addressed {
 /// `CommandText` validation. Every malformed shape rejects as invalid
 /// format; a well-formed name matching no configured companion rejects as
 /// unknown.
-pub(crate) fn parse_chat_address(
-    text: &str,
-    names: &BTreeMap<String, CompanionId>,
-) -> Addressed {
+pub(crate) fn parse_chat_address(text: &str, names: &BTreeMap<String, CompanionId>) -> Addressed {
     let Some(rest) = text.strip_prefix('@') else {
         return Addressed::Invalid;
     };

@@ -19,12 +19,13 @@ use mornlea_domain::{
     MotionState, MotionStateParts, Movement, PartialMove, PassiveDespawn, PassiveDespawnParts,
     PassiveDespawnReason, PassiveDespawnRecord, PassiveId, PassiveSpawn, PassiveSpawnParts,
     PassiveSpawnRecord, PassiveSpawnRecordParts, PassiveState, PassiveStateParts,
-    PassiveStateRecord, PassiveStateRecordParts, PlayerControl, PlayerControlParts, PlayerId, ProjectileDespawn, ProjectileDespawnParts,
-    ProjectileId, ProjectileKind, ProjectileSpawn, ProjectileSpawnParts, ProjectileSpawnRecord,
-    ProjectileSpawnRecordParts, ProjectileState, ProjectileStateParts, ProjectileStateRecord,
-    ProjectileStateRecordParts, RemotePlayerSpawn, RemotePlayerSpawnParts, RemotePlayerState,
-    RemotePlayerStateParts, RemotePlayerStates, ResyncIntent, StackSource, StackView, SurvivalState,
-    SurvivalStateParts, TaskFailure, TaskState, Weather,
+    PassiveStateRecord, PassiveStateRecordParts, PlayerControl, PlayerControlParts, PlayerId,
+    ProjectileDespawn, ProjectileDespawnParts, ProjectileId, ProjectileKind, ProjectileSpawn,
+    ProjectileSpawnParts, ProjectileSpawnRecord, ProjectileSpawnRecordParts, ProjectileState,
+    ProjectileStateParts, ProjectileStateRecord, ProjectileStateRecordParts, RemotePlayerSpawn,
+    RemotePlayerSpawnParts, RemotePlayerState, RemotePlayerStateParts, RemotePlayerStates,
+    ResyncIntent, StackSource, StackView, SurvivalState, SurvivalStateParts, TaskFailure,
+    TaskState, Weather,
 };
 use mornlea_protocol::{AdmittedLogin, LoginStart, PlayIntent, admit_login};
 use mornlea_server::contracts::{
@@ -37,9 +38,9 @@ use mornlea_server::core::companion_chat::CompanionChatPhase;
 use mornlea_server::core::world::ReadyChunk;
 use mornlea_server::state::{AuthorityState, TickContext};
 use mornlea_storage::{
-    ChestSlot, Chunk, CompanionBody, ContainerSnapshot, FurnaceSlot, HostileMob, Inventory,
-    ItemStack as StorageStack, PassiveMob, PlayerId as SavePlayerId, PlayerLocation, StorageKind,
-    StoredCompanionTask, StoredPlayer, COMPANION_TASK_RUNNING, COMPANION_TASK_STOPPED,
+    COMPANION_TASK_RUNNING, COMPANION_TASK_STOPPED, ChestSlot, Chunk, CompanionBody,
+    ContainerSnapshot, FurnaceSlot, HostileMob, Inventory, ItemStack as StorageStack, PassiveMob,
+    PlayerId as SavePlayerId, PlayerLocation, StorageKind, StoredCompanionTask, StoredPlayer,
 };
 
 const GRASS: u16 = 4;
@@ -1947,7 +1948,11 @@ fn projection_chat_contract_inactive_admission_and_unknown() {
     let id = companion_id(9);
     stage(&mut state, |context| {
         context
-            .stage(RuleEffect::Actor(companion_actor(id, [8.5, 65.0, 8.5], 0.0)))
+            .stage(RuleEffect::Actor(companion_actor(
+                id,
+                [8.5, 65.0, 8.5],
+                0.0,
+            )))
             .unwrap();
     });
     assert!(state.companion_chat_queue(id).is_none());
@@ -2136,19 +2141,13 @@ fn projection_chat_contract_intake_limit_and_stop_phrases() {
     assert_eq!(all.len(), 256);
     assert_eq!(
         all.iter()
-            .filter(|event| matches!(
-                event.body(),
-                ChatBody::Accepted { .. }
-            ))
+            .filter(|event| matches!(event.body(), ChatBody::Accepted { .. }))
             .count(),
         16
     );
     assert_eq!(
         all.iter()
-            .filter(|event| matches!(
-                event.body(),
-                ChatBody::QueueFull { .. }
-            ))
+            .filter(|event| matches!(event.body(), ChatBody::QueueFull { .. }))
             .count(),
         240
     );
@@ -2242,10 +2241,12 @@ fn projection_chat_contract_stop_rejections_and_take_once() {
     assert_eq!(first.generation, 1);
     assert_eq!(first.phase, CompanionChatPhase::Planning);
     assert_eq!(first.command.as_str(), "collect stone");
-    assert!(state
-        .take_companion_chat_planning(amu_id())
-        .unwrap()
-        .is_none());
+    assert!(
+        state
+            .take_companion_chat_planning(amu_id())
+            .unwrap()
+            .is_none()
+    );
     submit_chat(&mut state, sender, "@阿木 停止");
     let tick = state.advance_tick(TickBudget::full()).unwrap();
     assert_sender_only_rejection(&tick, sender, listener, 4, &stop_body);
@@ -2365,10 +2366,19 @@ fn projection_chat_contract_install_stop_runtime_fence() {
     let stopped = chats
         .iter()
         .find(|event| {
-            matches!(event.body(), ChatBody::Task { state: TaskState::Stopped, .. })
+            matches!(
+                event.body(),
+                ChatBody::Task {
+                    state: TaskState::Stopped,
+                    ..
+                }
+            )
         })
         .expect("stopped broadcast");
-    assert_eq!(stopped.player_id(), PlayerId::try_from_bytes(uuid(1)).unwrap());
+    assert_eq!(
+        stopped.player_id(),
+        PlayerId::try_from_bytes(uuid(1)).unwrap()
+    );
     assert_eq!(stopped.player_name().as_str(), "Ada");
     assert_eq!(
         stopped.body(),
@@ -2388,7 +2398,10 @@ fn projection_chat_contract_install_stop_runtime_fence() {
     assert_eq!(stopped_route.recipient(), EventRecipient::Broadcast);
     assert!(chats.iter().any(|event| matches!(
         event.body(),
-        ChatBody::Task { state: TaskState::Started, .. }
+        ChatBody::Task {
+            state: TaskState::Started,
+            ..
+        }
     )));
 
     // The full pending FIFO is preserved and its head is already queued with
@@ -2440,12 +2453,7 @@ fn projection_chat_contract_install_stop_runtime_fence() {
     // The delayed stale generation refuses; an unconfigured companion's
     // trusted action is unaffected.
     assert_eq!(
-        state.submit_companion(chat_envelope(
-            amu_id(),
-            1,
-            50,
-            CompanionAction::MineRelease,
-        )),
+        state.submit_companion(chat_envelope(amu_id(), 1, 50, CompanionAction::MineRelease,)),
         Err(ServerError::InvalidInput {
             field: "companion_generation",
         })
@@ -2518,16 +2526,20 @@ fn projection_chat_contract_terminal_finish_and_quota() {
     stage_companion_with_runtime(&mut state, amu_id(), [8.5, 65.0, 8.5]);
     submit_chat(&mut state, sender, "@阿木 dig 0");
     let _ = state.advance_tick(TickBudget::full()).unwrap();
-    assert!(!state
-        .finish_companion_chat_task(amu_id(), 1, TaskState::Completed)
-        .unwrap());
-    assert!(!state
-        .finish_companion_chat_task(
-            amu_id(),
-            1,
-            TaskState::Failed(TaskFailure::PlannerUnavailable),
-        )
-        .unwrap());
+    assert!(
+        !state
+            .finish_companion_chat_task(amu_id(), 1, TaskState::Completed)
+            .unwrap()
+    );
+    assert!(
+        !state
+            .finish_companion_chat_task(
+                amu_id(),
+                1,
+                TaskState::Failed(TaskFailure::PlannerUnavailable),
+            )
+            .unwrap()
+    );
     let view = state.companion_chat_queue(amu_id()).unwrap();
     assert_eq!(
         view.current.as_ref().unwrap().phase,
@@ -2545,11 +2557,7 @@ fn projection_chat_contract_terminal_finish_and_quota() {
             .install_companion_chat_plan(amu_id(), 1, follow_plan(player))
             .unwrap()
     );
-    for refused in [
-        TaskState::Started,
-        TaskState::Progress,
-        TaskState::Stopped,
-    ] {
+    for refused in [TaskState::Started, TaskState::Progress, TaskState::Stopped] {
         assert_eq!(
             state.finish_companion_chat_task(amu_id(), 1, refused),
             Err(ServerError::InvalidInput {
@@ -2575,7 +2583,13 @@ fn projection_chat_contract_terminal_finish_and_quota() {
     let terminal = broadcast_chats(&tick)
         .into_iter()
         .find(|event| {
-            matches!(event.body(), ChatBody::Task { state: TaskState::Completed, .. })
+            matches!(
+                event.body(),
+                ChatBody::Task {
+                    state: TaskState::Completed,
+                    ..
+                }
+            )
         })
         .expect("completed broadcast");
     assert_eq!(
@@ -2609,7 +2623,10 @@ fn projection_chat_contract_terminal_finish_and_quota() {
     let tick = state.advance_tick(TickBudget::full()).unwrap();
     assert!(broadcast_chats(&tick).iter().any(|event| matches!(
         event.body(),
-        ChatBody::Task { state: TaskState::TimedOut, .. }
+        ChatBody::Task {
+            state: TaskState::TimedOut,
+            ..
+        }
     )));
 
     // Failed finishes a planning task; timed-out finishes a running one;
@@ -2634,13 +2651,23 @@ fn projection_chat_contract_terminal_finish_and_quota() {
             )
             .unwrap()
     );
-    assert!(state.companion_chat_queue(amu_id()).unwrap().current.is_none());
-    assert!(!state
-        .finish_companion_chat_task(amu_id(), 9, TaskState::Completed)
-        .unwrap());
-    assert!(!state
-        .finish_companion_chat_task(companion_id(50), 1, TaskState::Completed)
-        .unwrap());
+    assert!(
+        state
+            .companion_chat_queue(amu_id())
+            .unwrap()
+            .current
+            .is_none()
+    );
+    assert!(
+        !state
+            .finish_companion_chat_task(amu_id(), 9, TaskState::Completed)
+            .unwrap()
+    );
+    assert!(
+        !state
+            .finish_companion_chat_task(companion_id(50), 1, TaskState::Completed)
+            .unwrap()
+    );
 
     // Four lifecycle facts fit between drains; the fifth refuses before any
     // mutation while the running task is preserved.
@@ -2673,7 +2700,12 @@ fn projection_chat_contract_terminal_finish_and_quota() {
     submit_chat(&mut state, sender, "@阿土 three");
     submit_chat(&mut state, sender, "@阿水 four");
     let _ = state.advance_tick(TickBudget::full()).unwrap();
-    for id in [amu_id(), companion_id(10), companion_id(11), companion_id(12)] {
+    for id in [
+        amu_id(),
+        companion_id(10),
+        companion_id(11),
+        companion_id(12),
+    ] {
         state
             .take_companion_chat_planning(id)
             .unwrap()
@@ -2724,7 +2756,13 @@ fn projection_chat_contract_terminal_finish_and_quota() {
     let terminal = broadcast_chats(&tick)
         .into_iter()
         .find(|event| {
-            matches!(event.body(), ChatBody::Task { state: TaskState::TimedOut, .. })
+            matches!(
+                event.body(),
+                ChatBody::Task {
+                    state: TaskState::TimedOut,
+                    ..
+                }
+            )
         })
         .expect("timed-out broadcast");
     assert_eq!(
@@ -2867,8 +2905,7 @@ fn projection_chat_contract_issuer_capture_and_ray() {
     let mut solid = ground_chunk();
     set_cell(&mut solid, BlockPos::new(0, 66, -1), GRASS);
     stage(&mut state, |context| {
-        context
-            .preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, solid).unwrap());
+        context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, solid).unwrap());
     });
     // Prime the player actor before capture; the radius stays zero.
     let _ = state.advance_tick(TickBudget::full()).unwrap();
@@ -2906,20 +2943,12 @@ fn projection_chat_contract_issuer_capture_and_ray() {
     // diagonal target inside the fixed 3x3.
     let mut state = authority();
     seed_world(&mut state);
-    let sender = login(
-        &mut state,
-        1,
-        "Ada",
-        [15.5, 65.0, 15.5],
-        -2.3561945,
-        0.0,
-    );
+    let sender = login(&mut state, 1, "Ada", [15.5, 65.0, 15.5], -2.3561945, 0.0);
     configure_amu(&mut state);
     let mut diagonal = ground_chunk();
     set_cell(&mut diagonal, BlockPos::new(17, 66, 17), GRASS);
     stage(&mut state, |context| {
-        context
-            .preload_ready_chunk(ReadyChunk::try_new(chunk_key(1, 1), 1, 1, diagonal).unwrap());
+        context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(1, 1), 1, 1, diagonal).unwrap());
     });
     let _ = state.advance_tick(TickBudget::full()).unwrap();
     submit_chat(&mut state, sender, "@阿木 collect wood");
@@ -2943,8 +2972,7 @@ fn projection_chat_contract_issuer_capture_and_ray() {
     let mut far = ground_chunk();
     set_cell(&mut far, BlockPos::new(33, 66, 0), GRASS);
     stage(&mut state, |context| {
-        context
-            .preload_ready_chunk(ReadyChunk::try_new(chunk_key(2, 0), 1, 1, far).unwrap());
+        context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(2, 0), 1, 1, far).unwrap());
     });
     let _ = state.advance_tick(TickBudget::full()).unwrap();
     // Source-default tunables with only the reach extended to forty blocks:

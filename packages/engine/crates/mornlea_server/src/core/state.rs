@@ -16,21 +16,20 @@ use mornlea_domain::{
     EventRecipient, FiniteVec3, LookAngles, MotionState, PassiveId, PlayerId, RejectReason,
     RoutedEvent, TaskFailure, TaskState, Weather, WorldState,
 };
+use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
+use mornlea_engine::native::raycast::NativeRaycast;
 use mornlea_protocol::{
     AdmittedLogin, Direction, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket, State,
 };
 use mornlea_storage::{
-    Chunk, Metadata, PlayerId as StoredPlayerId, PlanStep as StoredPlanStep, PlayerLocation,
-    PlayerSave, StoredCompanionTask, StoredPlayer, COMPANION_PLAN_STEP_FOLLOW,
-    COMPANION_PLAN_STEP_GO_TO, COMPANION_PLAN_STEP_MINE, COMPANION_PLAN_STEP_PLACE,
-    COMPANION_TASK_COMPLETED, COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_INVALID_PLAN,
+    COMPANION_PLAN_STEP_FOLLOW, COMPANION_PLAN_STEP_GO_TO, COMPANION_PLAN_STEP_MINE,
+    COMPANION_PLAN_STEP_PLACE, COMPANION_TASK_COMPLETED, COMPANION_TASK_FAIL_INVALID_PLAN,
     COMPANION_TASK_FAIL_INVENTORY_FULL, COMPANION_TASK_FAIL_NONE,
     COMPANION_TASK_FAIL_PATH_UNREACHABLE, COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
-    COMPANION_TASK_FAIL_WORLD_CHANGED, COMPANION_TASK_RUNNING, COMPANION_TASK_STOPPED,
-    COMPANION_TASK_TIMED_OUT,
+    COMPANION_TASK_FAIL_WORLD_CHANGED, COMPANION_TASK_FAILED, COMPANION_TASK_RUNNING,
+    COMPANION_TASK_STOPPED, COMPANION_TASK_TIMED_OUT, Chunk, Metadata, PlanStep as StoredPlanStep,
+    PlayerId as StoredPlayerId, PlayerLocation, PlayerSave, StoredCompanionTask, StoredPlayer,
 };
-use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
-use mornlea_engine::native::raycast::NativeRaycast;
 
 use super::acquisition::{
     AcquiredChunkEvent, AcquisitionState, ChunkGenerationReservation, ChunkLoadReservation,
@@ -980,10 +979,11 @@ impl AuthorityState {
         let staged = StagedChat {
             session,
             player_id: record.player_id,
-            display_name: DisplayName::try_from_canonical(record.display_name.clone())
-                .map_err(|_| ServerError::InvalidInput {
+            display_name: DisplayName::try_from_canonical(record.display_name.clone()).map_err(
+                |_| ServerError::InvalidInput {
                     field: "display_name",
-                })?,
+                },
+            )?,
             text,
         };
         self.chat_queue.push_back(staged);
@@ -1056,7 +1056,7 @@ impl AuthorityState {
                 observed: total,
             });
         }
-        let usable = u64::MAX.checked_sub(self.next_chat_event_id).unwrap_or(0);
+        let usable = u64::MAX.saturating_sub(self.next_chat_event_id);
         if (total as u64) > usable {
             return Err(ServerError::Capacity {
                 resource: Resource::Commands,
@@ -1073,59 +1073,56 @@ impl AuthorityState {
             }
             match parse_chat_address(entry.text.as_str(), &names) {
                 Addressed::Invalid => {
-                    self.companion_chat.push_decided(DecidedChatFact::sender_only(
-                        entry.player_id,
-                        entry.display_name,
-                        entry.session,
-                        ChatBody::InvalidFormat,
-                    ))?;
+                    self.companion_chat
+                        .push_decided(DecidedChatFact::sender_only(
+                            entry.player_id,
+                            entry.display_name,
+                            entry.session,
+                            ChatBody::InvalidFormat,
+                        ))?;
                 }
                 Addressed::Unknown { name } => {
-                    self.companion_chat.push_decided(DecidedChatFact::sender_only(
-                        entry.player_id,
-                        entry.display_name,
-                        entry.session,
-                        ChatBody::UnknownCompanion { name },
-                    ))?;
+                    self.companion_chat
+                        .push_decided(DecidedChatFact::sender_only(
+                            entry.player_id,
+                            entry.display_name,
+                            entry.session,
+                            ChatBody::UnknownCompanion { name },
+                        ))?;
                 }
                 Addressed::Matched { id, name, command } => {
                     if command.as_str() == STOP_COMMAND {
                         self.apply_chat_stop(id, name, command, &entry)?;
                     } else if !self.companion_chat.pending_has_capacity(id) {
                         let companion = CompanionSpeaker::new(id, name);
-                        self.companion_chat.push_decided(DecidedChatFact::sender_only(
-                            entry.player_id,
-                            entry.display_name,
-                            entry.session,
-                            ChatBody::QueueFull {
-                                companion,
-                                command,
-                            },
-                        ))?;
-                    } else {
-                        let issuer = self.capture_chat_issuer(&entry)?;
-                        let admitted =
-                            self.companion_chat.try_admit(id, command.clone(), issuer, tick)?;
-                        let companion = CompanionSpeaker::new(id, name);
-                        if admitted {
-                            self.companion_chat.push_decided(DecidedChatFact::broadcast(
-                                entry.player_id,
-                                entry.display_name,
-                                ChatBody::Accepted {
-                                    companion,
-                                    command,
-                                },
-                            ))?;
-                        } else {
-                            self.companion_chat.push_decided(DecidedChatFact::sender_only(
+                        self.companion_chat
+                            .push_decided(DecidedChatFact::sender_only(
                                 entry.player_id,
                                 entry.display_name,
                                 entry.session,
-                                ChatBody::QueueFull {
-                                    companion,
-                                    command,
-                                },
+                                ChatBody::QueueFull { companion, command },
                             ))?;
+                    } else {
+                        let issuer = self.capture_chat_issuer(&entry)?;
+                        let admitted =
+                            self.companion_chat
+                                .try_admit(id, command.clone(), issuer, tick)?;
+                        let companion = CompanionSpeaker::new(id, name);
+                        if admitted {
+                            self.companion_chat
+                                .push_decided(DecidedChatFact::broadcast(
+                                    entry.player_id,
+                                    entry.display_name,
+                                    ChatBody::Accepted { companion, command },
+                                ))?;
+                        } else {
+                            self.companion_chat
+                                .push_decided(DecidedChatFact::sender_only(
+                                    entry.player_id,
+                                    entry.display_name,
+                                    entry.session,
+                                    ChatBody::QueueFull { companion, command },
+                                ))?;
                         }
                     }
                 }
@@ -1151,26 +1148,25 @@ impl AuthorityState {
         if let Some(task) = self.companion_chat.stop_current(id) {
             let companion = CompanionSpeaker::new(id, name);
             self.clear_stopped_companion_runtime(id);
-            self.companion_chat.push_decided(DecidedChatFact::broadcast(
-                task.issuer.player_id,
-                task.issuer.player_name,
-                ChatBody::Task {
-                    companion,
-                    command: task.command,
-                    state: TaskState::Stopped,
-                },
-            ))?;
+            self.companion_chat
+                .push_decided(DecidedChatFact::broadcast(
+                    task.issuer.player_id,
+                    task.issuer.player_name,
+                    ChatBody::Task {
+                        companion,
+                        command: task.command,
+                        state: TaskState::Stopped,
+                    },
+                ))?;
         } else {
             let companion = CompanionSpeaker::new(id, name);
-            self.companion_chat.push_decided(DecidedChatFact::sender_only(
-                entry.player_id,
-                entry.display_name.clone(),
-                entry.session,
-                ChatBody::NotFollowing {
-                    companion,
-                    command,
-                },
-            ))?;
+            self.companion_chat
+                .push_decided(DecidedChatFact::sender_only(
+                    entry.player_id,
+                    entry.display_name.clone(),
+                    entry.session,
+                    ChatBody::NotFollowing { companion, command },
+                ))?;
         }
         Ok(())
     }
@@ -1196,7 +1192,8 @@ impl AuthorityState {
             }
         }
         self.residents.mining.remove(&key);
-        self.companions.retain(|queued| queued.envelope.companion_id != id);
+        self.companions
+            .retain(|queued| queued.envelope.companion_id != id);
     }
 
     /// Captures the issuer facts for one accepted chat instruction.
@@ -1269,9 +1266,7 @@ impl AuthorityState {
                 if !(-64..320).contains(&cell.y()) {
                     continue;
                 }
-                if ((cell.x() >> 4) - foot_cx).abs() > 1
-                    || ((cell.z() >> 4) - foot_cz).abs() > 1
-                {
+                if ((cell.x() >> 4) - foot_cx).abs() > 1 || ((cell.z() >> 4) - foot_cz).abs() > 1 {
                     continue;
                 }
                 let key = ChunkKey {
@@ -1425,30 +1420,30 @@ impl AuthorityState {
             .map(|environment| environment.world_time)
             .unwrap_or(self.next_tick);
         let stored = Self::map_chat_plan_to_stored(&checked, &installed.command, start_tick);
-        if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id)) {
-            if let ActorAux::Companion {
+        if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id))
+            && let ActorAux::Companion {
                 generation: current,
                 task: running,
                 ..
             } = &mut runtime.aux
-            {
-                *current = generation;
-                *running = stored;
-            }
+        {
+            *current = generation;
+            *running = stored;
         }
         let companion = self
             .companion_chat
             .speaker(id)
             .expect("configured companion has a speaker");
-        self.companion_chat.push_decided(DecidedChatFact::broadcast(
-            installed.issuer.player_id,
-            installed.issuer.player_name,
-            ChatBody::Task {
-                companion,
-                command: installed.command,
-                state: TaskState::Started,
-            },
-        ))?;
+        self.companion_chat
+            .push_decided(DecidedChatFact::broadcast(
+                installed.issuer.player_id,
+                installed.issuer.player_name,
+                ChatBody::Task {
+                    companion,
+                    command: installed.command,
+                    state: TaskState::Started,
+                },
+            ))?;
         self.companion_chat.reserve_external_lifecycle()?;
         Ok(true)
     }
@@ -1504,15 +1499,16 @@ impl AuthorityState {
             .companion_chat
             .speaker(id)
             .expect("configured companion has a speaker");
-        self.companion_chat.push_decided(DecidedChatFact::broadcast(
-            finished.issuer.player_id,
-            finished.issuer.player_name,
-            ChatBody::Task {
-                companion,
-                command: finished.command,
-                state,
-            },
-        ))?;
+        self.companion_chat
+            .push_decided(DecidedChatFact::broadcast(
+                finished.issuer.player_id,
+                finished.issuer.player_name,
+                ChatBody::Task {
+                    companion,
+                    command: finished.command,
+                    state,
+                },
+            ))?;
         self.companion_chat.reserve_external_lifecycle()?;
         Ok(true)
     }
@@ -1548,7 +1544,7 @@ impl AuthorityState {
                 observed: total,
             });
         }
-        let usable = u64::MAX.checked_sub(self.next_chat_event_id).unwrap_or(0);
+        let usable = u64::MAX.saturating_sub(self.next_chat_event_id);
         if (total as u64) > usable {
             return Err(ServerError::Capacity {
                 resource: Resource::Commands,
@@ -1668,26 +1664,24 @@ impl AuthorityState {
             TaskState::Failed(TaskFailure::InvalidPlan) => {
                 (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_INVALID_PLAN)
             }
-            TaskState::Failed(TaskFailure::PathUnreachable) => (
-                COMPANION_TASK_FAILED,
-                COMPANION_TASK_FAIL_PATH_UNREACHABLE,
-            ),
+            TaskState::Failed(TaskFailure::PathUnreachable) => {
+                (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_PATH_UNREACHABLE)
+            }
             TaskState::Failed(TaskFailure::WorldChanged) => {
                 (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_WORLD_CHANGED)
             }
-            TaskState::Failed(TaskFailure::InventoryFull) => (
-                COMPANION_TASK_FAILED,
-                COMPANION_TASK_FAIL_INVENTORY_FULL,
-            ),
+            TaskState::Failed(TaskFailure::InventoryFull) => {
+                (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_INVENTORY_FULL)
+            }
             TaskState::Started | TaskState::Progress | TaskState::Stopped => {
                 unreachable!("terminal state validated above")
             }
         };
-        if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id)) {
-            if let ActorAux::Companion { task, .. } = &mut runtime.aux {
-                task.state = stored_state;
-                task.fail_reason = fail_reason;
-            }
+        if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id))
+            && let ActorAux::Companion { task, .. } = &mut runtime.aux
+        {
+            task.state = stored_state;
+            task.fail_reason = fail_reason;
         }
     }
 
