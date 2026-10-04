@@ -536,3 +536,87 @@ pub(crate) fn parse_chat_address(text: &str, names: &BTreeMap<String, CompanionI
         None => Addressed::Unknown { name },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_uuid(tag: u8) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[0] = tag.max(1);
+        bytes[6] = 0x40;
+        bytes[8] = 0x80;
+        bytes
+    }
+
+    fn test_issuer() -> CompanionChatIssuer {
+        CompanionChatIssuer {
+            session: SessionKey::from_raw(1).unwrap(),
+            player_id: PlayerId::try_from_bytes(test_uuid(1)).unwrap(),
+            player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
+            position: FiniteVec3::try_new([0.0, 1.0, 0.0]).unwrap(),
+            look: LookAngles::try_new(0.0, 0.0).unwrap(),
+            look_hit: None,
+        }
+    }
+
+    fn configured_book() -> (CompanionChatBook, CompanionId) {
+        let mut book = CompanionChatBook::new();
+        let id = CompanionId::try_from_bytes(test_uuid(9)).unwrap();
+        let name = CompanionName::try_from_canonical("阿木".to_owned()).unwrap();
+        book.apply_configuration(&[(id, name)]).unwrap();
+        (book, id)
+    }
+
+    fn test_command(text: &str) -> CommandText {
+        CommandText::try_from_canonical(text.to_owned()).unwrap()
+    }
+
+    /// Generation exhaustion refuses before any FIFO or current mutation:
+    /// the pending head stays queued with the counter and current intact.
+    #[test]
+    fn generation_exhaustion_refuses_before_promotion_mutation() {
+        let (mut book, id) = configured_book();
+        assert!(book
+            .try_admit(id, test_command("dig"), test_issuer(), 7)
+            .unwrap());
+        book.slots.get_mut(&id).expect("slot").generation = u64::MAX;
+        let snapshot = book.clone();
+        assert_eq!(
+            book.promote_heads(),
+            Err(ServerError::Capacity {
+                resource: super::contracts::Resource::Commands,
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+        );
+        assert_eq!(book, snapshot);
+        assert!(book.slots.get(&id).expect("slot").current.is_none());
+        assert_eq!(book.slots.get(&id).expect("slot").pending.len(), 1);
+    }
+
+    /// The last usable generation promotes exactly once to `u64::MAX`, and
+    /// the promoted task keeps its queued command, issuer, and source tick
+    /// for the once-only planning take.
+    #[test]
+    fn last_usable_generation_promotes_once_with_receipt() {
+        let (mut book, id) = configured_book();
+        assert!(book
+            .try_admit(id, test_command("dig"), test_issuer(), 7)
+            .unwrap());
+        book.slots.get_mut(&id).expect("slot").generation = u64::MAX - 1;
+        book.promote_heads().unwrap();
+        let slot = book.slots.get(&id).expect("slot");
+        assert_eq!(slot.generation, u64::MAX);
+        let current = slot.current.as_ref().expect("promoted current");
+        assert_eq!(current.generation, u64::MAX);
+        assert_eq!(current.command, test_command("dig"));
+        assert_eq!(current.issuer, test_issuer());
+        assert_eq!(current.source_tick, 7);
+        assert_eq!(current.phase, CompanionChatPhase::Queued);
+        assert!(slot.pending.is_empty());
+        let taken = book.take_queued_for_planning(id).expect("receipt");
+        assert_eq!(taken.generation, u64::MAX);
+        assert!(book.take_queued_for_planning(id).is_none());
+    }
+}

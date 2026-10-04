@@ -38,9 +38,12 @@ use mornlea_server::core::companion_chat::CompanionChatPhase;
 use mornlea_server::core::world::ReadyChunk;
 use mornlea_server::state::{AuthorityState, TickContext};
 use mornlea_storage::{
-    COMPANION_TASK_RUNNING, COMPANION_TASK_STOPPED, ChestSlot, Chunk, CompanionBody,
-    ContainerSnapshot, FurnaceSlot, HostileMob, Inventory, ItemStack as StorageStack, PassiveMob,
-    PlayerId as SavePlayerId, PlayerLocation, StorageKind, StoredCompanionTask, StoredPlayer,
+    COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_INVALID_PLAN, COMPANION_TASK_FAIL_INVENTORY_FULL,
+    COMPANION_TASK_FAIL_PATH_UNREACHABLE, COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
+    COMPANION_TASK_FAIL_WORLD_CHANGED, COMPANION_TASK_RUNNING, COMPANION_TASK_STOPPED, ChestSlot,
+    Chunk, CompanionBody, ContainerSnapshot, FurnaceSlot, HostileMob, Inventory,
+    ItemStack as StorageStack, PassiveMob, PlayerId as SavePlayerId, PlayerLocation, StorageKind,
+    StoredCompanionTask, StoredPlayer,
 };
 
 const GRASS: u16 = 4;
@@ -2770,6 +2773,149 @@ fn projection_chat_contract_terminal_finish_and_quota() {
         PlayerId::try_from_bytes(uuid(1)).unwrap()
     );
     assert_eq!(terminal.player_name().as_str(), "Ada");
+}
+
+/// projection::chat_contract_stored_failure_reasons — each closed failure
+/// maps to its stored task state and reason on the authoritative runtime
+/// while the original command and issuer broadcast; a companion that goes
+/// quiet after the planning take still terminates without an active actor.
+#[test]
+fn projection_chat_contract_stored_failure_reasons() {
+    let cases = [
+        (
+            TaskFailure::PlannerUnavailable,
+            COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
+        ),
+        (
+            TaskFailure::InvalidPlan,
+            COMPANION_TASK_FAIL_INVALID_PLAN,
+        ),
+        (
+            TaskFailure::PathUnreachable,
+            COMPANION_TASK_FAIL_PATH_UNREACHABLE,
+        ),
+        (TaskFailure::WorldChanged, COMPANION_TASK_FAIL_WORLD_CHANGED),
+        (
+            TaskFailure::InventoryFull,
+            COMPANION_TASK_FAIL_INVENTORY_FULL,
+        ),
+    ];
+    for (failure, reason) in cases {
+        let mut state = authority();
+        seed_world(&mut state);
+        let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+        configure_amu(&mut state);
+        stage_companion_with_runtime(&mut state, amu_id(), [8.5, 65.0, 8.5]);
+        submit_chat(&mut state, sender, "@阿木 dig 0");
+        let _ = state.advance_tick(TickBudget::full()).unwrap();
+        state
+            .take_companion_chat_planning(amu_id())
+            .unwrap()
+            .expect("planning receipt");
+        assert!(
+            state
+                .finish_companion_chat_task(amu_id(), 1, TaskState::Failed(failure))
+                .unwrap()
+        );
+        let residents = state.residents();
+        let runtime = residents
+            .runtimes
+            .get(&ActorKey::Companion(amu_id()))
+            .expect("companion runtime");
+        match &runtime.aux {
+            ActorAux::Companion { task, .. } => {
+                assert_eq!(task.state, COMPANION_TASK_FAILED, "failure {failure:?}");
+                assert_eq!(task.fail_reason, reason, "failure {failure:?}");
+            }
+            _ => panic!("companion aux"),
+        }
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        let failed = broadcast_chats(&tick)
+            .into_iter()
+            .find(|event| {
+                matches!(
+                    event.body(),
+                    ChatBody::Task { state: TaskState::Failed(_), .. }
+                )
+            })
+            .expect("failed broadcast");
+        assert_eq!(
+            failed.body(),
+            &ChatBody::Task {
+                companion: CompanionSpeaker::new(amu_id(), amu_name()),
+                command: CommandText::try_from_canonical("dig 0".to_owned()).unwrap(),
+                state: TaskState::Failed(failure),
+            }
+        );
+        assert_eq!(
+            failed.player_id(),
+            PlayerId::try_from_bytes(uuid(1)).unwrap()
+        );
+        assert_eq!(failed.player_name().as_str(), "Ada");
+    }
+
+    // A companion that goes quiet after the planning take still terminates:
+    // the original fact emits and the present runtime is cleaned.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    stage_companion_with_runtime(&mut state, amu_id(), [8.5, 65.0, 8.5]);
+    submit_chat(&mut state, sender, "@阿木 dig 0");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    state
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .expect("planning receipt");
+    let quiet = {
+        let residents = state.residents();
+        let mut actor = residents
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Companion(amu_id()))
+            .expect("companion actor")
+            .clone();
+        actor.lifecycle = ActorLifecycle::Pending;
+        actor
+    };
+    stage(&mut state, |context| {
+        context.stage(RuleEffect::Actor(quiet)).unwrap();
+    });
+    assert!(
+        state
+            .finish_companion_chat_task(
+                amu_id(),
+                1,
+                TaskState::Failed(TaskFailure::PlannerUnavailable),
+            )
+            .unwrap()
+    );
+    assert!(
+        state
+            .companion_chat_queue(amu_id())
+            .unwrap()
+            .current
+            .is_none()
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let failed = broadcast_chats(&tick)
+        .into_iter()
+        .find(|event| {
+            matches!(
+                event.body(),
+                ChatBody::Task { state: TaskState::Failed(_), .. }
+            )
+        })
+        .expect("failed broadcast without an active actor");
+    assert_eq!(
+        failed.body(),
+        &ChatBody::Task {
+            companion: CompanionSpeaker::new(amu_id(), amu_name()),
+            command: CommandText::try_from_canonical("dig 0".to_owned()).unwrap(),
+            state: TaskState::Failed(TaskFailure::PlannerUnavailable),
+        }
+    );
+    assert_eq!(failed.player_name().as_str(), "Ada");
 }
 
 /// projection::chat_contract_issuer_capture_and_ray — the issuer pose, look,

@@ -16316,3 +16316,229 @@ mod live_collision_read_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod companion_chat_boundary_tests {
+    use super::*;
+    use mornlea_domain::ChatIntent;
+
+    fn fresh() -> AuthorityState {
+        AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap()
+    }
+
+    fn logged(a: &mut AuthorityState) -> SessionKey {
+        let player =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        let start = mornlea_protocol::LoginStart::new(player, "Ada", 8).unwrap();
+        let inbound =
+            mornlea_protocol::LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
+        a.admit(mornlea_protocol::admit_login(inbound).unwrap(), TransportKind::Memory)
+            .unwrap()
+    }
+
+    fn amu() -> (CompanionId, CompanionName) {
+        let mut bytes = [0u8; 16];
+        bytes[0] = 9;
+        bytes[6] = 0x40;
+        bytes[8] = 0x80;
+        (
+            CompanionId::try_from_bytes(bytes).unwrap(),
+            CompanionName::try_from_canonical("阿木".to_owned()).unwrap(),
+        )
+    }
+
+    fn chat(text: &str) -> PlayIntent {
+        PlayIntent::Chat(ChatIntent::new(
+            CommandText::try_from_canonical(text.to_owned()).unwrap(),
+        ))
+    }
+
+    fn companion_actor(id: CompanionId) -> ActorRecord {
+        ActorRecord::try_new(
+            ActorKey::Companion(id),
+            ActorLifecycle::Active,
+            Dimension::OVERWORLD,
+            MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new([8.5, 65.0, 8.5]).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            }),
+            LookAngles::try_new(0.0, 0.0).unwrap(),
+            SurvivalState::try_new(SurvivalStateParts {
+                health: 20,
+                oxygen: 300,
+                hunger: 20,
+                saturation_zero: false,
+                armor_points: 0,
+            })
+            .unwrap(),
+            ActorBody::Companion(mornlea_storage::CompanionBody {
+                id: mornlea_storage::PlayerId::from_bytes(id.bytes()),
+                dimension: 0,
+                position: [8.5, 65.0, 8.5],
+                yaw: 0.0,
+                pitch: 0.0,
+                inventory: mornlea_storage::Inventory::default(),
+            }),
+        )
+        .unwrap()
+    }
+
+    fn companion_runtime(id: CompanionId) -> ActorRuntime {
+        ActorRuntime {
+            key: ActorKey::Companion(id),
+            controls: None,
+            has_view: false,
+            reset: false,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 0,
+            oxygen: 300,
+            peak_y: 65.0,
+            exhaustion_milli: 0,
+            saturation_milli: 0,
+            since_damage_ticks: 0,
+            drown_ticks: 0,
+            starvation_ticks: 0,
+            eating: None,
+            bow: None,
+            path: None,
+            aux: ActorAux::Companion {
+                generation: 0,
+                attempt: 1,
+                task: StoredCompanionTask::default(),
+                mining_target: None,
+            },
+        }
+    }
+
+    fn follow_plan() -> AgentPlan {
+        let player =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        AgentPlan::try_new(
+            "跟随我".to_owned(),
+            vec![PlanStep::Follow { player_id: player }],
+        )
+        .unwrap()
+    }
+
+    /// Event-id exhaustion refuses ingress before any drain, task, or fact
+    /// mutation; the last usable id still admits exactly one fact, and the
+    /// next fact refuses with every input and counter retained.
+    #[test]
+    fn id_exhaustion_refuses_ingress_before_mutation() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        let book = a.companion_chat.clone();
+        assert_eq!(a.chat_queue.len(), 1);
+        a.next_chat_event_id = u64::MAX;
+        assert!(matches!(
+            a.prepare_companion_chat(),
+            Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                ..
+            })
+        ));
+        assert_eq!(a.chat_queue.len(), 1);
+        assert_eq!(a.companion_chat, book);
+        assert_eq!(a.next_chat_event_id, u64::MAX);
+
+        a.next_chat_event_id = u64::MAX - 1;
+        a.prepare_companion_chat().unwrap();
+        assert!(a.chat_queue.is_empty());
+        assert!(a.companion_chat_queue(id).unwrap().current.is_some());
+        assert_eq!(a.companion_chat.decided.len(), 1);
+
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        assert!(a.prepare_companion_chat().is_err());
+        assert_eq!(a.chat_queue.len(), 1);
+        assert_eq!(a.companion_chat.decided.len(), 1);
+        assert_eq!(a.next_chat_event_id, u64::MAX - 1);
+    }
+
+    /// Install and terminal lifecycle calls refuse without mutation while
+    /// the remaining id headroom cannot cover the staged inputs plus the
+    /// new fact; with headroom both succeed in order.
+    #[test]
+    fn lifecycle_refusals_preserve_state_under_id_pressure() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        a.next_chat_event_id = u64::MAX;
+        let book = a.companion_chat.clone();
+        assert!(a
+            .install_companion_chat_plan(id, 1, follow_plan())
+            .is_err());
+        assert_eq!(a.companion_chat, book);
+        let runtime = a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime");
+        assert!(matches!(
+            runtime.aux,
+            ActorAux::Companion { generation: 0, .. }
+        ));
+        assert_eq!(a.companion_chat.decided.len(), 0);
+        assert_eq!(a.next_chat_event_id, u64::MAX);
+        assert!(a
+            .finish_companion_chat_task(
+                id,
+                1,
+                TaskState::Failed(TaskFailure::PlannerUnavailable),
+            )
+            .is_err());
+        assert_eq!(a.companion_chat, book);
+
+        a.next_chat_event_id = u64::MAX - 2;
+        assert!(a
+            .install_companion_chat_plan(id, 1, follow_plan())
+            .unwrap());
+        assert_eq!(a.companion_chat.decided.len(), 1);
+        assert!(a
+            .finish_companion_chat_task(
+                id,
+                1,
+                TaskState::Failed(TaskFailure::PlannerUnavailable),
+            )
+            .unwrap());
+    }
+
+    /// Preparing at the extreme tick captures that exact source tick with
+    /// checked generation and event ids: nothing wraps or panics.
+    #[test]
+    fn extreme_tick_captures_max_source_tick_without_wrap() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.next_tick = u64::MAX;
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        let current = a
+            .companion_chat_queue(id)
+            .unwrap()
+            .current
+            .expect("current task");
+        assert_eq!(current.source_tick, u64::MAX);
+        assert_eq!(current.generation, 1);
+        assert_eq!(a.next_tick, u64::MAX);
+    }
+}
