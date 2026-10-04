@@ -345,17 +345,17 @@ fn derived_name(id: CompanionId) -> String {
     text
 }
 
-/// The configured chat companion: real identity tag 9 with the name `阿木`.
+/// The configured chat companion: real identity tag 9 with the name `U+963F U+6728`.
 fn amu_id() -> CompanionId {
     companion_id(9)
 }
 
-/// The configured chat name `阿木`.
+/// The configured chat name `U+963F U+6728`.
 fn amu_name() -> CompanionName {
     CompanionName::try_from_canonical("阿木".to_owned()).unwrap()
 }
 
-/// Registers the configured `阿木` companion before the first tick.
+/// Registers the configured `U+963F U+6728` companion before the first tick.
 fn configure_amu(state: &mut AuthorityState) {
     state
         .configure_companion_chat(&[(amu_id(), amu_name())])
@@ -2113,8 +2113,8 @@ fn projection_chat_contract_fifo_capacity_two_slots() {
 /// projection::chat_contract_intake_limit_and_stop_phrases — 256 staged
 /// entries are admitted to staging while the 257th refuses with the
 /// transport capacity error before mutation and no fake overflow fact; the
-/// ordinary phrases `停止移动` and `stop` admit while the trimmed exact
-/// `停止` takes the stop path and is never queued.
+/// ordinary phrases `U+505C U+6B62 U+79FB U+52A8` and `stop` admit while the trimmed exact
+/// `U+505C U+6B62` takes the stop path and is never queued.
 #[test]
 fn projection_chat_contract_intake_limit_and_stop_phrases() {
     let mut state = authority();

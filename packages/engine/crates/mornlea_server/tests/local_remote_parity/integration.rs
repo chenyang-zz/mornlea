@@ -2669,7 +2669,7 @@ fn session_chats(publication: &TickPublication, session: SessionKey) -> Vec<Chat
         .collect()
 }
 
-/// Configured `阿木` full lifecycle through one real adapter: idle exact
+/// Configured `U+963F U+6728` full lifecycle through one real adapter: idle exact
 /// stop rejects sender-only, normal admission broadcasts and queues with the
 /// captured Ada issuer, the planning take is once-only, a planning stop
 /// preserves, the install seam starts with the original issuer, sixteen
@@ -2953,7 +2953,7 @@ fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture
     }
 }
 
-/// Ordinary `停止移动`/`stop` phrases admit while an exact stop against a
+/// Ordinary `U+505C U+6B62 U+79FB U+52A8`/`stop` phrases admit while an exact stop against a
 /// running finite plan rejects sender-only with the queue preserved,
 /// proven through both real adapters.
 fn chat_contract_phrases_finite_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture {
@@ -3058,7 +3058,7 @@ fn chat_contract_phrases_finite_scenario(adapter: &mut dyn ParityAdapter) -> Cha
     }
 }
 
-/// The configured `阿木` contract matrix is identical across the real
+/// The configured `U+963F U+6728` contract matrix is identical across the real
 /// adapters: whole ordered transcripts plus exact drained frame bytes.
 #[test]
 fn chat_contract_matrix_across_adapters() {
