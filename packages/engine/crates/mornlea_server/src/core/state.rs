@@ -11,9 +11,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use mornlea_domain::{
-    BlockChange, CommandEnvelope, CommandEnvelopeParts, CommandText, ContainerRef, Dimension,
-    DisplayName, EventRecipient, MotionState, PassiveId, PlayerId, RejectReason, RoutedEvent,
-    Weather, WorldState,
+    BlockChange, CommandEnvelope, CommandEnvelopeParts, CommandText, CompanionId, CompanionName,
+    ContainerRef, Dimension, DisplayName, EventRecipient, MotionState, PassiveId, PlayerId,
+    RejectReason, RoutedEvent, Weather, WorldState,
 };
 use mornlea_protocol::{
     AdmittedLogin, Direction, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket, State,
@@ -25,6 +25,7 @@ use super::acquisition::{
     LiveChunkFacts, LiveChunkPhase, RejectedAcquiredChunk,
 };
 use super::block_observations::ChunkBlockObservations;
+use super::companion_chat::{CompanionChatBook, CompanionChatQueueView, CompanionChatTask};
 use super::container_store::ContainerState;
 use super::contracts::*;
 use super::deferred_commands::DeferredCommands;
@@ -228,6 +229,10 @@ pub struct AuthorityState {
     /// Next chat event id, strictly increasing from one; zero is the absent
     /// form the chat event constructor rejects.
     next_chat_event_id: u64,
+    /// Configured companion chat address book and task queues. The book is
+    /// the single serial owner for configured names, task FIFOs, captured
+    /// issuers, generations, phases, and decided chat facts.
+    companion_chat: CompanionChatBook,
 }
 
 impl AuthorityState {
@@ -299,6 +304,7 @@ impl AuthorityState {
             session_views: BTreeMap::new(),
             chat_queue: VecDeque::new(),
             next_chat_event_id: 1,
+            companion_chat: CompanionChatBook::new(),
         })
     }
 
@@ -992,6 +998,66 @@ impl AuthorityState {
         let next = id.checked_add(1)?;
         self.next_chat_event_id = next;
         Some(id)
+    }
+
+    /// Installs the immutable configured companion chat address book.
+    ///
+    /// At most four id/name pairs, validated atomically: duplicates or an
+    /// over-count refuses everything. Configuration is allowed only before
+    /// the first tick with no staged chat or task activity; an explicit
+    /// empty configuration freezes the same way. Repeating the identical
+    /// configuration is idempotent, while any later differing configuration
+    /// is refused. It may run after login before the first tick.
+    pub fn configure_companion_chat(
+        &mut self,
+        definitions: &[(CompanionId, CompanionName)],
+    ) -> Result<(), ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        if self.companion_chat.ever_configured
+            && self.companion_chat.same_configuration(definitions)
+        {
+            return Ok(());
+        }
+        let sealed = self.next_tick != 0
+            || !self.chat_queue.is_empty()
+            || self.companion_chat.has_activity()
+            || self.companion_chat.ever_configured;
+        if sealed {
+            return Err(ServerError::InvalidInput {
+                field: "companion_chat_config",
+            });
+        }
+        self.companion_chat.apply_configuration(definitions)
+    }
+
+    /// Clones the bounded queue view for one configured companion.
+    pub fn companion_chat_queue(&self, id: CompanionId) -> Option<CompanionChatQueueView> {
+        self.companion_chat.queue_view(id)
+    }
+
+    /// Takes the current queued task into planning, returning it exactly once.
+    ///
+    /// Only a current `Queued` task with a live `Active` companion actor
+    /// promotes to `Planning`. The returned receipt keeps the original
+    /// generation, command, captured issuer, and source tick for the
+    /// caller's planning snapshot and dispatch; no network or model work
+    /// happens here.
+    pub fn take_companion_chat_planning(
+        &mut self,
+        id: CompanionId,
+    ) -> Result<Option<CompanionChatTask>, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        let live = self.residents.actors.iter().any(|actor| {
+            actor.key == ActorKey::Companion(id) && actor.lifecycle == ActorLifecycle::Active
+        });
+        if !live {
+            return Ok(None);
+        }
+        Ok(self.companion_chat.take_queued_for_planning(id))
     }
 
     /// Takes the per-session publication views for one projection pass.

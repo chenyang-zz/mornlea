@@ -2467,3 +2467,11 @@ Call1 output_limit cleaned successfully; call2 same developer UUID resumed, new 
 
 
 Wanted host gates PASS. Frozen R4 declaration8/Ready3 counterexample RED on sourcee148; candidate replay/parity/lib and unchanged passive regressions, clippy-Dwarnings, fmt/diff and R4 wanted probe GREEN. Exact commands/counts/log/source hashes in evidence/wanted-loom-host-validation.json. Independent readonly review pending; clean candidate identity bound externally. No chat/full-binary/overall3.7 acceptance, merge/push/deploy. Architecture skill: no change.
+
+
+## Configured companion chat admission and stop
+
+Main design uses Superpowers brainstorming and writing-plans; precise bounded plan102 restores original3.7 chat from qualifiedwanted2e553148, retains R4evidence585e28d separately. Authority owns immutable configuredname index and real bounded command/issuer/current FIFO, serial before-companion-drain stop/fence; explicit planning/install/terminal hooks leave full Agent composition caller-owned. Claude realCLI owns7Rustimplementationpaths, host owns runtimeRED/GREEN/identity and local scopedfreeze then fresh readonlyreview. No schema/fullbinary prerequisite, passive/wanted change or overall3.7checkbox. Explicit user authorization selects unlimitednullable calls/rounds/budget with fixed controller e5ca4036 and preserved deadlines/cleanup/permissions; no mainLoom/outputcandidate edits. New module inherits existingguide. Architecture skill: no change.
+
+
+Partial binding diagnostic checkpoint only: third real call completed192s, source module/config/query/planning-take compiles, but actual configured idle-stop probe still RED0pass1fail/exit101. Not task acceptance, no independent review executed. Local checkpoint exists solely to bind observed failure and resume original dev session under controller clean-source feedback invariant. Static defect: same_configuration length+all can mistake repeated[A,A] for existing[A,B], duplicate idempotent request must reject. Remaining original admission/capture/stop/publication/tests still pending. Architecture skill: no change.

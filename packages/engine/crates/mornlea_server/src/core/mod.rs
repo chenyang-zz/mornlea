@@ -9,6 +9,7 @@ pub mod chunk_driver;
 pub mod chunk_encoding;
 pub mod chunk_retirement;
 pub mod companion_ingress;
+pub mod companion_chat;
 mod container_store;
 pub mod contracts;
 mod deferred_commands;
