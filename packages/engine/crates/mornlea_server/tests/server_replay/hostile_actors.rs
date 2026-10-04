@@ -1373,6 +1373,21 @@ fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want
     let mut context = TickContext::harness(&mut state, TickBudget::full());
     stage_environment(&mut context, 1000, 0);
     preload_band_world(&mut context);
+    // Repair the hostile fixture: stage the foot block through a live Ready
+    // transaction before the first chase/path search consumes it.
+    let foot_cell = mornlea_domain::BlockPos::new(100, 40, 100);
+    if foot != mornlea_domain::Block::AIR {
+        let observed = context
+            .read()
+            .observation(Dimension::OVERWORLD, foot_cell)
+            .expect("ready foot observation");
+        let write = BlockWrite::try_new(observed, foot).expect("foot block write");
+        let outcome = context
+            .transaction()
+            .try_system(SystemRule::Support, vec![write])
+            .expect("support system write");
+        assert_eq!(outcome.changed.len(), 1);
+    }
     stage_actors(
         &mut context,
         &[
@@ -1416,9 +1431,7 @@ fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want
         .find(|actor| matches!(actor.key, ActorKey::Player(_)))
         .cloned()
         .expect("player record");
-    let foot_cell = mornlea_domain::BlockPos::new(100, 40, 100);
     let support_cell = mornlea_domain::BlockPos::new(100, 39, 100);
-    observe(&mut context, foot_cell, foot);
     let foot_observed = context.read().observation(Dimension::OVERWORLD, foot_cell);
     let support_observed = context.read().observation(Dimension::OVERWORLD, support_cell);
     let events = context.events().to_vec();
