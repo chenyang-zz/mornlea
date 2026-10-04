@@ -1362,12 +1362,6 @@ fn hurler_runtime_path(context: &TickContext<'_>, id: u64) -> bool {
         .is_some_and(|runtime| runtime.path.is_some())
 }
 
-/// One hostile motion tick over a borrowed foot cell, through the real
-/// provider only (no NativePhysics double). The source oracle pins dt 0.05,
-/// walk speed 4.3 and ground acceleration 40, so a full-speed -z approach
-/// settles at walk 3.01 over thick Snow (cells 87 and 88, which carry zero
-/// collision) and keeps 4.3 over AIR: displacement 0.1505 thick / 0.215 AIR
-/// from [100.5, 40, 100.5].
 /// Scene configuration for one native motion guard: the starting ground
 /// contact, a stationary variant and the foot block present before the first
 /// chase/path search runs.
@@ -1377,6 +1371,12 @@ struct SnowScene {
     initial_foot: u16,
 }
 
+/// One hostile motion tick over a borrowed foot cell, through the real
+/// provider only (no NativePhysics double). The source oracle pins dt 0.05,
+/// walk speed 4.3 and ground acceleration 40, so a full-speed -z approach
+/// settles at walk 3.01 over thick Snow (cells 87 and 88, which carry zero
+/// collision) and keeps 4.3 over AIR: displacement 0.1505 thick / 0.215 AIR
+/// from [100.5, 40, 100.5].
 fn assert_motion_snow_case(kind: u8, scene: SnowScene, foot: u16, want_z: f32, want_vz: f32) {
     let mut state = authority();
     let anchor = anchor_session(&mut state);
@@ -1525,7 +1525,7 @@ fn assert_motion_snow_case(kind: u8, scene: SnowScene, foot: u16, want_z: f32, w
     assert_eq!(context.events(), events);
 }
 
-/// The grounded wrapper: the foot cell holds air when the first chase runs.
+/// The grounded wrapper: the foot cell holds air before the final foot write.
 fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want_vz: f32) {
     assert_motion_snow_case(
         kind,

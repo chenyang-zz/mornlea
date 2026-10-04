@@ -655,10 +655,11 @@ fn assert_motion_snow_case(scene: SnowScene, foot: u16, want_z: f32, want_vz: f3
             .observation(Dimension::OVERWORLD, foot_cell)
             .expect("ready foot observation");
         let write = BlockWrite::try_new(observed, foot).expect("foot block write");
-        context
+        let outcome = context
             .transaction()
             .try_system(SystemRule::Support, vec![write])
             .expect("support system write");
+        assert_eq!(outcome.changed.len(), 1);
     }
     // The cow starts at the scene's ground contact and speed; the motion
     // state and the mirrored passive body stay consistent before staging.
@@ -725,15 +726,11 @@ fn assert_motion_snow_case(scene: SnowScene, foot: u16, want_z: f32, want_vz: f3
     let position = next.motion.position().get();
     let velocity = next.motion.velocity().get();
     assert_eq!(position[0], 2.5, "foot {foot}");
-    if scene.support == GRASS {
-        assert_eq!(position[1], 1.0, "foot {foot}");
-        assert!(next.motion.on_ground());
-    } else {
-        // With the support removed the native step is a horizontal pin
-        // beside the fall; the cow leaves the floor.
-        assert!(position[1] < 1.0, "foot {foot}: y {}", position[1]);
-        assert!(!next.motion.on_ground());
-    }
+    // The support variations replace only the center floor cell; the
+    // surrounding grass floor keeps the body in contact (y stays 1), so the
+    // decisive pin is the unslowed horizontal step over the AIR foot cell.
+    assert_eq!(position[1], 1.0, "foot {foot}");
+    assert!(next.motion.on_ground());
     assert!(
         (position[2] - want_z).abs() < 1e-5,
         "foot {foot}: z {}",
@@ -793,8 +790,8 @@ fn assert_motion_snow_case(scene: SnowScene, foot: u16, want_z: f32, want_vz: f3
     assert_eq!(context.events(), events);
 }
 
-/// The grounded wrapper: a grass floor and an air foot cell when the pursuit
-/// runs.
+/// The grounded wrapper: a grass floor and an air foot cell before the final
+/// foot write.
 fn assert_motion_snow_native_displacement(foot: u16, want_z: f32, want_vz: f32) {
     assert_motion_snow_case(
         SnowScene {
@@ -851,8 +848,9 @@ fn motion_snow_thick_native_displacement() {
             0.0,
         );
     }
-    // A removed support (air or walk-through snow) leaves the floor while the
-    // horizontal pin above it stays untouched by the snow tuning.
+    // Center-only support variations (air or walk-through snow) keep the
+    // surrounding floor in contact; the unslowed horizontal pin over the AIR
+    // foot cell stays decisive.
     for support in [AIR, 87, 88] {
         assert_motion_snow_case(
             SnowScene {
