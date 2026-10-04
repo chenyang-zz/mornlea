@@ -115,7 +115,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7l3tr Capture actual source player trample candidates before death and settle fixed coordinates ([packet](plans/94-source-player-trample-capture.md)).
 - [x] 3.7l3sn Retain actual source player Snow travel, capture before death and settle original cells ([packet](plans/95-source-player-snow-capture.md)).
 - [x] 3.7l3ac Settle successful source player Till and Mining exhaustion in their same-tick regions ([packet](plans/96-source-player-action-costs.md)).
-- [ ] 3.7l3ns0 Qualify the common raw-foot nonplayer thick-Snow speed contract before actual native consumers ([packet](plans/97-nonplayer-snow-scalar-contract.md)).
+- [x] 3.7l3ns0 Qualify the common raw-foot nonplayer thick-Snow speed contract before actual native consumers ([packet](plans/97-nonplayer-snow-scalar-contract.md)) — accepted 2026-10-04: fresh library 374/374 including the 6 prescribed Snow contracts; independent Codex source review PASS; evidence source `255a3e205`; actual native companion/hostile/passive consumers not accepted.
 - [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
 - [x] 3.7r0 Move resident ownership through live ticks and finalize changed chunks only ([packet](plans/52-owned-resident-tick.md)).
 - [x] 3.7r1 Bound defensive compound rollback to touched resident keys ([packet](plans/53-bounded-compound-undo.md)).
