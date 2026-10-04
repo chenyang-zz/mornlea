@@ -1600,19 +1600,21 @@ use mornlea_domain::{
     ProjectileSpawnParts, ProjectileSpawnRecord, ProjectileSpawnRecordParts, ProjectileState,
     ProjectileStateParts, ProjectileStateRecord, ProjectileStateRecordParts, RemotePlayerSpawn,
     RemotePlayerSpawnParts, RemotePlayerState, RemotePlayerStateParts, RemotePlayerStates,
-    SurvivalState, SurvivalStateParts, Weather,
+    SurvivalState, SurvivalStateParts, TaskState, Weather,
 };
 use mornlea_protocol::{CONTAINER_KIND_CHEST, STACK_VIEW_CONTAINER};
 use mornlea_server::contracts::{
-    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, ChunkKey, DropRecord,
-    EnvironmentState, ProjectileRecord, RuleEffect, RuleTunables,
+    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, AgentPlan,
+    AgentRequestId, ChunkKey, CompanionAction, CompanionActionEnvelope, DropRecord,
+    EnvironmentState, PlanStep, ProjectileRecord, RuleEffect, RuleTunables, RunId, SnapshotId,
 };
+use mornlea_server::core::companion_chat::CompanionChatPhase;
 use mornlea_server::core::world::ReadyChunk;
 use mornlea_server::state::TickContext;
 use mornlea_storage::{
     ChestSlot, Chunk, CompanionBody, ContainerSnapshot, FurnaceSlot, HostileMob, Inventory,
     ItemStack as StorageStack, PassiveMob, PlayerId as SavePlayerId, PlayerLocation, StorageKind,
-    StoredPlayer,
+    StoredCompanionTask, StoredPlayer,
 };
 
 const GRASS_BLOCK: u16 = 4;
@@ -2564,6 +2566,489 @@ fn chat_publications_match_across_adapters() {
     assert_eq!(
         memory.peer_frames, tcp.peer_frames,
         "the peer's drained frames match byte for byte"
+    );
+}
+
+/// The configured chat companion for the contract matrix: real identity
+/// tag 9 with the name `阿木`.
+fn amu_pair() -> (CompanionId, CompanionName) {
+    (
+        companion_id(9),
+        CompanionName::try_from_canonical("阿木".to_owned()).unwrap(),
+    )
+}
+
+/// A neutral companion runtime with a provider-owned attempt and no task.
+fn contract_runtime(id: CompanionId) -> ActorRuntime {
+    ActorRuntime {
+        key: ActorKey::Companion(id),
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 300,
+        peak_y: 65.0,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Companion {
+            generation: 0,
+            attempt: 3,
+            task: StoredCompanionTask::default(),
+            mining_target: None,
+        },
+    }
+}
+
+/// A checked terminal-follow plan for Ada's player identity.
+fn contract_follow_plan() -> AgentPlan {
+    AgentPlan::try_new(
+        "跟随我".to_owned(),
+        vec![PlanStep::Follow {
+            player_id: player(1),
+        }],
+    )
+    .unwrap()
+}
+
+/// A checked finite plan with no terminal follow.
+fn contract_finite_plan() -> AgentPlan {
+    AgentPlan::try_new(
+        "前进".to_owned(),
+        vec![PlanStep::GoTo { x: 1, y: 65, z: 1 }],
+    )
+    .unwrap()
+}
+
+/// One companion action envelope naming an explicit task generation.
+fn contract_envelope(
+    id: CompanionId,
+    generation: u64,
+    tag: u8,
+    action: CompanionAction,
+) -> CompanionActionEnvelope {
+    CompanionActionEnvelope::try_new(
+        id,
+        0,
+        AgentRequestId::try_from_bytes(uuid(tag)).unwrap(),
+        RunId::try_from_bytes(uuid(tag + 1)).unwrap(),
+        SnapshotId::try_from_bytes(uuid(tag + 2)).unwrap(),
+        generation,
+        1,
+        [0u8; 32],
+        action,
+    )
+    .unwrap()
+}
+
+/// Every broadcast chat event in one publication, in publication order.
+fn broadcast_chats(publication: &TickPublication) -> Vec<ChatEvent> {
+    publication
+        .events
+        .iter()
+        .filter(|event| event.recipient() == EventRecipient::Broadcast)
+        .filter_map(|event| match event.event() {
+            Event::Chat(chat) => Some(chat.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every chat event addressed to one session, in publication order.
+fn session_chats(publication: &TickPublication, session: SessionKey) -> Vec<ChatEvent> {
+    session_events(publication, session)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::Chat(chat) => Some(chat),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Configured `阿木` full lifecycle through one real adapter: idle exact
+/// stop rejects sender-only, normal admission broadcasts and queues with the
+/// captured Ada issuer, the planning take is once-only, a planning stop
+/// preserves, the install seam starts with the original issuer, sixteen
+/// pendings fill before the seventeenth refuses, a peer exact stop bypasses
+/// the full FIFO with the original issuer and command while the head
+/// promotes same-tick, and the stale generation refuses. Every phase ticks
+/// the real authority and drains real frames; the capture accumulates all
+/// phases for cross-adapter comparison.
+fn chat_contract_matrix_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture {
+    let (amu_id, amu_name) = amu_pair();
+    adapter
+        .endpoint()
+        .authority
+        .configure_companion_chat(&[(amu_id, amu_name.clone())])
+        .unwrap();
+    seed_day_world(adapter);
+    let ada = adapter.login(1, "Ada");
+    let bea = adapter.login(2, "Bea");
+    let speaker = CompanionSpeaker::new(amu_id, amu_name.clone());
+    let chat =
+        |text: String| ClientPacket::ChatCommand(mornlea_protocol::ChatCommand::new(text).unwrap());
+    let mut ticks = Vec::new();
+    let mut sender_frames: Vec<Vec<u8>> = Vec::new();
+    let mut peer_frames: Vec<Vec<u8>> = Vec::new();
+    let collect = |adapter: &mut dyn ParityAdapter,
+                       ticks: &mut Vec<TickPublication>,
+                       sender_frames: &mut Vec<Vec<u8>>,
+                       peer_frames: &mut Vec<Vec<u8>>,
+                       ada: &Peer,
+                       bea: &Peer| {
+        ticks.push(adapter.tick());
+        sender_frames.extend(adapter.drain(ada.session));
+        peer_frames.extend(adapter.drain(bea.session));
+    };
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Actor(companion_actor(
+                amu_id,
+                [8.5, 65.0, 8.5],
+                0.0,
+            )))
+            .unwrap();
+    }));
+
+    // Phase 0: idle exact stop rejects sender-only with no queue effect.
+    adapter.send_packet(ada.conn, &chat("@阿木 停止".to_owned()));
+    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    let tick = ticks.last().expect("phase tick");
+    assert_eq!(tick_counters(tick), (0, 0, 0));
+    let rejects = session_chats(tick, ada.session);
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(
+        rejects[0].body(),
+        &ChatBody::NotFollowing {
+            companion: CompanionSpeaker::new(amu_id, amu_name.clone()),
+            command: CommandText::try_from_canonical("停止".to_owned()).unwrap(),
+        }
+    );
+    assert!(session_chats(tick, bea.session).is_empty());
+    assert!(
+        adapter
+            .endpoint()
+            .authority
+            .companion_chat_queue(amu_id)
+            .unwrap()
+            .current
+            .is_none()
+    );
+
+    // Phase 1: normal admission broadcasts, queues, and captures Ada.
+    adapter.send_packet(ada.conn, &chat("@阿木 mine stone".to_owned()));
+    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    let tick = ticks.last().expect("phase tick");
+    let accepted = broadcast_chats(tick);
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(
+        accepted[0].body(),
+        &ChatBody::Accepted {
+            companion: speaker.clone(),
+            command: CommandText::try_from_canonical("mine stone".to_owned()).unwrap(),
+        }
+    );
+    let view = adapter
+        .endpoint()
+        .authority
+        .companion_chat_queue(amu_id)
+        .unwrap();
+    let current = view.current.as_ref().expect("queued current");
+    assert_eq!(current.generation, 1);
+    assert_eq!(current.phase, CompanionChatPhase::Queued);
+    assert_eq!(current.issuer.player_name.as_str(), "Ada");
+    assert_eq!(current.issuer.player_id, player(1));
+    let planned = adapter
+        .endpoint()
+        .authority
+        .take_companion_chat_planning(amu_id)
+        .unwrap()
+        .expect("planning receipt");
+    assert_eq!(planned.generation, 1);
+    assert_eq!(planned.issuer.player_name.as_str(), "Ada");
+    assert!(adapter
+        .endpoint()
+        .authority
+        .take_companion_chat_planning(amu_id)
+        .unwrap()
+        .is_none());
+
+    // Phase 2: a planning stop preserves the queue for the other session.
+    adapter.send_packet(bea.conn, &chat("@阿木 停止".to_owned()));
+    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    let tick = ticks.last().expect("phase tick");
+    let rejects = session_chats(tick, bea.session);
+    assert_eq!(rejects.len(), 1);
+    assert!(matches!(
+        rejects[0].body(),
+        ChatBody::NotFollowing { .. }
+    ));
+    assert!(session_chats(tick, ada.session).is_empty());
+    let view = adapter
+        .endpoint()
+        .authority
+        .companion_chat_queue(amu_id)
+        .unwrap();
+    assert_eq!(
+        view.current.as_ref().expect("planning kept").phase,
+        CompanionChatPhase::Planning
+    );
+
+    // Install through the real seam, then flush the started fact.
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Runtime(contract_runtime(amu_id)))
+            .unwrap();
+    }));
+    assert!(
+        adapter
+            .endpoint()
+            .authority
+            .install_companion_chat_plan(amu_id, 1, contract_follow_plan())
+            .unwrap()
+    );
+    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    let tick = ticks.last().expect("phase tick");
+    let started = broadcast_chats(tick)
+        .into_iter()
+        .find(|event| {
+            matches!(event.body(), ChatBody::Task { state: TaskState::Started, .. })
+        })
+        .expect("started broadcast");
+    assert_eq!(
+        started.body(),
+        &ChatBody::Task {
+            companion: speaker.clone(),
+            command: CommandText::try_from_canonical("mine stone".to_owned()).unwrap(),
+            state: TaskState::Started,
+        }
+    );
+    assert_eq!(started.player_name().as_str(), "Ada");
+
+    // Phase 4: sixteen pendings fill beside the running task.
+    for n in 0..16 {
+        adapter.send_packet(ada.conn, &chat(format!("@阿木 task-{}", n)));
+    }
+    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    let tick = ticks.last().expect("phase tick");
+    assert_eq!(broadcast_chats(tick).len(), 16);
+    let view = adapter
+        .endpoint()
+        .authority
+        .companion_chat_queue(amu_id)
+        .unwrap();
+    assert_eq!(view.pending.len(), 16);
+
+    // Phase 5: the seventeenth refuses while Bea's exact stop bypasses the
+    // full FIFO with the original Ada issuer and command.
+    adapter.send_packet(ada.conn, &chat("@阿木 task-overflow".to_owned()));
+    adapter.send_packet(bea.conn, &chat("@阿木 停止".to_owned()));
+    collect(&mut *adapter, &mut ticks, &mut sender_frames, &mut peer_frames, &ada, &bea);
+    let tick = ticks.last().expect("phase tick");
+    let rejects = session_chats(tick, ada.session);
+    assert_eq!(rejects.len(), 1);
+    assert!(matches!(
+        rejects[0].body(),
+        ChatBody::QueueFull { .. }
+    ));
+    let stopped = broadcast_chats(tick)
+        .into_iter()
+        .find(|event| {
+            matches!(event.body(), ChatBody::Task { state: TaskState::Stopped, .. })
+        })
+        .expect("stopped broadcast");
+    assert_eq!(
+        stopped.body(),
+        &ChatBody::Task {
+            companion: speaker.clone(),
+            command: CommandText::try_from_canonical("mine stone".to_owned()).unwrap(),
+            state: TaskState::Stopped,
+        }
+    );
+    assert_eq!(stopped.player_name().as_str(), "Ada");
+    let view = adapter
+        .endpoint()
+        .authority
+        .companion_chat_queue(amu_id)
+        .unwrap();
+    let current = view.current.as_ref().expect("promoted head");
+    assert_eq!(current.generation, 2);
+    assert_eq!(current.command.as_str(), "task-0");
+    assert_eq!(view.pending.len(), 15);
+
+    // Phase 6: the delayed stale generation refuses at the fence.
+    assert_eq!(
+        adapter.endpoint().authority.submit_companion(contract_envelope(
+            amu_id,
+            1,
+            50,
+            CompanionAction::MineRelease,
+        )),
+        Err(mornlea_server::contracts::ServerError::InvalidInput {
+            field: "companion_generation",
+        })
+    );
+
+    ChatCapture {
+        ticks,
+        sender_frames,
+        peer_frames,
+    }
+}
+
+/// Ordinary `停止移动`/`stop` phrases admit while an exact stop against a
+/// running finite plan rejects sender-only with the queue preserved,
+/// proven through both real adapters.
+fn chat_contract_phrases_finite_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture {
+    let (amu_id, amu_name) = amu_pair();
+    adapter
+        .endpoint()
+        .authority
+        .configure_companion_chat(&[(amu_id, amu_name.clone())])
+        .unwrap();
+    seed_day_world(adapter);
+    let ada = adapter.login(1, "Ada");
+    let bea = adapter.login(2, "Bea");
+    let speaker = CompanionSpeaker::new(amu_id, amu_name.clone());
+    let chat =
+        |text: String| ClientPacket::ChatCommand(mornlea_protocol::ChatCommand::new(text).unwrap());
+    let mut ticks = Vec::new();
+    let mut sender_frames: Vec<Vec<u8>> = Vec::new();
+    let mut peer_frames: Vec<Vec<u8>> = Vec::new();
+    adapter.stage(Box::new(move |context| {
+        context
+            .stage(RuleEffect::Actor(companion_actor(
+                amu_id,
+                [8.5, 65.0, 8.5],
+                0.0,
+            )))
+            .unwrap();
+        context
+            .stage(RuleEffect::Runtime(contract_runtime(amu_id)))
+            .unwrap();
+    }));
+
+    // Ordinary phrases admit as normal commands.
+    adapter.send_packet(ada.conn, &chat("@阿木 停止移动".to_owned()));
+    adapter.send_packet(ada.conn, &chat("@阿木 stop".to_owned()));
+    ticks.push(adapter.tick());
+    sender_frames.extend(adapter.drain(ada.session));
+    peer_frames.extend(adapter.drain(bea.session));
+    let tick = ticks.last().expect("phase tick");
+    let accepted = broadcast_chats(tick);
+    assert_eq!(accepted.len(), 2);
+    assert_eq!(
+        accepted[0].body(),
+        &ChatBody::Accepted {
+            companion: speaker.clone(),
+            command: CommandText::try_from_canonical("停止移动".to_owned()).unwrap(),
+        }
+    );
+    assert_eq!(
+        accepted[1].body(),
+        &ChatBody::Accepted {
+            companion: speaker.clone(),
+            command: CommandText::try_from_canonical("stop".to_owned()).unwrap(),
+        }
+    );
+
+    // A running finite plan is not following: the exact stop rejects
+    // sender-only with the task and FIFO preserved.
+    adapter
+        .endpoint()
+        .authority
+        .take_companion_chat_planning(amu_id)
+        .unwrap()
+        .expect("planning receipt");
+    assert!(
+        adapter
+            .endpoint()
+            .authority
+            .install_companion_chat_plan(amu_id, 1, contract_finite_plan())
+            .unwrap()
+    );
+    ticks.push(adapter.tick());
+    sender_frames.extend(adapter.drain(ada.session));
+    peer_frames.extend(adapter.drain(bea.session));
+    adapter.send_packet(ada.conn, &chat("@阿木 停止".to_owned()));
+    ticks.push(adapter.tick());
+    sender_frames.extend(adapter.drain(ada.session));
+    peer_frames.extend(adapter.drain(bea.session));
+    let tick = ticks.last().expect("phase tick");
+    let rejects = session_chats(tick, ada.session);
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(
+        rejects[0].body(),
+        &ChatBody::NotFollowing {
+            companion: speaker.clone(),
+            command: CommandText::try_from_canonical("停止".to_owned()).unwrap(),
+        }
+    );
+    assert!(session_chats(tick, bea.session).is_empty());
+    let view = adapter
+        .endpoint()
+        .authority
+        .companion_chat_queue(amu_id)
+        .unwrap();
+    let current = view.current.as_ref().expect("running kept");
+    assert_eq!(current.phase, CompanionChatPhase::Running);
+    assert_eq!(current.generation, 1);
+
+    ChatCapture {
+        ticks,
+        sender_frames,
+        peer_frames,
+    }
+}
+
+/// The configured `阿木` contract matrix is identical across the real
+/// adapters: whole ordered transcripts plus exact drained frame bytes.
+#[test]
+fn chat_contract_matrix_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory_capture = chat_contract_matrix_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp_capture = chat_contract_matrix_scenario(&mut tcp);
+    assert_eq!(
+        memory_capture.ticks, tcp_capture.ticks,
+        "matrix publications are identical across the real adapters"
+    );
+    assert_eq!(
+        memory_capture.sender_frames, tcp_capture.sender_frames,
+        "matrix sender frames match byte for byte"
+    );
+    assert_eq!(
+        memory_capture.peer_frames, tcp_capture.peer_frames,
+        "matrix peer frames match byte for byte"
+    );
+}
+
+/// Ordinary phrases plus the finite-plan stop are identical across the real
+/// adapters: whole ordered transcripts plus exact drained frame bytes.
+#[test]
+fn chat_contract_phrases_finite_across_adapters() {
+    let mut memory = MemoryParity::new();
+    let memory_capture = chat_contract_phrases_finite_scenario(&mut memory);
+    let mut tcp = TcpParity::new();
+    let tcp_capture = chat_contract_phrases_finite_scenario(&mut tcp);
+    assert_eq!(
+        memory_capture.ticks, tcp_capture.ticks,
+        "phrase publications are identical across the real adapters"
+    );
+    assert_eq!(
+        memory_capture.sender_frames, tcp_capture.sender_frames,
+        "phrase sender frames match byte for byte"
+    );
+    assert_eq!(
+        memory_capture.peer_frames, tcp_capture.peer_frames,
+        "phrase peer frames match byte for byte"
     );
 }
 
