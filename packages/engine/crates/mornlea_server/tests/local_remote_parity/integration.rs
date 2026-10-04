@@ -2567,7 +2567,7 @@ fn chat_publications_match_across_adapters() {
 }
 
 /// The configured chat companion for the contract matrix: real identity
-/// tag 9 with the name `阿木`.
+/// tag 9 with the name `U+963F U+6728`.
 fn amu_pair() -> (CompanionId, CompanionName) {
     (
         companion_id(9),
