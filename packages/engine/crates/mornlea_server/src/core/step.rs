@@ -210,6 +210,10 @@ fn reduce_tick_inner(
     publish: bool,
 ) -> Result<TickPublication, ServerError> {
     let tick = state.next_tick();
+    // Staged chat ingress runs before the mailbox/companion drain: admission,
+    // stop handling, and promotion decide facts once, and a successful stop
+    // purges this companion's queued envelopes before they are drained.
+    state.prepare_companion_chat()?;
     let drained = drain_mailbox(state, tick, budget.commands());
     let companions = state.drain_companions(COMPANION_FEED);
     // The login scan runs before the context borrows the authority: Active

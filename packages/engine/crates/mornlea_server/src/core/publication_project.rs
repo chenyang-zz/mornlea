@@ -11,17 +11,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mornlea_domain::{
-    self, BlockChange, BlockChanges, BlockChangesParts, BlockPos, ChatBody, ChatEvent,
-    ChatEventParts, ChunkPos, CommandText, CompanionDespawn, CompanionId, CompanionName,
-    CompanionSpawn, CompanionSpawnParts, CompanionSpeaker, CompanionState, CompanionStateParts,
-    CompanionStates, CompanionStatesParts, ContainerClosed, CraftingState, CraftingStateParts,
-    Dimension, Event, EventRecipient, ForgetChunks, ForgetChunksParts, HostileDespawn,
-    HostileDespawnParts, HostileId, HostileKind, HostileSpawn, HostileSpawnParts,
-    HostileSpawnRecord, HostileSpawnRecordParts, HostileState, HostileStateParts,
-    HostileStateRecord, HostileStateRecordParts, ItemDrop, ItemDropParts, ItemDropRemoves,
-    ItemDropRemovesParts, ItemDropUpserts, ItemDropUpsertsParts, ItemStack, PassiveDespawn,
-    PassiveDespawnParts, PassiveDespawnReason, PassiveDespawnRecord, PassiveId, PassiveSpawn,
-    PassiveSpawnParts, PassiveSpawnRecord, PassiveSpawnRecordParts, PassiveState,
+    self, BlockChange, BlockChanges, BlockChangesParts, BlockPos, ChatEvent, ChatEventParts,
+    ChunkPos, CompanionDespawn, CompanionId, CompanionName, CompanionSpawn, CompanionSpawnParts,
+    CompanionState, CompanionStateParts, CompanionStates, CompanionStatesParts, ContainerClosed,
+    CraftingState, CraftingStateParts, Dimension, Event, EventRecipient, ForgetChunks,
+    ForgetChunksParts, HostileDespawn, HostileDespawnParts, HostileId, HostileKind, HostileSpawn,
+    HostileSpawnParts, HostileSpawnRecord, HostileSpawnRecordParts, HostileState,
+    HostileStateParts, HostileStateRecord, HostileStateRecordParts, ItemDrop, ItemDropParts,
+    ItemDropRemoves, ItemDropRemovesParts, ItemDropUpserts, ItemDropUpsertsParts, ItemStack,
+    PassiveDespawn, PassiveDespawnParts, PassiveDespawnReason, PassiveDespawnRecord, PassiveId,
+    PassiveSpawn, PassiveSpawnParts, PassiveSpawnRecord, PassiveSpawnRecordParts, PassiveState,
     PassiveStateParts, PassiveStateRecord, PassiveStateRecordParts, PlayerId, ProjectileDespawn,
     ProjectileDespawnParts, ProjectileId, ProjectileSpawn, ProjectileSpawnParts,
     ProjectileSpawnRecord, ProjectileSpawnRecordParts, ProjectileState, ProjectileStateParts,
@@ -113,7 +112,9 @@ struct Visibility {
 /// address derives one: `companion-` plus the lowercase hex of the identity's
 /// first eight bytes. The form is fixed-length, canonical (no whitespace, no
 /// control character, well inside the thirty-two scalar cap) and stable for
-/// one identity across ticks.
+/// one identity across ticks. Configured companions publish their configured
+/// chat name instead; this derived form stays the fallback for unconfigured
+/// entity fixtures only.
 pub(crate) fn companion_display_name(id: CompanionId) -> Option<CompanionName> {
     const PREFIX: &str = "companion-";
     let mut text = String::with_capacity(PREFIX.len() + 16);
@@ -213,11 +214,13 @@ impl AuthorityState {
         emit_forgets(&mut view_list, &observers, &mut events);
         emit_snapshots(&mut view_list, &observers, self, &mut events);
         emit_block_batches(&mut view_list, &observers, self, outcome, &mut events);
+        let configured_names = self.configured_chat_names();
         emit_companions(
             &mut view_list,
             &observers,
             &visibilities,
             &inputs,
+            &configured_names,
             &mut events,
         );
         emit_remotes(
@@ -272,59 +275,31 @@ impl AuthorityState {
         events
     }
 
-    /// Chat: drains the staged chat FIFO and emits one chat event per entry.
+    /// Chat: drains the decided chat facts and emits one chat event per fact.
     ///
-    /// Malformed addressing and an unknown derived name reject to the sender
-    /// only, a staged overflow marker rejects queue-full to the sender only,
-    /// and valid addressing broadcasts the accepted command. Every published
-    /// event consumes one strictly increasing event id; entries for retired
-    /// senders are dropped without an id.
-    fn emit_chat(&mut self, entities: &Entities, events: &mut Vec<RoutedEvent>) {
-        let staged = self.take_chat_queue();
-        if staged.is_empty() {
-            return;
-        }
-        let mut names: BTreeMap<String, CompanionId> = BTreeMap::new();
-        for (id, _) in &entities.companions {
-            if let Some(name) = companion_display_name(*id) {
-                names.entry(name.as_str().to_owned()).or_insert(*id);
-            }
-        }
-        for chat in staged {
-            if !self.session_active(chat.session) {
-                continue;
-            }
-            // One parse per entry decides both the body and the destination:
-            // only a normally staged match broadcasts, while the queue-full
-            // marker rejects to the sender even though it addressed fine.
-            let (body, broadcast) = match parse_chat_address(chat.text.as_str(), &names) {
-                Addressed::Invalid => (ChatBody::InvalidFormat, false),
-                Addressed::Unknown { name } => (ChatBody::UnknownCompanion { name }, false),
-                Addressed::Matched { id, name, command } => {
-                    let companion = CompanionSpeaker::new(id, name);
-                    if chat.overflow {
-                        (ChatBody::QueueFull { companion, command }, false)
-                    } else {
-                        (ChatBody::Accepted { companion, command }, true)
-                    }
-                }
-            };
+    /// Admission, queue-full, stop, and lifecycle outcomes were decided at
+    /// the tick boundary before provider dispatch; this family only assigns
+    /// the monotonic event ids in decided order at the existing family slot.
+    /// Accepted and lifecycle facts broadcast while sender-only rejections
+    /// address the issuing session. The pre-tick budget proves id headroom,
+    /// so allocation cannot run out; already decided broadcasts are never
+    /// rechecked or suppressed here.
+    fn emit_chat(&mut self, _entities: &Entities, events: &mut Vec<RoutedEvent>) {
+        for fact in self.take_decided_chat_facts() {
             let Some(event_id) = self.allocate_chat_event_id() else {
                 break;
             };
-            let Ok(event) = ChatEvent::try_new(ChatEventParts {
+            let event = ChatEvent::try_new(ChatEventParts {
                 event_id,
-                player_id: chat.player_id,
-                player_name: chat.display_name,
-                body,
+                player_id: fact.player_id,
+                player_name: fact.player_name,
+                body: fact.body,
             })
-            .map(Event::Chat) else {
-                continue;
-            };
-            let recipient = if broadcast {
-                EventRecipient::Broadcast
-            } else {
-                EventRecipient::Session(chat.session.get())
+            .map(Event::Chat)
+            .expect("decided chat facts carry nonzero event ids");
+            let recipient = match fact.recipient {
+                None => EventRecipient::Broadcast,
+                Some(session) => EventRecipient::Session(session.get()),
             };
             events.push(RoutedEvent::new(recipient, event));
         }
@@ -409,55 +384,6 @@ impl AuthorityState {
                 events.push(RoutedEvent::new(owner, event));
             }
         }
-    }
-}
-
-/// One staged chat text's addressing outcome before the queue-full branch.
-#[derive(Debug)]
-enum Addressed {
-    Invalid,
-    Unknown {
-        name: CompanionName,
-    },
-    Matched {
-        id: CompanionId,
-        name: CompanionName,
-        command: CommandText,
-    },
-}
-
-/// Parses one staged chat text against the live companion names.
-///
-/// The format is `@<name><separator><command>`: the name runs to the first
-/// whitespace separator, the remainder must re-validate as a `CommandText`,
-/// and every malformed shape (no `@`, no separator, an empty or invalid
-/// remainder, or a name no canonical companion name accepts) rejects as
-/// invalid format. A well-formed name that matches no live companion rejects
-/// as unknown. This projection owns the addressing outcome only: feeding the
-/// companion task queue is the separately-owned sessionless
-/// `CompanionIngress` path, which this slice deliberately does not drive
-/// from chat.
-fn parse_chat_address(text: &str, names: &BTreeMap<String, CompanionId>) -> Addressed {
-    let Some(rest) = text.strip_prefix('@') else {
-        return Addressed::Invalid;
-    };
-    let Some(separator) = rest.find(char::is_whitespace) else {
-        return Addressed::Invalid;
-    };
-    let (name, remainder) = rest.split_at(separator);
-    let remainder = remainder.trim_start_matches(char::is_whitespace);
-    if CommandText::try_from_canonical(remainder.to_owned()).is_err() {
-        return Addressed::Invalid;
-    }
-    let Ok(name) = CompanionName::try_from_canonical(name.to_owned()) else {
-        return Addressed::Invalid;
-    };
-    let Ok(command) = CommandText::try_from_canonical(remainder.to_owned()) else {
-        return Addressed::Invalid;
-    };
-    match names.get(name.as_str()) {
-        Some(&id) => Addressed::Matched { id, name, command },
-        None => Addressed::Unknown { name },
     }
 }
 
@@ -874,6 +800,7 @@ fn emit_companions(
     observers: &[Observer],
     visibilities: &[Visibility],
     inputs: &WorldInputs<'_>,
+    configured: &BTreeMap<CompanionId, CompanionName>,
     events: &mut Vec<RoutedEvent>,
 ) {
     for ((observer, view), visibility) in
@@ -891,7 +818,13 @@ fn emit_companions(
                 continue;
             };
             let actor = &inputs.actors[*index];
-            let Some(name) = companion_display_name(*id) else {
+            // Configured companions publish their configured chat name; the
+            // derived form stays the fallback for unconfigured fixtures.
+            let Some(name) = configured
+                .get(id)
+                .cloned()
+                .or_else(|| companion_display_name(*id))
+            else {
                 published.remove(id);
                 continue;
             };
@@ -1473,6 +1406,7 @@ fn domain_stacks<const N: usize>(stacks: &[mornlea_storage::ItemStack; N]) -> [I
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::companion_chat::{Addressed, parse_chat_address};
 
     /// The derivation pins its exact form: the `companion-` prefix plus the
     /// lowercase hex of the first eight identity bytes, canonical and far

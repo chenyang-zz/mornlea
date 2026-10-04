@@ -7,14 +7,14 @@
 //! caller-owned; this module performs no I/O and never infers task state
 //! from position, path, or broadcast output.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use mornlea_domain::{
     BlockPos, ChatBody, CommandText, CompanionId, CompanionName, CompanionSpeaker, DisplayName,
     FiniteVec3, LookAngles, PlayerId,
 };
 
-use super::contracts::{AgentPlan, ServerError, SessionKey};
+use super::contracts::{AgentPlan, PlanStep, ServerError, SessionKey};
 
 /// Maximum immutable configured companions.
 pub const MAX_CONFIGURED_COMPANIONS: usize = 4;
@@ -133,7 +133,7 @@ impl DecidedChatFact {
 pub struct CompanionChatBook {
     pub(crate) configured: BTreeMap<CompanionId, CompanionName>,
     pub(crate) by_name: BTreeMap<String, CompanionId>,
-    pub(crate) slots: BTreeMap<CompanionId, ChatSlot>,
+    slots: BTreeMap<CompanionId, ChatSlot>,
     pub(crate) decided: Vec<DecidedChatFact>,
     pub(crate) ever_configured: bool,
 }
@@ -192,9 +192,22 @@ impl CompanionChatBook {
     }
 
     /// Whether the exact configuration is already installed.
+    ///
+    /// Length alone never proves identity: the candidate pairs are checked
+    /// for unique ids and names first, so a duplicate-heavy request with a
+    /// matching length (for example existing `[A, B]` against `[A, A]`) is
+    /// not reported identical. Only the complete checked map comparison
+    /// decides.
     pub(crate) fn same_configuration(&self, definitions: &[(CompanionId, CompanionName)]) -> bool {
-        if self.configured.len() != definitions.len() {
+        if definitions.len() != self.configured.len() {
             return false;
+        }
+        let mut seen_ids = BTreeSet::new();
+        let mut seen_names = BTreeSet::new();
+        for (id, name) in definitions {
+            if !seen_ids.insert(*id) || !seen_names.insert(name.as_str()) {
+                return false;
+            }
         }
         definitions.iter().all(|(id, name)| {
             self.configured
@@ -273,6 +286,104 @@ impl CompanionChatBook {
         }
         current.phase = CompanionChatPhase::Planning;
         Some(current.clone())
+    }
+
+    /// Whether one slot has room for another pending command.
+    pub(crate) fn pending_has_capacity(&self, id: CompanionId) -> bool {
+        self.slots
+            .get(&id)
+            .is_some_and(|slot| slot.pending.len() < MAX_PENDING_COMMANDS)
+    }
+
+    /// Reserves one pending FIFO entry behind the current task.
+    ///
+    /// Returns `false` without mutation when the slot already holds
+    /// sixteen pending commands. A missing configured slot is a caller
+    /// error; FIFO-full is an ordinary refusal.
+    pub(crate) fn try_admit(
+        &mut self,
+        id: CompanionId,
+        command: CommandText,
+        issuer: CompanionChatIssuer,
+        source_tick: u64,
+    ) -> Result<bool, ServerError> {
+        let slot = self.slots.get_mut(&id).ok_or(ServerError::InvalidInput {
+            field: "companion_chat_slot",
+        })?;
+        if slot.pending.len() >= MAX_PENDING_COMMANDS {
+            return Ok(false);
+        }
+        slot.pending.push_back((command, issuer, source_tick));
+        Ok(true)
+    }
+
+    /// Promotes one pending head per companion that has no current task.
+    ///
+    /// The generation counter advances under a checked addition before the
+    /// head is popped, so exhaustion refuses before any FIFO or current
+    /// mutation. The new current task waits in `Queued` for a real planning
+    /// take and never pretends to run.
+    pub(crate) fn promote_heads(&mut self) -> Result<(), ServerError> {
+        for slot in self.slots.values_mut() {
+            if slot.current.is_some() || slot.pending.is_empty() {
+                continue;
+            }
+            let next = slot.generation.checked_add(1).ok_or(ServerError::Capacity {
+                resource: super::contracts::Resource::Commands,
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+            let (command, issuer, source_tick) =
+                slot.pending.pop_front().expect("checked pending head");
+            slot.generation = next;
+            slot.current = Some(CompanionChatTask {
+                generation: next,
+                command,
+                issuer,
+                source_tick,
+                phase: CompanionChatPhase::Queued,
+                plan: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// Returns the current task when it can be stopped, without mutation.
+    ///
+    /// Only a `Running` task carrying a checked plan whose last step is a
+    /// terminal `Follow` is stoppable; earlier finite steps before that
+    /// terminal follow are permitted. Idle, queued, planning, plan-less, or
+    /// non-follow running tasks all yield `None`.
+    pub(crate) fn peek_stoppable(&self, id: CompanionId) -> Option<CompanionChatTask> {
+        let current = self.slots.get(&id)?.current.as_ref()?;
+        if current.phase != CompanionChatPhase::Running {
+            return None;
+        }
+        if !matches!(current.plan.as_ref()?.steps.last(), Some(PlanStep::Follow { .. })) {
+            return None;
+        }
+        Some(current.clone())
+    }
+
+    /// Clears a stoppable current task, returning the original task facts.
+    ///
+    /// Returns `None` under the same conditions as [`Self::peek_stoppable`];
+    /// the pending FIFO, the generation counter, and every other companion
+    /// are untouched.
+    pub(crate) fn stop_current(&mut self, id: CompanionId) -> Option<CompanionChatTask> {
+        if self.peek_stoppable(id).is_none() {
+            return None;
+        }
+        self.slots.get_mut(&id)?.current.take()
+    }
+
+    /// Whether one companion holds a running task of this generation.
+    pub(crate) fn is_running_generation(&self, id: CompanionId, generation: u64) -> bool {
+        self.slots.get(&id).is_some_and(|slot| {
+            slot.current.as_ref().is_some_and(|current| {
+                current.phase == CompanionChatPhase::Running && current.generation == generation
+            })
+        })
     }
 }
 

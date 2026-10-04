@@ -11,25 +11,34 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use mornlea_domain::{
-    BlockChange, CommandEnvelope, CommandEnvelopeParts, CommandText, CompanionId, CompanionName,
-    ContainerRef, Dimension, DisplayName, EventRecipient, MotionState, PassiveId, PlayerId,
-    RejectReason, RoutedEvent, Weather, WorldState,
+    BlockChange, BlockPos, ChatBody, ChunkPos, CommandEnvelope, CommandEnvelopeParts, CommandText,
+    CompanionId, CompanionName, CompanionSpeaker, ContainerRef, Dimension, DisplayName,
+    EventRecipient, FiniteVec3, LookAngles, MotionState, PassiveId, PlayerId, RejectReason,
+    RoutedEvent, TaskState, Weather, WorldState,
 };
 use mornlea_protocol::{
     AdmittedLogin, Direction, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket, State,
 };
-use mornlea_storage::{Chunk, Metadata, PlayerLocation, PlayerSave, StoredPlayer};
+use mornlea_storage::{
+    Chunk, Metadata, PlayerLocation, PlayerSave, StoredPlayer, COMPANION_TASK_STOPPED,
+};
+use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
+use mornlea_engine::native::raycast::NativeRaycast;
 
 use super::acquisition::{
     AcquiredChunkEvent, AcquisitionState, ChunkGenerationReservation, ChunkLoadReservation,
     LiveChunkFacts, LiveChunkPhase, RejectedAcquiredChunk,
 };
 use super::block_observations::ChunkBlockObservations;
-use super::companion_chat::{CompanionChatBook, CompanionChatQueueView, CompanionChatTask};
+use super::companion_chat::{
+    Addressed, CompanionChatBook, CompanionChatIssuer, CompanionChatQueueView, CompanionChatTask,
+    DecidedChatFact, MAX_DECIDED_FACTS, STOP_COMMAND, parse_chat_address,
+};
 use super::container_store::ContainerState;
 use super::contracts::*;
 use super::deferred_commands::DeferredCommands;
 use super::drop_store::{self, DropState};
+use super::interaction::{look_direction, normalized_direction};
 use super::login_seed::{SeededPlayer, seed_player};
 use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
 use super::publication_project::TickOutcome;
@@ -41,21 +50,20 @@ use crate::rules::fluids::FluidSchedule;
 
 const COMPANION_INBOX: usize = 4;
 
-/// Chat intake bound: normal entries stop at this count, and one overflow
-/// marker may ride past it so the blocked sender still learns the refusal in
-/// the same drain. The queue is fully drained every tick, so the marker bound
-/// is structural rather than cumulative.
+/// Chat intake bound: at most this many staged entries wait between ticks.
+/// The 257th arrival is refused with a transport capacity error before any
+/// mutation. The queue drains fully every tick, so the bound is structural
+/// rather than cumulative. This intake ceiling is distinct from the
+/// per-companion task FIFO bound the chat book owns.
 const CHAT_QUEUE_CAP: usize = 256;
 
-/// One chat instruction staged between two ticks, waiting for the next
-/// projection drain. The overflow flag marks the queue-full marker staged in
-/// place of a normal entry.
+/// One chat instruction staged between two ticks, waiting for ingress
+/// processing at the tick boundary.
 pub(crate) struct StagedChat {
     pub(crate) session: SessionKey,
     pub(crate) player_id: PlayerId,
     pub(crate) display_name: DisplayName,
     pub(crate) text: CommandText,
-    pub(crate) overflow: bool,
 }
 
 /// One Active session's published identity, the projection-side speaker
@@ -547,6 +555,20 @@ impl AuthorityState {
         if self.phase != ServerPhase::Running {
             return Err(ServerError::InvalidState { phase: self.phase });
         }
+        // Configured companions fence late actions against the serial
+        // current-task generation: only an action naming the running
+        // generation is admitted, so a delayed envelope from a stopped or
+        // finished task cannot execute. Unconfigured trusted fixtures keep
+        // the previous behavior.
+        if self.companion_chat.is_configured(candidate.companion_id)
+            && !self
+                .companion_chat
+                .is_running_generation(candidate.companion_id, candidate.generation)
+        {
+            return Err(ServerError::InvalidInput {
+                field: "companion_generation",
+            });
+        }
         let duplicate = self.companions.iter().any(|queued| {
             queued.envelope.request_id == candidate.request_id
                 && queued.envelope.generation == candidate.generation
@@ -874,10 +896,10 @@ impl AuthorityState {
         let _ = phase;
         match intent {
             // Chat keeps its existing wire receipt while the staged entry
-            // waits for the next projection drain, which owns the addressing
-            // outcome and the sender-only rejects.
+            // waits for tick-boundary ingress processing, which owns the
+            // addressing outcome and the sender-only rejects.
             PlayIntent::Chat(chat) => {
-                self.stage_chat(session, chat.text().clone());
+                self.stage_chat(session, chat.text().clone())?;
                 Ok(SubmissionReceipt::ControlAccepted)
             }
             PlayIntent::KeepAliveReply { .. } => Ok(SubmissionReceipt::ControlAccepted),
@@ -930,37 +952,35 @@ impl AuthorityState {
         true
     }
 
-    /// Stages one chat instruction on the bounded FIFO. Normal entries stop
-    /// at [`CHAT_QUEUE_CAP`]; the arrival that finds the queue full stages a
-    /// queue-full marker for its sender instead, and one marker is the
-    /// structural maximum because the queue drains fully every tick. A chat
-    /// staged before the sender's session is Active (or while no session is
-    /// Active) stays queued, bounded by the cap, and is drained on the first
+    /// Stages one chat instruction on the bounded intake FIFO.
+    ///
+    /// The 257th arrival between two ticks is refused with a transport
+    /// capacity error before any mutation; no marker is staged and nothing
+    /// is silently discarded. A chat staged before the sender's session is
+    /// Active stays queued, bounded by the cap, and is drained on the first
     /// tick with an Active session or dropped with the session at retire.
-    fn stage_chat(&mut self, session: SessionKey, text: CommandText) {
-        let Some(record) = self.sessions.get(&session) else {
-            return;
-        };
-        let player_id = record.player_id;
-        let raw_name = record.display_name.clone();
-        let entry = |overflow| {
-            Some(StagedChat {
-                session,
-                player_id,
-                display_name: DisplayName::try_from_canonical(raw_name.clone()).ok()?,
-                text: text.clone(),
-                overflow,
-            })
-        };
-        if self.chat_queue.len() < CHAT_QUEUE_CAP {
-            if let Some(staged) = entry(false) {
-                self.chat_queue.push_back(staged);
-            }
-        } else if self.chat_queue.len() == CHAT_QUEUE_CAP
-            && let Some(staged) = entry(true)
-        {
-            self.chat_queue.push_back(staged);
+    fn stage_chat(&mut self, session: SessionKey, text: CommandText) -> Result<(), ServerError> {
+        if self.chat_queue.len() >= CHAT_QUEUE_CAP {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: CHAT_QUEUE_CAP,
+                observed: self.chat_queue.len() + 1,
+            });
         }
+        let Some(record) = self.sessions.get(&session) else {
+            return Ok(());
+        };
+        let staged = StagedChat {
+            session,
+            player_id: record.player_id,
+            display_name: DisplayName::try_from_canonical(record.display_name.clone())
+                .map_err(|_| ServerError::InvalidInput {
+                    field: "display_name",
+                })?,
+            text,
+        };
+        self.chat_queue.push_back(staged);
+        Ok(())
     }
 
     /// Active sessions' published identities in ascending session order.
@@ -986,11 +1006,6 @@ impl AuthorityState {
             .is_some_and(|record| record.phase == SessionPhase::Active)
     }
 
-    /// Takes the whole staged chat FIFO for one projection drain.
-    pub(crate) fn take_chat_queue(&mut self) -> Vec<StagedChat> {
-        self.chat_queue.drain(..).collect()
-    }
-
     /// Allocates the next strictly increasing chat event id, publishing
     /// nothing further once the id space is exhausted.
     pub(crate) fn allocate_chat_event_id(&mut self) -> Option<u64> {
@@ -998,6 +1013,291 @@ impl AuthorityState {
         let next = id.checked_add(1)?;
         self.next_chat_event_id = next;
         Some(id)
+    }
+
+    /// Clones the bounded configured companion name map (at most four).
+    pub(crate) fn configured_chat_names(&self) -> BTreeMap<CompanionId, CompanionName> {
+        self.companion_chat.configured.clone()
+    }
+
+    /// Drains the decided chat facts for one publication pass.
+    pub(crate) fn take_decided_chat_facts(&mut self) -> Vec<DecidedChatFact> {
+        self.companion_chat.take_decided()
+    }
+
+    /// Processes staged chat into decided facts before provider dispatch.
+    ///
+    /// Runs at the tick boundary before the mailbox/companion drain: retired
+    /// senders stage no event, addressing parses against the immutable
+    /// configured names only, exact trimmed stop bypasses the FIFO cap while
+    /// normal text reserves a real pending entry before any Accepted fact,
+    /// and one pending head per idle companion promotes afterwards. The
+    /// fact/id budget is preflighted before any drain or task mutation, so a
+    /// refusal retains every staged input and task.
+    pub(crate) fn prepare_companion_chat(&mut self) -> Result<(), ServerError> {
+        let staged = self.chat_queue.len();
+        let decided = self.companion_chat.decided.len();
+        let total = decided.checked_add(staged).ok_or(ServerError::Capacity {
+            resource: Resource::Commands,
+            limit: MAX_DECIDED_FACTS,
+            observed: usize::MAX,
+        })?;
+        if total > MAX_DECIDED_FACTS {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: MAX_DECIDED_FACTS,
+                observed: total,
+            });
+        }
+        let usable = u64::MAX.checked_sub(self.next_chat_event_id).unwrap_or(0);
+        if (total as u64) > usable {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: usize::MAX,
+                observed: usize::MAX,
+            });
+        }
+        let tick = self.next_tick;
+        let names = self.companion_chat.by_name.clone();
+        let staged_entries: Vec<StagedChat> = self.chat_queue.drain(..).collect();
+        for entry in staged_entries {
+            if !self.session_active(entry.session) {
+                continue;
+            }
+            match parse_chat_address(entry.text.as_str(), &names) {
+                Addressed::Invalid => {
+                    self.companion_chat.push_decided(DecidedChatFact::sender_only(
+                        entry.player_id,
+                        entry.display_name,
+                        entry.session,
+                        ChatBody::InvalidFormat,
+                    ))?;
+                }
+                Addressed::Unknown { name } => {
+                    self.companion_chat.push_decided(DecidedChatFact::sender_only(
+                        entry.player_id,
+                        entry.display_name,
+                        entry.session,
+                        ChatBody::UnknownCompanion { name },
+                    ))?;
+                }
+                Addressed::Matched { id, name, command } => {
+                    if command.as_str() == STOP_COMMAND {
+                        self.apply_chat_stop(id, name, command, &entry)?;
+                    } else if !self.companion_chat.pending_has_capacity(id) {
+                        let companion = CompanionSpeaker::new(id, name);
+                        self.companion_chat.push_decided(DecidedChatFact::sender_only(
+                            entry.player_id,
+                            entry.display_name,
+                            entry.session,
+                            ChatBody::QueueFull {
+                                companion,
+                                command,
+                            },
+                        ))?;
+                    } else {
+                        let issuer = self.capture_chat_issuer(&entry)?;
+                        let admitted =
+                            self.companion_chat.try_admit(id, command.clone(), issuer, tick)?;
+                        let companion = CompanionSpeaker::new(id, name);
+                        if admitted {
+                            self.companion_chat.push_decided(DecidedChatFact::broadcast(
+                                entry.player_id,
+                                entry.display_name,
+                                ChatBody::Accepted {
+                                    companion,
+                                    command,
+                                },
+                            ))?;
+                        } else {
+                            self.companion_chat.push_decided(DecidedChatFact::sender_only(
+                                entry.player_id,
+                                entry.display_name,
+                                entry.session,
+                                ChatBody::QueueFull {
+                                    companion,
+                                    command,
+                                },
+                            ))?;
+                        }
+                    }
+                }
+            }
+        }
+        self.companion_chat.promote_heads()
+    }
+
+    /// Applies one exact trimmed stop instruction for a configured companion.
+    ///
+    /// A stoppable current task emits the original issuer and original
+    /// command as a broadcast stopped fact and clears this companion's
+    /// runtime and queued action envelopes; any other state emits a
+    /// sender-only not-following rejection with every queue and current
+    /// fact preserved and no accepted stop queued.
+    fn apply_chat_stop(
+        &mut self,
+        id: CompanionId,
+        name: CompanionName,
+        command: CommandText,
+        entry: &StagedChat,
+    ) -> Result<(), ServerError> {
+        if let Some(task) = self.companion_chat.stop_current(id) {
+            let companion = CompanionSpeaker::new(id, name);
+            self.clear_stopped_companion_runtime(id);
+            self.companion_chat.push_decided(DecidedChatFact::broadcast(
+                task.issuer.player_id,
+                task.issuer.player_name,
+                ChatBody::Task {
+                    companion,
+                    command: task.command,
+                    state: TaskState::Stopped,
+                },
+            ))?;
+        } else {
+            let companion = CompanionSpeaker::new(id, name);
+            self.companion_chat.push_decided(DecidedChatFact::sender_only(
+                entry.player_id,
+                entry.display_name.clone(),
+                entry.session,
+                ChatBody::NotFollowing {
+                    companion,
+                    command,
+                },
+            ))?;
+        }
+        Ok(())
+    }
+
+    /// Clears one companion's stop-scoped runtime and queued action envelopes.
+    ///
+    /// Only this companion's held controls, path, mining target, mining
+    /// progress, running task state, and already queued action envelopes are
+    /// cleared; the pending chat FIFO and every other companion are kept.
+    fn clear_stopped_companion_runtime(&mut self, id: CompanionId) {
+        let key = ActorKey::Companion(id);
+        if let Some(runtime) = self.residents.runtimes.get_mut(&key) {
+            runtime.controls = None;
+            runtime.path = None;
+            if let ActorAux::Companion {
+                mining_target,
+                task,
+                ..
+            } = &mut runtime.aux
+            {
+                *mining_target = None;
+                task.state = COMPANION_TASK_STOPPED;
+            }
+        }
+        self.residents.mining.remove(&key);
+        self.companions.retain(|queued| queued.envelope.companion_id != id);
+    }
+
+    /// Captures the issuer facts for one accepted chat instruction.
+    ///
+    /// The session identity comes from the staged entry while the pose and
+    /// look come from the committed live player actor, falling back to
+    /// `[0, 1, 0]` with a zero look when absent. The look hit walks the
+    /// native ray kernel from the eye origin over the interaction reach and
+    /// reports the first context-free solid cell inside the Ready fixed 3x3
+    /// around the foot chunk in the issuer's own dimension; missing cells,
+    /// cells outside the square, out-of-height cells, and a missing
+    /// environment all yield no hit. Captured facts are never reread later.
+    fn capture_chat_issuer(&self, entry: &StagedChat) -> Result<CompanionChatIssuer, ServerError> {
+        let view = self.settled_read()?;
+        let (position, look, dimension) = view
+            .actor(ActorKey::Player(entry.session))
+            .filter(|actor| actor.lifecycle == ActorLifecycle::Active)
+            .map(|actor| (actor.motion.position(), actor.look, actor.dimension))
+            .unwrap_or_else(|| {
+                (
+                    FiniteVec3::try_new([0.0, 1.0, 0.0]).expect("fallback pose is finite"),
+                    LookAngles::try_new(0.0, 0.0).expect("fallback look is finite"),
+                    Dimension::OVERWORLD,
+                )
+            });
+        let look_hit = Self::capture_look_hit(&view, position, look, dimension);
+        Ok(CompanionChatIssuer {
+            session: entry.session,
+            player_id: entry.player_id,
+            player_name: entry.display_name.clone(),
+            position,
+            look,
+            look_hit,
+        })
+    }
+
+    /// Walks the native ray kernel for one issuer look hit, if any.
+    fn capture_look_hit(
+        view: &AuthorityReadView<'_>,
+        position: FiniteVec3,
+        look: LookAngles,
+        dimension: Dimension,
+    ) -> Option<BlockPos> {
+        let environment = view.environment()?;
+        let eye_height = environment.tunables.eye_height();
+        let reach = environment.tunables.interaction_reach();
+        if !eye_height.is_finite() || !reach.is_finite() || reach <= 0.0 {
+            return None;
+        }
+        let base = position.get();
+        let foot_cx = (base[0] / 16.0).floor() as i32;
+        let foot_cz = (base[2] / 16.0).floor() as i32;
+        let origin = [base[0], base[1] + eye_height, base[2]];
+        if origin.iter().any(|component| !component.is_finite()) {
+            return None;
+        }
+        let normalized = normalized_direction(look_direction(look.yaw(), look.pitch()))?;
+        let mut cursor = RayCursor::try_new(Ray {
+            origin,
+            direction: normalized,
+            maximum: reach,
+        })
+        .ok()?;
+        loop {
+            let batch = NativeRaycast.next_batch(&mut cursor).ok()?;
+            for record in batch.records() {
+                let cell = BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
+                // Outside the fixed 3x3, out of height, or unready cells are
+                // non-targets: the walk continues past them.
+                if !(-64..320).contains(&cell.y()) {
+                    continue;
+                }
+                if ((cell.x() >> 4) - foot_cx).abs() > 1
+                    || ((cell.z() >> 4) - foot_cz).abs() > 1
+                {
+                    continue;
+                }
+                let key = ChunkKey {
+                    dimension,
+                    pos: ChunkPos::new(cell.x() >> 4, cell.z() >> 4),
+                };
+                if !view.ready_chunk(key) {
+                    continue;
+                }
+                let Some(block) = view.block(dimension, cell) else {
+                    continue;
+                };
+                if Self::chat_cell_solid(block) {
+                    return Some(cell);
+                }
+            }
+            if batch.is_done() {
+                return None;
+            }
+        }
+    }
+
+    /// Context-free solid predicate for the chat issuer capture.
+    ///
+    /// A cell targets when its id is nonzero, not fluid, and either outside
+    /// the door range or an even (solid-leaf) form; the upper door form
+    /// always targets with no lower-cell query. This capture predicate is
+    /// intentionally narrower than the world-aware interaction classifier.
+    fn chat_cell_solid(block: u16) -> bool {
+        if block == 0 || (27..=34).contains(&block) {
+            return false;
+        }
+        !(62..=69).contains(&block) || block.is_multiple_of(2)
     }
 
     /// Installs the immutable configured companion chat address book.

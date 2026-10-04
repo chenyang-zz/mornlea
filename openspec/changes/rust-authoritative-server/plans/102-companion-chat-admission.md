@@ -37,3 +37,13 @@ Frozen Go CompleteStep/Expire require Running; FailPlanning/FailRun require Plan
 ## Diagnostic execution slices
 
 Second600s invocation added29 source reads but no implementation; clean/no pendingtools. Main narrows the next same-session turn to module export, AuthorityState book binding/config/query/planningtake, then host compile. Later turns complete the already designed install/capture/stop/publication/tests. This is execution chunking within the same seven-file task, not additional feature scope or acceptance; original stop remains RED until complete. Timeouts/output/permissions/controller stay fixed.
+
+
+## Main fact reservation algorithm
+
+Before staged ingress drain, check decided.len()+chat_queue.len() <=260 and <=u64::MAX-next_chat_event_id; one fact per live input bounds later family-slot ID allocation without task mutation on overflow. External install/finish later also preflight additional fact and count at most4 between drains before mutation, counter resets at drain. Private Book helpers may own task transitions in companion_chat.rs; same private owner, no shared contract change. Correct identical-config check must reject repeated IDs/names before idempotent return. Next same-session turn wires real admission/capture/stop/projection; replay/parity legacy migration and full Running installation/lifecycle follow, not acceptance by compile.
+
+
+## Exact Go issuer ray predicate clarification
+
+Verified companion_manager.go393–421 uses core.InteractionTarget(id) with false,nil for notReady, so DDA continues through absent cells; a later Ready diagonal cell inside fixed3x3 may hit. Predicate is nonair/nonfluid27..34 with door62..69 evenclosed and upper70 alwaystarget, independentoflowerdoor. The generic world-aware target_block sampler is NOT the capture oracle. Use existing native RayCursor/RaycastOp with borrowed settled read, skip missing/outside-square/outheight cells, sourcef32 look/eye/reach. This clarifies earlier unloaded/nohit phrasing percell and does not change protocols/storage or other interactionrules. Fourthcall completed Bookhelpers/imports before600timeout, cleaned; next originalsession turn wires state/step/projection only.
