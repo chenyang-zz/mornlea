@@ -13,13 +13,13 @@ use mornlea_domain::{
     Command, CommandText, CompanionDespawn, CompanionId, CompanionName, CompanionSpawn,
     CompanionSpawnParts, CompanionSpeaker, CompanionStates, ContainerKind, ContainerRef,
     CraftingSize, CraftingState, CraftingStateParts, Dimension, DisplayName, DropId, Event,
-    EventRecipient, FiniteVec3, ForgetChunks, HostileId, HostileKind, HostileSpawn,
+    EventRecipient, FiniteVec3, ForgetChunks, HeldActions, HostileId, HostileKind, HostileSpawn,
     HostileSpawnParts, HostileSpawnRecord, HostileSpawnRecordParts, HotbarSlot, InventoryState,
     InventoryStateParts, ItemDrop, ItemDropParts, ItemDropUpserts, ItemStack, LookAngles,
-    MotionState, MotionStateParts, PartialMove, PassiveDespawn, PassiveDespawnParts,
+    MotionState, MotionStateParts, Movement, PartialMove, PassiveDespawn, PassiveDespawnParts,
     PassiveDespawnReason, PassiveDespawnRecord, PassiveId, PassiveSpawn, PassiveSpawnParts,
     PassiveSpawnRecord, PassiveSpawnRecordParts, PassiveState, PassiveStateParts,
-    PassiveStateRecord, PassiveStateRecordParts, PlayerId, ProjectileDespawn, ProjectileDespawnParts,
+    PassiveStateRecord, PassiveStateRecordParts, PlayerControl, PlayerControlParts, PlayerId, ProjectileDespawn, ProjectileDespawnParts,
     ProjectileId, ProjectileKind, ProjectileSpawn, ProjectileSpawnParts, ProjectileSpawnRecord,
     ProjectileSpawnRecordParts, ProjectileState, ProjectileStateParts, ProjectileStateRecord,
     ProjectileStateRecordParts, RemotePlayerSpawn, RemotePlayerSpawnParts, RemotePlayerState,
@@ -446,8 +446,23 @@ fn chat_envelope(
     .unwrap()
 }
 
-/// Every chat event in one publication, in publication order.
+/// Every broadcast chat event in one publication, in publication order.
 fn broadcast_chats(
+    publication: &mornlea_server::contracts::TickPublication,
+) -> Vec<mornlea_domain::ChatEvent> {
+    publication
+        .events
+        .iter()
+        .filter(|event| event.recipient() == EventRecipient::Broadcast)
+        .filter_map(|event| match event.event() {
+            Event::Chat(chat) => Some(chat.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every chat event in one publication regardless of recipient, in order.
+fn all_chats(
     publication: &mornlea_server::contracts::TickPublication,
 ) -> Vec<mornlea_domain::ChatEvent> {
     publication
@@ -460,27 +475,19 @@ fn broadcast_chats(
         .collect()
 }
 
-/// The event id of one session-addressed chat event.
-fn sender_events_event_id(event: &Event) -> u64 {
-    match event {
-        Event::Chat(event) => event.event_id(),
-        _ => unreachable!("chat only"),
-    }
-}
-
-/// Rebuilds the exact expected sender-only chat event reusing its id.
-fn expect_chat(event: &Event, body: ChatBody) -> ChatEvent {
-    ChatEvent::try_new(ChatEventParts {
-        event_id: sender_events_event_id(event),
-        player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
-        player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
-        body,
-    })
-    .unwrap()
+/// Every chat event addressed to one session, in publication order.
+fn session_chats(events: &[Event]) -> Vec<&ChatEvent> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Chat(event) => Some(event),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Asserts one sender-only rejection: the exact body at one monotonic id,
-/// session-only delivery, observer silence, and no broadcast fact.
+/// session-only delivery, chat-quiet observers, and no broadcast fact.
 fn assert_sender_only_rejection(
     publication: &mornlea_server::contracts::TickPublication,
     sender: SessionKey,
@@ -488,20 +495,19 @@ fn assert_sender_only_rejection(
     id: u64,
     body: &ChatBody,
 ) {
-    let sender_events = events_for(publication, sender);
+    let sender_chats = session_chats(&events_for(publication, sender));
+    assert_eq!(sender_chats.len(), 1);
     assert_eq!(
-        sender_events,
-        vec![Event::Chat(
-            ChatEvent::try_new(ChatEventParts {
-                event_id: id,
-                player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
-                player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
-                body: body.clone(),
-            })
-            .unwrap()
-        )]
+        sender_chats[0],
+        &ChatEvent::try_new(ChatEventParts {
+            event_id: id,
+            player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
+            player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
+            body: body.clone(),
+        })
+        .unwrap()
     );
-    assert!(events_for(publication, listener).is_empty());
+    assert!(session_chats(&events_for(publication, listener)).is_empty());
     assert!(broadcast_chats(publication).is_empty());
 }
 
@@ -1944,7 +1950,7 @@ fn projection_chat_contract_inactive_admission_and_unknown() {
     assert!(state.companion_chat_queue(id).is_none());
     submit_chat(&mut state, sender, &format!("@{} dig", derived_name(id)));
     let tick = state.advance_tick(TickBudget::full()).unwrap();
-    let sender_events = events_for(&tick, sender);
+    let sender_chats = session_chats(&events_for(&tick, sender));
     let unknown = ChatEvent::try_new(ChatEventParts {
         event_id: 1,
         player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
@@ -1954,8 +1960,8 @@ fn projection_chat_contract_inactive_admission_and_unknown() {
         },
     })
     .unwrap();
-    assert_eq!(sender_events, vec![Event::Chat(unknown)]);
-    assert!(events_for(&tick, listener).is_empty());
+    assert_eq!(sender_chats, vec![&unknown]);
+    assert!(session_chats(&events_for(&tick, listener)).is_empty());
     assert!(state.companion_chat_queue(id).is_none());
 
     // Configured while inactive: the pending entry is a real reservation.
@@ -2000,12 +2006,16 @@ fn projection_chat_contract_fifo_capacity_two_slots() {
         .configure_companion_chat(&[(amu_id(), amu_name()), (second_id, second_name.clone())])
         .unwrap();
 
-    for n in 0..17 {
+    // The first instruction becomes the current task; the next sixteen fill
+    // the pending FIFO, and every admission broadcasts exactly once.
+    submit_chat(&mut state, sender, "@阿木 dig 0");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    for n in 1..17 {
         submit_chat(&mut state, sender, &format!("@阿木 dig {}", n));
     }
     let tick_a = state.advance_tick(TickBudget::full()).unwrap();
     let chats = broadcast_chats(&tick_a);
-    assert_eq!(chats.len(), 17);
+    assert_eq!(chats.len(), 16);
     for pair in chats.windows(2) {
         assert!(pair[0].event_id() < pair[1].event_id());
     }
@@ -2030,19 +2040,16 @@ fn projection_chat_contract_fifo_capacity_two_slots() {
             command: CommandText::try_from_canonical("hello".to_owned()).unwrap(),
         }
     );
-    let sender_events = events_for(&tick_b, sender);
-    assert_eq!(sender_events.len(), 1);
+    let sender_chats = session_chats(&events_for(&tick_b, sender));
+    assert_eq!(sender_chats.len(), 1);
     assert_eq!(
-        sender_events[0],
-        Event::Chat(expect_chat(
-            &sender_events[0],
-            ChatBody::QueueFull {
-                companion: CompanionSpeaker::new(amu_id(), amu_name()),
-                command: CommandText::try_from_canonical("dig overflow".to_owned()).unwrap(),
-            },
-        ))
+        sender_chats[0].body(),
+        &ChatBody::QueueFull {
+            companion: CompanionSpeaker::new(amu_id(), amu_name()),
+            command: CommandText::try_from_canonical("dig overflow".to_owned()).unwrap(),
+        }
     );
-    assert!(events_for(&tick_b, listener).is_empty());
+    assert!(session_chats(&events_for(&tick_b, listener)).is_empty());
     let view = state.companion_chat_queue(amu_id()).unwrap();
     assert_eq!(view.current.as_ref().unwrap().generation, 1);
     assert_eq!(view.current.as_ref().unwrap().command.as_str(), "dig 0");
@@ -2078,22 +2085,14 @@ fn projection_chat_contract_fifo_capacity_two_slots() {
     // not-following instead of queue-full, preserving every queue fact.
     submit_chat(&mut state, sender, "@阿木 停止");
     let tick = state.advance_tick(TickBudget::full()).unwrap();
-    let sender_events = events_for(&tick, sender);
-    assert_eq!(sender_events.len(), 1);
+    let sender_chats = session_chats(&events_for(&tick, sender));
+    assert_eq!(sender_chats.len(), 1);
     assert_eq!(
-        sender_events[0],
-        Event::Chat(
-            ChatEvent::try_new(ChatEventParts {
-                event_id: sender_events_event_id(&sender_events[0]),
-                player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
-                player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
-                body: ChatBody::NotFollowing {
-                    companion: CompanionSpeaker::new(amu_id(), amu_name()),
-                    command: CommandText::try_from_canonical("停止".to_owned()).unwrap(),
-                },
-            })
-            .unwrap()
-        )
+        sender_chats[0].body(),
+        &ChatBody::NotFollowing {
+            companion: CompanionSpeaker::new(amu_id(), amu_name()),
+            command: CommandText::try_from_canonical("停止".to_owned()).unwrap(),
+        }
     );
     let view = state.companion_chat_queue(amu_id()).unwrap();
     assert_eq!(view.current.as_ref().unwrap().command.as_str(), "dig 0");
@@ -2128,14 +2127,7 @@ fn projection_chat_contract_intake_limit_and_stop_phrases() {
         })
     );
     let tick = state.advance_tick(TickBudget::full()).unwrap();
-    let all: Vec<&mornlea_domain::ChatEvent> = tick
-        .events
-        .iter()
-        .filter_map(|event| match event.event() {
-            Event::Chat(event) => Some(event),
-            _ => None,
-        })
-        .collect();
+    let all = all_chats(&tick);
     // Sixteen admissions plus two hundred forty queue-full rejections: every
     // staged entry yields exactly one real fact, nothing silent or fake.
     assert_eq!(all.len(), 256);
@@ -2186,11 +2178,11 @@ fn projection_chat_contract_intake_limit_and_stop_phrases() {
             command: CommandText::try_from_canonical("stop".to_owned()).unwrap(),
         }
     );
-    let sender_events = events_for(&tick, sender);
-    assert_eq!(sender_events.len(), 1);
+    let sender_chats = session_chats(&events_for(&tick, sender));
+    assert_eq!(sender_chats.len(), 1);
     assert!(matches!(
-        sender_events[0],
-        Event::Chat(ref event) if matches!(event.body(), ChatBody::NotFollowing { .. })
+        sender_chats[0].body(),
+        ChatBody::NotFollowing { .. }
     ));
     let view = state.companion_chat_queue(amu_id()).unwrap();
     assert_eq!(view.current.as_ref().unwrap().command.as_str(), "停止移动");
@@ -2274,25 +2266,14 @@ fn projection_chat_contract_stop_rejections_and_take_once() {
     submit_chat(&mut state, sender, "@阿木 停止");
     submit_chat(&mut state, sender, "@阿木 停止");
     let tick = state.advance_tick(TickBudget::full()).unwrap();
-    let sender_events = events_for(&tick, sender);
-    assert_eq!(sender_events.len(), 2);
-    assert_eq!(sender_events[0], Event::Chat(expect_chat(
-        &sender_events[0],
-        stop_body.clone(),
-    )));
-    assert_eq!(sender_events[1], Event::Chat(expect_chat(
-        &sender_events[1],
-        stop_body.clone(),
-    )));
-    let ids: Vec<u64> = sender_events
-        .iter()
-        .map(|event| match event {
-            Event::Chat(event) => event.event_id(),
-            _ => unreachable!("chat only"),
-        })
-        .collect();
+    let sender_chats = session_chats(&events_for(&tick, sender));
+    assert_eq!(sender_chats.len(), 2);
+    for chat in &sender_chats {
+        assert_eq!(chat.body(), &stop_body);
+    }
+    let ids: Vec<u64> = sender_chats.iter().map(|event| event.event_id()).collect();
     assert!(ids[0] < ids[1]);
-    assert!(events_for(&tick, listener).is_empty());
+    assert!(session_chats(&events_for(&tick, listener)).is_empty());
     let view = state.companion_chat_queue(amu_id()).unwrap();
     let current = view.current.as_ref().unwrap();
     assert_eq!(current.phase, CompanionChatPhase::Running);
@@ -2758,12 +2739,34 @@ fn projection_chat_contract_terminal_finish_and_quota() {
 /// even above an open lower, and skips air, fluids, and open doors.
 #[test]
 fn projection_chat_contract_issuer_capture_and_ray() {
-    // Capture precedes same-tick movement; the receipt never rereads.
+    // Capture precedes same-tick movement; the receipt never rereads. A
+    // chat-free priming tick commits the player actor first, since the login
+    // install only materializes the actor during reduction.
     let mut state = authority();
     seed_world(&mut state);
     let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
     configure_amu(&mut state);
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
     submit_chat(&mut state, sender, "@阿木 collect wood");
+    submit(
+        &mut state,
+        sender,
+        1,
+        Command::PlayerInput(PlayerControl::new(PlayerControlParts {
+            movement: Movement {
+                move_x: 1,
+                move_z: 0,
+                jump: false,
+            },
+            look: LookAngles::try_new(0.0, 0.0).unwrap(),
+            actions: HeldActions {
+                primary: false,
+                eating: false,
+                sprinting: false,
+                sneaking: false,
+            },
+        })),
+    );
     let _ = state.advance_tick(TickBudget::full()).unwrap();
     let issuer = state
         .companion_chat_queue(amu_id())
@@ -2778,24 +2781,19 @@ fn projection_chat_contract_issuer_capture_and_ray() {
     assert_eq!(issuer.player_name.as_str(), "Ada");
     assert_eq!(issuer.position.get(), [0.5, 65.0, 0.5]);
     assert_eq!((issuer.look.yaw(), issuer.look.pitch()), (0.0, 0.0));
-    let moved = {
-        let mut actor = state
-            .residents()
-            .actors
-            .iter()
-            .find(|actor| actor.key == ActorKey::Player(sender))
-            .expect("player actor")
-            .clone();
-        actor.motion = MotionState::new(MotionStateParts {
-            position: FiniteVec3::try_new([10.5, 65.0, 10.5]).unwrap(),
-            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
-            on_ground: true,
-        });
-        actor
-    };
-    stage(&mut state, |context| {
-        context.stage(RuleEffect::Actor(moved)).unwrap();
-    });
+    // The same tick moved the player through held-control ingress while the
+    // captured facts stayed at the pre-move pose.
+    let residents = state.residents();
+    let actor = residents
+        .actors
+        .iter()
+        .find(|actor| actor.key == ActorKey::Player(sender))
+        .expect("player actor");
+    let stepped = actor.motion.position().get();
+    assert!(
+        (stepped[0] - 0.5).abs() > 1e-6 || (stepped[2] - 0.5).abs() > 1e-6,
+        "held control moves the player in the capture tick"
+    );
     // The planning take needs the live companion actor; capture already ran.
     stage(&mut state, |context| {
         context
@@ -2811,9 +2809,51 @@ fn projection_chat_contract_issuer_capture_and_ray() {
         .unwrap()
         .expect("planning receipt");
     assert_eq!(planned.issuer.position.get(), [0.5, 65.0, 0.5]);
-    assert_eq!(planned.source_tick, 0);
+    assert_eq!(planned.source_tick, 1);
+    // A committed overwrite on the next tick plus the issuer's retirement
+    // still cannot rewrite the owned receipt.
+    let moved = {
+        let residents = state.residents();
+        let mut actor = residents
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Player(sender))
+            .expect("player actor")
+            .clone();
+        actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([10.5, 65.0, 10.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        actor
+    };
+    stage(&mut state, |context| {
+        context.stage(RuleEffect::Actor(moved)).unwrap();
+    });
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
     state.retire(sender, CloseReason::PeerGone).unwrap();
+    assert_eq!(planned.issuer.position.get(), [0.5, 65.0, 0.5]);
     assert_eq!(planned.issuer.player_name.as_str(), "Ada");
+
+    // With no committed player actor the capture falls back to the source
+    // pose with a zero look and no hit.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    submit_chat(&mut state, sender, "@阿木 collect wood");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    let issuer = state
+        .companion_chat_queue(amu_id())
+        .unwrap()
+        .current
+        .as_ref()
+        .expect("current")
+        .issuer
+        .clone();
+    assert_eq!(issuer.position.get(), [0.0, 1.0, 0.0]);
+    assert_eq!((issuer.look.yaw(), issuer.look.pitch()), (0.0, 0.0));
+    assert_eq!(issuer.look_hit, None);
 
     // A solid cell in the look path hits, with no wanted dependence: the
     // publication radius is zero yet the Ready cell still targets.
@@ -2827,6 +2867,8 @@ fn projection_chat_contract_issuer_capture_and_ray() {
         context
             .preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, solid).unwrap());
     });
+    // Prime the player actor before capture; the radius stays zero.
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
     submit_chat(&mut state, sender, "@阿木 collect wood");
     let _ = state.advance_tick(TickBudget::full()).unwrap();
     let hit = state
@@ -2844,6 +2886,7 @@ fn projection_chat_contract_issuer_capture_and_ray() {
     seed_world(&mut state);
     let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
     configure_amu(&mut state);
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
     submit_chat(&mut state, sender, "@阿木 collect wood");
     let _ = state.advance_tick(TickBudget::full()).unwrap();
     let hit = state
@@ -2864,7 +2907,7 @@ fn projection_chat_contract_issuer_capture_and_ray() {
         &mut state,
         1,
         "Ada",
-        [0.5, 65.0, 0.5],
+        [15.5, 65.0, 15.5],
         -2.3561945,
         0.0,
     );
@@ -2875,6 +2918,7 @@ fn projection_chat_contract_issuer_capture_and_ray() {
         context
             .preload_ready_chunk(ReadyChunk::try_new(chunk_key(1, 1), 1, 1, diagonal).unwrap());
     });
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
     submit_chat(&mut state, sender, "@阿木 collect wood");
     let _ = state.advance_tick(TickBudget::full()).unwrap();
     let hit = state
@@ -2887,7 +2931,8 @@ fn projection_chat_contract_issuer_capture_and_ray() {
         .look_hit;
     assert_eq!(hit, Some(BlockPos::new(17, 66, 17)));
 
-    // Outside the fixed 3x3 there is no hit.
+    // Outside the fixed 3x3 there is no hit even when the reach covers
+    // the Ready target: the square bound decides, not the reach.
     let mut state = authority();
     seed_world(&mut state);
     let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], -1.5707964, 0.0);
@@ -2897,6 +2942,38 @@ fn projection_chat_contract_issuer_capture_and_ray() {
     stage(&mut state, |context| {
         context
             .preload_ready_chunk(ReadyChunk::try_new(chunk_key(2, 0), 1, 1, far).unwrap());
+    });
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    // Source-default tunables with only the reach extended to forty blocks:
+    // staged after priming so the capture tick reads it before the freeze
+    // restores defaults.
+    let base = RuleTunables::source_defaults();
+    let far_reach = RuleTunables::try_new(
+        base.physics(),
+        base.regen_delay_ticks(),
+        base.regen_interval_ticks(),
+        base.drown_interval_ticks(),
+        base.starvation_interval_ticks(),
+        base.regen_hunger_threshold(),
+        base.exhaustion_threshold_milli(),
+        base.eating_ticks(),
+        base.furnace_burn_ticks(),
+        base.furnace_smelt_ticks(),
+        base.fluid_delay(),
+        base.random_attempts(),
+        base.crop_growth_percent(),
+        40.0,
+        base.eye_height(),
+        base.drop_pickup_delay_ticks(),
+        base.player_drop_pickup_delay_ticks(),
+        base.drop_lifetime_ticks(),
+        base.drop_pickup_range(),
+    )
+    .unwrap();
+    stage(&mut state, |context| {
+        let mut env = environment(1_000);
+        env.tunables = far_reach;
+        context.stage(RuleEffect::Environment(env)).unwrap();
     });
     submit_chat(&mut state, sender, "@阿木 collect wood");
     let _ = state.advance_tick(TickBudget::full()).unwrap();
@@ -2930,6 +3007,7 @@ fn projection_chat_contract_issuer_capture_and_ray() {
             context
                 .preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, cells).unwrap());
         });
+        let _ = state.advance_tick(TickBudget::full()).unwrap();
         submit_chat(&mut state, sender, "@阿木 collect wood");
         let _ = state.advance_tick(TickBudget::full()).unwrap();
         let hit = state
