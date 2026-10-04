@@ -14,7 +14,7 @@ use mornlea_domain::{
     BlockChange, BlockPos, ChatBody, ChunkPos, CommandEnvelope, CommandEnvelopeParts, CommandText,
     CompanionId, CompanionName, CompanionSpeaker, ContainerRef, Dimension, DisplayName,
     EventRecipient, FiniteVec3, LookAngles, MotionState, PassiveId, PlayerId, RejectReason,
-    RoutedEvent, TaskState, Weather, WorldState,
+    RoutedEvent, TaskFailure, TaskState, Weather, WorldState,
 };
 use mornlea_protocol::{
     AdmittedLogin, Direction, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket, State,
@@ -23,8 +23,11 @@ use mornlea_storage::{
     Chunk, Metadata, PlayerId as StoredPlayerId, PlanStep as StoredPlanStep, PlayerLocation,
     PlayerSave, StoredCompanionTask, StoredPlayer, COMPANION_PLAN_STEP_FOLLOW,
     COMPANION_PLAN_STEP_GO_TO, COMPANION_PLAN_STEP_MINE, COMPANION_PLAN_STEP_PLACE,
-    COMPANION_TASK_COMPLETED, COMPANION_TASK_FAILED, COMPANION_TASK_RUNNING,
-    COMPANION_TASK_STOPPED, COMPANION_TASK_TIMED_OUT,
+    COMPANION_TASK_COMPLETED, COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_INVALID_PLAN,
+    COMPANION_TASK_FAIL_INVENTORY_FULL, COMPANION_TASK_FAIL_NONE,
+    COMPANION_TASK_FAIL_PATH_UNREACHABLE, COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
+    COMPANION_TASK_FAIL_WORLD_CHANGED, COMPANION_TASK_RUNNING, COMPANION_TASK_STOPPED,
+    COMPANION_TASK_TIMED_OUT,
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
@@ -1488,30 +1491,15 @@ impl AuthorityState {
         {
             return Ok(false);
         }
-        if !self.residents.actors.iter().any(|actor| {
-            actor.key == ActorKey::Companion(id) && actor.lifecycle == ActorLifecycle::Active
-        }) {
-            return Ok(false);
-        }
-        if !matches!(
-            self.residents.runtimes.get(&ActorKey::Companion(id)),
-            Some(runtime) if matches!(runtime.aux, ActorAux::Companion { .. })
-        ) {
-            return Ok(false);
-        }
+        // Unlike install, the terminal hook needs no live companion actor or
+        // runtime: a matching phase and generation terminates the current
+        // task, emits the original issuer fact, and clears whatever runtime
+        // is still present on a best-effort basis.
         self.reserve_chat_lifecycle_slot()?;
         let Some(finished) = self.companion_chat.commit_finish(id, generation, state) else {
             return Ok(false);
         };
-        let stored_state = match state {
-            TaskState::Completed => COMPANION_TASK_COMPLETED,
-            TaskState::TimedOut => COMPANION_TASK_TIMED_OUT,
-            TaskState::Failed(_) => COMPANION_TASK_FAILED,
-            TaskState::Started | TaskState::Progress | TaskState::Stopped => {
-                unreachable!("terminal state validated above")
-            }
-        };
-        self.clear_finished_companion_runtime(id, stored_state);
+        self.clear_finished_companion_runtime(id, state);
         let companion = self
             .companion_chat
             .speaker(id)
@@ -1666,12 +1654,39 @@ impl AuthorityState {
     /// Clears one companion's terminal-scoped runtime and queued envelopes.
     ///
     /// Reuses the stop-scoped clearing, then records the exact terminal
-    /// stored task state.
-    fn clear_finished_companion_runtime(&mut self, id: CompanionId, stored_state: u8) {
+    /// stored task state and failure reason: completed and timed-out keep a
+    /// zero reason while each closed failure maps to its stored reason.
+    fn clear_finished_companion_runtime(&mut self, id: CompanionId, state: TaskState) {
         self.clear_stopped_companion_runtime(id);
+        let (stored_state, fail_reason) = match state {
+            TaskState::Completed => (COMPANION_TASK_COMPLETED, COMPANION_TASK_FAIL_NONE),
+            TaskState::TimedOut => (COMPANION_TASK_TIMED_OUT, COMPANION_TASK_FAIL_NONE),
+            TaskState::Failed(TaskFailure::PlannerUnavailable) => (
+                COMPANION_TASK_FAILED,
+                COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
+            ),
+            TaskState::Failed(TaskFailure::InvalidPlan) => {
+                (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_INVALID_PLAN)
+            }
+            TaskState::Failed(TaskFailure::PathUnreachable) => (
+                COMPANION_TASK_FAILED,
+                COMPANION_TASK_FAIL_PATH_UNREACHABLE,
+            ),
+            TaskState::Failed(TaskFailure::WorldChanged) => {
+                (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_WORLD_CHANGED)
+            }
+            TaskState::Failed(TaskFailure::InventoryFull) => (
+                COMPANION_TASK_FAILED,
+                COMPANION_TASK_FAIL_INVENTORY_FULL,
+            ),
+            TaskState::Started | TaskState::Progress | TaskState::Stopped => {
+                unreachable!("terminal state validated above")
+            }
+        };
         if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id)) {
             if let ActorAux::Companion { task, .. } = &mut runtime.aux {
                 task.state = stored_state;
+                task.fail_reason = fail_reason;
             }
         }
     }

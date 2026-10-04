@@ -10,33 +10,36 @@
 
 use mornlea_domain::{
     self, BlockChange, BlockPos, ChatBody, ChatEvent, ChatEventParts, ChatIntent, ChunkPos,
-    Command, CommandText, CompanionDespawn, CompanionId, CompanionSpawn, CompanionSpawnParts,
-    CompanionSpeaker, CompanionStates, ContainerKind, ContainerRef, CraftingSize, CraftingState,
-    CraftingStateParts, Dimension, DisplayName, DropId, Event, EventRecipient, FiniteVec3,
-    ForgetChunks, HostileId, HostileKind, HostileSpawn, HostileSpawnParts, HostileSpawnRecord,
-    HostileSpawnRecordParts, HotbarSlot, InventoryState, InventoryStateParts, ItemDrop,
-    ItemDropParts, ItemDropUpserts, ItemStack, LookAngles, MotionState, MotionStateParts,
-    PartialMove, PassiveDespawn, PassiveDespawnParts, PassiveDespawnReason, PassiveDespawnRecord,
-    PassiveId, PassiveSpawn, PassiveSpawnParts, PassiveSpawnRecord, PassiveSpawnRecordParts,
-    PassiveState, PassiveStateParts, PassiveStateRecord, PassiveStateRecordParts, PlayerId,
-    ProjectileDespawn, ProjectileDespawnParts, ProjectileId, ProjectileKind, ProjectileSpawn,
-    ProjectileSpawnParts, ProjectileSpawnRecord, ProjectileSpawnRecordParts, ProjectileState,
-    ProjectileStateParts, ProjectileStateRecord, ProjectileStateRecordParts, RemotePlayerSpawn,
-    RemotePlayerSpawnParts, RemotePlayerState, RemotePlayerStateParts, RemotePlayerStates,
-    ResyncIntent, StackSource, StackView, SurvivalState, SurvivalStateParts, Weather,
+    Command, CommandText, CompanionDespawn, CompanionId, CompanionName, CompanionSpawn,
+    CompanionSpawnParts, CompanionSpeaker, CompanionStates, ContainerKind, ContainerRef,
+    CraftingSize, CraftingState, CraftingStateParts, Dimension, DisplayName, DropId, Event,
+    EventRecipient, FiniteVec3, ForgetChunks, HostileId, HostileKind, HostileSpawn,
+    HostileSpawnParts, HostileSpawnRecord, HostileSpawnRecordParts, HotbarSlot, InventoryState,
+    InventoryStateParts, ItemDrop, ItemDropParts, ItemDropUpserts, ItemStack, LookAngles,
+    MotionState, MotionStateParts, PartialMove, PassiveDespawn, PassiveDespawnParts,
+    PassiveDespawnReason, PassiveDespawnRecord, PassiveId, PassiveSpawn, PassiveSpawnParts,
+    PassiveSpawnRecord, PassiveSpawnRecordParts, PassiveState, PassiveStateParts,
+    PassiveStateRecord, PassiveStateRecordParts, PlayerId, ProjectileDespawn, ProjectileDespawnParts,
+    ProjectileId, ProjectileKind, ProjectileSpawn, ProjectileSpawnParts, ProjectileSpawnRecord,
+    ProjectileSpawnRecordParts, ProjectileState, ProjectileStateParts, ProjectileStateRecord,
+    ProjectileStateRecordParts, RemotePlayerSpawn, RemotePlayerSpawnParts, RemotePlayerState,
+    RemotePlayerStateParts, RemotePlayerStates, ResyncIntent, StackSource, StackView, SurvivalState,
+    SurvivalStateParts, TaskFailure, TaskState, Weather,
 };
 use mornlea_protocol::{AdmittedLogin, LoginStart, PlayIntent, admit_login};
 use mornlea_server::contracts::{
-    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, ChunkKey,
-    CloseReason, DropRecord, EnvironmentState, ProjectileRecord, RuleEffect, RuleTunables,
-    ServerLimits, SessionKey, TickBudget, TransportKind,
+    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, AgentPlan,
+    AgentRequestId, ChunkKey, CloseReason, CompanionAction, CompanionActionEnvelope, DropRecord,
+    EnvironmentState, PlanStep, ProjectileRecord, Resource, RuleEffect, RuleTunables, RunId,
+    ServerError, ServerLimits, SessionKey, SnapshotId, TickBudget, TransportKind,
 };
+use mornlea_server::core::companion_chat::CompanionChatPhase;
 use mornlea_server::core::world::ReadyChunk;
 use mornlea_server::state::{AuthorityState, TickContext};
 use mornlea_storage::{
     ChestSlot, Chunk, CompanionBody, ContainerSnapshot, FurnaceSlot, HostileMob, Inventory,
     ItemStack as StorageStack, PassiveMob, PlayerId as SavePlayerId, PlayerLocation, StorageKind,
-    StoredPlayer,
+    StoredCompanionTask, StoredPlayer, COMPANION_TASK_RUNNING, COMPANION_TASK_STOPPED,
 };
 
 const GRASS: u16 = 4;
@@ -336,6 +339,170 @@ fn derived_name(id: CompanionId) -> String {
         text.push_str(&format!("{byte:02x}"));
     }
     text
+}
+
+/// The configured chat companion: real identity tag 9 with the name `阿木`.
+fn amu_id() -> CompanionId {
+    companion_id(9)
+}
+
+/// The configured chat name `阿木`.
+fn amu_name() -> CompanionName {
+    CompanionName::try_from_canonical("阿木".to_owned()).unwrap()
+}
+
+/// Registers the configured `阿木` companion before the first tick.
+fn configure_amu(state: &mut AuthorityState) {
+    state
+        .configure_companion_chat(&[(amu_id(), amu_name())])
+        .unwrap();
+}
+
+/// A second configured companion for independent-bound probes.
+fn second_pair() -> (CompanionId, CompanionName) {
+    (
+        companion_id(10),
+        CompanionName::try_from_canonical("阿火".to_owned()).unwrap(),
+    )
+}
+
+/// A neutral companion runtime with provider-owned attempt 7 and no task.
+fn companion_chat_runtime(id: CompanionId) -> ActorRuntime {
+    ActorRuntime {
+        key: ActorKey::Companion(id),
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 300,
+        peak_y: 65.0,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Companion {
+            generation: 0,
+            attempt: 7,
+            task: StoredCompanionTask::default(),
+            mining_target: None,
+        },
+    }
+}
+
+/// Stages one active companion actor with a neutral companion runtime.
+fn stage_companion_with_runtime(state: &mut AuthorityState, id: CompanionId, position: [f32; 3]) {
+    stage(state, |context| {
+        context
+            .stage(RuleEffect::Actor(companion_actor(id, position, 0.0)))
+            .unwrap();
+        context
+            .stage(RuleEffect::Runtime(companion_chat_runtime(id)))
+            .unwrap();
+    });
+}
+
+/// A checked terminal-follow plan for the issuer's player identity.
+fn follow_plan(player: PlayerId) -> AgentPlan {
+    AgentPlan::try_new(
+        "跟随我".to_owned(),
+        vec![PlanStep::Follow { player_id: player }],
+    )
+    .unwrap()
+}
+
+/// A checked finite plan with no terminal follow.
+fn finite_plan() -> AgentPlan {
+    AgentPlan::try_new(
+        "前进".to_owned(),
+        vec![PlanStep::GoTo { x: 1, y: 65, z: 1 }],
+    )
+    .unwrap()
+}
+
+/// One companion action envelope naming an explicit task generation.
+fn chat_envelope(
+    id: CompanionId,
+    generation: u64,
+    tag: u8,
+    action: CompanionAction,
+) -> CompanionActionEnvelope {
+    CompanionActionEnvelope::try_new(
+        id,
+        0,
+        AgentRequestId::try_from_bytes(uuid(tag)).unwrap(),
+        RunId::try_from_bytes(uuid(tag + 1)).unwrap(),
+        SnapshotId::try_from_bytes(uuid(tag + 2)).unwrap(),
+        generation,
+        1,
+        [0u8; 32],
+        action,
+    )
+    .unwrap()
+}
+
+/// Every chat event in one publication, in publication order.
+fn broadcast_chats(
+    publication: &mornlea_server::contracts::TickPublication,
+) -> Vec<mornlea_domain::ChatEvent> {
+    publication
+        .events
+        .iter()
+        .filter_map(|event| match event.event() {
+            Event::Chat(chat) => Some(chat.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The event id of one session-addressed chat event.
+fn sender_events_event_id(event: &Event) -> u64 {
+    match event {
+        Event::Chat(event) => event.event_id(),
+        _ => unreachable!("chat only"),
+    }
+}
+
+/// Rebuilds the exact expected sender-only chat event reusing its id.
+fn expect_chat(event: &Event, body: ChatBody) -> ChatEvent {
+    ChatEvent::try_new(ChatEventParts {
+        event_id: sender_events_event_id(event),
+        player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
+        player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
+        body,
+    })
+    .unwrap()
+}
+
+/// Asserts one sender-only rejection: the exact body at one monotonic id,
+/// session-only delivery, observer silence, and no broadcast fact.
+fn assert_sender_only_rejection(
+    publication: &mornlea_server::contracts::TickPublication,
+    sender: SessionKey,
+    listener: SessionKey,
+    id: u64,
+    body: &ChatBody,
+) {
+    let sender_events = events_for(publication, sender);
+    assert_eq!(
+        sender_events,
+        vec![Event::Chat(
+            ChatEvent::try_new(ChatEventParts {
+                event_id: id,
+                player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
+                player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
+                body: body.clone(),
+            })
+            .unwrap()
+        )]
+    );
+    assert!(events_for(publication, listener).is_empty());
+    assert!(broadcast_chats(publication).is_empty());
 }
 
 fn survival() -> SurvivalState {
@@ -1672,9 +1839,1115 @@ fn projection_item_drop_upserts_and_removes() {
     );
 }
 
+/// projection::chat_contract_config_atomic_bounds_and_idempotence — the
+/// immutable address book holds at most four pairs, duplicate ids or names
+/// refuse atomically, identical repeats are idempotent across ticks, later
+/// differing configurations (including the length-matching duplicate
+/// `[A, A]`) refuse, and an explicit empty configuration seals the same way.
+#[test]
+fn projection_chat_contract_config_atomic_bounds_and_idempotence() {
+    let pair = |tag: u8, name: &str| {
+        (
+            companion_id(tag),
+            CompanionName::try_from_canonical(name.to_owned()).unwrap(),
+        )
+    };
+    let (a_id, a_name) = pair(9, "阿木");
+    let (b_id, b_name) = pair(10, "阿火");
+    let (c_id, c_name) = pair(11, "阿土");
+    let (d_id, d_name) = pair(12, "阿水");
+    let (e_id, e_name) = pair(13, "阿金");
+    let config_err = Err(ServerError::InvalidInput {
+        field: "companion_chat_config",
+    });
+
+    // Five pairs exceed the bound of four.
+    let mut state = authority();
+    assert_eq!(
+        state.configure_companion_chat(&[
+            (a_id, a_name.clone()),
+            (b_id, b_name.clone()),
+            (c_id, c_name.clone()),
+            (d_id, d_name.clone()),
+            (e_id, e_name.clone()),
+        ]),
+        config_err
+    );
+    // The refusal is atomic: a smaller configuration still installs after it.
+    state
+        .configure_companion_chat(&[(a_id, a_name.clone())])
+        .unwrap();
+
+    // Duplicate ids refuse, and duplicate names refuse.
+    let mut state = authority();
+    assert_eq!(
+        state.configure_companion_chat(&[(a_id, a_name.clone()), (a_id, b_name.clone())]),
+        config_err
+    );
+    assert_eq!(
+        state.configure_companion_chat(&[(a_id, a_name.clone()), (b_id, a_name.clone())]),
+        config_err
+    );
+
+    // Identical repeats are idempotent, before and after the first tick.
+    let mut state = authority();
+    seed_world(&mut state);
+    let _ = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    state
+        .configure_companion_chat(&[(a_id, a_name.clone()), (b_id, b_name.clone())])
+        .unwrap();
+    state
+        .configure_companion_chat(&[(a_id, a_name.clone()), (b_id, b_name.clone())])
+        .unwrap();
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    state
+        .configure_companion_chat(&[(a_id, a_name.clone()), (b_id, b_name.clone())])
+        .unwrap();
+
+    // Existing [A, B] then the length-matching duplicate [A, A]: refused,
+    // never reported identical.
+    assert_eq!(
+        state.configure_companion_chat(&[(a_id, a_name.clone()), (a_id, a_name.clone())]),
+        config_err
+    );
+    // Any later differing configuration refuses once sealed.
+    assert_eq!(
+        state.configure_companion_chat(&[(a_id, a_name.clone())]),
+        config_err
+    );
+
+    // An explicit empty configuration seals the same way.
+    let mut state = authority();
+    state.configure_companion_chat(&[]).unwrap();
+    assert_eq!(
+        state.configure_companion_chat(&[(a_id, a_name.clone())]),
+        config_err
+    );
+}
+
+/// projection::chat_contract_inactive_admission_and_unknown — an unconfigured
+/// active companion's derived name is unknown with no queue view, while a
+/// configured companion admits while inactive as a real capacity receipt.
+#[test]
+fn projection_chat_contract_inactive_admission_and_unknown() {
+    // Unconfigured: the live derived name addresses nobody.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let listener = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    let id = companion_id(9);
+    stage(&mut state, |context| {
+        context
+            .stage(RuleEffect::Actor(companion_actor(id, [8.5, 65.0, 8.5], 0.0)))
+            .unwrap();
+    });
+    assert!(state.companion_chat_queue(id).is_none());
+    submit_chat(&mut state, sender, &format!("@{} dig", derived_name(id)));
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sender_events = events_for(&tick, sender);
+    let unknown = ChatEvent::try_new(ChatEventParts {
+        event_id: 1,
+        player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
+        player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
+        body: ChatBody::UnknownCompanion {
+            name: CompanionName::try_from_canonical(derived_name(id)).unwrap(),
+        },
+    })
+    .unwrap();
+    assert_eq!(sender_events, vec![Event::Chat(unknown)]);
+    assert!(events_for(&tick, listener).is_empty());
+    assert!(state.companion_chat_queue(id).is_none());
+
+    // Configured while inactive: the pending entry is a real reservation.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    submit_chat(&mut state, sender, "@阿木 collect wood");
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let chats = broadcast_chats(&tick);
+    assert_eq!(chats.len(), 1);
+    assert_eq!(chats[0].event_id(), 1);
+    assert_eq!(
+        chats[0].body(),
+        &ChatBody::Accepted {
+            companion: CompanionSpeaker::new(amu_id(), amu_name()),
+            command: CommandText::try_from_canonical("collect wood".to_owned()).unwrap(),
+        }
+    );
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    let current = view.current.as_ref().expect("admitted current");
+    assert_eq!(current.generation, 1);
+    assert_eq!(current.command.as_str(), "collect wood");
+    assert_eq!(current.phase, CompanionChatPhase::Queued);
+    assert!(view.pending.is_empty());
+}
+
+/// projection::chat_contract_fifo_capacity_two_slots — one current task plus
+/// sixteen pending commands are actually queued before the eighteenth
+/// instruction rejects queue-full with the snapshot preserved; two
+/// companions are independently bounded; a sixteen-command batch promotes its
+/// head leaving fifteen pending; and an exact stop bypasses the full FIFO as
+/// not-following instead of queue-full.
+#[test]
+fn projection_chat_contract_fifo_capacity_two_slots() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let listener = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    let (second_id, second_name) = second_pair();
+    state
+        .configure_companion_chat(&[(amu_id(), amu_name()), (second_id, second_name.clone())])
+        .unwrap();
+
+    for n in 0..17 {
+        submit_chat(&mut state, sender, &format!("@阿木 dig {}", n));
+    }
+    let tick_a = state.advance_tick(TickBudget::full()).unwrap();
+    let chats = broadcast_chats(&tick_a);
+    assert_eq!(chats.len(), 17);
+    for pair in chats.windows(2) {
+        assert!(pair[0].event_id() < pair[1].event_id());
+    }
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(view.current.as_ref().unwrap().generation, 1);
+    assert_eq!(view.current.as_ref().unwrap().command.as_str(), "dig 0");
+    assert_eq!(view.pending.len(), 16);
+    assert_eq!(view.pending[0].0.as_str(), "dig 1");
+    assert_eq!(view.pending[15].0.as_str(), "dig 16");
+
+    // The eighteenth instruction rejects queue-full with no queue effect,
+    // while the second companion admits independently in the same tick.
+    submit_chat(&mut state, sender, "@阿木 dig overflow");
+    submit_chat(&mut state, sender, "@阿火 hello");
+    let tick_b = state.advance_tick(TickBudget::full()).unwrap();
+    let chats = broadcast_chats(&tick_b);
+    assert_eq!(chats.len(), 1);
+    assert_eq!(
+        chats[0].body(),
+        &ChatBody::Accepted {
+            companion: CompanionSpeaker::new(second_id, second_name.clone()),
+            command: CommandText::try_from_canonical("hello".to_owned()).unwrap(),
+        }
+    );
+    let sender_events = events_for(&tick_b, sender);
+    assert_eq!(sender_events.len(), 1);
+    assert_eq!(
+        sender_events[0],
+        Event::Chat(expect_chat(
+            &sender_events[0],
+            ChatBody::QueueFull {
+                companion: CompanionSpeaker::new(amu_id(), amu_name()),
+                command: CommandText::try_from_canonical("dig overflow".to_owned()).unwrap(),
+            },
+        ))
+    );
+    assert!(events_for(&tick_b, listener).is_empty());
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(view.current.as_ref().unwrap().generation, 1);
+    assert_eq!(view.current.as_ref().unwrap().command.as_str(), "dig 0");
+    assert_eq!(view.pending.len(), 16);
+    assert_eq!(view.pending[15].0.as_str(), "dig 16");
+    let other = state.companion_chat_queue(second_id).unwrap();
+    assert_eq!(other.current.as_ref().unwrap().generation, 1);
+    assert_eq!(other.current.as_ref().unwrap().command.as_str(), "hello");
+    assert!(other.pending.is_empty());
+
+    // A fresh sixteen-command batch promotes its head, leaving fifteen
+    // pending; the next tick admits the sixteenth pending entry.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    for n in 0..16 {
+        submit_chat(&mut state, sender, &format!("@阿木 dig {}", n));
+    }
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(view.current.as_ref().unwrap().command.as_str(), "dig 0");
+    assert_eq!(view.pending.len(), 15);
+    submit_chat(&mut state, sender, "@阿木 dig 16");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(view.current.as_ref().unwrap().generation, 1);
+    assert_eq!(view.current.as_ref().unwrap().command.as_str(), "dig 0");
+    assert_eq!(view.pending.len(), 16);
+    assert_eq!(view.pending[15].0.as_str(), "dig 16");
+
+    // The exact stop bypasses the full FIFO: the queued task answers
+    // not-following instead of queue-full, preserving every queue fact.
+    submit_chat(&mut state, sender, "@阿木 停止");
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sender_events = events_for(&tick, sender);
+    assert_eq!(sender_events.len(), 1);
+    assert_eq!(
+        sender_events[0],
+        Event::Chat(
+            ChatEvent::try_new(ChatEventParts {
+                event_id: sender_events_event_id(&sender_events[0]),
+                player_id: PlayerId::try_from_bytes(uuid(1)).unwrap(),
+                player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
+                body: ChatBody::NotFollowing {
+                    companion: CompanionSpeaker::new(amu_id(), amu_name()),
+                    command: CommandText::try_from_canonical("停止".to_owned()).unwrap(),
+                },
+            })
+            .unwrap()
+        )
+    );
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(view.current.as_ref().unwrap().command.as_str(), "dig 0");
+    assert_eq!(view.pending.len(), 16);
+}
+
+/// projection::chat_contract_intake_limit_and_stop_phrases — 256 staged
+/// entries are admitted to staging while the 257th refuses with the
+/// transport capacity error before mutation and no fake overflow fact; the
+/// ordinary phrases `停止移动` and `stop` admit while the trimmed exact
+/// `停止` takes the stop path and is never queued.
+#[test]
+fn projection_chat_contract_intake_limit_and_stop_phrases() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    let chat = |text: &str| {
+        PlayIntent::Chat(ChatIntent::new(
+            CommandText::try_from_canonical(text.to_owned()).unwrap(),
+        ))
+    };
+    for _ in 0..256 {
+        state.submit(sender, chat("@阿木 dig")).unwrap();
+    }
+    assert_eq!(
+        state.submit(sender, chat("@阿木 dig")),
+        Err(ServerError::Capacity {
+            resource: Resource::Commands,
+            limit: 256,
+            observed: 257,
+        })
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let all: Vec<&mornlea_domain::ChatEvent> = tick
+        .events
+        .iter()
+        .filter_map(|event| match event.event() {
+            Event::Chat(event) => Some(event),
+            _ => None,
+        })
+        .collect();
+    // Sixteen admissions plus two hundred forty queue-full rejections: every
+    // staged entry yields exactly one real fact, nothing silent or fake.
+    assert_eq!(all.len(), 256);
+    assert_eq!(
+        all.iter()
+            .filter(|event| matches!(
+                event.body(),
+                ChatBody::Accepted { .. }
+            ))
+            .count(),
+        16
+    );
+    assert_eq!(
+        all.iter()
+            .filter(|event| matches!(
+                event.body(),
+                ChatBody::QueueFull { .. }
+            ))
+            .count(),
+        240
+    );
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert!(view.current.is_some());
+    assert_eq!(view.pending.len(), 15);
+
+    // Ordinary phrases admit; the trimmed exact stop does not queue.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    submit_chat(&mut state, sender, "@阿木 停止移动");
+    submit_chat(&mut state, sender, "@阿木 stop");
+    submit_chat(&mut state, sender, "@阿木  停止");
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let chats = broadcast_chats(&tick);
+    assert_eq!(chats.len(), 2);
+    assert_eq!(
+        chats[0].body(),
+        &ChatBody::Accepted {
+            companion: CompanionSpeaker::new(amu_id(), amu_name()),
+            command: CommandText::try_from_canonical("停止移动".to_owned()).unwrap(),
+        }
+    );
+    assert_eq!(
+        chats[1].body(),
+        &ChatBody::Accepted {
+            companion: CompanionSpeaker::new(amu_id(), amu_name()),
+            command: CommandText::try_from_canonical("stop".to_owned()).unwrap(),
+        }
+    );
+    let sender_events = events_for(&tick, sender);
+    assert_eq!(sender_events.len(), 1);
+    assert!(matches!(
+        sender_events[0],
+        Event::Chat(ref event) if matches!(event.body(), ChatBody::NotFollowing { .. })
+    ));
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(view.current.as_ref().unwrap().command.as_str(), "停止移动");
+    assert_eq!(view.pending.len(), 1);
+    assert_eq!(view.pending[0].0.as_str(), "stop");
+}
+
+/// projection::chat_contract_stop_rejections_and_take_once — idle, queued,
+/// planning, and running-finite tasks all answer a stop with a sender-only
+/// not-following rejection that preserves every task and FIFO fact; the
+/// planning receipt is returned exactly once with monotonic observer-quiet
+/// event ids.
+#[test]
+fn projection_chat_contract_stop_rejections_and_take_once() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let listener = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    let stop_body = ChatBody::NotFollowing {
+        companion: CompanionSpeaker::new(amu_id(), amu_name()),
+        command: CommandText::try_from_canonical("停止".to_owned()).unwrap(),
+    };
+    // The companion actor exists throughout; only the task phase varies.
+    stage_companion_with_runtime(&mut state, amu_id(), [8.5, 65.0, 8.5]);
+
+    // Idle: no current task at all.
+    submit_chat(&mut state, sender, "@阿木 停止");
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_sender_only_rejection(&tick, sender, listener, 1, &stop_body);
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert!(view.current.is_none());
+    assert!(view.pending.is_empty());
+
+    // Queued: admission without any planning take.
+    submit_chat(&mut state, sender, "@阿木 collect stone");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    submit_chat(&mut state, sender, "@阿木 停止");
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_sender_only_rejection(&tick, sender, listener, 3, &stop_body);
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(view.current.as_ref().unwrap().generation, 1);
+    assert_eq!(
+        view.current.as_ref().unwrap().phase,
+        CompanionChatPhase::Queued
+    );
+
+    // Planning: the receipt is returned exactly once, then the stop still
+    // rejects with the planning task preserved.
+    let first = state
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .expect("planning receipt");
+    assert_eq!(first.generation, 1);
+    assert_eq!(first.phase, CompanionChatPhase::Planning);
+    assert_eq!(first.command.as_str(), "collect stone");
+    assert!(state
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .is_none());
+    submit_chat(&mut state, sender, "@阿木 停止");
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_sender_only_rejection(&tick, sender, listener, 4, &stop_body);
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(
+        view.current.as_ref().unwrap().phase,
+        CompanionChatPhase::Planning
+    );
+
+    // Running with a finite plan: still not following.
+    assert!(
+        state
+            .install_companion_chat_plan(amu_id(), 1, finite_plan())
+            .unwrap()
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(tick
+        .events
+        .iter()
+        .any(|event| matches!(event.event(), Event::Chat(event) if matches!(event.body(), ChatBody::Task { state: TaskState::Started, .. }))));
+    submit_chat(&mut state, sender, "@阿木 停止");
+    submit_chat(&mut state, sender, "@阿木 停止");
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let sender_events = events_for(&tick, sender);
+    assert_eq!(sender_events.len(), 2);
+    assert_eq!(sender_events[0], Event::Chat(expect_chat(
+        &sender_events[0],
+        stop_body.clone(),
+    )));
+    assert_eq!(sender_events[1], Event::Chat(expect_chat(
+        &sender_events[1],
+        stop_body.clone(),
+    )));
+    let ids: Vec<u64> = sender_events
+        .iter()
+        .map(|event| match event {
+            Event::Chat(event) => event.event_id(),
+            _ => unreachable!("chat only"),
+        })
+        .collect();
+    assert!(ids[0] < ids[1]);
+    assert!(events_for(&tick, listener).is_empty());
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    let current = view.current.as_ref().unwrap();
+    assert_eq!(current.phase, CompanionChatPhase::Running);
+    assert_eq!(current.generation, 1);
+    assert!(view.pending.is_empty());
+}
+
+/// projection::chat_contract_install_stop_runtime_fence — the real install
+/// seam produces a running terminal-follow task the runtime agrees with; a
+/// different stopper stops it with the original issuer and original command
+/// broadcast while the full pending FIFO is preserved and the head promotes
+/// in the same tick; controls, path, mining, and already queued actions are
+/// cleared; stale generations refuse and other companions stay unaffected.
+#[test]
+fn projection_chat_contract_install_stop_runtime_fence() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let stopper = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    stage_companion_with_runtime(&mut state, amu_id(), [8.5, 65.0, 8.5]);
+    submit_chat(&mut state, sender, "@阿木 dig 0");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+
+    let planned = state
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .expect("planning receipt");
+    assert_eq!(planned.issuer.player_name.as_str(), "Ada");
+    let player = PlayerId::try_from_bytes(uuid(1)).unwrap();
+    assert!(
+        state
+            .install_companion_chat_plan(amu_id(), 1, follow_plan(player))
+            .unwrap()
+    );
+    // The authoritative runtime agrees: generation and stored task facts are
+    // set while the provider-owned attempt is untouched.
+    let runtime = state
+        .residents()
+        .runtimes
+        .get(&ActorKey::Companion(amu_id()))
+        .expect("companion runtime")
+        .clone();
+    match &runtime.aux {
+        ActorAux::Companion {
+            generation,
+            attempt,
+            task,
+            mining_target,
+        } => {
+            assert_eq!(*generation, 1);
+            assert_eq!(*attempt, 7);
+            assert_eq!(task.command.as_str(), "dig 0");
+            assert_eq!(task.state, COMPANION_TASK_RUNNING);
+            assert_eq!(task.plan_steps.len(), 1);
+            assert!(mining_target.is_none());
+        }
+        _ => panic!("companion aux"),
+    }
+
+    // Fill the pending FIFO, queue one live action at the running
+    // generation, then stop from a different session in the same window.
+    for n in 1..17 {
+        submit_chat(&mut state, sender, &format!("@阿木 dig {}", n));
+    }
+    state
+        .submit_companion(chat_envelope(
+            amu_id(),
+            1,
+            40,
+            CompanionAction::Move {
+                move_x: 1,
+                move_z: 0,
+                jump: false,
+                yaw: 0.0,
+            },
+        ))
+        .unwrap();
+    submit_chat(&mut state, stopper, "@阿木 停止");
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+
+    // One started fact, sixteen admissions, one stopped fact: the stop
+    // carries the original issuer Ada and the original command.
+    let chats = broadcast_chats(&tick);
+    assert_eq!(chats.len(), 18);
+    let stopped = chats
+        .iter()
+        .find(|event| {
+            matches!(event.body(), ChatBody::Task { state: TaskState::Stopped, .. })
+        })
+        .expect("stopped broadcast");
+    assert_eq!(stopped.player_id(), PlayerId::try_from_bytes(uuid(1)).unwrap());
+    assert_eq!(stopped.player_name().as_str(), "Ada");
+    assert_eq!(
+        stopped.body(),
+        &ChatBody::Task {
+            companion: CompanionSpeaker::new(amu_id(), amu_name()),
+            command: CommandText::try_from_canonical("dig 0".to_owned()).unwrap(),
+            state: TaskState::Stopped,
+        }
+    );
+    let stopped_route = tick
+        .events
+        .iter()
+        .find(|event| {
+            matches!(event.event(), Event::Chat(event) if matches!(event.body(), ChatBody::Task { state: TaskState::Stopped, .. }))
+        })
+        .expect("stopped route");
+    assert_eq!(stopped_route.recipient(), EventRecipient::Broadcast);
+    assert!(chats.iter().any(|event| matches!(
+        event.body(),
+        ChatBody::Task { state: TaskState::Started, .. }
+    )));
+
+    // The full pending FIFO is preserved and its head is already queued with
+    // a fresh generation in the same tick.
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    let current = view.current.as_ref().expect("promoted head");
+    assert_eq!(current.generation, 2);
+    assert_eq!(current.command.as_str(), "dig 1");
+    assert_eq!(current.phase, CompanionChatPhase::Queued);
+    assert_eq!(view.pending.len(), 15);
+    assert_eq!(view.pending[0].0.as_str(), "dig 2");
+
+    // Stop clears held controls, path, mining, the running task state, and
+    // the already queued action: the companion never moves.
+    let runtime = state
+        .residents()
+        .runtimes
+        .get(&ActorKey::Companion(amu_id()))
+        .expect("companion runtime")
+        .clone();
+    assert!(runtime.controls.is_none());
+    assert!(runtime.path.is_none());
+    match &runtime.aux {
+        ActorAux::Companion {
+            task,
+            mining_target,
+            ..
+        } => {
+            assert_eq!(task.state, COMPANION_TASK_STOPPED);
+            assert!(mining_target.is_none());
+        }
+        _ => panic!("companion aux"),
+    }
+    assert!(
+        !state
+            .residents()
+            .mining
+            .contains_key(&ActorKey::Companion(amu_id()))
+    );
+    let residents = state.residents();
+    let actor = residents
+        .actors
+        .iter()
+        .find(|actor| actor.key == ActorKey::Companion(amu_id()))
+        .expect("companion actor");
+    assert_eq!(actor.motion.position().get()[0], 8.5);
+    assert_eq!(actor.motion.position().get()[2], 8.5);
+
+    // The delayed stale generation refuses; an unconfigured companion's
+    // trusted action is unaffected.
+    assert_eq!(
+        state.submit_companion(chat_envelope(
+            amu_id(),
+            1,
+            50,
+            CompanionAction::MineRelease,
+        )),
+        Err(ServerError::InvalidInput {
+            field: "companion_generation",
+        })
+    );
+    state
+        .submit_companion(chat_envelope(
+            companion_id(50),
+            1,
+            60,
+            CompanionAction::MineRelease,
+        ))
+        .unwrap();
+
+    // Without the stop, the same live action executes: the control companion
+    // moves, proving the stillness above comes from the purge.
+    let mut control = authority();
+    seed_world(&mut control);
+    let sender = login(&mut control, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut control);
+    stage_companion_with_runtime(&mut control, amu_id(), [8.5, 65.0, 8.5]);
+    submit_chat(&mut control, sender, "@阿木 dig 0");
+    let _ = control.advance_tick(TickBudget::full()).unwrap();
+    control
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .expect("planning receipt");
+    control
+        .install_companion_chat_plan(amu_id(), 1, follow_plan(player))
+        .unwrap();
+    control
+        .submit_companion(chat_envelope(
+            amu_id(),
+            1,
+            40,
+            CompanionAction::Move {
+                move_x: 1,
+                move_z: 0,
+                jump: false,
+                yaw: 0.0,
+            },
+        ))
+        .unwrap();
+    let _ = control.advance_tick(TickBudget::full()).unwrap();
+    let residents = control.residents();
+    let actor = residents
+        .actors
+        .iter()
+        .find(|actor| actor.key == ActorKey::Companion(amu_id()))
+        .expect("companion actor");
+    let position = actor.motion.position().get();
+    assert!(
+        (position[0] - 8.5).abs() > 1e-6 || (position[2] - 8.5).abs() > 1e-6,
+        "the live action moves the companion without a stop"
+    );
+}
+
+/// projection::chat_contract_terminal_finish_and_quota — terminal finish
+/// needs the matching generation and phase (completed/timed-out only
+/// running, failed from planning or running, never queued), refuses
+/// non-terminal states before mutation, advances generations, honors the
+/// four-fact lifecycle quota with refusal before mutation, and still
+/// broadcasts for a retired original issuer.
+#[test]
+fn projection_chat_contract_terminal_finish_and_quota() {
+    // Queued tasks never complete or fail here.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    stage_companion_with_runtime(&mut state, amu_id(), [8.5, 65.0, 8.5]);
+    submit_chat(&mut state, sender, "@阿木 dig 0");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(!state
+        .finish_companion_chat_task(amu_id(), 1, TaskState::Completed)
+        .unwrap());
+    assert!(!state
+        .finish_companion_chat_task(
+            amu_id(),
+            1,
+            TaskState::Failed(TaskFailure::PlannerUnavailable),
+        )
+        .unwrap());
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(
+        view.current.as_ref().unwrap().phase,
+        CompanionChatPhase::Queued
+    );
+
+    // Non-terminal states refuse before any mutation.
+    state
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .expect("planning receipt");
+    let player = PlayerId::try_from_bytes(uuid(1)).unwrap();
+    assert!(
+        state
+            .install_companion_chat_plan(amu_id(), 1, follow_plan(player))
+            .unwrap()
+    );
+    for refused in [
+        TaskState::Started,
+        TaskState::Progress,
+        TaskState::Stopped,
+    ] {
+        assert_eq!(
+            state.finish_companion_chat_task(amu_id(), 1, refused),
+            Err(ServerError::InvalidInput {
+                field: "companion_chat_state",
+            })
+        );
+    }
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(
+        view.current.as_ref().unwrap().phase,
+        CompanionChatPhase::Running
+    );
+
+    // A running completion broadcasts the terminal fact and the next command
+    // advances the generation.
+    assert!(
+        state
+            .finish_companion_chat_task(amu_id(), 1, TaskState::Completed)
+            .unwrap()
+    );
+    submit_chat(&mut state, sender, "@阿木 second");
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let terminal = broadcast_chats(&tick)
+        .into_iter()
+        .find(|event| {
+            matches!(event.body(), ChatBody::Task { state: TaskState::Completed, .. })
+        })
+        .expect("completed broadcast");
+    assert_eq!(
+        terminal.body(),
+        &ChatBody::Task {
+            companion: CompanionSpeaker::new(amu_id(), amu_name()),
+            command: CommandText::try_from_canonical("dig 0".to_owned()).unwrap(),
+            state: TaskState::Completed,
+        }
+    );
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    let current = view.current.as_ref().expect("next generation");
+    assert_eq!(current.generation, 2);
+    assert_eq!(current.command.as_str(), "second");
+
+    // A timed-out finish needs the running second generation.
+    state
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .expect("planning receipt");
+    assert!(
+        state
+            .install_companion_chat_plan(amu_id(), 2, follow_plan(player))
+            .unwrap()
+    );
+    assert!(
+        state
+            .finish_companion_chat_task(amu_id(), 2, TaskState::TimedOut)
+            .unwrap()
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(broadcast_chats(&tick).iter().any(|event| matches!(
+        event.body(),
+        ChatBody::Task { state: TaskState::TimedOut, .. }
+    )));
+
+    // Failed finishes a planning task; timed-out finishes a running one;
+    // wrong generations and unconfigured ids stay false without mutation.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    stage_companion_with_runtime(&mut state, amu_id(), [8.5, 65.0, 8.5]);
+    submit_chat(&mut state, sender, "@阿木 dig 0");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    state
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .expect("planning receipt");
+    assert!(
+        state
+            .finish_companion_chat_task(
+                amu_id(),
+                1,
+                TaskState::Failed(TaskFailure::PathUnreachable),
+            )
+            .unwrap()
+    );
+    assert!(state.companion_chat_queue(amu_id()).unwrap().current.is_none());
+    assert!(!state
+        .finish_companion_chat_task(amu_id(), 9, TaskState::Completed)
+        .unwrap());
+    assert!(!state
+        .finish_companion_chat_task(companion_id(50), 1, TaskState::Completed)
+        .unwrap());
+
+    // Four lifecycle facts fit between drains; the fifth refuses before any
+    // mutation while the running task is preserved.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let pairs = [
+        (amu_id(), amu_name()),
+        second_pair(),
+        (
+            companion_id(11),
+            CompanionName::try_from_canonical("阿土".to_owned()).unwrap(),
+        ),
+        (
+            companion_id(12),
+            CompanionName::try_from_canonical("阿水".to_owned()).unwrap(),
+        ),
+    ];
+    state.configure_companion_chat(&pairs).unwrap();
+    for (id, position) in [
+        (amu_id(), [8.5, 65.0, 8.5]),
+        (companion_id(10), [9.5, 65.0, 9.5]),
+        (companion_id(11), [10.5, 65.0, 10.5]),
+        (companion_id(12), [11.5, 65.0, 11.5]),
+    ] {
+        stage_companion_with_runtime(&mut state, id, position);
+    }
+    submit_chat(&mut state, sender, "@阿木 one");
+    submit_chat(&mut state, sender, "@阿火 two");
+    submit_chat(&mut state, sender, "@阿土 three");
+    submit_chat(&mut state, sender, "@阿水 four");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    for id in [amu_id(), companion_id(10), companion_id(11), companion_id(12)] {
+        state
+            .take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        assert!(
+            state
+                .install_companion_chat_plan(id, 1, follow_plan(player))
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        state.finish_companion_chat_task(amu_id(), 1, TaskState::Completed),
+        Err(ServerError::Capacity {
+            resource: Resource::Commands,
+            limit: 4,
+            observed: 5,
+        })
+    );
+    let view = state.companion_chat_queue(amu_id()).unwrap();
+    assert_eq!(
+        view.current.as_ref().unwrap().phase,
+        CompanionChatPhase::Running
+    );
+
+    // A retired original issuer still finishes with its original broadcast.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let _ = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    stage_companion_with_runtime(&mut state, amu_id(), [8.5, 65.0, 8.5]);
+    submit_chat(&mut state, sender, "@阿木 dig 0");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    state
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .expect("planning receipt");
+    state
+        .install_companion_chat_plan(amu_id(), 1, follow_plan(player))
+        .unwrap();
+    state.retire(sender, CloseReason::PeerGone).unwrap();
+    assert!(
+        state
+            .finish_companion_chat_task(amu_id(), 1, TaskState::TimedOut)
+            .unwrap()
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let terminal = broadcast_chats(&tick)
+        .into_iter()
+        .find(|event| {
+            matches!(event.body(), ChatBody::Task { state: TaskState::TimedOut, .. })
+        })
+        .expect("timed-out broadcast");
+    assert_eq!(
+        terminal.player_id(),
+        PlayerId::try_from_bytes(uuid(1)).unwrap()
+    );
+    assert_eq!(terminal.player_name().as_str(), "Ada");
+}
+
+/// projection::chat_contract_issuer_capture_and_ray — the issuer pose, look,
+/// and look hit are captured before same-tick movement and retained by the
+/// planning receipt across movement and retirement; the native Ready ray is
+/// fixed-3x3 around the foot independent of wanted, skips unloaded and
+/// out-of-square cells by continuing, targets the context-free upper door
+/// even above an open lower, and skips air, fluids, and open doors.
+#[test]
+fn projection_chat_contract_issuer_capture_and_ray() {
+    // Capture precedes same-tick movement; the receipt never rereads.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    submit_chat(&mut state, sender, "@阿木 collect wood");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    let issuer = state
+        .companion_chat_queue(amu_id())
+        .unwrap()
+        .current
+        .as_ref()
+        .expect("current")
+        .issuer
+        .clone();
+    assert_eq!(issuer.session, sender);
+    assert_eq!(issuer.player_id, PlayerId::try_from_bytes(uuid(1)).unwrap());
+    assert_eq!(issuer.player_name.as_str(), "Ada");
+    assert_eq!(issuer.position.get(), [0.5, 65.0, 0.5]);
+    assert_eq!((issuer.look.yaw(), issuer.look.pitch()), (0.0, 0.0));
+    let moved = {
+        let mut actor = state
+            .residents()
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Player(sender))
+            .expect("player actor")
+            .clone();
+        actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([10.5, 65.0, 10.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        actor
+    };
+    stage(&mut state, |context| {
+        context.stage(RuleEffect::Actor(moved)).unwrap();
+    });
+    // The planning take needs the live companion actor; capture already ran.
+    stage(&mut state, |context| {
+        context
+            .stage(RuleEffect::Actor(companion_actor(
+                amu_id(),
+                [8.5, 65.0, 8.5],
+                0.0,
+            )))
+            .unwrap();
+    });
+    let planned = state
+        .take_companion_chat_planning(amu_id())
+        .unwrap()
+        .expect("planning receipt");
+    assert_eq!(planned.issuer.position.get(), [0.5, 65.0, 0.5]);
+    assert_eq!(planned.source_tick, 0);
+    state.retire(sender, CloseReason::PeerGone).unwrap();
+    assert_eq!(planned.issuer.player_name.as_str(), "Ada");
+
+    // A solid cell in the look path hits, with no wanted dependence: the
+    // publication radius is zero yet the Ready cell still targets.
+    let mut state = authority_with_view_radius(0);
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    let mut solid = ground_chunk();
+    set_cell(&mut solid, BlockPos::new(0, 66, -1), GRASS);
+    stage(&mut state, |context| {
+        context
+            .preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, solid).unwrap());
+    });
+    submit_chat(&mut state, sender, "@阿木 collect wood");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    let hit = state
+        .companion_chat_queue(amu_id())
+        .unwrap()
+        .current
+        .as_ref()
+        .expect("current")
+        .issuer
+        .look_hit;
+    assert_eq!(hit, Some(BlockPos::new(0, 66, -1)));
+
+    // The same geometry without the Ready chunk yields no hit.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    configure_amu(&mut state);
+    submit_chat(&mut state, sender, "@阿木 collect wood");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    let hit = state
+        .companion_chat_queue(amu_id())
+        .unwrap()
+        .current
+        .as_ref()
+        .expect("current")
+        .issuer
+        .look_hit;
+    assert_eq!(hit, None);
+
+    // A diagonal ray continues past unready corner cells to the Ready
+    // diagonal target inside the fixed 3x3.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(
+        &mut state,
+        1,
+        "Ada",
+        [0.5, 65.0, 0.5],
+        -2.3561945,
+        0.0,
+    );
+    configure_amu(&mut state);
+    let mut diagonal = ground_chunk();
+    set_cell(&mut diagonal, BlockPos::new(17, 66, 17), GRASS);
+    stage(&mut state, |context| {
+        context
+            .preload_ready_chunk(ReadyChunk::try_new(chunk_key(1, 1), 1, 1, diagonal).unwrap());
+    });
+    submit_chat(&mut state, sender, "@阿木 collect wood");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    let hit = state
+        .companion_chat_queue(amu_id())
+        .unwrap()
+        .current
+        .as_ref()
+        .expect("current")
+        .issuer
+        .look_hit;
+    assert_eq!(hit, Some(BlockPos::new(17, 66, 17)));
+
+    // Outside the fixed 3x3 there is no hit.
+    let mut state = authority();
+    seed_world(&mut state);
+    let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], -1.5707964, 0.0);
+    configure_amu(&mut state);
+    let mut far = ground_chunk();
+    set_cell(&mut far, BlockPos::new(33, 66, 0), GRASS);
+    stage(&mut state, |context| {
+        context
+            .preload_ready_chunk(ReadyChunk::try_new(chunk_key(2, 0), 1, 1, far).unwrap());
+    });
+    submit_chat(&mut state, sender, "@阿木 collect wood");
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    let hit = state
+        .companion_chat_queue(amu_id())
+        .unwrap()
+        .current
+        .as_ref()
+        .expect("current")
+        .issuer
+        .look_hit;
+    assert_eq!(hit, None);
+
+    // The upper door targets even above an open lower; open doors, fluids,
+    // and plain air do not.
+    for (target, lower, expected) in [
+        (70u16, 63u16, Some(BlockPos::new(0, 66, -1))),
+        (63u16, 0u16, None),
+        (30u16, 0u16, None),
+    ] {
+        let mut state = authority();
+        seed_world(&mut state);
+        let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+        configure_amu(&mut state);
+        let mut cells = ground_chunk();
+        set_cell(&mut cells, BlockPos::new(0, 66, -1), target);
+        if lower != 0 {
+            set_cell(&mut cells, BlockPos::new(0, 65, -1), lower);
+        }
+        stage(&mut state, |context| {
+            context
+                .preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, cells).unwrap());
+        });
+        submit_chat(&mut state, sender, "@阿木 collect wood");
+        let _ = state.advance_tick(TickBudget::full()).unwrap();
+        let hit = state
+            .companion_chat_queue(amu_id())
+            .unwrap()
+            .current
+            .as_ref()
+            .expect("current")
+            .issuer
+            .look_hit;
+        assert_eq!(hit, expected, "target cell {}", target);
+    }
+}
+
 /// projection::chat_accepted_broadcast_and_rejects_sender_only — malformed
 /// and unknown addressing reject to the sender alone, a valid command
-/// broadcasts with strictly increasing event ids, the 257th chat in one tick
+/// broadcasts with strictly increasing event ids, the task FIFO holds one
+/// current task plus sixteen pending commands before the next instruction
 /// rejects queue-full, and chat never enqueues a sequenced command.
 #[test]
 fn projection_chat_accepted_broadcast_and_rejects_sender_only() {
@@ -1684,6 +2957,11 @@ fn projection_chat_accepted_broadcast_and_rejects_sender_only() {
     let listener = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
     let id = companion_id(9);
     let name = mornlea_domain::CompanionName::try_from_canonical(derived_name(id)).unwrap();
+    // Fixture migration: the derived companion name is explicitly registered
+    // before the first tick. There is no production auto-registration.
+    state
+        .configure_companion_chat(&[(id, name.clone())])
+        .unwrap();
     stage(&mut state, |context| {
         context
             .stage(RuleEffect::Actor(companion_actor(
@@ -1788,9 +3066,10 @@ fn projection_chat_accepted_broadcast_and_rejects_sender_only() {
         .position(|event| matches!(event.event(), Event::PlayerState(_)))
         .unwrap();
     assert!(drop_index < chat_index && chat_index < player_index);
-    // The queue ceiling: the 257th chat in one tick rejects queue-full to the
-    // sender only, and the ids keep increasing.
-    for _ in 0..257 {
+    // The task FIFO ceiling: one current task plus sixteen pending commands
+    // are accepted, and the eighteenth instruction rejects queue-full to the
+    // sender only while the ids keep increasing.
+    for _ in 0..17 {
         submit_chat(&mut state, sender, &format!("@{} dig", name.as_str()));
     }
     let tick_b = state.advance_tick(TickBudget::full()).unwrap();
@@ -1803,7 +3082,7 @@ fn projection_chat_accepted_broadcast_and_rejects_sender_only() {
             _ => None,
         })
         .collect();
-    assert_eq!(chats.len(), 257);
+    assert_eq!(chats.len(), 17);
     for pair in chats.windows(2) {
         assert!(pair[0].event_id() < pair[1].event_id());
     }

@@ -230,11 +230,6 @@ impl CompanionChatBook {
             })
     }
 
-    /// Configured name for one companion, if configured.
-    pub(crate) fn configured_name(&self, id: CompanionId) -> Option<CompanionName> {
-        self.configured.get(&id).cloned()
-    }
-
     /// Whether one companion id is configured.
     pub(crate) fn is_configured(&self, id: CompanionId) -> bool {
         self.configured.contains_key(&id)

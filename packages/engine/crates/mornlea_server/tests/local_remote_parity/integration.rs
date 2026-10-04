@@ -2386,6 +2386,16 @@ fn chat_scenario(adapter: &mut dyn ParityAdapter) -> ChatCapture {
     let bea = adapter.login(2, "Bea");
     let id = companion_id(9);
     let name = derived_name(id);
+    // Fixture migration: the derived companion name is explicitly registered
+    // before the first tick. There is no production auto-registration.
+    adapter
+        .endpoint()
+        .authority
+        .configure_companion_chat(&[(
+            id,
+            CompanionName::try_from_canonical(name.clone()).unwrap(),
+        )])
+        .unwrap();
     adapter.stage(Box::new(move |context| {
         context
             .stage(RuleEffect::Actor(companion_actor(
