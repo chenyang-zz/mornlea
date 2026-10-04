@@ -4753,7 +4753,7 @@ fn wanted_subscription_scenario(
     let cleo = adapter.login_with_view(3, "Cleo", 8);
     let tick_b = adapter.tick();
     assert_eq!(
-        snapshot_keys(&session_events(&tick_b, cleo)),
+        snapshot_keys(&session_events(&tick_b, cleo.session)),
         vec![
             ChunkPos::new(0, 0),
             ChunkPos::new(3, 0),
@@ -4794,8 +4794,7 @@ fn wanted_subscription_scenario(
     let ada_move_events = session_events(&tick_c, ada.session);
     let mut expected: Vec<ChunkPos> = (-3..=3).map(|z| ChunkPos::new(-3, z)).collect();
     expected.sort();
-    let mut forgets = forget_keys(&ada_move_events);
-    forgets.sort();
+    let forgets = forget_keys(&ada_move_events);
     assert_eq!(
         forgets, expected,
         "the move forgets the exact sorted column"
@@ -4979,6 +4978,8 @@ fn wanted_resync_scenario(adapter: &mut dyn ParityAdapter) -> (Vec<TickPublicati
     assert!(snapshot_keys(&session_events(&tick_c, ada.session)).is_empty());
     let ada_frames_c = adapter.drain(ada.session);
     let bo_frames_c = adapter.drain(bo.session);
+    assert_frames_match_events("wide stale resync", &tick_c, &ada, &ada_frames_c);
+    assert_frames_match_events("narrow stale steady", &tick_c, &bo, &bo_frames_c);
 
     adapter.stage(Box::new(|context| {
         context.preload_ready_chunk(

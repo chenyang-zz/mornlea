@@ -2723,8 +2723,7 @@ fn projection_wanted_move_forgets_old_and_snapshots_new() {
     let events_b = events_for(&tick_b, session);
     let mut expected: Vec<ChunkPos> = (-3..=3).map(|z| ChunkPos::new(-3, z)).collect();
     expected.sort();
-    let mut forgets = forget_positions(&events_b);
-    forgets.sort();
+    let forgets = forget_positions(&events_b);
     assert_eq!(forgets, expected, "the exited column forgets sorted");
     for event in &events_b {
         if let Event::ChunkSnapshot(snapshot) = event {
