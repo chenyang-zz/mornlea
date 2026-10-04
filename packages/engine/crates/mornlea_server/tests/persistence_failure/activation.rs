@@ -776,6 +776,81 @@ fn assert_single_rust_owner(manifest: &serde_json::Value, socket: &Path) {
 }
 
 #[test]
+fn activation_rejects_backup_nested_in_world() {
+    let _scope = Scope::fresh("nested-backup");
+    let run = _scope.path("run");
+    let world = run.join("world");
+    let backup = world.join("backup");
+    let previous = previous_bin();
+    let (mut go, _, _, _) = prepare_go_world(&previous, &world, "overlap-probe");
+    stop_child(&mut go, "preparing previous binary");
+
+    let world_before = tree_hash(&world, &[LOCK_BASENAME]);
+    let rust = rust_bin();
+    let previous_hash = sha256_file(&previous);
+    let package = previous_package();
+    let (code, output) = run_script(&[
+        "activate",
+        "--world",
+        &world.to_string_lossy(),
+        "--backup",
+        &backup.to_string_lossy(),
+        "--run-dir",
+        &run.to_string_lossy(),
+        "--rust-bin",
+        &rust.to_string_lossy(),
+        "--previous-bin",
+        &previous.to_string_lossy(),
+        "--previous-sha256",
+        &previous_hash,
+        "--previous-manifest",
+        &package.to_string_lossy(),
+    ]);
+    let manifest = run.join(MANIFEST_BASENAME);
+    let manifest_present = manifest.is_file();
+    let sockets: Vec<String> = fs::read_dir(&run)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".sock"))
+                .collect()
+        })
+        .unwrap_or_default();
+    // A baseline script may already have started Rust before failing; prove
+    // it exits before any failing assertion so this case never leaks a writer.
+    if manifest_present
+        && read_manifest(&manifest)
+            .get("pid")
+            .and_then(|value| value.as_u64())
+            .is_some()
+    {
+        quiesce_rust(&manifest);
+    }
+    assert_ne!(
+        code, 0,
+        "activation with a nested backup must fail: {output}"
+    );
+    assert!(
+        output.contains("invalid_manifest"),
+        "refusal names invalid_manifest: {output}"
+    );
+    assert_eq!(
+        tree_hash(&world, &[LOCK_BASENAME]),
+        world_before,
+        "refusal leaves the world bytes untouched"
+    );
+    assert!(!backup.exists(), "refusal creates no nested backup");
+    assert!(!manifest_present, "refusal writes no manifest");
+    assert!(
+        sockets.is_empty(),
+        "refusal leaves no control socket: {sockets:?}"
+    );
+    let _lease = activation_restore_lease::WorldLease::acquire(&world)
+        .expect("refusal leaves the world lock free");
+}
+
+#[test]
 fn manifest_fixture_shape() {
     let fixture = repo_root()
         .join("testdata")
