@@ -2464,3 +2464,6 @@ User-approved basee1480d85; prior evidence585e28d retained separately. Plan101 f
 
 
 Call1 output_limit cleaned successfully; call2 same developer UUID resumed, new wanted replay13/13 and full projection29/29 passed. Actual parity target failed compilation E0308 Peer vs SessionKey (Cleo). Host found new tests sort received forget arrays, weakening ordering assertions, and missing stale-tick frame decoding. Preserve all failures. A local UNQUALIFIED diagnostic checkpoint enables source-bound original-session feedback; no model review is launched on red gates. Call3 limited to these new test corrections, production readonly. Final qualified candidate and review only after full GREEN. No overall3.7 acceptance.
+
+
+Wanted host gates PASS. Frozen R4 declaration8/Ready3 counterexample RED on sourcee148; candidate replay/parity/lib and unchanged passive regressions, clippy-Dwarnings, fmt/diff and R4 wanted probe GREEN. Exact commands/counts/log/source hashes in evidence/wanted-loom-host-validation.json. Independent readonly review pending; clean candidate identity bound externally. No chat/full-binary/overall3.7 acceptance, merge/push/deploy. Architecture skill: no change.

@@ -4964,7 +4964,7 @@ fn wanted_resync_scenario(adapter: &mut dyn ParityAdapter) -> (Vec<TickPublicati
 
     resync(adapter, ada.conn, 3, 0, 0, 1);
     let tick_c = adapter.tick();
-    assert_eq!(tick_counters(&tick_c), (0, 0, 1));
+    assert_eq!(tick_counters(&tick_c), (1, 0, 1));
     assert_eq!(
         adapter
             .endpoint()
