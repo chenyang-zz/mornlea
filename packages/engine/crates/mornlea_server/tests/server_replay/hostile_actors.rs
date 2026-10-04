@@ -1361,6 +1361,150 @@ fn hurler_runtime_path(context: &TickContext<'_>, id: u64) -> bool {
         .is_some_and(|runtime| runtime.path.is_some())
 }
 
+/// One hostile motion tick over a borrowed foot cell, through the real
+/// provider only (no NativePhysics double). The source oracle pins dt 0.05,
+/// walk speed 4.3 and ground acceleration 40, so a full-speed -z approach
+/// settles at walk 3.01 over thick Snow (cells 87 and 88, which carry zero
+/// collision) and keeps 4.3 over AIR: displacement 0.1505 thick / 0.215 AIR
+/// from [100.5, 40, 100.5].
+fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want_vz: f32) {
+    let mut state = authority();
+    let anchor = anchor_session(&mut state);
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    preload_band_world(&mut context);
+    stage_actors(
+        &mut context,
+        &[
+            player_actor(anchor, 1, [100.5, 40.0, 84.5]),
+            hostile_actor(21, [100.5, 40.0, 100.5], kind),
+        ],
+    );
+    provider::run(&mut context, motion_call()).expect("live chase tick");
+    // The chase must point exactly -z before any pinned snow number applies.
+    let chased = find_hostile(&context, 21).motion.position().get();
+    assert!(
+        (chased[0] - 100.5).abs() < 1e-6 && chased[2] < 100.5,
+        "fixture chase must point exactly -z, got {chased:?}"
+    );
+    // Restage the chased hostile at the start pose with full -z speed; the
+    // established target, repath deadline and runtime path stay live.
+    let mut prepared = find_hostile(&context, 21).clone();
+    prepared.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new([100.5, 40.0, 100.5]).expect("position"),
+        velocity: FiniteVec3::try_new([0.0, 0.0, -4.3]).expect("velocity"),
+        on_ground: true,
+    });
+    prepared.look = LookAngles::try_new(0.0, 0.0).expect("look");
+    {
+        let ActorBody::Hostile(body) = &mut prepared.body else {
+            unreachable!();
+        };
+        body.position = [100.5, 40.0, 100.5];
+        body.velocity = [0.0, 0.0, -4.3];
+        body.on_ground = true;
+        body.yaw = 0.0;
+    }
+    stage_actors(&mut context, std::slice::from_ref(&prepared));
+    let key = prepared.key;
+    let runtime = context.read().runtime(key).cloned();
+    let environment = context.read().environment().cloned();
+    let player = context
+        .read()
+        .actors()
+        .iter()
+        .find(|actor| matches!(actor.key, ActorKey::Player(_)))
+        .cloned()
+        .expect("player record");
+    let foot_cell = mornlea_domain::BlockPos::new(100, 40, 100);
+    let support_cell = mornlea_domain::BlockPos::new(100, 39, 100);
+    observe(&mut context, foot_cell, foot);
+    let foot_observed = context.read().observation(Dimension::OVERWORLD, foot_cell);
+    let support_observed = context.read().observation(Dimension::OVERWORLD, support_cell);
+    let events = context.events().to_vec();
+
+    provider::run(&mut context, motion_call()).expect("snow motion tick");
+
+    let actor = find_hostile(&context, 21);
+    let position = actor.motion.position().get();
+    let velocity = actor.motion.velocity().get();
+    assert_eq!(position[0], 100.5, "kind {kind}, foot {foot}");
+    assert_eq!(position[1], 40.0, "kind {kind}, foot {foot}");
+    assert!(
+        (position[2] - want_z).abs() < 1e-5,
+        "kind {kind}, foot {foot}: z {}",
+        position[2]
+    );
+    assert!(
+        (velocity[2] - want_vz).abs() < 1e-6,
+        "kind {kind}, foot {foot}: vz {}",
+        velocity[2]
+    );
+    assert!(actor.motion.on_ground());
+    assert_eq!(actor.look.yaw(), 0.0);
+    assert_eq!(actor.key, key);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.survival, prepared.survival);
+    let ActorBody::Hostile(body) = &actor.body else {
+        unreachable!();
+    };
+    let ActorBody::Hostile(want) = &prepared.body else {
+        unreachable!();
+    };
+    assert_eq!(body.id, want.id);
+    assert_eq!(body.health, want.health);
+    assert_eq!(body.position, position);
+    assert_eq!(body.velocity, velocity);
+    assert_eq!(body.on_ground, actor.motion.on_ground());
+    assert_eq!(body.yaw, 0.0);
+    assert_eq!(body.has_target, want.has_target);
+    assert_eq!(body.player_id, want.player_id);
+    assert_eq!(body.next_repath_ticks, want.next_repath_ticks);
+    assert_eq!(body.attack_cooldown, want.attack_cooldown);
+    assert_eq!(body.hurt_cooldown, want.hurt_cooldown);
+    assert_eq!(body.burn_cooldown, want.burn_cooldown);
+    assert_eq!(body.distant_ticks, want.distant_ticks);
+    assert_eq!(context.read().runtime(key), runtime.as_ref());
+    assert_eq!(
+        context
+            .read()
+            .actors()
+            .iter()
+            .find(|actor| matches!(actor.key, ActorKey::Player(_)))
+            .cloned(),
+        Some(player),
+        "the unrelated player record is unchanged"
+    );
+    assert_eq!(context.read().environment(), environment.as_ref());
+    assert_eq!(
+        context.read().observation(Dimension::OVERWORLD, foot_cell),
+        foot_observed,
+        "the borrowed foot cell is unchanged"
+    );
+    assert_eq!(
+        context.read().observation(Dimension::OVERWORLD, support_cell),
+        support_observed,
+        "the support cell is unchanged"
+    );
+    assert_eq!(context.events(), events);
+}
+
+/// Thick Snow (87 and 88) under the foot cell consumes the shared snow
+/// tuning for both hostile kinds inside the actual native motion pass; the
+/// AIR control scene keeps the uncut walk speed.
+#[test]
+fn motion_snow_thick_native_displacement() {
+    for kind in [NIGHTWALKER, HURLER] {
+        for (foot, want_z, want_vz) in [
+            (87, 100.349_5, -3.01),
+            (88, 100.349_5, -3.01),
+            (AIR, 100.285, -4.3),
+        ] {
+            assert_motion_snow_native_displacement(kind, foot, want_z, want_vz);
+        }
+    }
+}
+
 /// Sixteen blocks out, the hurler dispatches a path and steps toward the
 /// target on the same tick.
 #[test]
