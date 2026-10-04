@@ -16321,6 +16321,7 @@ mod live_collision_read_tests {
 mod companion_chat_boundary_tests {
     use super::*;
     use mornlea_domain::ChatIntent;
+    use mornlea_domain::{MotionStateParts, SurvivalState, SurvivalStateParts};
 
     fn fresh() -> AuthorityState {
         AuthorityState::try_new(

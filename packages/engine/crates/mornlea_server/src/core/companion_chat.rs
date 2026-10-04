@@ -585,7 +585,7 @@ mod tests {
         assert_eq!(
             book.promote_heads(),
             Err(ServerError::Capacity {
-                resource: super::contracts::Resource::Commands,
+                resource: crate::contracts::Resource::Commands,
                 limit: usize::MAX,
                 observed: usize::MAX,
             })
