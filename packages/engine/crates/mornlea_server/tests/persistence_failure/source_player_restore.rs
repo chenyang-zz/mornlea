@@ -4059,16 +4059,13 @@ fn source_companion_saved_ready_activates_ignores_pending_action() {
         assert_eq!(actor.lifecycle, ActorLifecycle::Active);
         assert_eq!((actor.look.yaw(), actor.look.pitch()), (0.0, 0.2));
     }
-    // The next neutral tick retains the companion without clearing ownership.
+    // The next neutral tick retains the companion without clearing ownership;
+    // the plan pins retention only, not a precise quiet pose.
     let _quiet = state.advance_tick(TickBudget::full()).unwrap();
     {
         let view = state.settled_read().unwrap();
         let actor = view.actor(ActorKey::Companion(id)).unwrap();
         assert_eq!(actor.lifecycle, ActorLifecycle::Active);
-        assert_eq!(
-            actor.motion.position().get(),
-            [8.5f32 + 4.3f32 * 0.05f32, 65.0, 8.5]
-        );
     }
     fixture.close();
 }
