@@ -192,6 +192,27 @@ impl ActorSaveLedger {
         Ok(())
     }
 
+    /// Releases only unpinned clean or unconfirmed player cache ownership.
+    /// Dirty eligible values and every selected flight survive cache retirement.
+    pub fn release_player(&mut self, player: PlayerId) -> Result<bool, ServerError> {
+        self.check_open()?;
+        let key = Key::Player(player.bytes());
+        if !self.entries.get(&key).is_some_and(|entry| {
+            !entry.pinned && entry.flight.is_none() && (!entry.eligible || !entry.dirty)
+        }) {
+            return Ok(false);
+        }
+        self.entries.remove(&key);
+        Ok(true)
+    }
+
+    pub(crate) fn retained_player_count(&self) -> usize {
+        self.entries
+            .keys()
+            .filter(|key| matches!(key, Key::Player(_)))
+            .count()
+    }
+
     /// Borrows the normalized current body and its separate durable revision.
     /// The body's envelope one is comparison state, never a disk receipt.
     pub fn current(&self, key: &SaveKey) -> Option<(u64, &SaveValue)> {

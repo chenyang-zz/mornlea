@@ -29,6 +29,8 @@ struct Record {
     session: SessionKey,
     player: PlayerId,
     state: State,
+    // Logical login aliases never substitute for a provider load identity.
+    load_ticket: Option<LoginTicket>,
 }
 
 /// Retains at most sixteen uncommitted aliases, including refused cancellation.
@@ -36,6 +38,7 @@ struct Record {
 pub struct LoginDriver {
     records: BTreeMap<LoginTicket, Record>,
     stopped: bool,
+    next_owned_ticket: u64,
     last_cancellation_error: Option<ServerError>,
 }
 impl LoginDriver {
@@ -103,7 +106,10 @@ impl LoginDriver {
             let _ = authority.close_session(record.session, CloseReason::PeerGone);
         }
         record.state = State::Cancelled;
-        match loads.cancel(ticket) {
+        match record
+            .load_ticket
+            .map_or(Ok(()), |original| loads.cancel(original))
+        {
             Ok(()) => {
                 self.records.remove(&ticket);
                 Ok(true)
@@ -193,20 +199,69 @@ impl TransportAuthority for LiveEndpoint<'_> {
             });
         }
         let player = login.player_id();
+        let logical = if self.authority.player_persistence_enabled() {
+            let raw =
+                self.driver
+                    .next_owned_ticket
+                    .checked_add(1)
+                    .ok_or(ServerError::Internal {
+                        invariant: "logical login ticket space",
+                    })?;
+            let ticket = LoginTicket::try_from_raw(raw)?;
+            if self.driver.records.contains_key(&ticket) {
+                return Err(ServerError::Internal {
+                    invariant: "logical login ticket identity",
+                });
+            }
+            Some(ticket)
+        } else {
+            None
+        };
         let session = self.authority.prepare(login, kind)?;
-        let ticket = match self.loads.start(player, deadline) {
+        if let Some(ticket) = logical {
+            let cached = match self.authority.prepare_player_cache(session) {
+                Ok(cached) => cached,
+                Err(error) => {
+                    let _ = self.authority.close_session(session, CloseReason::PeerGone);
+                    return Err(error);
+                }
+            };
+            if cached {
+                self.driver.next_owned_ticket = ticket.get();
+                self.driver.records.insert(
+                    ticket,
+                    Record {
+                        session,
+                        player,
+                        state: State::Ready,
+                        load_ticket: None,
+                    },
+                );
+                return Ok(ticket);
+            }
+        }
+        let original = match self.loads.start(player, deadline) {
             Ok(ticket) => ticket,
             Err(error) => {
                 let _ = self.authority.close_session(session, CloseReason::PeerGone);
                 return Err(error);
             }
         };
-        if self.driver.records.contains_key(&ticket) {
+        if self
+            .driver
+            .records
+            .values()
+            .any(|record| record.load_ticket == Some(original))
+        {
             // A repeated identity cannot overwrite or cancel the older owner.
             let _ = self.authority.close_session(session, CloseReason::PeerGone);
             return Err(ServerError::Internal {
                 invariant: "login load ticket identity",
             });
+        }
+        let ticket = logical.unwrap_or(original);
+        if logical.is_some() {
+            self.driver.next_owned_ticket = ticket.get();
         }
         self.driver.records.insert(
             ticket,
@@ -214,6 +269,7 @@ impl TransportAuthority for LiveEndpoint<'_> {
                 session,
                 player,
                 state: State::Loading,
+                load_ticket: Some(original),
             },
         );
         Ok(ticket)
@@ -230,7 +286,10 @@ impl TransportAuthority for LiveEndpoint<'_> {
             State::Ready => return ready(record, self.world_seed()),
             State::Loading => {}
         }
-        let error = match self.loads.poll(ticket) {
+        let error = match self
+            .loads
+            .poll(record.load_ticket.expect("loading provider identity"))
+        {
             LoadPoll::Pending => return LoginPoll::Pending,
             LoadPoll::Loaded(stored) => match self.authority.install(record.session, stored) {
                 Ok(()) => {

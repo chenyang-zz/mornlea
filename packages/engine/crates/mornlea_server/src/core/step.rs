@@ -340,6 +340,8 @@ fn reduce_tick_inner(
     if let Some(goals) = goals {
         goals.finish_tick(state)?;
     }
+    // The source cache observes only fully settled current players, including final execution.
+    state.capture_player_saves()?;
     Ok(publication)
 }
 

@@ -61,6 +61,8 @@ use crate::rules::passives::PassiveSnowBook;
 
 #[path = "state_actor_saves.rs"]
 mod actor_saves;
+#[path = "state_player_persistence.rs"]
+mod player_persistence;
 
 const COMPANION_INBOX: usize = 4;
 /// Freshly missing keys one Acquire row may stage for the source generation
@@ -227,6 +229,8 @@ pub struct AuthorityState {
     /// Opt-in bounded latest actor values and immutable persistence flights.
     actor_saves: Option<ActorSaveLedger>,
     actor_saves_next: bool,
+    /// Source cache leases share the actor ledger current and immutable flight owners.
+    player_persistence: Option<player_persistence::PlayerPersistence>,
     cancelled_chunks: BTreeSet<ChunkRequestId>,
     chunk_cancel_discards: usize,
     chunk_duplicate_discards: usize,
@@ -317,6 +321,7 @@ impl AuthorityState {
             acquisition: AcquisitionState::default(),
             actor_saves: None,
             actor_saves_next: true,
+            player_persistence: None,
             cancelled_chunks: BTreeSet::new(),
             chunk_cancel_discards: 0,
             chunk_duplicate_discards: 0,
@@ -913,6 +918,9 @@ impl AuthorityState {
         session: SessionKey,
         loaded: Option<StoredPlayer>,
     ) -> Result<(), ServerError> {
+        if self.player_persistence.is_some() {
+            return self.install_player_cache(session, loaded);
+        }
         let player_id = self
             .sessions
             .get(&session)
@@ -993,6 +1001,7 @@ impl AuthorityState {
                     invariant: "source player registration",
                 });
             }
+            self.confirm_player_cache(session)?;
             // All checked construction precedes the owner transfer and Active handoff.
             let slot = self.residents.actors.len();
             self.residents.actors.push(prepared.seeded.actor);
@@ -1017,6 +1026,17 @@ impl AuthorityState {
     }
 
     pub fn retire(&mut self, key: SessionKey, _reason: CloseReason) -> Result<(), ServerError> {
+        // A stale transport close is an ordinary refusal, before source capture can fail hard.
+        if !self
+            .sessions
+            .get(&key)
+            .is_some_and(|record| record.phase != SessionPhase::Retired)
+        {
+            return Err(ServerError::StaleSession { session: key });
+        }
+        if let Err(error) = self.retire_player_cache(key) {
+            return Err(self.fail_tick(error));
+        }
         let record = self
             .sessions
             .get_mut(&key)

@@ -78,11 +78,24 @@ that preference. Mixed completion validation covers at most nineteen actor,
 eight chunk and one metadata targets before any durability update. Closing
 blocks new producer facts but keeps retained selection and ACK usable.
 
-This routing and its actual background scheduler/disk consumer do not perform
-automatic capture, player prepare/cache policy, companion merge/bootstrap or
-executable shutdown composition. The persistence authority-actor-saves topic
-separates explicit producer fixtures from actual generated chunk, save and
-reopen evidence.
+`core/state_player_persistence.rs` owns a pre-tick opt-in lifecycle cache of
+at most sixteen players, including loading reservations. Bodies and immutable
+flights stay exclusively in the actor ledger. The concrete login driver checks
+this cache before disk admission, routes checked logical receipts separately
+from original provider tickets, and stages names until successful confirmation.
+Settled ordinary and final reducers capture only current indexed players.
+Never-spawned Pending actors preserve their loaded or missing fallback; Pending
+actors that have spawned retain post-death empty inventory. Retirement rehearses
+all nine crafting cells before capture and owner release, then repairs the moved
+player's slot after constant-time physical removal. Failed repack keeps the
+session, inventory and held target and enters the existing sticky tick fence.
+
+The persistence source-player-persistence topic separates lifecycle/provider
+controls from actual background DiskStore, native acquisition, Memory/TCP login,
+autosave, final flush and reopen evidence. This player boundary does not perform
+companion or mob aggregate bootstrap/capture, configuration or executable
+shutdown composition. Authority actor routing remains independently qualified
+by its explicit producer and actual generated chunk/save/reopen topic.
 
 `src/store/AGENTS.md` owns disk worker I/O, decoded loads, durable acknowledgment
 and the narrowly confined native-close adapters. Region and standalone providers

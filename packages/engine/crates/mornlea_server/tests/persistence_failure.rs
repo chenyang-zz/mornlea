@@ -53,3 +53,6 @@ mod actor_save;
 
 #[path = "persistence_failure/authority_actor_saves.rs"]
 mod authority_actor_saves;
+
+#[path = "persistence_failure/source_player_persistence.rs"]
+mod source_player_persistence;
