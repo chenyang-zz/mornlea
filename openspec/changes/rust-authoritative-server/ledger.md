@@ -2478,3 +2478,8 @@ Partial binding diagnostic checkpoint only: third real call completed192s, sourc
 
 
 Chat host gates PASS. Original frozen R4 idle-stop counterexample RED on qualified wanted source2e553148; explicitly configured same-ID/same-name adapted fixture GREEN, original frozen hash preserved separately. Actual chat replay/MemoryTCP and full replay/parity/lib, prior wanted/passive, clippy/fmt/diff all GREEN. Exact receipts in evidence/chat-loom-host-validation.json; fresh readonly review pending and clean source externally bound. No full Agent/binary/overall3.7 acceptance or push/merge/deploy. Architecture skill: no change.
+
+## Passive retained Snow capture production, 2026-10-05
+
+- Real Claude production at c299002bb71e830cb3a2ea5bf63ff643f677ba0d on accepted runtime base 4aaae. The two actual NativePhysics REDs (retained multi-tick stride; predeath captured destination) turned GREEN with the dispatch order guard, Native 3 passed/0 ignored per host receipts capture-green-production-02/capture-order-production-02. Private 32-slot tracker/32-cell pending book, fixed owned registry, capture after valid native motion/home rollback/staging before death, late settle through the existing crop Snow consumer, public book-less batch entry unchanged; scoped AGENTS guide reconciled. Unit lib compile had three reconcile-argument type errors now fixed, pending host check. Final full Rust gates and independent exact-SHA review not yet claimed; other 4.1/4.2 gaps remain open. Architecture skill: no change.
+

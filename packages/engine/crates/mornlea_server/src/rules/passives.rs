@@ -595,7 +595,7 @@ mod passive_snow_tests {
     fn capture_preflights_capacity_and_preserves_travel() {
         let mut book = PassiveSnowBook::default();
         let one = id(1);
-        book.reconcile(&[one]);
+        book.reconcile(&[ActorKey::Passive(one)]);
         for offset in 0..PASSIVE_SNOW_PENDING {
             book.append(Dimension::OVERWORLD, BlockPos::new(offset as i32, 1, 0))
                 .unwrap();
@@ -639,7 +639,7 @@ mod passive_snow_tests {
     fn airborne_capture_preserves_travel_and_samples_nothing() {
         let mut book = PassiveSnowBook::default();
         let one = id(1);
-        book.reconcile(&[one]);
+        book.reconcile(&[ActorKey::Passive(one)]);
         capture_passive_snow(
             &mut book,
             Dimension::OVERWORLD,
@@ -659,7 +659,7 @@ mod passive_snow_tests {
     fn home_rollback_zero_distance_preserves_travel() {
         let mut book = PassiveSnowBook::default();
         let one = id(1);
-        book.reconcile(&[one]);
+        book.reconcile(&[ActorKey::Passive(one)]);
         capture_passive_snow(
             &mut book,
             Dimension::OVERWORLD,

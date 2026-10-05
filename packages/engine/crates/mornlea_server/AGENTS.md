@@ -57,6 +57,16 @@ consume its cancellation and error contracts before joining the real backend.
   Private scalar doubles qualify this shared contract; actual companion,
   hostile and passive native integrations remain separately owned.
 
+- `src/rules/passives.rs` privately owns the retained passive Snow producer:
+  a 32-slot Option tracker table plus a 32-cell copied pending batch and a
+  fixed tick-local owned registry that excludes exactly those residents from
+  the legacy single-tick collector. Capture follows valid native motion, the
+  home rollback and staging, before death settlement; the late settle drains
+  the frozen prefix through the existing crop Snow consumer in bounded
+  slices. Admission, newborn and death resets clear only tracker slots, so
+  queued coordinates survive; the public batch entry keeps its book-less
+  None behavior unchanged.
+
 - `src/core/pending_restore.rs` retains bounded candidate, wanted-key, nearest
   column, fallback and exhausted-revision progress over borrowed placement reads.
   Current waits before Safe; ready columns keep source same-call cadence, and
@@ -142,7 +152,7 @@ consume its cancellation and error contracts before joining the real backend.
   and Mining through scalar-only indexed context borrows. Each accepted player
   consumes only its own bounded receipts; later refusal preserves that scalar
   prefix and foreign receipt order until context Drop.
-  Passive Snow timing, subscriptions, publication, automatic actor save/cache
+  Subscriptions, publication, automatic actor save/cache
   eligibility and executable runtime acceptance remain separately owned.
 
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
