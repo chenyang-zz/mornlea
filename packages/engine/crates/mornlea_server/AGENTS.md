@@ -542,7 +542,13 @@ consume its cancellation and error contracts before joining the real backend.
   before staging on full output or failed repack rehearsal, close repacks
   or refuses. The command-close grid-size drop belongs to the container
   provider's `CloseContainer`; the bench-anchor recheck arm waits for a
-  contract surface that can express the anchor.
+  contract surface that can express the anchor. Accepted `MoveCrafting` and
+  `TakeCraftingOutput` settlements reuse the tick-local owner-only dirty
+  publication lanes after their whole-record patch stages: one recorder call
+  marks both the owner inventory state and the private crafting identity, so
+  the projection republishes each complete owner family once even on a
+  settle-back round trip. Refused commands, generic staging and the lifecycle
+  open/close mark nothing; other crafting writers remain future work.
 - `src/rules/farmland.rs` owns bounded moisture checks on the `Farmland`
   phase: one check per candidate, the 162-read neighborhood reservation
   before any scan, events staged before rescan work, x-fastest/z/y cursor

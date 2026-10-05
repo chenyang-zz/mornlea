@@ -1055,6 +1055,9 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
                 return Err(ServerError::InvalidInput { field: "crafting" });
             }
             stage_patch(ctx, actor, before, after)?;
+            // An accepted move settles into the owner record and the private
+            // grid, so it marks both owner-only publication lanes.
+            ctx.record_crafting_command_publication_dirty(session);
             Ok(applied_report())
         }
         Command::TakeCraftingOutput => {
@@ -1088,6 +1091,9 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
             after.slots = next_slots;
             after.crafting = consumed;
             stage_patch(ctx, actor, before, after)?;
+            // An accepted take, like the move above, marks both owner-only
+            // publication lanes.
+            ctx.record_crafting_command_publication_dirty(session);
             Ok(applied_report())
         }
         // The bench open rides the same admitted-open surface as the

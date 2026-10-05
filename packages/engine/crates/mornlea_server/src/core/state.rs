@@ -3558,12 +3558,21 @@ pub struct TickContext<'a> {
     /// instead of re-deriving physics. Compounds never touch it; no rollback entry.
     pre_step: BTreeMap<ActorKey, MotionState>,
     /// Tick-local owner-only inventory publication intent: sessions whose
-    /// accepted inventory commands marked their owner state dirty this tick.
-    /// The inventory provider is the single writer; the tick-outcome capture
+    /// accepted inventory or crafting commands marked their owner state dirty
+    /// this tick. The inventory provider and the crafting command provider
+    /// are the two validated writers; the tick-outcome capture
     /// drains the set so the publication projection can emit one final owner
     /// inventory state even when the settled record equals the last published
     /// snapshot (the select round trip, the accepted equal armor swap).
     inventory_publication_dirty: BTreeSet<SessionKey>,
+    /// Tick-local owner-only crafting identity publication intent: sessions
+    /// whose accepted crafting commands marked their private grid dirty this
+    /// tick. The crafting command provider is the single writer, through the
+    /// combined recorder that also marks the inventory lane; the tick-outcome
+    /// capture drains the set so the publication projection can emit one
+    /// final crafting state even when the settled grid equals the last
+    /// published snapshot (the pack and grid round trips).
+    crafting_publication_dirty: BTreeSet<SessionKey>,
 }
 
 /// Compound-entry preimages own only affected keys. Fixed slot rehearsals stay
@@ -4066,6 +4075,7 @@ impl<'a> TickContext<'a> {
             suppressed_mining: BTreeSet::new(),
             pre_step: BTreeMap::new(),
             inventory_publication_dirty: BTreeSet::new(),
+            crafting_publication_dirty: BTreeSet::new(),
         }
     }
 
@@ -4182,16 +4192,27 @@ impl<'a> TickContext<'a> {
             resyncs: std::mem::take(&mut self.resync_lane),
             quiet_passive_removals: std::mem::take(&mut self.quiet_passive_removals),
             inventory_dirty: std::mem::take(&mut self.inventory_publication_dirty),
+            crafting_dirty: std::mem::take(&mut self.crafting_publication_dirty),
         }
     }
 
     /// Records one session's accepted inventory-command publication intent.
-    /// Only the inventory provider calls this, after a settled command staged
-    /// its changed patch or after an accepted equal armor swap, so no
-    /// arbitrary session and no extra owner can force an owner-only inventory
-    /// publication.
+    /// Only the inventory provider and the crafting command provider reach
+    /// this, after a settled command staged its changed patch or after an
+    /// accepted equal armor swap, so no arbitrary session and no extra owner
+    /// can force an owner-only inventory publication.
     pub(crate) fn record_inventory_publication_dirty(&mut self, session: SessionKey) {
         self.inventory_publication_dirty.insert(session);
+    }
+
+    /// Records one session's accepted crafting-command publication intent.
+    /// An accepted crafting move or take settles into the owner inventory
+    /// record and the private grid, so this marks both lanes at once; only
+    /// the crafting command provider calls it, after its whole-record patch
+    /// staged.
+    pub(crate) fn record_crafting_command_publication_dirty(&mut self, session: SessionKey) {
+        self.record_inventory_publication_dirty(session);
+        self.crafting_publication_dirty.insert(session);
     }
 
     /// Stages one container record for fixture-driven resolver preflight,

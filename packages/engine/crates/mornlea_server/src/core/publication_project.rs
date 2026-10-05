@@ -64,6 +64,10 @@ pub(crate) struct TickOutcome {
     /// sessions whose accepted inventory commands marked their owner state
     /// dirty this tick, beside the plain record diff.
     pub(crate) inventory_dirty: BTreeSet<SessionKey>,
+    /// Tick-local crafting identity publication intent drained from the tick
+    /// context: sessions whose accepted crafting commands marked their private
+    /// grid dirty this tick, beside the plain record diff.
+    pub(crate) crafting_dirty: BTreeSet<SessionKey>,
 }
 
 /// The shared read-only world facts the per-family emitters consume.
@@ -318,19 +322,20 @@ impl AuthorityState {
     /// The owner-only record families: inventory state, the viewed chest
     /// state, the container-closed notice, the crafting state and the viewed
     /// furnace state, in exactly that per-session order. The inventory state
-    /// falls back to its record diff plus the accepted command intent
-    /// described below; every other family diffs against the last published
-    /// snapshot stored on the session view alone, so an unchanged record and
-    /// a refused command publish nothing. A session
+    /// and the crafting state add the accepted command intent described
+    /// below to their record diffs; every other family diffs against the last
+    /// published snapshot stored on the session view alone, so an unchanged
+    /// record and a refused command publish nothing. A session
     /// holds at most one container lease, so the chest and furnace slots of
     /// the order never compete: the chest publishes before the close notice
     /// and the grid, and the furnace after the grid.
     ///
-    /// The inventory state is the one family with an explicit command intent
-    /// beside its record diff: a session whose accepted inventory commands
-    /// marked the tick-local dirty lane still publishes exactly one final
-    /// owner state even when the settled record equals the last published
-    /// snapshot (the select round trip, the accepted equal armor swap).
+    /// The inventory state and the crafting state are the two families with
+    /// an explicit command intent beside their record diffs: a session whose
+    /// accepted inventory or crafting commands marked the tick-local dirty
+    /// lane still publishes exactly one final owner state even when the
+    /// settled record equals the last published snapshot (the select round
+    /// trip, the accepted equal armor swap, the crafting round trips).
     fn emit_records(
         &mut self,
         observers: &[Observer],
@@ -345,6 +350,8 @@ impl AuthorityState {
             let record = inventories.get(&actor).copied();
             let inventory_dirty =
                 observer.has_actor && outcome.inventory_dirty.contains(&observer.session);
+            let crafting_dirty =
+                observer.has_actor && outcome.crafting_dirty.contains(&observer.session);
             // The inventory state comes first.
             if let Some(record) = record
                 && (view.last_inventory.as_ref() != Some(&record) || inventory_dirty)
@@ -385,7 +392,7 @@ impl AuthorityState {
             // output from the frozen recipe matcher the take provider owns.
             if let Some(record) = record {
                 let crafting = (record.crafting, record.crafting_size);
-                if view.last_crafting.as_ref() != Some(&crafting) {
+                if view.last_crafting.as_ref() != Some(&crafting) || crafting_dirty {
                     let extent = crate::rules::crafting::grid_extent(record.crafting_size);
                     let matched = crate::rules::crafting::match_grid(extent, &record.crafting)
                         .map(|(_, output)| domain_stack(output))
