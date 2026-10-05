@@ -633,19 +633,100 @@ mod passive_snow_tests {
         let mut book = PassiveSnowBook::default();
         let one = id(1);
         book.reconcile(&[ActorKey::Passive(one)]);
+        // Seed grounded positive subthreshold travel through a real capture.
         capture_passive_snow(
             &mut book,
             Dimension::OVERWORLD,
             one,
             [0.0, 1.0, 0.0],
+            [0.3, 1.0, 0.0],
+            true,
+        )
+        .unwrap();
+        let seeded = book.snow_test_state(one).unwrap();
+        assert!((seeded.0 - 0.3).abs() < 1e-6);
+        assert!(!seeded.2);
+        // The airborne step preserves the exact nonzero tracker and samples
+        // nothing: cell, prefix and length are unchanged.
+        capture_passive_snow(
+            &mut book,
+            Dimension::OVERWORLD,
+            one,
+            [0.3, 1.0, 0.0],
             [2.0, 3.0, 0.0],
             false,
         )
         .unwrap();
-        let (travel, _, valid) = book.snow_test_state(one).unwrap();
-        assert_eq!(travel, 0.0);
-        assert!(!valid);
+        assert_eq!(book.snow_test_state(one).unwrap(), seeded);
         assert_eq!(book.pending_len(), 0);
+        // The later grounded threshold crossing yields the exact destination
+        // cell: overshoot discarded, accumulator reset, cell remembered.
+        capture_passive_snow(
+            &mut book,
+            Dimension::OVERWORLD,
+            one,
+            [2.0, 3.0, 0.0],
+            [2.4, 3.0, 0.0],
+            true,
+        )
+        .unwrap();
+        let (travel, cell, valid) = book.snow_test_state(one).unwrap();
+        assert_eq!(travel, 0.0);
+        assert_eq!(cell, BlockPos::new(2, 3, 0));
+        assert!(valid);
+        assert_eq!(book.pending_len(), 1);
+        assert_eq!(
+            book.pending_slice(0, PASSIVE_SNOW_PENDING)[0].pos,
+            BlockPos::new(2, 3, 0)
+        );
+    }
+
+    #[test]
+    fn capture_rejects_out_of_range_destination_without_mutation() {
+        let mut book = PassiveSnowBook::default();
+        let one = id(1);
+        book.reconcile(&[ActorKey::Passive(one)]);
+        book.append(Dimension::OVERWORLD, BlockPos::new(7, 1, 7))
+            .unwrap();
+        capture_passive_snow(
+            &mut book,
+            Dimension::OVERWORLD,
+            one,
+            [0.0, 1.0, 0.0],
+            [0.3, 1.0, 0.0],
+            true,
+        )
+        .unwrap();
+        let seeded = book.snow_test_state(one).unwrap();
+        let prefix: Vec<(Dimension, BlockPos)> = book
+            .pending_slice(0, book.pending_len())
+            .iter()
+            .map(|cell| (cell.dimension, cell.pos))
+            .collect();
+        // A finite destination past the checked cell bound still crosses the
+        // stride, but the geometry preflight refuses before the tracker
+        // commits or the prefix grows.
+        assert_eq!(
+            capture_passive_snow(
+                &mut book,
+                Dimension::OVERWORLD,
+                one,
+                [0.3, 1.0, 0.0],
+                [3.0e9, 1.0, 0.0],
+                true,
+            ),
+            Err(ServerError::InvalidInput {
+                field: "actor_geometry"
+            })
+        );
+        assert_eq!(book.snow_test_state(one).unwrap(), seeded);
+        let observed: Vec<(Dimension, BlockPos)> = book
+            .pending_slice(0, book.pending_len())
+            .iter()
+            .map(|cell| (cell.dimension, cell.pos))
+            .collect();
+        assert_eq!(observed, prefix);
+        assert_eq!(book.pending_len(), prefix.len());
     }
 
     #[test]
