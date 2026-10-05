@@ -5147,3 +5147,58 @@ fn projection_container_dirty_no_lease_publishes_nothing() {
         "a quiet tick publishes no inventory state"
     );
 }
+
+#[test]
+fn projection_crafting_stack_partial_then_quick_round_trip() {
+    projection_crafting_stack_round_trip(false);
+}
+
+#[test]
+fn projection_crafting_stack_quick_round_trip() {
+    projection_crafting_stack_round_trip(true);
+}
+
+fn projection_crafting_stack_round_trip(quick: bool) {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login_with(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |player| {
+        player.inventory.hotbar.slots[0] = storage(ITEM_DIRT, 5);
+    });
+    let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    let join = state.advance_tick(TickBudget::full()).unwrap();
+    let baseline = projection_crafting_record_states(&events_for(&join, owner));
+    assert_eq!(baseline.len(), 2);
+    let before = state.residents().inventories[&ActorKey::Player(owner)];
+    let outward = if quick {
+        Command::QuickMove(
+            mornlea_domain::StackSource::try_new(mornlea_domain::StackView::Crafting, 9).unwrap(),
+        )
+    } else {
+        Command::MovePartial(
+            mornlea_domain::PartialMove::try_new(mornlea_domain::StackView::Crafting, 9, 0, false)
+                .unwrap(),
+        )
+    };
+    submit(&mut state, owner, 1, outward);
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::QuickMove(
+            mornlea_domain::StackSource::try_new(mornlea_domain::StackView::Crafting, 0).unwrap(),
+        ),
+    );
+    let dirty = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state.residents().inventories[&ActorKey::Player(owner)],
+        before
+    );
+    // Source dirty intent survives an unchanged final record and is owner-only.
+    assert_eq!(
+        projection_crafting_record_states(&events_for(&dirty, owner)),
+        baseline
+    );
+    assert!(projection_crafting_record_states(&events_for(&dirty, other)).is_empty());
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(projection_crafting_record_states(&events_for(&quiet, owner)).is_empty());
+}

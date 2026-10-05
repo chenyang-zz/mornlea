@@ -1,4 +1,4 @@
-//! Workbench crafting: the bench open, crafting-view moves, recipe matching
+//! Workbench crafting: the bench open, whole/partial/quick crafting-view moves, recipe matching
 //! and the atomic output take.
 //!
 //! This provider owns the crafting view and its lifecycle. The view is
@@ -43,7 +43,7 @@
 //! input debit and the grid side of a settlement are one atomic staging: a
 //! refused rehearsal stages nothing and the whole view is unchanged.
 use mornlea_domain::{
-    BlockPos, ChunkPos, Command, CommandEnvelope, CraftingSize, Dimension, LookAngles,
+    BlockPos, ChunkPos, Command, CommandEnvelope, CraftingSize, Dimension, LookAngles, StackView,
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
@@ -998,9 +998,57 @@ fn applied_report() -> PhaseReport {
     }
 }
 
+/// Computes a quick move on a private copy using Go's first-fitting grid
+/// cell or four-phase pickup order. Repack refusal discards the whole copy;
+/// it never searches a later target after a fitting cell fails rehearsal.
+fn quick_move_view(record: &mut InventoryRecord, from: usize) -> bool {
+    let source = view_slot(record, from);
+    if source.item == ITEM_NONE {
+        return false;
+    }
+    if from < CRAFTING_GRID_SLOTS {
+        let (slots, leftover) = add_stack(&record.slots, source);
+        if leftover.count == source.count {
+            return false;
+        }
+        record.slots = slots;
+        set_view_slot(record, from, leftover);
+    } else {
+        let Some(limit) = mornlea_domain::item_stack_limit(source.item) else {
+            return false;
+        };
+        let extent = usize::from(grid_extent(record.crafting_size));
+        let Some(to) = (0..extent * extent).find(|&slot| {
+            let target = record.crafting[slot];
+            target.item == ITEM_NONE || (target.item == source.item && target.count < limit)
+        }) else {
+            return false;
+        };
+        let mut target = record.crafting[to];
+        if target.item == ITEM_NONE {
+            target = source;
+            target.count = 0;
+        }
+        let moved = source.count.min(limit - target.count);
+        target.count += moved;
+        let leftover = if moved == source.count {
+            ItemStack::default()
+        } else {
+            ItemStack {
+                item: source.item,
+                count: source.count - moved,
+                durability: source.durability,
+            }
+        };
+        set_view_slot(record, from, leftover);
+        record.crafting[to] = target;
+    }
+    record.slots.iter().all(ItemStack::is_valid) && can_repack(&record.slots, &record.crafting)
+}
+
 /// Settles one admission or runs the lifecycle pass, exactly one of which
 /// the call shape names. Admission (`RulePhase::PlayerCommand` with a
-/// command) settles the crafting-view moves and the output take inline,
+/// command) settles whole, partial and quick crafting-view moves and the output take inline,
 /// mirroring the Go command rows that touch only player state, and defers
 /// the bench opens into the lifecycle phase. The lifecycle pass
 /// (`RulePhase::WorkbenchLifecycle` with no command) settles the deferred
@@ -1028,6 +1076,54 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
         .ok_or(ServerError::InvalidInput { field: "session" })?;
     let actor = ActorKey::Player(session);
     match envelope.command() {
+        Command::MovePartial(movement) if movement.view() == StackView::Crafting => {
+            let from = usize::from(movement.from());
+            let to = usize::from(movement.to());
+            let before = *ctx
+                .read()
+                .inventory(actor)
+                .ok_or(ServerError::InvalidInput { field: "session" })?;
+            let mut after = before;
+            let extent = usize::from(grid_extent(after.crafting_size));
+            if (from >= CRAFTING_GRID_SLOTS && to >= CRAFTING_GRID_SLOTS)
+                || [from, to]
+                    .into_iter()
+                    .any(|slot| slot < CRAFTING_GRID_SLOTS && slot >= extent * extent)
+            {
+                return Err(ServerError::InvalidInput { field: "crafting" });
+            }
+            // The client chooses half or single; the current authority stack
+            // supplies the count, including odd halves rounded upward.
+            let count = view_slot(&after, from).count;
+            let amount = if movement.single() {
+                1
+            } else {
+                count.div_ceil(2)
+            };
+            if !move_view_stack(&mut after, from, to, amount) {
+                return Err(ServerError::InvalidInput { field: "crafting" });
+            }
+            stage_patch(ctx, actor, before, after)?;
+            ctx.record_crafting_command_publication_dirty(session);
+            Ok(applied_report())
+        }
+        Command::QuickMove(source) if source.view() == StackView::Crafting => {
+            let from = usize::from(source.slot());
+            let before = *ctx
+                .read()
+                .inventory(actor)
+                .ok_or(ServerError::InvalidInput { field: "session" })?;
+            let mut after = before;
+            let extent = usize::from(grid_extent(after.crafting_size));
+            if (from < CRAFTING_GRID_SLOTS && from >= extent * extent)
+                || !quick_move_view(&mut after, from)
+            {
+                return Err(ServerError::InvalidInput { field: "crafting" });
+            }
+            stage_patch(ctx, actor, before, after)?;
+            ctx.record_crafting_command_publication_dirty(session);
+            Ok(applied_report())
+        }
         Command::MoveCrafting(movement) => {
             let from = usize::from(movement.from());
             let to = usize::from(movement.to());

@@ -38,6 +38,14 @@ its producer boundary.
 
 ## Agent boundary
 
+Crafting-view partial and quick moves settle in the crafting provider during
+PlayerCommand using a copied whole-record inventory patch. Quick movement uses
+the first fitting active grid cell or the existing four-phase pack insertion;
+failed complete repack discards the copy. Only successful staging marks the
+owner inventory and crafting publication lanes. Inventory and container views
+retain their separate providers and phases. Prepared rule cases and actual
+reducer publication cases qualify this command boundary, not executable startup.
+
 [`src/agent/AGENTS.md`](src/agent/AGENTS.md) owns loopback HTTP, lease, host,
 memory, snapshot and MCP lifecycle guidance. The actual `McpService` implements
 `McpLifecycle`; successful explicit deadline-aware close proves every admitted

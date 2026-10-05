@@ -2463,3 +2463,171 @@ fn bench_anchor_is_save_blind() {
     // live anchor lives in the overlay only.
     assert_eq!(anchor_of(&context, actor), Some(bench));
 }
+
+// These prepared rule cases execute real staging; they do not establish startup ownership.
+fn settle_crafting_stack_case(
+    before: InventoryRecord,
+    command: Command,
+    expected: Option<InventoryRecord>,
+) {
+    let session = player_session(91, "stack-case");
+    let mut state = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let actor = scene(&mut context, session, before, ActorLifecycle::Active);
+    let result = admit(&mut context, &envelope(session, 1, command));
+    match expected {
+        Some(after) => {
+            assert!(
+                result.is_ok(),
+                "supported crafting command refused: {result:?}"
+            );
+            assert_eq!(inventory_of(&context, actor), after);
+        }
+        None => {
+            assert!(result.is_err(), "invalid settlement must refuse");
+            assert_eq!(
+                inventory_of(&context, actor),
+                before,
+                "refusal must preserve the whole record"
+            );
+        }
+    }
+}
+
+fn crafting_partial(from: u8, to: u8, single: bool) -> Command {
+    Command::MovePartial(
+        mornlea_domain::PartialMove::try_new(mornlea_domain::StackView::Crafting, from, to, single)
+            .unwrap(),
+    )
+}
+
+fn crafting_quick(from: u8) -> Command {
+    Command::QuickMove(
+        mornlea_domain::StackSource::try_new(mornlea_domain::StackView::Crafting, from).unwrap(),
+    )
+}
+
+#[test]
+fn crafting_stack_partial_odd_half_and_single() {
+    // Go stackSplitAmount rounds an odd half upward and derives each amount from the current source.
+    for (single, moved, left) in [(false, 3, 2), (true, 1, 4)] {
+        let mut before = InventoryRecord::empty();
+        before.slots[0] = stack(ITEM_DIRT, 5);
+        let mut after = before;
+        after.slots[0] = stack(ITEM_DIRT, left);
+        after.crafting[0] = stack(ITEM_DIRT, moved);
+        settle_crafting_stack_case(before, crafting_partial(9, 0, single), Some(after));
+    }
+}
+
+#[test]
+fn crafting_stack_partial_capacity_and_atomic_refusals() {
+    let mut before = InventoryRecord::empty();
+    before.slots[0] = stack(ITEM_DIRT, 5);
+    before.crafting[0] = stack(ITEM_DIRT, 63);
+    let mut after = before;
+    after.slots[0] = stack(ITEM_DIRT, 4);
+    after.crafting[0] = stack(ITEM_DIRT, 64);
+    settle_crafting_stack_case(before, crafting_partial(9, 0, false), Some(after));
+    for target in [stack(ITEM_DIRT, 64), stack(ITEM_STONE, 1)] {
+        before.crafting[0] = target;
+        settle_crafting_stack_case(before, crafting_partial(9, 0, false), None);
+    }
+    before.crafting = [ItemStack::default(); 9];
+    for (from, to) in [(9, 10), (9, 4), (4, 9)] {
+        settle_crafting_stack_case(before, crafting_partial(from, to, false), None);
+    }
+    settle_crafting_stack_case(
+        InventoryRecord::empty(),
+        crafting_partial(9, 0, false),
+        None,
+    );
+}
+
+#[test]
+fn crafting_stack_quick_first_fit_retains_remainder() {
+    let mut before = InventoryRecord::empty();
+    before.slots[0] = stack(ITEM_DIRT, 5);
+    before.crafting[0] = stack(ITEM_STONE, 1);
+    before.crafting[1] = stack(ITEM_DIRT, 63);
+    let mut after = before;
+    after.slots[0] = stack(ITEM_DIRT, 4);
+    after.crafting[1] = stack(ITEM_DIRT, 64);
+    settle_crafting_stack_case(before, crafting_quick(9), Some(after));
+}
+
+#[test]
+fn crafting_stack_quick_grid_to_pack_uses_pickup_order() {
+    let mut before = InventoryRecord::empty();
+    before.crafting[0] = stack(ITEM_DIRT, 5);
+    before.slots[0] = stack(ITEM_STONE, 1);
+    before.slots[9] = stack(ITEM_DIRT, 60);
+    let mut after = before;
+    after.crafting[0] = ItemStack::default();
+    after.slots[1] = stack(ITEM_DIRT, 5);
+    settle_crafting_stack_case(before, crafting_quick(0), Some(after));
+}
+
+#[test]
+fn crafting_stack_quick_bench_extent_and_durability() {
+    let mut before = InventoryRecord::empty();
+    before.crafting_size = CraftingSize::Workbench;
+    before.crafting[..8].fill(stack(ITEM_STONE, 64));
+    before.slots[0] = durable(ITEM_STONE_PICKAXE, 1, 17);
+    let mut after = before;
+    after.slots[0] = ItemStack::default();
+    after.crafting[8] = durable(ITEM_STONE_PICKAXE, 1, 17);
+    settle_crafting_stack_case(before, crafting_quick(9), Some(after));
+    let mut reverse = after;
+    reverse.slots[0] = durable(ITEM_STONE_PICKAXE, 1, 17);
+    reverse.crafting[8] = ItemStack::default();
+    settle_crafting_stack_case(after, crafting_quick(8), Some(reverse));
+}
+
+#[test]
+fn crafting_stack_quick_empty_inactive_and_full_refusals() {
+    let mut before = InventoryRecord::empty();
+    before.slots[0] = stack(ITEM_DIRT, 5);
+    before.crafting[..4].fill(stack(ITEM_STONE, 64));
+    settle_crafting_stack_case(before, crafting_quick(9), None);
+    settle_crafting_stack_case(before, crafting_quick(4), None);
+    settle_crafting_stack_case(InventoryRecord::empty(), crafting_quick(0), None);
+    before.slots.fill(stack(ITEM_STONE, 64));
+    before.crafting[0] = stack(ITEM_DIRT, 5);
+    settle_crafting_stack_case(before, crafting_quick(0), None);
+}
+
+#[test]
+fn crafting_stack_repack_failure_preserves_complete_record() {
+    // An intentionally invalid prepared preimage still cannot be partially settled.
+    let mut before = InventoryRecord::empty();
+    before.slots.fill(stack(ITEM_STONE, 64));
+    before.slots[0] = stack(ITEM_DIRT, 5);
+    before.crafting[0] = stack(ITEM_COAL, 1);
+    settle_crafting_stack_case(before, crafting_partial(9, 1, true), None);
+    settle_crafting_stack_case(before, crafting_quick(9), None);
+    before.crafting[1] = stack(ITEM_DIRT, 5);
+    before.slots[0] = stack(ITEM_DIRT, 63);
+    settle_crafting_stack_case(before, crafting_quick(1), None);
+}
+
+#[test]
+fn crafting_stack_partial_repeated_settlement_reads_current_source() {
+    let session = player_session(92, "current-source");
+    let mut state = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let mut before = InventoryRecord::empty();
+    before.slots[0] = stack(ITEM_DIRT, 5);
+    let actor = scene(&mut context, session, before, ActorLifecycle::Active);
+    for sequence in [1, 2] {
+        admit(
+            &mut context,
+            &envelope(session, sequence, crafting_partial(9, 0, false)),
+        )
+        .unwrap();
+    }
+    let mut after = before;
+    after.slots[0] = stack(ITEM_DIRT, 1);
+    after.crafting[0] = stack(ITEM_DIRT, 4);
+    assert_eq!(inventory_of(&context, actor), after);
+}
