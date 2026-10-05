@@ -5100,7 +5100,7 @@ fn source_acquisition_corrupt_future(
         SchedulerConfig::default(),
         StoreMailbox::try_new_background(
             StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap(),
-            DiskStore::open_at(
+            DiskStore::open(
                 &fixture.root.0,
                 options(Dimension::OVERWORLD, ChunkPos::new(0, 0)),
             )
@@ -5130,8 +5130,10 @@ fn source_acquisition_actual_typed_restore_failure_quiet_and_dirty_retry() {
         ChunkPos::new(0, 0),
         vec![(target, floor())],
     );
-    let (_login, _transport, _connection, session, _clock) = handshake(&mut fixture, &mut state);
+    // Corrupt (closing and reopening the store) before the first handshake, so
+    // ticket 1 and the later ticket 2 both refer to the same reopened owner.
     let (path, corrupt) = source_acquisition_corrupt_future(&mut fixture, Dimension::DEPTHS, 10);
+    let (_login, _transport, _connection, session, _clock) = handshake(&mut fixture, &mut state);
     let load = mornlea_server::core::source_acquisition::SourceChunkKind::Load;
     let generate = mornlea_server::core::source_acquisition::SourceChunkKind::Generate;
     let target_loads =
