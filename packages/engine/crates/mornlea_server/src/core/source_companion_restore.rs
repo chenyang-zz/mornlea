@@ -223,9 +223,7 @@ pub(crate) fn advance(
             let environment = view.environment().ok_or(ServerError::Internal {
                 invariant: "source companion environment",
             })?;
-            let progress = entry
-                .restore
-                .advance(&view, environment.tunables.eye_height())?;
+            let progress = entry.advance(&view, environment.tunables.eye_height())?;
             let RestoreProgress::Activated(chosen) = progress else {
                 continue;
             };
