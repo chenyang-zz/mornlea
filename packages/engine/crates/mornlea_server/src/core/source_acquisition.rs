@@ -1059,4 +1059,92 @@ mod goals_tests {
             Some(LiveChunkPhase::Failed)
         );
     }
+
+    #[test]
+    fn quiet_missing_queues_generation_behind_existing_fifo_without_failed_retry() {
+        use super::super::acquisition::AcquiredChunkEvent;
+        use super::super::contracts::{ChunkRequestId, Operation, ServerLimits};
+
+        let dimension = Dimension::OVERWORLD;
+        let failed_key = key(dimension, 2, 0);
+        let missing_key = key(dimension, 5, 0);
+        let older_key = key(dimension, 7, 0);
+        let wanted = BTreeSet::from([failed_key, missing_key, older_key]);
+        let mut state = AuthorityState::try_new(
+            ServerLimits::try_new(8, 128, 64, 16, 32, 1_048_576).expect("limits"),
+            42,
+        )
+        .expect("authority");
+        state.enable_live_chunks().expect("live chunks");
+        state.replace_chunk_wants(wanted.clone()).expect("want");
+        let failed = state
+            .reserve_chunk_load(failed_key)
+            .expect("failed reserve");
+        state
+            .abort_chunk_load(
+                failed,
+                ServerError::Io {
+                    operation: Operation::Load,
+                    kind: std::io::ErrorKind::PermissionDenied,
+                },
+            )
+            .expect("typed failure");
+        let missing = state
+            .reserve_chunk_load(missing_key)
+            .expect("missing reserve");
+        let request = ChunkRequestId::try_new(1).expect("request");
+        state.bind_chunk_load(missing, request).expect("bind");
+        state
+            .offer_acquired(AcquiredChunkEvent::Load {
+                key: missing_key,
+                generation: missing.generation(),
+                request,
+                result: Ok(None),
+            })
+            .expect("prepared missing completion");
+        let inputs = SourceInputs::default();
+        let mut goals = SourceGoals {
+            force: false,
+            last_inputs: Some(inputs.clone()),
+            wanted,
+            ..SourceGoals::default()
+        };
+        goals.enqueue(older_key);
+        let players = SourcePlayerBook::default();
+        let companions = SourceCompanionBook::default();
+        let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+
+        // Prepared completion injection isolates the quiet consumer branch;
+        // actual disk and native generation have separate integration cases.
+        context.set_source_completion_wants(goals.wanted.clone());
+        assert_eq!(context.apply_live_acquisition().applied, 1);
+        goals.after_acquire(&mut context).expect("fresh missing");
+        goals
+            .reconcile(&mut context, &players, &companions)
+            .expect("quiet generation enqueue");
+        assert!(!goals.force);
+        assert_eq!(goals.last_inputs.as_ref(), Some(&inputs));
+        assert_eq!(goals.pending, VecDeque::from([older_key, missing_key]));
+        assert_eq!(goals.queued, BTreeSet::from([older_key, missing_key]));
+        assert!(!goals.queued.contains(&failed_key));
+        let retained = context
+            .source_chunk_facts(failed_key)
+            .expect("retained failure");
+        assert_eq!(retained.phase, LiveChunkPhase::Failed);
+        assert_eq!(retained.generation, failed.generation());
+        assert!(retained.wanted);
+        let pending = context
+            .source_chunk_facts(missing_key)
+            .expect("generation candidate");
+        assert_eq!(pending.phase, LiveChunkPhase::NeedsGeneration);
+        assert_eq!(pending.generation, missing.generation());
+
+        goals.fresh_missing.push(missing_key);
+        goals
+            .reconcile(&mut context, &players, &companions)
+            .expect("duplicate candidate stays quiet");
+        assert!(!goals.force);
+        assert_eq!(goals.pending, VecDeque::from([older_key, missing_key]));
+        assert_eq!(goals.queued, BTreeSet::from([older_key, missing_key]));
+    }
 }
