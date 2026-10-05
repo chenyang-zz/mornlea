@@ -109,6 +109,58 @@ impl PendingRestore {
         keys.into_iter().collect()
     }
 
+    /// The exact captured subscription anchor column.
+    pub fn subscription_anchor(&self) -> ChunkPos {
+        self.anchor
+    }
+
+    /// The column one unconsumed spawn site still waits on: only while the
+    /// scan is live, every restore candidate has been consumed and the next
+    /// column index stays within the captured spawn columns.
+    pub fn spawn_wait_key(&self) -> Option<ChunkKey> {
+        if self.completed
+            || self.exhausted_revisions.is_some()
+            || self.next_restore < self.candidates.len()
+        {
+            return None;
+        }
+        self.column_chunk_positions
+            .get(self.next_column)
+            .map(|pos| ChunkKey {
+                dimension: self.spawn_dimension,
+                pos: *pos,
+            })
+    }
+
+    /// The minimum squared chunk distance over the retained wanted keys:
+    /// restore keys measure to same-dimension candidate centers, spawn keys
+    /// to the captured anchor in the spawn dimension. A scan holding nothing
+    /// reports the unbounded distance.
+    pub fn pending_distance_squared(&self) -> i64 {
+        if self.completed {
+            return i64::MAX;
+        }
+        let mut best = i64::MAX;
+        for key in &self.restore_wanted {
+            for candidate in &self.candidates {
+                if candidate.dimension != key.dimension {
+                    continue;
+                }
+                let center_x = (candidate.position[0].floor() as i32) >> 4;
+                let center_z = (candidate.position[2].floor() as i32) >> 4;
+                let dx = i64::from(key.pos.x() - center_x);
+                let dz = i64::from(key.pos.z() - center_z);
+                best = best.min(dx * dx + dz * dz);
+            }
+        }
+        for pos in &self.spawn_wanted {
+            let dx = i64::from(pos.x() - self.anchor.x());
+            let dz = i64::from(pos.z() - self.anchor.z());
+            best = best.min(dx * dx + dz * dz);
+        }
+        best
+    }
+
     /// Executes source same-call scan cadence; trusted errors retain prior progress.
     pub fn advance(
         &mut self,

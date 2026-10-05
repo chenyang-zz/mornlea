@@ -14,6 +14,16 @@ Python Agent process. Workspace membership is `packages/engine/Cargo.toml`.
 No dependency-direction test guards this crate yet; review the manifest
 against this file.
 
+## Automatic source acquisition
+
+The producer phase of plan 109 adds one explicit `SourceAcquisition` caller:
+it owns a single chunk driver, borrows the background scheduler and the
+generation pool without closing or cancelling them, and runs one nonblocking
+admission pass before the ordinary tick. Session geometry comes from the
+shared checked `publication_project::wanted_square`; store admission comes
+from the scheduler's `source_chunk_slots` query. This is not whole-exe or
+save acceptance.
+
 ## Agent boundary
 
 [`src/agent/AGENTS.md`](src/agent/AGENTS.md) owns loopback HTTP, lease, host,

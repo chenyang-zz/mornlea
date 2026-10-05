@@ -108,6 +108,11 @@ impl Loads {
     pub fn retained(&self) -> bool {
         !self.players.is_empty() || !self.chunks.is_empty()
     }
+    /// Free chunk-load admission slots: queued, started and unconsumed
+    /// results all occupy the fixed eight-entry ledger.
+    pub fn chunk_slots(&self) -> usize {
+        8usize.saturating_sub(self.chunks.len())
+    }
     pub fn start_player(&mut self, p: PlayerId, d: Deadline) -> Result<LoginTicket, ServerError> {
         let id = admit(
             &mut self.next_player,

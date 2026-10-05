@@ -31,7 +31,7 @@ use mornlea_domain::{
 
 use crate::contracts::{
     ActorBody, ActorKey, ActorLifecycle, ActorRecord, ChunkKey, ContainerSlots, DropRecord,
-    InventoryRecord, ProjectileRecord, SessionKey, ViewLease,
+    InventoryRecord, ProjectileRecord, ServerError, SessionKey, ViewLease,
 };
 use crate::core::session_view::SessionView;
 use crate::state::{AuthorityState, Speaker};
@@ -454,23 +454,49 @@ fn observer_of(
 /// the given radius.
 fn wanted_columns(actor: &ActorRecord, radius: u8) -> BTreeSet<ChunkKey> {
     let position = actor.motion.position().get();
-    let center_x = (position[0].floor() as i32) >> 4;
-    let center_z = (position[2].floor() as i32) >> 4;
+    let center = ChunkPos::new(
+        (position[0].floor() as i32) >> 4,
+        (position[2].floor() as i32) >> 4,
+    );
+    // The foot center stays inside the physical chunk range (+/- 134217728)
+    // and the session radius ceiling (33) keeps every offset far from the
+    // i32 limits, so the shared checked square cannot refuse here.
+    wanted_square(actor.dimension, center, radius).expect("physical chunk square")
+}
+
+/// The inclusive square of chunk columns around one center in one dimension,
+/// shared by publication projection and automatic source acquisition. Every
+/// offset is a checked add: a center no physical chunk can move away from
+/// refuses instead of saturating into a wrapped square.
+pub(crate) fn wanted_square(
+    dimension: Dimension,
+    center: ChunkPos,
+    radius: u8,
+) -> Result<BTreeSet<ChunkKey>, ServerError> {
     let bound = i32::from(radius);
     let mut keys = BTreeSet::new();
     for dz in -bound..=bound {
         for dx in -bound..=bound {
+            let x = center.x().checked_add(dx).ok_or_else(square_refusal)?;
+            let z = center.z().checked_add(dz).ok_or_else(square_refusal)?;
             keys.insert(ChunkKey {
-                dimension: actor.dimension,
-                pos: ChunkPos::new(center_x.saturating_add(dx), center_z.saturating_add(dz)),
+                dimension,
+                pos: ChunkPos::new(x, z),
             });
         }
     }
-    keys
+    Ok(keys)
+}
+
+/// The one refusal the shared checked square produces.
+fn square_refusal() -> ServerError {
+    ServerError::InvalidInput {
+        field: "source_acquisition_geometry",
+    }
 }
 
 /// The chunk column one world position sits in.
-fn position_chunk(dimension: Dimension, position: [f32; 3]) -> ChunkKey {
+pub(crate) fn position_chunk(dimension: Dimension, position: [f32; 3]) -> ChunkKey {
     ChunkKey {
         dimension,
         pos: ChunkPos::new(
