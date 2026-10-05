@@ -53,6 +53,7 @@ use super::source_player_restore::SourcePlayerBook;
 use super::world::ReadyChunk;
 use crate::rules::farmland::FarmlandSchedule;
 use crate::rules::fluids::FluidSchedule;
+use crate::rules::passives::PassiveSnowBook;
 
 const COMPANION_INBOX: usize = 4;
 
@@ -235,6 +236,10 @@ pub struct AuthorityState {
     residents: ResidentTickState,
     source_player_radius: Option<u8>,
     source_players: SourcePlayerBook,
+    /// Retained passive Snow book: fixed tracker slots plus the pending
+    /// candidate batch. The reducer moves it across the tick exactly like the
+    /// source book, so retained travel survives tick boundaries.
+    passive_snow: PassiveSnowBook,
     /// Per-session publication view state for the tick-end projection.
     /// Entries appear lazily during projection and leave at retirement.
     session_views: BTreeMap<SessionKey, SessionView>,
@@ -315,6 +320,7 @@ impl AuthorityState {
             residents: ResidentTickState::default(),
             source_player_radius: None,
             source_players: SourcePlayerBook::default(),
+            passive_snow: PassiveSnowBook::default(),
             session_views: BTreeMap::new(),
             chat_queue: VecDeque::new(),
             next_chat_event_id: 1,
@@ -710,6 +716,10 @@ impl AuthorityState {
 
     pub(crate) fn source_players_mut(&mut self) -> &mut SourcePlayerBook {
         &mut self.source_players
+    }
+
+    pub(crate) fn passive_snow_mut(&mut self) -> &mut PassiveSnowBook {
+        &mut self.passive_snow
     }
 
     pub(crate) fn prune_source_players(&mut self) {
@@ -3531,6 +3541,12 @@ pub struct TickContext<'a> {
     /// drains it so the publication projection can report a quiet fall-out
     /// removal as vanished and a death settlement as died.
     quiet_passive_removals: BTreeSet<PassiveId>,
+    /// Tick-local retained-producer ownership: passive identities the retained
+    /// Snow book registered this tick, from their first movement tick. The
+    /// legacy single-tick collector excludes exactly these from its tracker
+    /// lookup so no stride is double-counted; the book-less public batch path
+    /// leaves the lane empty.
+    passive_snow_owned: BTreeSet<PassiveId>,
     charges: Vec<(ActorKey, ActionKind)>,
     suppressed_mining: BTreeSet<ActorKey>,
     /// Pre-motion actor poses captured at construction. Only source recovery
@@ -4034,6 +4050,7 @@ impl<'a> TickContext<'a> {
             deferred: DeferredCommands::default(),
             resync_lane: Vec::new(),
             quiet_passive_removals: BTreeSet::new(),
+            passive_snow_owned: BTreeSet::new(),
             charges: Vec::new(),
             suppressed_mining: BTreeSet::new(),
             pre_step: BTreeMap::new(),
@@ -4078,6 +4095,18 @@ impl<'a> TickContext<'a> {
     /// the context owns no cross-tick retention.
     pub(crate) fn record_passive_quiet_removal(&mut self, id: PassiveId) {
         self.quiet_passive_removals.insert(id);
+    }
+
+    /// Records one resident passive as owned by the retained Snow book for
+    /// this tick's legacy collection exclusion.
+    pub(crate) fn record_passive_snow_owned(&mut self, id: PassiveId) {
+        self.passive_snow_owned.insert(id);
+    }
+
+    /// Whether the retained passive Snow producer owns this identity this
+    /// tick; the legacy collector skips exactly these residents.
+    pub(crate) fn passive_snow_owned(&self, id: PassiveId) -> bool {
+        self.passive_snow_owned.contains(&id)
     }
 
     /// Captures the publication projection's tick inputs before the carried

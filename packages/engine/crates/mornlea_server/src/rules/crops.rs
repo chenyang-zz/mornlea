@@ -420,6 +420,14 @@ fn collect_snow_samples(schedule: &mut FootprintSchedule, ctx: &TickContext<'_>)
         {
             continue;
         }
+        if let ActorKey::Passive(id) = actor.key
+            && ctx.passive_snow_owned(id)
+        {
+            // The retained producer owns this resident's stride from its first
+            // registered tick; the legacy single-tick schedule must not
+            // double-count it.
+            continue;
+        }
         let Some(pre) = view.pre_step_motion(actor.key) else {
             continue;
         };
@@ -1020,5 +1028,151 @@ mod source_snow_tests {
             })
         );
         assert_eq!(source_snow_snapshot(&c), before);
+    }
+
+    use crate::core::contracts::{ActorBody, ActorLifecycle, ActorRecord, RuleEffect};
+    use mornlea_domain::{
+        FiniteVec3, LookAngles, MotionState, MotionStateParts, PassiveId, SurvivalState,
+        SurvivalStateParts,
+    };
+    use mornlea_storage::PassiveMob;
+
+    fn passive_record(id: u64, position: [f32; 3]) -> ActorRecord {
+        ActorRecord::try_new(
+            ActorKey::Passive(PassiveId::try_new(id).unwrap()),
+            ActorLifecycle::Active,
+            Dimension::OVERWORLD,
+            MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new(position).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            }),
+            LookAngles::try_new(0.0, 0.0).unwrap(),
+            SurvivalState::try_new(SurvivalStateParts {
+                health: 10,
+                oxygen: 300,
+                hunger: 20,
+                saturation_zero: false,
+                armor_points: 0,
+            })
+            .unwrap(),
+            ActorBody::Passive(PassiveMob {
+                id,
+                dimension: 0,
+                position,
+                velocity: [0.0; 3],
+                on_ground: true,
+                yaw: 0.0,
+                health: 10,
+            }),
+        )
+        .unwrap()
+    }
+
+    fn passive_exclusion_context(
+        a: &mut AuthorityState,
+        actors: Vec<ActorRecord>,
+    ) -> TickContext<'_> {
+        let f = FixtureState {
+            runtime: vec![],
+            actors,
+            chunks: vec![],
+            inventories: vec![],
+            containers: vec![],
+            work: WorkState::default(),
+            sleep: SleepState {
+                beds: vec![],
+                day_phase_offset: 0,
+                pending_offset: None,
+            },
+            projectiles: vec![],
+            drops: vec![],
+            world: source_snow_world(),
+        };
+        let mut c = TickContext::from_fixture(a, &f, TickBudget::full());
+        let mut sections = vec![
+            ContainerSnapshot {
+                kind: StorageKind::Single,
+                bits: 0,
+                single: 0,
+                palette: vec![],
+                packed: vec![]
+            };
+            24
+        ];
+        for (pos, block) in [
+            (BlockPos::ORIGIN, 1),
+            (BlockPos::new(0, 1, 0), 87),
+            (BlockPos::new(1, 1, 0), 87),
+            (BlockPos::new(5, 1, 0), 1),
+        ] {
+            let section = ((pos.y() + 64) / 16) as usize;
+            if sections[section].kind == StorageKind::Single {
+                sections[section] = ContainerSnapshot {
+                    kind: StorageKind::Direct,
+                    bits: 15,
+                    single: 0,
+                    palette: vec![],
+                    packed: vec![0; 1024],
+                };
+            }
+            let index =
+                (((pos.y() + 64) % 16) * 256 + (pos.z() & 15) * 16 + (pos.x() & 15)) as usize;
+            sections[section].packed[index / 4] |= u64::from(block as u16) << ((index % 4) * 15);
+        }
+        c.preload_ready_chunk(
+            ReadyChunk::try_new(
+                ChunkKey {
+                    dimension: Dimension::OVERWORLD,
+                    pos: ChunkPos::new(0, 0),
+                },
+                1,
+                1,
+                Chunk {
+                    sections,
+                    drops: vec![Default::default(); 32],
+                    furnaces: vec![Default::default(); 32],
+                    chests: vec![Default::default(); 16],
+                },
+            )
+            .unwrap(),
+        );
+        c
+    }
+
+    #[test]
+    fn registered_passive_stride_leaves_legacy_collection() {
+        // Unregistered: the legacy single-tick collector samples a full stride
+        // and the tier-1 layer at the landing cell shatters to air.
+        let mut a = source_snow_authority();
+        let mut c = passive_exclusion_context(&mut a, vec![passive_record(7, [0.0, 1.0, 0.0])]);
+        c.stage(RuleEffect::Actor(passive_record(7, [1.0, 1.0, 0.0])))
+            .unwrap();
+        let mut schedule = FootprintSchedule::new();
+        assert_eq!(
+            settle_snow_footprints(&mut schedule, &mut c).unwrap().applied,
+            1
+        );
+        assert_eq!(
+            c.read().block(Dimension::OVERWORLD, BlockPos::new(1, 1, 0)),
+            Some(0)
+        );
+
+        // Registered on its first movement tick: the retained producer owns
+        // the stride, the legacy collector never samples, the layer stays.
+        let mut a = source_snow_authority();
+        let mut c = passive_exclusion_context(&mut a, vec![passive_record(8, [0.0, 1.0, 0.0])]);
+        c.record_passive_snow_owned(PassiveId::try_new(8).unwrap());
+        c.stage(RuleEffect::Actor(passive_record(8, [1.0, 1.0, 0.0])))
+            .unwrap();
+        let mut schedule = FootprintSchedule::new();
+        assert_eq!(
+            settle_snow_footprints(&mut schedule, &mut c).unwrap().applied,
+            0
+        );
+        assert_eq!(
+            c.read().block(Dimension::OVERWORLD, BlockPos::new(1, 1, 0)),
+            Some(87)
+        );
     }
 }

@@ -229,6 +229,7 @@ fn reduce_tick_inner(
         farmland::FarmlandSchedule::new(),
     );
     let mut source_players = std::mem::take(state.source_players_mut());
+    let mut passive_snow = std::mem::take(state.passive_snow_mut());
     let mut context = TickContext::for_tick(state, budget);
     let result = catch_unwind(AssertUnwindSafe(|| {
         // Seeded logins land before the first provider row, so this tick's own
@@ -247,6 +248,7 @@ fn reduce_tick_inner(
             &mut fluid_schedule,
             &mut farmland_schedule,
             &mut source_players,
+            &mut passive_snow,
         )?;
         let overlay = context.viewer_leases();
         // Private observations are projected after every settlement. Provider
@@ -283,6 +285,7 @@ fn reduce_tick_inner(
     *state.fluid_schedule_mut() = fluid_schedule;
     *state.farmland_schedule_mut() = farmland_schedule;
     *state.source_players_mut() = source_players;
+    *state.passive_snow_mut() = passive_snow;
     state.prune_source_players();
     let (mut overlay, hits, mut events, counters, outcome) = match result {
         Ok(result) => result?,
@@ -393,6 +396,7 @@ fn dispatch_rows(
     fluid_schedule: &mut fluids::FluidSchedule,
     farmland_schedule: &mut farmland::FarmlandSchedule,
     source_players: &mut SourcePlayerBook,
+    passive_snow: &mut passives::PassiveSnowBook,
 ) -> Result<(), ServerError> {
     for envelope in dispatched {
         admit_command(context, envelope)?;
@@ -479,7 +483,11 @@ fn dispatch_rows(
         .collect();
     victims.sort_unstable();
     victims.dedup();
-    passives::run(context, batch_call(RulePhase::PassiveStepDeaths))?;
+    passives::run_with_snow(
+        context,
+        Some(&mut *passive_snow),
+        batch_call(RulePhase::PassiveStepDeaths),
+    )?;
     companions::run(context, batch_call(RulePhase::CompanionPlacement))?;
     for envelope in context.deferred(RulePhase::Interaction) {
         route_interaction(context, &envelope)?;
@@ -561,6 +569,10 @@ fn dispatch_rows(
     crops::settle_tramples(&mut footprints, context)?;
     crops::run(context, batch_call(RulePhase::SnowFootprint))?;
     source_player_restore::settle_snow(source_players, context)?;
+    // The retained passive book settles its copied candidates through the
+    // same fresh-cell consumer, after the source rows and before the generic
+    // single-tick schedule.
+    passives::settle_snow(passive_snow, context)?;
     crops::settle_snow_footprints(&mut footprints, context)?;
     random_blocks::run(context, batch_call(RulePhase::RandomBlock))?;
     random_blocks::advance(context, &active_keys)?;
