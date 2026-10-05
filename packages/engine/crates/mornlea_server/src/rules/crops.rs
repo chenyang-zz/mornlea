@@ -1150,7 +1150,9 @@ mod source_snow_tests {
             .unwrap();
         let mut schedule = FootprintSchedule::new();
         assert_eq!(
-            settle_snow_footprints(&mut schedule, &mut c).unwrap().applied,
+            settle_snow_footprints(&mut schedule, &mut c)
+                .unwrap()
+                .applied,
             1
         );
         assert_eq!(
@@ -1168,7 +1170,9 @@ mod source_snow_tests {
             .unwrap();
         let mut schedule = FootprintSchedule::new();
         assert_eq!(
-            settle_snow_footprints(&mut schedule, &mut c).unwrap().applied,
+            settle_snow_footprints(&mut schedule, &mut c)
+                .unwrap()
+                .applied,
             0
         );
         assert_eq!(

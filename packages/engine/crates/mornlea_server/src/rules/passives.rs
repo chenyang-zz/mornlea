@@ -341,10 +341,7 @@ impl Default for PassiveSnowBook {
 
 impl PassiveSnowBook {
     #[cfg(test)]
-    fn snow_test_state(
-        &self,
-        id: mornlea_domain::PassiveId,
-    ) -> Option<(f32, BlockPos, bool)> {
+    fn snow_test_state(&self, id: mornlea_domain::PassiveId) -> Option<(f32, BlockPos, bool)> {
         self.trackers
             .iter()
             .find(|slot| slot.is_some_and(|(held, _)| held == id))
@@ -357,12 +354,10 @@ impl PassiveSnowBook {
     /// Exact owned-id qualification: only a registered resident's tracker is
     /// visible to capture.
     fn tracker_mut(&mut self, id: mornlea_domain::PassiveId) -> Option<&mut PassiveSnowTracker> {
-        self.trackers
-            .iter_mut()
-            .find_map(|slot| match slot {
-                Some((held, tracker)) if *held == id => Some(tracker),
-                _ => None,
-            })
+        self.trackers.iter_mut().find_map(|slot| match slot {
+            Some((held, tracker)) if *held == id => Some(tracker),
+            _ => None,
+        })
     }
 
     fn owns(&self, id: mornlea_domain::PassiveId) -> bool {
@@ -521,11 +516,10 @@ pub(crate) fn settle_snow(
     let mut settled_count = 0;
     while settled_count < len {
         let take = (len - settled_count).min(PASSIVE_SNOW_SETTLE_SLICE);
-        let settled =
-            crate::rules::crops::settle_captured_source_snow(
-                book.pending_slice(settled_count, take),
-                ctx,
-            )?;
+        let settled = crate::rules::crops::settle_captured_source_snow(
+            book.pending_slice(settled_count, take),
+            ctx,
+        )?;
         report.examined += settled.examined;
         report.applied += settled.applied;
         settled_count += take;
@@ -629,8 +623,7 @@ mod passive_snow_tests {
         let (travel, _, _) = book.snow_test_state(one).unwrap();
         assert!((travel - 0.3).abs() < 1e-6);
         assert_eq!(
-            book.pending_slice(0, PASSIVE_SNOW_PENDING)[0]
-                .pos,
+            book.pending_slice(0, PASSIVE_SNOW_PENDING)[0].pos,
             BlockPos::new(0, 1, 0)
         );
     }
@@ -691,21 +684,17 @@ mod passive_snow_tests {
             book.append(Dimension::OVERWORLD, BlockPos::new(x, 1, 0))
                 .unwrap();
         }
-        assert_eq!(
-            book.pending_slice(0, 8)[0].pos,
-            BlockPos::new(0, 1, 0)
-        );
-        assert_eq!(
-            book.pending_slice(8, 2)[0].pos,
-            BlockPos::new(8, 1, 0)
-        );
+        assert_eq!(book.pending_slice(0, 8)[0].pos, BlockPos::new(0, 1, 0));
+        assert_eq!(book.pending_slice(8, 2)[0].pos, BlockPos::new(8, 1, 0));
         book.clear_pending();
         assert_eq!(book.pending_len(), 0);
     }
 
     #[test]
     fn runtimeless_admission_resets_tracker_and_keeps_pending() {
-        use crate::core::contracts::{FixtureState, ServerLimits, SleepState, TickBudget, WorkState};
+        use crate::core::contracts::{
+            FixtureState, ServerLimits, SleepState, TickBudget, WorkState,
+        };
         use crate::core::state::AuthorityState;
         let mut authority = AuthorityState::try_new(
             ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
