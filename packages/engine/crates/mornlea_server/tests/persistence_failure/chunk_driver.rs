@@ -1752,7 +1752,7 @@ fn source_acquisition_memory_login(
         )
     );
     transport.acknowledge(connection, 1, &mut login.bind(state, store));
-    let start = LoginStart::new(player, "Ada", 1).unwrap();
+    let start = LoginStart::new(player, "Ada", 8).unwrap();
     let start =
         ClientPacket::LoginStart(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap());
     transport.send(
