@@ -224,6 +224,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.7l3mr Restore complete hostile/passive aggregates, bound terminal residency and capture settled/final live rosters through actual persistence ([packet](plans/117-source-mob-persistence.md)). Direct Codex:4genuine behavior REDs,18topic/3private GREEN; actual disk/native death and quiet removal, Died/Vanished/loot/shard ownership, exact failed-save retry and later final flush/reopen; Rust75suites3543results PASS, independent SCOPED_PASS. Passive lethal input and shard ownership are prepared controls with real downstream providers; executable and broad3.8/4.1/4.2 remain open.
 
 
+- [x] 3.7l3cm Land source-compatible pure companion missing/legacy/v5 configuration and lifecycle merge before authoritative consumers ([packet](plans/118-companion-configuration-merge.md)). Direct Codex: declaration-only REDs,24GREEN including19actual unchanged Go merge/encode outcomes and original non-Clone entropy I/O cause; full Rust76suites3567results PASS, independent revised SCOPED_PASS. Startup/capture/CAS consumers and broad3.8/4.1/4.2 remain open.
+
 ## 4. Closeout
 
 
