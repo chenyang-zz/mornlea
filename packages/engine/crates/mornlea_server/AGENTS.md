@@ -42,6 +42,11 @@ Age and pickup timers remain authority-only and do not trigger wire publication.
 This private event construction does not accept the separately pending queue
 admission/mirror acknowledgment transaction or executable composition.
 
+Hostile, passive and projectile publication emits departures before arrivals
+and survivor states within each observer's family. Previous membership remains
+intact until all three blocks complete, preserving survivor-only state selection
+and passive death reasons. This event ordering does not qualify queue admission.
+
 ## Agent boundary
 
 Crafting-view partial and quick moves settle in the crafting provider during

@@ -5340,3 +5340,202 @@ fn projection_drop_wire_nonwire_aging_is_quiet() {
         assert!(projection_drop_wire_events(&events_for(&quiet, owner)).is_empty());
     }
 }
+
+fn projection_entity_order_trace(
+    events: &[Event],
+    family: u8,
+) -> Vec<(&'static str, u64, Vec<u64>)> {
+    events
+        .iter()
+        .filter_map(|event| match (family, event) {
+            (0, Event::HostileDespawn(batch)) => Some((
+                "despawn",
+                batch.server_tick(),
+                batch.ids().iter().map(|id| id.get()).collect(),
+            )),
+            (0, Event::HostileSpawn(batch)) => Some((
+                "spawn",
+                batch.server_tick(),
+                batch
+                    .spawns()
+                    .iter()
+                    .map(|record| record.id().get())
+                    .collect(),
+            )),
+            (0, Event::HostileState(batch)) => Some((
+                "state",
+                batch.server_tick(),
+                batch
+                    .states()
+                    .iter()
+                    .map(|record| record.id().get())
+                    .collect(),
+            )),
+            (1, Event::PassiveDespawn(batch)) => Some((
+                "despawn",
+                batch.server_tick(),
+                batch
+                    .despawns()
+                    .iter()
+                    .map(|record| record.id().get())
+                    .collect(),
+            )),
+            (1, Event::PassiveSpawn(batch)) => Some((
+                "spawn",
+                batch.server_tick(),
+                batch
+                    .spawns()
+                    .iter()
+                    .map(|record| record.id().get())
+                    .collect(),
+            )),
+            (1, Event::PassiveState(batch)) => Some((
+                "state",
+                batch.server_tick(),
+                batch
+                    .states()
+                    .iter()
+                    .map(|record| record.id().get())
+                    .collect(),
+            )),
+            (2, Event::ProjectileDespawn(batch)) => Some((
+                "despawn",
+                batch.server_tick(),
+                batch.ids().iter().map(|id| id.get()).collect(),
+            )),
+            (2, Event::ProjectileSpawn(batch)) => Some((
+                "spawn",
+                batch.server_tick(),
+                batch
+                    .spawns()
+                    .iter()
+                    .map(|record| record.id().get())
+                    .collect(),
+            )),
+            (2, Event::ProjectileState(batch)) => Some((
+                "state",
+                batch.server_tick(),
+                batch
+                    .states()
+                    .iter()
+                    .map(|record| record.id().get())
+                    .collect(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn projection_entity_order_seed(
+    state: &mut AuthorityState,
+    owner: SessionKey,
+    family: u8,
+    id: u64,
+    age: u32,
+) {
+    // Prepared actor bodies establish membership; the real reducer owns projection and flight aging.
+    stage(state, |context| match family {
+        0 => context
+            .stage(RuleEffect::Actor(hostile_actor(id, [8.5, 65.0, 8.5], 0)))
+            .unwrap(),
+        1 => {
+            context
+                .stage(RuleEffect::Actor(passive_actor(id, [8.5, 65.0, 8.5])))
+                .unwrap();
+            context
+                .stage(RuleEffect::Runtime(passive_runtime(
+                    PassiveId::try_new(id).unwrap(),
+                )))
+                .unwrap();
+        }
+        2 => context
+            .stage(RuleEffect::Projectile {
+                before: None,
+                after: Some(ProjectileRecord {
+                    id: ProjectileId::try_new(id).unwrap(),
+                    owner: ActorKey::Player(owner),
+                    dimension: Dimension::OVERWORLD,
+                    position: FiniteVec3::try_new([4.5, 100.0, 4.5]).unwrap(),
+                    velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                    kind: ProjectileKind::Shard,
+                    damage: 3,
+                    age,
+                }),
+            })
+            .unwrap(),
+        _ => panic!("unsupported prepared family"),
+    });
+}
+
+fn projection_entity_order_mixed(family: u8) {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    projection_entity_order_seed(&mut state, owner, family, 33, 0);
+    projection_entity_order_seed(&mut state, owner, family, 31, 99);
+    let initial = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        projection_entity_order_trace(&events_for(&initial, owner), family),
+        vec![("spawn", 0, vec![31, 33])]
+    );
+    if family != 2 {
+        stage(&mut state, |context| {
+            let key = if family == 0 {
+                ActorKey::Hostile(HostileId::try_new(31).unwrap())
+            } else {
+                ActorKey::Passive(PassiveId::try_new(31).unwrap())
+            };
+            let mut actor = context.read().actor(key).cloned().unwrap();
+            actor.lifecycle = ActorLifecycle::Dead;
+            context.stage(RuleEffect::Actor(actor)).unwrap();
+        });
+    }
+    projection_entity_order_seed(&mut state, owner, family, 32, 0);
+    let mixed = state.advance_tick(TickBudget::full()).unwrap();
+    let events = events_for(&mixed, owner);
+    assert_eq!(
+        projection_entity_order_trace(&events, family),
+        vec![
+            ("despawn", 1, vec![31]),
+            ("spawn", 1, vec![32]),
+            ("state", 1, vec![33])
+        ]
+    );
+    if family == 1 {
+        let reasons: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::PassiveDespawn(batch) => Some(
+                    batch
+                        .despawns()
+                        .iter()
+                        .map(|record| record.reason())
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(reasons, vec![PassiveDespawnReason::Died]);
+    }
+    let continued = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        projection_entity_order_trace(&events_for(&continued, owner), family),
+        vec![("state", 2, vec![32, 33])]
+    );
+}
+
+#[test]
+fn projection_entity_order_hostile_mixed_transition() {
+    projection_entity_order_mixed(0);
+}
+
+#[test]
+fn projection_entity_order_passive_mixed_transition() {
+    projection_entity_order_mixed(1);
+}
+
+#[test]
+fn projection_entity_order_projectile_mixed_transition() {
+    projection_entity_order_mixed(2);
+}

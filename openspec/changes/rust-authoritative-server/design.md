@@ -310,3 +310,8 @@ Source census also identifies automatic player/aggregate save ownership and cach
 ## Surviving drop wire-value projection
 
 Packet111 retains complete copied checked ItemDrop values in the private session mirror instead of identity membership alone. It compares only wire-visible ID/cell/stack, publishes surviving-ID changes, and emits removes before upserts in existing sorted32-entry batches. Retaining whole DropRecord would republish every aging tick and retain unrelated lifecycle quantities; emitting an upsert for every visible record would also violate Go quiet behavior. Both alternatives are rejected. The actual queue-admission mirror transaction remains a separate owner; this private tick-end projection repair does not accept that integration or source-mode/executable composition.
+
+
+## Mixed entity lifecycle event ordering
+
+Packet112 moves each existing hostile/passive/projectile despawn batch before spawn and survivor-state construction, preserving the original membership preimage until the final private mirror assignment. This matches source capacity-release ordering without changing typed records, bounds, passive reason precedence or survivor selection. Mutating previous membership early would incorrectly turn arrivals into state candidates; a cross-family event sort would obscure each provider's stable batch order. Both alternatives are rejected. Prepared actor setup plus actual reducer/aging qualifies event construction only; source visibility, queue admission and automatic runtime composition remain open.

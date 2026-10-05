@@ -211,6 +211,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3dp Preserve full surviving drop wire values and source remove-before-upsert event order ([packet](plans/111-drop-wire-mirror.md)). Accepted direct Codex node:2genuine behavior RED plusquiet control,3GREEN, full528replay and75Rust suites3463results PASS; independent native SCOPED_PASS. Event construction only; queue admission/mirror and broad3.8/4.1/4.2 remain open.
 
+- [x] 3.7l3eo Preserve despawn-before-spawn-before-state order for mixed hostile/passive/projectile transitions ([packet](plans/112-mixed-entity-publication-order.md)). Direct Codex node:3qualified ordering REDs then3GREEN,531replay and75Rust suites3466results PASS; native independent SCOPED_PASS. Event construction only; queue admission/mirror and broad3.8/4.1/4.2 remain open.
+
 ## 4. Closeout
 
 

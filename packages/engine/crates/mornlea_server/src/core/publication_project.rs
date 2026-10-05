@@ -1036,7 +1036,7 @@ fn emit_remotes(
     }
 }
 
-/// Hostile spawn, state and despawn batches split at the
+/// Hostile despawn, spawn and survivor state batches split at the
 /// mob wire cap, with the exact body, kind and health of each record.
 fn emit_hostiles(
     view_list: &mut [SessionView],
@@ -1048,6 +1048,22 @@ fn emit_hostiles(
     for ((observer, view), visibility) in
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
+        let despawns: Vec<HostileId> = view
+            .visible_hostiles
+            .difference(&visibility.hostiles)
+            .copied()
+            .collect();
+        for group in despawns.chunks(MOB_BATCH_CAP) {
+            if let Ok(batch) = HostileDespawn::try_new(HostileDespawnParts {
+                server_tick: inputs.tick,
+                ids: group.to_vec().into_boxed_slice(),
+            }) {
+                events.push(RoutedEvent::new(
+                    EventRecipient::Session(observer.session.get()),
+                    Event::HostileDespawn(batch),
+                ));
+            }
+        }
         let mut published = visibility.hostiles.clone();
         let mut spawns = Vec::new();
         for (id, kind, index) in &inputs.entities.hostiles {
@@ -1108,27 +1124,11 @@ fn emit_hostiles(
                 ));
             }
         }
-        let despawns: Vec<HostileId> = view
-            .visible_hostiles
-            .difference(&visibility.hostiles)
-            .copied()
-            .collect();
-        for group in despawns.chunks(MOB_BATCH_CAP) {
-            if let Ok(batch) = HostileDespawn::try_new(HostileDespawnParts {
-                server_tick: inputs.tick,
-                ids: group.to_vec().into_boxed_slice(),
-            }) {
-                events.push(RoutedEvent::new(
-                    EventRecipient::Session(observer.session.get()),
-                    Event::HostileDespawn(batch),
-                ));
-            }
-        }
         view.visible_hostiles = published;
     }
 }
 
-/// Passive spawn, state and despawn batches. Grazing is
+/// Passive despawn, spawn and survivor state batches. Grazing is
 /// the transient observation the actor runtime carries; despawns publish the
 /// died reason for resident death-settlement removals and the vanished reason
 /// otherwise (live view exit, missing actor, or quiet movement termination).
@@ -1143,6 +1143,30 @@ fn emit_passives(
     for ((observer, view), visibility) in
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
+        let despawns: Vec<PassiveDespawnRecord> = view
+            .visible_passives
+            .difference(&visibility.passives)
+            .copied()
+            .map(|id| {
+                let reason = if inputs.passive_deaths.contains(&id) {
+                    PassiveDespawnReason::Died
+                } else {
+                    PassiveDespawnReason::Vanished
+                };
+                PassiveDespawnRecord::new(id, reason)
+            })
+            .collect();
+        for group in despawns.chunks(MOB_BATCH_CAP) {
+            if let Ok(batch) = PassiveDespawn::try_new(PassiveDespawnParts {
+                server_tick: inputs.tick,
+                despawns: group.to_vec().into_boxed_slice(),
+            }) {
+                events.push(RoutedEvent::new(
+                    EventRecipient::Session(observer.session.get()),
+                    Event::PassiveDespawn(batch),
+                ));
+            }
+        }
         let mut published = visibility.passives.clone();
         let mut spawns = Vec::new();
         for (id, index) in &inputs.entities.passives {
@@ -1202,35 +1226,11 @@ fn emit_passives(
                 ));
             }
         }
-        let despawns: Vec<PassiveDespawnRecord> = view
-            .visible_passives
-            .difference(&visibility.passives)
-            .copied()
-            .map(|id| {
-                let reason = if inputs.passive_deaths.contains(&id) {
-                    PassiveDespawnReason::Died
-                } else {
-                    PassiveDespawnReason::Vanished
-                };
-                PassiveDespawnRecord::new(id, reason)
-            })
-            .collect();
-        for group in despawns.chunks(MOB_BATCH_CAP) {
-            if let Ok(batch) = PassiveDespawn::try_new(PassiveDespawnParts {
-                server_tick: inputs.tick,
-                despawns: group.to_vec().into_boxed_slice(),
-            }) {
-                events.push(RoutedEvent::new(
-                    EventRecipient::Session(observer.session.get()),
-                    Event::PassiveDespawn(batch),
-                ));
-            }
-        }
         view.visible_passives = published;
     }
 }
 
-/// Projectile spawn, state and despawn batches split at
+/// Projectile despawn, spawn and survivor state batches split at
 /// the projectile wire cap, carrying the exact flight values.
 fn emit_projectiles(
     view_list: &mut [SessionView],
@@ -1243,6 +1243,22 @@ fn emit_projectiles(
     for ((observer, view), visibility) in
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
+        let despawns: Vec<ProjectileId> = view
+            .visible_projectiles
+            .difference(&visibility.projectiles)
+            .copied()
+            .collect();
+        for group in despawns.chunks(PROJECTILE_BATCH_CAP) {
+            if let Ok(batch) = ProjectileDespawn::try_new(ProjectileDespawnParts {
+                server_tick: tick,
+                ids: group.to_vec().into_boxed_slice(),
+            }) {
+                events.push(RoutedEvent::new(
+                    EventRecipient::Session(observer.session.get()),
+                    Event::ProjectileDespawn(batch),
+                ));
+            }
+        }
         let mut spawns = Vec::new();
         for record in projectiles {
             if !visibility.projectiles.contains(&record.id)
@@ -1291,22 +1307,6 @@ fn emit_projectiles(
                 events.push(RoutedEvent::new(
                     EventRecipient::Session(observer.session.get()),
                     Event::ProjectileState(batch),
-                ));
-            }
-        }
-        let despawns: Vec<ProjectileId> = view
-            .visible_projectiles
-            .difference(&visibility.projectiles)
-            .copied()
-            .collect();
-        for group in despawns.chunks(PROJECTILE_BATCH_CAP) {
-            if let Ok(batch) = ProjectileDespawn::try_new(ProjectileDespawnParts {
-                server_tick: tick,
-                ids: group.to_vec().into_boxed_slice(),
-            }) {
-                events.push(RoutedEvent::new(
-                    EventRecipient::Session(observer.session.get()),
-                    Event::ProjectileDespawn(batch),
                 ));
             }
         }
