@@ -232,15 +232,17 @@ pub(crate) fn run_with_snow(
         carried: 0,
         rejected: 0,
     };
-    admit_residents(ctx, &mut report)?;
-    advance_spawn(ctx, &environment, &mut report)?;
+    admit_residents(ctx, &mut report, snow.as_deref_mut())?;
+    advance_spawn(ctx, &environment, &mut report, snow.as_deref_mut())?;
     // Every current resident registers after spawn and before movement —
     // fresh newborns and graze-frozen cows included, so the retained book owns
-    // the whole resident set from its first tick.
+    // the whole resident set from its first tick. The movement loop reuses the
+    // same resident snapshot with no second collection.
+    let keys = resident_keys(ctx);
     if let Some(book) = snow.as_deref_mut() {
-        register_snow_residents(ctx, book);
+        register_snow_residents(ctx, book, &keys)?;
     }
-    for key in resident_keys(ctx) {
+    for key in keys {
         advance_movement(ctx, key, &environment, &mut report, snow.as_deref_mut())?;
         report.examined += 1;
     }
@@ -345,7 +347,7 @@ impl PassiveSnowBook {
     ) -> Option<(f32, BlockPos, bool)> {
         self.trackers
             .iter()
-            .find(|slot| slot.is_some_and(|(held, _)| *held == id))
+            .find(|slot| slot.is_some_and(|(held, _)| held == id))
             .map(|slot| match slot {
                 Some((_, tracker)) => (tracker.travel, tracker.cell, tracker.cell_valid),
                 None => unreachable!("matched slot holds a tracker"),
@@ -366,7 +368,7 @@ impl PassiveSnowBook {
     fn owns(&self, id: mornlea_domain::PassiveId) -> bool {
         self.trackers
             .iter()
-            .any(|slot| slot.is_some_and(|(held, _)| *held == id))
+            .any(|slot| slot.is_some_and(|(held, _)| held == id))
     }
 
     fn commit_tracker(&mut self, id: mornlea_domain::PassiveId, tracker: PassiveSnowTracker) {
@@ -379,25 +381,29 @@ impl PassiveSnowBook {
     /// batch, so a dying resident's queued coordinates still settle.
     fn forget(&mut self, id: mornlea_domain::PassiveId) {
         for slot in &mut self.trackers {
-            if slot.is_some_and(|(held, _)| *held == id) {
+            if slot.is_some_and(|(held, _)| held == id) {
                 *slot = None;
             }
         }
     }
 
-    /// Lookup-or-insert reconciliation: retired identities free their slots
-    /// first, so a stale entry can never refuse a new resident's admission;
-    /// matched ids keep their accumulated travel and remembered cell.
-    fn reconcile(&mut self, current: &[mornlea_domain::PassiveId]) {
+    /// Lookup-or-insert reconciliation over the borrowed resident keys:
+    /// retired identities free their slots first, so a stale entry can never
+    /// refuse a new resident's admission; matched ids keep their accumulated
+    /// travel and remembered cell, and the pending prefix is untouched.
+    fn reconcile(&mut self, current: &[ActorKey]) {
         for slot in &mut self.trackers {
             if slot
                 .as_ref()
-                .is_some_and(|(held, _)| !current.contains(held))
+                .is_some_and(|(held, _)| !current_holds(current, *held))
             {
                 *slot = None;
             }
         }
-        for id in current {
+        for key in current {
+            let ActorKey::Passive(id) = key else {
+                continue;
+            };
             if self.owns(*id) {
                 continue;
             }
@@ -422,30 +428,47 @@ impl PassiveSnowBook {
         self.len
     }
 
-    fn pending_prefix(&self, count: usize) -> &[crate::rules::crops::FootprintCell] {
-        &self.pending[..count]
+    fn pending_slice(&self, start: usize, count: usize) -> &[crate::rules::crops::FootprintCell] {
+        &self.pending[start..start + count]
     }
 
-    fn drain_prefix(&mut self, count: usize) {
-        self.pending.copy_within(count..self.len, 0);
-        self.len -= count;
+    fn clear_pending(&mut self) {
+        self.len = 0;
     }
 }
 
+/// Whether the borrowed resident slice holds this passive identity.
+fn current_holds(current: &[ActorKey], id: mornlea_domain::PassiveId) -> bool {
+    current
+        .iter()
+        .any(|key| matches!(key, ActorKey::Passive(held) if *held == id))
+}
+
 /// Registers every current resident into the retained book and marks the
-/// tick-local ownership lane the legacy single-tick collector excludes.
-fn register_snow_residents(ctx: &mut TickContext<'_>, book: &mut PassiveSnowBook) {
-    let residents: Vec<mornlea_domain::PassiveId> = resident_keys(ctx)
-        .into_iter()
-        .filter_map(|key| match key {
-            ActorKey::Passive(id) => Some(id),
-            _ => None,
-        })
-        .collect();
-    book.reconcile(&residents);
-    for id in residents {
-        ctx.record_passive_snow_owned(id);
+/// tick-local ownership lane the legacy single-tick collector excludes. The
+/// bound preflight runs before any tracker change, so an oversize set refuses
+/// instead of silently leaving a resident untracked.
+fn register_snow_residents(
+    ctx: &mut TickContext<'_>,
+    book: &mut PassiveSnowBook,
+    residents: &[ActorKey],
+) -> Result<(), ServerError> {
+    let count = residents
+        .iter()
+        .filter(|key| matches!(key, ActorKey::Passive(_)))
+        .count();
+    if count > PASSIVE_SNOW_SLOTS {
+        return Err(ServerError::Internal {
+            invariant: "passive snow capacity",
+        });
     }
+    book.reconcile(residents);
+    for key in residents {
+        if let ActorKey::Passive(id) = key {
+            ctx.record_passive_snow_owned(*id)?;
+        }
+    }
+    Ok(())
 }
 
 /// Captures one resident's accepted step into the retained book. The preview
@@ -475,27 +498,39 @@ fn capture_passive_snow(
     Ok(())
 }
 
-/// Late settle: drains the copied candidates through the existing fresh-cell
-/// consumer in bounded slices, reusing its transactions unchanged, then
-/// empties the batch.
+/// Late settle: settles the copied candidates through the existing fresh-cell
+/// consumer in bounded in-order slices, reusing its transactions unchanged.
+/// Only a fully settled batch clears the prefix; a refusal leaves the whole
+/// prefix charged and untouched.
 pub(crate) fn settle_snow(
     book: &mut PassiveSnowBook,
     ctx: &mut TickContext<'_>,
 ) -> Result<PhaseReport, ServerError> {
+    let len = book.pending_len();
+    if len > PASSIVE_SNOW_PENDING {
+        return Err(ServerError::Internal {
+            invariant: "passive snow capacity",
+        });
+    }
     let mut report = PhaseReport {
         examined: 0,
         applied: 0,
         carried: 0,
         rejected: 0,
     };
-    while book.pending_len() > 0 {
-        let take = book.pending_len().min(PASSIVE_SNOW_SETTLE_SLICE);
+    let mut settled_count = 0;
+    while settled_count < len {
+        let take = (len - settled_count).min(PASSIVE_SNOW_SETTLE_SLICE);
         let settled =
-            crate::rules::crops::settle_captured_source_snow(book.pending_prefix(take), ctx)?;
+            crate::rules::crops::settle_captured_source_snow(
+                book.pending_slice(settled_count, take),
+                ctx,
+            )?;
         report.examined += settled.examined;
         report.applied += settled.applied;
-        book.drain_prefix(take);
+        settled_count += take;
     }
+    book.clear_pending();
     Ok(report)
 }
 
@@ -536,18 +571,18 @@ mod passive_snow_tests {
         let mut book = PassiveSnowBook::default();
         let one = id(1);
         let two = id(2);
-        book.reconcile(&[one, two]);
+        book.reconcile(&[ActorKey::Passive(one), ActorKey::Passive(two)]);
         assert!(book.owns(one) && book.owns(two));
         book.append(Dimension::OVERWORLD, BlockPos::new(4, 1, 4))
             .unwrap();
         // A retired id frees only its tracker slot; queued coordinates survive.
-        book.reconcile(&[two]);
+        book.reconcile(&[ActorKey::Passive(two)]);
         assert!(!book.owns(one));
         assert!(book.owns(two));
         assert_eq!(book.pending_len(), 1);
         // A new neighbor id takes the freed slot; matched ids keep theirs.
         let three = id(3);
-        book.reconcile(&[two, three]);
+        book.reconcile(&[ActorKey::Passive(two), ActorKey::Passive(three)]);
         assert!(book.owns(two) && book.owns(three));
         assert_eq!(book.pending_len(), 1);
         // Death forget clears only the tracker, never the pending batch.
@@ -593,7 +628,11 @@ mod passive_snow_tests {
         );
         let (travel, _, _) = book.snow_test_state(one).unwrap();
         assert!((travel - 0.3).abs() < 1e-6);
-        assert_eq!(book.pending_prefix(PASSIVE_SNOW_PENDING)[0].pos, BlockPos::new(0, 1, 0));
+        assert_eq!(
+            book.pending_slice(0, PASSIVE_SNOW_PENDING)[0]
+                .pos,
+            BlockPos::new(0, 1, 0)
+        );
     }
 
     #[test]
@@ -646,16 +685,124 @@ mod passive_snow_tests {
     }
 
     #[test]
-    fn pending_prefix_drains_in_order() {
+    fn pending_slice_views_prefix_in_order_and_clear_is_whole_batch() {
         let mut book = PassiveSnowBook::default();
         for x in 0..10i32 {
             book.append(Dimension::OVERWORLD, BlockPos::new(x, 1, 0))
                 .unwrap();
         }
-        assert_eq!(book.pending_prefix(8)[0].pos, BlockPos::new(0, 1, 0));
-        book.drain_prefix(8);
-        assert_eq!(book.pending_len(), 2);
-        assert_eq!(book.pending_prefix(2)[0].pos, BlockPos::new(8, 1, 0));
+        assert_eq!(
+            book.pending_slice(0, 8)[0].pos,
+            BlockPos::new(0, 1, 0)
+        );
+        assert_eq!(
+            book.pending_slice(8, 2)[0].pos,
+            BlockPos::new(8, 1, 0)
+        );
+        book.clear_pending();
+        assert_eq!(book.pending_len(), 0);
+    }
+
+    #[test]
+    fn runtimeless_admission_resets_tracker_and_keeps_pending() {
+        use crate::core::contracts::{FixtureState, ServerLimits, SleepState, TickBudget, WorkState};
+        use crate::core::state::AuthorityState;
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let nine = id(9);
+        let record = ActorRecord::try_new(
+            ActorKey::Passive(nine),
+            ActorLifecycle::Active,
+            Dimension::OVERWORLD,
+            MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new([0.0, 1.0, 0.0]).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            }),
+            LookAngles::try_new(0.0, 0.0).unwrap(),
+            SurvivalState::try_new(SurvivalStateParts {
+                health: MAX_HEALTH,
+                oxygen: 300,
+                hunger: 20,
+                saturation_zero: false,
+                armor_points: 0,
+            })
+            .unwrap(),
+            ActorBody::Passive(PassiveMob {
+                id: nine.get(),
+                dimension: 0,
+                position: [0.0, 1.0, 0.0],
+                velocity: [0.0; 3],
+                on_ground: true,
+                yaw: 0.0,
+                health: MAX_HEALTH,
+            }),
+        )
+        .unwrap();
+        let fixture = FixtureState {
+            runtime: vec![],
+            actors: vec![record],
+            chunks: vec![],
+            inventories: vec![],
+            containers: vec![],
+            work: WorkState::default(),
+            sleep: SleepState {
+                beds: vec![],
+                day_phase_offset: 0,
+                pending_offset: None,
+            },
+            projectiles: vec![],
+            drops: vec![],
+            world: mornlea_domain::WorldState::try_new(mornlea_domain::WorldStateParts {
+                world_time_ticks: 0,
+                day_phase_offset: 0,
+                weather: mornlea_domain::Weather::Clear,
+                season: mornlea_domain::Season::Spring,
+                season_progress: 0,
+                temperature: 0,
+            })
+            .unwrap(),
+        };
+        let mut c = TickContext::from_fixture(&mut authority, &fixture, TickBudget::full());
+        let mut book = PassiveSnowBook::default();
+        // Seed stale state: a remembered cell with a queued candidate plus
+        // retained travel the restore must not inherit.
+        book.reconcile(&[ActorKey::Passive(nine)]);
+        capture_passive_snow(
+            &mut book,
+            Dimension::OVERWORLD,
+            nine,
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            true,
+        )
+        .unwrap();
+        capture_passive_snow(
+            &mut book,
+            Dimension::OVERWORLD,
+            nine,
+            [1.0, 1.0, 0.0],
+            [1.4, 1.0, 0.0],
+            true,
+        )
+        .unwrap();
+        let mut report = PhaseReport {
+            examined: 0,
+            applied: 0,
+            carried: 0,
+            rejected: 0,
+        };
+        admit_residents(&mut c, &mut report, Some(&mut book)).unwrap();
+        let (travel, _, valid) = book.snow_test_state(nine).unwrap();
+        assert_eq!(travel, 0.0);
+        assert!(!valid);
+        // The runtime staged and the queued coordinate survived the reset.
+        assert_eq!(report.applied, 1);
+        assert!(c.read().runtime(ActorKey::Passive(nine)).is_some());
+        assert_eq!(book.pending_len(), 1);
     }
 }
 
@@ -684,7 +831,11 @@ fn resident_keys(ctx: &TickContext<'_>) -> Vec<ActorKey> {
 /// the frozen zeroed defaults and re-anchors home at the loaded position,
 /// exactly the transient discipline of `RestorePassive` (`passive.go`): no
 /// restart can resurrect a flee or graze event.
-fn admit_residents(ctx: &mut TickContext<'_>, report: &mut PhaseReport) -> Result<(), ServerError> {
+fn admit_residents(
+    ctx: &mut TickContext<'_>,
+    report: &mut PhaseReport,
+    mut snow: Option<&mut PassiveSnowBook>,
+) -> Result<(), ServerError> {
     for key in resident_keys(ctx) {
         if ctx.read().runtime(key).is_some() {
             continue;
@@ -705,6 +856,14 @@ fn admit_residents(ctx: &mut TickContext<'_>, report: &mut PhaseReport) -> Resul
                 fresh: false,
             },
         )?;
+        // A runtime-less restore is a fresh admission: the same id cannot
+        // inherit a stale tracker. The reset lands only after the runtime
+        // staged successfully, and the pending coordinates always survive.
+        if let Some(book) = snow.as_deref_mut()
+            && let ActorKey::Passive(id) = key
+        {
+            book.forget(id);
+        }
         report.applied += 1;
     }
     Ok(())
@@ -722,6 +881,7 @@ fn advance_spawn(
     ctx: &mut TickContext<'_>,
     environment: &EnvironmentState,
     report: &mut PhaseReport,
+    snow: Option<&mut PassiveSnowBook>,
 ) -> Result<(), ServerError> {
     let residents = resident_keys(ctx).len() as u64;
     let plan = {
@@ -739,7 +899,7 @@ fn advance_spawn(
             dimension,
             candidate,
             home,
-        } => insert_spawn(ctx, id, dimension, candidate, home, report),
+        } => insert_spawn(ctx, id, dimension, candidate, home, report, snow),
     }
 }
 
@@ -831,6 +991,7 @@ fn insert_spawn(
     candidate: [f32; 3],
     home: BlockPos,
     report: &mut PhaseReport,
+    snow: Option<&mut PassiveSnowBook>,
 ) -> Result<(), ServerError> {
     let record = ActorRecord::try_new(
         ActorKey::Passive(id),
@@ -887,6 +1048,11 @@ fn insert_spawn(
             fresh: true,
         },
     )?;
+    // A newborn never inherits a retired same-id tracker; its pending
+    // coordinates survive. The reset lands only after both stagings succeed.
+    if let Some(book) = snow {
+        book.forget(id);
+    }
     report.applied += 2;
     report.examined += 1;
     Ok(())
@@ -989,7 +1155,7 @@ fn advance_movement(
     key: ActorKey,
     environment: &EnvironmentState,
     report: &mut PhaseReport,
-    mut snow: Option<&mut PassiveSnowBook>,
+    snow: Option<&mut PassiveSnowBook>,
 ) -> Result<(), ServerError> {
     let Some(record) = ctx.read().actor(key).cloned() else {
         return Ok(());

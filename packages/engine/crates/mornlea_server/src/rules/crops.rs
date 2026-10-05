@@ -1162,7 +1162,8 @@ mod source_snow_tests {
         // the stride, the legacy collector never samples, the layer stays.
         let mut a = source_snow_authority();
         let mut c = passive_exclusion_context(&mut a, vec![passive_record(8, [0.0, 1.0, 0.0])]);
-        c.record_passive_snow_owned(PassiveId::try_new(8).unwrap());
+        c.record_passive_snow_owned(PassiveId::try_new(8).unwrap())
+            .unwrap();
         c.stage(RuleEffect::Actor(passive_record(8, [1.0, 1.0, 0.0])))
             .unwrap();
         let mut schedule = FootprintSchedule::new();

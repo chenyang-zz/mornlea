@@ -56,6 +56,9 @@ use crate::rules::fluids::FluidSchedule;
 use crate::rules::passives::PassiveSnowBook;
 
 const COMPANION_INBOX: usize = 4;
+/// Fixed retained-producer ownership slots: one per resident under the global
+/// passive cap, mirroring the retained book's tracker bound.
+const PASSIVE_SNOW_OWNED_SLOTS: usize = 32;
 
 /// Chat intake bound: at most this many staged entries wait between ticks.
 /// The 257th arrival is refused with a transport capacity error before any
@@ -3542,11 +3545,11 @@ pub struct TickContext<'a> {
     /// removal as vanished and a death settlement as died.
     quiet_passive_removals: BTreeSet<PassiveId>,
     /// Tick-local retained-producer ownership: passive identities the retained
-    /// Snow book registered this tick, from their first movement tick. The
-    /// legacy single-tick collector excludes exactly these from its tracker
-    /// lookup so no stride is double-counted; the book-less public batch path
-    /// leaves the lane empty.
-    passive_snow_owned: BTreeSet<PassiveId>,
+    /// Snow book registered this tick, from their first movement tick, one
+    /// fixed slot per resident. The legacy single-tick collector excludes
+    /// exactly these from its tracker lookup so no stride is double-counted;
+    /// the book-less public batch path leaves the lane empty.
+    passive_snow_owned: [Option<PassiveId>; PASSIVE_SNOW_OWNED_SLOTS],
     charges: Vec<(ActorKey, ActionKind)>,
     suppressed_mining: BTreeSet<ActorKey>,
     /// Pre-motion actor poses captured at construction. Only source recovery
@@ -4050,7 +4053,7 @@ impl<'a> TickContext<'a> {
             deferred: DeferredCommands::default(),
             resync_lane: Vec::new(),
             quiet_passive_removals: BTreeSet::new(),
-            passive_snow_owned: BTreeSet::new(),
+            passive_snow_owned: [None; PASSIVE_SNOW_OWNED_SLOTS],
             charges: Vec::new(),
             suppressed_mining: BTreeSet::new(),
             pre_step: BTreeMap::new(),
@@ -4098,15 +4101,35 @@ impl<'a> TickContext<'a> {
     }
 
     /// Records one resident passive as owned by the retained Snow book for
-    /// this tick's legacy collection exclusion.
-    pub(crate) fn record_passive_snow_owned(&mut self, id: PassiveId) {
-        self.passive_snow_owned.insert(id);
+    /// this tick's legacy collection exclusion. A deduplicated id is a no-op;
+    /// a full lane refuses instead of dropping the resident silently.
+    pub(crate) fn record_passive_snow_owned(&mut self, id: PassiveId) -> Result<(), ServerError> {
+        if self
+            .passive_snow_owned
+            .iter()
+            .any(|slot| slot.is_some_and(|held| held == id))
+        {
+            return Ok(());
+        }
+        let Some(free) = self
+            .passive_snow_owned
+            .iter_mut()
+            .find(|slot| slot.is_none())
+        else {
+            return Err(ServerError::Internal {
+                invariant: "passive snow ownership capacity",
+            });
+        };
+        *free = Some(id);
+        Ok(())
     }
 
     /// Whether the retained passive Snow producer owns this identity this
     /// tick; the legacy collector skips exactly these residents.
     pub(crate) fn passive_snow_owned(&self, id: PassiveId) -> bool {
-        self.passive_snow_owned.contains(&id)
+        self.passive_snow_owned
+            .iter()
+            .any(|slot| slot.is_some_and(|held| held == id))
     }
 
     /// Captures the publication projection's tick inputs before the carried
