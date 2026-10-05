@@ -3358,7 +3358,7 @@ fn passive_snow_actual_cow_id_through(horizon: u64) -> u64 {
 /// velocity from its start pose, holding the neutral wheat like the
 /// retained-stride stage.
 fn passive_snow_actual_custom_stage(
-    cells: [(BlockPos, u16); 3],
+    cells: &[(BlockPos, u16)],
     position: [f32; 3],
     velocity: [f32; 3],
     home: BlockPos,
@@ -3379,7 +3379,7 @@ fn passive_snow_actual_custom_stage(
     };
     let current = key(Dimension::OVERWORLD, 0, 0);
     let mut chunk = height_floor(63);
-    for (pos, block) in cells {
+    for &(pos, block) in cells {
         death_chunk_cell(&mut chunk, pos, block);
     }
     let (mut fixture, mut state) = Fixture::new(
@@ -3482,40 +3482,85 @@ fn passive_snow_actual_velocity_toward(state: &mut AuthorityState, cow: ActorKey
     state.commit_residents(residents);
 }
 
-fn passive_snow_actual_cell(state: &AuthorityState, x: i32) -> u16 {
-    state
-        .settled_read()
-        .unwrap()
-        .block(Dimension::OVERWORLD, BlockPos::new(x, 64, 8))
-        .unwrap()
+/// The accepted checked off-tick transaction against the actual Ready world:
+/// the same harness recipe the recovery fixtures use — every prepared actor,
+/// runtime, inventory, environment and sleep record staged, every ready chunk
+/// preloaded — writing one cell through `SystemRule::Support` and committing
+/// the resident snapshot back. The authority's retained passive book is never
+/// touched, so the staged write lands between real ticks exactly like the
+/// accepted recovery obstruction.
+fn passive_snow_actual_off_tick_cell(state: &mut AuthorityState, pos: BlockPos, block: u16) {
+    let prepared = state.residents();
+    let mut context = mornlea_server::state::TickContext::harness(state, TickBudget::full());
+    for (key, generation, revision, chunk) in prepared.ready_snapshot() {
+        context.preload_ready_chunk(
+            mornlea_server::core::world::ReadyChunk::try_new(key, generation, revision, chunk)
+                .unwrap(),
+        );
+    }
+    for actor in prepared.actors {
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+    }
+    for runtime in prepared.runtimes.into_values() {
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+    }
+    for (key, inventory) in prepared.inventories {
+        context.preload_inventory(key, inventory);
+    }
+    if let Some(environment) = prepared.environment {
+        context.stage(RuleEffect::Environment(environment)).unwrap();
+    }
+    if let Some(sleep) = prepared.sleep_record {
+        context.stage(RuleEffect::Sleep(sleep)).unwrap();
+    }
+    let observed = context
+        .read()
+        .observation(Dimension::OVERWORLD, pos)
+        .unwrap();
+    context
+        .transaction()
+        .try_system(
+            SystemRule::Support,
+            vec![BlockWrite::try_new(observed, block).unwrap()],
+        )
+        .unwrap();
+    let residents = context.resident_snapshot();
+    drop(context);
+    state.commit_residents(residents);
 }
 
-/// Same-cell suppression and nonSnow memory on the real line: gliding in from
-/// the far end, the ninth tick's crossing lowers the snow cell (8, 64, 8) and
-/// remembers it, the eighteenth lands in the same remembered cell and must not
-/// lower it a second time, the twenty-seventh samples the nonSnow short-grass
-/// cell (writes nothing, still remembers it), and only the thirty-sixth's
-/// new-cell crossing lowers (6, 64, 8). The untouched (9, 64, 8) column stays
-/// air for the whole window. An implementation without the same-cell memory
-/// lowers (8, 64, 8) twice; the nonSnow leg pins the silent skip and that the
-/// write only lands at the next new-cell threshold — a re-cross of the
-/// remembered nonSnow cell itself stays world-invisible here, because nothing
-/// in this scene can make snow appear in a cell that never held it.
+/// Same-cell suppression across an AIR memory: the checked off-tick
+/// transaction empties (8, 64, 8) first, so the ninth forward stride samples
+/// AIR in that cell, writes nothing, and still remembers it. The same harness
+/// then stages snow back into that same cell without touching the retained
+/// book: the reversed eighteenth stride's threshold lands in the remembered
+/// cell and must not lower the restored 87 — a tracker that remembers only
+/// written Snow cells forgets the AIR sample and lowers here — and the
+/// twenty-seventh's forward threshold lands in it again, still suppressed.
+/// Only the thirty-sixth's new-cell threshold lowers (9, 64, 8).
 #[test]
 fn passive_snow_actual_same_cell_and_nonsnow_memory() {
     let (mut fixture, mut state, _session, cow) = passive_snow_actual_custom_stage(
-        [
-            (BlockPos::new(8, 64, 8), 87),
-            (BlockPos::new(7, 64, 8), 84),
-            (BlockPos::new(6, 64, 8), 87),
-        ],
-        [9.45, 64., 8.5],
-        [-4., 0., 0.],
+        &[(BlockPos::new(8, 64, 8), 87), (BlockPos::new(9, 64, 8), 87)],
+        [8.1, 64., 8.5],
+        [4., 0., 0.],
         BlockPos::new(8, 64, 8),
     );
-    let mut previous = 9.45f32;
+    passive_snow_actual_off_tick_cell(&mut state, BlockPos::new(8, 64, 8), 0);
+    assert_eq!(passive_snow_actual_cells(&state), (0, 87));
+    let mut forward = true;
+    let mut previous = 8.1f32;
     for tick in 1..=36u64 {
-        passive_snow_actual_velocity_toward(&mut state, cow, -4.);
+        // The glide reverses right after the AIR sample (tick 9) and resumes
+        // forward right after the same-cell threshold (tick 18).
+        if tick == 10 {
+            forward = false;
+        }
+        if tick == 19 {
+            forward = true;
+        }
+        let direction = if forward { 4. } else { -4. };
+        passive_snow_actual_velocity_toward(&mut state, cow, direction);
         let publication = state.advance_tick(TickBudget::full()).unwrap();
         death_no_hit(&publication);
         let actor = passive_snow_actual_cow(&state, cow);
@@ -3524,53 +3569,37 @@ fn passive_snow_actual_same_cell_and_nonsnow_memory() {
         let p = actor.motion.position().get();
         assert_eq!((p[1], p[2]), (64., 8.5), "tick {tick}");
         let step = p[0] - previous;
-        assert!(
-            step < 0. && step > -0.6,
-            "tick {tick}: native stride {step} must stay under the threshold backwards"
-        );
-        assert!((6.5..9.5).contains(&p[0]), "tick {tick}: {p:?}");
-        previous = p[0];
-        let observed = (
-            passive_snow_actual_cell(&state, 9),
-            passive_snow_actual_cell(&state, 8),
-            passive_snow_actual_cell(&state, 7),
-            passive_snow_actual_cell(&state, 6),
-        );
-        assert_eq!(observed.0, 0, "tick {tick}: untouched column");
-        if tick < 9 {
-            assert_eq!(
-                (observed.1, observed.2, observed.3),
-                (87, 84, 87),
-                "tick {tick}"
-            );
-        } else if tick < 27 {
-            // The remembered snow cell lowered exactly once at tick 9; the
-            // tick-18 landing in the same cell is suppressed, and the tick-27
-            // nonSnow sample writes nothing.
-            assert_eq!(
-                (observed.1, observed.2, observed.3),
-                (86, 84, 87),
-                "tick {tick}"
-            );
+        let along = if (10..=18).contains(&tick) {
+            -step
         } else {
-            // Only the new cell's threshold crossing lowers again.
-            assert_eq!(
-                (observed.1, observed.2, observed.3),
-                (86, 84, 86),
-                "tick {tick}"
-            );
+            step
+        };
+        assert!(
+            along > 0. && along < 0.6,
+            "tick {tick}: native stride {step} must stay under the threshold"
+        );
+        assert!((8.0..9.6).contains(&p[0]), "tick {tick}: {p:?}");
+        previous = p[0];
+        if tick < 9 {
+            assert_eq!(passive_snow_actual_cells(&state), (0, 87), "tick {tick}");
+        } else if tick == 9 {
+            // The AIR sample wrote nothing and still remembered cell 8; stage
+            // snow back into that same cell before the reversed threshold.
+            assert_eq!(passive_snow_actual_cells(&state), (0, 87), "tick {tick}");
+            passive_snow_actual_off_tick_cell(&mut state, BlockPos::new(8, 64, 8), 87);
+        } else if tick < 36 {
+            // Both the reversed tick-18 threshold and the forward tick-27
+            // threshold land in the remembered cell and must leave the
+            // restored 87 standing.
+            assert_eq!(passive_snow_actual_cells(&state), (87, 87), "tick {tick}");
+        } else {
+            // Only the new cell's threshold crossing lowers.
+            assert_eq!(passive_snow_actual_cells(&state), (87, 86), "tick {tick}");
         }
     }
     let quiet = state.advance_tick(TickBudget::full()).unwrap();
     death_no_hit(&quiet);
-    assert_eq!(
-        (
-            passive_snow_actual_cell(&state, 8),
-            passive_snow_actual_cell(&state, 7),
-            passive_snow_actual_cell(&state, 6)
-        ),
-        (86, 84, 86)
-    );
+    assert_eq!(passive_snow_actual_cells(&state), (87, 86));
     fixture.close();
 }
 

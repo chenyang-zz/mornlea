@@ -866,13 +866,31 @@ mod passive_snow_tests {
             rejected: 0,
         };
         admit_residents(&mut c, &mut report, Some(&mut book)).unwrap();
-        let (travel, _, valid) = book.snow_test_state(nine).unwrap();
-        assert_eq!(travel, 0.0);
-        assert!(!valid);
-        // The runtime staged and the queued coordinate survived the reset.
+        // The admission-side reset only forgets the stale tracker slot: the
+        // tracker is absent immediately after admission, the runtime staged,
+        // and the queued coordinate survived with its prefix intact.
+        assert_eq!(book.snow_test_state(nine), None);
         assert_eq!(report.applied, 1);
         assert!(c.read().runtime(ActorKey::Passive(nine)).is_some());
         assert_eq!(book.pending_len(), 1);
+        assert_eq!(
+            book.pending_slice(0, book.pending_len())[0].pos,
+            BlockPos::new(1, 1, 0)
+        );
+        // The actual flow reconciles the current resident keys after
+        // admission: the fresh slot starts at zero travel with no remembered
+        // cell, and the pending batch is untouched.
+        let keys = resident_keys(&c);
+        book.reconcile(&keys);
+        let (travel, cell, valid) = book.snow_test_state(nine).unwrap();
+        assert_eq!(travel, 0.0);
+        assert_eq!(cell, BlockPos::ORIGIN);
+        assert!(!valid);
+        assert_eq!(book.pending_len(), 1);
+        assert_eq!(
+            book.pending_slice(0, book.pending_len())[0].pos,
+            BlockPos::new(1, 1, 0)
+        );
     }
 }
 
