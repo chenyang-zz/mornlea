@@ -4490,7 +4490,7 @@ fn projection_inventory_dirty_select_carry_budget_publishes_once() {
     });
     assert_eq!(
         projection_inventory_states(&events_for(&carried_tick, owner)),
-        vec![Event::InventoryState(selected_two.clone())],
+        vec![Event::InventoryState(selected_two)],
         "the one executed select publishes exactly one complete owner state"
     );
 
