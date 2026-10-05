@@ -330,3 +330,10 @@ Packet114 keeps the mailbox whole-request admission contract, while the schedule
 
 
 Reservation adaptation also applies to fresh final flush; its admitted prefix counts as progress before stall detection. Mailbox codec/admission validation remains whole-request, so any non-Capacity submit refusal returns the complete selection. Additional decoded identities/conflicts remain actual DiskStore preflight for each admitted request. A selection divided across multiple requests is not a transaction across those requests, consistent with Go's separately dispatched region jobs. Refusal/partial durability is explicit. Prefix halving performs bounded O(n log n) owner moves, with no extra payload clones or I/O.
+
+
+### Common authority actor persistence owner
+
+Packet115 consumes accepted ledger4247ae4a5 and scheduler3c526dd26. The opaque authority owns an opt-in ledger through a private child implementation unit, exposing checked trusted-producer retention/observation and borrowed current facts. Nonempty actor/chunk selections alternate, while empty urgent passes do not consume preference. Per-family bounds remain19actors/eightchunks; enabled mixed completion preflights at most28unique targets before any durable mutation. Exact refused owners and admitted failure retries remain distinct; statistics/frozen keys include actors. Closing flush may select existing obligations but refuses new producer observations. Automatic gameplay capture/cache/bootstrap remain separate consumers.
+
+Authority actor routing accepted: opt-in private ledger joins live SaveAuthority, with nineteen actor/eight chunk/one metadata bounded mixed preflight, both actor and chunk exact held-identity rejection, immutable failed-flight retry, actor/chunk group alternation and Closing flush. Actual generated chunk plus explicit actor producer fixtures persist and reopen through AutosaveScheduler/background DiskStore. This accepts common routing and real storage consumer only; automatic gameplay capture, cache/prepare/retirement, aggregate bootstrap/config and executable remain future source owners.

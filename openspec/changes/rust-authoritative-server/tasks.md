@@ -217,6 +217,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3sp Preserve ordered progress for fresh and retry save cohorts exceeding available mailbox reservations ([packet](plans/114-save-admission-progress.md)). Direct Codex:3initial assertion REDs plus actual fresh-flush review RED, final5GREEN including two real8chunk save/reopen paths; corrected Rust75suites3491results PASS, native SCOPED_PASS. Actor-state/cache/bootstrap/runtime and broad3.8/4.1/4.2 remain open.
 
+- [x] 3.7l3ao Integrate bounded actor ledger selection, mixed completion preflight, statistics and flush ownership into the live authority ([packet](plans/115-authority-actor-save-routing.md)). Direct Codex: missing-API declaration RED, three genuine mixed-chunk-forgery review REDs, final13GREEN including real background autosave/Closing flush and five-family reopen; Rust75suites3504results PASS, native corrected SCOPED_PASS. Automatic producers/cache/bootstrap/runtime and broad3.8/4.1/4.2 remain open.
+
 ## 4. Closeout
 
 

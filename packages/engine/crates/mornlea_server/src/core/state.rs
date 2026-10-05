@@ -36,6 +36,7 @@ use super::acquisition::{
     AcquiredChunkEvent, AcquisitionState, ChunkGenerationReservation, ChunkLoadReservation,
     LiveChunkFacts, LiveChunkPhase, RejectedAcquiredChunk,
 };
+use super::actor_save::ActorSaveLedger;
 use super::block_observations::ChunkBlockObservations;
 use super::companion_chat::{
     Addressed, CompanionChatBook, CompanionChatIssuer, CompanionChatQueueView, CompanionChatTask,
@@ -57,6 +58,9 @@ use super::world::ReadyChunk;
 use crate::rules::farmland::FarmlandSchedule;
 use crate::rules::fluids::FluidSchedule;
 use crate::rules::passives::PassiveSnowBook;
+
+#[path = "state_actor_saves.rs"]
+mod actor_saves;
 
 const COMPANION_INBOX: usize = 4;
 /// Freshly missing keys one Acquire row may stage for the source generation
@@ -220,6 +224,9 @@ pub struct AuthorityState {
     interactions: Vec<AuthorityInteraction>,
     chunk_results: Vec<ChunkResult>,
     acquisition: AcquisitionState,
+    /// Opt-in bounded latest actor values and immutable persistence flights.
+    actor_saves: Option<ActorSaveLedger>,
+    actor_saves_next: bool,
     cancelled_chunks: BTreeSet<ChunkRequestId>,
     chunk_cancel_discards: usize,
     chunk_duplicate_discards: usize,
@@ -308,6 +315,8 @@ impl AuthorityState {
             interactions: Vec::new(),
             chunk_results: Vec::new(),
             acquisition: AcquisitionState::default(),
+            actor_saves: None,
+            actor_saves_next: true,
             cancelled_chunks: BTreeSet::new(),
             chunk_cancel_discards: 0,
             chunk_duplicate_discards: 0,
@@ -2389,6 +2398,14 @@ impl AuthorityState {
         } else {
             Vec::new()
         };
+        // Closing preserves ledger selection until the final flush consumes it.
+        if let Some(ledger) = &self.actor_saves {
+            for key in ledger.save_keys() {
+                if !save_keys.contains(&key) {
+                    save_keys.push(key);
+                }
+            }
+        }
         for snapshot in self.dirty.iter().chain(self.in_flight.iter()) {
             if !save_keys.contains(&snapshot.key) {
                 save_keys.push(snapshot.key.clone());
@@ -2482,7 +2499,7 @@ impl AuthorityState {
     }
 
     // Selection consults only the ordered dirty index and captures admitted keys.
-    fn select_live(&mut self, mode: SaveMode, budget: SaveBudget) -> Vec<OwnedSnapshot> {
+    fn select_live_chunks(&mut self, mode: SaveMode, budget: SaveBudget) -> Vec<OwnedSnapshot> {
         let mut chosen = Vec::new();
         let mut bytes = 0usize;
         while self.acquisition.stats().in_flight < 8 && chosen.len() < 8 {
@@ -2516,6 +2533,12 @@ impl AuthorityState {
 
     pub fn return_dirty(&mut self, snapshot: OwnedSnapshot) {
         if self.acquisition.enabled() {
+            if self.actor_saves.is_some()
+                && !matches!(snapshot.key, SaveKey::Chunk(_) | SaveKey::Metadata)
+            {
+                self.return_actor_dirty(&snapshot);
+                return;
+            }
             self.acquisition.release(&snapshot);
             return;
         }
@@ -2604,6 +2627,9 @@ impl AuthorityState {
     }
 
     fn apply_live_completion(&mut self, completion: SaveCompletion) -> AckReport {
+        if self.actor_saves.is_some() {
+            return self.apply_actor_completion(completion);
+        }
         let mut errors: Vec<_> = completion.error.into_iter().collect();
         let observed = completion
             .snapshots
@@ -2705,7 +2731,16 @@ impl AuthorityState {
 
     pub fn save_stats(&self) -> SaveStats {
         if self.acquisition.enabled() {
-            return self.acquisition.stats();
+            let mut stats = self.acquisition.stats();
+            if let Some(ledger) = &self.actor_saves {
+                let actors = ledger.stats();
+                stats.dirty = stats.dirty.saturating_add(actors.dirty);
+                stats.in_flight = stats.in_flight.saturating_add(actors.in_flight);
+                stats.estimated_unsaved_bytes = stats
+                    .estimated_unsaved_bytes
+                    .saturating_add(actors.estimated_unsaved_bytes);
+            }
+            return stats;
         }
         let estimated_unsaved_bytes = self
             .dirty

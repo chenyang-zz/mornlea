@@ -70,8 +70,19 @@ retry. Full Agent-to-authority runtime composition remains separate.
 flights, with caller-supplied eligibility/pinning and separate durable revisions.
 Refused admission returns exact ownership; admitted failures retain the same
 target for scheduler retry. ACK keeps distinct newer current values dirty.
-This callable ledger does not perform automatic capture, player prepare/cache
-policy, companion merge/bootstrap, disk I/O or executable shutdown composition.
+`core/state_actor_saves.rs` is a private child of the opaque authority. Explicit
+pre-tick opt-in joins ledger selection, refusal, exact completion preflight,
+statistics and final-flush ownership to managed live chunks. Nonempty actor and
+chunk selections alternate as independent tickets; empty urgent passes preserve
+that preference. Mixed completion validation covers at most nineteen actor,
+eight chunk and one metadata targets before any durability update. Closing
+blocks new producer facts but keeps retained selection and ACK usable.
+
+This routing and its actual background scheduler/disk consumer do not perform
+automatic capture, player prepare/cache policy, companion merge/bootstrap or
+executable shutdown composition. The persistence authority-actor-saves topic
+separates explicit producer fixtures from actual generated chunk, save and
+reopen evidence.
 
 `src/store/AGENTS.md` owns disk worker I/O, decoded loads, durable acknowledgment
 and the narrowly confined native-close adapters. Region and standalone providers

@@ -50,3 +50,6 @@ mod source_player_restore;
 
 #[path = "persistence_failure/actor_save.rs"]
 mod actor_save;
+
+#[path = "persistence_failure/authority_actor_saves.rs"]
+mod authority_actor_saves;
