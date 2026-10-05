@@ -4600,7 +4600,6 @@ fn source_acquisition_actual_saved_player_companion_union_priority() {
     assert_eq!(inventory.selected.get(), save.inventory.hotbar.selected);
     assert_eq!(inventory.slots[..9], save.inventory.hotbar.slots);
     assert_eq!(inventory.armor, save.armor);
-    drop(view);
     fixture.close();
 }
 
@@ -4966,5 +4965,323 @@ fn source_acquisition_manual_fixture_early_offer_control() {
     assert_eq!(local(&publication).last_input_sequence(), 3);
     assert!(!local(&publication).reset());
     assert_eq!(view.inventory(actor.key).unwrap().selected.get(), 5);
+    fixture.close();
+}
+
+/// Ticket-parameterised copy of the actual `handshake` recipe above: the
+/// identical protocol decode, transport poll, login drive and ACK path,
+/// differing only in the expected store login ticket echoed by `poll_login`.
+/// The player ticket allocator belongs to the store, so a fresh identical
+/// login over the reopened owner draws the next ticket rather than reusing
+/// the hardcoded first one.
+fn source_acquisition_handshake_ticket(
+    fixture: &mut Fixture,
+    state: &mut AuthorityState,
+    expected: LoginTicket,
+) -> (
+    LoginDriver,
+    MemoryTransport,
+    ConnectionId,
+    SessionKey,
+    StepClock,
+) {
+    let mut login = LoginDriver::new();
+    let clock = StepClock(Instant::now());
+    let mut transport = MemoryTransport::new();
+    let connection = transport.connect(clock.monotonic()).unwrap();
+    let hello = ClientPacket::ClientHello(
+        ClientHello::decode_inbound(&encode_uvarint(Identities::current().protocol)).unwrap(),
+    );
+    transport.send(
+        connection,
+        MemoryTransport::encode_frame(&hello).unwrap(),
+        &mut login.bind(state, &mut fixture.store),
+        &clock,
+    );
+    let hello = decode(&receive(&mut transport, connection), State::Handshake);
+    assert_eq!(
+        hello,
+        ServerPacket::ServerHello(
+            mornlea_protocol::ServerHello::new(Identities::current().protocol).unwrap()
+        )
+    );
+    transport.acknowledge(connection, 1, &mut login.bind(state, &mut fixture.store));
+    let start = LoginStart::new(player(), "Ada", 8).unwrap();
+    let start =
+        ClientPacket::LoginStart(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap());
+    transport.send(
+        connection,
+        MemoryTransport::encode_frame(&start).unwrap(),
+        &mut login.bind(state, &mut fixture.store),
+        &clock,
+    );
+    let until = Instant::now() + BOUND;
+    let (session, success) = loop {
+        fixture.store.drive_workers();
+        transport.poll(
+            connection,
+            &mut login.bind(state, &mut fixture.store),
+            &clock,
+        );
+        match login.bind(state, &mut fixture.store).poll_login(expected) {
+            LoginPoll::Ready { session, success } => break (session, success),
+            LoginPoll::Failed { error, .. } => panic!("actual login load failed: {error:?}"),
+            LoginPoll::Pending => {
+                assert!(Instant::now() < until);
+                thread::yield_now();
+            }
+        }
+    };
+    assert_eq!(
+        state.session(session).unwrap().phase,
+        SessionPhase::Prepared
+    );
+    transport.poll(
+        connection,
+        &mut login.bind(state, &mut fixture.store),
+        &clock,
+    );
+    assert_eq!(
+        decode(&receive(&mut transport, connection), State::Login),
+        success
+    );
+    assert!(matches!(success, ServerPacket::LoginSuccess(_)));
+    transport.acknowledge(connection, 1, &mut login.bind(state, &mut fixture.store));
+    assert_eq!(login.pending(), 0);
+    let active = state.session(session).unwrap();
+    assert_eq!(active.phase, SessionPhase::Active);
+    assert_eq!(active.player_id, player());
+    (login, transport, connection, session, clock)
+}
+
+/// Closes the fixture's real background store to release its world lease and
+/// region cache, corrupts the saved payload of one entry (chunk `entry` of
+/// region r.0.0.0 in `dimension`) into a typed `FutureVersion` body exactly
+/// like the verified chunk_driver pattern, writes the file back and reopens a
+/// fresh real `DiskStore` owner over the same tree. The closed owner is
+/// replaced, never mutated while cached live. Returns the path and corrupt
+/// bytes so the caller can prove the file stays unchanged.
+fn source_acquisition_corrupt_future(
+    fixture: &mut Fixture,
+    dimension: Dimension,
+    entry: usize,
+) -> (PathBuf, Vec<u8>) {
+    use mornlea_storage::{
+        BANK_A_START_SECTOR, BANK_B_START_SECTOR, BANK_SIZE, RegionKey, SECTOR_SIZE, crc32c,
+        decode_region_bank, encode_region_bank,
+    };
+    fixture.store.close(deadline()).unwrap();
+    let path = fixture.root.0.join(format!(
+        "dimensions/{}/regions/r.0.0.region",
+        i32::from(dimension.get())
+    ));
+    let mut bytes = fs::read(&path).unwrap();
+    let rk = RegionKey {
+        dimension: i32::from(dimension.get()),
+        x: 0,
+        z: 0,
+    };
+    for sector in [BANK_A_START_SECTOR, BANK_B_START_SECTOR] {
+        let at = sector as usize * SECTOR_SIZE as usize;
+        let mut bank =
+            decode_region_bank(rk, &bytes[at..at + BANK_SIZE], bytes.len() as i64).unwrap();
+        let e = &mut bank.entries[entry];
+        if e.offset_sector == 0 {
+            continue;
+        }
+        let payload = e.offset_sector as usize * SECTOR_SIZE as usize;
+        let end = payload + e.payload_length as usize;
+        bytes[payload + 8..payload + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        e.payload_crc32c = crc32c(&bytes[payload..end]);
+        bytes[at..at + BANK_SIZE].copy_from_slice(&encode_region_bank(rk, &bank).unwrap());
+    }
+    fs::write(&path, &bytes).unwrap();
+    fixture.store = AutosaveScheduler::try_new(
+        SchedulerConfig::default(),
+        StoreMailbox::try_new_background(
+            StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap(),
+            DiskStore::open_at(
+                &fixture.root.0,
+                options(Dimension::OVERWORLD, ChunkPos::new(0, 0)),
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    (path, bytes)
+}
+
+/// A5: the saved player's real Depths target chunk is corrupted on disk into
+/// a typed `FutureVersion` load failure. The Pending saved-restore candidate
+/// produces Failed, never NeedsGeneration/Generate; three unchanged extra
+/// automatic ticks stay quiet with one target load start. Retiring the Memory
+/// session and admitting a fresh identical saved login is a real owner change
+/// that dirties the inputs and issues a new target Load generation.
+#[test]
+fn source_acquisition_actual_typed_restore_failure_quiet_and_dirty_retry() {
+    let mut save = saved_player();
+    save.current.dimension = i32::from(Dimension::DEPTHS.get());
+    save.current.position = [168.5, 65.0, 8.5];
+    let target = key(Dimension::DEPTHS, 10, 0);
+    let (mut fixture, mut state) = source_acquisition_fixture(
+        Some(save.clone()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(target, floor())],
+    );
+    let (_login, _transport, _connection, session, _clock) = handshake(&mut fixture, &mut state);
+    let (path, corrupt) = source_acquisition_corrupt_future(&mut fixture, Dimension::DEPTHS, 10);
+    let load = mornlea_server::core::source_acquisition::SourceChunkKind::Load;
+    let generate = mornlea_server::core::source_acquisition::SourceChunkKind::Generate;
+    let target_loads =
+        |report: &mornlea_server::core::source_acquisition::SourceAcquisitionTick| {
+            report
+                .started
+                .iter()
+                .filter(|start| start.key == target && start.kind == load)
+                .count()
+        };
+    let no_target_generate =
+        |report: &mornlea_server::core::source_acquisition::SourceAcquisitionTick| {
+            report
+                .started
+                .iter()
+                .all(|start| !(start.key == target && start.kind == generate))
+        };
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let mut target_load_starts = 0usize;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(no_target_generate(&report));
+        target_load_starts += target_loads(&report);
+        if state
+            .live_chunk_facts(target)
+            .is_some_and(|facts| facts.phase == LiveChunkPhase::Failed)
+        {
+            break;
+        }
+        thread::yield_now();
+    }
+    let facts = state
+        .live_chunk_facts(target)
+        .expect("typed target failure");
+    assert_eq!(facts.phase, LiveChunkPhase::Failed);
+    let failed_generation = facts.generation;
+    let typed = || {
+        Some(&ServerError::Storage {
+            family: "chunk",
+            kind: StorageFailure::FutureVersion,
+        })
+    };
+    assert_eq!(state.live_chunk_error(target), typed());
+    // Unchanged saved-restore inputs: three extra automatic quiet ticks keep
+    // the failed generation and typed error, with exactly one target load
+    // start despite unrelated view-key requests.
+    for _ in 0..3 {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(no_target_generate(&report));
+        target_load_starts += target_loads(&report);
+    }
+    let facts = state.live_chunk_facts(target).unwrap();
+    assert_eq!(facts.phase, LiveChunkPhase::Failed);
+    assert_eq!(facts.generation, failed_generation);
+    assert_eq!(state.live_chunk_error(target), typed());
+    assert_eq!(target_load_starts, 1);
+    // Real owner change: retire prunes the old source owner on the next real
+    // advance, then the fresh identical Memory login dirties a new Load.
+    state.retire(session, CloseReason::PeerGone).unwrap();
+    source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    let (_login, _transport, _connection, _session, _clock) = source_acquisition_handshake_ticket(
+        &mut fixture,
+        &mut state,
+        LoginTicket::try_from_raw(2).unwrap(),
+    );
+    let mut retried_load_starts = 0usize;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(no_target_generate(&report));
+        retried_load_starts += target_loads(&report);
+        if state
+            .live_chunk_facts(target)
+            .is_some_and(|facts| facts.generation > failed_generation)
+        {
+            break;
+        }
+        thread::yield_now();
+    }
+    assert!(
+        retried_load_starts >= 1,
+        "dirty retry starts a new target load"
+    );
+    let facts = state
+        .live_chunk_facts(target)
+        .expect("dirty retry target facts");
+    assert!(facts.generation > failed_generation);
+    assert_eq!(fs::read(&path).unwrap(), corrupt);
+    fixture.close();
+}
+
+/// A6: the missing-body registered companion's pending spawn scans an anchor
+/// whose actual on-disk load fails typed. Unlike the quiet saved-restore
+/// candidate of A5, the pending spawn dirty path retries Load on later
+/// reconciliations, so the target load generation advances across repeated
+/// starts and never turns into Generate.
+#[test]
+fn source_acquisition_actual_pending_spawn_failed_retries() {
+    let target = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = source_acquisition_fixture(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(target, floor())],
+    );
+    let (path, corrupt) = source_acquisition_corrupt_future(&mut fixture, Dimension::OVERWORLD, 0);
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let load = mornlea_server::core::source_acquisition::SourceChunkKind::Load;
+    let generate = mornlea_server::core::source_acquisition::SourceChunkKind::Generate;
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let mut target_load_starts = 0usize;
+    let mut first_generation: Option<u64> = None;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(
+            report
+                .started
+                .iter()
+                .all(|start| !(start.key == target && start.kind == generate))
+        );
+        if report
+            .started
+            .iter()
+            .any(|start| start.key == target && start.kind == load)
+        {
+            target_load_starts += 1;
+            if first_generation.is_none() {
+                first_generation = state.live_chunk_facts(target).map(|facts| facts.generation);
+            }
+        }
+        if target_load_starts >= 2
+            && state
+                .live_chunk_facts(target)
+                .is_some_and(|facts| first_generation.is_some_and(|first| facts.generation > first))
+        {
+            break;
+        }
+        thread::yield_now();
+    }
+    assert!(
+        target_load_starts >= 2,
+        "pending spawn retries the typed load"
+    );
+    let facts = state.live_chunk_facts(target).expect("target facts");
+    assert!(first_generation.is_some_and(|first| facts.generation > first));
+    assert_eq!(fs::read(&path).unwrap(), corrupt);
     fixture.close();
 }
