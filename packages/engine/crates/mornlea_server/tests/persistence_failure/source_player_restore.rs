@@ -4079,7 +4079,12 @@ fn source_companion_saved_ready_activates_ignores_pending_action() {
         let view = state.settled_read().unwrap();
         let actor = view.actor(ActorKey::Companion(id)).unwrap();
         let position = actor.motion.position().get();
-        assert_eq!(position[0].to_bits(), (8.5f32 + 4.3f32 * 0.05f32).to_bits());
+        // First step accelerates from zero velocity to 2 (ground_acceleration
+        // 40 * dt 0.05), not walk speed; displacement is 2 * 0.05.
+        assert_eq!(
+            position[0].to_bits(),
+            (8.5f32 + (40.0f32 * 0.05f32) * 0.05f32).to_bits()
+        );
         assert_eq!((position[1], position[2]), (65.0, 8.5));
         assert_eq!(actor.lifecycle, ActorLifecycle::Active);
         assert_eq!((actor.look.yaw(), actor.look.pitch()), (0.0, 0.2));
