@@ -4479,7 +4479,9 @@ fn projection_inventory_dirty_select_carry_budget_publishes_once() {
     let carried_tick = state
         .advance_tick(TickBudget::try_new(1, 512, 65536, 65536, 65536).unwrap())
         .unwrap();
-    assert_eq!(carried_tick.counters.commands, 1);
+    // The counter counts the whole admitted batch before the budget split, so
+    // all three sequenced selects appear here while only one executes.
+    assert_eq!(carried_tick.counters.commands, 3);
     assert_eq!(carried_tick.counters.carried, 2);
     let selected_two = InventoryState::new(InventoryStateParts {
         selected: HotbarSlot::new(2).unwrap(),
