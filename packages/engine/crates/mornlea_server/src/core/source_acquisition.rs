@@ -423,7 +423,7 @@ impl SourceInputs {
                 invariant: "source owner bound",
             });
         }
-        owners.sort_unstable_by(|a, b| a.actor.cmp(&b.actor));
+        owners.sort_unstable_by_key(|owner| owner.actor);
         Ok(Self { owners })
     }
 
@@ -938,11 +938,13 @@ mod goals_tests {
     #[test]
     fn late_input_change_carries_force_without_a_second_reconcile() {
         let dimension = Dimension::OVERWORLD;
-        let mut goals = SourceGoals::default();
-        goals.force = false;
-        goals.wanted.insert(key(dimension, 0, 0));
         let settled = SourceInputs::default();
-        goals.last_inputs = Some(settled.clone());
+        let mut goals = SourceGoals {
+            force: false,
+            wanted: [key(dimension, 0, 0)].into(),
+            last_inputs: Some(settled.clone()),
+            ..SourceGoals::default()
+        };
         let changed = SourceInputs {
             owners: vec![player_owner(true, true, dimension, (0, 0), 1, &[])],
         };
@@ -973,11 +975,14 @@ mod goals_tests {
                 &[(cross, 100)],
             )],
         };
-        let mut goals = SourceGoals::default();
-        goals.last_inputs = Some(final_inputs.clone());
-        goals.wanted = [cross, corner, outside].into();
-        goals.queued = [cross, corner, outside].into();
-        goals.pending = VecDeque::from(vec![cross, corner, outside]);
+        let mut goals = SourceGoals {
+            force: false,
+            last_inputs: Some(final_inputs.clone()),
+            wanted: [cross, corner, outside].into(),
+            queued: [cross, corner, outside].into(),
+            pending: VecDeque::from(vec![cross, corner, outside]),
+            ..SourceGoals::default()
+        };
         goals.prune_unstarted(&final_inputs);
         // Cross-dimension pending key and the inclusive square corner stay;
         // a key no owner wants through membership is pruned.
@@ -1025,10 +1030,12 @@ mod goals_tests {
             state.live_chunk_facts(failed_key).map(|facts| facts.phase),
             Some(LiveChunkPhase::Failed)
         );
-        let mut goals = SourceGoals::default();
-        goals.force = false;
-        goals.last_inputs = Some(SourceInputs::default());
-        goals.wanted = [failed_key, missing_key].into();
+        let mut goals = SourceGoals {
+            force: false,
+            last_inputs: Some(SourceInputs::default()),
+            wanted: [failed_key, missing_key].into(),
+            ..SourceGoals::default()
+        };
         goals.fresh_missing.push(missing_key);
         goals.enqueue(failed_key);
         let players = SourcePlayerBook::default();

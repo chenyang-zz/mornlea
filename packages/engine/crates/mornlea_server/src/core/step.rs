@@ -337,7 +337,7 @@ fn reduce_tick_inner(
     // The final small-input capture stays inside the same trusted-error
     // fence: a late refusal or panic keeps the counter unbumped through the
     // ordinary fail_tick path, never after committed publication.
-    if let Some(goals) = goals.as_deref_mut() {
+    if let Some(goals) = goals {
         goals.finish_tick(state)?;
     }
     Ok(publication)
