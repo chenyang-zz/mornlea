@@ -50,6 +50,7 @@ use super::login_seed::{SeededPlayer, seed_player};
 use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
 use super::publication_project::TickOutcome;
 use super::session_view::SessionView;
+use super::source_acquisition::{SourceInputs, effective_radius};
 use super::source_companion_restore::SourceCompanionBook;
 use super::source_player_restore::SourcePlayerBook;
 use super::world::ReadyChunk;
@@ -733,6 +734,30 @@ impl AuthorityState {
 
     pub(crate) fn passive_snow_mut(&mut self) -> &mut PassiveSnowBook {
         &mut self.passive_snow
+    }
+
+    /// Source-only effective session radius: a declared zero selects the
+    /// full server view bound; any other declaration keeps the publication
+    /// clamp. Non-Active sessions keep no automatic goals.
+    fn source_session_radius(&self, session: SessionKey) -> Option<u8> {
+        let record = self.sessions.get(&session)?;
+        if record.phase != SessionPhase::Active {
+            return None;
+        }
+        let bound = u8::try_from(self.limits.view_radius()).ok()?;
+        Some(effective_radius(record.view_distance, bound))
+    }
+
+    /// Collects the bounded automatic source owner facts over the settled
+    /// read view and the real retained source books.
+    pub(crate) fn source_inputs_settled(&self) -> Result<SourceInputs, ServerError> {
+        let view = self.settled_read()?;
+        SourceInputs::collect(
+            &view,
+            &self.source_players,
+            &self.source_companions,
+            |session| self.source_session_radius(session),
+        )
     }
 
     pub(crate) fn prune_source_players(&mut self) {

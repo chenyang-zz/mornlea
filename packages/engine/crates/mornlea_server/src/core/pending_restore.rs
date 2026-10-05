@@ -4,8 +4,9 @@ use super::actor_placement::{
     PlacementWorld, RestoreCandidate, SpawnColumn, SpawnSite, SpawnTier, candidate_chunks,
     scan_spawn_column, spawn_chunk_keys, spawn_columns, validate_restore,
 };
-use super::contracts::{ChunkKey, ServerError};
-use mornlea_domain::{ChunkPos, Dimension};
+use super::contracts::ServerError;
+use super::publication_project::position_chunk;
+use mornlea_domain::{ChunkKey, ChunkPos, Dimension};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,53 +111,55 @@ impl PendingRestore {
     }
 
     /// The exact captured subscription anchor column.
-    pub fn subscription_anchor(&self) -> ChunkPos {
+    pub(crate) fn subscription_anchor(&self) -> ChunkPos {
         self.anchor
     }
 
     /// The column one unconsumed spawn site still waits on: only while the
     /// scan is live, every restore candidate has been consumed and the next
     /// column index stays within the captured spawn columns.
-    pub fn spawn_wait_key(&self) -> Option<ChunkKey> {
+    pub(crate) fn spawn_wait_key(&self) -> Option<ChunkKey> {
         if self.completed
             || self.exhausted_revisions.is_some()
             || self.next_restore < self.candidates.len()
         {
             return None;
         }
-        self.column_chunk_positions
-            .get(self.next_column)
-            .map(|pos| ChunkKey {
-                dimension: self.spawn_dimension,
-                pos: *pos,
-            })
+        self.columns.get(self.next_column).map(|column| ChunkKey {
+            dimension: self.spawn_dimension,
+            pos: ChunkPos::new(column.x >> 4, column.z >> 4),
+        })
     }
 
-    /// The minimum squared chunk distance over the retained wanted keys:
-    /// restore keys measure to same-dimension candidate centers, spawn keys
-    /// to the captured anchor in the spawn dimension. A scan holding nothing
-    /// reports the unbounded distance.
-    pub fn pending_distance_squared(&self) -> i64 {
+    /// The squared chunk distance for one queried retained key: restore keys
+    /// measure to the centers of same-dimension candidates whose footprint
+    /// retains the key, spawn keys to the captured anchor in the spawn
+    /// dimension. The minimum of both, or none when the key is not retained
+    /// or the scan already completed.
+    pub(crate) fn pending_distance_squared(&self, key: ChunkKey) -> Option<i64> {
         if self.completed {
-            return i64::MAX;
+            return None;
         }
-        let mut best = i64::MAX;
-        for key in &self.restore_wanted {
+        let mut best: Option<i64> = None;
+        if self.restore_wanted.contains(&key) {
             for candidate in &self.candidates {
                 if candidate.dimension != key.dimension {
                     continue;
                 }
-                let center_x = (candidate.position[0].floor() as i32) >> 4;
-                let center_z = (candidate.position[2].floor() as i32) >> 4;
-                let dx = i64::from(key.pos.x() - center_x);
-                let dz = i64::from(key.pos.z() - center_z);
-                best = best.min(dx * dx + dz * dz);
+                if !candidate_chunks(*candidate).ok()?.contains(&key) {
+                    continue;
+                }
+                let center = position_chunk(candidate.dimension, candidate.position);
+                let dx = i64::from(key.pos.x()) - i64::from(center.pos.x());
+                let dz = i64::from(key.pos.z()) - i64::from(center.pos.z());
+                best = Some(best.map_or(dx * dx + dz * dz, |kept| kept.min(dx * dx + dz * dz)));
             }
         }
-        for pos in &self.spawn_wanted {
-            let dx = i64::from(pos.x() - self.anchor.x());
-            let dz = i64::from(pos.z() - self.anchor.z());
-            best = best.min(dx * dx + dz * dz);
+        if key.dimension == self.spawn_dimension && self.spawn_wanted.contains(&key.pos) {
+            let dx = i64::from(key.pos.x()) - i64::from(self.anchor.x());
+            let dz = i64::from(key.pos.z()) - i64::from(self.anchor.z());
+            let distance = dx * dx + dz * dz;
+            best = Some(best.map_or(distance, |kept| kept.min(distance)));
         }
         best
     }

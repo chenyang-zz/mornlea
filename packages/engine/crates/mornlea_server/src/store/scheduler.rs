@@ -221,7 +221,7 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
     }
 
     /// Chunk-load admission slots for the automatic source acquisition caller.
-    pub fn source_chunk_slots(&self) -> Result<usize, ServerError> {
+    pub(crate) fn source_chunk_slots(&self) -> Result<usize, ServerError> {
         self.store.source_chunk_slots()
     }
 
