@@ -11,3 +11,5 @@
 完成后沿原依赖进入acquisition；存储非空bootstrap/save/cache、其他dirty发布/config/gameplay/fullGo/audit/整体4.1/4.2仍开放。不推送、合并或部署。Architecture skill: no change.
 
 2026-10-05 验收oracle修正（任务仍开放）：新激活伙伴速度为0，首个Move[1,0]yaw0按ground acceleration40×dt0.05加速到2，再移动2×dt0.05；X应8.600000381469727/0x4109999a，而不是Snow已预设vx4.3夹具的8.715。Go step.go106/motion.go9、Native step.rs235–248/321/359及collision.rs278–281和独立f32核对一致。只改计划与实际Claude测试期待，生产motion不改；首次激活、动作隔离和完整inventory/look断言保留。
+
+2026-10-05 局部验收runtime 60f89185273e2df58e259818e843f956653d259a，仅3.7l3cr：真实本地Claude四任务六调用全部reaped，其中测试首次/注册首次permission_denied路径误读保留，实际范围内Edits已独立核验，其他调用completed。声明RED不算行为；准确fa0ecf的1控制PASS/5生产者RED转6真实Ready/Native GREEN。E0609与根错误4.3首步oracle修正史保留，首步40×0.05=2/X0x4109999a，不改生产motion。qualifiedGREEN为701628脏测试产物，hash等于60f8；准确60f8全Rust75套件3422零失败忽略/replay513/persistence293，fmt/Clippy、release、非空Go42顶层/含子用例69、OpenSpec128，GPT6.1-sol medium SCOPED_PASS。原3861行字节不变，既有扫描/Native/companion规则及通用Pending夹具未改。bootstrap/save/cache/自动acquisition/assembledruntime/其余源结果及整体4.1/4.2仍开放；文档SHA与runtime分开核对，未推送合并部署。Architecture skill: no change.
