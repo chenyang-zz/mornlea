@@ -30,6 +30,7 @@ pub mod retirement_worker;
 pub mod session;
 mod session_view;
 pub mod shutdown;
+pub mod source_acquisition;
 mod source_companion_restore;
 mod source_player_death;
 mod source_player_reset;

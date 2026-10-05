@@ -4421,3 +4421,550 @@ fn source_companion_exhausted_retries_ready_revision() {
     assert!(state.source_companion_pending_keys().is_empty());
     fixture.close();
 }
+
+// ---------------------------------------------------------------------------
+// Plan 109 appended consumer-only source acquisition cases (A1-A4 and the
+// A7 manual control). Everything above this marker is byte-for-byte the
+// original file; the appended helpers below only add new bytes.
+// ---------------------------------------------------------------------------
+
+/// Total bound for one bounded automatic drive loop (plan 109 line 59).
+const SOURCE_ACQUISITION_BOUND: Duration = Duration::from_secs(10);
+
+/// Same actual disk, background store, generation pool and Memory handshake
+/// recipe as `Fixture::new`, but the returned authority is a fresh empty
+/// `AuthorityState` with view radius one, source restoration radius one and
+/// live chunks enabled. The untouched initial state from `Fixture::new` is
+/// discarded without ever ticking or registering it.
+fn source_acquisition_fixture(
+    save: Option<PlayerSave>,
+    dimension: Dimension,
+    anchor: ChunkPos,
+    chunks: Vec<(ChunkKey, Chunk)>,
+) -> (Fixture, AuthorityState) {
+    let (fixture, _untouched) = Fixture::new(save, dimension, anchor, chunks);
+    let mut state = AuthorityState::try_new_with_metadata(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(1),
+        Metadata {
+            format_version: mornlea_storage::METADATA_CURRENT_VERSION,
+            seed: 42,
+            spawn_dimension: i32::from(dimension.get()),
+            spawn_anchor: MetadataChunkPos {
+                x: anchor.x(),
+                z: anchor.z(),
+            },
+            world_time_ticks: 0,
+            day_phase_offset: 0,
+            weather_kind: 0,
+            weather_ticks_remaining: 0,
+            depths_spawn_anchor: MetadataChunkPos { x: 0, z: 0 },
+            depths_seed_salt: 0,
+            difficulty: 0,
+        },
+    )
+    .unwrap();
+    state.enable_source_player_restoration(1).unwrap();
+    state.enable_live_chunks().unwrap();
+    (fixture, state)
+}
+
+/// One bounded automatic drive step: only `SourceAcquisition::advance` touches
+/// the authority, store, pool or driver, and every successful call pins the
+/// pre-bump publication tick against the counter before and after.
+fn source_acquisition_step(
+    acquisition: &mut mornlea_server::core::source_acquisition::SourceAcquisition,
+    state: &mut AuthorityState,
+    fixture: &mut Fixture,
+) -> mornlea_server::core::source_acquisition::SourceAcquisitionTick {
+    let before = state.next_tick();
+    let report = acquisition
+        .advance(
+            state,
+            &mut fixture.store,
+            &mut fixture.generation,
+            TickBudget::full(),
+            deadline(),
+        )
+        .expect("actual automatic source acquisition tick");
+    assert_eq!(report.publication.tick, before);
+    assert_eq!(state.next_tick(), before.saturating_add(1));
+    assert!(acquisition.pending_loads() <= 8);
+    assert!(acquisition.pending_generations() <= 8);
+    report
+}
+
+/// Immutable resident chunk body for whole-record equality.
+fn source_materialized(state: &AuthorityState, key: ChunkKey) -> Chunk {
+    let SaveValue::ChunkView(view) = state
+        .capture_chunk_snapshot(key, SaveUrgency::Unload)
+        .unwrap()
+        .value
+    else {
+        panic!("immutable resident view")
+    };
+    view.materialize().chunk
+}
+
+/// A1: the saved player's captured anchor interest and the registered source
+/// companion's own interest union into the exact first eight load starts, and
+/// the bounded automatic drive later activates both owners with their saved
+/// bodies. No manual wants, driver starts or offered completions exist here.
+#[test]
+fn source_acquisition_actual_saved_player_companion_union_priority() {
+    let mut save = saved_player();
+    save.current.dimension = i32::from(Dimension::DEPTHS.get());
+    save.current.position = [168.5, 65.0, 8.5];
+    let depths_current = key(Dimension::DEPTHS, 10, 0);
+    let companion_target = key(Dimension::OVERWORLD, 20, 0);
+    let (mut fixture, mut state) = source_acquisition_fixture(
+        Some(save.clone()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![
+            (depths_current, floor()),
+            (companion_target, source_companion_ground()),
+        ],
+    );
+    let (_login, _transport, _connection, session, _clock) = handshake(&mut fixture, &mut state);
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(
+            id,
+            ChunkPos::new(0, 0),
+            Some(source_companion_body(id, [328.5, 65.0, 8.5])),
+        )
+        .unwrap();
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let first = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    let load = mornlea_server::core::source_acquisition::SourceChunkKind::Load;
+    let start = |x: i32, z: i32| mornlea_server::core::source_acquisition::SourceChunkStart {
+        key: key(Dimension::OVERWORLD, x, z),
+        kind: load,
+    };
+    assert_eq!(
+        first.started,
+        vec![
+            start(0, 0),
+            start(20, 0),
+            start(-1, 0),
+            start(0, -1),
+            start(0, 1),
+            start(1, 0),
+            start(-1, -1),
+            start(-1, 1),
+        ]
+    );
+    // The bounded automatic drive runs the whole acquisition; the sequence
+    // always includes at least two successful calls through the step helper.
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        let ready = [depths_current, companion_target].into_iter().all(|key| {
+            state
+                .live_chunk_facts(key)
+                .is_some_and(|facts| facts.phase == LiveChunkPhase::Ready)
+        });
+        if ready {
+            break;
+        }
+        thread::yield_now();
+    }
+    for target in [depths_current, companion_target] {
+        let facts = state.live_chunk_facts(target).unwrap();
+        assert_eq!(facts.phase, LiveChunkPhase::Ready);
+        assert_eq!((facts.revision, facts.persisted_revision), (9, 9));
+        assert!(!facts.needs_rewrite);
+        assert!(!facts.recovered);
+    }
+    assert_eq!(source_materialized(&state, depths_current), floor());
+    assert_eq!(
+        source_materialized(&state, companion_target),
+        source_companion_ground()
+    );
+    source_companion_active(&state, id, [328.5, 65.0, 8.5], true);
+    let actor_key = ActorKey::Player(session);
+    let view = state.settled_read().unwrap();
+    let actor = view.actor(actor_key).unwrap();
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::DEPTHS);
+    assert_eq!(actor.motion.position().get(), [168.5, 65.0, 8.5]);
+    assert_eq!(
+        (actor.look.yaw(), actor.look.pitch()),
+        (save.yaw, save.pitch)
+    );
+    assert_eq!(actor.survival.health(), save.health);
+    assert_eq!(actor.survival.hunger(), save.hunger);
+    let inventory = view.inventory(actor_key).unwrap();
+    assert_eq!(inventory.selected.get(), save.inventory.hotbar.selected);
+    assert_eq!(inventory.slots[..9], save.inventory.hotbar.slots);
+    assert_eq!(inventory.armor, save.armor);
+    drop(view);
+    fixture.close();
+}
+
+/// A2: a registered missing companion on an empty disk automatically loads,
+/// observes the real miss, generates natively and reaches Ready revision one
+/// with the exact off-tick `ChunkGenerator` body. No manual warm request or
+/// fake native result exists in this primary path.
+#[test]
+fn source_acquisition_actual_missing_native() {
+    let (mut fixture, mut state) =
+        source_acquisition_fixture(None, Dimension::OVERWORLD, ChunkPos::new(0, 0), Vec::new());
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let target = key(Dimension::OVERWORLD, 0, 0);
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let first = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    assert_eq!(
+        first.started,
+        vec![mornlea_server::core::source_acquisition::SourceChunkStart {
+            key: target,
+            kind: mornlea_server::core::source_acquisition::SourceChunkKind::Load,
+        }]
+    );
+    // Pending before Ready: the registered companion still waits in the air.
+    source_companion_waiting(&state, id, [0.5, 321.0, 0.5]);
+    let generate = mornlea_server::core::source_acquisition::SourceChunkKind::Generate;
+    let mut observed_generate = false;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        if report
+            .started
+            .iter()
+            .any(|start| start.key == target && start.kind == generate)
+        {
+            // A Generate can already start after this tick's publication, so
+            // NeedsGeneration need not survive the call; the recorded start
+            // plus the retained pending scan is the durable witness.
+            observed_generate = true;
+            assert!(!state.source_companion_pending_keys().is_empty());
+        }
+        let ready = state
+            .live_chunk_facts(target)
+            .is_some_and(|facts| facts.phase == LiveChunkPhase::Ready);
+        let active = state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Companion(id))
+            .is_some_and(|actor| actor.lifecycle == ActorLifecycle::Active);
+        if ready && active {
+            break;
+        }
+        thread::yield_now();
+    }
+    assert!(observed_generate, "actual automatic generation start");
+    let facts = state.live_chunk_facts(target).unwrap();
+    assert_eq!(
+        (
+            facts.phase,
+            facts.revision,
+            facts.persisted_revision,
+            facts.needs_rewrite,
+            facts.recovered
+        ),
+        (LiveChunkPhase::Ready, 1, 0, false, false)
+    );
+    let expected = mornlea_server::core::generation::ChunkGenerator::try_new(42, false)
+        .unwrap()
+        .generate(target)
+        .unwrap();
+    assert_eq!(source_materialized(&state, target), expected);
+    fixture.close();
+}
+
+/// A3: eight externally warm store loads occupy the load lanes; the automatic
+/// candidate is retained without any start or Failed facts, and after the
+/// warm ownership retires off-tick the same automatic caller loads the saved
+/// target and activates the companion. Driver/authority/provider stay <= 8.
+#[test]
+fn source_acquisition_actual_load_capacity_retains_without_failed() {
+    let target = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = source_acquisition_fixture(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(target, source_companion_ground())],
+    );
+    // Actual external warm loads owned by the store alone, far outside every
+    // source interest; never entered into the authority or any want set.
+    let warm: Vec<_> = (100..108)
+        .map(|x| {
+            fixture
+                .store
+                .start_chunk(key(Dimension::OVERWORLD, x, 0), 1, deadline())
+                .unwrap()
+        })
+        .collect();
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let first = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    assert!(first.started.is_empty());
+    assert!(first.queued >= 1);
+    assert!(acquisition.pending_candidates() > 0);
+    assert_ne!(
+        state.live_chunk_facts(target).map(|facts| facts.phase),
+        Some(LiveChunkPhase::Failed)
+    );
+    // Retire the warm ownership off-tick, outside the authority.
+    let until = deadline();
+    for request in warm {
+        loop {
+            fixture.store.drive_workers();
+            match fixture.store.poll_chunk(request) {
+                ChunkLoadPoll::Loaded(_) => break,
+                ChunkLoadPoll::Failed(error) => panic!("actual warm load failed: {error:?}"),
+                ChunkLoadPoll::Pending => {
+                    assert!(!until.expired(Instant::now()));
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        let ready = state
+            .live_chunk_facts(target)
+            .is_some_and(|facts| facts.phase == LiveChunkPhase::Ready);
+        let active = state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Companion(id))
+            .is_some_and(|actor| actor.lifecycle == ActorLifecycle::Active);
+        if ready && active {
+            break;
+        }
+        thread::yield_now();
+    }
+    let facts = state.live_chunk_facts(target).unwrap();
+    assert_eq!(
+        (
+            facts.phase,
+            facts.revision,
+            facts.persisted_revision,
+            facts.needs_rewrite,
+            facts.recovered
+        ),
+        (LiveChunkPhase::Ready, 9, 9, false, false)
+    );
+    assert_eq!(
+        source_materialized(&state, target),
+        source_companion_ground()
+    );
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], false);
+    fixture.close();
+}
+
+/// A4: eight actual native warm jobs fill CPU admission before the automatic
+/// missing-companion load; the target reaches NeedsGeneration with its
+/// Generate retained queued, never Failed and never started. After the warm
+/// jobs drain off-tick, the same queued candidate starts real generation and
+/// reaches Ready without any Capacity-induced reload.
+#[test]
+fn source_acquisition_actual_generation_capacity_retains_missing() {
+    let target = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) =
+        source_acquisition_fixture(None, Dimension::OVERWORLD, ChunkPos::new(0, 0), Vec::new());
+    // Actual native warm jobs in the real pool, distinct faraway keys; they
+    // stay owned until polled regardless of worker completion.
+    let warm: Vec<_> = (200..208)
+        .map(|x| {
+            fixture
+                .generation
+                .start_generation(key(Dimension::OVERWORLD, x, 0), 1)
+                .unwrap()
+        })
+        .collect();
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let first = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    let load = mornlea_server::core::source_acquisition::SourceChunkKind::Load;
+    let generate = mornlea_server::core::source_acquisition::SourceChunkKind::Generate;
+    assert!(
+        first
+            .started
+            .iter()
+            .any(|start| start.key == target && start.kind == load)
+    );
+    // Phase one: reach NeedsGeneration with the Generate retained queued.
+    let mut needs_generation_queued = None;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(
+            report
+                .started
+                .iter()
+                .all(|start| !(start.key == target && start.kind == generate))
+        );
+        let facts = state.live_chunk_facts(target).unwrap();
+        assert_ne!(facts.phase, LiveChunkPhase::Failed);
+        if facts.phase == LiveChunkPhase::NeedsGeneration && report.queued >= 1 {
+            needs_generation_queued = Some(facts.generation);
+            break;
+        }
+        thread::yield_now();
+    }
+    let retained_generation = needs_generation_queued.expect("queued Generate retained");
+    // Drain the warm native ownership off-tick with bounded deadlines.
+    let until = deadline();
+    for job in warm {
+        loop {
+            match fixture.generation.poll_generation(job) {
+                GenerationPoll::Ready(_) => break,
+                GenerationPoll::Failed(error) => panic!("native warm job {error:?}"),
+                GenerationPoll::Pending => {
+                    assert!(!until.expired(Instant::now()));
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+    // Phase two: the same candidate automatically starts generation and
+    // becomes Ready with no reload and an unchanged load generation.
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(
+            report
+                .started
+                .iter()
+                .all(|start| !(start.key == target && start.kind == load))
+        );
+        let facts = state.live_chunk_facts(target).unwrap();
+        assert_eq!(facts.generation, retained_generation);
+        let ready = facts.phase == LiveChunkPhase::Ready;
+        let active = state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Companion(id))
+            .is_some_and(|actor| actor.lifecycle == ActorLifecycle::Active);
+        if ready && active {
+            break;
+        }
+        thread::yield_now();
+    }
+    let facts = state.live_chunk_facts(target).unwrap();
+    assert_eq!(
+        (
+            facts.phase,
+            facts.revision,
+            facts.persisted_revision,
+            facts.needs_rewrite,
+            facts.recovered
+        ),
+        (LiveChunkPhase::Ready, 1, 0, false, false)
+    );
+    let expected = mornlea_server::core::generation::ChunkGenerator::try_new(42, false)
+        .unwrap()
+        .generate(target)
+        .unwrap();
+    assert_eq!(source_materialized(&state, target), expected);
+    fixture.close();
+}
+
+/// A7 manual control: the original current/Safe recipe ordering with
+/// unmodified `Fixture::acquire` and `state.advance_tick` only. The early far
+/// Safe chunk stays Ready until the current/manual scan, and the later
+/// acquisition, restoration and native motion behave exactly as before. No
+/// `SourceAcquisition` is constructed here; this control must pass before any
+/// producer integration changes the automatic path.
+#[test]
+fn source_acquisition_manual_fixture_early_offer_control() {
+    let mut save = saved_player();
+    save.current.dimension = 1;
+    save.safe = Some(PlayerLocation {
+        dimension: 0,
+        position: [56.5, 64., 8.5],
+    });
+    let current = key(Dimension::DEPTHS, 0, 0);
+    let safe = key(Dimension::OVERWORLD, 3, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save.clone()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(2, -1),
+        vec![(current, air()), (safe, floor())],
+    );
+    let (mut login, mut transport, connection, session, clock) =
+        handshake(&mut fixture, &mut state);
+    pending(&state, session, Dimension::OVERWORLD, [32.5, 321., -15.5]);
+    let waiting = fixture.acquire(&mut state, safe);
+    assert!(!local(&waiting).ready());
+    assert!(!local(&waiting).reset());
+    // The early far Safe offer survives as Ready until the current scan.
+    assert_eq!(
+        state.live_chunk_facts(safe).unwrap().phase,
+        LiveChunkPhase::Ready
+    );
+    pending(&state, session, Dimension::OVERWORLD, [32.5, 321., -15.5]);
+    for packet in [
+        ClientPacket::PlayerInput(
+            PlayerInput::new(1, 1, 0, false, 1.2, 0.3, false, false, false, false).unwrap(),
+        ),
+        ClientPacket::SelectHotbar(SelectHotbar::new(2, 5).unwrap()),
+    ] {
+        assert!(!matches!(
+            transport.send(
+                connection,
+                MemoryTransport::encode_frame(&packet).unwrap(),
+                &mut login.bind(&mut state, &mut fixture.store),
+                &clock
+            ),
+            ConnectionProgress::Closed { .. }
+        ));
+    }
+    let publication = fixture.acquire(&mut state, current);
+    assert_eq!(publication.counters.commands, 2);
+    assert_eq!(state.session(session).unwrap().last_applied_sequence, 2);
+    activated(
+        &state,
+        session,
+        &publication,
+        Dimension::DEPTHS,
+        save.current.position,
+        false,
+        Some(&save),
+    );
+    for packet in [
+        ClientPacket::PlayerInput(
+            PlayerInput::new(3, 1, 0, false, 1.2, 0.3, false, false, false, false).unwrap(),
+        ),
+        ClientPacket::SelectHotbar(SelectHotbar::new(4, 5).unwrap()),
+    ] {
+        assert!(!matches!(
+            transport.send(
+                connection,
+                MemoryTransport::encode_frame(&packet).unwrap(),
+                &mut login.bind(&mut state, &mut fixture.store),
+                &clock
+            ),
+            ConnectionProgress::Closed { .. }
+        ));
+    }
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let view = state.settled_read().unwrap();
+    let actor = view.actor(ActorKey::Player(session)).unwrap();
+    let pos = actor.motion.position().get();
+    assert!(
+        pos[0] != save.current.position[0] || pos[2] != save.current.position[2],
+        "actual native horizontal motion"
+    );
+    assert_eq!(publication.counters.commands, 2);
+    assert_eq!(state.session(session).unwrap().last_applied_sequence, 4);
+    assert_eq!((actor.look.yaw(), actor.look.pitch()), (1.2, 0.3));
+    assert_eq!(local(&publication).last_input_sequence(), 3);
+    assert!(!local(&publication).reset());
+    assert_eq!(view.inventory(actor.key).unwrap().selected.get(), 5);
+    fixture.close();
+}
