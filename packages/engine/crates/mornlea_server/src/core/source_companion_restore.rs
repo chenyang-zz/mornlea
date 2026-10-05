@@ -1,1 +1,183 @@
+//! Source companion registration, checked body mapping and the bounded
+//! radius-16 pending restore book. This module owns no tick movement: the
+//! scan advance and reset publication arrive with the reducer integration.
 
+use super::actor_placement::RestoreCandidate;
+use super::actor_projection::project_companion;
+use super::contracts::{
+    ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, InventoryRecord,
+    ServerError,
+};
+use super::pending_restore::{PendingRestore, RestoreKind};
+use mornlea_domain::{
+    ChunkPos, CompanionId, CraftingSize, Dimension, FiniteVec3, HotbarSlot, LookAngles,
+    MotionState, MotionStateParts, SurvivalState, SurvivalStateParts,
+};
+use mornlea_storage::{
+    BACKPACK_SLOTS, CompanionBody, HOTBAR_SLOTS, Inventory, ItemStack, StoredCompanionTask,
+};
+use std::collections::BTreeMap;
+
+/// Exclusive retained-scan owner. Entries are bounded by checked
+/// registration and the book is never cloned; a completed entry stays until
+/// authority destruction and contributes no pending keys.
+#[derive(Default)]
+pub(crate) struct SourceCompanionBook {
+    pub(crate) entries: BTreeMap<CompanionId, PendingRestore>,
+}
+
+/// One fully checked companion owner before any authority mutation.
+pub(crate) struct PreparedCompanion {
+    pub(crate) actor: ActorRecord,
+    pub(crate) runtime: ActorRuntime,
+    pub(crate) inventory: InventoryRecord,
+    pub(crate) restore: PendingRestore,
+}
+
+/// Existing save-shape refusal field for every checked body mapping below.
+const BODY: ServerError = ServerError::InvalidInput {
+    field: "actor_save",
+};
+
+/// Neutral survival for one pending companion: companions never consume
+/// player survival, so health, oxygen and hunger start full and saturation
+/// starts empty.
+fn neutral_survival() -> Result<SurvivalState, ServerError> {
+    SurvivalState::try_new(SurvivalStateParts {
+        health: 20,
+        oxygen: 300,
+        hunger: 20,
+        saturation_zero: true,
+        armor_points: 0,
+    })
+    .map_err(|_| BODY)
+}
+
+/// Prepares every companion owner before the registration seam mutates any
+/// authority collection. A saved body keeps its captured pose, look and
+/// inventory; a missing body falls back to the canonical anchor capture.
+pub(crate) fn prepare(
+    id: CompanionId,
+    anchor: ChunkPos,
+    body: Option<CompanionBody>,
+) -> Result<PreparedCompanion, ServerError> {
+    let supplied = body.is_some();
+    let body = body.unwrap_or_else(|| CompanionBody {
+        id: mornlea_storage::PlayerId::from_bytes(id.bytes()),
+        dimension: 0,
+        position: [
+            (anchor.x() as f32) * 16.0 + 0.5,
+            321.0,
+            (anchor.z() as f32) * 16.0 + 0.5,
+        ],
+        yaw: 0.0,
+        pitch: 0.0,
+        inventory: Inventory::default(),
+    });
+    // Identity belongs to the registration seam; every later shape refusal
+    // keeps the source save field.
+    if body.id.to_bytes() != id.bytes() {
+        return Err(ServerError::InvalidInput {
+            field: "source_companion_body",
+        });
+    }
+    // Runtime dimension policy is fixed: companions live in the Overworld,
+    // and a raw non-Overworld body must refuse before projection can
+    // silently normalize it back.
+    if body.dimension != 0 {
+        return Err(BODY);
+    }
+    let position = FiniteVec3::try_new(body.position).map_err(|_| BODY)?;
+    let motion = MotionState::new(MotionStateParts {
+        position,
+        velocity: FiniteVec3::try_new([0.0; 3]).map_err(|_| BODY)?,
+        on_ground: false,
+    });
+    let look = LookAngles::try_new(body.yaw, body.pitch).map_err(|_| BODY)?;
+    let survival = neutral_survival()?;
+    let pending = ActorRecord::try_new(
+        ActorKey::Companion(id),
+        ActorLifecycle::Pending,
+        Dimension::OVERWORLD,
+        motion,
+        look,
+        survival,
+        ActorBody::Companion(body.clone()),
+    )
+    .map_err(|_| BODY)?;
+    let mut slots = [ItemStack::default(); 36];
+    slots[0..HOTBAR_SLOTS].copy_from_slice(&body.inventory.hotbar.slots);
+    slots[HOTBAR_SLOTS..HOTBAR_SLOTS + BACKPACK_SLOTS].copy_from_slice(&body.inventory.backpack);
+    let selected = HotbarSlot::new(body.inventory.hotbar.selected).map_err(|_| BODY)?;
+    // Armor and the personal grid never persist for companions.
+    let inventory = InventoryRecord::try_new(
+        slots,
+        selected,
+        [ItemStack::default(); 4],
+        [ItemStack::default(); 9],
+        CraftingSize::Personal,
+    )
+    .map_err(|_| BODY)?;
+    // The projection helper is the one body validator; its checked output
+    // becomes the canonical body so an invalid source shape is never
+    // normalized into a resident record.
+    let canonical = project_companion(&pending, Some(&inventory))?;
+    let actor = ActorRecord::try_new(
+        ActorKey::Companion(id),
+        ActorLifecycle::Pending,
+        Dimension::OVERWORLD,
+        motion,
+        look,
+        survival,
+        ActorBody::Companion(canonical),
+    )
+    .map_err(|_| BODY)?;
+    let runtime = ActorRuntime {
+        key: ActorKey::Companion(id),
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 300,
+        peak_y: body.position[1],
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Companion {
+            generation: 0,
+            attempt: 0,
+            task: StoredCompanionTask::default(),
+            mining_target: None,
+        },
+    };
+    // A saved body contributes exactly one restore candidate at its captured
+    // pose; a missing body relies on the anchor spawn scan alone.
+    let candidates = if supplied {
+        vec![RestoreCandidate {
+            dimension: Dimension::OVERWORLD,
+            position: body.position,
+            require_support: false,
+        }]
+    } else {
+        Vec::new()
+    };
+    Ok(PreparedCompanion {
+        actor,
+        runtime,
+        inventory,
+        restore: PendingRestore::try_new(
+            RestoreKind::Companion,
+            Dimension::OVERWORLD,
+            anchor,
+            16,
+            candidates,
+        )?,
+    })
+}

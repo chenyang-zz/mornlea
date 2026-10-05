@@ -27,8 +27,9 @@ use mornlea_storage::{
     COMPANION_TASK_FAIL_INVENTORY_FULL, COMPANION_TASK_FAIL_NONE,
     COMPANION_TASK_FAIL_PATH_UNREACHABLE, COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
     COMPANION_TASK_FAIL_WORLD_CHANGED, COMPANION_TASK_FAILED, COMPANION_TASK_RUNNING,
-    COMPANION_TASK_STOPPED, COMPANION_TASK_TIMED_OUT, Chunk, Metadata, PlanStep as StoredPlanStep,
-    PlayerId as StoredPlayerId, PlayerLocation, PlayerSave, StoredCompanionTask, StoredPlayer,
+    COMPANION_TASK_STOPPED, COMPANION_TASK_TIMED_OUT, Chunk, CompanionBody, Metadata,
+    PlanStep as StoredPlanStep, PlayerId as StoredPlayerId, PlayerLocation, PlayerSave,
+    StoredCompanionTask, StoredPlayer,
 };
 
 use super::acquisition::{
@@ -49,6 +50,7 @@ use super::login_seed::{SeededPlayer, seed_player};
 use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
 use super::publication_project::TickOutcome;
 use super::session_view::SessionView;
+use super::source_companion_restore::SourceCompanionBook;
 use super::source_player_restore::SourcePlayerBook;
 use super::world::ReadyChunk;
 use crate::rules::farmland::FarmlandSchedule;
@@ -239,6 +241,9 @@ pub struct AuthorityState {
     residents: ResidentTickState,
     source_player_radius: Option<u8>,
     source_players: SourcePlayerBook,
+    /// Retained source companion restore scans, owned exclusively like the
+    /// source player book and never cloned.
+    source_companions: SourceCompanionBook,
     /// Retained passive Snow book: fixed tracker slots plus the pending
     /// candidate batch. The reducer moves it across the tick exactly like the
     /// source book, so retained travel survives tick boundaries.
@@ -323,6 +328,7 @@ impl AuthorityState {
             residents: ResidentTickState::default(),
             source_player_radius: None,
             source_players: SourcePlayerBook::default(),
+            source_companions: SourceCompanionBook::default(),
             passive_snow: PassiveSnowBook::default(),
             session_views: BTreeMap::new(),
             chat_queue: VecDeque::new(),
@@ -731,6 +737,66 @@ impl AuthorityState {
                 .get(key)
                 .is_some_and(|record| record.phase == SessionPhase::Active)
         });
+    }
+
+    /// Registers one bounded source companion restore identity at the startup
+    /// seam. Every check precedes the first insertion, so a refusal leaves the
+    /// resident lanes, the book and the wanted sets unchanged.
+    pub fn register_source_companion(
+        &mut self,
+        id: CompanionId,
+        anchor: ChunkPos,
+        body: Option<CompanionBody>,
+    ) -> Result<(), ServerError> {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        if self.next_tick != 0 {
+            return Err(ServerError::InvalidInput {
+                field: "source_companion_registration",
+            });
+        }
+        let key = ActorKey::Companion(id);
+        if self.source_companions.entries.contains_key(&id)
+            || self.residents.actors.iter().any(|actor| actor.key == key)
+            || self.residents.inventories.contains_key(&key)
+            || self.residents.runtimes.contains_key(&key)
+        {
+            return Err(ServerError::InvalidInput {
+                field: "source_companion_duplicate",
+            });
+        }
+        if self
+            .residents
+            .actors
+            .iter()
+            .filter(|actor| matches!(actor.key, ActorKey::Companion(_)))
+            .count()
+            >= 4
+        {
+            return Err(ServerError::InvalidInput {
+                field: "source_companion_capacity",
+            });
+        }
+        // All checked construction precedes the resident handoff.
+        let prepared = super::source_companion_restore::prepare(id, anchor, body)?;
+        self.residents.actors.push(prepared.actor);
+        self.residents.inventories.insert(key, prepared.inventory);
+        self.residents.runtimes.insert(key, prepared.runtime);
+        self.source_companions.entries.insert(id, prepared.restore);
+        Ok(())
+    }
+
+    /// Sorted union of every retained pending companion scan's wanted keys.
+    pub fn source_companion_pending_keys(&self) -> Vec<ChunkKey> {
+        let mut keys = BTreeSet::new();
+        for entry in self.source_companions.entries.values() {
+            keys.extend(entry.pending_keys());
+        }
+        keys.into_iter().collect()
     }
 
     pub fn allocate(
