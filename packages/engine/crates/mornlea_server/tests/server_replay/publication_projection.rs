@@ -4510,11 +4510,12 @@ fn projection_inventory_dirty_select_carry_budget_publishes_once() {
     );
 }
 
-/// projection_inventory_dirty_equip_armor_publishes_once — an accepted equip of
-/// the held iron helmet publishes exactly one complete owner inventory state
-/// with the helmet gone from the hotbar and settled into the armor region.
+/// projection_inventory_dirty_equip_armor_equal_swap_publishes_once — an
+/// accepted equip whose held iron helmet equals the worn one changes no record
+/// byte, yet the accepted equal swap still marks the dirty lane and publishes
+/// exactly one complete owner inventory state, equal to the join snapshot.
 #[test]
-fn projection_inventory_dirty_equip_armor_publishes_once() {
+fn projection_inventory_dirty_equip_armor_equal_swap_publishes_once() {
     let mut state = authority();
     seed_world(&mut state);
     let owner = login_with(
@@ -4525,35 +4526,32 @@ fn projection_inventory_dirty_equip_armor_publishes_once() {
         0.0,
         0.0,
         |player: &mut StoredPlayer| {
-            player.inventory.hotbar.slots[0] = StorageStack {
+            let helmet = StorageStack {
                 item: PROJECTION_IRON_HELMET,
                 count: 1,
                 durability: 165,
             };
+            player.inventory.hotbar.slots[0] = helmet;
+            player.armor[0] = helmet;
         },
     );
     let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
     let join = state.advance_tick(TickBudget::full()).unwrap();
-    assert!(
-        find_event(&events_for(&join, owner), |event| matches!(
-            event,
-            Event::InventoryState(_)
-        ))
-        .is_some(),
-        "the join publication carries the complete owner inventory snapshot"
-    );
+    let baseline = find_event(&events_for(&join, owner), |event| matches!(
+        event,
+        Event::InventoryState(_)
+    ))
+    .cloned()
+    .expect("the join publication carries the complete owner inventory snapshot");
 
+    // The equip swaps two identical helmets, so the full record equals the
+    // before state and only the accepted-equal-swap dirty lane can publish.
     submit(&mut state, owner, 1, Command::EquipArmor);
     let equip = state.advance_tick(TickBudget::full()).unwrap();
-    let expected = InventoryState::new(InventoryStateParts {
-        selected: HotbarSlot::new(0).unwrap(),
-        hotbar: item_array(&[]),
-        backpack: item_array(&[]),
-    });
     assert_eq!(
         projection_inventory_states(&events_for(&equip, owner)),
-        vec![Event::InventoryState(expected)],
-        "the equip publishes exactly one complete owner inventory state"
+        vec![baseline],
+        "the equal swap publishes exactly one complete owner inventory state"
     );
     assert!(
         !events_for(&equip, other)
@@ -4561,22 +4559,6 @@ fn projection_inventory_dirty_equip_armor_publishes_once() {
             .any(|event| matches!(event, Event::InventoryState(_))),
         "the foreign session never sees the owner inventory"
     );
-    // The helmet settled into the armor region with count and durability kept.
-    stage(&mut state, |context| {
-        let record = context
-            .read()
-            .inventory(ActorKey::Player(owner))
-            .cloned()
-            .unwrap();
-        assert_eq!(
-            record.armor[0],
-            StorageStack {
-                item: PROJECTION_IRON_HELMET,
-                count: 1,
-                durability: 165,
-            }
-        );
-    });
 
     let quiet = state.advance_tick(TickBudget::full()).unwrap();
     assert!(
