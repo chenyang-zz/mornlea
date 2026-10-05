@@ -4633,3 +4633,219 @@ fn projection_inventory_dirty_noop_refused_stale_publish_nothing() {
         "the no-op, refused, and stale commands publish no inventory state"
     );
 }
+
+/// One session's private inventory and crafting identity publications for a
+/// tick, in order: the complete owner inventory snapshot lane beside the
+/// private crafting grid lane, with every other family filtered out.
+fn projection_crafting_record_states(events: &[Event]) -> Vec<Event> {
+    events
+        .iter()
+        .filter(|event| matches!(event, Event::InventoryState(_) | Event::CraftingState(_)))
+        .cloned()
+        .collect()
+}
+
+/// projection_crafting_dirty_pack_round_trip_publishes_once — two accepted
+/// crafting moves that carry the backpack stack onto the personal grid and
+/// back inside one tick leave the full record where it started, yet the dirty
+/// lane still publishes the complete owner inventory and crafting states
+/// exactly once each, never to the foreign session, and a quiet tick
+/// publishes neither.
+#[test]
+fn projection_crafting_dirty_pack_round_trip_publishes_once() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login_with(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |player| {
+        player.inventory.backpack[0] = storage(ITEM_DIRT, 5);
+    });
+    let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    let join = state.advance_tick(TickBudget::full()).unwrap();
+    let baseline = projection_crafting_record_states(&events_for(&join, owner));
+    assert_eq!(
+        baseline.len(),
+        2,
+        "the join publication carries the complete owner inventory and crafting snapshots"
+    );
+    let before = state
+        .residents()
+        .inventories
+        .get(&ActorKey::Player(owner))
+        .copied()
+        .unwrap();
+
+    // Pack to grid and back inside one tick: the unified crafting view keeps
+    // the grid at 0..8 and the backpack at 9..44, so the round trip settles
+    // back to the join record and only the dirty lane can publish.
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::MoveCrafting(mornlea_domain::CraftingMove::try_new(9, 0).unwrap()),
+    );
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::MoveCrafting(mornlea_domain::CraftingMove::try_new(0, 9).unwrap()),
+    );
+    let dirty = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state
+            .residents()
+            .inventories
+            .get(&ActorKey::Player(owner))
+            .copied()
+            .unwrap(),
+        before,
+        "the pack round trip leaves the full committed record unchanged"
+    );
+    assert_eq!(
+        projection_crafting_record_states(&events_for(&dirty, owner)),
+        baseline,
+        "the pack round trip publishes the complete owner inventory and crafting states exactly once"
+    );
+    assert!(
+        projection_crafting_record_states(&events_for(&dirty, other)).is_empty(),
+        "the foreign session never sees the owner inventory or crafting grid"
+    );
+
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_crafting_record_states(&events_for(&quiet, owner)).is_empty(),
+        "a quiet tick publishes neither state"
+    );
+}
+
+/// projection_crafting_dirty_grid_round_trip_publishes_once — after one
+/// accepted move establishes the grid stack through the real command lane, a
+/// grid-to-grid round trip inside one later tick leaves the record unchanged
+/// and republishes the same complete owner states exactly once each, never to
+/// the foreign session, and a quiet tick publishes neither.
+#[test]
+fn projection_crafting_dirty_grid_round_trip_publishes_once() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login_with(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |player| {
+        player.inventory.backpack[0] = storage(ITEM_DIRT, 5);
+    });
+    let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    // The join snapshot is discarded; the grid is established by a real
+    // accepted command rather than an injected fixture.
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::MoveCrafting(mornlea_domain::CraftingMove::try_new(9, 0).unwrap()),
+    );
+    let establish = state.advance_tick(TickBudget::full()).unwrap();
+    let baseline = projection_crafting_record_states(&events_for(&establish, owner));
+    assert_eq!(
+        baseline.len(),
+        2,
+        "the establishing move publishes the complete owner inventory and crafting snapshots"
+    );
+    let before = state
+        .residents()
+        .inventories
+        .get(&ActorKey::Player(owner))
+        .copied()
+        .unwrap();
+
+    // Grid to grid and back inside one tick: both ends stay inside the
+    // personal grid, so the round trip settles back to the established record
+    // and only the dirty lane can publish.
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::MoveCrafting(mornlea_domain::CraftingMove::try_new(0, 1).unwrap()),
+    );
+    submit(
+        &mut state,
+        owner,
+        3,
+        Command::MoveCrafting(mornlea_domain::CraftingMove::try_new(1, 0).unwrap()),
+    );
+    let dirty = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state
+            .residents()
+            .inventories
+            .get(&ActorKey::Player(owner))
+            .copied()
+            .unwrap(),
+        before,
+        "the grid round trip leaves the full committed record unchanged"
+    );
+    assert_eq!(
+        projection_crafting_record_states(&events_for(&dirty, owner)),
+        baseline,
+        "the grid round trip publishes the same complete owner states exactly once"
+    );
+    assert!(
+        projection_crafting_record_states(&events_for(&dirty, other)).is_empty(),
+        "the foreign session never sees the owner inventory or crafting grid"
+    );
+
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_crafting_record_states(&events_for(&quiet, owner)).is_empty(),
+        "a quiet tick publishes neither state"
+    );
+}
+
+/// projection_crafting_dirty_refused_commands_publish_nothing — a crafting
+/// move whose source slot is empty and a take-output with no matching product
+/// are refused without effect, so neither private lane publishes, the foreign
+/// session sees nothing, the full record stays where the join left it, and a
+/// quiet tick publishes neither.
+#[test]
+fn projection_crafting_dirty_refused_commands_publish_nothing() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    let _join = state.advance_tick(TickBudget::full()).unwrap();
+    let before = state
+        .residents()
+        .inventories
+        .get(&ActorKey::Player(owner))
+        .copied()
+        .unwrap();
+
+    // The source backpack slot is empty and the empty grid has no crafted
+    // output to take, so both commands are refused without marking any lane.
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::MoveCrafting(mornlea_domain::CraftingMove::try_new(9, 0).unwrap()),
+    );
+    submit(&mut state, owner, 2, Command::TakeCraftingOutput);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_crafting_record_states(&events_for(&tick, owner)).is_empty(),
+        "the refused commands publish neither owner state"
+    );
+    assert!(
+        projection_crafting_record_states(&events_for(&tick, other)).is_empty(),
+        "the foreign session sees neither state"
+    );
+    assert_eq!(
+        state
+            .residents()
+            .inventories
+            .get(&ActorKey::Player(owner))
+            .copied()
+            .unwrap(),
+        before,
+        "the refused commands leave the full committed record unchanged"
+    );
+
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_crafting_record_states(&events_for(&quiet, owner)).is_empty(),
+        "a quiet tick publishes neither state"
+    );
+}
