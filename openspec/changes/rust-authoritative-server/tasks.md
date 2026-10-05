@@ -202,5 +202,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 ## 4. Closeout
 
+- [ ] 3.7l3ct Preserve committed checked tuning through actual tick freeze ([plan](plans/104-committed-tick-tunables.md)); full tuple and actual Till RED/GREEN, defaults/clock guards, applicable gates and independent review required. Config loading and executable assembly remain open.
+
 - [ ] 4.1 Reconcile zero-gap inventory, real-provider/integration evidence and guides.
 - [ ] 4.2 Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA.
