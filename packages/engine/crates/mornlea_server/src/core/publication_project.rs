@@ -317,9 +317,11 @@ impl AuthorityState {
 
     /// The owner-only record families: inventory state, the viewed chest
     /// state, the container-closed notice, the crafting state and the viewed
-    /// furnace state, in exactly that per-session order. Every family diffs
-    /// against the last published snapshot stored on the session view, so an
-    /// unchanged record and a refused command publish nothing. A session
+    /// furnace state, in exactly that per-session order. The inventory state
+    /// falls back to its record diff plus the accepted command intent
+    /// described below; every other family diffs against the last published
+    /// snapshot stored on the session view alone, so an unchanged record and
+    /// a refused command publish nothing. A session
     /// holds at most one container lease, so the chest and furnace slots of
     /// the order never compete: the chest publishes before the close notice
     /// and the grid, and the furnace after the grid.

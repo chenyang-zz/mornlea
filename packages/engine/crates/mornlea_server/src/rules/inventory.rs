@@ -418,9 +418,10 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
     }
     // The owner publication lane follows the Go tick row: every accepted
     // settlement that staged a changed patch marks the owner dirty, and an
-    // accepted `EquipArmor` marks it even when the swap is equal
-    // (`entity/armor.go` accepts unconditionally). The idempotent re-select
-    // and every refusal return above this point and never mark.
+    // accepted `EquipArmor` may mark it even when the swap is equal
+    // (`entity/armor.go` accepts unconditionally). Refused settlements
+    // return above this point and never mark; the equal `SelectHotbar`
+    // falls through and does not mark.
     if after != before || matches!(envelope.command(), Command::EquipArmor) {
         ctx.record_inventory_publication_dirty(session);
     }
