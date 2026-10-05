@@ -22,14 +22,19 @@ background scheduler and the generation pool without closing or cancelling
 them, and validates sticky failure, Running phase, the tick budget and live
 acquisition before driving any provider. Session geometry comes from the
 shared checked `publication_project::wanted_square`; store admission comes
-from the scheduler's `source_chunk_slots` query. Only explicit Active and
-Pending lifecycles produce automatic goals; Dead, respawning, absent and
-completed owners contribute nothing, and an exceeded eight-player plus
-four-companion trusted bound is a typed invariant failure rather than a
-silent truncation. The goal book reconciles the whole want set once per tick
-after companion motion, takes per-record completion overrides at the Acquire
-row, and admits at most sixteen strict front FIFO provider starts while
-provider lanes stay under eight. This is not whole-exe or save acceptance.
+from the scheduler's `source_chunk_slots` query. Only Active source sessions
+and registered Active or Pending actors produce automatic goals; dead,
+respawning and absent actors contribute nothing. Completed companion scans
+retain their Active actor's radius-one interest. An exceeded registration
+bound is a typed invariant failure rather than a silent truncation. The goal
+book reconciles changed wants after companion motion, takes per-record
+completion overrides at the Acquire row, and admits a bounded strict FIFO
+prefix through the existing independent load and generation lanes. Quiet
+passes compare small inputs; final capture prunes only unstarted keys by
+owner membership and carries late changes into the next tick. Borrowers own
+provider draining and close. This caller does not qualify whole-exe or save
+composition; focused source-acquisition tests and the scoped review qualify
+its producer boundary.
 
 ## Agent boundary
 

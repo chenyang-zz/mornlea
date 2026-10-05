@@ -1943,15 +1943,24 @@ fn source_acquisition_actual_forget_queued_and_keep_started() {
         ),
         (LiveChunkPhase::Unloading, false, 9, 9)
     );
-    // The finished held owner's resident body stays installed off-tick, and
-    // the retired session publishes no active actor.
+    // The finished held owner's resident body stays installed off-tick; the
+    // retired session keeps that durable resident and publishes nothing.
     assert_eq!(materialized(&state, key(0)), expected);
+    assert_eq!(state.session(session).unwrap().phase, SessionPhase::Retired);
     assert!(
-        state
-            .settled_read()
-            .unwrap()
-            .actor(ActorKey::Player(session))
-            .is_none()
+        report.publication.events.is_empty(),
+        "no routed publication after retirement"
+    );
+    // Test-only cleanup: latch the real scheduler backpressure so the drain
+    // settles the started provider jobs without any new start, qualifying
+    // the borrowed owners' close.
+    drain_acquisition_providers(
+        &mut state,
+        &mut store.owner,
+        &mut pool.owner,
+        &mut acquisition,
+        1,
+        options().create,
     );
     store.finish().unwrap();
     pool.finish().unwrap();
@@ -2160,7 +2169,89 @@ fn source_acquisition_scheduler_backpressure_retains_fifo() {
             kind: SourceChunkKind::Load,
         }]
     );
+    // Test-only cleanup: latch the real scheduler backpressure again so the
+    // started load settles without any new start, qualifying the close.
+    drain_acquisition_providers(
+        &mut state,
+        &mut store.owner,
+        &mut pool.owner,
+        &mut acquisition,
+        3,
+        options().create,
+    );
     // Close the real owners even with a metadata save still pending.
     store.finish().unwrap();
     pool.finish().unwrap();
+}
+
+/// Test-only cleanup between the frozen business assertions and the borrowed
+/// owners' close: a stats-only `SaveAuthority` double (empty selection, no-op
+/// dirty return, zeroed acknowledgment and a `usize::MAX` unsaved estimate)
+/// latches the real scheduler backpressure on one finite tick, then bounded
+/// automatic advances poll the already-started provider jobs to settlement
+/// without admitting any new start. Retained unstarted candidates are not
+/// provider ownership, so the loop never waits on the candidate FIFO.
+fn drain_acquisition_providers<B: DiskBackend>(
+    state: &mut AuthorityState,
+    store: &mut AutosaveScheduler<B>,
+    generations: &mut GenerationPool,
+    acquisition: &mut mornlea_server::core::source_acquisition::SourceAcquisition,
+    latch_tick: u64,
+    metadata: Metadata,
+) {
+    struct DrainAuthority {
+        estimated_unsaved_bytes: usize,
+        metadata: Metadata,
+    }
+    impl SaveAuthority for DrainAuthority {
+        fn select(&mut self, _mode: SaveMode, _budget: SaveBudget) -> Vec<OwnedSnapshot> {
+            Vec::new()
+        }
+        fn return_dirty(&mut self, _snapshot: OwnedSnapshot) {}
+        fn apply_completion(&mut self, _completion: SaveCompletion) -> AckReport {
+            AckReport {
+                acked: 0,
+                released: 0,
+                retry: Vec::new(),
+                errors: Vec::new(),
+            }
+        }
+        fn save_stats(&self) -> SaveStats {
+            SaveStats {
+                dirty: 0,
+                in_flight: 0,
+                estimated_unsaved_bytes: self.estimated_unsaved_bytes,
+            }
+        }
+        fn metadata_snapshot(&self) -> OwnedSnapshot {
+            OwnedSnapshot::try_new(
+                SaveKey::Metadata,
+                1,
+                1,
+                SaveUrgency::Autosave,
+                SaveValue::Metadata(self.metadata.clone()),
+            )
+            .unwrap()
+        }
+    }
+    let mut authority = DrainAuthority {
+        estimated_unsaved_bytes: usize::MAX,
+        metadata,
+    };
+    let report = store
+        .poll_tick(latch_tick, SaveBudget::default(), &mut authority)
+        .expect("drain backpressure latch tick");
+    assert!(report.backpressured);
+    let until = Instant::now() + Duration::from_secs(10);
+    while acquisition.pending_loads() > 0 || acquisition.pending_generations() > 0 {
+        let drained = acquisition
+            .advance(state, store, generations, TickBudget::full(), deadline())
+            .expect("drain automatic acquisition tick");
+        assert!(
+            drained.started.is_empty(),
+            "backpressured drain admits no new starts"
+        );
+        assert!(Instant::now() < until, "bounded provider drain");
+        thread::yield_now();
+    }
 }

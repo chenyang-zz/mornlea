@@ -4495,6 +4495,83 @@ fn source_acquisition_step(
     report
 }
 
+/// Test-only cleanup between the frozen business assertions and
+/// `Fixture::close`: a stats-only `SaveAuthority` double (empty selection,
+/// no-op dirty return, zeroed acknowledgment and a `usize::MAX` unsaved
+/// estimate) latches the real scheduler backpressure on one finite tick,
+/// then bounded automatic advances poll the already-started provider jobs
+/// to settlement without admitting any new start. Retained unstarted
+/// candidates are not provider ownership, so the loop never waits on the
+/// pending spawn FIFO.
+fn source_acquisition_drain(
+    acquisition: &mut mornlea_server::core::source_acquisition::SourceAcquisition,
+    state: &mut AuthorityState,
+    fixture: &mut Fixture,
+) {
+    struct OwnStatsAuthority {
+        estimated_unsaved_bytes: usize,
+        metadata: Metadata,
+    }
+    impl SaveAuthority for OwnStatsAuthority {
+        fn select(&mut self, _mode: SaveMode, _budget: SaveBudget) -> Vec<OwnedSnapshot> {
+            Vec::new()
+        }
+        fn return_dirty(&mut self, _snapshot: OwnedSnapshot) {}
+        fn apply_completion(&mut self, _completion: SaveCompletion) -> AckReport {
+            AckReport {
+                acked: 0,
+                released: 0,
+                retry: Vec::new(),
+                errors: Vec::new(),
+            }
+        }
+        fn save_stats(&self) -> SaveStats {
+            SaveStats {
+                dirty: 0,
+                in_flight: 0,
+                estimated_unsaved_bytes: self.estimated_unsaved_bytes,
+            }
+        }
+        fn metadata_snapshot(&self) -> OwnedSnapshot {
+            OwnedSnapshot::try_new(
+                SaveKey::Metadata,
+                1,
+                1,
+                SaveUrgency::Autosave,
+                SaveValue::Metadata(self.metadata.clone()),
+            )
+            .unwrap()
+        }
+    }
+    let mut authority = OwnStatsAuthority {
+        estimated_unsaved_bytes: usize::MAX,
+        metadata: options(Dimension::OVERWORLD, ChunkPos::new(0, 0)).create,
+    };
+    let report = fixture
+        .store
+        .poll_tick(1, SaveBudget::default(), &mut authority)
+        .expect("drain backpressure latch tick");
+    assert!(report.backpressured);
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while acquisition.pending_loads() > 0 || acquisition.pending_generations() > 0 {
+        let drained = acquisition
+            .advance(
+                state,
+                &mut fixture.store,
+                &mut fixture.generation,
+                TickBudget::full(),
+                deadline(),
+            )
+            .expect("drain automatic acquisition tick");
+        assert!(
+            drained.started.is_empty(),
+            "backpressured drain admits no new starts"
+        );
+        assert!(Instant::now() < until, "bounded provider drain");
+        thread::yield_now();
+    }
+}
+
 /// Immutable resident chunk body for whole-record equality.
 fn source_materialized(state: &AuthorityState, key: ChunkKey) -> Chunk {
     let SaveValue::ChunkView(view) = state
@@ -4600,6 +4677,8 @@ fn source_acquisition_actual_saved_player_companion_union_priority() {
     assert_eq!(inventory.selected.get(), save.inventory.hotbar.selected);
     assert_eq!(inventory.slots[..9], save.inventory.hotbar.slots);
     assert_eq!(inventory.armor, save.armor);
+    // Test-only cleanup: settle the started provider jobs before close.
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
     fixture.close();
 }
 
@@ -4673,6 +4752,8 @@ fn source_acquisition_actual_missing_native() {
         .generate(target)
         .unwrap();
     assert_eq!(source_materialized(&state, target), expected);
+    // Test-only cleanup: settle the started provider jobs before close.
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
     fixture.close();
 }
 
@@ -4870,6 +4951,8 @@ fn source_acquisition_actual_generation_capacity_retains_missing() {
         .generate(target)
         .unwrap();
     assert_eq!(source_materialized(&state, target), expected);
+    // Test-only cleanup: settle the started provider jobs before close.
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
     fixture.close();
 }
 
