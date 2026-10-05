@@ -688,9 +688,7 @@ impl SourceGoals {
     pub(crate) fn finish_tick(&mut self, state: &AuthorityState) -> Result<(), ServerError> {
         let inputs = state.source_inputs_settled()?;
         self.carry_force(&inputs);
-        let final_union = inputs.wanted()?;
-        self.queued.retain(|key| final_union.contains(key));
-        self.pending.retain(|key| final_union.contains(key));
+        self.prune_unstarted(&inputs);
         Ok(())
     }
 
@@ -700,6 +698,21 @@ impl SourceGoals {
         if self.last_inputs.as_ref() != Some(inputs) {
             self.force = true;
         }
+    }
+
+    /// Prunes unstarted candidates by scalar owner membership only: each
+    /// queued key stays when some final owner still wants it through the
+    /// exact pending/dimension/square membership rule. A quiet pass never
+    /// rebuilds the full view square or whole-want union, and the
+    /// reconcile-captured `wanted` stays for the next new-want comparison.
+    fn prune_unstarted(&mut self, inputs: &SourceInputs) {
+        let owners = &inputs.owners;
+        self.queued.retain(|key| {
+            owners
+                .iter()
+                .any(|owner| owner_distance(owner, key).is_some())
+        });
+        self.pending.retain(|key| self.queued.contains(key));
     }
 }
 
@@ -941,6 +954,46 @@ mod goals_tests {
         goals.force = false;
         goals.carry_force(&settled);
         assert!(!goals.force);
+    }
+
+    #[test]
+    fn final_prune_uses_scalar_membership_without_full_union() {
+        let dimension = Dimension::OVERWORLD;
+        let depths = Dimension::DEPTHS;
+        let cross = key(depths, 10, 0);
+        let corner = key(dimension, 1, 1);
+        let outside = key(dimension, 3, 3);
+        let final_inputs = SourceInputs {
+            owners: vec![player_owner(
+                true,
+                false,
+                dimension,
+                (0, 0),
+                1,
+                &[(cross, 100)],
+            )],
+        };
+        let mut goals = SourceGoals::default();
+        goals.last_inputs = Some(final_inputs.clone());
+        goals.wanted = [cross, corner, outside].into();
+        goals.queued = [cross, corner, outside].into();
+        goals.pending = VecDeque::from(vec![cross, corner, outside]);
+        goals.prune_unstarted(&final_inputs);
+        // Cross-dimension pending key and the inclusive square corner stay;
+        // a key no owner wants through membership is pruned.
+        assert!(goals.queued.contains(&cross));
+        assert!(goals.queued.contains(&corner));
+        assert!(!goals.queued.contains(&outside));
+        assert_eq!(goals.pending.len(), 2);
+        // Unchanged final inputs carry no force.
+        goals.carry_force(&final_inputs);
+        assert!(!goals.force);
+        // A late owner change only flags the next tick's reconcile.
+        let changed = SourceInputs {
+            owners: vec![player_owner(true, true, dimension, (5, 0), 1, &[])],
+        };
+        goals.carry_force(&changed);
+        assert!(goals.force);
     }
 
     #[test]
