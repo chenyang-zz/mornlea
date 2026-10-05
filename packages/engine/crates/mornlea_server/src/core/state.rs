@@ -3945,9 +3945,11 @@ impl<'a> TickContext<'a> {
 
     /// Freezes the tick-start climate snapshot every provider consumes.
     /// Metadata seeds the first snapshot; later ticks retain committed climate
-    /// progression and sleep display offsets. Only the executing tick and
-    /// checked source tunables refresh at this boundary, before any provider
-    /// runs. The providers share that frozen record without durability reads.
+    /// progression and sleep display offsets. Only the executing tick
+    /// refreshes at this boundary, before any provider runs; committed
+    /// checked tunables survive the freeze and the metadata fallback alone
+    /// seeds source defaults. The providers share that frozen record without
+    /// durability reads.
     pub(crate) fn freeze_environment(&mut self, tick: u64) {
         let mut frozen = self.environment.clone().unwrap_or_else(|| {
             let metadata = &self.authority.metadata;
@@ -3968,7 +3970,6 @@ impl<'a> TickContext<'a> {
             }
         });
         frozen.next_tick = tick;
-        frozen.tunables = RuleTunables::source_defaults();
         self.environment = Some(frozen);
     }
 

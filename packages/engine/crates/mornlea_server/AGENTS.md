@@ -426,7 +426,10 @@ consume its cancellation and error contracts before joining the real backend.
   intervals, restore-zero preserving kind and regenerating duration). The
   mirrored constants and KAT literals reproduce the Go engine exactly;
   staging goes through `RuleEffect::Environment` plus the world publication
-  record.
+  record. The tick-start freeze preserves the committed checked
+  `EnvironmentState` tunables; only the metadata fallback seeds
+  `RuleTunables::source_defaults()`, and every provider consumes that same
+  frozen record — no CLI configuration loading exists.
 - `src/core/companion_ingress.rs` owns the sessionless companion candidate
   admission: whole-payload validation (provenance, digest, generation,
   source tick, finite yaw, world-Y target bound) before a global four-slot
