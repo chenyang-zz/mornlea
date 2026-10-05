@@ -50,7 +50,7 @@ use super::login_seed::{SeededPlayer, seed_player};
 use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
 use super::publication_project::TickOutcome;
 use super::session_view::SessionView;
-use super::source_acquisition::{SourceInputs, effective_radius};
+use super::source_acquisition::{SourceGoals, SourceInputs, effective_radius};
 use super::source_companion_restore::SourceCompanionBook;
 use super::source_player_restore::SourcePlayerBook;
 use super::world::ReadyChunk;
@@ -59,6 +59,9 @@ use crate::rules::fluids::FluidSchedule;
 use crate::rules::passives::PassiveSnowBook;
 
 const COMPANION_INBOX: usize = 4;
+/// Freshly missing keys one Acquire row may stage for the source generation
+/// lane; the bounded lane matches the fresh-missing goal book ceiling.
+const SOURCE_GENERATION_KEYS_MAX: usize = 8;
 /// Fixed retained-producer ownership slots: one per resident under the global
 /// passive cap, mirroring the retained book's tracker bound.
 const PASSIVE_SNOW_OWNED_SLOTS: usize = 32;
@@ -666,6 +669,41 @@ impl AuthorityState {
         // after it returns, so staged event ticks name the tick the
         // publication carries.
         let publication = super::step::reduce_tick(self, work)?;
+        self.next_tick = self.next_tick.saturating_add(1);
+        Ok(publication)
+    }
+
+    /// Validation precedence for the automatic source caller: the ordinary
+    /// sticky-failure, Running and budget checks, then live acquisition,
+    /// all before any provider is driven.
+    pub(crate) fn check_source_tick(&self, work: TickBudget) -> Result<(), ServerError> {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        TickBudget::try_new(
+            work.commands(),
+            work.fluid_updates_per_dimension(),
+            work.fluid_rescan_target_per_dimension(),
+            work.farmland_checks(),
+            work.farmland_block_reads(),
+        )?;
+        self.require_live_chunks(true)
+    }
+
+    /// The automatic source tick: the same ordinary validation, the source
+    /// reducer threading the private goal book, and the successful counter
+    /// bump only after the reducer returns. Errors leave the counter
+    /// unchanged and ordinary `advance_tick` semantics untouched.
+    pub(crate) fn advance_source_tick(
+        &mut self,
+        work: TickBudget,
+        goals: &mut SourceGoals,
+    ) -> Result<TickPublication, ServerError> {
+        self.check_source_tick(work)?;
+        let publication = super::step::reduce_tick_source(self, work, goals)?;
         self.next_tick = self.next_tick.saturating_add(1);
         Ok(publication)
     }
@@ -3678,6 +3716,14 @@ pub struct TickContext<'a> {
     /// final crafting state even when the settled grid equals the last
     /// published snapshot (the pack and grid round trips).
     crafting_publication_dirty: BTreeSet<SessionKey>,
+    /// Tick-local completion override for the automatic source caller: the
+    /// current whole-want union the Acquire row applies record by record.
+    /// Manual ticks keep it empty and their settle behavior unchanged.
+    source_completion_wants: Option<BTreeSet<ChunkKey>>,
+    /// Tick-local freshly missing keys the Acquire row produced for wanted
+    /// loads that returned no body; the source goals drain them as
+    /// generation candidates after this tick's conditional load batch.
+    source_generation_keys: Vec<ChunkKey>,
 }
 
 /// Compound-entry preimages own only affected keys. Fixed slot rehearsals stay
@@ -3937,6 +3983,50 @@ pub enum ActionKind {
 }
 
 impl<'a> TickContext<'a> {
+    /// Collects the automatic source owner facts over this context's read
+    /// view plus the reducer's moved local books and the authority's real
+    /// source session radii.
+    pub(crate) fn source_inputs(
+        &self,
+        players: &SourcePlayerBook,
+        companions: &SourceCompanionBook,
+    ) -> Result<SourceInputs, ServerError> {
+        let view = self.read();
+        SourceInputs::collect(&view, players, companions, |session| {
+            self.authority.source_session_radius(session)
+        })
+    }
+
+    /// Whether staged acquisition completions wait for the Acquire row.
+    pub(crate) fn source_staged_present(&self) -> bool {
+        self.authority.acquisition.has_staged()
+    }
+
+    /// Current live record facts for one chunk key, if any.
+    pub(crate) fn source_chunk_facts(&self, key: ChunkKey) -> Option<LiveChunkFacts> {
+        self.authority.acquisition.facts(key)
+    }
+
+    /// Replaces the authority's whole want set atomically through the
+    /// existing replacement contract.
+    pub(crate) fn replace_source_chunk_wants(
+        &mut self,
+        wants: BTreeSet<ChunkKey>,
+    ) -> Result<(), ServerError> {
+        self.authority.replace_chunk_wants(wants)
+    }
+
+    /// Sets this tick's completion override union; only the source goals
+    /// call it, and only when staged completions exist.
+    pub(crate) fn set_source_completion_wants(&mut self, wants: BTreeSet<ChunkKey>) {
+        self.source_completion_wants = Some(wants);
+    }
+
+    /// Takes this tick's freshly missing generation keys.
+    pub(crate) fn take_source_generation_keys(&mut self) -> Vec<ChunkKey> {
+        std::mem::take(&mut self.source_generation_keys)
+    }
+
     /// Consumes at most sixteen prepared owners at the existing Acquire row.
     pub(crate) fn apply_live_acquisition(&mut self) -> PhaseReport {
         let events = self.authority.acquisition.drain();
@@ -3954,6 +4044,9 @@ impl<'a> TickContext<'a> {
             rejected: 0,
             carried: 0,
         };
+        // The source override is taken once: it adjusts only the completion
+        // records' wanted bits, never the whole want set.
+        let completion_wants = self.source_completion_wants.take();
         for event in events {
             if !self.authority.acquisition.settle(&event) {
                 report.rejected += 1;
@@ -3963,10 +4056,25 @@ impl<'a> TickContext<'a> {
                 AcquiredChunkEvent::Load { key, result, .. } => (key, result),
                 AcquiredChunkEvent::Generated { key, result, .. } => (key, result.map(Some)),
             };
+            if let Some(union) = &completion_wants {
+                self.authority
+                    .acquisition
+                    .completion_wanted(key, union.contains(&key));
+            }
             match result {
                 Ok(None) => {
                     self.authority.acquisition.missing(key);
                     report.applied += 1;
+                    // A wanted missing load under the source override is the
+                    // generation lane's fresh candidate; manual missing keeps
+                    // its existing behavior with no queued generation.
+                    if completion_wants
+                        .as_ref()
+                        .is_some_and(|union| union.contains(&key))
+                        && self.source_generation_keys.len() < SOURCE_GENERATION_KEYS_MAX
+                    {
+                        self.source_generation_keys.push(key);
+                    }
                 }
                 Ok(Some(prepared)) => {
                     let (ready, drops, containers, persisted, rewrite, recovered) =
@@ -4181,6 +4289,8 @@ impl<'a> TickContext<'a> {
             pre_step: BTreeMap::new(),
             inventory_publication_dirty: BTreeSet::new(),
             crafting_publication_dirty: BTreeSet::new(),
+            source_completion_wants: None,
+            source_generation_keys: Vec::new(),
         }
     }
 

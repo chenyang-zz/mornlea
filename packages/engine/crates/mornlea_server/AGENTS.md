@@ -17,12 +17,19 @@ against this file.
 ## Automatic source acquisition
 
 The producer phase of plan 109 adds one explicit `SourceAcquisition` caller:
-it owns a single chunk driver, borrows the background scheduler and the
-generation pool without closing or cancelling them, and runs one nonblocking
-admission pass before the ordinary tick. Session geometry comes from the
+it owns a single chunk driver plus the private `SourceGoals` book, borrows the
+background scheduler and the generation pool without closing or cancelling
+them, and validates sticky failure, Running phase, the tick budget and live
+acquisition before driving any provider. Session geometry comes from the
 shared checked `publication_project::wanted_square`; store admission comes
-from the scheduler's `source_chunk_slots` query. This is not whole-exe or
-save acceptance.
+from the scheduler's `source_chunk_slots` query. Only explicit Active and
+Pending lifecycles produce automatic goals; Dead, respawning, absent and
+completed owners contribute nothing, and an exceeded eight-player plus
+four-companion trusted bound is a typed invariant failure rather than a
+silent truncation. The goal book reconciles the whole want set once per tick
+after companion motion, takes per-record completion overrides at the Acquire
+row, and admits at most sixteen strict front FIFO provider starts while
+provider lanes stay under eight. This is not whole-exe or save acceptance.
 
 ## Agent boundary
 

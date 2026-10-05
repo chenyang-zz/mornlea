@@ -180,6 +180,24 @@ impl AcquisitionState {
     pub(crate) fn facts(&self, key: ChunkKey) -> Option<LiveChunkFacts> {
         self.records.get(&key).map(|r| r.facts)
     }
+    /// Whether staged completions wait for the Acquire row's drain.
+    pub(crate) fn has_staged(&self) -> bool {
+        !self.staged.is_empty()
+    }
+    /// Adjusts one settled record's completion-wanted bit while it is still
+    /// Loading/Generating: the automatic source override changes only this
+    /// bit ahead of the existing missing/failed/installed transition; every
+    /// other record and the global want set stay untouched.
+    pub(crate) fn completion_wanted(&mut self, key: ChunkKey, wanted: bool) {
+        if let Some(r) = self.records.get_mut(&key)
+            && matches!(
+                r.facts.phase,
+                LiveChunkPhase::Loading | LiveChunkPhase::Generating
+            )
+        {
+            r.facts.wanted = wanted;
+        }
+    }
     pub(crate) fn error(&self, key: ChunkKey) -> Option<&ServerError> {
         self.records.get(&key)?.error.as_ref()
     }

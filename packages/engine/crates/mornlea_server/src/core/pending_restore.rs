@@ -4,9 +4,9 @@ use super::actor_placement::{
     PlacementWorld, RestoreCandidate, SpawnColumn, SpawnSite, SpawnTier, candidate_chunks,
     scan_spawn_column, spawn_chunk_keys, spawn_columns, validate_restore,
 };
-use super::contracts::ServerError;
+use super::contracts::{ChunkKey, ServerError};
 use super::publication_project::position_chunk;
-use mornlea_domain::{ChunkKey, ChunkPos, Dimension};
+use mornlea_domain::{ChunkPos, Dimension};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,7 +146,10 @@ impl PendingRestore {
                 if candidate.dimension != key.dimension {
                     continue;
                 }
-                if !candidate_chunks(*candidate).ok()?.contains(&key) {
+                let Some(footprint) = candidate_chunks(*candidate).ok() else {
+                    continue;
+                };
+                if !footprint.contains(&key) {
                     continue;
                 }
                 let center = position_chunk(candidate.dimension, candidate.position);

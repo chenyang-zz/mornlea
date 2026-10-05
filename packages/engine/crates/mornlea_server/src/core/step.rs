@@ -34,6 +34,7 @@ use super::contracts::{
     SessionPhase, TickBudget, TickCounters, TickPublication,
 };
 use super::publication;
+use super::source_acquisition::SourceGoals;
 use super::source_companion_restore::{self, SourceCompanionBook};
 use super::source_player_restore::{self, SourcePlayerBook};
 use super::state::{AuthorityState, TickContext};
@@ -159,7 +160,21 @@ pub fn reduce_tick(
     state: &mut AuthorityState,
     budget: TickBudget,
 ) -> Result<TickPublication, ServerError> {
-    reduce_tick_mode(state, budget, true)
+    reduce_tick_mode(state, budget, true, None)
+}
+
+/// The automatic source tick: the same engine with the private goal book
+/// threaded through dispatch, then the final small-input capture after
+/// publication and book restoration. `AuthorityState::advance_source_tick`
+/// owns the successful counter bump.
+pub(crate) fn reduce_tick_source(
+    state: &mut AuthorityState,
+    budget: TickBudget,
+    goals: &mut SourceGoals,
+) -> Result<TickPublication, ServerError> {
+    let publication = reduce_tick_mode(state, budget, true, Some(goals))?;
+    goals.finish_tick(state)?;
+    Ok(publication)
 }
 
 /// Runs the actual full phase engine once without appending publication frames.
@@ -168,7 +183,7 @@ pub struct AuthoritativeFinalReducer;
 
 impl FinalReducer for AuthoritativeFinalReducer {
     fn reduce_final(&mut self, state: &mut AuthorityState) -> Result<u64, ServerError> {
-        Ok(reduce_tick_mode(state, TickBudget::full(), false)?.tick)
+        Ok(reduce_tick_mode(state, TickBudget::full(), false, None)?.tick)
     }
 }
 
@@ -177,6 +192,7 @@ fn reduce_tick_mode(
     state: &mut AuthorityState,
     budget: TickBudget,
     publish: bool,
+    goals: Option<&mut SourceGoals>,
 ) -> Result<TickPublication, ServerError> {
     if let Some(error) = state.tick_failure() {
         return Err(error);
@@ -195,7 +211,7 @@ fn reduce_tick_mode(
     )?;
     // Trusted Rust provider unwinds stop the owner; native aborts and UB are outside this boundary.
     match catch_unwind(AssertUnwindSafe(|| {
-        reduce_tick_inner(state, budget, publish)
+        reduce_tick_inner(state, budget, publish, goals)
     })) {
         Ok(Ok(publication)) => Ok(publication),
         Ok(Err(error)) => Err(state.fail_tick(error)),
@@ -209,6 +225,7 @@ fn reduce_tick_inner(
     state: &mut AuthorityState,
     budget: TickBudget,
     publish: bool,
+    goals: Option<&mut SourceGoals>,
 ) -> Result<TickPublication, ServerError> {
     let tick = state.next_tick();
     // Staged chat ingress runs before the mailbox/companion drain: admission,
@@ -252,6 +269,7 @@ fn reduce_tick_inner(
             &mut source_companions,
             &mut source_players,
             &mut passive_snow,
+            goals,
         )?;
         let overlay = context.viewer_leases();
         // Private observations are projected after every settlement. Provider
@@ -405,6 +423,7 @@ fn dispatch_rows(
     source_companions: &mut SourceCompanionBook,
     source_players: &mut SourcePlayerBook,
     passive_snow: &mut passives::PassiveSnowBook,
+    mut goals: Option<&mut SourceGoals>,
 ) -> Result<(), ServerError> {
     for envelope in dispatched {
         admit_command(context, envelope)?;
@@ -429,7 +448,13 @@ fn dispatch_rows(
         .filter(|interaction| interaction.kind == InteractionKind::Bed)
         .collect();
     companions::run(context, batch_call(RulePhase::CompanionIntent))?;
+    if let Some(goals) = goals.as_deref_mut() {
+        goals.before_acquire(context, source_players, source_companions)?;
+    }
     world_acquisition::run(context, batch_call(RulePhase::Acquire))?;
+    if let Some(goals) = goals.as_deref_mut() {
+        goals.after_acquire(context)?;
+    }
     source_companion_restore::advance(source_companions, context)?;
     source_player_restore::advance(source_players, context)?;
     for session in active_players(context) {
@@ -473,6 +498,9 @@ fn dispatch_rows(
         source_player_restore::checkpoint_safe(source_players, context, session)?;
     }
     companions::run(context, batch_call(RulePhase::CompanionMotion))?;
+    if let Some(goals) = goals.as_deref_mut() {
+        goals.reconcile(context, source_players, source_companions)?;
+    }
     let plan = hostile_actions::plan(context)?;
     let melee = plan.melee_batch().clone();
     hostile_actions::apply(context, plan)?;
