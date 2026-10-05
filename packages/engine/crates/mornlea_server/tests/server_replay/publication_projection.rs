@@ -4886,7 +4886,6 @@ fn projection_container_dirty_fixture(
             0,
             0,
         ),
-        _ => unreachable!("the fixture covers the chest and furnace panels"),
     };
     stage(&mut state, |context| {
         context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, front).unwrap());
