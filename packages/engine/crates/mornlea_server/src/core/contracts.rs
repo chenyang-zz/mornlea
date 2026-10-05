@@ -204,6 +204,7 @@ pub enum SessionPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Resource {
     Players,
+    Actors,
     Commands,
     Arrivals,
     ChunkResults,

@@ -61,6 +61,8 @@ use crate::rules::passives::PassiveSnowBook;
 
 #[path = "state_actor_saves.rs"]
 mod actor_saves;
+#[path = "state_mob_persistence.rs"]
+mod mob_persistence;
 #[path = "state_player_persistence.rs"]
 mod player_persistence;
 
@@ -231,6 +233,7 @@ pub struct AuthorityState {
     actor_saves_next: bool,
     /// Source cache leases share the actor ledger current and immutable flight owners.
     player_persistence: Option<player_persistence::PlayerPersistence>,
+    mob_persistence: bool,
     cancelled_chunks: BTreeSet<ChunkRequestId>,
     chunk_cancel_discards: usize,
     chunk_duplicate_discards: usize,
@@ -322,6 +325,7 @@ impl AuthorityState {
             actor_saves: None,
             actor_saves_next: true,
             player_persistence: None,
+            mob_persistence: false,
             cancelled_chunks: BTreeSet::new(),
             chunk_cancel_discards: 0,
             chunk_duplicate_discards: 0,
@@ -5919,6 +5923,7 @@ impl<'a> TickContext<'a> {
                 Ok(())
             }
             RuleEffect::Actor(record) => {
+                self.admit_mob_actor(&record)?;
                 // Latest-wins overlay replace, mirroring the inventory arm: a
                 // staged actor snapshot supersedes the earlier record with
                 // the same key instead of accumulating duplicates.

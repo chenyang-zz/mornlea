@@ -93,9 +93,27 @@ session, inventory and held target and enters the existing sticky tick fence.
 The persistence source-player-persistence topic separates lifecycle/provider
 controls from actual background DiskStore, native acquisition, Memory/TCP login,
 autosave, final flush and reopen evidence. This player boundary does not perform
-companion or mob aggregate bootstrap/capture, configuration or executable
+companion aggregate bootstrap/capture, configuration or executable
 shutdown composition. Authority actor routing remains independently qualified
 by its explicit producer and actual generated chunk/save/reopen topic.
+
+`core/state_mob_persistence.rs` owns one-shot complete hostile/passive startup
+after source player and actor-ledger opt-in. Both codecs, sorted bodies and reset
+transients are prepared before either aggregate or resident ownership changes.
+Quiet missing baselines stay ineligible until observed; durable revisions and
+immutable older targets remain ledger-owned. Before tick owners move, a constant
+time size guard limits opted-in actor records to 110, followed by bounded source
+identity and active-family checks. Ordered Actor effect application enforces
+64 hostiles and 32 passives with the existing whole Compound rollback journal.
+
+Ordinary and final reducers prepare both complete settled projections after
+publication consumes terminal identities, then observe aggregates and physically
+remove Dead mob records and their identity-local runtime/path ownership. Swapped
+players retain repaired indices; loot, pending Snow, projectiles and old save
+targets keep their independent owners. The source-mob-persistence topic separates
+prepared terminal controls from actual disk bootstrap, native burn/death/quiet
+removal, publication, failed filesystem save retry, autosave/final flush and reopen.
+This library operation does not qualify executable startup or shutdown composition.
 
 `src/store/AGENTS.md` owns disk worker I/O, decoded loads, durable acknowledgment
 and the narrowly confined native-close adapters. Region and standalone providers

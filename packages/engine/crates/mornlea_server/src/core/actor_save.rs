@@ -80,6 +80,37 @@ pub struct ActorSaveLedger {
 }
 
 impl ActorSaveLedger {
+    /// Prepares both startup singleton owners before either enters the live ledger.
+    pub(crate) fn retain_mob_pair(
+        &mut self,
+        hostiles: mornlea_storage::HostileMobsSave,
+        hostile_persisted: u64,
+        passives: mornlea_storage::PassiveMobsSave,
+        passive_persisted: u64,
+    ) -> Result<(), ServerError> {
+        self.check_open()?;
+        if self.entries.contains_key(&Key::Hostiles) || self.entries.contains_key(&Key::Passives) {
+            return Err(INVALID);
+        }
+        let mut prepared = Self::default();
+        prepared.retain(
+            SaveValue::Hostiles(hostiles),
+            hostile_persisted,
+            false,
+            hostile_persisted > 0,
+            true,
+        )?;
+        prepared.retain(
+            SaveValue::Passives(passives),
+            passive_persisted,
+            false,
+            passive_persisted > 0,
+            true,
+        )?;
+        self.entries.append(&mut prepared.entries);
+        Ok(())
+    }
+
     /// Retains a loaded value or an explicitly unsaved initial value.
     ///
     /// Positive durable revisions must agree with the value. An unsaved value

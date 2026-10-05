@@ -56,3 +56,6 @@ mod authority_actor_saves;
 
 #[path = "persistence_failure/source_player_persistence.rs"]
 mod source_player_persistence;
+
+#[path = "persistence_failure/source_mob_persistence.rs"]
+mod source_mob_persistence;
