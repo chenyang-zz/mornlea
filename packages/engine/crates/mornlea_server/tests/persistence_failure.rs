@@ -47,3 +47,6 @@ mod actor_projection;
 
 #[path = "persistence_failure/source_player_restore.rs"]
 mod source_player_restore;
+
+#[path = "persistence_failure/actor_save.rs"]
+mod actor_save;

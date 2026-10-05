@@ -213,6 +213,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3eo Preserve despawn-before-spawn-before-state order for mixed hostile/passive/projectile transitions ([packet](plans/112-mixed-entity-publication-order.md)). Direct Codex node:3qualified ordering REDs then3GREEN,531replay and75Rust suites3466results PASS; native independent SCOPED_PASS. Event construction only; queue admission/mirror and broad3.8/4.1/4.2 remain open.
 
+- [x] 3.7l3as Land the bounded retained actor save ledger and exact latest/flight/revision contract ([packet](plans/113-retained-actor-save-ledger.md)). Direct Codex callable-contract/provider landing: six genuine review-correction REDs then20GREEN, inline mailbox consumer with explicit backend double, Rust75suites3486results PASS and native independent SCOPED_PASS. Automatic capture/cache/bootstrap/physical disk/runtime and broad3.8/4.1/4.2 remain open.
+
 ## 4. Closeout
 
 

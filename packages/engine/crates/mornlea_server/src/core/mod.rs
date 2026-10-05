@@ -3,6 +3,7 @@
 pub mod acquisition;
 pub mod actor_placement;
 pub mod actor_projection;
+pub mod actor_save;
 pub mod actor_snow;
 pub mod block_observations;
 pub mod chunk_driver;

@@ -66,6 +66,13 @@ retry. Full Agent-to-authority runtime composition remains separate.
 
 ## Persistence boundary
 
+`core/actor_save.rs` owns bounded latest actor values and exact immutable save
+flights, with caller-supplied eligibility/pinning and separate durable revisions.
+Refused admission returns exact ownership; admitted failures retain the same
+target for scheduler retry. ACK keeps distinct newer current values dirty.
+This callable ledger does not perform automatic capture, player prepare/cache
+policy, companion merge/bootstrap, disk I/O or executable shutdown composition.
+
 `src/store/AGENTS.md` owns disk worker I/O, decoded loads, durable acknowledgment
 and the narrowly confined native-close adapters. Region and standalone providers
 consume its cancellation and error contracts before joining the real backend.
