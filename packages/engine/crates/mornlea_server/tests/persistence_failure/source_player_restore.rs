@@ -3954,8 +3954,17 @@ fn source_companion_waiting(state: &AuthorityState, id: CompanionId, position: [
 
 /// The activated companion holds the chosen pose with zero velocity, ground
 /// contact, neutral survival and runtime fields, and the whole captured look
-/// and hotbar/backpack inventory mapped back from its canonical body.
-fn source_companion_active(state: &AuthorityState, id: CompanionId, position: [f32; 3]) {
+/// and hotbar/backpack inventory mapped back from its canonical body. The
+/// frozen oracle pins the exact six-fixture contract independent of the
+/// mutable body: saved captures keep look (0.1, 0.2) and slot 3 selected with
+/// item 1 count 7; missing-body captures keep the default look and the empty
+/// record.
+fn source_companion_active(
+    state: &AuthorityState,
+    id: CompanionId,
+    position: [f32; 3],
+    saved: bool,
+) {
     let view = state.settled_read().unwrap();
     let key = ActorKey::Companion(id);
     let actor = view.actor(key).unwrap();
@@ -3991,6 +4000,22 @@ fn source_companion_active(state: &AuthorityState, id: CompanionId, position: [f
     assert_eq!(inventory.slots[9..36], body.inventory.backpack);
     assert!(inventory.armor.iter().all(|slot| slot.count == 0));
     assert!(inventory.crafting.iter().all(|slot| slot.count == 0));
+    // Frozen look oracle, independent of the mutable canonical body.
+    assert_eq!(
+        (actor.look.yaw(), actor.look.pitch()),
+        if saved { (0.1, 0.2) } else { (0., 0.) }
+    );
+    // Whole-record inventory oracle for the exact six-fixture contract.
+    let mut expected = InventoryRecord::empty();
+    if saved {
+        expected.selected = mornlea_domain::HotbarSlot::new(3).unwrap();
+        expected.slots[3] = ItemStack {
+            item: 1,
+            count: 7,
+            durability: 0,
+        };
+    }
+    assert_eq!(inventory, &expected);
 }
 
 /// Complete observable registration state: every resident lane the producer
@@ -4041,7 +4066,7 @@ fn source_companion_saved_ready_activates_ignores_pending_action() {
         .submit_companion(source_companion_move(id, 10, 0, 0.9))
         .unwrap();
     let _activated = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
-    source_companion_active(&state, id, [8.5, 65.0, 8.5]);
+    source_companion_active(&state, id, [8.5, 65.0, 8.5], true);
     assert!(state.source_companion_pending_keys().is_empty());
     // A fresh Move with a distinct request id and the current source tick is
     // the first input the active companion actually consumes.
@@ -4112,7 +4137,7 @@ fn source_companion_saved_neighbor_waits_for_actual_ready() {
         ]
     );
     let _full = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 1, 0));
-    source_companion_active(&state, id, [15.9, 65.0, 8.5]);
+    source_companion_active(&state, id, [15.9, 65.0, 8.5], true);
     assert!(state.source_companion_pending_keys().is_empty());
     fixture.close();
 }
@@ -4139,7 +4164,7 @@ fn source_companion_invalid_saved_uses_captured_spawn() {
         )
         .unwrap();
     let _publication = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
-    source_companion_active(&state, id, [0.5, 65.0, 0.5]);
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], true);
     assert!(state.source_companion_pending_keys().is_empty());
     fixture.close();
 }
@@ -4174,10 +4199,10 @@ fn source_companion_missing_body_spawns() {
         vec![key(Dimension::OVERWORLD, 0, 0)]
     );
     let _publication = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
-    source_companion_active(&state, id, [0.5, 65.0, 0.5]);
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], false);
     assert!(state.source_companion_pending_keys().is_empty());
     let _quiet = state.advance_tick(TickBudget::full()).unwrap();
-    source_companion_active(&state, id, [0.5, 65.0, 0.5]);
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], false);
     fixture.close();
 }
 
@@ -4387,7 +4412,7 @@ fn source_companion_exhausted_retries_ready_revision() {
         assert_eq!(view.highest_non_air(Dimension::OVERWORLD, 0, 0), Some(64));
     }
     let _rescanned = state.advance_tick(TickBudget::full()).unwrap();
-    source_companion_active(&state, id, [0.5, 65.0, 0.5]);
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], false);
     assert!(state.source_companion_pending_keys().is_empty());
     fixture.close();
 }

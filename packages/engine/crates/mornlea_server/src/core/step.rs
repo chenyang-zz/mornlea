@@ -34,6 +34,7 @@ use super::contracts::{
     SessionPhase, TickBudget, TickCounters, TickPublication,
 };
 use super::publication;
+use super::source_companion_restore::{self, SourceCompanionBook};
 use super::source_player_restore::{self, SourcePlayerBook};
 use super::state::{AuthorityState, TickContext};
 use crate::rules::{
@@ -229,6 +230,7 @@ fn reduce_tick_inner(
         farmland::FarmlandSchedule::new(),
     );
     let mut source_players = std::mem::take(state.source_players_mut());
+    let mut source_companions = std::mem::take(state.source_companions_mut());
     let mut passive_snow = std::mem::take(state.passive_snow_mut());
     let mut context = TickContext::for_tick(state, budget);
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -247,6 +249,7 @@ fn reduce_tick_inner(
             &drained.dispatched,
             &mut fluid_schedule,
             &mut farmland_schedule,
+            &mut source_companions,
             &mut source_players,
             &mut passive_snow,
         )?;
@@ -280,11 +283,12 @@ fn reduce_tick_inner(
         context.commit_carried();
         Ok::<_, ServerError>((overlay, hits, events, counters, outcome))
     }));
-    // Context recovery precedes restoration of all three exclusively moved owners.
+    // Context recovery precedes restoration of all five exclusively moved owners.
     drop(context);
     *state.fluid_schedule_mut() = fluid_schedule;
     *state.farmland_schedule_mut() = farmland_schedule;
     *state.source_players_mut() = source_players;
+    *state.source_companions_mut() = source_companions;
     *state.passive_snow_mut() = passive_snow;
     state.prune_source_players();
     let (mut overlay, hits, mut events, counters, outcome) = match result {
@@ -300,6 +304,9 @@ fn reduce_tick_inner(
     events.extend(state.project_tick_publication(tick, &outcome));
     events.extend(state.project_player_updates(tick));
     events.extend(hits);
+    // Registered Active companions consume their reset marker before delivery
+    // finalizes the tick, preserving the source cadence with no observer.
+    state.finish_source_companion_resets();
     let publication = TickPublication {
         tick,
         events,
@@ -388,13 +395,14 @@ fn drain_mailbox(state: &mut AuthorityState, tick: u64, command_budget: usize) -
 /// Runs every dispatch row in the frozen order. The first error stops later
 /// rows and prevents successful commit and delivery. The carried schedules
 /// arrive as locals because the context owns the authority borrow.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn dispatch_rows(
     context: &mut TickContext<'_>,
     tick: u64,
     dispatched: &[CommandEnvelope],
     fluid_schedule: &mut fluids::FluidSchedule,
     farmland_schedule: &mut farmland::FarmlandSchedule,
+    source_companions: &mut SourceCompanionBook,
     source_players: &mut SourcePlayerBook,
     passive_snow: &mut passives::PassiveSnowBook,
 ) -> Result<(), ServerError> {
@@ -422,6 +430,7 @@ fn dispatch_rows(
         .collect();
     companions::run(context, batch_call(RulePhase::CompanionIntent))?;
     world_acquisition::run(context, batch_call(RulePhase::Acquire))?;
+    source_companion_restore::advance(source_companions, context)?;
     source_player_restore::advance(source_players, context)?;
     for session in active_players(context) {
         let actor = ActorKey::Player(session);

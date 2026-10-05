@@ -727,6 +727,10 @@ impl AuthorityState {
         &mut self.source_players
     }
 
+    pub(crate) fn source_companions_mut(&mut self) -> &mut SourceCompanionBook {
+        &mut self.source_companions
+    }
+
     pub(crate) fn passive_snow_mut(&mut self) -> &mut PassiveSnowBook {
         &mut self.passive_snow
     }
@@ -797,6 +801,16 @@ impl AuthorityState {
             keys.extend(entry.pending_keys());
         }
         keys.into_iter().collect()
+    }
+
+    /// Clears the publication reset marker for registered Active companions
+    /// through the module owner, with disjoint book and resident borrows and
+    /// no observer requirement.
+    pub(crate) fn finish_source_companion_resets(&mut self) {
+        super::source_companion_restore::finish_publication(
+            &self.source_companions,
+            &mut self.residents,
+        );
     }
 
     pub fn allocate(
@@ -4343,6 +4357,13 @@ impl<'a> TickContext<'a> {
     /// bound of its own.
     pub fn push_companion_action(&mut self, action: CompanionActionEnvelope) {
         self.companions.push(action);
+    }
+
+    /// Drops only the given companion's queued action envelopes after its
+    /// activation; every other identity's order and content stay untouched.
+    pub(crate) fn discard_source_companion_actions(&mut self, id: CompanionId) {
+        self.companions
+            .retain(|envelope| envelope.companion_id != id);
     }
 
     pub fn read(&self) -> AuthorityReadView<'_> {

@@ -155,6 +155,22 @@ consume its cancellation and error contracts before joining the real backend.
   Subscriptions, publication, automatic actor save/cache
   eligibility and executable runtime acceptance remain separately owned.
 
+- `src/core/source_companion_restore.rs` owns the checked source startup
+  pending companion producer: bounded four-id registration, the canonical body
+  mapping and one retained radius-16 scan per identity with its captured wants.
+  Advance runs in id byte order after Acquire and before pending players; only
+  Pending entries advance, Waiting/Exhausted progress stays retained, and
+  activation stages one fixed actor+runtime compound at the chosen pose with
+  zero velocity, ground certificate and reset=true while preserving
+  look/body/inventory, then discards only that newly activated id's inactive
+  action envelopes. The reducer moves the book as the fifth exclusive owner
+  across the context loan and returns it after context drop on success, typed
+  failure and unwind; publication clears reset only for registered Active
+  companions with no observer. Active companion recovery, unstick and
+  below-world reset, companion-rule edits and generic pending-actor
+  reinterpretation remain excluded, and the existing pending restore
+  algorithms stay read-only.
+
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
   inventory/runtime overlays to produce checked existing storage values. Player
   current pose/survival, inventory/armor and hunger/respawn come from their

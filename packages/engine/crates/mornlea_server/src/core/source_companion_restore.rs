@@ -1,14 +1,15 @@
-//! Source companion registration, checked body mapping and the bounded
-//! radius-16 pending restore book. This module owns no tick movement: the
-//! scan advance and reset publication arrive with the reducer integration.
+//! Source companion registration, checked body mapping, the bounded
+//! radius-16 pending restore book, and the serial scan advance and reset
+//! publication the reducer consumes around its context loan.
 
 use super::actor_placement::RestoreCandidate;
 use super::actor_projection::project_companion;
 use super::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, InventoryRecord,
-    ServerError,
+    RuleEffect, ServerError,
 };
-use super::pending_restore::{PendingRestore, RestoreKind};
+use super::pending_restore::{PendingRestore, RestoreKind, RestoreProgress};
+use super::state::{ResidentTickState, TickContext};
 use mornlea_domain::{
     ChunkPos, CompanionId, CraftingSize, Dimension, FiniteVec3, HotbarSlot, LookAngles,
     MotionState, MotionStateParts, SurvivalState, SurvivalStateParts,
@@ -180,4 +181,101 @@ pub(crate) fn prepare(
             candidates,
         )?,
     })
+}
+
+/// Advances every retained pending companion scan in id byte order. Only a
+/// Pending actor with its indexed companion runtime and inventory advances;
+/// Active and other lifecycles skip without new policy, and Waiting or
+/// Exhausted progress stays retained. Activation clones this fixed
+/// actor/runtime only, stages one constant two-effect compound at the chosen
+/// pose with zero velocity, ground certificate and reset marker, preserving
+/// look, body, inventory and companion aux, then discards only this id's
+/// already-examined inactive action envelopes.
+pub(crate) fn advance(
+    book: &mut SourceCompanionBook,
+    context: &mut TickContext<'_>,
+) -> Result<(), ServerError> {
+    for (id, entry) in book.entries.iter_mut() {
+        let effects = {
+            let view = context.read();
+            let key = ActorKey::Companion(*id);
+            let actor = view.actor(key).ok_or(ServerError::Internal {
+                invariant: "source companion registration",
+            })?;
+            let runtime = view.runtime(key).ok_or(ServerError::Internal {
+                invariant: "source companion registration",
+            })?;
+            view.inventory(key).ok_or(ServerError::Internal {
+                invariant: "source companion registration",
+            })?;
+            if actor.key != key
+                || !matches!(actor.body, ActorBody::Companion(_))
+                || runtime.key != key
+                || !matches!(runtime.aux, ActorAux::Companion { .. })
+            {
+                return Err(ServerError::Internal {
+                    invariant: "source companion registration",
+                });
+            }
+            if actor.lifecycle != ActorLifecycle::Pending {
+                continue;
+            }
+            let environment = view.environment().ok_or(ServerError::Internal {
+                invariant: "source companion environment",
+            })?;
+            let progress = entry
+                .restore
+                .advance(&view, environment.tunables.eye_height())?;
+            let RestoreProgress::Activated(chosen) = progress else {
+                continue;
+            };
+            let mut actor = actor.clone();
+            actor.dimension = chosen.dimension;
+            actor.lifecycle = ActorLifecycle::Active;
+            actor.motion = MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new(chosen.position).map_err(|_| {
+                    ServerError::Internal {
+                        invariant: "source companion activation",
+                    }
+                })?,
+                velocity: FiniteVec3::try_new([0.0; 3]).map_err(|_| ServerError::Internal {
+                    invariant: "source companion activation",
+                })?,
+                on_ground: chosen.on_ground,
+            });
+            let mut runtime = runtime.clone();
+            runtime.controls = None;
+            runtime.peak_y = chosen.position[1];
+            runtime.reset = true;
+            vec![RuleEffect::Actor(actor), RuleEffect::Runtime(runtime)]
+        };
+        // One constant-size compound publishes both prepared owners or neither.
+        context
+            .stage(RuleEffect::Compound(effects))
+            .map_err(|_| ServerError::Internal {
+                invariant: "source companion activation",
+            })?;
+        context.discard_source_companion_actions(*id);
+    }
+    Ok(())
+}
+
+/// Clears the publication reset marker for every registered companion whose
+/// resident actor is currently Active, preserving the source result cadence
+/// even with no observer. Only registered book identities are touched; no
+/// other runtime lane changes.
+pub(crate) fn finish_publication(book: &SourceCompanionBook, residents: &mut ResidentTickState) {
+    for id in book.entries.keys() {
+        let key = ActorKey::Companion(*id);
+        let active = residents
+            .actors
+            .iter()
+            .any(|actor| actor.key == key && actor.lifecycle == ActorLifecycle::Active);
+        if !active {
+            continue;
+        }
+        if let Some(runtime) = residents.runtimes.get_mut(&key) {
+            runtime.reset = false;
+        }
+    }
 }

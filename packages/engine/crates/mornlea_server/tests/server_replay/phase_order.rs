@@ -196,6 +196,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "admit_command",
     "companions::run",
     "world_acquisition::run",
+    "source_companion_restore::advance",
     "source_player_restore::advance",
     "player_survival::run",
     "eating::run",
@@ -879,4 +880,27 @@ fn action_costs_source_regions_order() {
     assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
     let duplicate = body.replacen(marker, &format!("{marker} {marker}"), 1);
     assert_ne!(marker_count(&duplicate, marker), 2);
+}
+
+#[test]
+fn dispatch_guard_rejects_player_restore_before_companion() {
+    // Companion pending advancement must precede pending players: the swap
+    // keeps both markers present, so only the order probe can refuse.
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let swapped = swap_markers(
+        body,
+        "source_companion_restore::advance",
+        "source_player_restore::advance",
+    );
+    assert_eq!(
+        marker_count(&swapped, "source_companion_restore::advance"),
+        1
+    );
+    assert_eq!(marker_count(&swapped, "source_player_restore::advance"), 1);
+    let result = std::panic::catch_unwind(|| chain_positions(&swapped, DISPATCH_CHAIN));
+    assert!(
+        result.is_err(),
+        "both markers survive but the companion-before-player-restore guard must refuse"
+    );
 }
