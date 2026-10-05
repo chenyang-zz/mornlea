@@ -1143,7 +1143,7 @@ mod source_snow_tests {
     #[test]
     fn registered_passive_stride_leaves_legacy_collection() {
         // Unregistered: the legacy single-tick collector samples a full stride
-        // and the tier-1 layer at the landing cell shatters to air.
+        // and the snow layer at the landing cell lowers one tier (87 -> 86).
         let mut a = source_snow_authority();
         let mut c = passive_exclusion_context(&mut a, vec![passive_record(7, [0.0, 1.0, 0.0])]);
         c.stage(RuleEffect::Actor(passive_record(7, [1.0, 1.0, 0.0])))
@@ -1157,7 +1157,7 @@ mod source_snow_tests {
         );
         assert_eq!(
             c.read().block(Dimension::OVERWORLD, BlockPos::new(1, 1, 0)),
-            Some(0)
+            Some(86)
         );
 
         // Registered on its first movement tick: the retained producer owns
