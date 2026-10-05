@@ -205,6 +205,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.9d5 Transfer and retire host/memory terminal request ownership once.
 - [x] 3.9d6 Drive retryable memory finalization through bounded shutdown ([provider](plans/38-memory-finalization-progress.md), [real integration](plans/40-real-memory-shutdown.md), [panic consumers](plans/42-panic-retirement-consumers.md), [entry quiescence](plans/43-shutdown-entry-quiescence.md)).
 
+- [ ] 3.7l3ca Join automatic source player/companion wants, priority and actual chunk driver at the original phase seams ([plan](plans/109-source-acquisition.md)) — ready after controller design review; real Disk/native RED/GREEN and exact-SHA gates remain required. Original4.1/4.2 and runtime/bootstrap/save/cache stay open.
+
 ## 4. Closeout
 
 - [ ] 4.1 Reconcile zero-gap inventory, real-provider/integration evidence and guides. Verified remaining source gaps: automatic acquisition subscription union, dirty-publication outcome reconciliation, automatic actor save/cache lifecycle, nonempty bootstrap, assembled gameplay executable, every supported Go-to-Rust outcome inventory, and configuration-file loading/runtime ownership. Declared session-radius wanted/resync publication and passive-death reason publication are already present; do not reopen them.
