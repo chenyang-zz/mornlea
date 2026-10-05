@@ -3699,3 +3699,163 @@ fn passive_snow_actual_airborne_retention_lands_on_threshold() {
     assert_eq!(passive_snow_actual_cells(&state), (86, 87));
     fixture.close();
 }
+
+/// Stages a configured `EnvironmentState` through the between-tick restage
+/// path the production tick owns: seeded from the committed residents, staged
+/// as a rule effect, snapshotted, and committed back so every resident lane
+/// survives the staging. Dropping the context first restores the untouched
+/// loan exactly like the harness staging path.
+fn configured_environment_stage(
+    state: &mut AuthorityState,
+    configure: impl FnOnce(&mut EnvironmentState),
+) {
+    let mut environment = state
+        .residents()
+        .environment
+        .expect("fixture tick committed an environment");
+    configure(&mut environment);
+    let mut context = mornlea_server::state::TickContext::restage(state, TickBudget::full());
+    context.stage(RuleEffect::Environment(environment)).unwrap();
+    let snapshot = context.resident_snapshot();
+    drop(context);
+    state.commit_residents(snapshot);
+}
+
+/// A full custom nineteen-field `RuleTunables` committed between ticks must
+/// survive two actual `advance_tick` executions as the committed snapshot,
+/// with the world clock advancing exactly once per tick and `next_tick`
+/// tracking the executed tick.
+#[test]
+fn configured_tick_tunables_survive_actual_ticks() {
+    let mut f = ActionCostFixture::new(
+        500,
+        0,
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 1,
+        },
+        0,
+    );
+    let mut physics = RuleTunables::source_defaults().physics();
+    physics.walk_speed = 8.6;
+    let configured = RuleTunables::try_new(
+        physics, 7, 3, 5, 9, 17, 2000, 2, 600, 15, 2, 0, 25, 4.5, 1.5, 3, 9, 1234, 0.75,
+    )
+    .unwrap();
+    configured_environment_stage(&mut f.state, |environment| {
+        environment.tunables = configured;
+        environment.world_time = 1_000;
+    });
+    f.input(3, false);
+    let _ = f.tick();
+    let environment = f.state.residents().environment;
+    let first = environment.as_ref().unwrap();
+    assert_eq!(
+        first.tunables, configured,
+        "first actual tick keeps the configured tunables"
+    );
+    assert_eq!(
+        first.world_time, 1_001,
+        "first actual tick advances the clock once"
+    );
+    let executed = first.next_tick;
+    let _ = f.tick();
+    let environment = f.state.residents().environment;
+    let second = environment.as_ref().unwrap();
+    assert_eq!(
+        second.tunables, configured,
+        "second actual tick keeps the configured tunables"
+    );
+    assert_eq!(
+        second.world_time, 1_002,
+        "second actual tick advances the clock once"
+    );
+    assert_eq!(
+        second.next_tick,
+        executed + 1,
+        "next_tick tracks the executed tick"
+    );
+}
+
+/// A committed exhaustion threshold of 2000 milli governs the real Till cost
+/// settlement: 3999 + 5 crosses twice, spending the 500 saturation and one
+/// hunger point, while the source default 4000 crosses once and keeps hunger
+/// at 20. The configured threshold is pinned on the actual publication, the
+/// Memory-decoded `PlayerState`, and across a quiet follow-up tick.
+#[test]
+fn configured_tick_tunables_exhaustion_threshold_till() {
+    let source = RuleTunables::source_defaults();
+    let configured = RuleTunables::try_new(
+        source.physics(),
+        source.regen_delay_ticks(),
+        source.regen_interval_ticks(),
+        source.drown_interval_ticks(),
+        source.starvation_interval_ticks(),
+        source.regen_hunger_threshold(),
+        2000,
+        source.eating_ticks(),
+        source.furnace_burn_ticks(),
+        source.furnace_smelt_ticks(),
+        source.fluid_delay(),
+        source.random_attempts(),
+        source.crop_growth_percent(),
+        source.interaction_reach(),
+        source.eye_height(),
+        source.drop_pickup_delay_ticks(),
+        source.player_drop_pickup_delay_ticks(),
+        source.drop_lifetime_ticks(),
+        source.drop_pickup_range(),
+    )
+    .unwrap();
+    assert_eq!(configured.exhaustion_threshold_milli(), 2000);
+    let mut f = ActionCostFixture::new(
+        500,
+        3999,
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 1,
+        },
+        0,
+    );
+    configured_environment_stage(&mut f.state, |environment| {
+        environment.tunables = configured;
+    });
+    f.input(3, false);
+    f.till();
+    let p = f.tick();
+    assert_eq!(f.cell(BlockPos::new(8, 63, 6)), 35, "native Till target");
+    f.assert_cost(&p, (19, 0, 4), 3);
+    let p = f.tick();
+    f.assert_cost(&p, (19, 0, 4), 3);
+    assert_eq!(
+        f.state.residents().environment.unwrap().tunables,
+        configured,
+        "quiet tick keeps the configured threshold"
+    );
+}
+
+/// Default control: an ordinary actual tick on the shared fixture keeps the
+/// source defaults as the committed snapshot. Nothing here stages a
+/// configuration, so this holds both before and after the reset repair.
+#[test]
+fn configured_tick_tunables_default_control_keeps_source_defaults() {
+    let mut f = ActionCostFixture::new(
+        500,
+        3999,
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 1,
+        },
+        0,
+    );
+    f.input(3, false);
+    let _ = f.tick();
+    assert_eq!(
+        f.state.residents().environment.unwrap().tunables,
+        RuleTunables::source_defaults(),
+        "ordinary actual tick retains source defaults"
+    );
+}
