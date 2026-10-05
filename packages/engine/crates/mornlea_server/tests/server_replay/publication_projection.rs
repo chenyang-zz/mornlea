@@ -4383,3 +4383,252 @@ fn projection_wanted_cap_zero_is_center_only() {
     assert!(sent.contains(&ChunkPos::new(0, 0)));
     assert!(!sent.contains(&ChunkPos::new(1, 0)));
 }
+
+/// The iron helmet wire item, the same frozen `core.ItemIronHelmet` number the
+/// armor provider mirrors (`packages/shared/core/item.go`, helmet durability
+/// ceiling 165).
+const PROJECTION_IRON_HELMET: u16 = 58;
+
+/// One session's inventory state publications for a tick, in order.
+fn projection_inventory_states(events: &[Event]) -> Vec<Event> {
+    events
+        .iter()
+        .filter(|event| matches!(event, Event::InventoryState(_)))
+        .cloned()
+        .collect()
+}
+
+/// projection_inventory_dirty_select_round_trip_publishes_once — two accepted
+/// selects that settle back to the held slot in one tick leave no record diff,
+/// yet the dirty lane still publishes exactly one complete owner inventory
+/// state, never to the foreign session, and a quiet tick publishes none.
+#[test]
+fn projection_inventory_dirty_select_round_trip_publishes_once() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    let join = state.advance_tick(TickBudget::full()).unwrap();
+    let baseline = find_event(&events_for(&join, owner), |event| {
+        matches!(event, Event::InventoryState(_))
+    })
+    .cloned()
+    .expect("the join publication carries the complete owner inventory snapshot");
+
+    // Select away and back inside one tick: the final record equals the join
+    // snapshot, so only the dirty lane can publish, and it publishes once.
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::SelectHotbar(HotbarSlot::new(2).unwrap()),
+    );
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::SelectHotbar(HotbarSlot::new(0).unwrap()),
+    );
+    let dirty = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        projection_inventory_states(&events_for(&dirty, owner)),
+        vec![baseline],
+        "the select round trip publishes exactly one complete owner inventory state"
+    );
+    assert!(
+        !events_for(&dirty, other)
+            .iter()
+            .any(|event| matches!(event, Event::InventoryState(_))),
+        "the foreign session never sees the owner inventory"
+    );
+
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_inventory_states(&events_for(&quiet, owner)).is_empty(),
+        "a quiet tick publishes no inventory state"
+    );
+}
+
+/// projection_inventory_dirty_select_carry_budget_publishes_once — a command
+/// budget that carries the round trip settles it on the second tick and
+/// republishes the unchanged complete owner state exactly once.
+#[test]
+fn projection_inventory_dirty_select_carry_budget_publishes_once() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let _ = state.advance_tick(TickBudget::full()).unwrap();
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::SelectHotbar(HotbarSlot::new(2).unwrap()),
+    );
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::SelectHotbar(HotbarSlot::new(0).unwrap()),
+    );
+    submit(
+        &mut state,
+        owner,
+        3,
+        Command::SelectHotbar(HotbarSlot::new(2).unwrap()),
+    );
+    let carried_tick = state
+        .advance_tick(TickBudget::try_new(1, 512, 65536, 65536, 65536).unwrap())
+        .unwrap();
+    assert_eq!(carried_tick.counters.commands, 1);
+    assert_eq!(carried_tick.counters.carried, 2);
+    let selected_two = InventoryState::new(InventoryStateParts {
+        selected: HotbarSlot::new(2).unwrap(),
+        hotbar: item_array(&[]),
+        backpack: item_array(&[]),
+    });
+    assert_eq!(
+        projection_inventory_states(&events_for(&carried_tick, owner)),
+        vec![Event::InventoryState(selected_two.clone())],
+        "the one executed select publishes exactly one complete owner state"
+    );
+
+    let settled_tick = state
+        .advance_tick(TickBudget::try_new(2, 512, 65536, 65536, 65536).unwrap())
+        .unwrap();
+    assert_eq!(settled_tick.counters.commands, 2);
+    assert_eq!(settled_tick.counters.carried, 0);
+    assert_eq!(
+        projection_inventory_states(&events_for(&settled_tick, owner)),
+        vec![Event::InventoryState(selected_two)],
+        "the carried round trip republishes the unchanged complete state once"
+    );
+
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_inventory_states(&events_for(&quiet, owner)).is_empty(),
+        "a quiet tick publishes no inventory state"
+    );
+}
+
+/// projection_inventory_dirty_equip_armor_publishes_once — an accepted equip of
+/// the held iron helmet publishes exactly one complete owner inventory state
+/// with the helmet gone from the hotbar and settled into the armor region.
+#[test]
+fn projection_inventory_dirty_equip_armor_publishes_once() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login_with(
+        &mut state,
+        1,
+        "Ada",
+        [0.5, 65.0, 0.5],
+        0.0,
+        0.0,
+        |player: &mut StoredPlayer| {
+            player.inventory.hotbar.slots[0] = StorageStack {
+                item: PROJECTION_IRON_HELMET,
+                count: 1,
+                durability: 165,
+            };
+        },
+    );
+    let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    let join = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        find_event(&events_for(&join, owner), |event| matches!(
+            event,
+            Event::InventoryState(_)
+        ))
+        .is_some(),
+        "the join publication carries the complete owner inventory snapshot"
+    );
+
+    submit(&mut state, owner, 1, Command::EquipArmor);
+    let equip = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = InventoryState::new(InventoryStateParts {
+        selected: HotbarSlot::new(0).unwrap(),
+        hotbar: item_array(&[]),
+        backpack: item_array(&[]),
+    });
+    assert_eq!(
+        projection_inventory_states(&events_for(&equip, owner)),
+        vec![Event::InventoryState(expected)],
+        "the equip publishes exactly one complete owner inventory state"
+    );
+    assert!(
+        !events_for(&equip, other)
+            .iter()
+            .any(|event| matches!(event, Event::InventoryState(_))),
+        "the foreign session never sees the owner inventory"
+    );
+    // The helmet settled into the armor region with count and durability kept.
+    stage(&mut state, |context| {
+        let record = context
+            .read()
+            .inventory(ActorKey::Player(owner))
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            record.armor[0],
+            StorageStack {
+                item: PROJECTION_IRON_HELMET,
+                count: 1,
+                durability: 165,
+            }
+        );
+    });
+
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_inventory_states(&events_for(&quiet, owner)).is_empty(),
+        "a quiet tick publishes no inventory state"
+    );
+}
+
+/// projection_inventory_dirty_noop_refused_stale_publish_nothing — the held
+/// reselect, a refused empty whole move, and a stale replay never mark the
+/// dirty lane, so the tick publishes no inventory state at all.
+#[test]
+fn projection_inventory_dirty_noop_refused_stale_publish_nothing() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let join = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        find_event(&events_for(&join, owner), |event| matches!(
+            event,
+            Event::InventoryState(_)
+        ))
+        .is_some(),
+        "the join publication carries the complete owner inventory snapshot"
+    );
+
+    // Re-selecting the held slot is the idempotent no-op row.
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::SelectHotbar(HotbarSlot::new(0).unwrap()),
+    );
+    // A whole move whose source slot is empty is refused without effect.
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::MoveInventory(mornlea_domain::InventoryMove::try_new(5, 6).unwrap()),
+    );
+    // A stale replay of an already-admitted sequence is skipped upstream; its
+    // observed result is not unwrapped, only that it cannot mark the lane.
+    let _stale = state.submit(
+        owner,
+        PlayIntent::Sequenced {
+            sequence: 1,
+            command: Command::SelectHotbar(HotbarSlot::new(2).unwrap()),
+        },
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_inventory_states(&events_for(&tick, owner)).is_empty(),
+        "the no-op, refused, and stale commands publish no inventory state"
+    );
+}
