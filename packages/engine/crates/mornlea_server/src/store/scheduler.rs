@@ -417,8 +417,39 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
         }
     }
 
-    /// Submits one fresh selection. A refused request returns whole through
-    /// the authority, preserving the dirty retention the selection marked.
+    /// Tries the original batch before adapting only capacity refusals.
+    /// Prefix/suffix moves preserve immutable owners and source order. Any
+    /// non-capacity admission refusal returns the whole original selection;
+    /// backend identity validation remains per admitted request.
+    fn submit_prefix(
+        &mut self,
+        mut request: SaveRequest,
+    ) -> Result<(SaveTicket, Vec<OwnedSnapshot>), SubmitSaveError> {
+        let mut tail = Vec::new();
+        loop {
+            match self.store.submit(request) {
+                Ok(ticket) => return Ok((ticket, tail)),
+                Err(mut refused) => {
+                    self.last_error = Some(refused.error);
+                    if matches!(refused.error, ServerError::Capacity { .. })
+                        && refused.request.snapshots.len() > 1
+                    {
+                        let middle = refused.request.snapshots.len() / 2;
+                        let mut suffix = refused.request.snapshots.split_off(middle);
+                        suffix.append(&mut tail);
+                        tail = suffix;
+                        request = refused.request;
+                    } else {
+                        refused.request.snapshots.append(&mut tail);
+                        return Err(refused);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns every unadmitted fresh owner exactly once, while the admitted
+    /// prefix stays correlated with its own ticket and authority flights.
     fn submit_fresh(
         &mut self,
         snapshots: Vec<OwnedSnapshot>,
@@ -428,20 +459,67 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
             return 0;
         }
         let count = snapshots.len();
-        match self.store.submit(SaveRequest { snapshots }) {
-            Ok(ticket) => {
+        match self.submit_prefix(SaveRequest { snapshots }) {
+            Ok((ticket, tail)) => {
                 self.tracked.push(TrackedSubmit {
                     ticket,
                     kind: TrackedKind::Fresh,
                 });
-                count
+                let admitted = count - tail.len();
+                for snapshot in tail {
+                    authority.return_dirty(snapshot);
+                }
+                admitted
             }
             Err(refused) => {
-                self.last_error = Some(refused.error);
                 for snapshot in refused.request.snapshots {
                     authority.return_dirty(snapshot);
                 }
                 0
+            }
+        }
+    }
+
+    /// Splits retry ownership only after an actual prefix admission. The tail
+    /// keeps its old deadline/attempt, independently of the dispatched prefix.
+    /// A partial admission stops this pass so a tight lane is never spun on.
+    fn dispatch_retry(&mut self, mut cohort: PendingRetry) -> (usize, bool) {
+        let count = cohort.snapshots.len();
+        let request = SaveRequest {
+            snapshots: cohort.snapshots.clone(),
+        };
+        match self.submit_prefix(request) {
+            Ok((ticket, tail)) => {
+                let admitted = count - tail.len();
+                let retained = cohort.snapshots.split_off(admitted);
+                self.tracked.push(TrackedSubmit {
+                    ticket,
+                    kind: TrackedKind::Retry {
+                        id: cohort.id,
+                        attempt: cohort.attempts.saturating_add(1),
+                    },
+                });
+                let attempts = cohort.attempts;
+                let next_tick = cohort.next_tick;
+                self.dispatched.insert(cohort.id, cohort);
+                if retained.is_empty() {
+                    (admitted, false)
+                } else {
+                    let id = self.allocate_retry_id();
+                    self.pending.push(PendingRetry {
+                        id,
+                        attempts,
+                        next_tick,
+                        snapshots: retained,
+                    });
+                    (admitted, true)
+                }
+            }
+            Err(_) => {
+                // Refusal changes no retry attempt or deadline, and the
+                // scheduler keeps the original retained payload allocation.
+                self.pending.push(cohort);
+                (0, true)
             }
         }
     }
@@ -463,27 +541,10 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
                 continue;
             };
             let cohort = self.pending.remove(position);
-            let attempt = cohort.attempts.saturating_add(1);
-            let count = cohort.snapshots.len();
-            let request = SaveRequest {
-                snapshots: cohort.snapshots.clone(),
-            };
-            match self.store.submit(request) {
-                Ok(ticket) => {
-                    self.tracked.push(TrackedSubmit {
-                        ticket,
-                        kind: TrackedKind::Retry { id, attempt },
-                    });
-                    self.dispatched.insert(id, cohort);
-                    submitted += count;
-                }
-                Err(refused) => {
-                    // Queue-full preserves the cohort: attempt, deadline and
-                    // snapshots return untouched for the next tick.
-                    self.last_error = Some(refused.error);
-                    self.pending.push(cohort);
-                    break;
-                }
+            let (count, stop) = self.dispatch_retry(cohort);
+            submitted += count;
+            if stop {
+                break;
             }
         }
         submitted
@@ -504,24 +565,10 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
                 continue;
             };
             let cohort = self.pending.remove(position);
-            let attempt = cohort.attempts.saturating_add(1);
-            let request = SaveRequest {
-                snapshots: cohort.snapshots.clone(),
-            };
-            match self.store.submit(request) {
-                Ok(ticket) => {
-                    self.tracked.push(TrackedSubmit {
-                        ticket,
-                        kind: TrackedKind::Retry { id, attempt },
-                    });
-                    self.dispatched.insert(id, cohort);
-                    submitted = true;
-                }
-                Err(refused) => {
-                    self.last_error = Some(refused.error);
-                    self.pending.push(cohort);
-                    break;
-                }
+            let (count, stop) = self.dispatch_retry(cohort);
+            submitted |= count > 0;
+            if stop {
+                break;
             }
         }
         submitted
@@ -679,19 +726,21 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
             let selected = authority.select(SaveMode::All, SaveBudget::default());
             let mut submitted = false;
             if !selected.is_empty() {
-                match self.store.submit(SaveRequest {
+                match self.submit_prefix(SaveRequest {
                     snapshots: selected,
                 }) {
-                    Ok(ticket) => {
+                    Ok((ticket, tail)) => {
                         self.tracked.push(TrackedSubmit {
                             ticket,
                             kind: TrackedKind::Fresh,
                         });
                         submitted = true;
+                        for snapshot in tail {
+                            authority.return_dirty(snapshot);
+                        }
                     }
                     Err(refused) => {
                         last_refusal = Some(refused.error);
-                        self.last_error = last_refusal;
                         for snapshot in refused.request.snapshots {
                             authority.return_dirty(snapshot);
                         }

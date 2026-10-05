@@ -567,3 +567,106 @@ fn actual_admission_refusal_returns_exact_capture_and_allows_fresh_recapture() {
     store.close(deadline()).unwrap();
     assert_eq!(state.save_stats(), SaveStats::default());
 }
+
+fn generated_eight(store: &mut AutosaveScheduler<DiskStore>) -> AuthorityState {
+    let mut state = authority();
+    state.enable_live_chunks().unwrap();
+    state
+        .replace_chunk_wants((0..8).map(key).collect())
+        .unwrap();
+    let mut pool = GenerationPool::try_new(42, false, 2).unwrap();
+    let mut driver = ChunkDriver::new();
+    for x in 0..8 {
+        driver
+            .start_load(&mut state, store, key(x), deadline())
+            .unwrap();
+    }
+    drain(&mut driver, &mut state, store, &mut pool);
+    state.advance_tick(TickBudget::full()).unwrap();
+    for x in 0..8 {
+        driver
+            .start_generation(&mut state, &mut pool, key(x))
+            .unwrap();
+    }
+    drain(&mut driver, &mut state, store, &mut pool);
+    state.advance_tick(TickBudget::full()).unwrap();
+    pool.close(deadline()).unwrap();
+    state
+}
+
+#[test]
+fn capacity_prefix_actual_eight_generated_chunks_save_and_reopen() {
+    let root = Root::new();
+    let mut store = store(&root);
+    let mut state = generated_eight(&mut store);
+    let expected = state.residents().ready_snapshot();
+    let first = store
+        .poll_tick(6000, SaveBudget::default(), &mut state)
+        .unwrap();
+    let until = deadline();
+    if first.autosave > 0 {
+        let mut tick = 6001;
+        while state.save_stats() != SaveStats::default() {
+            assert!(!until.expired(Instant::now()));
+            store.drive_workers();
+            store
+                .poll_tick(tick, SaveBudget::default(), &mut state)
+                .unwrap();
+            tick += 1;
+            thread::yield_now();
+        }
+    }
+    let stats = state.save_stats();
+    let facts: Vec<_> = (0..8)
+        .map(|x| state.live_chunk_facts(key(x)).unwrap())
+        .collect();
+    store.close(deadline()).unwrap();
+    assert!(
+        first.autosave > 0,
+        "all targets refused instead of an admitted prefix"
+    );
+    assert_eq!(stats, SaveStats::default());
+    assert_eq!(expected.len(), 8);
+    let mut reopened = DiskStore::open(&root.0, options()).unwrap();
+    let loaded: Vec<_> = expected
+        .iter()
+        .map(|(key, _, _, _)| reopened.load(SaveKey::Chunk(*key)).unwrap())
+        .collect();
+    reopened.close().unwrap();
+    for ((expected, loaded), facts) in expected.iter().zip(loaded).zip(facts) {
+        let LoadedValue::Chunk(loaded) = loaded else {
+            panic!("chunk");
+        };
+        assert_eq!(loaded.chunk, expected.3);
+        assert_eq!(loaded.revision, expected.2);
+        assert_eq!(facts.generation, expected.1);
+        assert_eq!(facts.persisted_revision, facts.revision);
+    }
+}
+
+#[test]
+fn capacity_prefix_actual_fresh_flush_drains_eight_without_prior_autosave() {
+    let root = Root::new();
+    let mut store = store(&root);
+    let mut state = generated_eight(&mut store);
+    let expected = state.residents().ready_snapshot();
+    assert!(state.begin_close());
+    let flushed = store.flush(deadline(), &mut state, &RealClock);
+    let stats = state.save_stats();
+    store.close(deadline()).unwrap();
+    assert!(flushed.is_ok(), "fresh final flush failed: {flushed:?}");
+    assert_eq!(stats, SaveStats::default());
+    let mut reopened = DiskStore::open(&root.0, options()).unwrap();
+    let loaded: Vec<_> = expected
+        .iter()
+        .map(|(key, _, _, _)| reopened.load(SaveKey::Chunk(*key)).unwrap())
+        .collect();
+    reopened.close().unwrap();
+    for (expected, loaded) in expected.iter().zip(loaded) {
+        let LoadedValue::Chunk(loaded) = loaded else {
+            panic!("chunk");
+        };
+        assert_eq!(loaded.chunk, expected.3);
+        assert_eq!(loaded.revision, expected.2);
+    }
+}

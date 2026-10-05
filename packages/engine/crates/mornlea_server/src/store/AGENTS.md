@@ -46,6 +46,20 @@ capacity; the scheduler only forwards the query.
   file/directory durability. Symlinks are rejected before exclusions and other
   nonregular entries afterward. Matching backup retries still sync the parent.
 
+## Scheduler admission progress
+
+The scheduler first submits each selected or retry cohort whole. Only a typed
+capacity refusal permits ordered prefix halving; the mailbox remains atomic
+for each request. Fresh unadmitted owners return to their authority exactly
+once. A retry prefix keeps its original ID and ticket correlation, while an
+unadmitted tail receives a unique child ID and retains the prior deadline and
+attempt. Due and final retry dispatch share this operation. An individually
+oversized target or non-capacity admission error retains its whole refusal.
+DiskStore performs additional decoded identity/conflict preflight separately
+for each admitted request; a selection spanning requests is not one atomic
+storage transaction. Fresh final flush uses the same prefix adaptation. Actual generated eight-chunk save/reopen evidence is in the
+live-chunk-saves topic; scripted retry cases remain consumer-double evidence.
+
 ## Failure and lifecycle
 
 Decoded loads preserve player rewrite flags, companion source schemas and

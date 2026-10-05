@@ -215,6 +215,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3as Land the bounded retained actor save ledger and exact latest/flight/revision contract ([packet](plans/113-retained-actor-save-ledger.md)). Direct Codex callable-contract/provider landing: six genuine review-correction REDs then20GREEN, inline mailbox consumer with explicit backend double, Rust75suites3486results PASS and native independent SCOPED_PASS. Automatic capture/cache/bootstrap/physical disk/runtime and broad3.8/4.1/4.2 remain open.
 
+- [x] 3.7l3sp Preserve ordered progress for fresh and retry save cohorts exceeding available mailbox reservations ([packet](plans/114-save-admission-progress.md)). Direct Codex:3initial assertion REDs plus actual fresh-flush review RED, final5GREEN including two real8chunk save/reopen paths; corrected Rust75suites3491results PASS, native SCOPED_PASS. Actor-state/cache/bootstrap/runtime and broad3.8/4.1/4.2 remain open.
+
 ## 4. Closeout
 
 

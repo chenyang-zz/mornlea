@@ -1102,3 +1102,155 @@ fn final_metadata() {
     assert!(authority.in_flight_keys().is_empty());
     assert_eq!(store.tracked_submits(), 0);
 }
+
+#[test]
+fn capacity_prefix_fresh_keeps_order_and_eventually_acks_all_targets() {
+    let (backend, script) = BackendDouble::new();
+    let mut store = scheduler_with_interval(backend, accepted_limits(), 1000, 20, 1200, 512 << 20);
+    let mut authority = AuthorityDouble::new();
+    for key in 0..8 {
+        authority.add_dirty(chunk_snapshot_estimated(key, 1, SaveUrgency::Autosave, 1));
+    }
+    let report = store
+        .poll_tick(1000, SaveBudget::default(), &mut authority)
+        .unwrap();
+    let first_flights = authority.in_flight_keys();
+    let first_dirty = authority.dirty_keys();
+    let capacity = store.last_error();
+    for tick in 1001..1010 {
+        store.drive_workers();
+        store
+            .poll_tick(tick, SaveBudget::default(), &mut authority)
+            .unwrap();
+    }
+    let acked = authority.acked.clone();
+    let final_stats = authority.save_stats();
+    store.close(far_deadline(&test_clock())).unwrap();
+    assert_eq!(report.autosave, 2);
+    assert_eq!(first_flights, vec![(chunk_key(0), 1), (chunk_key(1), 1)]);
+    assert_eq!(
+        first_dirty,
+        (0..8).map(|key| (chunk_key(key), 1)).collect::<Vec<_>>()
+    );
+    assert!(matches!(
+        capacity,
+        Some(ServerError::Capacity {
+            resource: Resource::SaveBytes,
+            ..
+        })
+    ));
+    assert_eq!(
+        acked,
+        (0..8).map(|key| (chunk_key(key), 1)).collect::<Vec<_>>()
+    );
+    assert_eq!(final_stats, SaveStats::default());
+    assert_eq!(
+        script
+            .borrow()
+            .seen_submitted
+            .iter()
+            .filter(|job| job.iter().any(|(key, _)| matches!(key, SaveKey::Chunk(_))))
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn capacity_prefix_retry_keeps_tail_attempt_deadline_and_exact_owners() {
+    let (backend, script) = BackendDouble::new();
+    let mut store = scheduler_with_interval(backend, accepted_limits(), 1000, 20, 1200, 512 << 20);
+    let mut authority = AuthorityDouble::new();
+    for key in 0..3 {
+        authority.add_dirty(chunk_snapshot_estimated(key, 7, SaveUrgency::Autosave, 1));
+    }
+    store
+        .poll_tick(1000, SaveBudget::default(), &mut authority)
+        .unwrap();
+    script.borrow_mut().fail_next_write = Some(write_error());
+    store.drive_workers();
+    store
+        .poll_tick(1001, SaveBudget::default(), &mut authority)
+        .unwrap();
+    assert_eq!(store.pending_retry_state(), vec![(1, 1021)]);
+    let held = store
+        .submit(SaveRequest {
+            snapshots: vec![
+                chunk_snapshot(9, 1, SaveUrgency::Autosave),
+                chunk_snapshot(10, 1, SaveUrgency::Autosave),
+            ],
+        })
+        .unwrap();
+    let report = store
+        .poll_tick(1021, SaveBudget::default(), &mut authority)
+        .unwrap();
+    let tail_state = store.pending_retry_state();
+    let flights = authority.in_flight_keys();
+    store.drive_workers();
+    assert!(matches!(
+        StoreHandle::poll(&mut store, held),
+        mornlea_server::contracts::SavePoll::Completed(_)
+    ));
+    store
+        .poll_tick(1022, SaveBudget::default(), &mut authority)
+        .unwrap();
+    store.drive_workers();
+    store
+        .poll_tick(1023, SaveBudget::default(), &mut authority)
+        .unwrap();
+    let acked = authority.acked.clone();
+    let remaining = store.pending_retry_jobs();
+    store.close(far_deadline(&test_clock())).unwrap();
+    assert_eq!(report.retry, 1);
+    assert_eq!(tail_state, vec![(1, 1021)]);
+    assert_eq!(
+        flights,
+        (0..3).map(|key| (chunk_key(key), 7)).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        acked,
+        (0..3).map(|key| (chunk_key(key), 7)).collect::<Vec<_>>()
+    );
+    assert_eq!(remaining, 0);
+    let jobs = &script.borrow().seen_submitted;
+    assert!(jobs.contains(&vec![(chunk_key(0), 7)]));
+    assert!(jobs.contains(&vec![(chunk_key(1), 7), (chunk_key(2), 7)]));
+}
+
+#[test]
+fn capacity_prefix_invalid_admission_returns_whole_selection() {
+    let (backend, script) = BackendDouble::new();
+    let mut store = scheduler(backend, accepted_limits(), 512 << 20);
+    let mut authority = AuthorityDouble::new();
+    let valid = player_snapshot(1, 1);
+    let mut invalid = player_snapshot(2, 1);
+    let SaveValue::Player(body) = &mut invalid.value else {
+        panic!("player");
+    };
+    body.display_name = " bad ".into();
+    authority.add_dirty(valid.clone());
+    authority.add_dirty(invalid.clone());
+    let report = store
+        .poll_tick(TEST_INTERVAL, SaveBudget::default(), &mut authority)
+        .unwrap();
+    let error = store.last_error();
+    let dirty = authority.dirty_keys();
+    let flights = authority.in_flight_keys();
+    store.drive_workers();
+    store.close(far_deadline(&test_clock())).unwrap();
+    assert_eq!(report.autosave, 0);
+    assert_eq!(
+        error,
+        Some(ServerError::InvalidInput {
+            field: "save_value"
+        })
+    );
+    assert_eq!(dirty, vec![(valid.key, 1), (invalid.key, 1)]);
+    assert!(flights.is_empty());
+    assert!(
+        script
+            .borrow()
+            .seen_submitted
+            .iter()
+            .all(|job| job.iter().all(|(key, _)| matches!(key, SaveKey::Metadata)))
+    );
+}
