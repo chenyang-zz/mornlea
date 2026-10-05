@@ -299,7 +299,6 @@ validate_export_preset() {
     'pyproject.toml'
     'uv.lock'
     'README*'
-    'app/bootstrap/setup_required.*'
     'assets/provenance/**'
     'assets/generated/**/*.provenance.json'
     'assets/generated/**/PROVENANCE.json'
@@ -340,6 +339,18 @@ validate_export_preset() {
   esac
   for required in "${common_exclusions[@]}"; do
     [[ ",${exclusions}," == *",${required},"* ]] || reject "export exclusion is missing: ${required} (${preset_name})"
+  done
+  # Bootstrap preloads its diagnostic scene even when every native dependency
+  # is available. Excluding that scene or its script prevents release startup.
+  local -a exclusion_patterns=()
+  local dependency pattern
+  IFS=',' read -r -a exclusion_patterns <<<"${exclusions}"
+  for dependency in app/bootstrap/bootstrap.gd app/bootstrap/setup_required.tscn app/bootstrap/setup_required.gd; do
+    for pattern in "${exclusion_patterns[@]}"; do
+      if [[ "${dependency}" == ${pattern} ]]; then
+        reject "export excludes required Bootstrap dependency: ${dependency} (${preset_name})"
+      fi
+    done
   done
   if [[ "${include_filter}" =~ (tests/|typing/|assets/provenance/) ]]; then
     reject "export include filter contains development or provenance content (${preset_name})"
@@ -449,7 +460,7 @@ new_fixture_root() {
     'runnable=true' \
     'export_filter="all_resources"' \
     'include_filter="app/**/*.py,features/**/*.py,platform/desktop/**/*.py,addons/mornlea_bridge/*.py,assets/generated/**"' \
-    'exclude_filter="tests/**,typing/**,.venv/**,.ruff_cache/**,pyproject.toml,uv.lock,README*,app/bootstrap/setup_required.*,assets/provenance/**,assets/generated/**/*.provenance.json,assets/generated/**/PROVENANCE.json,addons/mornlea_bridge/bin/linux-x86_64/**,addons/mornlea_bridge/bin/windows-x86_64/**,addons/py4godot/cpython-*-linux*/**,addons/py4godot/cpython-*-windows*/**"' \
+    'exclude_filter="tests/**,typing/**,.venv/**,.ruff_cache/**,pyproject.toml,uv.lock,README*,assets/provenance/**,assets/generated/**/*.provenance.json,assets/generated/**/PROVENANCE.json,addons/mornlea_bridge/bin/linux-x86_64/**,addons/mornlea_bridge/bin/windows-x86_64/**,addons/py4godot/cpython-*-linux*/**,addons/py4godot/cpython-*-windows*/**"' \
     'export_path=""' \
     '' \
     '[preset.0.options]' > "${fixture}/export_presets.cfg"

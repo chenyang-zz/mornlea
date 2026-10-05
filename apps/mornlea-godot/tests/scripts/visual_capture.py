@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any, Protocol, TypedDict, cast, runtime_checkable
 
@@ -64,6 +65,19 @@ def _word(value: object) -> int:
 def _env(name: str) -> str:
     value = OS.instance().get_environment(name)
     return value if isinstance(value, str) else ""
+
+
+def _visible_terrain_failure(samples: list[tuple[int, int, int]]) -> str:
+    # Sample the viewport interior so HUD labels cannot stand in for terrain.
+    # Uploaded RID counts prove submission, but only pixel variation proves
+    # the fixed world camera actually sees textured geometry.
+    colors = Counter(samples)
+    if not samples or len(colors) < 8:
+        return "the captured world interior is blank or lacks visible terrain texture"
+    background_count = colors.most_common(1)[0][1]
+    if (len(samples) - background_count) * 20 < len(samples):
+        return "the captured world interior is blank: terrain covers less than five percent"
+    return ""
 
 
 def _hide_window() -> None:
@@ -207,6 +221,18 @@ class visual_capture(Node):
     def _capture(self, summary: dict[str, Any]) -> None:
         if self._stage == "done" or self._failures:
             return
+        facts = summary.get("facts")
+        floor = self._live_sections(summary).get((0, 0, 0, 0))
+        if (
+            not isinstance(facts, dict)
+            or floor is None
+            or floor["surfaces"] < 1
+            or _word(facts.get("live_surfaces")) < 1
+            or _word(facts.get("uploads_failed")) != 0
+        ):
+            self._failures.append("the uploaded floor is not live and error-free at capture")
+            self._finish(1)
+            return
         image_path = self._run_dir / IMAGE_RELATIVE
         image_path.parent.mkdir(parents=True, exist_ok=True)
         viewport = self.get_viewport()
@@ -220,7 +246,56 @@ class visual_capture(Node):
             self._failures.append("the viewport image is empty")
             self._finish(1)
             return
-        cast(Any, image).call("save_png", str(image_path))
+        current_camera = viewport.call("get_camera_3d")
+        camera = self._camera
+        if (
+            current_camera is None
+            or camera is None
+            or cast(Any, current_camera).call("get_instance_id") != camera.call("get_instance_id")
+        ):
+            self._failures.append("the fixed CaptureCamera is not the viewport's active camera")
+            self._finish(1)
+            return
+        width = _word(cast(Any, image).call("get_width"))
+        height = _word(cast(Any, image).call("get_height"))
+        if width < 40 or height < 24:
+            self._failures.append("the viewport image is too small to prove terrain visibility")
+            self._finish(1)
+            return
+        samples: list[tuple[int, int, int]] = []
+        for row in range(24):
+            y = height // 8 + row * (height * 3 // 4 - 1) // 23
+            for column in range(40):
+                x = width // 8 + column * (width * 3 // 4 - 1) // 39
+                color = cast(Any, image).call("get_pixel", x, y)
+                samples.append((round(color.r * 255), round(color.g * 255), round(color.b * 255)))
+        visibility_failure = _visible_terrain_failure(samples)
+        if visibility_failure:
+            self._failures.append(visibility_failure)
+            self._finish(1)
+            return
+        save_status = cast(Any, image).call("save_png", str(image_path))
+        if save_status != 0:
+            self._failures.append(f"the captured PNG could not be saved: {save_status}")
+            self._finish(1)
+            return
+        colors = Counter(samples)
+        (self._run_dir / "image-metrics.json").write_text(
+            json.dumps(
+                {
+                    "interior_samples": len(samples),
+                    "distinct_colors": len(colors),
+                    "nonbackground_samples": len(samples) - colors.most_common(1)[0][1],
+                    "camera_position": [0.5, -24.0, 12.0],
+                    "camera_target": [8.0, -56.0, 8.0],
+                    "fixed_camera_current": True,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         if not image_path.is_file() or image_path.stat().st_size <= 0:
             self._failures.append("the captured PNG was not written")
             self._finish(1)

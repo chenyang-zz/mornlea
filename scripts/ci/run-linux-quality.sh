@@ -26,8 +26,6 @@ for package in "${all_packages[@]}"; do
 	github.com/channing771/mornlea/packages/client/cmd/mornlea/benchmark|\
 	github.com/channing771/mornlea/packages/client/cmd/mornlea/capture|\
 	github.com/channing771/mornlea/packages/client/cmd/mornlea/devcapture|\
-	github.com/channing771/mornlea/packages/client/cmd/mornlea-godot-core|\
-	github.com/channing771/mornlea/packages/client/render|\
 	github.com/channing771/mornlea/packages/client/render/hud|\
 	github.com/channing771/mornlea/packages/tools/gfxspike) continue ;;
 	esac

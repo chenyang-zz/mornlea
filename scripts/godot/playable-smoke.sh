@@ -5,7 +5,12 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repository_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 project_root="${repository_root}/apps/mornlea-godot"
-engine_dylib="${repository_root}/packages/engine/target/release/libmornlea_engine.dylib"
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64) engine_name="libmornlea_engine.dylib"; loader_rpath="@loader_path" ;;
+  Linux:x86_64) engine_name="libmornlea_engine.so"; loader_rpath='$ORIGIN' ;;
+  *) printf 'unsupported desktop target: %s-%s\n' "$(uname -s)" "$(uname -m)" >&2; exit 1 ;;
+esac
+engine_dylib="${repository_root}/packages/engine/target/release/${engine_name}"
 
 # shellcheck source=python-version.env
 source "${script_dir}/python-version.env"
@@ -191,8 +196,7 @@ else
   fail "duration must be a positive whole number of seconds or minutes"
 fi
 
-[[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || \
-  fail "unsupported desktop target: $(uname -s)-$(uname -m)"
+
 
 "${script_dir}/build-core.sh" --verify >/dev/null
 "${script_dir}/build-extension.sh" --verify >/dev/null
@@ -230,13 +234,13 @@ helper_log="${smoke_root}/helper.log"
 godot_log="${smoke_root}/godot.log"
 world_dir="${smoke_root}/world"
 config_pointer="${smoke_root}/absent-config.json"
-cp -- "${engine_dylib}" "${smoke_root}/bin/libmornlea_engine.dylib"
+cp -- "${engine_dylib}" "${smoke_root}/bin/${engine_name}"
 
 (
   cd "${repository_root}" &&
-  "${go_bin}" build -ldflags='-extldflags=-Wl,-rpath,@loader_path' \
+  "${go_bin}" build -ldflags="-extldflags=-Wl,-rpath,${loader_rpath}" \
     -o "${server_exe}" ./packages/server/cmd/mornlea-server &&
-  "${go_bin}" build -ldflags='-extldflags=-Wl,-rpath,@loader_path' \
+  "${go_bin}" build -ldflags="-extldflags=-Wl,-rpath,${loader_rpath}" \
     -o "${helper_exe}" ./packages/client/cmd/mornlea-godot-smoke
 ) || fail "the dedicated server or remote helper could not be built"
 
@@ -288,7 +292,7 @@ until grep -Fq -- "${helper_connected_marker}" "${helper_log}" 2>/dev/null; do
   sleep 0.2
 done
 
-godot_binary="${MORNLEA_GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
+godot_binary="$("${script_dir}/godot.sh" --print-path)"
 [[ -x "${godot_binary}" ]] || fail "Godot executable is unavailable: ${godot_binary}"
 actual_godot_version="$("${godot_binary}" --version)"
 [[ "${actual_godot_version}" == 4.7.2.stable* ]] || \

@@ -119,6 +119,11 @@ func TestCommentScannerCollectsFirstPartySourcesAndSkipsDeclaredTrees(t *testing
 		"packages/core/testdata/localized.ts":                   "const text = '中文';\n",
 		"scripts/check.mjs":                                     "export const ok = true;\n",
 		"apps/game/main.gd":                                     "extends Node\n",
+		"apps/mornlea-godot/addons/py4godot/copied.gd":          "# Upstream runtime.\n",
+		"apps/mornlea-godot/addons/py4godot/xterm.js":           "`unclosed third-party terminfo",
+		"apps/mornlea-godot/addons/mornlea_bridge/owned.gd":     "# First-party bridge.\n",
+		"apps/mornlea-godot/addons/mornlea_tools/controller.gd": "# Project-owned plugin.\nextends Node\n",
+		"apps/game/addons/py4godot/local.gd":                    "# Another app owns this source.\nextends Node\n",
 		"packages/core/vendor/copied.go":                        "package copied\n",
 		"packages/core/generated/schema.go":                     "package generated\n",
 		"packages/engine/target/debug/build.rs":                 "fn main() {}\n",
@@ -126,9 +131,6 @@ func TestCommentScannerCollectsFirstPartySourcesAndSkipsDeclaredTrees(t *testing
 		"packages/web/dist/index.js":                            "void 0;\n",
 		"packages/core/licenses/copied_license.c":               "int copied;\n",
 		"apps/game/.godot/imported/cache.gd":                    "extends Node\n",
-		"apps/mornlea-godot/addons/py4godot/xterm.js":           "`unclosed third-party terminfo",
-		"apps/mornlea-godot/addons/mornlea_tools/controller.gd": "# Project-owned plugin.\nextends Node\n",
-		"apps/game/addons/py4godot/local.gd":                    "# Another app owns this source.\nextends Node\n",
 		"outside/not_first_party.go":                            "package outside\n",
 	}
 	for path, content := range files {
@@ -153,6 +155,7 @@ func TestCommentScannerCollectsFirstPartySourcesAndSkipsDeclaredTrees(t *testing
 	want := []string{
 		"apps/game/addons/py4godot/local.gd",
 		"apps/game/main.gd",
+		"apps/mornlea-godot/addons/mornlea_bridge/owned.gd",
 		"apps/mornlea-godot/addons/mornlea_tools/controller.gd",
 		"packages/core/main.go",
 		"packages/core/testdata/localized.ts",

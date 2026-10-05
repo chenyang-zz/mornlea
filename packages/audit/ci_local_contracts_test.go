@@ -23,7 +23,7 @@ func TestCIDoctorProfilesAndFailures(t *testing.T) {
 		"native-macos":  {"bash", "cargo", "codesign", "go", "install_name_tool", "make", "nm", "rustc", "rustup", "shasum"},
 		"agent":         {"bash", "go", "python3", "uv"},
 		"godot-static":  {"bash", "make", "rg"},
-		"godot-runtime": {"bash", "cargo", "cc", "clang++", "codesign", "curl", "ditto", "git", "go", "install_name_tool", "make", "nm", "patch", "perl", "pgrep", "rg", "rustc", "rustup", "sandbox-exec", "shasum", "tar", "unzip", "uv", "xcrun"},
+		"godot-runtime": {"bash", "uname", "cargo", "cc", "clang++", "codesign", "curl", "ditto", "git", "go", "install_name_tool", "make", "nm", "patch", "perl", "pgrep", "rg", "rustc", "rustup", "sandbox-exec", "shasum", "tar", "unzip", "uv", "xcrun"},
 	}
 	for profile, commands := range profiles {
 		t.Run(profile, func(t *testing.T) {

@@ -105,7 +105,7 @@ func TestGodotBuildExtensionColdEditorImport(t *testing.T) {
 			projectRoot := createGodotExtensionFixture(t, repository)
 			binDir := t.TempDir()
 			calls := filepath.Join(repository, "godot-calls")
-			writeGodotExtensionFakeCommand(t, filepath.Join(binDir, "uname"), "#!/usr/bin/env bash\nprintf '%s\\n' arm64\n")
+			writeGodotExtensionFakeCommand(t, filepath.Join(binDir, "uname"), "#!/usr/bin/env bash\ncase \"$1\" in -s) printf '%s\\n' Darwin ;; -m) printf '%s\\n' arm64 ;; *) exit 2 ;; esac\n")
 			writeGodotExtensionFakeCommand(t, filepath.Join(binDir, "rustup"), `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$3" == rustc ]]; then printf '%s\n' 'host: aarch64-apple-darwin'; exit 0; fi
@@ -183,7 +183,7 @@ func godotExtensionBuildCommand(t *testing.T, script, repository, projectRoot, e
 	t.Helper()
 	binDir := t.TempDir()
 	marker := filepath.Join(binDir, "cargo-invoked")
-	writeGodotExtensionFakeCommand(t, filepath.Join(binDir, "uname"), "#!/usr/bin/env bash\nprintf '%s\\n' arm64\n")
+	writeGodotExtensionFakeCommand(t, filepath.Join(binDir, "uname"), "#!/usr/bin/env bash\ncase \"$1\" in -s) printf '%s\\n' Darwin ;; -m) printf '%s\\n' arm64 ;; *) exit 2 ;; esac\n")
 	writeGodotExtensionFakeCommand(t, filepath.Join(binDir, "rustup"), "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"$3\" == rustc ]]; then\n  printf '%s\\n' 'host: aarch64-apple-darwin'\n  exit 0\nfi\nif [[ \"$3\" != cargo || \"$4\" != build ]]; then\n  printf 'unexpected rustup invocation: %s\\n' \"$*\" >&2\n  exit 1\nfi\n[[ \"${CARGO_TARGET_DIR}\" == \"${MORNLEA_EXPECTED_CARGO_TARGET_DIR}\" ]] || { printf 'CARGO_TARGET_DIR=%s, want %s\\n' \"${CARGO_TARGET_DIR}\" \"${MORNLEA_EXPECTED_CARGO_TARGET_DIR}\" >&2; exit 1; }\ntouch \"${MORNLEA_CARGO_MARKER}\"\nmkdir -p \"${CARGO_TARGET_DIR}/aarch64-apple-darwin/debug\"\nprintf '%s' \"${MORNLEA_EXTENSION_PAYLOAD}\" > \"${CARGO_TARGET_DIR}/aarch64-apple-darwin/debug/libmornlea_godot.dylib\"\n")
 
 	command := exec.Command(script)

@@ -36,14 +36,6 @@ var embeddedGlyphLicense string
 //go:embed assets/NotoSansCJKsc-Regular.provenance.json
 var embeddedGlyphProvenance string
 
-// Glyph describes one cell in the fixed-size glyph atlas.
-type Glyph struct {
-	Slot                        uint16
-	U0, V0, U1, V1              float32
-	Advance, BearingX, BearingY float32
-	Width, Height               float32
-}
-
 type glyphResult struct {
 	char    rune
 	glyph   Glyph

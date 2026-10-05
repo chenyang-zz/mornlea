@@ -7,7 +7,10 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${script_dir}/version.env"
 
 cache_root="${MORNLEA_GODOT_CACHE_DIR:-/tmp/mornlea-godot-cache}"
-cached_binary="${cache_root}/${GODOT_VERSION}/darwin-universal/Godot.app/Contents/MacOS/Godot"
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64) cached_binary="${cache_root}/${GODOT_VERSION}/linux-x86_64/Godot_v${GODOT_VERSION}_linux.x86_64" ;;
+  *) cached_binary="${cache_root}/${GODOT_VERSION}/darwin-universal/Godot.app/Contents/MacOS/Godot" ;;
+esac
 application_binary="/Applications/Godot.app/Contents/MacOS/Godot"
 
 if [[ -n "${MORNLEA_GODOT_BIN:-}" ]]; then
@@ -17,7 +20,7 @@ elif [[ -x "${cached_binary}" ]]; then
 elif [[ -x "${application_binary}" ]]; then
   godot_binary="${application_binary}"
 else
-  printf 'Godot %s was not found. Run scripts/godot/fetch.sh and extract the verified editor archive outside the repository.\n' "${GODOT_VERSION}" >&2
+  printf 'Godot %s was not found. Run scripts/godot/fetch.sh to materialize the verified editor outside the repository.\n' "${GODOT_VERSION}" >&2
   exit 1
 fi
 

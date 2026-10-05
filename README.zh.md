@@ -1,166 +1,179 @@
----
-doc_id: root-readme
-doc_revision: 2026-09-16.1
-language: zh-CN
-counterpart: README.md
----
 # Mornlea
 
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8" alt="Go 1.26">
   <img src="https://img.shields.io/badge/Rust-1.97.1-f74c00" alt="Rust 1.97.1">
-  <img src="https://img.shields.io/badge/platform-macOS-9cf" alt="macOS">
-  <img src="https://img.shields.io/badge/protocol-v45-blue" alt="协议 v45">
+  <img src="https://img.shields.io/badge/client-macOS-9cf" alt="macOS 客户端">
+  <img src="https://img.shields.io/badge/protocol-v45-blue" alt="protocol v45">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://github.com/channing771/mornlea/actions/workflows/ci.yml/badge.svg" alt="CI">
-  <img src="https://img.shields.io/github/v/release/channing771/mornlea" alt="release">
+  <a href="https://github.com/chenyang-zz/mornlea/actions/workflows/ci.yml"><img src="https://github.com/chenyang-zz/mornlea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-> [English](README.md) · 简体中文（本文）
+[English](README.md) · 简体中文
 
-`Mornlea` 是一个使用 Go 编写的独立体素游戏实验项目。项目自研客户端、权威服务端、世界存储和 Rust wgpu 渲染管线，不追求兼容官方 Minecraft 的协议、存档或资源。
+Mornlea 是一个独立的体素生存游戏。客户端、权威服务端、世界格式和二进制协议都是自研的。它不兼容 Minecraft 协议，也不读取 Minecraft 存档或 Mojang 美术资源。
 
+单机和局域网走同一条登录与模拟路径。世界和玩家的结果由服务端决定。客户端只保留镜像、预测和呈现。
 
+当前契约：protocol v45、player schema v9、chunk schema v9、world metadata v6、`companions.ai` schema v5、`hostile_mobs` schema v2、`passive_mobs` schema v1、engine ABI v11、client ABI v19、benchmark scenario v23。
 
-项目仍处于早期开发阶段，已具备程序化地形、GPU 地形渲染、玩家移动与碰撞、客户端预测、方块挖掘与放置、内置权威服务端、世界持久化、有界二进制协议、TCP 直连与无图形专用服务端。已交付里程碑与版本演进见[实现进度](docs/notes/progress.md)。
+## 功能
 
-当前基线使用协议 v45、玩家 schema v9、区块 schema v9、世界 metadata v6、`companions.ai` schema v5、`hostile_mobs` v2、engine ABI v11、client ABI v19 与 benchmark scenario v23。生存循环包含水、农业（小麦/马铃薯/胡萝卜与骨粉催熟；第一颗小麦种子来自采除自然生成的短草，按确定性 `1/8` 判定掉落，新玩家初始背包为空、不附带任何种子）、饥饿/饱和/疲劳、氧气、三级剑与玩家/夜行者统一权威近战、工具耐久、木门、火把、工作台合成、床与睡眠（夜间入睡、全员跳夜与个人重生点）、夜间夜行者（追逐近战、白昼灼烧、跨重启持久）与疾跑；最多四名具名伙伴由 Go 服务端权威执行 `go_to`/`follow`/`mine`/`place` 队列任务，独立 Python 伙伴 Agent 只运行有界规划、台词与 compact memory。普通本地客户端从进程内 WebView（React）主菜单进入游戏，提供设置页与游戏内暂停覆盖层（单机暂停会冻结权威 tick，远程会话不宣称暂停）。完整玩法细节见[玩家手册](docs/notes/gameplay.md)。
+**世界。** 程序化地形、橡树与树苗、短草、矿石、流动的水和积雪。服务端推进固定昼夜、季节、温度和天气（晴、雨、雷暴）。天空光和方块光由客户端根据权威方块镜像推导。世界、玩家、敌对生物和被动生物都会存档。
 
-独立实体存档当前使用 `hostile_mobs` schema v2 与 `passive_mobs` schema v1。
+**生存。** 挖掘与放置、带耐久的工具、个人 2×2 合成和 3×3 工作台、熔炉、箱子。可种植小麦、马铃薯和胡萝卜。饥饿、食物、氧气、生命、摔落和铁质护甲都由服务端结算。战斗包括剑、弓，以及两种敌对生物（夜行者与掷骨者）和被动的牛。按住 Shift 潜行，双击 `W` 疾跑，可以在床上睡觉，也可以用水桶装水。新玩家的初始背包是空的。世界难度为 `peaceful`、`normal` 或 `hard`。
+
+**多人。** 普通单机会在进程内启动服务端。`mornlea-server` 是面向可信局域网的无图形 TCP 服务端：没有认证或加密，最多 8 名玩家，也没有游戏内的服务器列表。用 `--connect` 连接。
+
+**伙伴。** Go 服务端最多运行四名具名伙伴，并执行他们的 `go_to`、`follow`、`mine` 和 `place` 任务。可选的 Python 服务负责规划与台词，不能自行改写世界。
+
+**客户端。** macOS 上的默认客户端是 `mornlea`：Rust wgpu 渲染器、进程内 WebView 菜单（主菜单、设置、加载、暂停）和 WebView HUD。`F5` 在第一人称、第三人称背面和第三人称正面之间循环。`apps/mornlea-godot` 是可选的桌面试点，不是 `make run` 启动的程序。
+
+[docs/notes/limitations.md](docs/notes/limitations.md) 里有些较早的边界描述写于天气、护甲、潜行、弓和牛之前。该说明与代码不一致时，以代码和 [openspec/specs](openspec/specs/) 为准。
 
 ## 截图
 
-<p align="center"><img src="docs/demo.gif" width="640" alt="Mornlea 演示"></p>
+无头视觉基线，640×360。这些是入库的世界场景，不是实机录像。
 
-以下静态截图取自无窗口视觉验证基线（640×360，`make visual-check` 生成），从左到右、从上到下依次为：正午地形、橡树林、方块光房间与材料展示。
-
-<table>
-  <tr>
-    <td><img src="testdata/visual-golden/world/terrain-noon.png" width="380" alt="terrain-noon 正午地形"></td>
-    <td><img src="testdata/visual-golden/world/oak-grove.png" width="380" alt="oak-grove 橡树林"></td>
-  </tr>
-  <tr>
-    <td><img src="testdata/visual-golden/world/block-light-room.png" width="380" alt="block-light-room 方块光房间"></td>
-    <td><img src="testdata/visual-golden/world/materials-showcase.png" width="380" alt="materials-showcase 材料展示"></td>
-  </tr>
-</table>
+| 正午地形 | 橡树林 |
+| --- | --- |
+| ![正午地形](testdata/visual-golden/world/terrain-noon.png) | ![橡树林](testdata/visual-golden/world/oak-grove.png) |
+| 雨 | 积雪 |
+| ![正午雨景](testdata/visual-golden/world/rain-noon.png) | ![积雪](testdata/visual-golden/world/snow-cover.png) |
 
 ## 环境要求
 
-- macOS；客户端入口目前使用 Darwin 构建约束，主要在 Apple Silicon 上验证；
-- Go 1.26；
-- 伙伴 Agent 需要 Python 3.12 与 `uv`；不启用伙伴时无需 Python；
-- 通过 rustup 安装的 Rust 1.97.1；
-- 可用的 CGO 与 C 编译工具链，macOS 可通过 Xcode Command Line Tools 提供；
-- Make。
-
-如本机尚未安装命令行开发工具，可执行：
+- 图形客户端需要 macOS。客户端入口使用 Darwin 构建约束，主要在 Apple Silicon 上验证。
+- Go 1.26。
+- 通过 rustup 安装的 Rust 1.97.1。版本钉在 `packages/engine/rust-toolchain.toml`。
+- C 工具链与 CGO。macOS 上是 Xcode Command Line Tools：
 
 ```bash
 xcode-select --install
 ```
 
+- Make。
+- 只有启用伙伴 Agent 时才需要 Python 3.12 和 `uv`。
+- 只有改可选试点时才需要 Godot 4.7.2。见 [apps/mornlea-godot/README.zh.md](apps/mornlea-godot/README.zh.md)。
+
+Linux 可以用 `make build-linux-server` 构建无图形服务端。该目标不产出图形客户端。
+
 ## 快速开始
 
 ```bash
-git clone https://github.com/channing771/mornlea.git
+git clone https://github.com/chenyang-zz/mornlea.git
 cd mornlea
 make run
 ```
 
-首次启动需要生成并加载视距内的地形，耗时会明显长于后续运行。默认世界保存在 `worlds/default`；使用独立存档目录可加 `make run ARGS="--world worlds/demo"`。`make build` 会构建完整 Rust workspace 并产出 `bin/mornlea`、`bin/mornlea-server` 与相邻的 `libmornlea_engine.dylib`；任一 binary 都不能与其他构建的依赖库混装。
+首次启动会生成视距内的地形，比之后的启动更慢。默认存档是 `worlds/default`。
 
-## 仓库布局
+```bash
+make run ARGS="--world worlds/demo"
+```
 
-Go 源码由根 `go.work` 直辖为六个单元模块，Rust、Python 服务与开发工具并列在 `packages/` 下：
+`make run` 会先构建固定版本的 Rust 库，再启动客户端。不要把二进制和另一次构建的 `mornlea_engine` 库混用。
+
+## 使用
+
+本地游玩会打开主菜单，然后进入进程内世界。远程游玩不创建那个本地世界：
+
+```bash
+make rust
+go run ./packages/server/cmd/mornlea-server --listen :25565 --world worlds/lan --seed 42 --max-players 8
+go run ./packages/client/cmd/mornlea --connect 127.0.0.1:25565 --name PlayerA
+```
+
+`--seed` 只在创建世界目录时生效。`--max-players` 只接受 `1..8`。不要把这个 TCP 端口暴露到公网。`--difficulty` 等更多服务端参数见 [docs/notes/lan-server.md](docs/notes/lan-server.md)。
+
+`make build` 会链接 `bin/mornlea` 和 `bin/mornlea-server`，并复制 `bin/libmornlea_engine.dylib`。随后它会从 `packages/client/assets/packs/pixel_perfection` 复制署名文件，而这个目录已经不在树里。复制失败发生在二进制写完之后。内嵌默认材质是 `packages/client/assets/packs/pastelcraft` 里的 Pastelcraft 子集。
+
+`make build-linux-server` 产出 Linux amd64 无图形服务端，以及相邻的 `bin/libmornlea_engine.so`。这两个文件必须一起发布。
+
+### 操作
+
+| 输入 | 动作 |
+| --- | --- |
+| `W` `A` `S` `D` | 移动 |
+| 空格 | 跳跃；按住则在水中上浮 |
+| 双击 `W` | 向前移动时疾跑 |
+| 左 Shift | 潜行 |
+| 鼠标 | 转动视角 |
+| 按住左键 | 挖掘、近战或拉弓 |
+| 按住右键 | 使用：放置、打开、翻地、进食、门、床、工作台、装备护甲 |
+| `1`–`9` | 快捷栏 |
+| `E` | 打开背包，或关闭当前容器 |
+| `Q` | 从选中的快捷栏丢出一件物品 |
+| Enter | 聊天，也用来向伙伴发送 `@名字 指令` |
+| `F5` | 切换视角 |
+| Esc | 关闭当前面板，或暂停 |
+| `F3` | 调试面板，仅在带 `--dev` 时可用 |
+
+背包里的点击可以整堆移动、拆分或快捷搬运。移动由服务端结算。数值、配方和伙伴指令见 [docs/notes/gameplay.md](docs/notes/gameplay.md)。
+
+## 项目结构
+
+仓库根目录不是 Go module。`go.work` 列出六个模块。Go 导入路径前缀仍是 `github.com/channing771/mornlea/packages/<unit>`，GitHub 仓库则是 `chenyang-zz/mornlea`。
 
 ```text
 packages/
-  contracts/  跨语言共享 JSON 契约（Go embed 与 Python 双消费）
-  shared/     server/client 共用领域包（core、physics、network、world 等）
-  server/     权威模拟与存储（sim、fluid、storage、server 与 cmd/mornlea-server）
-  client/     呈现侧与图形客户端（client、render、mesh 与 cmd/mornlea）
-  tools/      开发工具（perfcheck、agent-board 看板、gfxspike 等）
-  audit/      跨模块架构门禁测试集（archcheck）
-  engine/     Rust workspace（mornlea_engine 数值内核与 mornlea_client wgpu 渲染）
-  agent/      独立 Python 伙伴 Agent 服务
+  contracts/   Go 与 Python 共用的 JSON 契约
+  shared/      领域类型、物理、网络、世界、engine ABI 桥
+  server/      权威模拟、流体、存储、mornlea-server
+  client/      镜像、预测、渲染 CPU 侧、mornlea
+  tools/       perfcheck、agent board 及其他开发工具
+  audit/       架构门禁
+  engine/      Rust workspace：mornlea_engine、mornlea_client，以及迁移中的 crate
+  agent/       可选的 Python 伙伴 Agent
+apps/
+  mornlea-godot/   可选的 Godot 桌面试点
 ```
 
-各单元的局部 `AGENTS.md` 随包目录生效；模块边界与依赖方向见[当前架构说明](docs/architecture.md)。
+当前由 Go 持有正在运行的服务端、默认客户端使用的协议会话，以及存储。`mornlea_engine` 是数值内核（网格、光照、碰撞、射线、物理、世界生成、流体）。`mornlea_client` 持有 Darwin 窗口、输入、WebView 壳和 GPU 渲染。Go 不调用 WebGPU。Rust 的 domain、protocol、storage crate 以及 Godot 应用属于迁移工作。目标终态见 [docs/architecture-target.zh.md](docs/architecture-target.zh.md)；正在运行的系统见 [docs/architecture.zh.md](docs/architecture.zh.md)。
 
-## 常用命令
-
-| 命令 | 说明 |
-| --- | --- |
-| `make help` | 显示 Makefile 帮助，也是默认目标 |
-| `make run` | 运行客户端，可使用 `ARGS` 传递命令行参数 |
-| `make build` | 构建两个 Go binary 与完整 Rust workspace，并复制 `bin/libmornlea_engine.dylib` |
-| `make build-linux-server` | 构建 Linux amd64 `bin/mornlea-server` 与同目录 `bin/libmornlea_engine.so` |
-| `make test` | 运行全部 Go 测试 |
-| `make test-race` | 使用 race detector 运行全部 Go 测试 |
-| `make test-multiplayer` | 运行 v6 报告、兴趣观察与 benchmark 调度相关测试子集 |
-| `make bench-multiplayer` | 运行三组 M3C 多人微基准 |
-| `make archcheck` | 验证依赖闭包与无图形服务端边界 |
-| `make visual-check` | 无头抓帧并与视觉 golden 基线比对（见[视觉验证](docs/notes/visual-verification.md)） |
-| `make dev-check` | gofmt 检查等开发门禁 |
-| `make rust` | 构建固定 Rust 1.97.1 workspace 的两个 cdylib，`run`/`build`/`test` 等目标的前置依赖 |
-| `make rust-check` | 运行 Rust 格式、clippy 与 workspace 单测 |
-| `make companion-agent-check` | locked 安装并运行伙伴 Agent 格式、lint、mypy 与全部 Python 单测 |
-| `make companion-agent-integration` | 运行无 provider、无外网的真实 Go/Python 进程合同测试 |
-| `make fmt` | 格式化仓库内的 Rust 与 Go 源码 |
-| `make clean` | 删除 `bin` 目录，不会删除世界存档 |
-
-## 操作一览
-
-| 输入 | 操作 |
-| --- | --- |
-| `W` / `A` / `S` / `D` + 空格 | 移动与跳跃；按住 `Left Ctrl` 或 `Left Shift` 前移可疾跑 |
-| 鼠标 | 移动转动视角；按住左键采掘/近战，按住右键使用（放置、开箱开炉、翻地、进食、开门、工作台等） |
-| `1` … `9` | 选择快捷栏栏位 |
-| `E` | 打开/关闭背包（含个人 2×2 合成网格）或关闭当前容器 |
-| `Q` | 丢弃选中栏位的一件物品 |
-| `Enter` | 打开聊天（也是伙伴指令 `@伙伴名 指令` 的入口） |
-| `Esc` | 关闭聊天/容器/面板，或打开暂停覆盖层 |
-
-完整键位、合成配方、农业、容器、采掘、生存数值与伙伴行为见[玩家手册](docs/notes/gameplay.md)。
-
-## 文档导航
+## 文档
 
 | 主题 | 文档 |
 | --- | --- |
-| 玩法手册（键位/合成/农业/生存/伙伴） | [docs/notes/gameplay.md](docs/notes/gameplay.md) |
-| 配置文件与调试面板 | [docs/notes/configuration.md](docs/notes/configuration.md) |
-| 局域网专用服务端（`mornlea-server`） | [docs/notes/lan-server.md](docs/notes/lan-server.md) |
+| 玩法 | [docs/notes/gameplay.md](docs/notes/gameplay.md) |
+| 配置 | [docs/notes/configuration.md](docs/notes/configuration.md) |
+| 局域网服务端 | [docs/notes/lan-server.md](docs/notes/lan-server.md) |
 | 材质包 | [docs/texture-packs.md](docs/texture-packs.md) |
-| 当前限制 | [docs/notes/limitations.md](docs/notes/limitations.md) |
-| 兼容性与升级（协议/存档/备份回退） | [docs/notes/compatibility.md](docs/notes/compatibility.md) |
-| 视觉验证 | [docs/notes/visual-verification.md](docs/notes/visual-verification.md) |
-| 当前架构与仓库目录 | [docs/architecture.md](docs/architecture.md) |
-| 实现进度与里程碑 | [docs/notes/progress.md](docs/notes/progress.md) |
-| 文档总地图 | [docs/README.md](docs/README.md) |
+| 限制 | [docs/notes/limitations.md](docs/notes/limitations.md) |
+| 存档与协议升级 | [docs/notes/compatibility.md](docs/notes/compatibility.md) |
+| 视觉基线 | [docs/notes/visual-verification.md](docs/notes/visual-verification.md) |
+| 当前架构 | [docs/architecture.zh.md](docs/architecture.zh.md) |
+| 目标架构 | [docs/architecture-target.zh.md](docs/architecture-target.zh.md) |
+| 已交付内容 | [docs/notes/progress.md](docs/notes/progress.md) |
+| 文档索引 | [docs/README.zh.md](docs/README.zh.md) |
 
-局域网联机最简启动：
+多份玩家说明是中文。
 
-```bash
-go run ./packages/server/cmd/mornlea-server --listen :25565 --world worlds/lan --seed 42 --max-players 8
-go run ./packages/client/cmd/mornlea --connect 127.0.0.1:25565 --name 玩家甲
-```
+## 常用命令
 
-## Rust 与 Go 的职责划分
+| 命令 | 作用 |
+| --- | --- |
+| `make help` | 列出 Makefile 目标 |
+| `make run` | 构建 Rust 库并启动 macOS 客户端 |
+| `make build` | 链接两个二进制并复制 engine dylib；末尾的署名复制仍然会失败 |
+| `make build-linux-server` | Linux amd64 无图形服务端以及 `libmornlea_engine.so` |
+| `make test` | 六个模块的 Go 测试 |
+| `make test-race` | 带 race detector 的同一组测试 |
+| `make dev-check` | 短 Go 检查，加上 Rust fmt、clippy 和测试 |
+| `make rust` | 构建固定版本的 Rust cdylib |
+| `make rust-check` | Rust fmt、clippy 和 workspace 测试 |
+| `make visual-check` | 把无头帧与视觉基线比较 |
+| `make companion-agent-check` | Python 格式、lint、类型和单元测试 |
+| `make companion-agent-integration` | 无外网的 Go/Python 进程合同 |
 
-固定 Rust 1.97.1 workspace 包含 `mornlea_engine`（mesh/light、collision、raycast、physics 积分、worldgen 与流体数值内核的唯一生产实现，engine ABI v11）与 `mornlea_client`（Darwin 窗口、事件循环、全部 GPU 渲染与 WebView 菜单层，client ABI v19）两个 cdylib。Go 拥有 app、world、sim、network、storage 与渲染 CPU 半部，不接触 GPU API，也没有生产 fallback；两条 ABI 各自是不可跨版本混装的 release-unit 边界。组件所有权与依赖方向见[当前架构说明](docs/architecture.md)，新代码归属规矩见 [docs/notes/go-rust-division.md](docs/notes/go-rust-division.md)。
+## 参与贡献
 
-## 伙伴 Agent 服务
+改代码前先读 [AGENTS.md](AGENTS.md)。小修复可以直接提 pull request。协议、存档、性能契约和跨包改动要先走 OpenSpec：[docs/openspec.zh.md](docs/openspec.zh.md) 和 [docs/development-process.zh.md](docs/development-process.zh.md)。
 
-`mornlea-companion-agent` 位于 `packages/agent/companion`，使用 Python 3.12、LangChain/LangGraph、FastAPI 与 SQLite。Go 服务端仍唯一拥有世界、任务、FIFO、动作和最终计划校验；Python 服务只返回候选计划、台词以及 compact memory CAS 结果。两进程只通过 loopback Agent HTTP v1 与只读 MCP v1 互通。
+不要加入 Mojang 材质或其他未授权美术资源。
 
-```bash
-make companion-agent-check        # locked 安装与 Python 全量质量门禁
-make companion-agent-integration  # deterministic fake model 的真实双进程合同
-```
+## 许可证
 
-实际启动前还需分别配置同名 Bearer credential 环境变量并先启动 Agent 服务；完整 YAML/JSON 示例见[配置说明](docs/notes/configuration.md)，组件信任与持久化边界见[当前架构说明](docs/architecture.md)。
+项目本身是 [MIT](LICENSE)。
 
-## 使用 OpenSpec 开发
-
-本项目使用 OpenSpec 管理复杂变更：新功能、跨包重构、协议、存档或性能契约变化默认先写 change 产物（`proposal.md`、delta specs、`design.md`、`tasks.md`），实现完成后校验并归档；低风险小改动可直接完成。安装、命令与自动 Hook 约束见 [docs/openspec.md](docs/openspec.md)，项目上下文见 [`openspec/config.yaml`](openspec/config.yaml)，AI 协作规则见 [`AGENTS.md`](AGENTS.md)。
+内嵌的默认方块材质是 [Pastelcraft](https://modrinth.com/resourcepack/pastelcraft)（作者 XradicalD，Square Dreams）的重命名子集，同样是 MIT。署名见 [packages/client/assets/packs/pastelcraft/ATTRIBUTION.md](packages/client/assets/packs/pastelcraft/ATTRIBUTION.md)。没有映射的层回退到程序化材质。

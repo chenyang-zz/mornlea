@@ -1,0 +1,138 @@
+{
+  "validated_utc": "2026-10-03",
+  "scope": "asset packaging; no production runtime integration",
+  "glb_files": [
+    {
+      "path": "characters/block_farmer_v06/runtime/block_farmer_animated_v06.glb",
+      "size_bytes": 886320,
+      "mesh_count": 80,
+      "joint_count": 21,
+      "clips": [
+        "Crouch_Down",
+        "Crouch_Idle",
+        "Crouch_Up",
+        "Idle",
+        "Prone_Down",
+        "Prone_Idle",
+        "Prone_Up",
+        "Run",
+        "Sleep_Enter",
+        "Sleep_Exit",
+        "Sleep_Loop",
+        "Walk"
+      ],
+      "status": "pass"
+    },
+    {
+      "path": "characters/block_farmer_v06/runtime/block_farmer_base_body_v06.glb",
+      "size_bytes": 628524,
+      "mesh_count": 38,
+      "joint_count": 21,
+      "clips": [
+        "Crouch_Down",
+        "Crouch_Idle",
+        "Crouch_Up",
+        "Idle",
+        "Prone_Down",
+        "Prone_Idle",
+        "Prone_Up",
+        "Run",
+        "Sleep_Enter",
+        "Sleep_Exit",
+        "Sleep_Loop",
+        "Walk"
+      ],
+      "status": "pass"
+    },
+    {
+      "path": "characters/block_farmer_v06/runtime/block_farmer_boots_v06.glb",
+      "size_bytes": 92092,
+      "mesh_count": 14,
+      "joint_count": 21,
+      "clips": [],
+      "status": "pass"
+    },
+    {
+      "path": "characters/block_farmer_v06/runtime/block_farmer_hair_v06.glb",
+      "size_bytes": 61272,
+      "mesh_count": 9,
+      "joint_count": 21,
+      "clips": [],
+      "status": "pass"
+    },
+    {
+      "path": "characters/block_farmer_v06/runtime/block_farmer_hat_v06.glb",
+      "size_bytes": 24680,
+      "mesh_count": 3,
+      "joint_count": 21,
+      "clips": [],
+      "status": "pass"
+    },
+    {
+      "path": "characters/block_farmer_v06/runtime/block_farmer_overalls_v06.glb",
+      "size_bytes": 114408,
+      "mesh_count": 20,
+      "joint_count": 21,
+      "clips": [],
+      "status": "pass"
+    },
+    {
+      "path": "characters/block_farmer_v06/runtime/block_farmer_pouch_v06.glb",
+      "size_bytes": 24660,
+      "mesh_count": 3,
+      "joint_count": 21,
+      "clips": [],
+      "status": "pass"
+    },
+    {
+      "path": "characters/block_farmer_v06/runtime/block_farmer_shirt_v06.glb",
+      "size_bytes": 38036,
+      "mesh_count": 7,
+      "joint_count": 21,
+      "clips": [],
+      "status": "pass"
+    },
+    {
+      "path": "tools/prototype_v01/runtime/axe_prototype_v01.glb",
+      "size_bytes": 16296,
+      "mesh_count": 5,
+      "joint_count": 0,
+      "clips": [],
+      "status": "pass"
+    },
+    {
+      "path": "tools/prototype_v01/runtime/hoe_prototype_v01.glb",
+      "size_bytes": 16360,
+      "mesh_count": 5,
+      "joint_count": 0,
+      "clips": [],
+      "status": "pass"
+    },
+    {
+      "path": "tools/prototype_v01/runtime/watering_can_prototype_v01.glb",
+      "size_bytes": 52280,
+      "mesh_count": 16,
+      "joint_count": 0,
+      "clips": [],
+      "status": "pass"
+    }
+  ],
+  "shared_skin_joint_names_and_inverse_bind_matrices": "pass",
+  "wardrobe_paths": "pass",
+  "self_contained_glb_buffers": "pass",
+  "source_reopened_with_blender": "4.3.2",
+  "character_source_geometry_materials_weights_rig_and_animation_unchanged_sha256": "5e5f0207a9d78ece3eb52b681e9778d54259fa7f59eec3648913093dd61abdf1",
+  "tool_source_scenes": [
+    "ASSET_Hoe",
+    "ASSET_Axe",
+    "ASSET_WateringCan"
+  ],
+  "tool_source_mesh_count": 26,
+  "tool_source_actions": 0,
+  "source_absolute_output_ui_paths_removed": "pass",
+  "limitations": [
+    "Not full glTF conformance certification",
+    "No Godot or Mornlea integration acceptance",
+    "No terrain IK, gameplay, effects, or controller testing"
+  ]
+}

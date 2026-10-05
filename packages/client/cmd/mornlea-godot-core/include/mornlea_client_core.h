@@ -155,6 +155,11 @@ extern "C" {
 #define MORNLEA_CLIENT_INPUT_VERSION 1u
 #define MORNLEA_CLIENT_STEP_VERSION 1u
 #define MORNLEA_CLIENT_WORLD_VERSION 1u
+/* Existing world-record coordinates: X/Z are signed section coordinates;
+ * Y is a zero-based storage index. The world origin is Y * edge - bias.
+ * These constants clarify generation-1 semantics without changing wire bytes. */
+#define MORNLEA_CLIENT_SECTION_EDGE_BLOCKS 16u
+#define MORNLEA_CLIENT_WORLD_Y_BIAS_BLOCKS 64u
 #define MORNLEA_CLIENT_FRAME_VERSION 1u
 #define MORNLEA_CLIENT_STATUS_VERSION 1u
 /* Additive projection of the retained frame; existing frame bytes stay frozen.

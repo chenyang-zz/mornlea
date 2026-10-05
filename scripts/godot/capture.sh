@@ -76,8 +76,24 @@ while (($# > 0)); do
 done
 
 [[ -f "${scenario_path}" ]] || fail "capture scenario is missing: ${scenario_path}"
-[[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || \
-  fail "unsupported desktop target: $(uname -s)-$(uname -m)"
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64)
+    display_args=(--display-driver macos --rendering-driver metal)
+    runtime_family="darwin64"
+    platform_version="$(sw_vers -productName) $(sw_vers -productVersion)"
+    engine_name="libmornlea_engine.dylib"
+    loader_rpath="@loader_path"
+    ;;
+  Linux:x86_64)
+    [[ -n "${DISPLAY:-}" ]] || fail "Linux capture requires DISPLAY; use a desktop or Xvfb"
+    display_args=(--display-driver x11 --rendering-driver opengl3)
+    runtime_family="linux64"
+    platform_version="$(uname -s) $(uname -r)"
+    engine_name="libmornlea_engine.so"
+    loader_rpath='$ORIGIN'
+    ;;
+  *) fail "unsupported desktop target: $(uname -s)-$(uname -m)" ;;
+esac
 case "${run_dir_override}" in
   *testdata/visual-golden*)
     fail "pilot evidence must stay outside tracked visual baselines"
@@ -99,6 +115,7 @@ else
   run_dir="${repository_root}/build/visual/godot-pilot/${run_id}"
 fi
 mkdir -p "${run_dir}/world"
+run_dir="$(cd -- "${run_dir}" && pwd -P)"
 
 if [[ "${port}" =~ ^[1-9][0-9]*$ ]] && ((port <= 65535)); then
   :
@@ -139,14 +156,13 @@ until grep -q 'listening on 127.0.0.1' "${helper_log}" 2>/dev/null; do
   sleep 0.2
 done
 
-godot_binary="${MORNLEA_GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
+godot_binary="$("${script_dir}/godot.sh" --print-path)"
 [[ -x "${godot_binary}" ]] || fail "Godot executable is unavailable: ${godot_binary}"
 actual_godot_version="$("${godot_binary}" --version)"
 [[ "${actual_godot_version}" == 4.7.2.stable* ]] || \
   fail "Godot version mismatch: got ${actual_godot_version}, want 4.7.2-stable"
 
-platform_version="$(sw_vers -productName) $(sw_vers -productVersion)"
-check_output="$(/usr/bin/env \
+if /usr/bin/env \
   MORNLEA_GODOT_CAPTURE_PORT="${port}" \
   MORNLEA_GODOT_CAPTURE_DIR="${run_dir}" \
   MORNLEA_GODOT_CAPTURE_RUN_ID="${run_id}" \
@@ -158,12 +174,15 @@ check_output="$(/usr/bin/env \
   MORNLEA_CPYTHON_VERSION="${PY4GODOT_CPYTHON_VERSION}" \
   MORNLEA_PLATFORM_ARCH="$(uname -m)" \
   MORNLEA_PLATFORM_VERSION="${platform_version}" \
-  "${godot_binary}" --audio-driver Dummy --display-driver macos --rendering-driver metal \
+  "${godot_binary}" --audio-driver Dummy "${display_args[@]}" \
   --resolution 640x360 --path "${project_root}" --quit-after 20000 \
-  res://tests/scenes/visual_capture.tscn 2>&1)" || {
-  printf '%s\n' "${check_output}" >&2
-  fail "the visual capture scene failed"
-}
+  res://tests/scenes/visual_capture.tscn >"${run_dir}/godot.log" 2>&1; then
+  check_output="$(cat -- "${run_dir}/godot.log")"
+else
+  scene_status="$?"
+  cat -- "${run_dir}/godot.log" >&2
+  fail "the visual capture scene failed (exit ${scene_status})"
+fi
 [[ "${check_output}" == *"Python visual capture passed."* ]] || {
   printf '%s\n' "${check_output}" >&2
   fail "the visual capture success marker is missing"
@@ -173,7 +192,7 @@ check_output="$(/usr/bin/env \
   fail "the visual capture reported an engine or script error"
 }
 
-runtime_python="${project_root}/addons/py4godot/cpython-${PY4GODOT_CPYTHON_VERSION}-darwin64/python/bin/python3.14"
+runtime_python="${project_root}/addons/py4godot/cpython-${PY4GODOT_CPYTHON_VERSION}-${runtime_family}/python/bin/python3.14"
 [[ -x "${runtime_python}" ]] || fail "embedded Python is missing"
 "${runtime_python}" "${script_dir}/visual_evidence_contract.py" \
   --identity "${run_dir}/identity.json" \

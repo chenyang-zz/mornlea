@@ -10,6 +10,7 @@ import (
 
 	"github.com/channing771/mornlea/packages/client/presentation"
 	clientruntime "github.com/channing771/mornlea/packages/client/runtime"
+	"github.com/channing771/mornlea/packages/shared/core"
 )
 
 // TestABIIdentityMatchesClientCoreContract pins identity values with explicit
@@ -254,6 +255,12 @@ func TestABILayoutMatchesHeaderStructs(t *testing.T) {
 // own them. Any change on either side must be a reviewed contract change, not
 // silent drift between the ABI and the platform-independent client core.
 func TestABILimitsMatchFrozenPresentationContracts(t *testing.T) {
+	if got, want := SectionEdgeBlocks, uint32(core.SectionSize); got != want {
+		t.Errorf("section edge blocks = %d, want %d", got, want)
+	}
+	if got, want := WorldYBiasBlocks, uint32(-core.MinY); got != want {
+		t.Errorf("world Y bias blocks = %d, want %d", got, want)
+	}
 	if got, want := MaxWorldBatchOperations, uint32(presentation.MaxWorldBatchOperations); got != want {
 		t.Errorf("world batch operations = %d, want %d", got, want)
 	}
@@ -363,6 +370,8 @@ func expectedHeaderDefines() map[string]uint32 {
 		"MORNLEA_CLIENT_INPUT_VERSION":                InputVersion,
 		"MORNLEA_CLIENT_STEP_VERSION":                 StepVersion,
 		"MORNLEA_CLIENT_WORLD_VERSION":                WorldVersion,
+		"MORNLEA_CLIENT_SECTION_EDGE_BLOCKS":          SectionEdgeBlocks,
+		"MORNLEA_CLIENT_WORLD_Y_BIAS_BLOCKS":          WorldYBiasBlocks,
 		"MORNLEA_CLIENT_FRAME_VERSION":                FrameVersion,
 		"MORNLEA_CLIENT_STATUS_VERSION":               StatusVersion,
 		"MORNLEA_CLIENT_ENVIRONMENT_VERSION":          EnvironmentVersion,

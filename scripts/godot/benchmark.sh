@@ -5,7 +5,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repository_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 project_root="${repository_root}/apps/mornlea-godot"
-engine_dylib="${repository_root}/packages/engine/target/release/libmornlea_engine.dylib"
+engine_dylib=""
 
 # shellcheck source=python-version.env
 source "${script_dir}/python-version.env"
@@ -160,8 +160,25 @@ case "${output}" in
     ;;
 esac
 
-[[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || \
-  fail "unsupported desktop target: $(uname -s)-$(uname -m)"
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64)
+    display_args=(--display-driver macos --rendering-driver metal)
+    runtime_family="darwin64"
+    platform_version="$(sw_vers -productName) $(sw_vers -productVersion)"
+    engine_name="libmornlea_engine.dylib"
+    loader_rpath="@loader_path"
+    ;;
+  Linux:x86_64)
+    [[ -n "${DISPLAY:-}" ]] || fail "Linux capture requires DISPLAY; use a desktop or Xvfb"
+    display_args=(--display-driver x11 --rendering-driver opengl3)
+    runtime_family="linux64"
+    platform_version="$(uname -s) $(uname -r)"
+    engine_name="libmornlea_engine.so"
+    loader_rpath='$ORIGIN'
+    ;;
+  *) fail "unsupported desktop target: $(uname -s)-$(uname -m)" ;;
+esac
+engine_dylib="${repository_root}/packages/engine/target/release/${engine_name}"
 "${script_dir}/build-core.sh" --verify >/dev/null
 "${script_dir}/build-extension.sh" --verify >/dev/null
 [[ -f "${engine_dylib}" ]] || fail "the engine release library is missing: ${engine_dylib} (run make rust)"
@@ -204,11 +221,11 @@ server_log="${smoke_root}/server.log"
 godot_log="${smoke_root}/godot.log"
 world_dir="${smoke_root}/world"
 config_pointer="${smoke_root}/absent-config.json"
-cp -- "${engine_dylib}" "${smoke_root}/bin/libmornlea_engine.dylib"
+cp -- "${engine_dylib}" "${smoke_root}/bin/${engine_name}"
 
 (
   cd "${repository_root}" &&
-  "${go_bin}" build -ldflags='-extldflags=-Wl,-rpath,@loader_path' \
+  "${go_bin}" build -ldflags="-extldflags=-Wl,-rpath,${loader_rpath}" \
     -o "${server_exe}" ./packages/server/cmd/mornlea-server
 ) || fail "the dedicated server could not be built"
 
@@ -232,13 +249,12 @@ until grep -q -- "listen=127.0.0.1:${port}" "${server_log}" 2>/dev/null; do
   sleep 0.2
 done
 
-godot_binary="${MORNLEA_GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
+godot_binary="$("${script_dir}/godot.sh" --print-path)"
 [[ -x "${godot_binary}" ]] || fail "Godot executable is unavailable: ${godot_binary}"
 actual_godot_version="$("${godot_binary}" --version)"
 [[ "${actual_godot_version}" == 4.7.2.stable* ]] || \
   fail "Godot version mismatch: got ${actual_godot_version}, want 4.7.2-stable"
 
-platform_version="$(sw_vers -productName) $(sw_vers -productVersion)"
 set +e
 /usr/bin/env \
   MORNLEA_GODOT_BENCHMARK_ADDRESS="127.0.0.1:${port}" \
@@ -255,7 +271,7 @@ set +e
   MORNLEA_CPYTHON_VERSION="${PY4GODOT_CPYTHON_VERSION}" \
   MORNLEA_PLATFORM_ARCH="$(uname -m)" \
   MORNLEA_PLATFORM_VERSION="${platform_version}" \
-  "${godot_binary}" --audio-driver Dummy --display-driver macos --rendering-driver metal \
+  "${godot_binary}" --audio-driver Dummy "${display_args[@]}" \
   --resolution 2560x1440 --path "${project_root}" --quit-after 50000 \
   res://tests/scenes/visual_benchmark.tscn >"${godot_log}" 2>&1
 godot_status=$?

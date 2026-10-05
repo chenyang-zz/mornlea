@@ -1151,7 +1151,11 @@ mod tests {
         let expected_origin = |x: i32, y: i32, z: i32| {
             Transform3D::new(
                 Basis::IDENTITY,
-                Vector3::new((x as f32) * 16.0, (y as f32) * 16.0, (z as f32) * 16.0),
+                Vector3::new(
+                    (x as f32) * 16.0,
+                    (y as f32) * 16.0 - 64.0,
+                    (z as f32) * 16.0,
+                ),
             )
         };
         let expected_origins = [

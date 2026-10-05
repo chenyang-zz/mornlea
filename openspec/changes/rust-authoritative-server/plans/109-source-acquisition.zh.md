@@ -1,11 +1,11 @@
-# Source acquisition 调用者计划说明
+# Source acquisition caller plan note
 
-规范实现接口、算法与验收以 [英文计划](109-source-acquisition.md) 为准；tasks.md 是唯一状态源。
+The authoritative implementation interface, algorithms, and acceptance follow the [English plan](109-source-acquisition.md); tasks.md is the sole status source.
 
-本单元从已验收 companion 恢复生产者继续，显式 library caller 借用原 background scheduler 与 Native GenerationPool，在真实 Acquire 前使用本地恢复 book 判断完成事件是否仍 wanted，在 AdvanceActors 后且 hostile/gameplay 前仅一次 dirty reconcile。手动 advance_tick/replace/start/offer 语义保持。容量不足保留未启动 FIFO 请求；真实 typed failure 不冒充缺失。Pending 出生扫描 dirty 重试与普通 saved-restore 失败不逐 tick 重试分开验收。
+This unit continues from the accepted companion-restore producer: an explicit library caller borrows the original background scheduler and the Native GenerationPool, uses the local restore book before the real Acquire to decide whether a completion event is still wanted, and performs exactly one dirty reconcile after AdvanceActors and before hostile/gameplay. Manual advance_tick/replace/start/offer semantics are preserved. Insufficient capacity retains unstarted FIFO requests; a real typed failure must not be disguised as missing. The Pending spawn-scan dirty retry and the ordinary saved-restore failure without every-tick retry are accepted separately.
 
-实际 Disk saved→Ready 和 Disk missing→NeedsGeneration→Native→Ready 是主验收，双对象或声明编译不接受集成。限制仍为 wanted/候选36660、resident36676、load8、CPU8、staged16，单次 admission 尝试16。Loom 控制器继续固定 b9e4cceb576e0f1f1187d88ae35996e65b727afc；Claude 写 Rust/测试，Codex 只设计、文档、格式化与验收。
+Actual Disk saved→Ready and Disk missing→NeedsGeneration→Native→Ready are the primary acceptance; doubles or declaration compilation do not accept the integration. The limits remain wanted/candidates 36660, resident 36676, load8, CPU8, staged16, with 16 admission attempts per pass. The Loom controller remains pinned to b9e4cceb576e0f1f1187d88ae35996e65b727afc; Claude writes the Rust/tests, and Codex only designs, documents, formats, and accepts.
 
-不重做 companion，不改 Go/binary/controlplane，不等待新超时功能。原4.1/4.2、自动 save/cache/bootstrap、完整可执行 runtime 与 trusted observer composition 保持开放；本计划没有宣称完成。
+Do not redo companion; do not change Go/binary/controlplane; do not wait for new timeout features. The original 4.1/4.2, automatic save/cache/bootstrap, the full executable runtime, and trusted-observer composition remain open; this plan claims no completion.
 
-普通 Missing 完成仅独立追加 Generate，不标记 subscriptions dirty。无论本 tick dirty reconcile 是否执行，都在条件式新 Load 批次之后追加仍 wanted 的 NeedsGeneration；不得因此重新选择不相关 Failed player 键。独立 Go 原代码审核核实此条件，并在生产调用前冻结修正。
+An ordinary Missing completion only independently appends a Generate and does not mark subscriptions dirty. Whether or not this tick's dirty reconcile runs, still-wanted NeedsGeneration keys are appended after the conditional new Load batch; unrelated Failed player keys must not be reselected because of it. An independent review of the original Go source verifies this condition, and the correction is frozen before the production call.

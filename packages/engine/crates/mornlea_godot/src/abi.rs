@@ -145,6 +145,11 @@ pub const STEP_VERSION: u32 = 1;
 /// Contract version of the world family.
 pub const WORLD_VERSION: u32 = 1;
 
+/// Existing world records use zero-based storage indices for section Y.
+pub const SECTION_EDGE_BLOCKS: u32 = 16;
+/// Subtract this bias after converting a storage index into blocks.
+pub const WORLD_Y_BIAS_BLOCKS: u32 = 64;
+
 /// Contract version of the frame family.
 pub const FRAME_VERSION: u32 = 1;
 
@@ -438,6 +443,14 @@ mod tests {
             ("MORNLEA_CLIENT_INPUT_VERSION", INPUT_VERSION),
             ("MORNLEA_CLIENT_STEP_VERSION", STEP_VERSION),
             ("MORNLEA_CLIENT_WORLD_VERSION", WORLD_VERSION),
+            (
+                "MORNLEA_CLIENT_SECTION_EDGE_BLOCKS",
+                super::SECTION_EDGE_BLOCKS,
+            ),
+            (
+                "MORNLEA_CLIENT_WORLD_Y_BIAS_BLOCKS",
+                super::WORLD_Y_BIAS_BLOCKS,
+            ),
             ("MORNLEA_CLIENT_FRAME_VERSION", FRAME_VERSION),
             ("MORNLEA_CLIENT_STATUS_VERSION", STATUS_VERSION),
             ("MORNLEA_CLIENT_ENVIRONMENT_VERSION", ENVIRONMENT_VERSION),

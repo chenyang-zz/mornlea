@@ -7,36 +7,34 @@ const APP_ROOT_SCENE_PATH := "res://app/host/app_root.tscn"
 const EXPECTED_GODOT_VERSION := "4.7.2-stable"
 const PYTHON_DESCRIPTOR := "res://addons/py4godot/python.gdextension"
 const BRIDGE_DESCRIPTOR := "res://addons/mornlea_bridge/mornlea_bridge.gdextension"
-const REQUIRED_ARTIFACTS := [
-	{
-		"id": "python-extension",
-		"path": PYTHON_DESCRIPTOR,
-	},
-	{
-		"id": "python-plugin",
-		"path": "res://addons/py4godot/cpython-3.14.4-darwin64/python/bin/pythonscript.dylib",
-	},
-	{
-		"id": "python-bridge",
-		"path": "res://addons/py4godot/cpython-3.14.4-darwin64/python/bin/main.dylib",
-	},
-	{
-		"id": "python-interpreter",
-		"path": "res://addons/py4godot/cpython-3.14.4-darwin64/python/lib/libpython3.14.dylib",
-	},
-	{
-		"id": "python-stdlib",
-		"path": "res://addons/py4godot/cpython-3.14.4-darwin64/python/lib/python3.14/os.py",
-	},
-	{
-		"id": "project-bridge-extension",
-		"path": BRIDGE_DESCRIPTOR,
-	},
-	{
-		"id": "project-bridge-library",
-		"path": "res://addons/mornlea_bridge/bin/macos-universal/debug/libmornlea_godot.dylib",
-	},
-]
+
+
+func _runtime_profile() -> String:
+	return "debug" if OS.has_feature("debug") else "release"
+
+
+func _required_artifacts() -> Array:
+	var linux := OS.get_name() == "Linux"
+	var runtime := "cpython-3.14.4-linux64" if linux else "cpython-3.14.4-darwin64"
+	var suffix := "so" if linux else "dylib"
+	var bridge_platform := "linux-x86_64" if linux else "macos-universal"
+	var profile := _runtime_profile()
+	var python_root := "res://addons/py4godot/%s/python/" % runtime
+	var bridge_root := "res://addons/mornlea_bridge/bin/%s/%s/" % [bridge_platform, profile]
+	var artifacts := [
+		{"id": "python-extension", "path": PYTHON_DESCRIPTOR},
+		{"id": "python-plugin", "path": python_root + "bin/pythonscript." + suffix},
+		{"id": "python-bridge", "path": python_root + "bin/main." + suffix},
+		{"id": "python-interpreter", "path": python_root + "lib/libpython3.14." + suffix},
+		{"id": "python-stdlib", "path": python_root + "lib/python3.14/os.py"},
+		{"id": "project-bridge-extension", "path": BRIDGE_DESCRIPTOR},
+		{"id": "project-bridge-library", "path": bridge_root + "libmornlea_godot." + suffix},
+		{"id": "client-core-library", "path": bridge_root + "libmornlea_client_core." + suffix},
+		{"id": "engine-library", "path": bridge_root + "libmornlea_engine." + suffix},
+	]
+	if not linux:
+		artifacts.append({"id": "client-render-library", "path": bridge_root + "libmornlea_client.dylib"})
+	return artifacts
 
 
 func _ready() -> void:
@@ -45,6 +43,7 @@ func _ready() -> void:
 	var mismatched := _identity_mismatches(target)
 	var prepare_command := (
 		"scripts/godot/build-python-runtime.sh --verify --offline"
+		+ " && scripts/godot/build-core.sh --verify"
 		+ " && scripts/godot/build-extension.sh --target %s --profile debug --verify" % target
 	)
 	if missing.is_empty() and mismatched.is_empty():
@@ -75,6 +74,10 @@ func _ready() -> void:
 func _handoff_to_python() -> bool:
 	# The path is loaded only after both native distribution identities pass, so
 	# opening an incomplete checkout never parses or instantiates Python scripts.
+	if not ClassDB.class_exists("MornleaClientBridge"):
+		return false
+	if not ResourceLoader.get_recognized_extensions_for_type("Script").has("py"):
+		return false
 	var resource := ResourceLoader.load(APP_ROOT_SCENE_PATH, "PackedScene", ResourceLoader.CACHE_MODE_REUSE)
 	if not resource is PackedScene:
 		return false
@@ -87,7 +90,7 @@ func _handoff_to_python() -> bool:
 
 func _missing_artifacts() -> PackedStringArray:
 	var missing := PackedStringArray()
-	for artifact in REQUIRED_ARTIFACTS:
+	for artifact in _required_artifacts():
 		if not FileAccess.file_exists(artifact.path):
 			missing.append("%s@%s" % [artifact.id, artifact.path])
 	return missing
@@ -95,6 +98,9 @@ func _missing_artifacts() -> PackedStringArray:
 
 func _identity_mismatches(target: String) -> PackedStringArray:
 	var mismatched := PackedStringArray()
+	var profile := _runtime_profile()
+	var platform := "linux" if OS.get_name() == "Linux" else "macos"
+	var selector := "%s.%s.%s" % [platform, profile, Engine.get_architecture_name()]
 	var version := Engine.get_version_info()
 	var actual_godot_version := "%s.%s.%s-%s" % [
 		version.get("major", -1),
@@ -113,26 +119,19 @@ func _identity_mismatches(target: String) -> PackedStringArray:
 			mismatched.append("python-extension-entry-symbol")
 		if not _file_contains(PYTHON_DESCRIPTOR, 'version = "4.7-alpha-21"'):
 			mismatched.append("python-extension-version")
-		if not _file_contains(
-			PYTHON_DESCRIPTOR,
-			(
-				'macos.debug.arm64 = '
-				+ '"cpython-3.14.4-darwin64/python/bin/pythonscript.dylib"'
-			)
-		):
+		var python_runtime := "cpython-3.14.4-linux64" if OS.get_name() == "Linux" else "cpython-3.14.4-darwin64"
+		var python_suffix := "so" if OS.get_name() == "Linux" else "dylib"
+		if not _file_contains(PYTHON_DESCRIPTOR, '%s = "%s/python/bin/pythonscript.%s"' % [selector, python_runtime, python_suffix]):
 			mismatched.append("python-extension-target")
 	if FileAccess.file_exists(BRIDGE_DESCRIPTOR):
 		if not _file_contains(BRIDGE_DESCRIPTOR, 'entry_symbol = "gdext_rust_init"'):
 			mismatched.append("project-bridge-entry-symbol")
 		if not _file_contains(BRIDGE_DESCRIPTOR, 'compatibility_minimum = "4.7"'):
 			mismatched.append("project-bridge-godot-api")
-		if not _file_contains(
-			BRIDGE_DESCRIPTOR,
-			(
-				'macos.debug.arm64 = '
-				+ '"res://addons/mornlea_bridge/bin/macos-universal/debug/libmornlea_godot.dylib"'
-			)
-		):
+		var bridge_platform := "linux-x86_64" if OS.get_name() == "Linux" else "macos-universal"
+		var bridge_suffix := "so" if OS.get_name() == "Linux" else "dylib"
+		var bridge_path := "%s/%s/libmornlea_godot.%s" % [bridge_platform, profile, bridge_suffix]
+		if not _file_contains(BRIDGE_DESCRIPTOR, '%s = "res://addons/mornlea_bridge/bin/%s"' % [selector, bridge_path]):
 			mismatched.append("project-bridge-target")
 	return mismatched
 
@@ -146,6 +145,8 @@ func _file_contains(path: String, expected: String) -> bool:
 
 func _target_triple() -> String:
 	# Platform scope is deliberately desktop-only; unsupported targets fail closed.
+	if OS.get_name() == "Linux" and Engine.get_architecture_name() == "x86_64":
+		return "x86_64-unknown-linux-gnu"
 	if OS.get_name() != "macOS":
 		return "unsupported-desktop-target"
 	match Engine.get_architecture_name():
