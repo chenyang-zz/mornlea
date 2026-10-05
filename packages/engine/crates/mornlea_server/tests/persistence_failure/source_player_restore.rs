@@ -4840,6 +4840,7 @@ fn source_acquisition_actual_load_capacity_retains_without_failed() {
         source_companion_ground()
     );
     source_companion_active(&state, id, [0.5, 65.0, 0.5], false);
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
     fixture.close();
 }
 
@@ -5306,6 +5307,7 @@ fn source_acquisition_actual_typed_restore_failure_quiet_and_dirty_retry() {
         .expect("dirty retry target facts");
     assert!(facts.generation > failed_generation);
     assert_eq!(fs::read(&path).unwrap(), corrupt);
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
     fixture.close();
 }
 
@@ -5368,5 +5370,6 @@ fn source_acquisition_actual_pending_spawn_failed_retries() {
     let facts = state.live_chunk_facts(target).expect("target facts");
     assert!(first_generation.is_some_and(|first| facts.generation > first));
     assert_eq!(fs::read(&path).unwrap(), corrupt);
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
     fixture.close();
 }
