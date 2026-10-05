@@ -61,8 +61,8 @@ pub(crate) struct TickOutcome {
     /// tick. Death settlement never appears here.
     pub(crate) quiet_passive_removals: BTreeSet<PassiveId>,
     /// Tick-local inventory publication intent drained from the tick context:
-    /// sessions whose accepted inventory commands marked their owner state
-    /// dirty this tick, beside the plain record diff.
+    /// sessions whose accepted inventory or crafting commands marked their
+    /// owner state dirty this tick, beside the plain record diff.
     pub(crate) inventory_dirty: BTreeSet<SessionKey>,
     /// Tick-local crafting identity publication intent drained from the tick
     /// context: sessions whose accepted crafting commands marked their private

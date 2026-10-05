@@ -4646,7 +4646,7 @@ fn projection_crafting_record_states(events: &[Event]) -> Vec<Event> {
 }
 
 /// projection_crafting_dirty_pack_round_trip_publishes_once — two accepted
-/// crafting moves that carry the backpack stack onto the personal grid and
+/// crafting moves that carry the hotbar stack onto the personal grid and
 /// back inside one tick leave the full record where it started, yet the dirty
 /// lane still publishes the complete owner inventory and crafting states
 /// exactly once each, never to the foreign session, and a quiet tick
@@ -4656,7 +4656,7 @@ fn projection_crafting_dirty_pack_round_trip_publishes_once() {
     let mut state = authority();
     seed_world(&mut state);
     let owner = login_with(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |player| {
-        player.inventory.backpack[0] = storage(ITEM_DIRT, 5);
+        player.inventory.hotbar.slots[0] = storage(ITEM_DIRT, 5);
     });
     let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
     let join = state.advance_tick(TickBudget::full()).unwrap();
@@ -4672,9 +4672,11 @@ fn projection_crafting_dirty_pack_round_trip_publishes_once() {
         .get(&ActorKey::Player(owner))
         .copied()
         .unwrap();
+    assert_eq!(before.slots[0], storage(ITEM_DIRT, 5));
+    assert_eq!(before.crafting[0], StorageStack::default());
 
     // Pack to grid and back inside one tick: the unified crafting view keeps
-    // the grid at 0..8 and the backpack at 9..44, so the round trip settles
+    // the grid at 0..8 and the pack at 9..44, so the round trip settles
     // back to the join record and only the dirty lane can publish.
     submit(
         &mut state,
@@ -4726,7 +4728,7 @@ fn projection_crafting_dirty_grid_round_trip_publishes_once() {
     let mut state = authority();
     seed_world(&mut state);
     let owner = login_with(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |player| {
-        player.inventory.backpack[0] = storage(ITEM_DIRT, 5);
+        player.inventory.hotbar.slots[0] = storage(ITEM_DIRT, 5);
     });
     let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
     // The join snapshot is discarded; the grid is established by a real
@@ -4751,6 +4753,8 @@ fn projection_crafting_dirty_grid_round_trip_publishes_once() {
         .get(&ActorKey::Player(owner))
         .copied()
         .unwrap();
+    assert_eq!(before.crafting[0], storage(ITEM_DIRT, 5));
+    assert_eq!(before.slots[0], StorageStack::default());
 
     // Grid to grid and back inside one tick: both ends stay inside the
     // personal grid, so the round trip settles back to the established record
@@ -4814,7 +4818,7 @@ fn projection_crafting_dirty_refused_commands_publish_nothing() {
         .copied()
         .unwrap();
 
-    // The source backpack slot is empty and the empty grid has no crafted
+    // The source pack slot is empty and the empty grid has no crafted
     // output to take, so both commands are refused without marking any lane.
     submit(
         &mut state,
