@@ -1691,7 +1691,6 @@ fn source_acquisition_receive(
     transport: &mut mornlea_server::transport::memory::MemoryTransport,
     id: ConnectionId,
 ) -> Vec<u8> {
-    use mornlea_server::transport::common::TransportAuthority;
     let until = Instant::now() + Duration::from_secs(10);
     loop {
         let mut frames = transport.receive(id, 1, 1 << 20);
@@ -1803,9 +1802,9 @@ fn source_acquisition_memory_login(
 }
 
 /// The retired source owner's already-started held loads survive retirement
-/// while its queued restore candidate is forgotten: the eight started view
-/// loads stay pending against the real held Disk backend, the queued saved
-/// current candidate drops to zero at retire, and after the gate opens the
+/// while its queued view key is forgotten: the eight started view loads stay
+/// pending against the real held Disk backend, the queued ninth view key
+/// drops to zero at retire, and after the gate opens the
 /// same resident saved body finishes installed and unloads off-tick without
 /// any generation for the forgotten missing neighbors.
 #[test]
@@ -1858,8 +1857,9 @@ fn source_acquisition_actual_forget_queued_and_keep_started() {
             deadline(),
         )
         .expect("first automatic acquisition tick");
-    // Only real wants exist here: eight started missing view loads, one
-    // queued saved-current restore candidate, no manual input at all.
+    // Only real wants exist here: with no saved current player body the view
+    // interest is nine plain view keys — eight started loads (one of them the
+    // saved key 0 body) and one queued view key, no manual input at all.
     assert_eq!(first.started.len(), 8);
     assert_eq!(first.queued, 1);
     assert_eq!(acquisition.pending_loads(), 8);
@@ -1882,6 +1882,20 @@ fn source_acquisition_actual_forget_queued_and_keep_started() {
     // candidate is forgotten while the started loads stay pending, with no
     // fabricated cancellation of the in-flight work.
     state.retire(session, CloseReason::PeerGone).unwrap();
+    // The retire is not a synchronous prune callback: the next real automatic
+    // tick forgets the queued candidate while the started held loads stay
+    // pending, with no fabricated cancellation of the in-flight work.
+    let pruned = acquisition
+        .advance(
+            &mut state,
+            &mut store.owner,
+            &mut pool.owner,
+            TickBudget::full(),
+            deadline(),
+        )
+        .expect("post-retire automatic acquisition tick");
+    assert_eq!(pruned.queued, 0);
+    assert!(pruned.started.is_empty());
     assert_eq!(acquisition.pending_candidates(), 0);
     assert!(acquisition.pending_loads() > 0);
     release.open();
