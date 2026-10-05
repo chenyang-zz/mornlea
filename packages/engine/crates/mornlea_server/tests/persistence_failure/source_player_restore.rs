@@ -3006,3 +3006,341 @@ fn action_costs_actual_refused_and_incomplete() {
     f.assert_cost(&p, (20, 500, 3999), 3);
     f.release_and_idle((20, 500, 3999), 5);
 }
+
+// Passive source Snow capture (plan 103): the appended actual cases drive one
+// staged cow through the same real seams as the player Snow recipes above —
+// disk/Memory login, Acquire and `advance_tick` — along the frozen glide line.
+
+// Mature wheat (`core.ItemWheat`, the 36th entry of the frozen item table in
+// `packages/shared/core/item.go`).
+const PASSIVE_SNOW_WHEAT: u16 = 35;
+// The frozen graze-roll constants (`PassiveGrazeRollSalt` and
+// `PassiveGrazePeriodTicks`, `packages/server/updates/sampler.go`).
+const PASSIVE_SNOW_GRAZE_SALT: u64 = 0x51ab_3e4d_07c3_f291;
+const PASSIVE_SNOW_GRAZE_PERIOD: u64 = 600;
+
+// The cited integer mirrors of `tests/server_replay/passives.rs`
+// (`Sampler.SplitMix64` and `Sampler.PassiveGrazeHit`).
+fn passive_snow_splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+fn passive_snow_graze_hit(seed: i64, tick: u64, id: u64) -> bool {
+    let hash = passive_snow_splitmix64(
+        passive_snow_splitmix64((seed as u64) ^ PASSIVE_SNOW_GRAZE_SALT) ^ tick,
+    );
+    passive_snow_splitmix64(hash ^ id) % PASSIVE_SNOW_GRAZE_PERIOD == 0
+}
+/// A cow id that misses every graze roll across the whole tested window, so
+/// no tick freezes the glide. The seed is the fixture's staged Metadata seed
+/// (42 in `options` above), never an assumed zero.
+fn passive_snow_actual_cow_id() -> u64 {
+    (1..)
+        .find(|&id| (0..=20u64).all(|tick| !passive_snow_graze_hit(42, tick, id)))
+        .expect("a graze-free cow id exists in the scan window")
+}
+
+/// One actual Snow scene on the frozen glide line: the accepted player fixture
+/// plus a staged Active cow at [8.1, 64., 8.5] with velocity [4, 0, 0] each
+/// frame. The stationary holder parks inside the 2.5 stop distance with wheat
+/// selected, so the cow's intent stays neutral for the whole window (the glide
+/// stays within 1.35 blocks) and the zero move input bypasses the shared Snow
+/// slowdown exactly like the frozen player calibration; the player never
+/// moves, so no player Snow sample double-writes the line.
+fn passive_snow_actual_stage(aux: ActorAux) -> (Fixture, AuthorityState, SessionKey, ActorKey) {
+    let (fixture, mut state, session, _publication, _login, _transport, _connection, _clock) =
+        snow_actual_fixture();
+    let id = passive_snow_actual_cow_id();
+    let cow = ActorKey::Passive(PassiveId::try_new(id).unwrap());
+    let position = [8.1, 64., 8.5];
+    let velocity = [4., 0., 0.];
+    let record = ActorRecord::try_new(
+        cow,
+        ActorLifecycle::Active,
+        Dimension::OVERWORLD,
+        MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new(velocity).unwrap(),
+            on_ground: true,
+        }),
+        LookAngles::try_new(0., 0.).unwrap(),
+        SurvivalState::try_new(SurvivalStateParts {
+            health: 20,
+            oxygen: 300,
+            hunger: 20,
+            saturation_zero: false,
+            armor_points: 0,
+        })
+        .unwrap(),
+        ActorBody::Passive(PassiveMob {
+            id,
+            dimension: 0,
+            position,
+            velocity,
+            on_ground: true,
+            yaw: 0.,
+            health: 20,
+        }),
+    )
+    .unwrap();
+    let runtime = ActorRuntime {
+        key: cow,
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 0,
+        peak_y: 0.,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux,
+    };
+    let mut residents = state.residents();
+    let holder = residents
+        .inventories
+        .get_mut(&ActorKey::Player(session))
+        .unwrap();
+    holder.slots[3].item = PASSIVE_SNOW_WHEAT;
+    residents.runtimes.insert(cow, runtime);
+    residents.actors.push(record);
+    state.commit_residents(residents);
+    (fixture, state, session, cow)
+}
+
+/// Re-pins the cow's glide velocity each frame, mirroring the motion state
+/// into the passive body like the accepted fixtures.
+fn passive_snow_actual_velocity(state: &mut AuthorityState, cow: ActorKey) {
+    let mut residents = state.residents();
+    let actor = residents.actors.iter_mut().find(|a| a.key == cow).unwrap();
+    let old = actor.motion;
+    actor.motion = MotionState::new(MotionStateParts {
+        position: old.position(),
+        velocity: FiniteVec3::try_new([4., 0., 0.]).unwrap(),
+        on_ground: old.on_ground(),
+    });
+    let ActorBody::Passive(body) = &mut actor.body else {
+        unreachable!("passive body");
+    };
+    body.velocity = [4., 0., 0.];
+    state.commit_residents(residents);
+}
+fn passive_snow_actual_cow(state: &AuthorityState, cow: ActorKey) -> ActorRecord {
+    state.settled_read().unwrap().actor(cow).unwrap().clone()
+}
+fn passive_snow_actual_cells(state: &AuthorityState) -> (u16, u16) {
+    snow_actual_cells(state)
+}
+
+/// Retained passive travel: eighteen real ticks at the frozen player-glide
+/// stride (0.0749998093, each under the 0.6 threshold) accumulate in a
+/// retained tracker, so the ninth tick samples the oracle foot cell and the
+/// eighteenth the next one, with a quiet tick afterwards. RED today: the
+/// per-tick generic tracker loses the travel and both cells stay 87 while
+/// every native step stays under the threshold.
+#[test]
+fn passive_snow_actual_retained_travel_crosses_cell() {
+    let (mut fixture, mut state, _session, cow) = passive_snow_actual_stage(ActorAux::Passive {
+        home: BlockPos::new(8, 64, 8),
+        flee_ticks: 0,
+        flee_from: None,
+        graze_ticks: 0,
+        graze_at: None,
+        fresh: false,
+    });
+    let mut previous = 8.1f32;
+    let mut first_sample: Option<(u64, (u16, u16))> = None;
+    for tick in 1..=18u64 {
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        let actor = passive_snow_actual_cow(&state, cow);
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active, "tick {tick}");
+        assert!(actor.motion.on_ground(), "tick {tick}");
+        let p = actor.motion.position().get();
+        assert_eq!((p[1], p[2]), (64., 8.5), "tick {tick}");
+        let step = p[0] - previous;
+        assert!(
+            step > 0. && step < 0.6,
+            "tick {tick}: native stride {step} must stay under the threshold"
+        );
+        assert!((8.0..10.0).contains(&p[0]), "tick {tick}: {p:?}");
+        let ActorBody::Passive(body) = &actor.body else {
+            unreachable!("passive body");
+        };
+        assert_eq!(body.position, p, "tick {tick}");
+        previous = p[0];
+        let cells = passive_snow_actual_cells(&state);
+        if cells != (87, 87) && first_sample.is_none() {
+            first_sample = Some((tick, cells));
+        }
+        if tick == 9 {
+            // Intended RED: the retained stride must sample the oracle cell
+            // while every per-tick step stays below the threshold.
+            assert_eq!(
+                cells,
+                (86, 87),
+                "retained passive Snow travel lost at tick {tick}"
+            );
+            // Player-glide oracle bits, valid iff the neutral-intent cow
+            // stride matches the frozen player calibration (host run
+            // confirms or corrects the literal).
+            assert_eq!(p[0].to_bits(), 0x410c6665, "tick {tick}");
+        }
+    }
+    assert_eq!(first_sample, Some((9, (86, 87))));
+    assert_eq!(passive_snow_actual_cells(&state), (86, 86));
+    assert_eq!(previous.to_bits(), 0x41173330);
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    death_no_hit(&quiet);
+    assert_eq!(passive_snow_actual_cells(&state), (86, 86));
+    fixture.close();
+}
+
+/// Pre-death capture: the movement pass runs before the same-phase death
+/// settlement, so the lethal tick's post-physics destination cell is captured
+/// and settles in the late region beside the beef loot, and the following
+/// quiet tick writes nothing more. RED today: the late generic collector
+/// demands an Active row and the moved cell never settles.
+#[test]
+fn passive_snow_actual_death_settles_captured_cell() {
+    let (mut fixture, mut state, _session, cow) = passive_snow_actual_stage(ActorAux::Passive {
+        home: BlockPos::new(8, 64, 8),
+        flee_ticks: 0,
+        flee_from: None,
+        graze_ticks: 0,
+        graze_at: None,
+        fresh: false,
+    });
+    for _tick in 1..=8u64 {
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        assert!(passive_snow_actual_cow(&state, cow).motion.on_ground());
+    }
+    // Eight strides warm the tracker below the threshold without a sample.
+    assert_eq!(passive_snow_actual_cells(&state), (87, 87));
+    // Lethal health staged while the cow is still Active: movement still runs
+    // before the same-phase deaths, the ninth stride crosses, and the
+    // captured destination settles after the settlement.
+    {
+        let mut residents = state.residents();
+        let actor = residents.actors.iter_mut().find(|a| a.key == cow).unwrap();
+        let old = actor.motion;
+        actor.motion = MotionState::new(MotionStateParts {
+            position: old.position(),
+            velocity: FiniteVec3::try_new([4., 0., 0.]).unwrap(),
+            on_ground: old.on_ground(),
+        });
+        actor.survival = SurvivalState::try_new(SurvivalStateParts {
+            health: 0,
+            hunger: 20,
+            oxygen: 300,
+            saturation_zero: false,
+            armor_points: 0,
+        })
+        .unwrap();
+        state.commit_residents(residents);
+    }
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    death_no_hit(&publication);
+    let actor = passive_snow_actual_cow(&state, cow);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Dead);
+    let p = actor.motion.position().get();
+    assert_eq!((p[1], p[2]), (64., 8.5));
+    assert!((8.0..9.0).contains(&p[0]), "captured destination {p:?}");
+    // The captured destination cell settles beside the fixed beef loot.
+    assert!(!death_ground(&state).is_empty());
+    assert_eq!(
+        passive_snow_actual_cells(&state),
+        (86, 87),
+        "the pre-death captured cell must settle in the late region"
+    );
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    death_no_hit(&quiet);
+    assert_eq!(passive_snow_actual_cells(&state), (86, 87));
+    fixture.close();
+}
+
+/// Deterministic boundary pins around the capture: a fresh runtime tick and a
+/// mid-graze tick displace nothing, and a home far outside the neighborhood
+/// rolls every pinned stride back, so no cell changes while the cow stays
+/// resident. These pin GREEN on both sides of the implementation.
+#[test]
+fn passive_snow_actual_boundary_pins() {
+    // Fresh runtime: the first tick skips movement outright.
+    {
+        let (mut fixture, mut state, _session, cow) =
+            passive_snow_actual_stage(ActorAux::Passive {
+                home: BlockPos::new(8, 64, 8),
+                flee_ticks: 0,
+                flee_from: None,
+                graze_ticks: 0,
+                graze_at: None,
+                fresh: true,
+            });
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        assert_eq!(
+            passive_snow_actual_cow(&state, cow).motion.position().get(),
+            [8.1, 64., 8.5]
+        );
+        assert_eq!(passive_snow_actual_cells(&state), (87, 87));
+        fixture.close();
+    }
+    // Graze freeze: a mid-graze cow holds its pose for the tick.
+    {
+        let (mut fixture, mut state, _session, cow) =
+            passive_snow_actual_stage(ActorAux::Passive {
+                home: BlockPos::new(8, 64, 8),
+                flee_ticks: 0,
+                flee_from: None,
+                graze_ticks: 4,
+                graze_at: Some(BlockPos::new(8, 64, 8)),
+                fresh: false,
+            });
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        assert_eq!(
+            passive_snow_actual_cow(&state, cow).motion.position().get(),
+            [8.1, 64., 8.5]
+        );
+        assert_eq!(passive_snow_actual_cells(&state), (87, 87));
+        fixture.close();
+    }
+    // Home rollback: a home far outside the neighborhood restores the
+    // pre-step pose every tick, so nothing samples across repeated strides.
+    {
+        let (mut fixture, mut state, _session, cow) =
+            passive_snow_actual_stage(ActorAux::Passive {
+                home: BlockPos::new(1000, 64, 8),
+                flee_ticks: 0,
+                flee_from: None,
+                graze_ticks: 0,
+                graze_at: None,
+                fresh: false,
+            });
+        for _tick in 0..4 {
+            passive_snow_actual_velocity(&mut state, cow);
+            let publication = state.advance_tick(TickBudget::full()).unwrap();
+            death_no_hit(&publication);
+            assert_eq!(
+                passive_snow_actual_cow(&state, cow).motion.position().get(),
+                [8.1, 64., 8.5]
+            );
+        }
+        assert_eq!(passive_snow_actual_cells(&state), (87, 87));
+        fixture.close();
+    }
+}

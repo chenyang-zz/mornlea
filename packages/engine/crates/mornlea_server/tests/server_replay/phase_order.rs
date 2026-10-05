@@ -810,34 +810,44 @@ fn snow_capture_order() {
     let body = fn_body(&code, "fn dispatch_rows");
     let capture = "source_player_restore::capture_snow";
     let settle = "source_player_restore::settle_snow";
+    // The passive capture rides the PassiveStepDeaths dispatch after the
+    // source-player deaths, and its copied cells settle between the
+    // source-player and legacy generic Snow regions (Go players-then-passives).
+    let passive_capture = "passives::run_with_snow";
+    let passive_settle = "passives::settle_snow";
     let chain = [
         "RulePhase::PlayerPostPhysics",
         "source_player_restore::capture_trample",
         capture,
         "source_player_restore::checkpoint_safe",
         "source_player_restore::settle_deaths",
+        passive_capture,
         "RulePhase::Trample",
         "source_player_restore::settle_tramples",
         "crops::settle_tramples",
         "RulePhase::SnowFootprint",
         settle,
+        passive_settle,
         "crops::settle_snow_footprints",
         "RulePhase::RandomBlock",
     ];
     chain_positions(body, &chain);
-    for marker in [capture, settle] {
+    for marker in [capture, settle, passive_capture, passive_settle] {
         assert_eq!(marker_count(body, marker), 1);
     }
     for (first, last) in [
         ("source_player_restore::capture_trample", capture),
         (capture, "source_player_restore::checkpoint_safe"),
+        (passive_capture, "RulePhase::Trample"),
         ("RulePhase::SnowFootprint", settle),
+        (settle, passive_settle),
+        (passive_settle, "crops::settle_snow_footprints"),
         (settle, "crops::settle_snow_footprints"),
     ] {
         let swapped = swap_markers(body, first, last);
         assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
     }
-    for marker in [capture, settle] {
+    for marker in [capture, settle, passive_capture, passive_settle] {
         let repeat = format!("{body}\n{marker}");
         assert!(std::panic::catch_unwind(|| assert_eq!(marker_count(&repeat, marker), 1)).is_err());
     }
