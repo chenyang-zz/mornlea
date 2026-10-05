@@ -4866,7 +4866,7 @@ fn projection_container_dirty_fixture(
     SessionKey,
     ContainerRef,
     Vec<Event>,
-    Inventory,
+    mornlea_server::contracts::InventoryRecord,
 ) {
     let mut state = authority();
     seed_world(&mut state);
@@ -5026,9 +5026,7 @@ fn projection_container_dirty_furnace_panel_drop_publishes_once() {
         &mut state,
         owner,
         2,
-        Command::DropStack(
-            StackSource::try_new(StackView::Container(furnace), 36).unwrap(),
-        ),
+        Command::DropStack(StackSource::try_new(StackView::Container(furnace), 36).unwrap()),
     );
     let dirty = state.advance_tick(TickBudget::full()).unwrap();
     let dirty_events = events_for(&dirty, owner);
