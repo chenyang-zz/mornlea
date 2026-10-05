@@ -3859,3 +3859,538 @@ fn configured_tick_tunables_default_control_keeps_source_defaults() {
         "ordinary actual tick retains source defaults"
     );
 }
+
+// Source pending companion producer (plan 108): the appended cases drive the
+// checked registration seam and the retained radius-16 pending scan through
+// the same real Disk, Memory, Acquire and `advance_tick` owners as the player
+// recipes above. No case stages a companion actor, runtime or inventory by
+// hand and none injects a fake Ready world: every activation crosses an
+// actual tick, and the off-tick write reuses the accepted Support transaction.
+
+/// Valid v4-shaped UUID bytes for one source companion identity tag.
+fn source_companion_uuid(tag: u8) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[0] = tag.max(1);
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    bytes
+}
+
+/// One valid source companion identity (`entity/companion.go` register shape).
+fn source_companion_id(tag: u8) -> CompanionId {
+    CompanionId::try_from_bytes(source_companion_uuid(tag)).unwrap()
+}
+
+/// Saved capture for one companion: the storage id mirrors the domain id, the
+/// look is yaw 0.1 / pitch 0.2 and hotbar slot 3 carries item 1 count 7.
+fn source_companion_body(id: CompanionId, position: [f32; 3]) -> CompanionBody {
+    let mut inventory = Inventory::default();
+    inventory.hotbar.selected = 3;
+    inventory.hotbar.slots[3] = ItemStack {
+        item: 1,
+        count: 7,
+        durability: 0,
+    };
+    CompanionBody {
+        id: mornlea_storage::PlayerId::from_bytes(id.bytes()),
+        dimension: 0,
+        position,
+        yaw: 0.1,
+        pitch: 0.2,
+        inventory,
+    }
+}
+
+/// Full stone sheet at y 64 under open air, the captured spawn floor.
+fn source_companion_ground() -> Chunk {
+    let mut chunk = air();
+    for x in 0..16 {
+        for z in 0..16 {
+            death_chunk_cell(&mut chunk, BlockPos::new(x, 64, z), 2);
+        }
+    }
+    chunk
+}
+
+/// One sessionless Move[1, 0] envelope with generation/attempt 1, valid
+/// request, run and snapshot UUIDs, digest [1; 32] and the given source tick
+/// and yaw — the same frozen provenance shape the companion inbox admits.
+fn source_companion_move(
+    id: CompanionId,
+    tag: u8,
+    source_tick: u64,
+    yaw: f32,
+) -> CompanionActionEnvelope {
+    CompanionActionEnvelope::try_new(
+        id,
+        source_tick,
+        AgentRequestId::try_from_bytes(source_companion_uuid(tag)).unwrap(),
+        RunId::try_from_bytes(source_companion_uuid(tag + 1)).unwrap(),
+        SnapshotId::try_from_bytes(source_companion_uuid(tag + 2)).unwrap(),
+        1,
+        1,
+        [1u8; 32],
+        CompanionAction::Move {
+            move_x: 1,
+            move_z: 0,
+            jump: false,
+            yaw,
+        },
+    )
+    .unwrap()
+}
+
+/// A pending companion holds its captured pose, zero velocity and no ground.
+fn source_companion_waiting(state: &AuthorityState, id: CompanionId, position: [f32; 3]) {
+    let view = state.settled_read().unwrap();
+    let actor = view.actor(ActorKey::Companion(id)).unwrap();
+    assert_eq!(actor.key, ActorKey::Companion(id));
+    assert_eq!(actor.lifecycle, ActorLifecycle::Pending);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), position);
+    assert_eq!(actor.motion.velocity().get(), [0.; 3]);
+    assert!(!actor.motion.on_ground());
+}
+
+/// The activated companion holds the chosen pose with zero velocity, ground
+/// contact, neutral survival and runtime fields, and the whole captured look
+/// and hotbar/backpack inventory mapped back from its canonical body.
+fn source_companion_active(state: &AuthorityState, id: CompanionId, position: [f32; 3]) {
+    let view = state.settled_read().unwrap();
+    let key = ActorKey::Companion(id);
+    let actor = view.actor(key).unwrap();
+    assert_eq!(actor.key, key);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), position);
+    assert_eq!(actor.motion.velocity().get(), [0.; 3]);
+    assert!(actor.motion.on_ground());
+    assert_eq!(
+        (
+            actor.survival.health(),
+            actor.survival.oxygen(),
+            actor.survival.hunger()
+        ),
+        (20, 300, 20)
+    );
+    let runtime = view.runtime(key).unwrap();
+    assert_eq!(runtime.key, key);
+    assert_eq!(runtime.controls, None);
+    assert!(!runtime.reset);
+    assert_eq!(runtime.peak_y, position[1]);
+    let ActorBody::Companion(body) = &actor.body else {
+        panic!("companion body");
+    };
+    assert_eq!(
+        (actor.look.yaw(), actor.look.pitch()),
+        (body.yaw, body.pitch)
+    );
+    let inventory = view.inventory(key).unwrap();
+    assert_eq!(inventory.selected.get(), body.inventory.hotbar.selected);
+    assert_eq!(inventory.slots[..9], body.inventory.hotbar.slots);
+    assert_eq!(inventory.slots[9..36], body.inventory.backpack);
+    assert!(inventory.armor.iter().all(|slot| slot.count == 0));
+    assert!(inventory.crafting.iter().all(|slot| slot.count == 0));
+}
+
+/// Complete observable registration state: every resident lane the producer
+/// owns plus the public pending-key set, so each refusal below proves
+/// atomicity against whole snapshots instead of a bare `is_err`.
+#[derive(Clone, Debug, PartialEq)]
+struct SourceCompanionCensus {
+    actors: Vec<ActorRecord>,
+    runtimes: std::collections::BTreeMap<ActorKey, ActorRuntime>,
+    inventories: std::collections::BTreeMap<ActorKey, InventoryRecord>,
+    pending: Vec<ChunkKey>,
+}
+
+fn source_companion_census(state: &AuthorityState) -> SourceCompanionCensus {
+    let residents = state.residents();
+    SourceCompanionCensus {
+        actors: residents.actors,
+        runtimes: residents.runtimes,
+        inventories: residents.inventories,
+        pending: state.source_companion_pending_keys(),
+    }
+}
+
+/// Plan 108 case 1: a saved companion on a Ready ground chunk activates at
+/// its captured pose on the actual Acquire tick, and a Move envelope that
+/// arrived while the id was still Pending never steers that first active
+/// tick; only a fresh post-activation Move travels the exact native stride.
+#[test]
+fn source_companion_saved_ready_activates_ignores_pending_action() {
+    let (mut fixture, mut state) = Fixture::new(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(key(Dimension::OVERWORLD, 0, 0), source_companion_ground())],
+    );
+    let id = source_companion_id(1);
+    state
+        .register_source_companion(
+            id,
+            ChunkPos::new(0, 0),
+            Some(source_companion_body(id, [8.5, 65.0, 8.5])),
+        )
+        .unwrap();
+    source_companion_waiting(&state, id, [8.5, 65.0, 8.5]);
+    // Arrives before Acquire while the id is still inactive; generation and
+    // attempt 1, valid UUIDs and digest [1; 32] keep the envelope admissible.
+    state
+        .submit_companion(source_companion_move(id, 10, 0, 0.9))
+        .unwrap();
+    let _activated = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
+    source_companion_active(&state, id, [8.5, 65.0, 8.5]);
+    assert!(state.source_companion_pending_keys().is_empty());
+    // A fresh Move with a distinct request id and the current source tick is
+    // the first input the active companion actually consumes.
+    let tick = state.next_tick();
+    state
+        .submit_companion(source_companion_move(id, 20, tick, 0.0))
+        .unwrap();
+    let _moved = state.advance_tick(TickBudget::full()).unwrap();
+    {
+        let view = state.settled_read().unwrap();
+        let actor = view.actor(ActorKey::Companion(id)).unwrap();
+        let position = actor.motion.position().get();
+        assert_eq!(position[0].to_bits(), (8.5f32 + 4.3f32 * 0.05f32).to_bits());
+        assert_eq!((position[1], position[2]), (65.0, 8.5));
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+        assert_eq!((actor.look.yaw(), actor.look.pitch()), (0.0, 0.2));
+    }
+    // The next neutral tick retains the companion without clearing ownership.
+    let _quiet = state.advance_tick(TickBudget::full()).unwrap();
+    {
+        let view = state.settled_read().unwrap();
+        let actor = view.actor(ActorKey::Companion(id)).unwrap();
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+        assert_eq!(
+            actor.motion.position().get(),
+            [8.5f32 + 4.3f32 * 0.05f32, 65.0, 8.5]
+        );
+    }
+    fixture.close();
+}
+
+/// Plan 108 case 2: the saved footprint at [15.9, 65, 8.5] spans chunks (0,0)
+/// and (1,0); the capture waits through a real tick and the first Ready chunk
+/// until the actual neighbor load completes, then activates at the saved pose.
+#[test]
+fn source_companion_saved_neighbor_waits_for_actual_ready() {
+    let (mut fixture, mut state) = Fixture::new(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![
+            (key(Dimension::OVERWORLD, 0, 0), source_companion_ground()),
+            (key(Dimension::OVERWORLD, 1, 0), source_companion_ground()),
+        ],
+    );
+    let id = source_companion_id(2);
+    state
+        .register_source_companion(
+            id,
+            ChunkPos::new(0, 0),
+            Some(source_companion_body(id, [15.9, 65.0, 8.5])),
+        )
+        .unwrap();
+    // Before any load the whole footprint waits; the scan retains both wants.
+    let _waiting = state.advance_tick(TickBudget::full()).unwrap();
+    source_companion_waiting(&state, id, [15.9, 65.0, 8.5]);
+    assert_eq!(
+        state.source_companion_pending_keys(),
+        vec![
+            key(Dimension::OVERWORLD, 0, 0),
+            key(Dimension::OVERWORLD, 1, 0)
+        ]
+    );
+    let _partial = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
+    source_companion_waiting(&state, id, [15.9, 65.0, 8.5]);
+    assert_eq!(
+        state.source_companion_pending_keys(),
+        vec![
+            key(Dimension::OVERWORLD, 0, 0),
+            key(Dimension::OVERWORLD, 1, 0)
+        ]
+    );
+    let _full = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 1, 0));
+    source_companion_active(&state, id, [15.9, 65.0, 8.5]);
+    assert!(state.source_companion_pending_keys().is_empty());
+    fixture.close();
+}
+
+/// Plan 108 case 3: stone at (8, 65, 8) obstructs the saved pose, so the
+/// actual Ready chunk rejects the capture and the nearest-first column scan
+/// activates the dry anchor spawn [0.5, 65, 0.5] preserving look and inventory.
+#[test]
+fn source_companion_invalid_saved_uses_captured_spawn() {
+    let mut chunk = source_companion_ground();
+    death_chunk_cell(&mut chunk, BlockPos::new(8, 65, 8), 2);
+    let (mut fixture, mut state) = Fixture::new(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(key(Dimension::OVERWORLD, 0, 0), chunk)],
+    );
+    let id = source_companion_id(3);
+    state
+        .register_source_companion(
+            id,
+            ChunkPos::new(0, 0),
+            Some(source_companion_body(id, [8.5, 65.0, 8.5])),
+        )
+        .unwrap();
+    let _publication = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
+    source_companion_active(&state, id, [0.5, 65.0, 0.5]);
+    assert!(state.source_companion_pending_keys().is_empty());
+    fixture.close();
+}
+
+/// Plan 108 case 4: a registration without a body starts Pending at the
+/// canonical anchor pose [0.5, 321, 0.5] with an empty inventory and the
+/// anchor want alone, activates at the first Ready ground column, and stays
+/// Active across a quiet tick without re-running the completed scan.
+#[test]
+fn source_companion_missing_body_spawns() {
+    let (mut fixture, mut state) = Fixture::new(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(key(Dimension::OVERWORLD, 0, 0), source_companion_ground())],
+    );
+    let id = source_companion_id(4);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    source_companion_waiting(&state, id, [0.5, 321.0, 0.5]);
+    {
+        let view = state.settled_read().unwrap();
+        let actor = view.actor(ActorKey::Companion(id)).unwrap();
+        assert_eq!((actor.look.yaw(), actor.look.pitch()), (0.0, 0.0));
+        let inventory = view.inventory(ActorKey::Companion(id)).unwrap();
+        assert!(inventory.slots.iter().all(|slot| slot.count == 0));
+        assert_eq!(inventory.selected.get(), 0);
+    }
+    assert_eq!(
+        state.source_companion_pending_keys(),
+        vec![key(Dimension::OVERWORLD, 0, 0)]
+    );
+    let _publication = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
+    source_companion_active(&state, id, [0.5, 65.0, 0.5]);
+    assert!(state.source_companion_pending_keys().is_empty());
+    let _quiet = state.advance_tick(TickBudget::full()).unwrap();
+    source_companion_active(&state, id, [0.5, 65.0, 0.5]);
+    fixture.close();
+}
+
+/// Plan 108 case 5: registration is checked and atomic. Mismatched saved ids,
+/// non-Overworld bodies, non-finite pitch, invalid inventory slots or
+/// selection and overflowing anchors refuse through their existing typed
+/// errors; duplicate book ids, the fifth companion and any late registration
+/// after the first actual tick refuse with their own fields, and every
+/// refusal leaves actors, runtimes, inventories and pending keys unchanged.
+#[test]
+fn source_companion_registration_refuses_atomically() {
+    let mut state = AuthorityState::try_new(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+        42,
+    )
+    .unwrap();
+    let anchor = ChunkPos::new(0, 0);
+    let id = source_companion_id(5);
+    let mut baseline = source_companion_census(&state);
+
+    // Mismatched saved body id.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.id = mornlea_storage::PlayerId::from_bytes(source_companion_id(50).bytes());
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "source_companion_body"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Saved body outside Overworld.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.dimension = 1;
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "actor_save"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Non-finite pitch.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.pitch = f32::NAN;
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "actor_save"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Unregistered inventory item in a hotbar slot.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.inventory.hotbar.slots[4] = ItemStack {
+        item: u16::MAX,
+        count: 1,
+        durability: 0,
+    };
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "actor_save"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Selected hotbar slot out of range.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.inventory.hotbar.selected = 9;
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "actor_save"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Anchor whose radius-16 block square overflows the world.
+    assert_eq!(
+        state.register_source_companion(
+            id,
+            ChunkPos::new(i32::MAX, 0),
+            Some(source_companion_body(id, [8.5, 65.0, 8.5]))
+        ),
+        Err(ServerError::InvalidInput {
+            field: "spawn_anchor"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Four valid distinct registrations fill the book.
+    for tag in 1..=4u8 {
+        let valid = source_companion_id(tag);
+        state
+            .register_source_companion(
+                valid,
+                anchor,
+                Some(source_companion_body(valid, [8.5, 65.0, 8.5])),
+            )
+            .unwrap();
+    }
+    baseline = source_companion_census(&state);
+    assert_eq!(baseline.actors.len(), 4);
+
+    // Duplicate book entry and fifth capacity both refuse unchanged.
+    let duplicate = source_companion_id(2);
+    assert_eq!(
+        state.register_source_companion(
+            duplicate,
+            anchor,
+            Some(source_companion_body(duplicate, [8.5, 65.0, 8.5]))
+        ),
+        Err(ServerError::InvalidInput {
+            field: "source_companion_duplicate"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+    let fifth = source_companion_id(6);
+    assert_eq!(
+        state.register_source_companion(
+            fifth,
+            anchor,
+            Some(source_companion_body(fifth, [8.5, 65.0, 8.5]))
+        ),
+        Err(ServerError::InvalidInput {
+            field: "source_companion_capacity"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // One actual waiting tick passes; late registration now refuses unchanged.
+    state.advance_tick(TickBudget::full()).unwrap();
+    baseline = source_companion_census(&state);
+    let late = source_companion_id(7);
+    assert_eq!(
+        state.register_source_companion(
+            late,
+            anchor,
+            Some(source_companion_body(late, [8.5, 65.0, 8.5]))
+        ),
+        Err(ServerError::InvalidInput {
+            field: "source_companion_registration"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+}
+
+/// Plan 108 case 6: nine actual AIR chunks let the radius-16 scan reach
+/// Exhausted while staying Pending with the exact nine wanted keys; the
+/// checked off-tick Support transaction on the managed Ready chunk changes
+/// its revision, so the next actual tick rescans and activates at
+/// [0.5, 65, 0.5] with an empty inventory.
+#[test]
+fn source_companion_exhausted_retries_ready_revision() {
+    let mut chunks = Vec::new();
+    for x in -1..=1 {
+        for z in -1..=1 {
+            chunks.push((key(Dimension::OVERWORLD, x, z), air()));
+        }
+    }
+    let (mut fixture, mut state) =
+        Fixture::new(None, Dimension::OVERWORLD, ChunkPos::new(0, 0), chunks);
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    assert_eq!(
+        state.source_companion_pending_keys(),
+        vec![key(Dimension::OVERWORLD, 0, 0)]
+    );
+    for x in -1..=1 {
+        for z in -1..=1 {
+            fixture.acquire(&mut state, key(Dimension::OVERWORLD, x, z));
+        }
+    }
+    // Every column is Ready air: the whole scan finishes Exhausted, the actor
+    // stays Pending and the retained wants cover exactly the nine chunks.
+    source_companion_waiting(&state, id, [0.5, 321.0, 0.5]);
+    let mut wanted = BTreeSet::new();
+    for x in -1..=1 {
+        for z in -1..=1 {
+            wanted.insert(key(Dimension::OVERWORLD, x, z));
+        }
+    }
+    let wanted: Vec<ChunkKey> = wanted.into_iter().collect();
+    assert_eq!(state.source_companion_pending_keys(), wanted);
+    // Two quiet ticks on unchanged revisions stay Exhausted without rescanning.
+    for _ in 0..2 {
+        state.advance_tick(TickBudget::full()).unwrap();
+        source_companion_waiting(&state, id, [0.5, 321.0, 0.5]);
+        assert_eq!(state.source_companion_pending_keys(), wanted);
+    }
+    // The actual managed off-tick Support transaction lands stone in (0, 64, 0)
+    // and advances the Ready chunk revision.
+    let before =
+        state
+            .settled_read()
+            .unwrap()
+            .ready_chunk_revision(key(Dimension::OVERWORLD, 0, 0));
+    passive_snow_actual_off_tick_cell(&mut state, BlockPos::new(0, 64, 0), 2);
+    {
+        let view = state.settled_read().unwrap();
+        let after = view.ready_chunk_revision(key(Dimension::OVERWORLD, 0, 0));
+        assert_ne!(before, after);
+        assert_eq!(view.highest_non_air(Dimension::OVERWORLD, 0, 0), Some(64));
+    }
+    let _rescanned = state.advance_tick(TickBudget::full()).unwrap();
+    source_companion_active(&state, id, [0.5, 65.0, 0.5]);
+    assert!(state.source_companion_pending_keys().is_empty());
+    fixture.close();
+}
