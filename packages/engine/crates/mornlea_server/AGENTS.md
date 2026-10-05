@@ -404,7 +404,11 @@ consume its cancellation and error contracts before joining the real backend.
   quick-move credit, armor points 2/6/5/2 with wear only on actual reduction
   (fall damage bypasses). Item conservation is the invariant and a refused
   settlement stages nothing; sequence gating and actor-lifecycle checks stay
-  with the ordering/admission layer, mirroring Go's layering.
+  with the ordering/admission layer, mirroring Go's layering. Accepted
+  settlements that staged a changed patch — plus an accepted equal
+  `EquipArmor` swap — also mark the tick-local owner-only dirty publication
+  lane, so the projection emits one final owner `InventoryState`; refusals
+  and the idempotent re-select mark nothing.
 - `src/rules/tools.rs` owns authority-ray hoe, bone meal and bucket commands.
   Soil/crop/water writes and selected-item debit use the same atomic placement
   transaction. Receipt and tick-local mining-suppression capacity are checked

@@ -60,6 +60,10 @@ pub(crate) struct TickOutcome {
     /// identities the movement rule terminated below the world floor this
     /// tick. Death settlement never appears here.
     pub(crate) quiet_passive_removals: BTreeSet<PassiveId>,
+    /// Tick-local inventory publication intent drained from the tick context:
+    /// sessions whose accepted inventory commands marked their owner state
+    /// dirty this tick, beside the plain record diff.
+    pub(crate) inventory_dirty: BTreeSet<SessionKey>,
 }
 
 /// The shared read-only world facts the per-family emitters consume.
@@ -262,7 +266,13 @@ impl AuthorityState {
             &mut events,
         );
         self.emit_chat(&entities, &mut events);
-        self.emit_records(&observers, &inventories, &mut view_list, &mut events);
+        self.emit_records(
+            &observers,
+            &inventories,
+            outcome,
+            &mut view_list,
+            &mut events,
+        );
         for (observer, mut view) in observers.iter().zip(view_list) {
             view.wanted.clone_from(&observer.wanted);
             view.chunks.retain(|key, _| observer.wanted.contains(key));
@@ -313,10 +323,17 @@ impl AuthorityState {
     /// holds at most one container lease, so the chest and furnace slots of
     /// the order never compete: the chest publishes before the close notice
     /// and the grid, and the furnace after the grid.
+    ///
+    /// The inventory state is the one family with an explicit command intent
+    /// beside its record diff: a session whose accepted inventory commands
+    /// marked the tick-local dirty lane still publishes exactly one final
+    /// owner state even when the settled record equals the last published
+    /// snapshot (the select round trip, the accepted equal armor swap).
     fn emit_records(
         &mut self,
         observers: &[Observer],
         inventories: &BTreeMap<ActorKey, InventoryRecord>,
+        outcome: &TickOutcome,
         view_list: &mut [SessionView],
         events: &mut Vec<RoutedEvent>,
     ) {
@@ -324,9 +341,11 @@ impl AuthorityState {
             let actor = ActorKey::Player(observer.session);
             let owner = EventRecipient::Session(observer.session.get());
             let record = inventories.get(&actor).copied();
+            let inventory_dirty =
+                observer.has_actor && outcome.inventory_dirty.contains(&observer.session);
             // The inventory state comes first.
             if let Some(record) = record
-                && view.last_inventory.as_ref() != Some(&record)
+                && (view.last_inventory.as_ref() != Some(&record) || inventory_dirty)
             {
                 events.push(RoutedEvent::new(
                     owner,

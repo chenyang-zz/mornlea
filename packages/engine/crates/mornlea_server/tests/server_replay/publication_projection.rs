@@ -4537,17 +4537,34 @@ fn projection_inventory_dirty_equip_armor_equal_swap_publishes_once() {
     );
     let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
     let join = state.advance_tick(TickBudget::full()).unwrap();
-    let baseline = find_event(&events_for(&join, owner), |event| matches!(
-        event,
-        Event::InventoryState(_)
-    ))
+    let baseline = find_event(&events_for(&join, owner), |event| {
+        matches!(event, Event::InventoryState(_))
+    })
     .cloned()
     .expect("the join publication carries the complete owner inventory snapshot");
+    // The full committed record before the equip; the equal swap must settle
+    // back to exactly it, so only the dirty lane can publish.
+    let before = state
+        .residents()
+        .inventories
+        .get(&ActorKey::Player(owner))
+        .copied()
+        .unwrap();
 
     // The equip swaps two identical helmets, so the full record equals the
     // before state and only the accepted-equal-swap dirty lane can publish.
     submit(&mut state, owner, 1, Command::EquipArmor);
     let equip = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state
+            .residents()
+            .inventories
+            .get(&ActorKey::Player(owner))
+            .copied()
+            .unwrap(),
+        before,
+        "the equal swap leaves the full committed record unchanged"
+    );
     assert_eq!(
         projection_inventory_states(&events_for(&equip, owner)),
         vec![baseline],

@@ -416,6 +416,14 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
         ctx.stage(RuleEffect::Inventory(patch))
             .map_err(|_| ServerError::InvalidInput { field: "inventory" })?;
     }
+    // The owner publication lane follows the Go tick row: every accepted
+    // settlement that staged a changed patch marks the owner dirty, and an
+    // accepted `EquipArmor` marks it even when the swap is equal
+    // (`entity/armor.go` accepts unconditionally). The idempotent re-select
+    // and every refusal return above this point and never mark.
+    if after != before || matches!(envelope.command(), Command::EquipArmor) {
+        ctx.record_inventory_publication_dirty(session);
+    }
     Ok(PhaseReport {
         examined: 1,
         applied: 1,
