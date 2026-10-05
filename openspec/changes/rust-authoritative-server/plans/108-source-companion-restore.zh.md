@@ -9,3 +9,5 @@
 单写者7路径/精确签名/错误优先级/6个具体fixture/oracle及英文注释要求详见英文计划。新增源文件仅由主 Agent创建空白路径metadata供冻结Edit-only使用，所有Rust正文由实际Claude写。继续使用已核实b9 frozen，不改主Loom、路由、秘密、安全、安装或output上限，nullcallsrounds及有限deadlinecleanup保留。
 
 完成后沿原依赖进入acquisition；存储非空bootstrap/save/cache、其他dirty发布/config/gameplay/fullGo/audit/整体4.1/4.2仍开放。不推送、合并或部署。Architecture skill: no change.
+
+2026-10-05 验收oracle修正（任务仍开放）：新激活伙伴速度为0，首个Move[1,0]yaw0按ground acceleration40×dt0.05加速到2，再移动2×dt0.05；X应8.600000381469727/0x4109999a，而不是Snow已预设vx4.3夹具的8.715。Go step.go106/motion.go9、Native step.rs235–248/321/359及collision.rs278–281和独立f32核对一致。只改计划与实际Claude测试期待，生产motion不改；首次激活、动作隔离和完整inventory/look断言保留。
