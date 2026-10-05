@@ -904,3 +904,45 @@ fn dispatch_guard_rejects_player_restore_before_companion() {
         "both markers survive but the companion-before-player-restore guard must refuse"
     );
 }
+
+#[test]
+fn source_acquisition_completion_phase_order() {
+    // The independently bounded acquisition phase closes the dispatch goals
+    // before the world acquisition runs and reopens them before companion
+    // restoration, so no provider call site can straddle the boundary.
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let chain = [
+        "goals.before_acquire(",
+        "world_acquisition::run(",
+        "goals.after_acquire(",
+        "source_companion_restore::advance(",
+    ];
+    chain_positions(body, &chain);
+    // Negative control: swapping two of this guard's own markers must break
+    // the order probe, proving the chain actually bites.
+    let swapped = swap_markers(body, "goals.before_acquire(", "world_acquisition::run(");
+    assert!(
+        std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err(),
+        "a swapped acquisition phase must break the frozen chain"
+    );
+}
+
+#[test]
+fn source_acquisition_reconcile_phase_order() {
+    // Companion motion goals reconcile before hostile planning, so the
+    // bounded phase always settles its own goals ahead of hostile intent.
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let chain = [
+        "RulePhase::CompanionMotion",
+        "goals.reconcile(",
+        "hostile_actions::plan(",
+    ];
+    chain_positions(body, &chain);
+    let swapped = swap_markers(body, "goals.reconcile(", "hostile_actions::plan(");
+    assert!(
+        std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err(),
+        "a swapped reconcile phase must break the frozen chain"
+    );
+}

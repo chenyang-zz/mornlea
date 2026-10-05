@@ -1653,3 +1653,500 @@ fn current_key_duplicate_across_sources_refuses_before_provider_start() {
     assert_eq!(driver.pending_loads(), 1);
     assert_eq!(driver.pending_generations(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Appended source acquisition lifecycle cases: real Disk owners, one real
+// Memory login and the automatic acquisition caller only. No manual wants,
+// driver starts or offered completions exist below, and every helper above
+// stays byte-for-byte unchanged.
+// ---------------------------------------------------------------------------
+
+/// Frozen clock for the appended Memory login recipe.
+struct SourceAcquisitionClock(Instant);
+impl Clock for SourceAcquisitionClock {
+    fn monotonic(&self) -> Instant {
+        self.0
+    }
+    fn unix_ms(&self) -> i64 {
+        1000
+    }
+}
+
+/// One fully decoded Memory frame; partial reads never settle.
+fn source_acquisition_decode(
+    bytes: &[u8],
+    state: mornlea_protocol::State,
+) -> mornlea_protocol::ServerPacket {
+    use mornlea_protocol::{ProtocolCodec, read_frame_ref};
+    let frame = read_frame_ref(bytes).unwrap();
+    assert_eq!(frame.consumed, bytes.len());
+    ProtocolCodec::new()
+        .unwrap()
+        .decode_server(state, frame.packet_id, frame.payload)
+        .unwrap()
+}
+
+/// Next inbound Memory frame with a bounded wait.
+fn source_acquisition_receive(
+    transport: &mut mornlea_server::transport::memory::MemoryTransport,
+    id: ConnectionId,
+) -> Vec<u8> {
+    use mornlea_server::transport::common::TransportAuthority;
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut frames = transport.receive(id, 1, 1 << 20);
+        if let Some(frame) = frames.pop() {
+            return frame;
+        }
+        assert!(Instant::now() < until, "Memory frame delivery stalled");
+        thread::yield_now();
+    }
+}
+
+/// Actual Memory login over the given real store: ClientHello/LoginStart
+/// protocol decode, transport polls, ACK and the bounded login drive through
+/// `LoginDriver`, the readonly source restore recipe adapted to the existing
+/// chunk_driver owners. A missing player save is fine: the login settles with
+/// the default body. The returned owners stay alive with the caller so the
+/// session keeps its transport endpoints.
+fn source_acquisition_memory_login(
+    store: &mut AutosaveScheduler<DiskStore>,
+    state: &mut AuthorityState,
+) -> (
+    mornlea_server::transport::live::LoginDriver,
+    mornlea_server::transport::memory::MemoryTransport,
+    ConnectionId,
+    SessionKey,
+    SourceAcquisitionClock,
+) {
+    use mornlea_domain::Identities;
+    use mornlea_protocol::{ClientHello, ClientPacket, LoginStart, encode_uvarint};
+    use mornlea_server::transport::common::TransportAuthority;
+    use mornlea_server::transport::live::LoginDriver;
+    use mornlea_server::transport::memory::MemoryTransport;
+    let mut login = LoginDriver::new();
+    let clock = SourceAcquisitionClock(Instant::now());
+    let mut transport = MemoryTransport::new();
+    let connection = transport.connect(clock.monotonic()).unwrap();
+    let mut bytes = [0u8; 16];
+    bytes[0] = 1;
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    let player = mornlea_domain::PlayerId::try_from_bytes(bytes).unwrap();
+    let hello = ClientPacket::ClientHello(
+        ClientHello::decode_inbound(&encode_uvarint(Identities::current().protocol)).unwrap(),
+    );
+    transport.send(
+        connection,
+        MemoryTransport::encode_frame(&hello).unwrap(),
+        &mut login.bind(state, store),
+        &clock,
+    );
+    let hello = source_acquisition_decode(
+        &source_acquisition_receive(&mut transport, connection),
+        mornlea_protocol::State::Handshake,
+    );
+    assert_eq!(
+        hello,
+        mornlea_protocol::ServerPacket::ServerHello(
+            mornlea_protocol::ServerHello::new(Identities::current().protocol).unwrap()
+        )
+    );
+    transport.acknowledge(connection, 1, &mut login.bind(state, store));
+    let start = LoginStart::new(player, "Ada", 1).unwrap();
+    let start =
+        ClientPacket::LoginStart(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap());
+    transport.send(
+        connection,
+        MemoryTransport::encode_frame(&start).unwrap(),
+        &mut login.bind(state, store),
+        &clock,
+    );
+    let until = Instant::now() + Duration::from_secs(10);
+    let (session, success) = loop {
+        store.drive_workers();
+        transport.poll(connection, &mut login.bind(state, store), &clock);
+        match login
+            .bind(state, store)
+            .poll_login(LoginTicket::try_from_raw(1).unwrap())
+        {
+            LoginPoll::Ready { session, success } => break (session, success),
+            LoginPoll::Failed { error, .. } => panic!("actual login load failed: {error:?}"),
+            LoginPoll::Pending => {
+                assert!(Instant::now() < until);
+                thread::yield_now();
+            }
+        }
+    };
+    assert_eq!(
+        state.session(session).unwrap().phase,
+        SessionPhase::Prepared
+    );
+    transport.poll(connection, &mut login.bind(state, store), &clock);
+    assert_eq!(
+        source_acquisition_decode(
+            &source_acquisition_receive(&mut transport, connection),
+            mornlea_protocol::State::Login
+        ),
+        success
+    );
+    assert!(matches!(
+        success,
+        mornlea_protocol::ServerPacket::LoginSuccess(_)
+    ));
+    transport.acknowledge(connection, 1, &mut login.bind(state, store));
+    assert_eq!(login.pending(), 0);
+    let active = state.session(session).unwrap();
+    assert_eq!(active.phase, SessionPhase::Active);
+    assert_eq!(active.player_id, player);
+    (login, transport, connection, session, clock)
+}
+
+/// The retired source owner's already-started held loads survive retirement
+/// while its queued restore candidate is forgotten: the eight started view
+/// loads stay pending against the real held Disk backend, the queued saved
+/// current candidate drops to zero at retire, and after the gate opens the
+/// same resident saved body finishes installed and unloads off-tick without
+/// any generation for the forgotten missing neighbors.
+#[test]
+fn source_acquisition_actual_forget_queued_and_keep_started() {
+    use mornlea_server::core::source_acquisition::{SourceAcquisition, SourceChunkKind};
+    let root = Root::new();
+    let expected = slotted_chunk();
+    // The initial ordinary background Disk owner saves the real body and
+    // admits the Memory login; the HeldDisk backend never gates this login.
+    let mut initial = StoreGuard::new(store(&root));
+    save(&mut initial.owner, key(0), expected.clone());
+    let mut state = AuthorityState::try_new_with_metadata(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(1),
+        options().create,
+    )
+    .unwrap();
+    state.enable_source_player_restoration(1).unwrap();
+    state.enable_live_chunks().unwrap();
+    // The missing player save is fine: the login settles with the default
+    // body, never a manually prepared session.
+    let (_login, _transport, _connection, session, _clock) =
+        source_acquisition_memory_login(&mut initial.owner, &mut state);
+    // The Memory session is really admitted without any authority tick yet.
+    assert_eq!(state.next_tick(), 0);
+    // Close the initial owner to release the Disk world lease before the
+    // same tree reopens inside the held backend.
+    initial.finish().unwrap();
+    let (entered_tx, entered) = mpsc::sync_channel(8);
+    let release = Release(Arc::new((Mutex::new(false), Condvar::new())));
+    let threads = Arc::new(Mutex::new(vec![]));
+    let disk = HeldDisk {
+        disk: DiskStore::open(&root.0, options()).unwrap(),
+        entered: entered_tx,
+        release: release.0.clone(),
+        threads,
+    };
+    let mut store = StoreGuard::new(scheduler(disk));
+    // A cloned Release inside the guard guarantees the hold unblocks on panic.
+    store.release = Some(Release(release.0.clone()));
+    let mut pool = PoolGuard::new();
+    let mut acquisition = SourceAcquisition::new();
+    let first = acquisition
+        .advance(
+            &mut state,
+            &mut store.owner,
+            &mut pool.owner,
+            TickBudget::full(),
+            deadline(),
+        )
+        .expect("first automatic acquisition tick");
+    // Only real wants exist here: eight started missing view loads, one
+    // queued saved-current restore candidate, no manual input at all.
+    assert_eq!(first.started.len(), 8);
+    assert_eq!(first.queued, 1);
+    assert_eq!(acquisition.pending_loads(), 8);
+    // The next advance dispatches the real job; the held backend entry is the
+    // authoritative proof the actual Disk load is held mid-flight.
+    acquisition
+        .advance(
+            &mut state,
+            &mut store.owner,
+            &mut pool.owner,
+            TickBudget::full(),
+            deadline(),
+        )
+        .expect("dispatching automatic acquisition tick");
+    assert!(
+        entered.recv_timeout(Duration::from_secs(10)).is_ok(),
+        "actual Disk entry hold"
+    );
+    // Retire the real session before any further automatic tick: the queued
+    // candidate is forgotten while the started loads stay pending, with no
+    // fabricated cancellation of the in-flight work.
+    state.retire(session, CloseReason::PeerGone).unwrap();
+    assert_eq!(acquisition.pending_candidates(), 0);
+    assert!(acquisition.pending_loads() > 0);
+    release.open();
+    let until = Instant::now() + Duration::from_secs(10);
+    let report = loop {
+        let report = acquisition
+            .advance(
+                &mut state,
+                &mut store.owner,
+                &mut pool.owner,
+                TickBudget::full(),
+                deadline(),
+            )
+            .expect("post-release automatic acquisition tick");
+        assert_eq!(report.queued, 0);
+        // Forgotten missing neighbors never turn into generations.
+        assert!(
+            report
+                .started
+                .iter()
+                .all(|start| start.kind != SourceChunkKind::Generate)
+        );
+        assert!(acquisition.pending_loads() <= 8);
+        assert!(acquisition.pending_generations() <= 8);
+        let settled = state.live_chunk_facts(key(0)).is_some_and(|facts| {
+            facts.phase == LiveChunkPhase::Unloading
+                && !facts.wanted
+                && facts.revision == 9
+                && facts.persisted_revision == 9
+        });
+        if settled {
+            break report;
+        }
+        assert!(Instant::now() < until, "bounded forget/keep completion");
+        thread::yield_now();
+    };
+    assert_eq!(report.queued, 0);
+    let facts = state.live_chunk_facts(key(0)).unwrap();
+    assert_eq!(
+        (
+            facts.phase,
+            facts.wanted,
+            facts.revision,
+            facts.persisted_revision
+        ),
+        (LiveChunkPhase::Unloading, false, 9, 9)
+    );
+    // The finished held owner's resident body stays installed off-tick, and
+    // the retired session publishes no active actor.
+    assert_eq!(materialized(&state, key(0)), expected);
+    assert!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(session))
+            .is_none()
+    );
+    store.finish().unwrap();
+    pool.finish().unwrap();
+    drop(release);
+}
+
+/// The automatic acquisition caller refuses an inline store mailbox before
+/// any provider work: the advance fails with the typed store field, the
+/// counted backend records zero loads and the authority stays unticked with
+/// no target facts. The inline backend is still a real Disk owner, so a bug
+/// that drove it would answer quickly rather than block the test.
+#[test]
+fn source_acquisition_actual_inline_refused() {
+    use mornlea_domain::CompanionId;
+    use mornlea_server::core::source_acquisition::SourceAcquisition;
+    let root = Root::new();
+    let calls = Arc::new(AtomicU64::new(0));
+    let mut store = StoreGuard::new(
+        AutosaveScheduler::try_new(
+            SchedulerConfig::default(),
+            StoreMailbox::try_new(
+                StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap(),
+                CountedDisk {
+                    disk: DiskStore::open(&root.0, options()).unwrap(),
+                    calls: calls.clone(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let mut pool = PoolGuard::new();
+    let mut state = AuthorityState::try_new_with_metadata(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(1),
+        options().create,
+    )
+    .unwrap();
+    state.enable_source_player_restoration(1).unwrap();
+    state.enable_live_chunks().unwrap();
+    let mut bytes = [0u8; 16];
+    bytes[0] = 8;
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    let id = CompanionId::try_from_bytes(bytes).unwrap();
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let mut acquisition = SourceAcquisition::new();
+    // SourceAcquisitionTick carries no Debug, so the success branch is
+    // refused by match instead of unwrap_err.
+    let refused = acquisition.advance(
+        &mut state,
+        &mut store.owner,
+        &mut pool.owner,
+        TickBudget::full(),
+        deadline(),
+    );
+    match refused {
+        Ok(report) => panic!(
+            "inline store must be refused before any start, got {} starts",
+            report.started.len()
+        ),
+        Err(error) => assert_eq!(
+            error,
+            ServerError::InvalidInput {
+                field: "source_acquisition_store"
+            }
+        ),
+    }
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    assert_eq!(state.next_tick(), 0);
+    assert!(state.live_chunk_facts(key(0)).is_none());
+    store.finish().unwrap();
+    pool.finish().unwrap();
+}
+
+/// The automatic acquisition caller consumes the real scheduler backpressure
+/// latch: with the ceiling exceeded the retained FIFO candidate starts
+/// nothing, and only a strictly-below-threshold poll_tick that clears the
+/// latch lets the same original candidate start its single load. The
+/// authority here is a documented stats-only double, so this qualifies latch
+/// consumption only, never the automatic save producer.
+#[test]
+fn source_acquisition_scheduler_backpressure_retains_fifo() {
+    use mornlea_domain::CompanionId;
+    use mornlea_server::core::source_acquisition::{
+        SourceAcquisition, SourceChunkKind, SourceChunkStart,
+    };
+
+    /// Stats-only save authority double: empty selection, no-op dirty
+    /// return, a zeroed completion acknowledgment, the configurable unsaved
+    /// byte estimate the latch reads and the frozen immutable metadata
+    /// snapshot. It is not an automatic Save producer.
+    struct StatsAuthority {
+        estimated_unsaved_bytes: usize,
+    }
+    impl SaveAuthority for StatsAuthority {
+        fn select(&mut self, _mode: SaveMode, _budget: SaveBudget) -> Vec<OwnedSnapshot> {
+            Vec::new()
+        }
+        fn return_dirty(&mut self, _snapshot: OwnedSnapshot) {}
+        fn apply_completion(&mut self, _completion: SaveCompletion) -> AckReport {
+            AckReport {
+                acked: 0,
+                released: 0,
+                retry: Vec::new(),
+                errors: Vec::new(),
+            }
+        }
+        fn save_stats(&self) -> SaveStats {
+            SaveStats {
+                dirty: 0,
+                in_flight: 0,
+                estimated_unsaved_bytes: self.estimated_unsaved_bytes,
+            }
+        }
+        fn metadata_snapshot(&self) -> OwnedSnapshot {
+            OwnedSnapshot::try_new(
+                SaveKey::Metadata,
+                1,
+                1,
+                SaveUrgency::Autosave,
+                SaveValue::Metadata(options().create),
+            )
+            .unwrap()
+        }
+    }
+    let root = Root::new();
+    let mut store = StoreGuard::new(
+        AutosaveScheduler::try_new(
+            SchedulerConfig::try_new(1000, 20, 1200, 100).unwrap(),
+            StoreMailbox::try_new_background(
+                StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap(),
+                DiskStore::open(&root.0, options()).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let mut pool = PoolGuard::new();
+    let mut state = AuthorityState::try_new_with_metadata(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(1),
+        options().create,
+    )
+    .unwrap();
+    state.enable_source_player_restoration(1).unwrap();
+    state.enable_live_chunks().unwrap();
+    let mut bytes = [0u8; 16];
+    bytes[0] = 8;
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    let id = CompanionId::try_from_bytes(bytes).unwrap();
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let mut authority = StatsAuthority {
+        estimated_unsaved_bytes: 100,
+    };
+    let report = store
+        .owner
+        .poll_tick(1, SaveBudget::default(), &mut authority)
+        .expect("tick one sets the real latch");
+    assert!(report.backpressured);
+    assert!(store.owner.backpressured());
+    let mut acquisition = SourceAcquisition::new();
+    let held = acquisition
+        .advance(
+            &mut state,
+            &mut store.owner,
+            &mut pool.owner,
+            TickBudget::full(),
+            deadline(),
+        )
+        .expect("backpressured automatic acquisition tick");
+    // The wanted candidate is retained FIFO with zero starts and no target
+    // facts while the real latch is set.
+    assert!(held.started.is_empty());
+    assert!(held.queued >= 1);
+    assert!(acquisition.pending_candidates() > 0);
+    assert!(state.live_chunk_facts(key(0)).is_none());
+    authority.estimated_unsaved_bytes = 89;
+    let report = store
+        .owner
+        .poll_tick(2, SaveBudget::default(), &mut authority)
+        .expect("tick two clears the real latch");
+    assert!(!report.backpressured);
+    assert!(!store.owner.backpressured());
+    let released = acquisition
+        .advance(
+            &mut state,
+            &mut store.owner,
+            &mut pool.owner,
+            TickBudget::full(),
+            deadline(),
+        )
+        .expect("released automatic acquisition tick");
+    // The original retained candidate starts its single load first.
+    assert_eq!(
+        released.started,
+        vec![SourceChunkStart {
+            key: key(0),
+            kind: SourceChunkKind::Load,
+        }]
+    );
+    // Close the real owners even with a metadata save still pending.
+    store.finish().unwrap();
+    pool.finish().unwrap();
+}

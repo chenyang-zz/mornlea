@@ -7,3 +7,5 @@
 实际 Disk saved→Ready 和 Disk missing→NeedsGeneration→Native→Ready 是主验收，双对象或声明编译不接受集成。限制仍为 wanted/候选36660、resident36676、load8、CPU8、staged16，单次 admission 尝试16。Loom 控制器继续固定 b9e4cceb576e0f1f1187d88ae35996e65b727afc；Claude 写 Rust/测试，Codex 只设计、文档、格式化与验收。
 
 不重做 companion，不改 Go/binary/controlplane，不等待新超时功能。原4.1/4.2、自动 save/cache/bootstrap、完整可执行 runtime 与 trusted observer composition 保持开放；本计划没有宣称完成。
+
+普通 Missing 完成仅独立追加 Generate，不标记 subscriptions dirty。无论本 tick dirty reconcile 是否执行，都在条件式新 Load 批次之后追加仍 wanted 的 NeedsGeneration；不得因此重新选择不相关 Failed player 键。独立 Go 原代码审核核实此条件，并在生产调用前冻结修正。
