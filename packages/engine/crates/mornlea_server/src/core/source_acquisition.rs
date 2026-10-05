@@ -602,20 +602,28 @@ impl SourceGoals {
         let inputs = context.source_inputs(players, companions)?;
         let mut dirty = self.force || self.last_inputs.as_ref() != Some(&inputs);
         if !dirty {
-            dirty = players
-                .entries
-                .values()
-                .filter_map(|entry| entry.restore.spawn_wait_key())
-                .chain(
-                    companions
-                        .entries
-                        .values()
-                        .filter_map(|scan| scan.spawn_wait_key()),
-                )
-                .any(|key| {
-                    context
-                        .source_chunk_facts(key)
-                        .is_none_or(|facts| facts.phase == LiveChunkPhase::Failed)
+            // Only current pending registered owners drive the spawn retry:
+            // a retained scan for an absent, dead, respawning or completed
+            // actor never dirties a quiet tick. Point lookups into the
+            // reducer's local books, never a historical book-wide scan.
+            dirty = inputs
+                .owners
+                .iter()
+                .filter(|owner| !owner.active)
+                .any(|owner| {
+                    let scan = match owner.actor {
+                        ActorKey::Player(session) => {
+                            players.entries.get(&session).map(|entry| &entry.restore)
+                        }
+                        ActorKey::Companion(id) => companions.entries.get(&id),
+                        _ => None,
+                    };
+                    scan.and_then(|scan| scan.spawn_wait_key())
+                        .is_some_and(|key| {
+                            context
+                                .source_chunk_facts(key)
+                                .is_none_or(|facts| facts.phase == LiveChunkPhase::Failed)
+                        })
                 });
         }
         if dirty {
@@ -982,8 +990,12 @@ mod goals_tests {
         assert!(!goals.force);
         assert_eq!(goals.pending.len(), 1);
         assert_eq!(goals.queued.len(), 1);
+        // The context keeps the authority borrow until drop, so the final
+        // phase check reads through the context's own facts port.
         assert_eq!(
-            state.live_chunk_facts(failed_key).map(|facts| facts.phase),
+            context
+                .source_chunk_facts(failed_key)
+                .map(|facts| facts.phase),
             Some(LiveChunkPhase::Failed)
         );
     }

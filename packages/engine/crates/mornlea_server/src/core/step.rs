@@ -164,17 +164,15 @@ pub fn reduce_tick(
 }
 
 /// The automatic source tick: the same engine with the private goal book
-/// threaded through dispatch, then the final small-input capture after
-/// publication and book restoration. `AuthorityState::advance_source_tick`
-/// owns the successful counter bump.
+/// threaded through dispatch; the final small-input capture runs inside the
+/// reducer's ordinary failure fence after publication and book restoration.
+/// `AuthorityState::advance_source_tick` owns the successful counter bump.
 pub(crate) fn reduce_tick_source(
     state: &mut AuthorityState,
     budget: TickBudget,
     goals: &mut SourceGoals,
 ) -> Result<TickPublication, ServerError> {
-    let publication = reduce_tick_mode(state, budget, true, Some(goals))?;
-    goals.finish_tick(state)?;
-    Ok(publication)
+    reduce_tick_mode(state, budget, true, Some(goals))
 }
 
 /// Runs the actual full phase engine once without appending publication frames.
@@ -225,7 +223,7 @@ fn reduce_tick_inner(
     state: &mut AuthorityState,
     budget: TickBudget,
     publish: bool,
-    goals: Option<&mut SourceGoals>,
+    mut goals: Option<&mut SourceGoals>,
 ) -> Result<TickPublication, ServerError> {
     let tick = state.next_tick();
     // Staged chat ingress runs before the mailbox/companion drain: admission,
@@ -269,7 +267,7 @@ fn reduce_tick_inner(
             &mut source_companions,
             &mut source_players,
             &mut passive_snow,
-            goals,
+            &mut goals,
         )?;
         let overlay = context.viewer_leases();
         // Private observations are projected after every settlement. Provider
@@ -335,6 +333,12 @@ fn reduce_tick_inner(
     };
     if publish {
         publication::publish_tick(state, publication.clone())?;
+    }
+    // The final small-input capture stays inside the same trusted-error
+    // fence: a late refusal or panic keeps the counter unbumped through the
+    // ordinary fail_tick path, never after committed publication.
+    if let Some(goals) = goals.as_deref_mut() {
+        goals.finish_tick(state)?;
     }
     Ok(publication)
 }
@@ -423,7 +427,7 @@ fn dispatch_rows(
     source_companions: &mut SourceCompanionBook,
     source_players: &mut SourcePlayerBook,
     passive_snow: &mut passives::PassiveSnowBook,
-    mut goals: Option<&mut SourceGoals>,
+    goals: &mut Option<&mut SourceGoals>,
 ) -> Result<(), ServerError> {
     for envelope in dispatched {
         admit_command(context, envelope)?;
