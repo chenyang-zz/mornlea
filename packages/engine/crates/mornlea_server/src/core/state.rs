@@ -3558,9 +3558,9 @@ pub struct TickContext<'a> {
     /// instead of re-deriving physics. Compounds never touch it; no rollback entry.
     pre_step: BTreeMap<ActorKey, MotionState>,
     /// Tick-local owner-only inventory publication intent: sessions whose
-    /// accepted inventory or crafting commands marked their owner state dirty
-    /// this tick. The inventory provider and the crafting command provider
-    /// are the two validated writers; the tick-outcome capture
+    /// accepted inventory, crafting or container commands marked their owner
+    /// state dirty this tick. The inventory, crafting command and container
+    /// providers are the three validated writers; the tick-outcome capture
     /// drains the set so the publication projection can emit one final owner
     /// inventory state even when the settled record equals the last published
     /// snapshot (the select round trip, the accepted equal armor swap).
@@ -4197,10 +4197,11 @@ impl<'a> TickContext<'a> {
     }
 
     /// Records one session's accepted inventory-command publication intent.
-    /// Only the inventory provider and the crafting command provider reach
-    /// this, after a settled command staged its changed patch or after an
-    /// accepted equal armor swap, so no arbitrary session and no extra owner
-    /// can force an owner-only inventory publication.
+    /// Only the inventory, crafting command and container providers reach
+    /// this, after a settled command staged its changed patch, after an
+    /// accepted equal armor swap, or after an accepted container compound
+    /// (including the equal-record panel drop), so no arbitrary session and
+    /// no extra owner can force an owner-only inventory publication.
     pub(crate) fn record_inventory_publication_dirty(&mut self, session: SessionKey) {
         self.inventory_publication_dirty.insert(session);
     }

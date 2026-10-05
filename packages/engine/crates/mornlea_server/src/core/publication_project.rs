@@ -61,8 +61,9 @@ pub(crate) struct TickOutcome {
     /// tick. Death settlement never appears here.
     pub(crate) quiet_passive_removals: BTreeSet<PassiveId>,
     /// Tick-local inventory publication intent drained from the tick context:
-    /// sessions whose accepted inventory or crafting commands marked their
-    /// owner state dirty this tick, beside the plain record diff.
+    /// sessions whose accepted inventory, crafting or container commands
+    /// marked their owner state dirty this tick, beside the plain record
+    /// diff.
     pub(crate) inventory_dirty: BTreeSet<SessionKey>,
     /// Tick-local crafting identity publication intent drained from the tick
     /// context: sessions whose accepted crafting commands marked their private
@@ -332,8 +333,9 @@ impl AuthorityState {
     ///
     /// The inventory state and the crafting state are the two families with
     /// an explicit command intent beside their record diffs: a session whose
-    /// accepted inventory or crafting commands marked the tick-local dirty
-    /// lane still publishes exactly one final owner state even when the
+    /// accepted inventory, crafting or container commands marked the
+    /// tick-local dirty lane still publishes exactly one final owner state
+    /// even when the
     /// settled record equals the last published snapshot (the select round
     /// trip, the accepted equal armor swap, the crafting round trips).
     fn emit_records(

@@ -607,6 +607,7 @@ fn settle_drop(
         },
         RuleEffect::Drops(batch),
     ]))?;
+    ctx.record_inventory_publication_dirty(basis.viewer.session);
     Ok(PhaseReport {
         examined: 1,
         applied: 1,
@@ -648,7 +649,9 @@ fn commit(
         after: next,
     });
     // A rejected durable container write must not spend the source inventory.
-    ctx.stage(RuleEffect::Compound(effects))
+    ctx.stage(RuleEffect::Compound(effects))?;
+    ctx.record_inventory_publication_dirty(viewer.session);
+    Ok(())
 }
 
 /// Final validity sweep over the computed sides, the `Valid` conjunction the

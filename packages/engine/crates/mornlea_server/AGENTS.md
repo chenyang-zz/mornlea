@@ -623,7 +623,11 @@ consume its cancellation and error contracts before joining the real backend.
   clearing the view. Output slot 38 is a legal drop source, never a transfer
   destination. Inventory, container and drop writes settle in one compound;
   every successful explicit container patch durably touches its chunk even
-  when its slots remain equal. Reach invalidation belongs to publication after
+  when its slots remain equal. Accepted transfers and the equal-record panel
+  drop also mark the tick-local owner-only inventory dirty lane after that
+  successful compound; refusals and lifecycle open/close mark nothing, and a
+  quiet container publication cadence remains future work.
+  Reach invalidation belongs to publication after
   transfers. The serial reducer owns net viewer commit, retirement pruning and
   real phase scheduling; workbench anchor mutual exclusion remains separate.
 - `src/store/scheduler.rs` owns save scheduling over the accepted mailbox:
