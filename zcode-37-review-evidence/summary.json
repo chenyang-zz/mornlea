@@ -1,0 +1,30 @@
+[
+ {
+  "name": "25-parity-review",
+  "exit": 0,
+  "elapsed_seconds": 0.655,
+  "source": "5210448bc4634f3bb7840184999164b55a6aa12f",
+  "start": "2026-10-03T09:38:23.173835+00:00"
+ },
+ {
+  "name": "26-persistence-full-postfix",
+  "exit": 0,
+  "elapsed_seconds": 562.889,
+  "source": "5210448bc4634f3bb7840184999164b55a6aa12f",
+  "start": "2026-10-03T09:38:23.963347+00:00"
+ },
+ {
+  "name": "27-go-audit",
+  "exit": 0,
+  "elapsed_seconds": 177.37,
+  "source": "5210448bc4634f3bb7840184999164b55a6aa12f",
+  "start": "2026-10-03T09:47:47.014330+00:00"
+ },
+ {
+  "name": "inventory-binding",
+  "rows": 78,
+  "bound": 78,
+  "open": 0,
+  "source": "gen-inventory-binding.py verified against recorded logs"
+ }
+]

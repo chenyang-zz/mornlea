@@ -895,3 +895,163 @@ fn fifo_log_without_reader_refuses_before_verifier_spawn() {
 fn fifo_log_with_held_reader_refuses_before_verifier_spawn() {
     fifo_log_refuses_with_bounded_cli(true);
 }
+
+/// Extracts the actual `cmd_rollback` batch consumer reads without
+/// executing the CLI, using the same anchored split technique as
+/// `process_termination_shell`.
+fn rollback_batch_consumer_reads() -> String {
+    let source = fs::read_to_string(optin_script()).expect("read production rollback consumer");
+    let (_, block) = source
+        .split_once(
+            "\n    local world backup socket nonce previous recorded_previous phase\n    {\n",
+        )
+        .expect("production rollback batch consumer exists");
+    let (reads, _) = block
+        .split_once("\n    } < <(manifest_get_batch ")
+        .expect("production rollback batch consumer closes");
+    reads.to_owned()
+}
+
+/// The batched manifest read must keep NUL as an exclusive field
+/// separator: an embedded NUL inside one field, or a stream shorter than
+/// the declared fields, refuses with a typed `invalid_manifest` instead of
+/// silently misaligning every later consumer. Ordinary and empty fields
+/// still decode in argument order, and the real rollback CLI refuses a
+/// NUL-bearing manifest before producing any side effect.
+#[test]
+fn manifest_batch_embedded_nul_and_truncation_refuse() {
+    // A JSON `\u0000` escape decodes to a literal NUL inside the field, so
+    // the extracted helper refuses that field as it is reached; the NUL
+    // sits in the first requested field here, so the refusal precedes any
+    // separator, while a later field's refusal may follow earlier emitted
+    // fields and the consumers' short-batch refusal covers that stream.
+    let scope = Scope::fresh("batch-nul");
+    let manifest = scope.path("nul.json");
+    fs::write(
+        &manifest,
+        "{\"world_path\": \"a\\u0000b\", \"phase\": \"RustRunning\"}",
+    )
+    .unwrap();
+    let (code, output) = run_script_functions(
+        &scope,
+        "manifest_get_batch \"$1\" world_path phase",
+        &[&manifest.to_string_lossy()],
+    );
+    assert_ne!(code, 0, "embedded NUL field refuses: {output}");
+    assert!(
+        output.contains("FAIL invalid_manifest")
+            && output.contains("embedded NUL")
+            && output.contains("world_path"),
+        "typed embedded NUL refusal: {output}"
+    );
+
+    // Empty and absent fields occupy their own slots, and ordinary fields
+    // (strings, integers, booleans) decode in the exact argument order.
+    let scope = Scope::fresh("batch-order");
+    let manifest = scope.path("fields.json");
+    fs::write(
+        &manifest,
+        r#"{"empty_field": "", "present_field": "value", "count": 7, "flag": true}"#,
+    )
+    .unwrap();
+    let action = r#"{ IFS= read -rd '' first
+IFS= read -rd '' second
+IFS= read -rd '' third
+IFS= read -rd '' fourth
+IFS= read -rd '' fifth
+} < <(manifest_get_batch "$1" empty_field present_field count flag absent_field)
+printf 'first=[%s]second=[%s]third=[%s]fourth=[%s]fifth=[%s]' "$first" "$second" "$third" "$fourth" "$fifth""#;
+    let (code, output) = run_script_functions(&scope, action, &[&manifest.to_string_lossy()]);
+    assert_eq!(code, 0, "ordinary batched fields decode: {output}");
+    assert_eq!(
+        output.trim_end(),
+        "first=[]second=[value]third=[7]fourth=[true]fifth=[]",
+        "empty and absent fields keep their own slots in argument order"
+    );
+
+    // A stream with fewer terminators than fields must refuse through the
+    // exact `cmd_rollback` consumer reads rather than leaving later fields
+    // silently empty.
+    let scope = Scope::fresh("batch-short");
+    let truncated = scope.path("truncated.bin");
+    fs::write(
+        &truncated,
+        b"world-value\0backup-value\0partial-without-terminator",
+    )
+    .unwrap();
+    let reads = rollback_batch_consumer_reads();
+    let action = format!("{{\n{reads}\n}} < \"$1\"\necho extraction-should-not-continue");
+    let (code, output) = run_script_functions(&scope, &action, &[&truncated.to_string_lossy()]);
+    assert_ne!(code, 0, "truncated batch refuses: {output}");
+    assert!(
+        output.contains("FAIL invalid_manifest")
+            && output.contains("manifest field batch is incomplete"),
+        "typed truncation refusal: {output}"
+    );
+    assert!(
+        !output.contains("extraction-should-not-continue"),
+        "truncation refusal stops the consumer: {output}"
+    );
+
+    // End to end: the real CLI refuses a NUL-bearing recorded path before
+    // any rollback side effect, bounded by the same deadline the FIFO
+    // fixtures already impose on this CLI.
+    use std::os::unix::process::CommandExt;
+
+    let scope = Scope::fresh("batch-cli");
+    let run = scope.path("run");
+    let world = run.join("world");
+    prepare_fixture(&world, false);
+    let manifest = script_activate(&scope, &world, &run.join("backup"), &run, &[]);
+    quiesce_rust(&manifest);
+    let before = tree_hash(&world, &[LOCK_BASENAME]);
+    set_manifest_field(&manifest, "world_path", serde_json::json!("a\0b"));
+    let corrupted = fs::read(&manifest).unwrap();
+    let mut rollback = RollbackGroup(Some(
+        Command::new("bash")
+            .arg(optin_script())
+            .args([
+                "rollback",
+                "--manifest",
+                &manifest.to_string_lossy(),
+                "--data-policy",
+                "compatible",
+            ])
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    ));
+    let returned = wait_until(Duration::from_secs(5), || {
+        rollback.0.as_mut().unwrap().try_wait().unwrap().is_some()
+    });
+    let output = rollback.collect(returned);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        returned,
+        "embedded NUL refuses before the verifier deadline: {text}"
+    );
+    assert!(
+        !output.status.success(),
+        "embedded NUL world path is invalid: {text}"
+    );
+    assert!(
+        text.contains("FAIL invalid_manifest") && text.contains("embedded NUL"),
+        "typed embedded NUL refusal: {text}"
+    );
+    assert_eq!(
+        fs::read(&manifest).unwrap(),
+        corrupted,
+        "refusal mutates no manifest byte"
+    );
+    assert_eq!(tree_hash(&world, &[LOCK_BASENAME]), before);
+    assert!(!run.join("previous-listen.addr").exists());
+    assert!(!run.join("previous-verifier-report.json").exists());
+    assert!(!run.join("previous-verifier.log").exists());
+    drop(mornlea_server::store::lease::WorldLease::acquire(&world).unwrap());
+}

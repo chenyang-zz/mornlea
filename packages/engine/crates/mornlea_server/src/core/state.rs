@@ -11,31 +11,84 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use mornlea_domain::{
-    CommandEnvelope, CommandEnvelopeParts, ContainerRef, Dimension, EventRecipient, MotionState,
-    PlayerId, RejectReason, RoutedEvent, Weather, WorldState,
+    BlockChange, BlockPos, ChatBody, ChunkPos, CommandEnvelope, CommandEnvelopeParts, CommandText,
+    CompanionId, CompanionName, CompanionSpeaker, ContainerRef, Dimension, DisplayName,
+    EventRecipient, FiniteVec3, LookAngles, MotionState, PassiveId, PlayerId, RejectReason,
+    RoutedEvent, TaskFailure, TaskState, Weather, WorldState,
 };
+use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
+use mornlea_engine::native::raycast::NativeRaycast;
 use mornlea_protocol::{
     AdmittedLogin, Direction, PlayIntent, ProtocolCodec, ProtocolError, ServerPacket, State,
 };
-use mornlea_storage::{Chunk, Metadata, PlayerLocation, PlayerSave, StoredPlayer};
+use mornlea_storage::{
+    COMPANION_PLAN_STEP_FOLLOW, COMPANION_PLAN_STEP_GO_TO, COMPANION_PLAN_STEP_MINE,
+    COMPANION_PLAN_STEP_PLACE, COMPANION_TASK_COMPLETED, COMPANION_TASK_FAIL_INVALID_PLAN,
+    COMPANION_TASK_FAIL_INVENTORY_FULL, COMPANION_TASK_FAIL_NONE,
+    COMPANION_TASK_FAIL_PATH_UNREACHABLE, COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
+    COMPANION_TASK_FAIL_WORLD_CHANGED, COMPANION_TASK_FAILED, COMPANION_TASK_RUNNING,
+    COMPANION_TASK_STOPPED, COMPANION_TASK_TIMED_OUT, Chunk, CompanionBody, Metadata,
+    PlanStep as StoredPlanStep, PlayerId as StoredPlayerId, PlayerLocation, PlayerSave,
+    StoredCompanionTask, StoredPlayer,
+};
 
 use super::acquisition::{
     AcquiredChunkEvent, AcquisitionState, ChunkGenerationReservation, ChunkLoadReservation,
     LiveChunkFacts, LiveChunkPhase, RejectedAcquiredChunk,
 };
 use super::block_observations::ChunkBlockObservations;
+use super::companion_chat::{
+    Addressed, CompanionChatBook, CompanionChatIssuer, CompanionChatQueueView, CompanionChatTask,
+    DecidedChatFact, MAX_DECIDED_FACTS, MAX_EXTERNAL_LIFECYCLE, STOP_COMMAND, parse_chat_address,
+};
 use super::container_store::ContainerState;
 use super::contracts::*;
 use super::deferred_commands::DeferredCommands;
 use super::drop_store::{self, DropState};
+use super::interaction::{look_direction, normalized_direction};
 use super::login_seed::{SeededPlayer, seed_player};
 use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
+use super::publication_project::TickOutcome;
+use super::session_view::SessionView;
+use super::source_acquisition::{SourceGoals, SourceInputs, effective_radius};
+use super::source_companion_restore::SourceCompanionBook;
 use super::source_player_restore::SourcePlayerBook;
 use super::world::ReadyChunk;
 use crate::rules::farmland::FarmlandSchedule;
 use crate::rules::fluids::FluidSchedule;
+use crate::rules::passives::PassiveSnowBook;
 
 const COMPANION_INBOX: usize = 4;
+/// Freshly missing keys one Acquire row may stage for the source generation
+/// lane; the bounded lane matches the fresh-missing goal book ceiling.
+const SOURCE_GENERATION_KEYS_MAX: usize = 8;
+/// Fixed retained-producer ownership slots: one per resident under the global
+/// passive cap, mirroring the retained book's tracker bound.
+const PASSIVE_SNOW_OWNED_SLOTS: usize = 32;
+
+/// Chat intake bound: at most this many staged entries wait between ticks.
+/// The 257th arrival is refused with a transport capacity error before any
+/// mutation. The queue drains fully every tick, so the bound is structural
+/// rather than cumulative. This intake ceiling is distinct from the
+/// per-companion task FIFO bound the chat book owns.
+const CHAT_QUEUE_CAP: usize = 256;
+
+/// One chat instruction staged between two ticks, waiting for ingress
+/// processing at the tick boundary.
+pub(crate) struct StagedChat {
+    pub(crate) session: SessionKey,
+    pub(crate) player_id: PlayerId,
+    pub(crate) display_name: DisplayName,
+    pub(crate) text: CommandText,
+}
+
+/// One Active session's published identity, the projection-side speaker
+/// facts the chat and remote families read.
+pub(crate) struct Speaker {
+    pub(crate) session: SessionKey,
+    pub(crate) player_id: PlayerId,
+    pub(crate) display_name: DisplayName,
+}
 
 static SETTLED_PRE_STEP: BTreeMap<ActorKey, MotionState> = BTreeMap::new();
 
@@ -51,6 +104,7 @@ thread_local! {
 struct SessionRecord {
     player_id: PlayerId,
     display_name: String,
+    view_distance: u8,
     phase: SessionPhase,
     last_applied_sequence: u64,
     last_input_sequence: u64,
@@ -191,6 +245,25 @@ pub struct AuthorityState {
     residents: ResidentTickState,
     source_player_radius: Option<u8>,
     source_players: SourcePlayerBook,
+    /// Retained source companion restore scans, owned exclusively like the
+    /// source player book and never cloned.
+    source_companions: SourceCompanionBook,
+    /// Retained passive Snow book: fixed tracker slots plus the pending
+    /// candidate batch. The reducer moves it across the tick exactly like the
+    /// source book, so retained travel survives tick boundaries.
+    passive_snow: PassiveSnowBook,
+    /// Per-session publication view state for the tick-end projection.
+    /// Entries appear lazily during projection and leave at retirement.
+    session_views: BTreeMap<SessionKey, SessionView>,
+    /// Chat instructions staged between ticks, drained by the projection.
+    chat_queue: VecDeque<StagedChat>,
+    /// Next chat event id, strictly increasing from one; zero is the absent
+    /// form the chat event constructor rejects.
+    next_chat_event_id: u64,
+    /// Configured companion chat address book and task queues. The book is
+    /// the single serial owner for configured names, task FIFOs, captured
+    /// issuers, generations, phases, and decided chat facts.
+    companion_chat: CompanionChatBook,
 }
 
 impl AuthorityState {
@@ -259,6 +332,12 @@ impl AuthorityState {
             residents: ResidentTickState::default(),
             source_player_radius: None,
             source_players: SourcePlayerBook::default(),
+            source_companions: SourceCompanionBook::default(),
+            passive_snow: PassiveSnowBook::default(),
+            session_views: BTreeMap::new(),
+            chat_queue: VecDeque::new(),
+            next_chat_event_id: 1,
+            companion_chat: CompanionChatBook::new(),
         })
     }
 
@@ -467,6 +546,17 @@ impl AuthorityState {
         self.limits
     }
 
+    /// Returns the authoritative per-session publication radius.
+    ///
+    /// The admitted declared distance plus one, clamped to the server view
+    /// bound. Absent sessions yield no wanted set.
+    pub(crate) fn session_view_radius(&self, session: SessionKey) -> Option<u8> {
+        let record = self.sessions.get(&session)?;
+        let derived = usize::from(record.view_distance).saturating_add(1);
+        let clamped = derived.min(self.limits.view_radius());
+        u8::try_from(clamped).ok()
+    }
+
     pub fn admit(
         &mut self,
         login: AdmittedLogin,
@@ -489,6 +579,20 @@ impl AuthorityState {
     ) -> Result<CompanionReceipt, ServerError> {
         if self.phase != ServerPhase::Running {
             return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        // Configured companions fence late actions against the serial
+        // current-task generation: only an action naming the running
+        // generation is admitted, so a delayed envelope from a stopped or
+        // finished task cannot execute. Unconfigured trusted fixtures keep
+        // the previous behavior.
+        if self.companion_chat.is_configured(candidate.companion_id)
+            && !self
+                .companion_chat
+                .is_running_generation(candidate.companion_id, candidate.generation)
+        {
+            return Err(ServerError::InvalidInput {
+                field: "companion_generation",
+            });
         }
         let duplicate = self.companions.iter().any(|queued| {
             queued.envelope.request_id == candidate.request_id
@@ -569,6 +673,41 @@ impl AuthorityState {
         Ok(publication)
     }
 
+    /// Validation precedence for the automatic source caller: the ordinary
+    /// sticky-failure, Running and budget checks, then live acquisition,
+    /// all before any provider is driven.
+    pub(crate) fn check_source_tick(&self, work: TickBudget) -> Result<(), ServerError> {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        TickBudget::try_new(
+            work.commands(),
+            work.fluid_updates_per_dimension(),
+            work.fluid_rescan_target_per_dimension(),
+            work.farmland_checks(),
+            work.farmland_block_reads(),
+        )?;
+        self.require_live_chunks(true)
+    }
+
+    /// The automatic source tick: the same ordinary validation, the source
+    /// reducer threading the private goal book, and the successful counter
+    /// bump only after the reducer returns. Errors leave the counter
+    /// unchanged and ordinary `advance_tick` semantics untouched.
+    pub(crate) fn advance_source_tick(
+        &mut self,
+        work: TickBudget,
+        goals: &mut SourceGoals,
+    ) -> Result<TickPublication, ServerError> {
+        self.check_source_tick(work)?;
+        let publication = super::step::reduce_tick_source(self, work, goals)?;
+        self.next_tick = self.next_tick.saturating_add(1);
+        Ok(publication)
+    }
+
     pub fn close_session(
         &mut self,
         session: SessionKey,
@@ -627,12 +766,114 @@ impl AuthorityState {
         &mut self.source_players
     }
 
+    pub(crate) fn source_companions_mut(&mut self) -> &mut SourceCompanionBook {
+        &mut self.source_companions
+    }
+
+    pub(crate) fn passive_snow_mut(&mut self) -> &mut PassiveSnowBook {
+        &mut self.passive_snow
+    }
+
+    /// Source-only effective session radius: a declared zero selects the
+    /// full server view bound; any other declaration keeps the publication
+    /// clamp. Non-Active sessions keep no automatic goals.
+    fn source_session_radius(&self, session: SessionKey) -> Option<u8> {
+        let record = self.sessions.get(&session)?;
+        if record.phase != SessionPhase::Active {
+            return None;
+        }
+        let bound = u8::try_from(self.limits.view_radius()).ok()?;
+        Some(effective_radius(record.view_distance, bound))
+    }
+
+    /// Collects the bounded automatic source owner facts over the settled
+    /// read view and the real retained source books.
+    pub(crate) fn source_inputs_settled(&self) -> Result<SourceInputs, ServerError> {
+        let view = self.settled_read()?;
+        SourceInputs::collect(
+            &view,
+            &self.source_players,
+            &self.source_companions,
+            |session| self.source_session_radius(session),
+        )
+    }
+
     pub(crate) fn prune_source_players(&mut self) {
         self.source_players.entries.retain(|key, _| {
             self.sessions
                 .get(key)
                 .is_some_and(|record| record.phase == SessionPhase::Active)
         });
+    }
+
+    /// Registers one bounded source companion restore identity at the startup
+    /// seam. Every check precedes the first insertion, so a refusal leaves the
+    /// resident lanes, the book and the wanted sets unchanged.
+    pub fn register_source_companion(
+        &mut self,
+        id: CompanionId,
+        anchor: ChunkPos,
+        body: Option<CompanionBody>,
+    ) -> Result<(), ServerError> {
+        if let Some(error) = self.tick_failure {
+            return Err(error);
+        }
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        if self.next_tick != 0 {
+            return Err(ServerError::InvalidInput {
+                field: "source_companion_registration",
+            });
+        }
+        let key = ActorKey::Companion(id);
+        if self.source_companions.entries.contains_key(&id)
+            || self.residents.actors.iter().any(|actor| actor.key == key)
+            || self.residents.inventories.contains_key(&key)
+            || self.residents.runtimes.contains_key(&key)
+        {
+            return Err(ServerError::InvalidInput {
+                field: "source_companion_duplicate",
+            });
+        }
+        if self
+            .residents
+            .actors
+            .iter()
+            .filter(|actor| matches!(actor.key, ActorKey::Companion(_)))
+            .count()
+            >= 4
+        {
+            return Err(ServerError::InvalidInput {
+                field: "source_companion_capacity",
+            });
+        }
+        // All checked construction precedes the resident handoff.
+        let prepared = super::source_companion_restore::prepare(id, anchor, body)?;
+        self.residents.actors.push(prepared.actor);
+        self.residents.inventories.insert(key, prepared.inventory);
+        self.residents.runtimes.insert(key, prepared.runtime);
+        self.source_companions.entries.insert(id, prepared.restore);
+        Ok(())
+    }
+
+    /// Sorted union of every retained pending companion scan's wanted keys.
+    pub fn source_companion_pending_keys(&self) -> Vec<ChunkKey> {
+        let mut keys = BTreeSet::new();
+        for entry in self.source_companions.entries.values() {
+            keys.extend(entry.pending_keys());
+        }
+        keys.into_iter().collect()
+    }
+
+    /// Clears the publication reset marker for registered Active companions
+    /// through the module owner, with disjoint book and resident borrows and
+    /// no observer requirement.
+    pub(crate) fn finish_source_companion_resets(&mut self) {
+        super::source_companion_restore::finish_publication(
+            &self.source_companions,
+            &mut self.residents,
+        );
     }
 
     pub fn allocate(
@@ -778,6 +1019,8 @@ impl AuthorityState {
         record.outbox_closed = true;
         self.current_sessions.remove(&key);
         self.occupied = self.occupied.saturating_sub(1);
+        // The publication view belongs to the live session only.
+        self.session_views.remove(&key);
         // Sleep participation belongs to the live session. Durable respawn
         // anchors and the other resident lanes keep their persistence owner.
         if let Some(sleep) = &mut self.residents.sleep_record {
@@ -814,9 +1057,14 @@ impl AuthorityState {
         };
         let _ = phase;
         match intent {
-            PlayIntent::Chat(_) | PlayIntent::KeepAliveReply { .. } => {
+            // Chat keeps its existing wire receipt while the staged entry
+            // waits for tick-boundary ingress processing, which owns the
+            // addressing outcome and the sender-only rejects.
+            PlayIntent::Chat(chat) => {
+                self.stage_chat(session, chat.text().clone())?;
                 Ok(SubmissionReceipt::ControlAccepted)
             }
+            PlayIntent::KeepAliveReply { .. } => Ok(SubmissionReceipt::ControlAccepted),
             PlayIntent::Sequenced { sequence, command } => {
                 // Intake order is seam-fixed: validate the whole payload before
                 // queue or arrival capacity, so a combined violation reports
@@ -864,6 +1112,818 @@ impl AuthorityState {
         }
         record.last_applied_sequence = sequence;
         true
+    }
+
+    /// Stages one chat instruction on the bounded intake FIFO.
+    ///
+    /// The 257th arrival between two ticks is refused with a transport
+    /// capacity error before any mutation; no marker is staged and nothing
+    /// is silently discarded. A chat staged before the sender's session is
+    /// Active stays queued, bounded by the cap, and is drained on the first
+    /// tick with an Active session or dropped with the session at retire.
+    fn stage_chat(&mut self, session: SessionKey, text: CommandText) -> Result<(), ServerError> {
+        if self.chat_queue.len() >= CHAT_QUEUE_CAP {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: CHAT_QUEUE_CAP,
+                observed: self.chat_queue.len() + 1,
+            });
+        }
+        let Some(record) = self.sessions.get(&session) else {
+            return Ok(());
+        };
+        let staged = StagedChat {
+            session,
+            player_id: record.player_id,
+            display_name: DisplayName::try_from_canonical(record.display_name.clone()).map_err(
+                |_| ServerError::InvalidInput {
+                    field: "display_name",
+                },
+            )?,
+            text,
+        };
+        self.chat_queue.push_back(staged);
+        Ok(())
+    }
+
+    /// Active sessions' published identities in ascending session order.
+    pub(crate) fn active_speakers(&self) -> Vec<Speaker> {
+        self.sessions
+            .iter()
+            .filter(|(_, record)| record.phase == SessionPhase::Active)
+            .filter_map(|(session, record)| {
+                Some(Speaker {
+                    session: *session,
+                    player_id: record.player_id,
+                    display_name: DisplayName::try_from_canonical(record.display_name.clone())
+                        .ok()?,
+                })
+            })
+            .collect()
+    }
+
+    /// Whether the named session is still an active chat sender.
+    pub(crate) fn session_active(&self, session: SessionKey) -> bool {
+        self.sessions
+            .get(&session)
+            .is_some_and(|record| record.phase == SessionPhase::Active)
+    }
+
+    /// Allocates the next strictly increasing chat event id, publishing
+    /// nothing further once the id space is exhausted.
+    pub(crate) fn allocate_chat_event_id(&mut self) -> Option<u64> {
+        let id = self.next_chat_event_id;
+        let next = id.checked_add(1)?;
+        self.next_chat_event_id = next;
+        Some(id)
+    }
+
+    /// Clones the bounded configured companion name map (at most four).
+    pub(crate) fn configured_chat_names(&self) -> BTreeMap<CompanionId, CompanionName> {
+        self.companion_chat.configured.clone()
+    }
+
+    /// Drains the decided chat facts for one publication pass.
+    pub(crate) fn take_decided_chat_facts(&mut self) -> Vec<DecidedChatFact> {
+        self.companion_chat.take_decided()
+    }
+
+    /// Processes staged chat into decided facts before provider dispatch.
+    ///
+    /// Runs at the tick boundary before the mailbox/companion drain: retired
+    /// senders stage no event, addressing parses against the immutable
+    /// configured names only, exact trimmed stop bypasses the FIFO cap while
+    /// normal text reserves a real pending entry before any Accepted fact,
+    /// and one pending head per idle companion promotes afterwards. The
+    /// fact/id budget is preflighted before any drain or task mutation, so a
+    /// refusal retains every staged input and task.
+    pub(crate) fn prepare_companion_chat(&mut self) -> Result<(), ServerError> {
+        let staged = self.chat_queue.len();
+        let decided = self.companion_chat.decided.len();
+        let total = decided.checked_add(staged).ok_or(ServerError::Capacity {
+            resource: Resource::Commands,
+            limit: MAX_DECIDED_FACTS,
+            observed: usize::MAX,
+        })?;
+        if total > MAX_DECIDED_FACTS {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: MAX_DECIDED_FACTS,
+                observed: total,
+            });
+        }
+        let usable = u64::MAX.saturating_sub(self.next_chat_event_id);
+        if (total as u64) > usable {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: usize::MAX,
+                observed: usize::MAX,
+            });
+        }
+        let tick = self.next_tick;
+        let names = self.companion_chat.by_name.clone();
+        let staged_entries: Vec<StagedChat> = self.chat_queue.drain(..).collect();
+        for entry in staged_entries {
+            if !self.session_active(entry.session) {
+                continue;
+            }
+            match parse_chat_address(entry.text.as_str(), &names) {
+                Addressed::Invalid => {
+                    self.companion_chat
+                        .push_decided(DecidedChatFact::sender_only(
+                            entry.player_id,
+                            entry.display_name,
+                            entry.session,
+                            ChatBody::InvalidFormat,
+                        ))?;
+                }
+                Addressed::Unknown { name } => {
+                    self.companion_chat
+                        .push_decided(DecidedChatFact::sender_only(
+                            entry.player_id,
+                            entry.display_name,
+                            entry.session,
+                            ChatBody::UnknownCompanion { name },
+                        ))?;
+                }
+                Addressed::Matched { id, name, command } => {
+                    if command.as_str() == STOP_COMMAND {
+                        self.apply_chat_stop(id, name, command, &entry)?;
+                    } else if !self.companion_chat.pending_has_capacity(id) {
+                        let companion = CompanionSpeaker::new(id, name);
+                        self.companion_chat
+                            .push_decided(DecidedChatFact::sender_only(
+                                entry.player_id,
+                                entry.display_name,
+                                entry.session,
+                                ChatBody::QueueFull { companion, command },
+                            ))?;
+                    } else {
+                        let issuer = self.capture_chat_issuer(&entry)?;
+                        let admitted =
+                            self.companion_chat
+                                .try_admit(id, command.clone(), issuer, tick)?;
+                        let companion = CompanionSpeaker::new(id, name);
+                        if admitted {
+                            self.companion_chat
+                                .push_decided(DecidedChatFact::broadcast(
+                                    entry.player_id,
+                                    entry.display_name,
+                                    ChatBody::Accepted { companion, command },
+                                ))?;
+                        } else {
+                            self.companion_chat
+                                .push_decided(DecidedChatFact::sender_only(
+                                    entry.player_id,
+                                    entry.display_name,
+                                    entry.session,
+                                    ChatBody::QueueFull { companion, command },
+                                ))?;
+                        }
+                    }
+                }
+            }
+        }
+        self.companion_chat.promote_heads()
+    }
+
+    /// Applies one exact trimmed stop instruction for a configured companion.
+    ///
+    /// A stoppable current task emits the original issuer and original
+    /// command as a broadcast stopped fact and clears this companion's
+    /// runtime and queued action envelopes; any other state emits a
+    /// sender-only not-following rejection with every queue and current
+    /// fact preserved and no accepted stop queued.
+    fn apply_chat_stop(
+        &mut self,
+        id: CompanionId,
+        name: CompanionName,
+        command: CommandText,
+        entry: &StagedChat,
+    ) -> Result<(), ServerError> {
+        if let Some(task) = self.companion_chat.stop_current(id) {
+            let companion = CompanionSpeaker::new(id, name);
+            self.clear_stopped_companion_runtime(id);
+            self.companion_chat
+                .push_decided(DecidedChatFact::broadcast(
+                    task.issuer.player_id,
+                    task.issuer.player_name,
+                    ChatBody::Task {
+                        companion,
+                        command: task.command,
+                        state: TaskState::Stopped,
+                    },
+                ))?;
+        } else {
+            let companion = CompanionSpeaker::new(id, name);
+            self.companion_chat
+                .push_decided(DecidedChatFact::sender_only(
+                    entry.player_id,
+                    entry.display_name.clone(),
+                    entry.session,
+                    ChatBody::NotFollowing { companion, command },
+                ))?;
+        }
+        Ok(())
+    }
+
+    /// Clears one companion's stop-scoped runtime and queued action envelopes.
+    ///
+    /// Only this companion's held controls, path, mining target, mining
+    /// progress, running task state, and already queued action envelopes are
+    /// cleared; the pending chat FIFO and every other companion are kept.
+    fn clear_stopped_companion_runtime(&mut self, id: CompanionId) {
+        let key = ActorKey::Companion(id);
+        if let Some(runtime) = self.residents.runtimes.get_mut(&key) {
+            runtime.controls = None;
+            runtime.path = None;
+            if let ActorAux::Companion {
+                mining_target,
+                task,
+                ..
+            } = &mut runtime.aux
+            {
+                *mining_target = None;
+                task.state = COMPANION_TASK_STOPPED;
+            }
+        }
+        self.residents.mining.remove(&key);
+        self.companions
+            .retain(|queued| queued.envelope.companion_id != id);
+    }
+
+    /// Captures the issuer facts for one accepted chat instruction.
+    ///
+    /// The session identity comes from the staged entry while the pose and
+    /// look come from the committed live player actor, falling back to
+    /// `[0, 1, 0]` with a zero look when absent. The look hit walks the
+    /// native ray kernel from the eye origin over the interaction reach and
+    /// reports the first context-free solid cell inside the Ready fixed 3x3
+    /// around the foot chunk in the issuer's own dimension; missing cells,
+    /// cells outside the square, out-of-height cells, and a missing
+    /// environment all yield no hit. Captured facts are never reread later.
+    fn capture_chat_issuer(&self, entry: &StagedChat) -> Result<CompanionChatIssuer, ServerError> {
+        let view = self.settled_read()?;
+        let (position, look, dimension) = view
+            .actor(ActorKey::Player(entry.session))
+            .filter(|actor| actor.lifecycle == ActorLifecycle::Active)
+            .map(|actor| (actor.motion.position(), actor.look, actor.dimension))
+            .unwrap_or_else(|| {
+                (
+                    FiniteVec3::try_new([0.0, 1.0, 0.0]).expect("fallback pose is finite"),
+                    LookAngles::try_new(0.0, 0.0).expect("fallback look is finite"),
+                    Dimension::OVERWORLD,
+                )
+            });
+        let look_hit = Self::capture_look_hit(&view, position, look, dimension);
+        Ok(CompanionChatIssuer {
+            session: entry.session,
+            player_id: entry.player_id,
+            player_name: entry.display_name.clone(),
+            position,
+            look,
+            look_hit,
+        })
+    }
+
+    /// Walks the native ray kernel for one issuer look hit, if any.
+    fn capture_look_hit(
+        view: &AuthorityReadView<'_>,
+        position: FiniteVec3,
+        look: LookAngles,
+        dimension: Dimension,
+    ) -> Option<BlockPos> {
+        let environment = view.environment()?;
+        let eye_height = environment.tunables.eye_height();
+        let reach = environment.tunables.interaction_reach();
+        if !eye_height.is_finite() || !reach.is_finite() || reach <= 0.0 {
+            return None;
+        }
+        let base = position.get();
+        let foot_cx = (base[0] / 16.0).floor() as i32;
+        let foot_cz = (base[2] / 16.0).floor() as i32;
+        let origin = [base[0], base[1] + eye_height, base[2]];
+        if origin.iter().any(|component| !component.is_finite()) {
+            return None;
+        }
+        let normalized = normalized_direction(look_direction(look.yaw(), look.pitch()))?;
+        let mut cursor = RayCursor::try_new(Ray {
+            origin,
+            direction: normalized,
+            maximum: reach,
+        })
+        .ok()?;
+        loop {
+            let batch = NativeRaycast.next_batch(&mut cursor).ok()?;
+            for record in batch.records() {
+                let cell = BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
+                // Outside the fixed 3x3, out of height, or unready cells are
+                // non-targets: the walk continues past them.
+                if !(-64..320).contains(&cell.y()) {
+                    continue;
+                }
+                if ((cell.x() >> 4) - foot_cx).abs() > 1 || ((cell.z() >> 4) - foot_cz).abs() > 1 {
+                    continue;
+                }
+                let key = ChunkKey {
+                    dimension,
+                    pos: ChunkPos::new(cell.x() >> 4, cell.z() >> 4),
+                };
+                if !view.ready_chunk(key) {
+                    continue;
+                }
+                let Some(block) = view.block(dimension, cell) else {
+                    continue;
+                };
+                if Self::chat_cell_solid(block) {
+                    return Some(cell);
+                }
+            }
+            if batch.is_done() {
+                return None;
+            }
+        }
+    }
+
+    /// Context-free solid predicate for the chat issuer capture.
+    ///
+    /// A cell targets when its id is nonzero, not fluid, and either outside
+    /// the door range or an even (solid-leaf) form; the upper door form
+    /// always targets with no lower-cell query. This capture predicate is
+    /// intentionally narrower than the world-aware interaction classifier.
+    fn chat_cell_solid(block: u16) -> bool {
+        if block == 0 || (27..=34).contains(&block) {
+            return false;
+        }
+        !(62..=69).contains(&block) || block.is_multiple_of(2)
+    }
+
+    /// Installs the immutable configured companion chat address book.
+    ///
+    /// At most four id/name pairs, validated atomically: duplicates or an
+    /// over-count refuses everything. Configuration is allowed only before
+    /// the first tick with no staged chat or task activity; an explicit
+    /// empty configuration freezes the same way. Repeating the identical
+    /// configuration is idempotent, while any later differing configuration
+    /// is refused. It may run after login before the first tick.
+    pub fn configure_companion_chat(
+        &mut self,
+        definitions: &[(CompanionId, CompanionName)],
+    ) -> Result<(), ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        if self.companion_chat.ever_configured
+            && self.companion_chat.same_configuration(definitions)
+        {
+            return Ok(());
+        }
+        let sealed = self.next_tick != 0
+            || !self.chat_queue.is_empty()
+            || self.companion_chat.has_activity()
+            || self.companion_chat.ever_configured;
+        if sealed {
+            return Err(ServerError::InvalidInput {
+                field: "companion_chat_config",
+            });
+        }
+        self.companion_chat.apply_configuration(definitions)
+    }
+
+    /// Clones the bounded queue view for one configured companion.
+    pub fn companion_chat_queue(&self, id: CompanionId) -> Option<CompanionChatQueueView> {
+        self.companion_chat.queue_view(id)
+    }
+
+    /// Takes the current queued task into planning, returning it exactly once.
+    ///
+    /// Only a current `Queued` task with a live `Active` companion actor
+    /// promotes to `Planning`. The returned receipt keeps the original
+    /// generation, command, captured issuer, and source tick for the
+    /// caller's planning snapshot and dispatch; no network or model work
+    /// happens here.
+    pub fn take_companion_chat_planning(
+        &mut self,
+        id: CompanionId,
+    ) -> Result<Option<CompanionChatTask>, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        let live = self.residents.actors.iter().any(|actor| {
+            actor.key == ActorKey::Companion(id) && actor.lifecycle == ActorLifecycle::Active
+        });
+        if !live {
+            return Ok(None);
+        }
+        Ok(self.companion_chat.take_queued_for_planning(id))
+    }
+
+    /// Installs an already validated agent plan onto a planning chat task.
+    ///
+    /// Requires a configured companion with a current `Planning` task of the
+    /// same generation, a live `Active` companion actor, and an existing
+    /// companion runtime; stale or duplicate installs return `false` without
+    /// mutation. The public plan is revalidated through `AgentPlan::try_new`
+    /// before any mutation, and the input must already be PlanHost validated:
+    /// provenance and reachability validation stay the caller's obligation.
+    /// On success the task runs with the checked plan, the runtime records
+    /// the generation and the mapped stored task (the provider-owned attempt
+    /// is left unchanged), and the original captured issuer and command emit
+    /// a broadcast started fact. No model, deadline, or task-runner policy is
+    /// invented here and the storage wire format is unchanged.
+    pub fn install_companion_chat_plan(
+        &mut self,
+        id: CompanionId,
+        generation: u64,
+        plan: AgentPlan,
+    ) -> Result<bool, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        if !self.companion_chat.is_configured(id) {
+            return Ok(false);
+        }
+        if self
+            .companion_chat
+            .peek_installable(id, generation)
+            .is_none()
+        {
+            return Ok(false);
+        }
+        if !self.residents.actors.iter().any(|actor| {
+            actor.key == ActorKey::Companion(id) && actor.lifecycle == ActorLifecycle::Active
+        }) {
+            return Ok(false);
+        }
+        if !matches!(
+            self.residents.runtimes.get(&ActorKey::Companion(id)),
+            Some(runtime) if matches!(runtime.aux, ActorAux::Companion { .. })
+        ) {
+            return Ok(false);
+        }
+        let checked = AgentPlan::try_new(plan.summary.clone(), plan.steps.clone())?;
+        self.reserve_chat_lifecycle_slot()?;
+        let Some(installed) = self
+            .companion_chat
+            .commit_install(id, generation, checked.clone())
+        else {
+            return Ok(false);
+        };
+        let start_tick = self
+            .residents
+            .environment
+            .as_ref()
+            .map(|environment| environment.world_time)
+            .unwrap_or(self.next_tick);
+        let stored = Self::map_chat_plan_to_stored(&checked, &installed.command, start_tick);
+        if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id))
+            && let ActorAux::Companion {
+                generation: current,
+                task: running,
+                ..
+            } = &mut runtime.aux
+        {
+            *current = generation;
+            *running = stored;
+        }
+        let companion = self
+            .companion_chat
+            .speaker(id)
+            .expect("configured companion has a speaker");
+        self.companion_chat
+            .push_decided(DecidedChatFact::broadcast(
+                installed.issuer.player_id,
+                installed.issuer.player_name,
+                ChatBody::Task {
+                    companion,
+                    command: installed.command,
+                    state: TaskState::Started,
+                },
+            ))?;
+        self.companion_chat.reserve_external_lifecycle()?;
+        Ok(true)
+    }
+
+    /// Finishes a chat task with a terminal lifecycle state.
+    ///
+    /// Only completed and timed-out finish a `Running` task while failed
+    /// finishes a `Planning` or `Running` task; any other state is refused
+    /// before mutation and stale generations return `false`. The original
+    /// captured issuer and command emit the terminal broadcast even when the
+    /// issuer has since retired. Success clears the current task, this
+    /// companion's held controls, path, mining target and progress, running
+    /// task state, and already queued action envelopes, while the pending
+    /// FIFO is preserved for the next tick's promotion. No deadline policy
+    /// or model outcome is fabricated here.
+    pub fn finish_companion_chat_task(
+        &mut self,
+        id: CompanionId,
+        generation: u64,
+        state: TaskState,
+    ) -> Result<bool, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        match state {
+            TaskState::Completed | TaskState::TimedOut | TaskState::Failed(_) => {}
+            TaskState::Started | TaskState::Progress | TaskState::Stopped => {
+                return Err(ServerError::InvalidInput {
+                    field: "companion_chat_state",
+                });
+            }
+        }
+        if !self.companion_chat.is_configured(id) {
+            return Ok(false);
+        }
+        if self
+            .companion_chat
+            .peek_finishable(id, generation, state)
+            .is_none()
+        {
+            return Ok(false);
+        }
+        // Unlike install, the terminal hook needs no live companion actor or
+        // runtime: a matching phase and generation terminates the current
+        // task, emits the original issuer fact, and clears whatever runtime
+        // is still present on a best-effort basis.
+        self.reserve_chat_lifecycle_slot()?;
+        let Some(finished) = self.companion_chat.commit_finish(id, generation, state) else {
+            return Ok(false);
+        };
+        self.clear_finished_companion_runtime(id, state);
+        let companion = self
+            .companion_chat
+            .speaker(id)
+            .expect("configured companion has a speaker");
+        self.companion_chat
+            .push_decided(DecidedChatFact::broadcast(
+                finished.issuer.player_id,
+                finished.issuer.player_name,
+                ChatBody::Task {
+                    companion,
+                    command: finished.command,
+                    state,
+                },
+            ))?;
+        self.companion_chat.reserve_external_lifecycle()?;
+        Ok(true)
+    }
+
+    /// Reserves one external lifecycle fact slot before any task mutation.
+    ///
+    /// Checks the four-fact quota, the decided buffer ceiling for the already
+    /// staged chat plus the new fact, and the event-id headroom for the same
+    /// bound. Stale or invalid callers never reach this reservation, so they
+    /// consume no quota.
+    fn reserve_chat_lifecycle_slot(&self) -> Result<(), ServerError> {
+        if self.companion_chat.external_lifecycle_used() >= MAX_EXTERNAL_LIFECYCLE {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: MAX_EXTERNAL_LIFECYCLE,
+                observed: self.companion_chat.external_lifecycle_used() + 1,
+            });
+        }
+        let staged = self.chat_queue.len();
+        let decided = self.companion_chat.decided.len();
+        let total = decided
+            .checked_add(staged)
+            .and_then(|pending| pending.checked_add(1))
+            .ok_or(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: MAX_DECIDED_FACTS,
+                observed: usize::MAX,
+            })?;
+        if total > MAX_DECIDED_FACTS {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: MAX_DECIDED_FACTS,
+                observed: total,
+            });
+        }
+        let usable = u64::MAX.saturating_sub(self.next_chat_event_id);
+        if (total as u64) > usable {
+            return Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                limit: usize::MAX,
+                observed: usize::MAX,
+            });
+        }
+        Ok(())
+    }
+
+    /// Maps a checked agent plan into the stored companion task shape.
+    ///
+    /// Go-to, mine, place, and terminal-follow steps become stored kinds
+    /// 1..4 through the shared place-block table. The deadline stays zero:
+    /// no deadline policy lives on this seam, so the existing runner
+    /// composition owns it until it is composed.
+    fn map_chat_plan_to_stored(
+        plan: &AgentPlan,
+        command: &CommandText,
+        start_tick: u64,
+    ) -> StoredCompanionTask {
+        let steps = plan
+            .steps
+            .iter()
+            .map(|step| match step {
+                PlanStep::GoTo { x, y, z } => StoredPlanStep {
+                    kind: COMPANION_PLAN_STEP_GO_TO,
+                    x: *x,
+                    y: *y,
+                    z: *z,
+                    block: 0,
+                    player_id: StoredPlayerId::from_bytes([0; 16]),
+                },
+                PlanStep::Mine { x, y, z } => StoredPlanStep {
+                    kind: COMPANION_PLAN_STEP_MINE,
+                    x: *x,
+                    y: *y,
+                    z: *z,
+                    block: 0,
+                    player_id: StoredPlayerId::from_bytes([0; 16]),
+                },
+                PlanStep::Place { x, y, z, block } => StoredPlanStep {
+                    kind: COMPANION_PLAN_STEP_PLACE,
+                    x: *x,
+                    y: *y,
+                    z: *z,
+                    block: Self::chat_plan_block_id(*block),
+                    player_id: StoredPlayerId::from_bytes([0; 16]),
+                },
+                PlanStep::Follow { player_id } => StoredPlanStep {
+                    kind: COMPANION_PLAN_STEP_FOLLOW,
+                    x: 0,
+                    y: 0,
+                    z: 0,
+                    block: 0,
+                    player_id: StoredPlayerId::from_bytes(player_id.bytes()),
+                },
+            })
+            .collect();
+        StoredCompanionTask {
+            command: command.as_str().to_owned(),
+            plan_steps: steps,
+            step_index: 0,
+            state: COMPANION_TASK_RUNNING,
+            start_tick,
+            deadline_ticks: 0,
+            fail_reason: 0,
+        }
+    }
+
+    /// Place-block table shared with the agent host mapping.
+    ///
+    /// Values are the frozen core block ids in declaration order, copied
+    /// read-only from the agent host's plan mapping.
+    fn chat_plan_block_id(block: PlanBlock) -> u16 {
+        match block {
+            PlanBlock::Brick => 21,
+            PlanBlock::Chest => 11,
+            PlanBlock::Clay => 24,
+            PlanBlock::Cobblestone => 13,
+            PlanBlock::Dirt => 3,
+            PlanBlock::Furnace => 9,
+            PlanBlock::Glass => 20,
+            PlanBlock::Grass => 4,
+            PlanBlock::Gravel => 16,
+            PlanBlock::IronBlock => 10,
+            PlanBlock::Leaves => 19,
+            PlanBlock::LightBlock => 12,
+            PlanBlock::MossyCobblestone => 26,
+            PlanBlock::OakLog => 17,
+            PlanBlock::OakPlanks => 18,
+            PlanBlock::RoofTile => 23,
+            PlanBlock::Sand => 15,
+            PlanBlock::SmoothStone => 14,
+            PlanBlock::SnowBlock => 25,
+            PlanBlock::Stone => 2,
+            PlanBlock::StoneBrick => 6,
+            PlanBlock::WhiteWool => 22,
+            PlanBlock::Workbench => 45,
+        }
+    }
+
+    /// Clears one companion's terminal-scoped runtime and queued envelopes.
+    ///
+    /// Reuses the stop-scoped clearing, then records the exact terminal
+    /// stored task state and failure reason: completed and timed-out keep a
+    /// zero reason while each closed failure maps to its stored reason.
+    fn clear_finished_companion_runtime(&mut self, id: CompanionId, state: TaskState) {
+        self.clear_stopped_companion_runtime(id);
+        let (stored_state, fail_reason) = match state {
+            TaskState::Completed => (COMPANION_TASK_COMPLETED, COMPANION_TASK_FAIL_NONE),
+            TaskState::TimedOut => (COMPANION_TASK_TIMED_OUT, COMPANION_TASK_FAIL_NONE),
+            TaskState::Failed(TaskFailure::PlannerUnavailable) => (
+                COMPANION_TASK_FAILED,
+                COMPANION_TASK_FAIL_PLANNER_UNAVAILABLE,
+            ),
+            TaskState::Failed(TaskFailure::InvalidPlan) => {
+                (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_INVALID_PLAN)
+            }
+            TaskState::Failed(TaskFailure::PathUnreachable) => {
+                (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_PATH_UNREACHABLE)
+            }
+            TaskState::Failed(TaskFailure::WorldChanged) => {
+                (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_WORLD_CHANGED)
+            }
+            TaskState::Failed(TaskFailure::InventoryFull) => {
+                (COMPANION_TASK_FAILED, COMPANION_TASK_FAIL_INVENTORY_FULL)
+            }
+            TaskState::Started | TaskState::Progress | TaskState::Stopped => {
+                unreachable!("terminal state validated above")
+            }
+        };
+        if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id))
+            && let ActorAux::Companion { task, .. } = &mut runtime.aux
+        {
+            task.state = stored_state;
+            task.fail_reason = fail_reason;
+        }
+    }
+
+    /// Takes the per-session publication views for one projection pass.
+    pub(crate) fn take_session_views(&mut self) -> BTreeMap<SessionKey, SessionView> {
+        std::mem::take(&mut self.session_views)
+    }
+
+    /// Returns the projection-updated publication views.
+    pub(crate) fn restore_session_views(&mut self, views: BTreeMap<SessionKey, SessionView>) {
+        self.session_views = views;
+    }
+
+    /// Committed resident actor records in physical slot order.
+    pub(crate) fn resident_actors(&self) -> &[ActorRecord] {
+        &self.residents.actors
+    }
+
+    /// Committed resident inventory records.
+    pub(crate) fn resident_inventories(&self) -> &BTreeMap<ActorKey, InventoryRecord> {
+        &self.residents.inventories
+    }
+
+    /// Committed resident projectile records.
+    pub(crate) fn resident_projectiles(&self) -> &[ProjectileRecord] {
+        &self.residents.projectiles
+    }
+
+    /// Every committed drop record across all chunk owners.
+    pub(crate) fn resident_drop_records(&self) -> Vec<DropRecord> {
+        self.residents.drop_records()
+    }
+
+    /// The live container record a reference names, Ready-chunk state before
+    /// any sparse fixture owner.
+    pub(crate) fn resident_container(&self, reference: ContainerRef) -> Option<ContainerRecord> {
+        let key = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: reference.chunk(),
+        };
+        if let Some(state) = self.residents.container_chunks.get(&key) {
+            return state.record(key, reference);
+        }
+        self.residents.containers.get(&reference).cloned()
+    }
+
+    /// The committed viewer lease one session holds, if any.
+    pub(crate) fn committed_lease(&self, session: SessionKey) -> Option<ViewLease> {
+        self.views.get(&session).copied()
+    }
+
+    /// The committed revision of a Ready chunk column, if it is resident.
+    pub(crate) fn ready_chunk_current_revision(&self, key: ChunkKey) -> Option<u64> {
+        self.residents.ready.get(&key).map(|chunk| chunk.revision)
+    }
+
+    /// The transient grazing observation of one passive actor.
+    pub(crate) fn resident_grazing(&self, id: mornlea_domain::PassiveId) -> bool {
+        self.residents
+            .runtimes
+            .get(&ActorKey::Passive(id))
+            .is_some_and(|runtime| {
+                matches!(
+                    &runtime.aux,
+                    ActorAux::Passive {
+                        graze_at: Some(_),
+                        ..
+                    }
+                )
+            })
+    }
+
+    /// Builds the wire-shaped chunk snapshot event of one Ready column from
+    /// the authoritative body. The sections equal the committed blocks; a
+    /// column that cannot cross the checked network boundary yields no event
+    /// so a publication never fails at encode time.
+    pub(crate) fn chunk_snapshot_event(
+        &self,
+        key: ChunkKey,
+    ) -> Option<mornlea_domain::ChunkSnapshot> {
+        let chunk = self.residents.ready.get(&key)?;
+        let view = chunk.capture(
+            self.residents.drops.get(&key),
+            self.residents.container_chunks.get(&key),
+        );
+        view.network_snapshot().ok().map(|(snapshot, _)| snapshot)
     }
 
     pub fn freeze_eligible(&mut self, tick: u64) -> Vec<CommandEnvelope> {
@@ -1903,6 +2963,7 @@ impl AuthorityState {
             SessionRecord {
                 player_id: login.player_id(),
                 display_name: login.display_name().as_str().to_owned(),
+                view_distance: login.view_distance(),
                 phase,
                 last_applied_sequence: 0,
                 last_input_sequence: 0,
@@ -2617,6 +3678,21 @@ pub struct TickContext<'a> {
     projectiles: Vec<ProjectileRecord>,
     damage_intents: Vec<DamageIntent>,
     deferred: DeferredCommands,
+    /// Provider resync requests recorded during dispatch, drained by the
+    /// tick-outcome capture before the carried commit.
+    resync_lane: Vec<(SessionKey, Dimension, mornlea_domain::ChunkPos)>,
+    /// Tick-local quiet passive removals: identities the passive movement
+    /// rule terminated below the world floor (or with a non-finite pose)
+    /// this tick. Death settlement never marks this lane; the outcome capture
+    /// drains it so the publication projection can report a quiet fall-out
+    /// removal as vanished and a death settlement as died.
+    quiet_passive_removals: BTreeSet<PassiveId>,
+    /// Tick-local retained-producer ownership: passive identities the retained
+    /// Snow book registered this tick, from their first movement tick, one
+    /// fixed slot per resident. The legacy single-tick collector excludes
+    /// exactly these from its tracker lookup so no stride is double-counted;
+    /// the book-less public batch path leaves the lane empty.
+    passive_snow_owned: [Option<PassiveId>; PASSIVE_SNOW_OWNED_SLOTS],
     charges: Vec<(ActorKey, ActionKind)>,
     suppressed_mining: BTreeSet<ActorKey>,
     /// Pre-motion actor poses captured at construction. Only source recovery
@@ -2624,6 +3700,30 @@ pub struct TickContext<'a> {
     /// Jump takeoffs and swimming displacement consume this step-start owner
     /// instead of re-deriving physics. Compounds never touch it; no rollback entry.
     pre_step: BTreeMap<ActorKey, MotionState>,
+    /// Tick-local owner-only inventory publication intent: sessions whose
+    /// accepted inventory, crafting or container commands marked their owner
+    /// state dirty this tick. The inventory, crafting command and container
+    /// providers are the three validated writers; the tick-outcome capture
+    /// drains the set so the publication projection can emit one final owner
+    /// inventory state even when the settled record equals the last published
+    /// snapshot (the select round trip, the accepted equal armor swap).
+    inventory_publication_dirty: BTreeSet<SessionKey>,
+    /// Tick-local owner-only crafting identity publication intent: sessions
+    /// whose accepted crafting commands marked their private grid dirty this
+    /// tick. The crafting command provider is the single writer, through the
+    /// combined recorder that also marks the inventory lane; the tick-outcome
+    /// capture drains the set so the publication projection can emit one
+    /// final crafting state even when the settled grid equals the last
+    /// published snapshot (the pack and grid round trips).
+    crafting_publication_dirty: BTreeSet<SessionKey>,
+    /// Tick-local completion override for the automatic source caller: the
+    /// current whole-want union the Acquire row applies record by record.
+    /// Manual ticks keep it empty and their settle behavior unchanged.
+    source_completion_wants: Option<BTreeSet<ChunkKey>>,
+    /// Tick-local freshly missing keys the Acquire row produced for wanted
+    /// loads that returned no body; the source goals drain them as
+    /// generation candidates after this tick's conditional load batch.
+    source_generation_keys: Vec<ChunkKey>,
 }
 
 /// Compound-entry preimages own only affected keys. Fixed slot rehearsals stay
@@ -2883,6 +3983,50 @@ pub enum ActionKind {
 }
 
 impl<'a> TickContext<'a> {
+    /// Collects the automatic source owner facts over this context's read
+    /// view plus the reducer's moved local books and the authority's real
+    /// source session radii.
+    pub(crate) fn source_inputs(
+        &self,
+        players: &SourcePlayerBook,
+        companions: &SourceCompanionBook,
+    ) -> Result<SourceInputs, ServerError> {
+        let view = self.read();
+        SourceInputs::collect(&view, players, companions, |session| {
+            self.authority.source_session_radius(session)
+        })
+    }
+
+    /// Whether staged acquisition completions wait for the Acquire row.
+    pub(crate) fn source_staged_present(&self) -> bool {
+        self.authority.acquisition.has_staged()
+    }
+
+    /// Current live record facts for one chunk key, if any.
+    pub(crate) fn source_chunk_facts(&self, key: ChunkKey) -> Option<LiveChunkFacts> {
+        self.authority.acquisition.facts(key)
+    }
+
+    /// Replaces the authority's whole want set atomically through the
+    /// existing replacement contract.
+    pub(crate) fn replace_source_chunk_wants(
+        &mut self,
+        wants: BTreeSet<ChunkKey>,
+    ) -> Result<(), ServerError> {
+        self.authority.replace_chunk_wants(wants)
+    }
+
+    /// Sets this tick's completion override union; only the source goals
+    /// call it, and only when staged completions exist.
+    pub(crate) fn set_source_completion_wants(&mut self, wants: BTreeSet<ChunkKey>) {
+        self.source_completion_wants = Some(wants);
+    }
+
+    /// Takes this tick's freshly missing generation keys.
+    pub(crate) fn take_source_generation_keys(&mut self) -> Vec<ChunkKey> {
+        std::mem::take(&mut self.source_generation_keys)
+    }
+
     /// Consumes at most sixteen prepared owners at the existing Acquire row.
     pub(crate) fn apply_live_acquisition(&mut self) -> PhaseReport {
         let events = self.authority.acquisition.drain();
@@ -2900,6 +4044,9 @@ impl<'a> TickContext<'a> {
             rejected: 0,
             carried: 0,
         };
+        // The source override is taken once: it adjusts only the completion
+        // records' wanted bits, never the whole want set.
+        let completion_wants = self.source_completion_wants.take();
         for event in events {
             if !self.authority.acquisition.settle(&event) {
                 report.rejected += 1;
@@ -2909,10 +4056,25 @@ impl<'a> TickContext<'a> {
                 AcquiredChunkEvent::Load { key, result, .. } => (key, result),
                 AcquiredChunkEvent::Generated { key, result, .. } => (key, result.map(Some)),
             };
+            if let Some(union) = &completion_wants {
+                self.authority
+                    .acquisition
+                    .completion_wanted(key, union.contains(&key));
+            }
             match result {
                 Ok(None) => {
                     self.authority.acquisition.missing(key);
                     report.applied += 1;
+                    // A wanted missing load under the source override is the
+                    // generation lane's fresh candidate; manual missing keeps
+                    // its existing behavior with no queued generation.
+                    if completion_wants
+                        .as_ref()
+                        .is_some_and(|union| union.contains(&key))
+                        && self.source_generation_keys.len() < SOURCE_GENERATION_KEYS_MAX
+                    {
+                        self.source_generation_keys.push(key);
+                    }
                 }
                 Ok(Some(prepared)) => {
                     let (ready, drops, containers, persisted, rewrite, recovered) =
@@ -2968,6 +4130,15 @@ impl<'a> TickContext<'a> {
         Self::from_parts(authority, budget)
     }
 
+    /// Between-tick staging context seeded from the committed residents,
+    /// mirroring the production tick's seeding so fixtures staged between two
+    /// ticks preserve every resident lane. The caller commits through
+    /// `resident_snapshot` plus `commit_residents`, exactly like the harness
+    /// staging path; dropping the context restores the untouched residents.
+    pub fn restage(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
+        Self::for_tick(authority, budget)
+    }
+
     /// Production tick context. The serial reducer owns the only call; the
     /// frozen tick inputs (mailbox batch, companion feed, environment
     /// snapshot) arrive through the narrow ports below, never through this
@@ -3003,9 +4174,11 @@ impl<'a> TickContext<'a> {
 
     /// Freezes the tick-start climate snapshot every provider consumes.
     /// Metadata seeds the first snapshot; later ticks retain committed climate
-    /// progression and sleep display offsets. Only the executing tick and
-    /// checked source tunables refresh at this boundary, before any provider
-    /// runs. The providers share that frozen record without durability reads.
+    /// progression and sleep display offsets. Only the executing tick
+    /// refreshes at this boundary, before any provider runs; committed
+    /// checked tunables survive the freeze and the metadata fallback alone
+    /// seeds source defaults. The providers share that frozen record without
+    /// durability reads.
     pub(crate) fn freeze_environment(&mut self, tick: u64) {
         let mut frozen = self.environment.clone().unwrap_or_else(|| {
             let metadata = &self.authority.metadata;
@@ -3026,7 +4199,6 @@ impl<'a> TickContext<'a> {
             }
         });
         frozen.next_tick = tick;
-        frozen.tunables = RuleTunables::source_defaults();
         self.environment = Some(frozen);
     }
 
@@ -3109,9 +4281,16 @@ impl<'a> TickContext<'a> {
             projectiles: Vec::new(),
             damage_intents: Vec::new(),
             deferred: DeferredCommands::default(),
+            resync_lane: Vec::new(),
+            quiet_passive_removals: BTreeSet::new(),
+            passive_snow_owned: [None; PASSIVE_SNOW_OWNED_SLOTS],
             charges: Vec::new(),
             suppressed_mining: BTreeSet::new(),
             pre_step: BTreeMap::new(),
+            inventory_publication_dirty: BTreeSet::new(),
+            crafting_publication_dirty: BTreeSet::new(),
+            source_completion_wants: None,
+            source_generation_keys: Vec::new(),
         }
     }
 
@@ -3136,6 +4315,120 @@ impl<'a> TickContext<'a> {
     /// own snapshot so their writes cannot recursively extend that pass.
     pub fn changed_blocks(&self) -> Vec<BlockObservation> {
         self.changed.values().copied().collect()
+    }
+
+    /// Records one provider resync request from the command intake.
+    pub(crate) fn record_resync(
+        &mut self,
+        entry: (SessionKey, Dimension, mornlea_domain::ChunkPos),
+    ) {
+        self.resync_lane.push(entry);
+    }
+
+    /// Records one quiet passive removal after the movement rule's fall-out
+    /// termination stages successfully. Only that branch calls this; death
+    /// settlement leaves the lane untouched so its removals keep the died
+    /// reason. The marker is tick-local: the outcome capture drains it and
+    /// the context owns no cross-tick retention.
+    pub(crate) fn record_passive_quiet_removal(&mut self, id: PassiveId) {
+        self.quiet_passive_removals.insert(id);
+    }
+
+    /// Records one resident passive as owned by the retained Snow book for
+    /// this tick's legacy collection exclusion. A deduplicated id is a no-op;
+    /// a full lane refuses instead of dropping the resident silently.
+    pub(crate) fn record_passive_snow_owned(&mut self, id: PassiveId) -> Result<(), ServerError> {
+        if self
+            .passive_snow_owned
+            .iter()
+            .any(|slot| slot.is_some_and(|held| held == id))
+        {
+            return Ok(());
+        }
+        let Some(free) = self
+            .passive_snow_owned
+            .iter_mut()
+            .find(|slot| slot.is_none())
+        else {
+            return Err(ServerError::Internal {
+                invariant: "passive snow ownership capacity",
+            });
+        };
+        *free = Some(id);
+        Ok(())
+    }
+
+    /// Whether the retained passive Snow producer owns this identity this
+    /// tick; the legacy collector skips exactly these residents.
+    pub(crate) fn passive_snow_owned(&self, id: PassiveId) -> bool {
+        self.passive_snow_owned
+            .iter()
+            .any(|slot| slot.is_some_and(|held| held == id))
+    }
+
+    /// Captures the publication projection's tick inputs before the carried
+    /// commit: block batches grouped per Ready chunk whose revision advances
+    /// this tick, plus the dispatch resync lane. The base revision is the
+    /// pre-commit committed revision and the new one includes this tick's
+    /// accepted work, exactly the transition the commit finalizes. A chunk
+    /// whose revision advanced without block changes (slots-only work) emits
+    /// no block batch; mirrors may then take the gap-resnapshot path on the
+    /// next real change, which is safe because container and drop content
+    /// travels in its own families.
+    pub(crate) fn capture_publication_outcome(&mut self) -> TickOutcome {
+        let mut batches: BTreeMap<ChunkKey, Vec<BlockChange>> = BTreeMap::new();
+        for observed in self.changed_blocks() {
+            // Unregistered fixture cells cannot cross the checked boundary;
+            // skipping the cell keeps the tick alive while the batch stays a
+            // prefix of the committed work.
+            if let Ok(change) = BlockChange::try_new(observed.pos, observed.block) {
+                batches.entry(observed.key).or_default().push(change);
+            }
+        }
+        let mut block_batches = Vec::with_capacity(batches.len());
+        for (key, changes) in batches {
+            let Some(chunk) = self.ready.get(&key) else {
+                continue;
+            };
+            let slots_dirty = self.drops.get(&key).is_some_and(|state| state.dirty)
+                || self
+                    .container_chunks
+                    .get(&key)
+                    .is_some_and(|state| state.dirty);
+            let base = chunk.revision;
+            let new = chunk.pending_revision(slots_dirty);
+            if new == base {
+                continue;
+            }
+            block_batches.push((key, base, new, changes));
+        }
+        TickOutcome {
+            block_batches,
+            resyncs: std::mem::take(&mut self.resync_lane),
+            quiet_passive_removals: std::mem::take(&mut self.quiet_passive_removals),
+            inventory_dirty: std::mem::take(&mut self.inventory_publication_dirty),
+            crafting_dirty: std::mem::take(&mut self.crafting_publication_dirty),
+        }
+    }
+
+    /// Records one session's accepted inventory-command publication intent.
+    /// Only the inventory, crafting command and container providers reach
+    /// this, after a settled command staged its changed patch, after an
+    /// accepted equal armor swap, or after an accepted container compound
+    /// (including the equal-record panel drop), so no arbitrary session and
+    /// no extra owner can force an owner-only inventory publication.
+    pub(crate) fn record_inventory_publication_dirty(&mut self, session: SessionKey) {
+        self.inventory_publication_dirty.insert(session);
+    }
+
+    /// Records one session's accepted crafting-command publication intent.
+    /// An accepted crafting move or take settles into the owner inventory
+    /// record and the private grid, so this marks both lanes at once; only
+    /// the crafting command provider calls it, after its whole-record patch
+    /// staged.
+    pub(crate) fn record_crafting_command_publication_dirty(&mut self, session: SessionKey) {
+        self.record_inventory_publication_dirty(session);
+        self.crafting_publication_dirty.insert(session);
     }
 
     /// Stages one container record for fixture-driven resolver preflight,
@@ -3199,6 +4492,13 @@ impl<'a> TickContext<'a> {
     /// bound of its own.
     pub fn push_companion_action(&mut self, action: CompanionActionEnvelope) {
         self.companions.push(action);
+    }
+
+    /// Drops only the given companion's queued action envelopes after its
+    /// activation; every other identity's order and content stay untouched.
+    pub(crate) fn discard_source_companion_actions(&mut self, id: CompanionId) {
+        self.companions
+            .retain(|envelope| envelope.companion_id != id);
     }
 
     pub fn read(&self) -> AuthorityReadView<'_> {
@@ -5452,6 +6752,7 @@ mod owned_resident_tests {
                     ])
                     .unwrap(),
                     display_name: "Ada".into(),
+                    view_distance: 8,
                     phase: SessionPhase::Active,
                     last_applied_sequence: 0,
                     last_input_sequence: 0,
@@ -15328,5 +16629,258 @@ mod live_collision_read_tests {
                 ready: false
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod companion_chat_boundary_tests {
+    use super::*;
+    use mornlea_domain::ChatIntent;
+    use mornlea_domain::{MotionStateParts, SurvivalState, SurvivalStateParts};
+
+    fn fresh() -> AuthorityState {
+        AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap()
+    }
+
+    fn logged(a: &mut AuthorityState) -> SessionKey {
+        let player =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        let start = mornlea_protocol::LoginStart::new(player, "Ada", 8).unwrap();
+        let inbound =
+            mornlea_protocol::LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
+        a.admit(
+            mornlea_protocol::admit_login(inbound).unwrap(),
+            TransportKind::Memory,
+        )
+        .unwrap()
+    }
+
+    fn amu() -> (CompanionId, CompanionName) {
+        let mut bytes = [0u8; 16];
+        bytes[0] = 9;
+        bytes[6] = 0x40;
+        bytes[8] = 0x80;
+        (
+            CompanionId::try_from_bytes(bytes).unwrap(),
+            CompanionName::try_from_canonical("阿木".to_owned()).unwrap(),
+        )
+    }
+
+    fn chat(text: &str) -> PlayIntent {
+        PlayIntent::Chat(ChatIntent::new(
+            CommandText::try_from_canonical(text.to_owned()).unwrap(),
+        ))
+    }
+
+    fn companion_actor(id: CompanionId) -> ActorRecord {
+        ActorRecord::try_new(
+            ActorKey::Companion(id),
+            ActorLifecycle::Active,
+            Dimension::OVERWORLD,
+            MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new([8.5, 65.0, 8.5]).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            }),
+            LookAngles::try_new(0.0, 0.0).unwrap(),
+            SurvivalState::try_new(SurvivalStateParts {
+                health: 20,
+                oxygen: 300,
+                hunger: 20,
+                saturation_zero: false,
+                armor_points: 0,
+            })
+            .unwrap(),
+            ActorBody::Companion(mornlea_storage::CompanionBody {
+                id: mornlea_storage::PlayerId::from_bytes(id.bytes()),
+                dimension: 0,
+                position: [8.5, 65.0, 8.5],
+                yaw: 0.0,
+                pitch: 0.0,
+                inventory: mornlea_storage::Inventory::default(),
+            }),
+        )
+        .unwrap()
+    }
+
+    fn companion_runtime(id: CompanionId) -> ActorRuntime {
+        ActorRuntime {
+            key: ActorKey::Companion(id),
+            controls: None,
+            has_view: false,
+            reset: false,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 0,
+            oxygen: 300,
+            peak_y: 65.0,
+            exhaustion_milli: 0,
+            saturation_milli: 0,
+            since_damage_ticks: 0,
+            drown_ticks: 0,
+            starvation_ticks: 0,
+            eating: None,
+            bow: None,
+            path: None,
+            aux: ActorAux::Companion {
+                generation: 0,
+                attempt: 1,
+                task: StoredCompanionTask::default(),
+                mining_target: None,
+            },
+        }
+    }
+
+    fn follow_plan() -> AgentPlan {
+        let player =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        AgentPlan::try_new(
+            "跟随我".to_owned(),
+            vec![PlanStep::Follow { player_id: player }],
+        )
+        .unwrap()
+    }
+
+    /// Event-id exhaustion refuses ingress before any drain, task, or fact
+    /// mutation; the last usable id still admits exactly one fact, and the
+    /// next fact refuses with every input and counter retained.
+    #[test]
+    fn id_exhaustion_refuses_ingress_before_mutation() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        let book = a.companion_chat.clone();
+        assert_eq!(a.chat_queue.len(), 1);
+        a.next_chat_event_id = u64::MAX;
+        assert!(matches!(
+            a.prepare_companion_chat(),
+            Err(ServerError::Capacity {
+                resource: Resource::Commands,
+                ..
+            })
+        ));
+        assert_eq!(a.chat_queue.len(), 1);
+        assert_eq!(a.companion_chat, book);
+        assert_eq!(a.next_chat_event_id, u64::MAX);
+
+        a.next_chat_event_id = u64::MAX - 1;
+        a.prepare_companion_chat().unwrap();
+        assert!(a.chat_queue.is_empty());
+        assert!(a.companion_chat_queue(id).unwrap().current.is_some());
+        assert_eq!(a.companion_chat.decided.len(), 1);
+
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        assert!(a.prepare_companion_chat().is_err());
+        assert_eq!(a.chat_queue.len(), 1);
+        assert_eq!(a.companion_chat.decided.len(), 1);
+        assert_eq!(a.next_chat_event_id, u64::MAX - 1);
+    }
+
+    /// Install and terminal lifecycle calls refuse without mutation while
+    /// the remaining id headroom cannot cover the staged inputs plus the
+    /// new fact; with headroom both succeed in order.
+    #[test]
+    fn lifecycle_refusals_preserve_state_under_id_pressure() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        // Model the real publication drain: the initial Accepted fact leaves
+        // the decided buffer before planning proceeds.
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        // One genuinely staged input is now pending beside the planning task.
+        a.submit(session, chat("@阿木 queued")).unwrap();
+        a.next_chat_event_id = u64::MAX - 1;
+        let book = a.companion_chat.clone();
+        let runtime = a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime")
+            .clone();
+        let view = a.companion_chat_queue(id).unwrap();
+        // One staged input plus the new fact exceeds the single usable id.
+        assert!(a.install_companion_chat_plan(id, 1, follow_plan()).is_err());
+        assert_eq!(a.companion_chat, book);
+        assert_eq!(
+            a.residents
+                .runtimes
+                .get(&ActorKey::Companion(id))
+                .expect("companion runtime"),
+            &runtime
+        );
+        assert_eq!(a.companion_chat_queue(id).unwrap(), view);
+        assert_eq!(a.companion_chat.decided.len(), 0);
+        assert_eq!(a.next_chat_event_id, u64::MAX - 1);
+        assert_eq!(a.chat_queue.len(), 1);
+        assert!(a
+            .finish_companion_chat_task(
+                id,
+                1,
+                TaskState::Failed(TaskFailure::PlannerUnavailable),
+            )
+            .is_err());
+        assert_eq!(a.companion_chat, book);
+        assert_eq!(
+            a.residents
+                .runtimes
+                .get(&ActorKey::Companion(id))
+                .expect("companion runtime"),
+            &runtime
+        );
+        assert_eq!(a.companion_chat_queue(id).unwrap(), view);
+        assert_eq!(a.companion_chat.decided.len(), 0);
+        assert_eq!(a.next_chat_event_id, u64::MAX - 1);
+        assert_eq!(a.chat_queue.len(), 1);
+
+        // Headroom for the staged input plus both lifecycle facts lets the
+        // install and the terminal finish succeed in order.
+        a.next_chat_event_id = u64::MAX - 3;
+        assert!(a.install_companion_chat_plan(id, 1, follow_plan()).unwrap());
+        assert_eq!(a.companion_chat.decided.len(), 1);
+        assert!(a
+            .finish_companion_chat_task(
+                id,
+                1,
+                TaskState::Failed(TaskFailure::PlannerUnavailable),
+            )
+            .unwrap());
+        assert_eq!(a.chat_queue.len(), 1);
+    }
+
+    /// Preparing at the extreme tick captures that exact source tick with
+    /// checked generation and event ids: nothing wraps or panics.
+    #[test]
+    fn extreme_tick_captures_max_source_tick_without_wrap() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.next_tick = u64::MAX;
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        let current = a
+            .companion_chat_queue(id)
+            .unwrap()
+            .current
+            .expect("current task");
+        assert_eq!(current.source_tick, u64::MAX);
+        assert_eq!(current.generation, 1);
+        assert_eq!(a.next_tick, u64::MAX);
     }
 }

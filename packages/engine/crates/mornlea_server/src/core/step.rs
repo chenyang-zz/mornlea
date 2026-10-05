@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use mornlea_domain::{
-    BlockPos, ChunkPos, CommandEnvelope, CommandOrderScratch, ContainerRef, Dimension,
+    BlockPos, ChunkPos, Command, CommandEnvelope, CommandOrderScratch, ContainerRef, Dimension,
     order_commands,
 };
 
@@ -34,6 +34,8 @@ use super::contracts::{
     SessionPhase, TickBudget, TickCounters, TickPublication,
 };
 use super::publication;
+use super::source_acquisition::SourceGoals;
+use super::source_companion_restore::{self, SourceCompanionBook};
 use super::source_player_restore::{self, SourcePlayerBook};
 use super::state::{AuthorityState, TickContext};
 use crate::rules::{
@@ -49,9 +51,10 @@ const COMPANION_FEED: usize = 4;
 /// Chunk-column radius around each active player for the shared active-key
 /// set. Eight players cap the set at two hundred columns structurally.
 const ACTIVE_KEY_RADIUS: i32 = 2;
-/// Projectile scope radius per active player. The frozen contract fixes the
-/// radius-two columns as the shared observation set; each flight square uses
-/// the same bound until a session subscription radius lands in the contract.
+/// Projectile scope radius per active player. This fixed simulation radius is
+/// independent of per-session subscription wanted: flights use this bound
+/// while publication uses each session's declared view distance clamped to
+/// the server view bound.
 const PROJECTILE_SCOPE_RADIUS: u64 = 2;
 /// Scope ceiling mirroring the eight-player structural bound.
 const MAX_SCOPES: usize = 8;
@@ -157,7 +160,19 @@ pub fn reduce_tick(
     state: &mut AuthorityState,
     budget: TickBudget,
 ) -> Result<TickPublication, ServerError> {
-    reduce_tick_mode(state, budget, true)
+    reduce_tick_mode(state, budget, true, None)
+}
+
+/// The automatic source tick: the same engine with the private goal book
+/// threaded through dispatch; the final small-input capture runs inside the
+/// reducer's ordinary failure fence after publication and book restoration.
+/// `AuthorityState::advance_source_tick` owns the successful counter bump.
+pub(crate) fn reduce_tick_source(
+    state: &mut AuthorityState,
+    budget: TickBudget,
+    goals: &mut SourceGoals,
+) -> Result<TickPublication, ServerError> {
+    reduce_tick_mode(state, budget, true, Some(goals))
 }
 
 /// Runs the actual full phase engine once without appending publication frames.
@@ -166,7 +181,7 @@ pub struct AuthoritativeFinalReducer;
 
 impl FinalReducer for AuthoritativeFinalReducer {
     fn reduce_final(&mut self, state: &mut AuthorityState) -> Result<u64, ServerError> {
-        Ok(reduce_tick_mode(state, TickBudget::full(), false)?.tick)
+        Ok(reduce_tick_mode(state, TickBudget::full(), false, None)?.tick)
     }
 }
 
@@ -175,6 +190,7 @@ fn reduce_tick_mode(
     state: &mut AuthorityState,
     budget: TickBudget,
     publish: bool,
+    goals: Option<&mut SourceGoals>,
 ) -> Result<TickPublication, ServerError> {
     if let Some(error) = state.tick_failure() {
         return Err(error);
@@ -193,7 +209,7 @@ fn reduce_tick_mode(
     )?;
     // Trusted Rust provider unwinds stop the owner; native aborts and UB are outside this boundary.
     match catch_unwind(AssertUnwindSafe(|| {
-        reduce_tick_inner(state, budget, publish)
+        reduce_tick_inner(state, budget, publish, goals)
     })) {
         Ok(Ok(publication)) => Ok(publication),
         Ok(Err(error)) => Err(state.fail_tick(error)),
@@ -207,8 +223,13 @@ fn reduce_tick_inner(
     state: &mut AuthorityState,
     budget: TickBudget,
     publish: bool,
+    mut goals: Option<&mut SourceGoals>,
 ) -> Result<TickPublication, ServerError> {
     let tick = state.next_tick();
+    // Staged chat ingress runs before the mailbox/companion drain: admission,
+    // stop handling, and promotion decide facts once, and a successful stop
+    // purges this companion's queued envelopes before they are drained.
+    state.prepare_companion_chat()?;
     let drained = drain_mailbox(state, tick, budget.commands());
     let companions = state.drain_companions(COMPANION_FEED);
     // The login scan runs before the context borrows the authority: Active
@@ -224,6 +245,8 @@ fn reduce_tick_inner(
         farmland::FarmlandSchedule::new(),
     );
     let mut source_players = std::mem::take(state.source_players_mut());
+    let mut source_companions = std::mem::take(state.source_companions_mut());
+    let mut passive_snow = std::mem::take(state.passive_snow_mut());
     let mut context = TickContext::for_tick(state, budget);
     let result = catch_unwind(AssertUnwindSafe(|| {
         // Seeded logins land before the first provider row, so this tick's own
@@ -241,7 +264,10 @@ fn reduce_tick_inner(
             &drained.dispatched,
             &mut fluid_schedule,
             &mut farmland_schedule,
+            &mut source_companions,
             &mut source_players,
+            &mut passive_snow,
+            &mut goals,
         )?;
         let overlay = context.viewer_leases();
         // Private observations are projected after every settlement. Provider
@@ -266,16 +292,22 @@ fn reduce_tick_inner(
             carried: drained.carried,
             stale: drained.stale,
         };
+        // The publication outcome leaves the context before the carried
+        // commit: its block batches pair each chunk's committed revision with
+        // the pending one the commit is about to finalize.
+        let outcome = context.capture_publication_outcome();
         context.commit_carried();
-        Ok::<_, ServerError>((overlay, hits, events, counters))
+        Ok::<_, ServerError>((overlay, hits, events, counters, outcome))
     }));
-    // Context recovery precedes restoration of all three exclusively moved owners.
+    // Context recovery precedes restoration of all five exclusively moved owners.
     drop(context);
     *state.fluid_schedule_mut() = fluid_schedule;
     *state.farmland_schedule_mut() = farmland_schedule;
     *state.source_players_mut() = source_players;
+    *state.source_companions_mut() = source_companions;
+    *state.passive_snow_mut() = passive_snow;
     state.prune_source_players();
-    let (mut overlay, hits, mut events, counters) = match result {
+    let (mut overlay, hits, mut events, counters, outcome) = match result {
         Ok(result) => result?,
         Err(panic) => std::panic::resume_unwind(panic),
     };
@@ -283,8 +315,14 @@ fn reduce_tick_inner(
         |key, _| matches!(state.session(*key), Some(facts) if facts.phase == SessionPhase::Active),
     );
     state.commit_viewers(overlay);
+    // The publication families precede the private player observation and the
+    // combat confirmations that close the tick.
+    events.extend(state.project_tick_publication(tick, &outcome));
     events.extend(state.project_player_updates(tick));
     events.extend(hits);
+    // Registered Active companions consume their reset marker before delivery
+    // finalizes the tick, preserving the source cadence with no observer.
+    state.finish_source_companion_resets();
     let publication = TickPublication {
         tick,
         events,
@@ -295,6 +333,12 @@ fn reduce_tick_inner(
     };
     if publish {
         publication::publish_tick(state, publication.clone())?;
+    }
+    // The final small-input capture stays inside the same trusted-error
+    // fence: a late refusal or panic keeps the counter unbumped through the
+    // ordinary fail_tick path, never after committed publication.
+    if let Some(goals) = goals {
+        goals.finish_tick(state)?;
     }
     Ok(publication)
 }
@@ -373,14 +417,17 @@ fn drain_mailbox(state: &mut AuthorityState, tick: u64, command_budget: usize) -
 /// Runs every dispatch row in the frozen order. The first error stops later
 /// rows and prevents successful commit and delivery. The carried schedules
 /// arrive as locals because the context owns the authority borrow.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn dispatch_rows(
     context: &mut TickContext<'_>,
     tick: u64,
     dispatched: &[CommandEnvelope],
     fluid_schedule: &mut fluids::FluidSchedule,
     farmland_schedule: &mut farmland::FarmlandSchedule,
+    source_companions: &mut SourceCompanionBook,
     source_players: &mut SourcePlayerBook,
+    passive_snow: &mut passives::PassiveSnowBook,
+    goals: &mut Option<&mut SourceGoals>,
 ) -> Result<(), ServerError> {
     for envelope in dispatched {
         admit_command(context, envelope)?;
@@ -405,7 +452,14 @@ fn dispatch_rows(
         .filter(|interaction| interaction.kind == InteractionKind::Bed)
         .collect();
     companions::run(context, batch_call(RulePhase::CompanionIntent))?;
+    if let Some(goals) = goals.as_deref_mut() {
+        goals.before_acquire(context, source_players, source_companions)?;
+    }
     world_acquisition::run(context, batch_call(RulePhase::Acquire))?;
+    if let Some(goals) = goals.as_deref_mut() {
+        goals.after_acquire(context)?;
+    }
+    source_companion_restore::advance(source_companions, context)?;
     source_player_restore::advance(source_players, context)?;
     for session in active_players(context) {
         let actor = ActorKey::Player(session);
@@ -448,6 +502,9 @@ fn dispatch_rows(
         source_player_restore::checkpoint_safe(source_players, context, session)?;
     }
     companions::run(context, batch_call(RulePhase::CompanionMotion))?;
+    if let Some(goals) = goals.as_deref_mut() {
+        goals.reconcile(context, source_players, source_companions)?;
+    }
     let plan = hostile_actions::plan(context)?;
     let melee = plan.melee_batch().clone();
     hostile_actions::apply(context, plan)?;
@@ -467,7 +524,11 @@ fn dispatch_rows(
         .collect();
     victims.sort_unstable();
     victims.dedup();
-    passives::run(context, batch_call(RulePhase::PassiveStepDeaths))?;
+    passives::run_with_snow(
+        context,
+        Some(&mut *passive_snow),
+        batch_call(RulePhase::PassiveStepDeaths),
+    )?;
     companions::run(context, batch_call(RulePhase::CompanionPlacement))?;
     for envelope in context.deferred(RulePhase::Interaction) {
         route_interaction(context, &envelope)?;
@@ -549,6 +610,10 @@ fn dispatch_rows(
     crops::settle_tramples(&mut footprints, context)?;
     crops::run(context, batch_call(RulePhase::SnowFootprint))?;
     source_player_restore::settle_snow(source_players, context)?;
+    // The retained passive book settles its copied candidates through the
+    // same fresh-cell consumer, after the source rows and before the generic
+    // single-tick schedule.
+    passives::settle_snow(passive_snow, context)?;
     crops::settle_snow_footprints(&mut footprints, context)?;
     random_blocks::run(context, batch_call(RulePhase::RandomBlock))?;
     random_blocks::advance(context, &active_keys)?;
@@ -576,9 +641,11 @@ fn batch_call(phase: RulePhase) -> RuleCall<'static> {
 
 /// Admits one sorted envelope into the intake providers. Every admit whose
 /// gate accepts the envelope runs: an open lands in both the container and
-/// the workbench bags. Resource and sequencing failures stop the tick; gate
-/// refusals fall through. An envelope no intake owns rides the ordered
-/// interaction bag the combat-close loop drains.
+/// the workbench bags. A `Command::Resync` envelope is provider-owned intake:
+/// it records its resync request on the tick outcome's lane and counts as
+/// applied here, never riding the interaction bag. Resource and sequencing
+/// failures stop the tick; gate refusals fall through. An envelope no intake
+/// owns rides the ordered interaction bag the combat-close loop drains.
 fn admit_command(
     context: &mut TickContext<'_>,
     envelope: &CommandEnvelope,
@@ -601,6 +668,12 @@ fn admit_command_with(
     envelope: &CommandEnvelope,
     admits: [ProviderCall; 4],
 ) -> Result<(), ServerError> {
+    if let Command::Resync(intent) = envelope.command() {
+        if let Some(session) = SessionKey::from_raw(envelope.session()) {
+            context.record_resync((session, intent.dimension(), intent.chunk()));
+        }
+        return Ok(());
+    }
     let call = RuleCall {
         phase: RulePhase::PlayerCommand,
         actor: None,

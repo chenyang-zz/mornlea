@@ -151,6 +151,20 @@ impl<B: DiskBackend> StoreMailbox<B> {
         matches!(self.owner, Owner::Background(_))
     }
 
+    /// Chunk-load admission slots for the automatic source acquisition
+    /// caller. An inline owner refuses before any drive; a frozen or closed
+    /// mailbox keeps its original phase refusal, and a live background store
+    /// forwards its free ledger slots.
+    pub(crate) fn source_chunk_slots(&self) -> Result<usize, ServerError> {
+        if !self.is_background() {
+            return Err(ServerError::InvalidInput {
+                field: "source_acquisition_store",
+            });
+        }
+        self.check_load_admission()?;
+        Ok(self.loads.chunk_slots())
+    }
+
     /// Caller clocks govern inline doubles. Real host time additionally bounds
     /// waits for the background owner, whose operation outlives a timed-out caller.
     pub(crate) fn check_flush_deadline(

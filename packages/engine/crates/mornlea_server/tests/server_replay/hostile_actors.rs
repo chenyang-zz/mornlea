@@ -50,8 +50,9 @@ use mornlea_domain::{
     SurvivalStateParts, Weather,
 };
 use mornlea_server::contracts::{
-    ActorAux, ActorBody, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation, ChunkKey,
-    EnvironmentState, RuleEffect, RulePhase, RuleTunables, SessionKey, TransportKind,
+    ActorAux, ActorBody, ActorLifecycle, ActorRecord, ActorRuntime, BlockObservation, BlockWrite,
+    ChunkKey, EnvironmentState, RuleEffect, RulePhase, RuleTunables, SessionKey, SystemRule,
+    TransportKind,
 };
 use mornlea_server::rules::hostile_actors as provider;
 use mornlea_storage::{HostileMob, ItemStack, PlayerId as StoredPlayerId};
@@ -1359,6 +1360,284 @@ fn hurler_runtime_path(context: &TickContext<'_>, id: u64) -> bool {
             mornlea_domain::HostileId::try_new(id).expect("hostile id"),
         ))
         .is_some_and(|runtime| runtime.path.is_some())
+}
+
+/// Scene configuration for one native motion guard: the starting ground
+/// contact, a stationary variant and the foot block present before the first
+/// chase/path search runs.
+struct SnowScene {
+    grounded: bool,
+    stationary: bool,
+    initial_foot: u16,
+}
+
+/// One hostile motion tick over a borrowed foot cell, through the real
+/// provider only (no NativePhysics double). The source oracle pins dt 0.05,
+/// walk speed 4.3 and ground acceleration 40, so a full-speed -z approach
+/// settles at walk 3.01 over thick Snow (cells 87 and 88, which carry zero
+/// collision) and keeps 4.3 over AIR: displacement 0.1505 thick / 0.215 AIR
+/// from [100.5, 40, 100.5].
+fn assert_motion_snow_case(kind: u8, scene: SnowScene, foot: u16, want_z: f32, want_vz: f32) {
+    let mut state = authority();
+    let anchor = anchor_session(&mut state);
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    stage_environment(&mut context, 1000, 0);
+    preload_band_world(&mut context);
+    // The foot block is staged through live Ready transactions so the first
+    // chase/path search runs against the real native scene; a requested foot
+    // that differs from the staged one rewrites the cell on the same tick.
+    let foot_cell = mornlea_domain::BlockPos::new(100, 40, 100);
+    let mut staged_foot = AIR;
+    for target in [scene.initial_foot, foot] {
+        if target != staged_foot {
+            let observed = context
+                .read()
+                .observation(Dimension::OVERWORLD, foot_cell)
+                .expect("ready foot observation");
+            let write = BlockWrite::try_new(observed, target).expect("foot block write");
+            let outcome = context
+                .transaction()
+                .try_system(SystemRule::Support, vec![write])
+                .expect("support system write");
+            assert_eq!(outcome.changed.len(), 1);
+            staged_foot = target;
+        }
+    }
+    stage_actors(
+        &mut context,
+        &[
+            player_actor(anchor, 1, [100.5, 40.0, 84.5]),
+            hostile_actor(21, [100.5, 40.0, 100.5], kind),
+        ],
+    );
+    provider::run(&mut context, motion_call()).expect("live chase tick");
+    // The chase must point exactly -z before any pinned snow number applies.
+    let chased = find_hostile(&context, 21).motion.position().get();
+    assert!(
+        (chased[0] - 100.5).abs() < 1e-6 && chased[2] < 100.5,
+        "fixture chase must point exactly -z, got {chased:?}"
+    );
+    // The stationary guard parks the holder on the hostile itself: within the
+    // attack range and the coincident hurler retreat both produce a genuine
+    // zero move intent.
+    if scene.stationary {
+        stage_actors(
+            &mut context,
+            &[player_actor(anchor, 1, [100.5, 40.0, 100.5])],
+        );
+    }
+    // Restage the chased hostile at the start pose with the scene's ground
+    // contact and speed; the established target, repath deadline and runtime
+    // path stay live.
+    let speed = if scene.stationary { 0.0 } else { -4.3 };
+    let mut prepared = find_hostile(&context, 21).clone();
+    prepared.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new([100.5, 40.0, 100.5]).expect("position"),
+        velocity: FiniteVec3::try_new([0.0, 0.0, speed]).expect("velocity"),
+        on_ground: scene.grounded,
+    });
+    prepared.look = LookAngles::try_new(0.0, 0.0).expect("look");
+    {
+        let ActorBody::Hostile(body) = &mut prepared.body else {
+            unreachable!();
+        };
+        body.position = [100.5, 40.0, 100.5];
+        body.velocity = [0.0, 0.0, speed];
+        body.on_ground = scene.grounded;
+        body.yaw = 0.0;
+    }
+    stage_actors(&mut context, std::slice::from_ref(&prepared));
+    let key = prepared.key;
+    let runtime = context.read().runtime(key).cloned();
+    let environment = context.read().environment().cloned();
+    let player = context
+        .read()
+        .actors()
+        .iter()
+        .find(|actor| matches!(actor.key, ActorKey::Player(_)))
+        .cloned()
+        .expect("player record");
+    let support_cell = mornlea_domain::BlockPos::new(100, 39, 100);
+    let foot_observed = context.read().observation(Dimension::OVERWORLD, foot_cell);
+    let support_observed = context
+        .read()
+        .observation(Dimension::OVERWORLD, support_cell);
+    let events = context.events().to_vec();
+
+    provider::run(&mut context, motion_call()).expect("snow motion tick");
+
+    let actor = find_hostile(&context, 21);
+    let position = actor.motion.position().get();
+    let velocity = actor.motion.velocity().get();
+    assert_eq!(position[0], 100.5, "kind {kind}, foot {foot}");
+    assert_eq!(position[1], 40.0, "kind {kind}, foot {foot}");
+    assert!(
+        (position[2] - want_z).abs() < 1e-5,
+        "kind {kind}, foot {foot}: z {}",
+        position[2]
+    );
+    assert!(
+        (velocity[2] - want_vz).abs() < 1e-6,
+        "kind {kind}, foot {foot}: vz {}",
+        velocity[2]
+    );
+    assert!(actor.motion.on_ground());
+    assert_eq!(actor.look.yaw(), 0.0);
+    assert_eq!(actor.key, key);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.survival, prepared.survival);
+    let ActorBody::Hostile(body) = &actor.body else {
+        unreachable!();
+    };
+    let ActorBody::Hostile(want) = &prepared.body else {
+        unreachable!();
+    };
+    assert_eq!(body.id, want.id);
+    assert_eq!(body.health, want.health);
+    assert_eq!(body.position, position);
+    assert_eq!(body.velocity, velocity);
+    assert_eq!(body.on_ground, actor.motion.on_ground());
+    assert_eq!(body.yaw, 0.0);
+    assert_eq!(body.has_target, want.has_target);
+    assert_eq!(body.player_id, want.player_id);
+    assert_eq!(body.next_repath_ticks, want.next_repath_ticks);
+    assert_eq!(body.attack_cooldown, want.attack_cooldown);
+    assert_eq!(body.hurt_cooldown, want.hurt_cooldown);
+    assert_eq!(body.burn_cooldown, want.burn_cooldown);
+    assert_eq!(body.distant_ticks, want.distant_ticks);
+    assert_eq!(context.read().runtime(key), runtime.as_ref());
+    assert_eq!(
+        context
+            .read()
+            .actors()
+            .iter()
+            .find(|actor| matches!(actor.key, ActorKey::Player(_)))
+            .cloned(),
+        Some(player),
+        "the unrelated player record is unchanged"
+    );
+    assert_eq!(context.read().environment(), environment.as_ref());
+    assert_eq!(
+        context.read().observation(Dimension::OVERWORLD, foot_cell),
+        foot_observed,
+        "the borrowed foot cell is unchanged"
+    );
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, support_cell),
+        support_observed,
+        "the support cell is unchanged"
+    );
+    assert_eq!(context.events(), events);
+}
+
+/// The grounded wrapper: the foot cell holds air before the final foot write.
+fn assert_motion_snow_native_displacement(kind: u8, foot: u16, want_z: f32, want_vz: f32) {
+    assert_motion_snow_case(
+        kind,
+        SnowScene {
+            grounded: true,
+            stationary: false,
+            initial_foot: AIR,
+        },
+        foot,
+        want_z,
+        want_vz,
+    );
+}
+
+/// Thick Snow (87 and 88) under the foot cell consumes the shared snow tuning
+/// for both hostile kinds inside the actual native motion pass; the thin Snow
+/// controls (85 and 86), the AIR control scene, airborne starts, stationary
+/// intents and same-tick foot rewrites keep the uncut walk speed or hold the
+/// start pose.
+#[test]
+fn motion_snow_thick_native_displacement() {
+    for kind in [NIGHTWALKER, HURLER] {
+        for (foot, want_z, want_vz) in [
+            (85, 100.285, -4.3),
+            (86, 100.285, -4.3),
+            (87, 100.349_5, -3.01),
+            (88, 100.349_5, -3.01),
+            (AIR, 100.285, -4.3),
+        ] {
+            assert_motion_snow_native_displacement(kind, foot, want_z, want_vz);
+        }
+        // An airborne start ignores the foot block until it lands, and a
+        // holder on the hostile itself holds the start pose for both kinds.
+        for foot in [AIR, 87, 88] {
+            assert_motion_snow_case(
+                kind,
+                SnowScene {
+                    grounded: false,
+                    stationary: false,
+                    initial_foot: AIR,
+                },
+                foot,
+                100.285,
+                -4.3,
+            );
+            assert_motion_snow_case(
+                kind,
+                SnowScene {
+                    grounded: true,
+                    stationary: true,
+                    initial_foot: AIR,
+                },
+                foot,
+                100.5,
+                0.0,
+            );
+        }
+    }
+    // Same-tick foot rewrites through the Ready transaction: clearing thick
+    // Snow keeps the uncut speed, writing it mid-tick consumes the tuning.
+    assert_motion_snow_case(
+        NIGHTWALKER,
+        SnowScene {
+            grounded: true,
+            stationary: false,
+            initial_foot: 87,
+        },
+        AIR,
+        100.285,
+        -4.3,
+    );
+    assert_motion_snow_case(
+        NIGHTWALKER,
+        SnowScene {
+            grounded: true,
+            stationary: false,
+            initial_foot: AIR,
+        },
+        88,
+        100.349_5,
+        -3.01,
+    );
+}
+
+// The isolated tests each qualify one native consumer directly, so a negative
+// control shows the snow scaling for both kinds before the first failure
+// stops the composite fixture.
+#[test]
+fn motion_snow_isolated_nightwalker_87() {
+    assert_motion_snow_native_displacement(NIGHTWALKER, 87, 100.349_5, -3.01);
+}
+
+#[test]
+fn motion_snow_isolated_nightwalker_88() {
+    assert_motion_snow_native_displacement(NIGHTWALKER, 88, 100.349_5, -3.01);
+}
+
+#[test]
+fn motion_snow_isolated_hurler_87() {
+    assert_motion_snow_native_displacement(HURLER, 87, 100.349_5, -3.01);
+}
+
+#[test]
+fn motion_snow_isolated_hurler_88() {
+    assert_motion_snow_native_displacement(HURLER, 88, 100.349_5, -3.01);
 }
 
 /// Sixteen blocks out, the hurler dispatches a path and steps toward the

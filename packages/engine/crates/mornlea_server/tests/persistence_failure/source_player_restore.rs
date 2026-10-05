@@ -3006,3 +3006,2370 @@ fn action_costs_actual_refused_and_incomplete() {
     f.assert_cost(&p, (20, 500, 3999), 3);
     f.release_and_idle((20, 500, 3999), 5);
 }
+
+// Passive source Snow capture (plan 103): the appended actual cases drive one
+// staged cow through the same real seams as the player Snow recipes above —
+// disk/Memory login, Acquire and `advance_tick` — along the frozen glide line.
+
+// Mature wheat (`core.ItemWheat`, the 36th entry of the frozen item table in
+// `packages/shared/core/item.go`).
+const PASSIVE_SNOW_WHEAT: u16 = 35;
+// The frozen graze-roll constants (`PassiveGrazeRollSalt` and
+// `PassiveGrazePeriodTicks`, `packages/server/updates/sampler.go`).
+const PASSIVE_SNOW_GRAZE_SALT: u64 = 0x51ab_3e4d_07c3_f291;
+const PASSIVE_SNOW_GRAZE_PERIOD: u64 = 600;
+
+// The cited integer mirrors of `tests/server_replay/passives.rs`
+// (`Sampler.SplitMix64` and `Sampler.PassiveGrazeHit`).
+fn passive_snow_splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+fn passive_snow_graze_hit(seed: i64, tick: u64, id: u64) -> bool {
+    let hash = passive_snow_splitmix64(
+        passive_snow_splitmix64((seed as u64) ^ PASSIVE_SNOW_GRAZE_SALT) ^ tick,
+    );
+    passive_snow_splitmix64(hash ^ id).is_multiple_of(PASSIVE_SNOW_GRAZE_PERIOD)
+}
+/// A cow id that misses every graze roll across the whole tested window, so
+/// no tick freezes the glide. The seed is the fixture's staged Metadata seed
+/// (42 in `options` above), never an assumed zero.
+fn passive_snow_actual_cow_id() -> u64 {
+    (1..)
+        .find(|&id| (0..=20u64).all(|tick| !passive_snow_graze_hit(42, tick, id)))
+        .expect("a graze-free cow id exists in the scan window")
+}
+
+/// One actual Snow scene on the frozen glide line: the accepted player fixture
+/// plus a staged Active cow at [8.1, 64., 8.5] with velocity [4, 0, 0] each
+/// frame. The stationary holder parks inside the 2.5 stop distance with wheat
+/// selected, so the cow's intent stays neutral for the whole window (the glide
+/// stays within 1.35 blocks) and the zero move input bypasses the shared Snow
+/// slowdown exactly like the frozen player calibration; the player never
+/// moves, so no player Snow sample double-writes the line.
+fn passive_snow_actual_stage(aux: ActorAux) -> (Fixture, AuthorityState, SessionKey, ActorKey) {
+    let (fixture, mut state, session, _publication, _login, _transport, _connection, _clock) =
+        snow_actual_fixture();
+    let id = passive_snow_actual_cow_id();
+    let cow = ActorKey::Passive(PassiveId::try_new(id).unwrap());
+    let position = [8.1, 64., 8.5];
+    let velocity = [4., 0., 0.];
+    let record = ActorRecord::try_new(
+        cow,
+        ActorLifecycle::Active,
+        Dimension::OVERWORLD,
+        MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new(velocity).unwrap(),
+            on_ground: true,
+        }),
+        LookAngles::try_new(0., 0.).unwrap(),
+        SurvivalState::try_new(SurvivalStateParts {
+            health: 20,
+            oxygen: 300,
+            hunger: 20,
+            saturation_zero: false,
+            armor_points: 0,
+        })
+        .unwrap(),
+        ActorBody::Passive(PassiveMob {
+            id,
+            dimension: 0,
+            position,
+            velocity,
+            on_ground: true,
+            yaw: 0.,
+            health: 20,
+        }),
+    )
+    .unwrap();
+    let runtime = ActorRuntime {
+        key: cow,
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 0,
+        peak_y: 0.,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux,
+    };
+    let mut residents = state.residents();
+    let holder = residents
+        .inventories
+        .get_mut(&ActorKey::Player(session))
+        .unwrap();
+    holder.slots[3].item = PASSIVE_SNOW_WHEAT;
+    residents.runtimes.insert(cow, runtime);
+    residents.actors.push(record);
+    state.commit_residents(residents);
+    (fixture, state, session, cow)
+}
+
+/// Re-pins the cow's glide velocity each frame, mirroring the motion state
+/// into the passive body like the accepted fixtures.
+fn passive_snow_actual_velocity(state: &mut AuthorityState, cow: ActorKey) {
+    let mut residents = state.residents();
+    let actor = residents.actors.iter_mut().find(|a| a.key == cow).unwrap();
+    let old = actor.motion;
+    actor.motion = MotionState::new(MotionStateParts {
+        position: old.position(),
+        velocity: FiniteVec3::try_new([4., 0., 0.]).unwrap(),
+        on_ground: old.on_ground(),
+    });
+    let ActorBody::Passive(body) = &mut actor.body else {
+        unreachable!("passive body");
+    };
+    body.velocity = [4., 0., 0.];
+    state.commit_residents(residents);
+}
+fn passive_snow_actual_cow(state: &AuthorityState, cow: ActorKey) -> ActorRecord {
+    state.settled_read().unwrap().actor(cow).unwrap().clone()
+}
+fn passive_snow_actual_cells(state: &AuthorityState) -> (u16, u16) {
+    snow_actual_cells(state)
+}
+
+/// Retained passive travel: eighteen real ticks at the frozen player-glide
+/// stride (0.0749998093, each under the 0.6 threshold) accumulate in a
+/// retained tracker, so the ninth tick samples the oracle foot cell and the
+/// eighteenth the next one, with a quiet tick afterwards. RED today: the
+/// per-tick generic tracker loses the travel and both cells stay 87 while
+/// every native step stays under the threshold.
+#[test]
+fn passive_snow_actual_retained_travel_crosses_cell() {
+    let (mut fixture, mut state, _session, cow) = passive_snow_actual_stage(ActorAux::Passive {
+        home: BlockPos::new(8, 64, 8),
+        flee_ticks: 0,
+        flee_from: None,
+        graze_ticks: 0,
+        graze_at: None,
+        fresh: false,
+    });
+    let mut previous = 8.1f32;
+    let mut first_sample: Option<(u64, (u16, u16))> = None;
+    for tick in 1..=18u64 {
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        let actor = passive_snow_actual_cow(&state, cow);
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active, "tick {tick}");
+        assert!(actor.motion.on_ground(), "tick {tick}");
+        let p = actor.motion.position().get();
+        assert_eq!((p[1], p[2]), (64., 8.5), "tick {tick}");
+        let step = p[0] - previous;
+        assert!(
+            step > 0. && step < 0.6,
+            "tick {tick}: native stride {step} must stay under the threshold"
+        );
+        assert!((8.0..10.0).contains(&p[0]), "tick {tick}: {p:?}");
+        let ActorBody::Passive(body) = &actor.body else {
+            unreachable!("passive body");
+        };
+        assert_eq!(body.position, p, "tick {tick}");
+        previous = p[0];
+        let cells = passive_snow_actual_cells(&state);
+        if cells != (87, 87) && first_sample.is_none() {
+            first_sample = Some((tick, cells));
+        }
+        if tick == 9 {
+            // Intended RED: the retained stride must sample the oracle cell
+            // while every per-tick step stays below the threshold.
+            assert_eq!(
+                cells,
+                (86, 87),
+                "retained passive Snow travel lost at tick {tick}"
+            );
+            // Player-glide oracle bits, valid iff the neutral-intent cow
+            // stride matches the frozen player calibration (host run
+            // confirms or corrects the literal).
+            assert_eq!(p[0].to_bits(), 0x410c6665, "tick {tick}");
+        }
+    }
+    assert_eq!(first_sample, Some((9, (86, 87))));
+    assert_eq!(passive_snow_actual_cells(&state), (86, 86));
+    assert_eq!(previous.to_bits(), 0x41173330);
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    death_no_hit(&quiet);
+    assert_eq!(passive_snow_actual_cells(&state), (86, 86));
+    fixture.close();
+}
+
+/// Pre-death capture: the movement pass runs before the same-phase death
+/// settlement, so the lethal tick's post-physics destination cell is captured
+/// and settles in the late region beside the beef loot, and the following
+/// quiet tick writes nothing more. RED today: the late generic collector
+/// demands an Active row and the moved cell never settles.
+#[test]
+fn passive_snow_actual_death_settles_captured_cell() {
+    let (mut fixture, mut state, _session, cow) = passive_snow_actual_stage(ActorAux::Passive {
+        home: BlockPos::new(8, 64, 8),
+        flee_ticks: 0,
+        flee_from: None,
+        graze_ticks: 0,
+        graze_at: None,
+        fresh: false,
+    });
+    for _tick in 1..=8u64 {
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        assert!(passive_snow_actual_cow(&state, cow).motion.on_ground());
+    }
+    // Eight strides warm the tracker below the threshold without a sample.
+    assert_eq!(passive_snow_actual_cells(&state), (87, 87));
+    // Lethal health staged while the cow is still Active: movement still runs
+    // before the same-phase deaths, the ninth stride crosses, and the
+    // captured destination settles after the settlement.
+    {
+        let mut residents = state.residents();
+        let actor = residents.actors.iter_mut().find(|a| a.key == cow).unwrap();
+        let old = actor.motion;
+        actor.motion = MotionState::new(MotionStateParts {
+            position: old.position(),
+            velocity: FiniteVec3::try_new([4., 0., 0.]).unwrap(),
+            on_ground: old.on_ground(),
+        });
+        actor.survival = SurvivalState::try_new(SurvivalStateParts {
+            health: 0,
+            hunger: 20,
+            oxygen: 300,
+            saturation_zero: false,
+            armor_points: 0,
+        })
+        .unwrap();
+        state.commit_residents(residents);
+    }
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    death_no_hit(&publication);
+    let actor = passive_snow_actual_cow(&state, cow);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Dead);
+    let p = actor.motion.position().get();
+    assert_eq!((p[1], p[2]), (64., 8.5));
+    assert!((8.0..9.0).contains(&p[0]), "captured destination {p:?}");
+    // The captured destination cell settles beside the fixed beef loot.
+    assert!(!death_ground(&state).is_empty());
+    assert_eq!(
+        passive_snow_actual_cells(&state),
+        (86, 87),
+        "the pre-death captured cell must settle in the late region"
+    );
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    death_no_hit(&quiet);
+    assert_eq!(passive_snow_actual_cells(&state), (86, 87));
+    fixture.close();
+}
+
+/// Deterministic boundary pins around the capture: a fresh runtime tick and a
+/// mid-graze tick displace nothing, and a home far outside the neighborhood
+/// rolls every pinned stride back, so no cell changes while the cow stays
+/// resident. These pin GREEN on both sides of the implementation.
+#[test]
+fn passive_snow_actual_boundary_pins() {
+    // Fresh runtime: the first tick skips movement outright.
+    {
+        let (mut fixture, mut state, _session, cow) =
+            passive_snow_actual_stage(ActorAux::Passive {
+                home: BlockPos::new(8, 64, 8),
+                flee_ticks: 0,
+                flee_from: None,
+                graze_ticks: 0,
+                graze_at: None,
+                fresh: true,
+            });
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        assert_eq!(
+            passive_snow_actual_cow(&state, cow).motion.position().get(),
+            [8.1, 64., 8.5]
+        );
+        assert_eq!(passive_snow_actual_cells(&state), (87, 87));
+        fixture.close();
+    }
+    // Graze freeze: a mid-graze cow holds its pose for the tick.
+    {
+        let (mut fixture, mut state, _session, cow) =
+            passive_snow_actual_stage(ActorAux::Passive {
+                home: BlockPos::new(8, 64, 8),
+                flee_ticks: 0,
+                flee_from: None,
+                graze_ticks: 4,
+                graze_at: Some(BlockPos::new(8, 64, 8)),
+                fresh: false,
+            });
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        assert_eq!(
+            passive_snow_actual_cow(&state, cow).motion.position().get(),
+            [8.1, 64., 8.5]
+        );
+        assert_eq!(passive_snow_actual_cells(&state), (87, 87));
+        fixture.close();
+    }
+    // Home rollback: a home far outside the neighborhood restores the
+    // pre-step pose every tick, so nothing samples across repeated strides.
+    {
+        let (mut fixture, mut state, _session, cow) =
+            passive_snow_actual_stage(ActorAux::Passive {
+                home: BlockPos::new(1000, 64, 8),
+                flee_ticks: 0,
+                flee_from: None,
+                graze_ticks: 0,
+                graze_at: None,
+                fresh: false,
+            });
+        for _tick in 0..4 {
+            passive_snow_actual_velocity(&mut state, cow);
+            let publication = state.advance_tick(TickBudget::full()).unwrap();
+            death_no_hit(&publication);
+            assert_eq!(
+                passive_snow_actual_cow(&state, cow).motion.position().get(),
+                [8.1, 64., 8.5]
+            );
+        }
+        assert_eq!(passive_snow_actual_cells(&state), (87, 87));
+        fixture.close();
+    }
+}
+
+/// A graze-free cow id for a longer horizon than the twenty-tick window the
+/// retained-stride cases pin, using the same sampler mirrors and staged seed.
+fn passive_snow_actual_cow_id_through(horizon: u64) -> u64 {
+    (1..)
+        .find(|&id| (0..=horizon).all(|tick| !passive_snow_graze_hit(42, tick, id)))
+        .expect("a graze-free cow id exists in the scan window")
+}
+
+/// The custom glide-line scene: the accepted fixture with three foot cells
+/// staged per argument, plus the staged Active cow gliding the calibrated
+/// velocity from its start pose, holding the neutral wheat like the
+/// retained-stride stage.
+fn passive_snow_actual_custom_stage(
+    cells: &[(BlockPos, u16)],
+    position: [f32; 3],
+    velocity: [f32; 3],
+    home: BlockPos,
+) -> (Fixture, AuthorityState, SessionKey, ActorKey) {
+    let mut save = height_player_save([8.1, 64., 8.5]);
+    save.health = 20;
+    save.safe = None;
+    save.armor = Default::default();
+    save.hunger = 20;
+    save.saturation_milli = 5000;
+    save.exhaustion_milli = 0;
+    save.respawn_present = false;
+    save.inventory.hotbar.selected = 3;
+    save.inventory.hotbar.slots[3] = ItemStack {
+        item: PASSIVE_SNOW_WHEAT,
+        count: 7,
+        durability: 0,
+    };
+    let current = key(Dimension::OVERWORLD, 0, 0);
+    let mut chunk = height_floor(63);
+    for &(pos, block) in cells {
+        death_chunk_cell(&mut chunk, pos, block);
+    }
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save),
+        Dimension::DEPTHS,
+        ChunkPos::new(-2, 3),
+        vec![
+            (current, chunk),
+            (key(Dimension::OVERWORLD, -2, 3), height_floor(64)),
+        ],
+    );
+    let (_login, _transport, _connection, session, _clock) = handshake(&mut fixture, &mut state);
+    let _publication = fixture.acquire(&mut state, current);
+    let id = passive_snow_actual_cow_id_through(40);
+    let cow = ActorKey::Passive(PassiveId::try_new(id).unwrap());
+    let record = ActorRecord::try_new(
+        cow,
+        ActorLifecycle::Active,
+        Dimension::OVERWORLD,
+        MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new(velocity).unwrap(),
+            on_ground: true,
+        }),
+        LookAngles::try_new(0., 0.).unwrap(),
+        SurvivalState::try_new(SurvivalStateParts {
+            health: 20,
+            oxygen: 300,
+            hunger: 20,
+            saturation_zero: false,
+            armor_points: 0,
+        })
+        .unwrap(),
+        ActorBody::Passive(PassiveMob {
+            id,
+            dimension: 0,
+            position,
+            velocity,
+            on_ground: true,
+            yaw: 0.,
+            health: 20,
+        }),
+    )
+    .unwrap();
+    let runtime = ActorRuntime {
+        key: cow,
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 0,
+        peak_y: 0.,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Passive {
+            home,
+            flee_ticks: 0,
+            flee_from: None,
+            graze_ticks: 0,
+            graze_at: None,
+            fresh: false,
+        },
+    };
+    let mut residents = state.residents();
+    let holder = residents
+        .inventories
+        .get_mut(&ActorKey::Player(session))
+        .unwrap();
+    holder.slots[3].item = PASSIVE_SNOW_WHEAT;
+    residents.runtimes.insert(cow, runtime);
+    residents.actors.push(record);
+    state.commit_residents(residents);
+    (fixture, state, session, cow)
+}
+
+/// Re-pins the cow's glide velocity each frame in the given horizontal
+/// direction, mirroring the motion state into the passive body like the
+/// accepted fixtures.
+fn passive_snow_actual_velocity_toward(state: &mut AuthorityState, cow: ActorKey, vx: f32) {
+    let mut residents = state.residents();
+    let actor = residents.actors.iter_mut().find(|a| a.key == cow).unwrap();
+    let old = actor.motion;
+    actor.motion = MotionState::new(MotionStateParts {
+        position: old.position(),
+        velocity: FiniteVec3::try_new([vx, 0., 0.]).unwrap(),
+        on_ground: old.on_ground(),
+    });
+    let ActorBody::Passive(body) = &mut actor.body else {
+        unreachable!("passive body");
+    };
+    body.velocity = [vx, 0., 0.];
+    state.commit_residents(residents);
+}
+
+/// The accepted checked off-tick transaction against the actual Ready world:
+/// the same harness recipe the recovery fixtures use — every prepared actor,
+/// runtime, inventory, environment and sleep record staged, every ready chunk
+/// preloaded — writing one cell through `SystemRule::Support` and committing
+/// the resident snapshot back. The authority's retained passive book is never
+/// touched, so the staged write lands between real ticks exactly like the
+/// accepted recovery obstruction.
+fn passive_snow_actual_off_tick_cell(state: &mut AuthorityState, pos: BlockPos, block: u16) {
+    let prepared = state.residents();
+    let mut context = mornlea_server::state::TickContext::harness(state, TickBudget::full());
+    for (key, generation, revision, chunk) in prepared.ready_snapshot() {
+        context.preload_ready_chunk(
+            mornlea_server::core::world::ReadyChunk::try_new(key, generation, revision, chunk)
+                .unwrap(),
+        );
+    }
+    for actor in prepared.actors {
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+    }
+    for runtime in prepared.runtimes.into_values() {
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+    }
+    for (key, inventory) in prepared.inventories {
+        context.preload_inventory(key, inventory);
+    }
+    if let Some(environment) = prepared.environment {
+        context.stage(RuleEffect::Environment(environment)).unwrap();
+    }
+    if let Some(sleep) = prepared.sleep_record {
+        context.stage(RuleEffect::Sleep(sleep)).unwrap();
+    }
+    let observed = context
+        .read()
+        .observation(Dimension::OVERWORLD, pos)
+        .unwrap();
+    context
+        .transaction()
+        .try_system(
+            SystemRule::Support,
+            vec![BlockWrite::try_new(observed, block).unwrap()],
+        )
+        .unwrap();
+    let residents = context.resident_snapshot();
+    drop(context);
+    state.commit_residents(residents);
+}
+
+/// Same-cell suppression across an AIR memory: the checked off-tick
+/// transaction empties (8, 64, 8) first, so the ninth forward stride samples
+/// AIR in that cell, writes nothing, and still remembers it. The same harness
+/// then stages snow back into that same cell without touching the retained
+/// book: the reversed eighteenth stride's threshold lands in the remembered
+/// cell and must not lower the restored 87 — a tracker that remembers only
+/// written Snow cells forgets the AIR sample and lowers here — and the
+/// twenty-seventh's forward threshold lands in it again, still suppressed.
+/// Only the thirty-sixth's new-cell threshold lowers (9, 64, 8).
+#[test]
+fn passive_snow_actual_same_cell_and_nonsnow_memory() {
+    let (mut fixture, mut state, _session, cow) = passive_snow_actual_custom_stage(
+        &[(BlockPos::new(8, 64, 8), 87), (BlockPos::new(9, 64, 8), 87)],
+        [8.1, 64., 8.5],
+        [4., 0., 0.],
+        BlockPos::new(8, 64, 8),
+    );
+    passive_snow_actual_off_tick_cell(&mut state, BlockPos::new(8, 64, 8), 0);
+    assert_eq!(passive_snow_actual_cells(&state), (0, 87));
+    let mut forward = true;
+    let mut previous = 8.1f32;
+    for tick in 1..=36u64 {
+        // The glide reverses right after the AIR sample (tick 9) and resumes
+        // forward right after the same-cell threshold (tick 18).
+        if tick == 10 {
+            forward = false;
+        }
+        if tick == 19 {
+            forward = true;
+        }
+        let direction = if forward { 4. } else { -4. };
+        passive_snow_actual_velocity_toward(&mut state, cow, direction);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        let actor = passive_snow_actual_cow(&state, cow);
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active, "tick {tick}");
+        assert!(actor.motion.on_ground(), "tick {tick}");
+        let p = actor.motion.position().get();
+        assert_eq!((p[1], p[2]), (64., 8.5), "tick {tick}");
+        let step = p[0] - previous;
+        let along = if (10..=18).contains(&tick) {
+            -step
+        } else {
+            step
+        };
+        assert!(
+            along > 0. && along < 0.6,
+            "tick {tick}: native stride {step} must stay under the threshold"
+        );
+        assert!((8.0..9.6).contains(&p[0]), "tick {tick}: {p:?}");
+        previous = p[0];
+        if tick < 9 {
+            assert_eq!(passive_snow_actual_cells(&state), (0, 87), "tick {tick}");
+        } else if tick == 9 {
+            // The AIR sample wrote nothing and still remembered cell 8; stage
+            // snow back into that same cell before the reversed threshold.
+            assert_eq!(passive_snow_actual_cells(&state), (0, 87), "tick {tick}");
+            passive_snow_actual_off_tick_cell(&mut state, BlockPos::new(8, 64, 8), 87);
+        } else if tick < 36 {
+            // Both the reversed tick-18 threshold and the forward tick-27
+            // threshold land in the remembered cell and must leave the
+            // restored 87 standing.
+            assert_eq!(passive_snow_actual_cells(&state), (87, 87), "tick {tick}");
+        } else {
+            // Only the new cell's threshold crossing lowers.
+            assert_eq!(passive_snow_actual_cells(&state), (87, 86), "tick {tick}");
+        }
+    }
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    death_no_hit(&quiet);
+    assert_eq!(passive_snow_actual_cells(&state), (87, 86));
+    fixture.close();
+}
+
+/// Airborne retention: four grounded strides warm the tracker below the
+/// threshold, an off-tick lift makes the next steps airborne (observed
+/// on-ground false before the tick and through the fall, true on landing), the
+/// airborne steps sample nothing and add no horizontal travel, and the ninth
+/// overall grounded stride — the fifth after landing — crosses and lowers the
+/// landing cell. A tracker reset on the airborne step would push the crossing
+/// four strides later; the tick-precise window pins it.
+#[test]
+fn passive_snow_actual_airborne_retention_lands_on_threshold() {
+    let (mut fixture, mut state, _session, cow) = passive_snow_actual_stage(ActorAux::Passive {
+        home: BlockPos::new(8, 64, 8),
+        flee_ticks: 0,
+        flee_from: None,
+        graze_ticks: 0,
+        graze_at: None,
+        fresh: false,
+    });
+    let mut previous = 8.1f32;
+    for tick in 1..=4u64 {
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        let actor = passive_snow_actual_cow(&state, cow);
+        assert!(actor.motion.on_ground(), "warm tick {tick}");
+        previous = actor.motion.position().get()[0];
+    }
+    assert_eq!(passive_snow_actual_cells(&state), (87, 87));
+    // Off-tick lift: one block up, airborne, zero horizontal velocity — the
+    // same residents staging the pinned-velocity helpers use.
+    {
+        let mut residents = state.residents();
+        let actor = residents.actors.iter_mut().find(|a| a.key == cow).unwrap();
+        actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([previous, 65., 8.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0., 0., 0.]).unwrap(),
+            on_ground: false,
+        });
+        state.commit_residents(residents);
+    }
+    assert!(!passive_snow_actual_cow(&state, cow).motion.on_ground());
+    let mut landed = false;
+    for fall in 1..=10u64 {
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        let actor = passive_snow_actual_cow(&state, cow);
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active, "fall tick {fall}");
+        assert_eq!(actor.motion.position().get()[2], 8.5, "fall tick {fall}");
+        if actor.motion.on_ground() {
+            let p = actor.motion.position().get();
+            assert_eq!((p[1], p[2]), (64., 8.5), "fall tick {fall}");
+            assert!(
+                (p[0] - previous).abs() < 1e-6,
+                "fall tick {fall}: airborne steps add no horizontal travel ({p:?} vs {previous})"
+            );
+            assert_eq!(
+                passive_snow_actual_cells(&state),
+                (87, 87),
+                "fall tick {fall}: airborne steps sample nothing"
+            );
+            landed = true;
+            break;
+        }
+        assert_eq!(
+            passive_snow_actual_cells(&state),
+            (87, 87),
+            "fall tick {fall}: airborne steps sample nothing"
+        );
+    }
+    assert!(landed, "the lifted cow must land within the fall window");
+    // The ninth overall stride — the fifth after landing — crosses.
+    for tick in 1..=5u64 {
+        passive_snow_actual_velocity(&mut state, cow);
+        let publication = state.advance_tick(TickBudget::full()).unwrap();
+        death_no_hit(&publication);
+        let actor = passive_snow_actual_cow(&state, cow);
+        assert!(actor.motion.on_ground(), "glide tick {tick}");
+        assert_eq!(actor.motion.position().get()[2], 8.5, "glide tick {tick}");
+        if tick < 5 {
+            assert_eq!(
+                passive_snow_actual_cells(&state),
+                (87, 87),
+                "glide tick {tick}: the retained crossing must not land early"
+            );
+        } else {
+            assert_eq!(
+                passive_snow_actual_cells(&state),
+                (86, 87),
+                "glide tick {tick}: the airborne-retained travel must cross on the ninth overall stride"
+            );
+        }
+    }
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    death_no_hit(&quiet);
+    assert_eq!(passive_snow_actual_cells(&state), (86, 87));
+    fixture.close();
+}
+
+/// Stages a configured `EnvironmentState` through the between-tick restage
+/// path the production tick owns: seeded from the committed residents, staged
+/// as a rule effect, snapshotted, and committed back so every resident lane
+/// survives the staging. Dropping the context first restores the untouched
+/// loan exactly like the harness staging path.
+fn configured_environment_stage(
+    state: &mut AuthorityState,
+    configure: impl FnOnce(&mut EnvironmentState),
+) {
+    let mut environment = state
+        .residents()
+        .environment
+        .expect("fixture tick committed an environment");
+    configure(&mut environment);
+    let mut context = mornlea_server::state::TickContext::restage(state, TickBudget::full());
+    context.stage(RuleEffect::Environment(environment)).unwrap();
+    let snapshot = context.resident_snapshot();
+    drop(context);
+    state.commit_residents(snapshot);
+}
+
+/// A full custom nineteen-field `RuleTunables` committed between ticks must
+/// survive two actual `advance_tick` executions as the committed snapshot,
+/// with the world clock advancing exactly once per tick and `next_tick`
+/// tracking the executed tick.
+#[test]
+fn configured_tick_tunables_survive_actual_ticks() {
+    let mut f = ActionCostFixture::new(
+        500,
+        0,
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 1,
+        },
+        0,
+    );
+    let mut physics = RuleTunables::source_defaults().physics();
+    physics.walk_speed = 8.6;
+    let configured = RuleTunables::try_new(
+        physics, 7, 3, 5, 9, 17, 2000, 2, 600, 15, 2, 0, 25, 4.5, 1.5, 3, 9, 1234, 0.75,
+    )
+    .unwrap();
+    configured_environment_stage(&mut f.state, |environment| {
+        environment.tunables = configured;
+        environment.world_time = 1_000;
+    });
+    f.input(3, false);
+    let _ = f.tick();
+    let environment = f.state.residents().environment;
+    let first = environment.as_ref().unwrap();
+    assert_eq!(
+        first.tunables, configured,
+        "first actual tick keeps the configured tunables"
+    );
+    assert_eq!(
+        first.world_time, 1_001,
+        "first actual tick advances the clock once"
+    );
+    let executed = first.next_tick;
+    let _ = f.tick();
+    let environment = f.state.residents().environment;
+    let second = environment.as_ref().unwrap();
+    assert_eq!(
+        second.tunables, configured,
+        "second actual tick keeps the configured tunables"
+    );
+    assert_eq!(
+        second.world_time, 1_002,
+        "second actual tick advances the clock once"
+    );
+    assert_eq!(
+        second.next_tick,
+        executed + 1,
+        "next_tick tracks the executed tick"
+    );
+}
+
+/// A committed exhaustion threshold of 2000 milli governs the real Till cost
+/// settlement: 3999 + 5 crosses twice, spending the 500 saturation and one
+/// hunger point, while the source default 4000 crosses once and keeps hunger
+/// at 20. The configured threshold is pinned on the actual publication, the
+/// Memory-decoded `PlayerState`, and across a quiet follow-up tick.
+#[test]
+fn configured_tick_tunables_exhaustion_threshold_till() {
+    let source = RuleTunables::source_defaults();
+    let configured = RuleTunables::try_new(
+        source.physics(),
+        source.regen_delay_ticks(),
+        source.regen_interval_ticks(),
+        source.drown_interval_ticks(),
+        source.starvation_interval_ticks(),
+        source.regen_hunger_threshold(),
+        2000,
+        source.eating_ticks(),
+        source.furnace_burn_ticks(),
+        source.furnace_smelt_ticks(),
+        source.fluid_delay(),
+        source.random_attempts(),
+        source.crop_growth_percent(),
+        source.interaction_reach(),
+        source.eye_height(),
+        source.drop_pickup_delay_ticks(),
+        source.player_drop_pickup_delay_ticks(),
+        source.drop_lifetime_ticks(),
+        source.drop_pickup_range(),
+    )
+    .unwrap();
+    assert_eq!(configured.exhaustion_threshold_milli(), 2000);
+    let mut f = ActionCostFixture::new(
+        500,
+        3999,
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 1,
+        },
+        0,
+    );
+    configured_environment_stage(&mut f.state, |environment| {
+        environment.tunables = configured;
+    });
+    f.input(3, false);
+    f.till();
+    let p = f.tick();
+    assert_eq!(f.cell(BlockPos::new(8, 63, 6)), 35, "native Till target");
+    f.assert_cost(&p, (19, 0, 4), 3);
+    let p = f.tick();
+    f.assert_cost(&p, (19, 0, 4), 3);
+    assert_eq!(
+        f.state.residents().environment.unwrap().tunables,
+        configured,
+        "quiet tick keeps the configured threshold"
+    );
+}
+
+/// Default control: an ordinary actual tick on the shared fixture keeps the
+/// source defaults as the committed snapshot. Nothing here stages a
+/// configuration, so this holds both before and after the reset repair.
+#[test]
+fn configured_tick_tunables_default_control_keeps_source_defaults() {
+    let mut f = ActionCostFixture::new(
+        500,
+        3999,
+        ItemStack {
+            item: 30,
+            count: 1,
+            durability: 1,
+        },
+        0,
+    );
+    f.input(3, false);
+    let _ = f.tick();
+    assert_eq!(
+        f.state.residents().environment.unwrap().tunables,
+        RuleTunables::source_defaults(),
+        "ordinary actual tick retains source defaults"
+    );
+}
+
+// Source pending companion producer (plan 108): the appended cases drive the
+// checked registration seam and the retained radius-16 pending scan through
+// the same real Disk, Memory, Acquire and `advance_tick` owners as the player
+// recipes above. No case stages a companion actor, runtime or inventory by
+// hand and none injects a fake Ready world: every activation crosses an
+// actual tick, and the off-tick write reuses the accepted Support transaction.
+
+/// Valid v4-shaped UUID bytes for one source companion identity tag.
+fn source_companion_uuid(tag: u8) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[0] = tag.max(1);
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    bytes
+}
+
+/// One valid source companion identity (`entity/companion.go` register shape).
+fn source_companion_id(tag: u8) -> CompanionId {
+    CompanionId::try_from_bytes(source_companion_uuid(tag)).unwrap()
+}
+
+/// Saved capture for one companion: the storage id mirrors the domain id, the
+/// look is yaw 0.1 / pitch 0.2 and hotbar slot 3 carries item 1 count 7.
+fn source_companion_body(id: CompanionId, position: [f32; 3]) -> CompanionBody {
+    let mut inventory = Inventory::default();
+    inventory.hotbar.selected = 3;
+    inventory.hotbar.slots[3] = ItemStack {
+        item: 1,
+        count: 7,
+        durability: 0,
+    };
+    CompanionBody {
+        id: mornlea_storage::PlayerId::from_bytes(id.bytes()),
+        dimension: 0,
+        position,
+        yaw: 0.1,
+        pitch: 0.2,
+        inventory,
+    }
+}
+
+/// Full stone sheet at y 64 under open air, the captured spawn floor.
+fn source_companion_ground() -> Chunk {
+    let mut chunk = air();
+    for x in 0..16 {
+        for z in 0..16 {
+            death_chunk_cell(&mut chunk, BlockPos::new(x, 64, z), 2);
+        }
+    }
+    chunk
+}
+
+/// One sessionless Move[1, 0] envelope with generation/attempt 1, valid
+/// request, run and snapshot UUIDs, digest [1; 32] and the given source tick
+/// and yaw — the same frozen provenance shape the companion inbox admits.
+fn source_companion_move(
+    id: CompanionId,
+    tag: u8,
+    source_tick: u64,
+    yaw: f32,
+) -> CompanionActionEnvelope {
+    CompanionActionEnvelope::try_new(
+        id,
+        source_tick,
+        AgentRequestId::try_from_bytes(source_companion_uuid(tag)).unwrap(),
+        RunId::try_from_bytes(source_companion_uuid(tag + 1)).unwrap(),
+        SnapshotId::try_from_bytes(source_companion_uuid(tag + 2)).unwrap(),
+        1,
+        1,
+        [1u8; 32],
+        CompanionAction::Move {
+            move_x: 1,
+            move_z: 0,
+            jump: false,
+            yaw,
+        },
+    )
+    .unwrap()
+}
+
+/// A pending companion holds its captured pose, zero velocity and no ground.
+fn source_companion_waiting(state: &AuthorityState, id: CompanionId, position: [f32; 3]) {
+    let view = state.settled_read().unwrap();
+    let actor = view.actor(ActorKey::Companion(id)).unwrap();
+    assert_eq!(actor.key, ActorKey::Companion(id));
+    assert_eq!(actor.lifecycle, ActorLifecycle::Pending);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), position);
+    assert_eq!(actor.motion.velocity().get(), [0.; 3]);
+    assert!(!actor.motion.on_ground());
+}
+
+/// The activated companion holds the chosen pose with zero velocity, ground
+/// contact, neutral survival and runtime fields, and the whole captured look
+/// and hotbar/backpack inventory mapped back from its canonical body. The
+/// frozen oracle pins the exact six-fixture contract independent of the
+/// mutable body: saved captures keep look (0.1, 0.2) and slot 3 selected with
+/// item 1 count 7; missing-body captures keep the default look and the empty
+/// record.
+fn source_companion_active(
+    state: &AuthorityState,
+    id: CompanionId,
+    position: [f32; 3],
+    saved: bool,
+) {
+    let view = state.settled_read().unwrap();
+    let key = ActorKey::Companion(id);
+    let actor = view.actor(key).unwrap();
+    assert_eq!(actor.key, key);
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::OVERWORLD);
+    assert_eq!(actor.motion.position().get(), position);
+    assert_eq!(actor.motion.velocity().get(), [0.; 3]);
+    assert!(actor.motion.on_ground());
+    assert_eq!(
+        (
+            actor.survival.health(),
+            actor.survival.oxygen(),
+            actor.survival.hunger()
+        ),
+        (20, 300, 20)
+    );
+    let runtime = view.runtime(key).unwrap();
+    assert_eq!(runtime.key, key);
+    assert_eq!(runtime.controls, None);
+    assert!(!runtime.reset);
+    assert_eq!(runtime.peak_y, position[1]);
+    let ActorBody::Companion(body) = &actor.body else {
+        panic!("companion body");
+    };
+    assert_eq!(
+        (actor.look.yaw(), actor.look.pitch()),
+        (body.yaw, body.pitch)
+    );
+    let inventory = view.inventory(key).unwrap();
+    assert_eq!(inventory.selected.get(), body.inventory.hotbar.selected);
+    assert_eq!(inventory.slots[..9], body.inventory.hotbar.slots);
+    assert_eq!(inventory.slots[9..36], body.inventory.backpack);
+    assert!(inventory.armor.iter().all(|slot| slot.count == 0));
+    assert!(inventory.crafting.iter().all(|slot| slot.count == 0));
+    // Frozen look oracle, independent of the mutable canonical body.
+    assert_eq!(
+        (actor.look.yaw(), actor.look.pitch()),
+        if saved { (0.1, 0.2) } else { (0., 0.) }
+    );
+    // Whole-record inventory oracle for the exact six-fixture contract.
+    let mut expected = InventoryRecord::empty();
+    if saved {
+        expected.selected = mornlea_domain::HotbarSlot::new(3).unwrap();
+        expected.slots[3] = ItemStack {
+            item: 1,
+            count: 7,
+            durability: 0,
+        };
+    }
+    assert_eq!(inventory, &expected);
+}
+
+/// Complete observable registration state: every resident lane the producer
+/// owns plus the public pending-key set, so each refusal below proves
+/// atomicity against whole snapshots instead of a bare `is_err`.
+#[derive(Clone, Debug, PartialEq)]
+struct SourceCompanionCensus {
+    actors: Vec<ActorRecord>,
+    runtimes: std::collections::BTreeMap<ActorKey, ActorRuntime>,
+    inventories: std::collections::BTreeMap<ActorKey, InventoryRecord>,
+    pending: Vec<ChunkKey>,
+}
+
+fn source_companion_census(state: &AuthorityState) -> SourceCompanionCensus {
+    let residents = state.residents();
+    SourceCompanionCensus {
+        actors: residents.actors,
+        runtimes: residents.runtimes,
+        inventories: residents.inventories,
+        pending: state.source_companion_pending_keys(),
+    }
+}
+
+/// Plan 108 case 1: a saved companion on a Ready ground chunk activates at
+/// its captured pose on the actual Acquire tick, and a Move envelope that
+/// arrived while the id was still Pending never steers that first active
+/// tick; only a fresh post-activation Move travels the exact native stride.
+#[test]
+fn source_companion_saved_ready_activates_ignores_pending_action() {
+    let (mut fixture, mut state) = Fixture::new(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(key(Dimension::OVERWORLD, 0, 0), source_companion_ground())],
+    );
+    let id = source_companion_id(1);
+    state
+        .register_source_companion(
+            id,
+            ChunkPos::new(0, 0),
+            Some(source_companion_body(id, [8.5, 65.0, 8.5])),
+        )
+        .unwrap();
+    source_companion_waiting(&state, id, [8.5, 65.0, 8.5]);
+    // Arrives before Acquire while the id is still inactive; generation and
+    // attempt 1, valid UUIDs and digest [1; 32] keep the envelope admissible.
+    state
+        .submit_companion(source_companion_move(id, 10, 0, 0.9))
+        .unwrap();
+    let _activated = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
+    source_companion_active(&state, id, [8.5, 65.0, 8.5], true);
+    assert!(state.source_companion_pending_keys().is_empty());
+    // A fresh Move with a distinct request id and the current source tick is
+    // the first input the active companion actually consumes.
+    let tick = state.next_tick();
+    state
+        .submit_companion(source_companion_move(id, 20, tick, 0.0))
+        .unwrap();
+    let _moved = state.advance_tick(TickBudget::full()).unwrap();
+    {
+        let view = state.settled_read().unwrap();
+        let actor = view.actor(ActorKey::Companion(id)).unwrap();
+        let position = actor.motion.position().get();
+        // First step accelerates from zero velocity to 2 (ground_acceleration
+        // 40 * dt 0.05), not walk speed; displacement is 2 * 0.05.
+        assert_eq!(
+            position[0].to_bits(),
+            (8.5f32 + (40.0f32 * 0.05f32) * 0.05f32).to_bits()
+        );
+        assert_eq!((position[1], position[2]), (65.0, 8.5));
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+        assert_eq!((actor.look.yaw(), actor.look.pitch()), (0.0, 0.2));
+    }
+    // The next neutral tick retains the companion without clearing ownership;
+    // the plan pins retention only, not a precise quiet pose.
+    let _quiet = state.advance_tick(TickBudget::full()).unwrap();
+    {
+        let view = state.settled_read().unwrap();
+        let actor = view.actor(ActorKey::Companion(id)).unwrap();
+        assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    }
+    fixture.close();
+}
+
+/// Plan 108 case 2: the saved footprint at [15.9, 65, 8.5] spans chunks (0,0)
+/// and (1,0); the capture waits through a real tick and the first Ready chunk
+/// until the actual neighbor load completes, then activates at the saved pose.
+#[test]
+fn source_companion_saved_neighbor_waits_for_actual_ready() {
+    let (mut fixture, mut state) = Fixture::new(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![
+            (key(Dimension::OVERWORLD, 0, 0), source_companion_ground()),
+            (key(Dimension::OVERWORLD, 1, 0), source_companion_ground()),
+        ],
+    );
+    let id = source_companion_id(2);
+    state
+        .register_source_companion(
+            id,
+            ChunkPos::new(0, 0),
+            Some(source_companion_body(id, [15.9, 65.0, 8.5])),
+        )
+        .unwrap();
+    // Before any load the whole footprint waits; the scan retains both wants.
+    let _waiting = state.advance_tick(TickBudget::full()).unwrap();
+    source_companion_waiting(&state, id, [15.9, 65.0, 8.5]);
+    assert_eq!(
+        state.source_companion_pending_keys(),
+        vec![
+            key(Dimension::OVERWORLD, 0, 0),
+            key(Dimension::OVERWORLD, 1, 0)
+        ]
+    );
+    let _partial = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
+    source_companion_waiting(&state, id, [15.9, 65.0, 8.5]);
+    assert_eq!(
+        state.source_companion_pending_keys(),
+        vec![
+            key(Dimension::OVERWORLD, 0, 0),
+            key(Dimension::OVERWORLD, 1, 0)
+        ]
+    );
+    let _full = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 1, 0));
+    source_companion_active(&state, id, [15.9, 65.0, 8.5], true);
+    assert!(state.source_companion_pending_keys().is_empty());
+    fixture.close();
+}
+
+/// Plan 108 case 3: stone at (8, 65, 8) obstructs the saved pose, so the
+/// actual Ready chunk rejects the capture and the nearest-first column scan
+/// activates the dry anchor spawn [0.5, 65, 0.5] preserving look and inventory.
+#[test]
+fn source_companion_invalid_saved_uses_captured_spawn() {
+    let mut chunk = source_companion_ground();
+    death_chunk_cell(&mut chunk, BlockPos::new(8, 65, 8), 2);
+    let (mut fixture, mut state) = Fixture::new(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(key(Dimension::OVERWORLD, 0, 0), chunk)],
+    );
+    let id = source_companion_id(3);
+    state
+        .register_source_companion(
+            id,
+            ChunkPos::new(0, 0),
+            Some(source_companion_body(id, [8.5, 65.0, 8.5])),
+        )
+        .unwrap();
+    let _publication = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], true);
+    assert!(state.source_companion_pending_keys().is_empty());
+    fixture.close();
+}
+
+/// Plan 108 case 4: a registration without a body starts Pending at the
+/// canonical anchor pose [0.5, 321, 0.5] with an empty inventory and the
+/// anchor want alone, activates at the first Ready ground column, and stays
+/// Active across a quiet tick without re-running the completed scan.
+#[test]
+fn source_companion_missing_body_spawns() {
+    let (mut fixture, mut state) = Fixture::new(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(key(Dimension::OVERWORLD, 0, 0), source_companion_ground())],
+    );
+    let id = source_companion_id(4);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    source_companion_waiting(&state, id, [0.5, 321.0, 0.5]);
+    {
+        let view = state.settled_read().unwrap();
+        let actor = view.actor(ActorKey::Companion(id)).unwrap();
+        assert_eq!((actor.look.yaw(), actor.look.pitch()), (0.0, 0.0));
+        let inventory = view.inventory(ActorKey::Companion(id)).unwrap();
+        assert!(inventory.slots.iter().all(|slot| slot.count == 0));
+        assert_eq!(inventory.selected.get(), 0);
+    }
+    assert_eq!(
+        state.source_companion_pending_keys(),
+        vec![key(Dimension::OVERWORLD, 0, 0)]
+    );
+    let _publication = fixture.acquire(&mut state, key(Dimension::OVERWORLD, 0, 0));
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], false);
+    assert!(state.source_companion_pending_keys().is_empty());
+    let _quiet = state.advance_tick(TickBudget::full()).unwrap();
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], false);
+    fixture.close();
+}
+
+/// Plan 108 case 5: registration is checked and atomic. Mismatched saved ids,
+/// non-Overworld bodies, non-finite pitch, invalid inventory slots or
+/// selection and overflowing anchors refuse through their existing typed
+/// errors; duplicate book ids, the fifth companion and any late registration
+/// after the first actual tick refuse with their own fields, and every
+/// refusal leaves actors, runtimes, inventories and pending keys unchanged.
+#[test]
+fn source_companion_registration_refuses_atomically() {
+    let mut state = AuthorityState::try_new(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+        42,
+    )
+    .unwrap();
+    let anchor = ChunkPos::new(0, 0);
+    let id = source_companion_id(5);
+    let mut baseline = source_companion_census(&state);
+
+    // Mismatched saved body id.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.id = mornlea_storage::PlayerId::from_bytes(source_companion_id(50).bytes());
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "source_companion_body"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Saved body outside Overworld.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.dimension = 1;
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "actor_save"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Non-finite pitch.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.pitch = f32::NAN;
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "actor_save"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Unregistered inventory item in a hotbar slot.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.inventory.hotbar.slots[4] = ItemStack {
+        item: u16::MAX,
+        count: 1,
+        durability: 0,
+    };
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "actor_save"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Selected hotbar slot out of range.
+    let mut body = source_companion_body(id, [8.5, 65.0, 8.5]);
+    body.inventory.hotbar.selected = 9;
+    assert_eq!(
+        state.register_source_companion(id, anchor, Some(body)),
+        Err(ServerError::InvalidInput {
+            field: "actor_save"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Anchor whose radius-16 block square overflows the world.
+    assert_eq!(
+        state.register_source_companion(
+            id,
+            ChunkPos::new(i32::MAX, 0),
+            Some(source_companion_body(id, [8.5, 65.0, 8.5]))
+        ),
+        Err(ServerError::InvalidInput {
+            field: "spawn_anchor"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // Four valid distinct registrations fill the book.
+    for tag in 1..=4u8 {
+        let valid = source_companion_id(tag);
+        state
+            .register_source_companion(
+                valid,
+                anchor,
+                Some(source_companion_body(valid, [8.5, 65.0, 8.5])),
+            )
+            .unwrap();
+    }
+    baseline = source_companion_census(&state);
+    assert_eq!(baseline.actors.len(), 4);
+
+    // Duplicate book entry and fifth capacity both refuse unchanged.
+    let duplicate = source_companion_id(2);
+    assert_eq!(
+        state.register_source_companion(
+            duplicate,
+            anchor,
+            Some(source_companion_body(duplicate, [8.5, 65.0, 8.5]))
+        ),
+        Err(ServerError::InvalidInput {
+            field: "source_companion_duplicate"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+    let fifth = source_companion_id(6);
+    assert_eq!(
+        state.register_source_companion(
+            fifth,
+            anchor,
+            Some(source_companion_body(fifth, [8.5, 65.0, 8.5]))
+        ),
+        Err(ServerError::InvalidInput {
+            field: "source_companion_capacity"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+
+    // One actual waiting tick passes; late registration now refuses unchanged.
+    state.advance_tick(TickBudget::full()).unwrap();
+    baseline = source_companion_census(&state);
+    let late = source_companion_id(7);
+    assert_eq!(
+        state.register_source_companion(
+            late,
+            anchor,
+            Some(source_companion_body(late, [8.5, 65.0, 8.5]))
+        ),
+        Err(ServerError::InvalidInput {
+            field: "source_companion_registration"
+        })
+    );
+    assert_eq!(source_companion_census(&state), baseline);
+}
+
+/// Plan 108 case 6: nine actual AIR chunks let the radius-16 scan reach
+/// Exhausted while staying Pending with the exact nine wanted keys; the
+/// checked off-tick Support transaction on the managed Ready chunk changes
+/// its revision, so the next actual tick rescans and activates at
+/// [0.5, 65, 0.5] with an empty inventory.
+#[test]
+fn source_companion_exhausted_retries_ready_revision() {
+    let mut chunks = Vec::new();
+    for x in -1..=1 {
+        for z in -1..=1 {
+            chunks.push((key(Dimension::OVERWORLD, x, z), air()));
+        }
+    }
+    let (mut fixture, mut state) =
+        Fixture::new(None, Dimension::OVERWORLD, ChunkPos::new(0, 0), chunks);
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    assert_eq!(
+        state.source_companion_pending_keys(),
+        vec![key(Dimension::OVERWORLD, 0, 0)]
+    );
+    for x in -1..=1 {
+        for z in -1..=1 {
+            fixture.acquire(&mut state, key(Dimension::OVERWORLD, x, z));
+        }
+    }
+    // Every column is Ready air: the whole scan finishes Exhausted, the actor
+    // stays Pending and the retained wants cover exactly the nine chunks.
+    source_companion_waiting(&state, id, [0.5, 321.0, 0.5]);
+    let mut wanted = BTreeSet::new();
+    for x in -1..=1 {
+        for z in -1..=1 {
+            wanted.insert(key(Dimension::OVERWORLD, x, z));
+        }
+    }
+    let wanted: Vec<ChunkKey> = wanted.into_iter().collect();
+    assert_eq!(state.source_companion_pending_keys(), wanted);
+    // Two quiet ticks on unchanged revisions stay Exhausted without rescanning.
+    for _ in 0..2 {
+        state.advance_tick(TickBudget::full()).unwrap();
+        source_companion_waiting(&state, id, [0.5, 321.0, 0.5]);
+        assert_eq!(state.source_companion_pending_keys(), wanted);
+    }
+    // The actual managed off-tick Support transaction lands stone in (0, 64, 0)
+    // and advances the Ready chunk revision.
+    let before =
+        state
+            .settled_read()
+            .unwrap()
+            .ready_chunk_revision(key(Dimension::OVERWORLD, 0, 0));
+    passive_snow_actual_off_tick_cell(&mut state, BlockPos::new(0, 64, 0), 2);
+    {
+        let view = state.settled_read().unwrap();
+        let after = view.ready_chunk_revision(key(Dimension::OVERWORLD, 0, 0));
+        assert_ne!(before, after);
+        assert_eq!(view.highest_non_air(Dimension::OVERWORLD, 0, 0), Some(64));
+    }
+    let _rescanned = state.advance_tick(TickBudget::full()).unwrap();
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], false);
+    assert!(state.source_companion_pending_keys().is_empty());
+    fixture.close();
+}
+
+// ---------------------------------------------------------------------------
+// Plan 109 appended consumer-only source acquisition cases (A1-A4 and the
+// A7 manual control). Everything above this marker is byte-for-byte the
+// original file; the appended helpers below only add new bytes.
+// ---------------------------------------------------------------------------
+
+/// Total bound for one bounded automatic drive loop (plan 109 line 59).
+const SOURCE_ACQUISITION_BOUND: Duration = Duration::from_secs(10);
+
+/// Same actual disk, background store, generation pool and Memory handshake
+/// recipe as `Fixture::new`, but the returned authority is a fresh empty
+/// `AuthorityState` with view radius one, source restoration radius one and
+/// live chunks enabled. The untouched initial state from `Fixture::new` is
+/// discarded without ever ticking or registering it.
+fn source_acquisition_fixture(
+    save: Option<PlayerSave>,
+    dimension: Dimension,
+    anchor: ChunkPos,
+    chunks: Vec<(ChunkKey, Chunk)>,
+) -> (Fixture, AuthorityState) {
+    let (fixture, _untouched) = Fixture::new(save, dimension, anchor, chunks);
+    let mut state = AuthorityState::try_new_with_metadata(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576)
+            .unwrap()
+            .with_view_radius(1),
+        Metadata {
+            format_version: mornlea_storage::METADATA_CURRENT_VERSION,
+            seed: 42,
+            spawn_dimension: i32::from(dimension.get()),
+            spawn_anchor: MetadataChunkPos {
+                x: anchor.x(),
+                z: anchor.z(),
+            },
+            world_time_ticks: 0,
+            day_phase_offset: 0,
+            weather_kind: 0,
+            weather_ticks_remaining: 0,
+            depths_spawn_anchor: MetadataChunkPos { x: 0, z: 0 },
+            depths_seed_salt: 0,
+            difficulty: 0,
+        },
+    )
+    .unwrap();
+    state.enable_source_player_restoration(1).unwrap();
+    state.enable_live_chunks().unwrap();
+    (fixture, state)
+}
+
+/// One bounded automatic drive step: only `SourceAcquisition::advance` touches
+/// the authority, store, pool or driver, and every successful call pins the
+/// pre-bump publication tick against the counter before and after.
+fn source_acquisition_step(
+    acquisition: &mut mornlea_server::core::source_acquisition::SourceAcquisition,
+    state: &mut AuthorityState,
+    fixture: &mut Fixture,
+) -> mornlea_server::core::source_acquisition::SourceAcquisitionTick {
+    let before = state.next_tick();
+    let report = acquisition
+        .advance(
+            state,
+            &mut fixture.store,
+            &mut fixture.generation,
+            TickBudget::full(),
+            deadline(),
+        )
+        .expect("actual automatic source acquisition tick");
+    assert_eq!(report.publication.tick, before);
+    assert_eq!(state.next_tick(), before.saturating_add(1));
+    assert!(acquisition.pending_loads() <= 8);
+    assert!(acquisition.pending_generations() <= 8);
+    report
+}
+
+/// Test-only cleanup between the frozen business assertions and
+/// `Fixture::close`: a stats-only `SaveAuthority` double (empty selection,
+/// no-op dirty return, zeroed acknowledgment and a `usize::MAX` unsaved
+/// estimate) latches the real scheduler backpressure on one finite tick,
+/// then bounded automatic advances poll the already-started provider jobs
+/// to settlement without admitting any new start. Retained unstarted
+/// candidates are not provider ownership, so the loop never waits on the
+/// pending spawn FIFO.
+fn source_acquisition_drain(
+    acquisition: &mut mornlea_server::core::source_acquisition::SourceAcquisition,
+    state: &mut AuthorityState,
+    fixture: &mut Fixture,
+) {
+    struct OwnStatsAuthority {
+        estimated_unsaved_bytes: usize,
+        metadata: Metadata,
+    }
+    impl SaveAuthority for OwnStatsAuthority {
+        fn select(&mut self, _mode: SaveMode, _budget: SaveBudget) -> Vec<OwnedSnapshot> {
+            Vec::new()
+        }
+        fn return_dirty(&mut self, _snapshot: OwnedSnapshot) {}
+        fn apply_completion(&mut self, _completion: SaveCompletion) -> AckReport {
+            AckReport {
+                acked: 0,
+                released: 0,
+                retry: Vec::new(),
+                errors: Vec::new(),
+            }
+        }
+        fn save_stats(&self) -> SaveStats {
+            SaveStats {
+                dirty: 0,
+                in_flight: 0,
+                estimated_unsaved_bytes: self.estimated_unsaved_bytes,
+            }
+        }
+        fn metadata_snapshot(&self) -> OwnedSnapshot {
+            OwnedSnapshot::try_new(
+                SaveKey::Metadata,
+                1,
+                1,
+                SaveUrgency::Autosave,
+                SaveValue::Metadata(self.metadata.clone()),
+            )
+            .unwrap()
+        }
+    }
+    let mut authority = OwnStatsAuthority {
+        estimated_unsaved_bytes: usize::MAX,
+        metadata: options(Dimension::OVERWORLD, ChunkPos::new(0, 0)).create,
+    };
+    let report = fixture
+        .store
+        .poll_tick(1, SaveBudget::default(), &mut authority)
+        .expect("drain backpressure latch tick");
+    assert!(report.backpressured);
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while acquisition.pending_loads() > 0 || acquisition.pending_generations() > 0 {
+        let drained = acquisition
+            .advance(
+                state,
+                &mut fixture.store,
+                &mut fixture.generation,
+                TickBudget::full(),
+                deadline(),
+            )
+            .expect("drain automatic acquisition tick");
+        assert!(
+            drained.started.is_empty(),
+            "backpressured drain admits no new starts"
+        );
+        assert!(Instant::now() < until, "bounded provider drain");
+        thread::yield_now();
+    }
+}
+
+/// Immutable resident chunk body for whole-record equality.
+fn source_materialized(state: &AuthorityState, key: ChunkKey) -> Chunk {
+    let SaveValue::ChunkView(view) = state
+        .capture_chunk_snapshot(key, SaveUrgency::Unload)
+        .unwrap()
+        .value
+    else {
+        panic!("immutable resident view")
+    };
+    view.materialize().chunk
+}
+
+/// A1: the saved player's captured anchor interest and the registered source
+/// companion's own interest union into the exact first eight load starts, and
+/// the bounded automatic drive later activates both owners with their saved
+/// bodies. No manual wants, driver starts or offered completions exist here.
+#[test]
+fn source_acquisition_actual_saved_player_companion_union_priority() {
+    let mut save = saved_player();
+    save.current.dimension = i32::from(Dimension::DEPTHS.get());
+    save.current.position = [168.5, 65.0, 8.5];
+    let depths_current = key(Dimension::DEPTHS, 10, 0);
+    let companion_target = key(Dimension::OVERWORLD, 20, 0);
+    let (mut fixture, mut state) = source_acquisition_fixture(
+        Some(save.clone()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![
+            (depths_current, floor()),
+            (companion_target, source_companion_ground()),
+        ],
+    );
+    let (_login, _transport, _connection, session, _clock) = handshake(&mut fixture, &mut state);
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(
+            id,
+            ChunkPos::new(0, 0),
+            Some(source_companion_body(id, [328.5, 65.0, 8.5])),
+        )
+        .unwrap();
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let first = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    let load = mornlea_server::core::source_acquisition::SourceChunkKind::Load;
+    let start = |x: i32, z: i32| mornlea_server::core::source_acquisition::SourceChunkStart {
+        key: key(Dimension::OVERWORLD, x, z),
+        kind: load,
+    };
+    assert_eq!(
+        first.started,
+        vec![
+            start(0, 0),
+            start(20, 0),
+            start(-1, 0),
+            start(0, -1),
+            start(0, 1),
+            start(1, 0),
+            start(-1, -1),
+            start(-1, 1),
+        ]
+    );
+    // The bounded automatic drive runs the whole acquisition; the sequence
+    // always includes at least two successful calls through the step helper.
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        let ready = [depths_current, companion_target].into_iter().all(|key| {
+            state
+                .live_chunk_facts(key)
+                .is_some_and(|facts| facts.phase == LiveChunkPhase::Ready)
+        });
+        if ready {
+            break;
+        }
+        thread::yield_now();
+    }
+    for target in [depths_current, companion_target] {
+        let facts = state.live_chunk_facts(target).unwrap();
+        assert_eq!(facts.phase, LiveChunkPhase::Ready);
+        assert_eq!((facts.revision, facts.persisted_revision), (9, 9));
+        assert!(!facts.needs_rewrite);
+        assert!(!facts.recovered);
+    }
+    assert_eq!(source_materialized(&state, depths_current), floor());
+    assert_eq!(
+        source_materialized(&state, companion_target),
+        source_companion_ground()
+    );
+    source_companion_active(&state, id, [328.5, 65.0, 8.5], true);
+    let actor_key = ActorKey::Player(session);
+    let view = state.settled_read().unwrap();
+    let actor = view.actor(actor_key).unwrap();
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    assert_eq!(actor.dimension, Dimension::DEPTHS);
+    assert_eq!(actor.motion.position().get(), [168.5, 65.0, 8.5]);
+    assert_eq!(
+        (actor.look.yaw(), actor.look.pitch()),
+        (save.yaw, save.pitch)
+    );
+    assert_eq!(actor.survival.health(), save.health);
+    assert_eq!(actor.survival.hunger(), save.hunger);
+    let inventory = view.inventory(actor_key).unwrap();
+    assert_eq!(inventory.selected.get(), save.inventory.hotbar.selected);
+    assert_eq!(inventory.slots[..9], save.inventory.hotbar.slots);
+    assert_eq!(inventory.armor, save.armor);
+    // Test-only cleanup: settle the started provider jobs before close.
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
+    fixture.close();
+}
+
+/// A2: a registered missing companion on an empty disk automatically loads,
+/// observes the real miss, generates natively and reaches Ready revision one
+/// with the exact off-tick `ChunkGenerator` body. No manual warm request or
+/// fake native result exists in this primary path.
+#[test]
+fn source_acquisition_actual_missing_native() {
+    let (mut fixture, mut state) =
+        source_acquisition_fixture(None, Dimension::OVERWORLD, ChunkPos::new(0, 0), Vec::new());
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let target = key(Dimension::OVERWORLD, 0, 0);
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let first = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    assert_eq!(
+        first.started,
+        vec![mornlea_server::core::source_acquisition::SourceChunkStart {
+            key: target,
+            kind: mornlea_server::core::source_acquisition::SourceChunkKind::Load,
+        }]
+    );
+    // Pending before Ready: the registered companion still waits in the air.
+    source_companion_waiting(&state, id, [0.5, 321.0, 0.5]);
+    let generate = mornlea_server::core::source_acquisition::SourceChunkKind::Generate;
+    let mut observed_generate = false;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        if report
+            .started
+            .iter()
+            .any(|start| start.key == target && start.kind == generate)
+        {
+            // A Generate can already start after this tick's publication, so
+            // NeedsGeneration need not survive the call; the recorded start
+            // plus the retained pending scan is the durable witness.
+            observed_generate = true;
+            assert!(!state.source_companion_pending_keys().is_empty());
+        }
+        let ready = state
+            .live_chunk_facts(target)
+            .is_some_and(|facts| facts.phase == LiveChunkPhase::Ready);
+        let active = state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Companion(id))
+            .is_some_and(|actor| actor.lifecycle == ActorLifecycle::Active);
+        if ready && active {
+            break;
+        }
+        thread::yield_now();
+    }
+    assert!(observed_generate, "actual automatic generation start");
+    let facts = state.live_chunk_facts(target).unwrap();
+    assert_eq!(
+        (
+            facts.phase,
+            facts.revision,
+            facts.persisted_revision,
+            facts.needs_rewrite,
+            facts.recovered
+        ),
+        (LiveChunkPhase::Ready, 1, 0, false, false)
+    );
+    let expected = mornlea_server::core::generation::ChunkGenerator::try_new(42, false)
+        .unwrap()
+        .generate(target)
+        .unwrap();
+    assert_eq!(source_materialized(&state, target), expected);
+    // Test-only cleanup: settle the started provider jobs before close.
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
+    fixture.close();
+}
+
+/// A3: eight externally warm store loads occupy the load lanes; the automatic
+/// candidate is retained without any start or Failed facts, and after the
+/// warm ownership retires off-tick the same automatic caller loads the saved
+/// target and activates the companion. Driver/authority/provider stay <= 8.
+#[test]
+fn source_acquisition_actual_load_capacity_retains_without_failed() {
+    let target = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = source_acquisition_fixture(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(target, source_companion_ground())],
+    );
+    // Actual external warm loads owned by the store alone, far outside every
+    // source interest; never entered into the authority or any want set.
+    let warm: Vec<_> = (100..108)
+        .map(|x| {
+            fixture
+                .store
+                .start_chunk(key(Dimension::OVERWORLD, x, 0), 1, deadline())
+                .unwrap()
+        })
+        .collect();
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let first = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    assert!(first.started.is_empty());
+    assert!(first.queued >= 1);
+    assert!(acquisition.pending_candidates() > 0);
+    assert_ne!(
+        state.live_chunk_facts(target).map(|facts| facts.phase),
+        Some(LiveChunkPhase::Failed)
+    );
+    // Retire the warm ownership off-tick, outside the authority.
+    let until = deadline();
+    for request in warm {
+        loop {
+            fixture.store.drive_workers();
+            match fixture.store.poll_chunk(request) {
+                ChunkLoadPoll::Loaded(_) => break,
+                ChunkLoadPoll::Failed(error) => panic!("actual warm load failed: {error:?}"),
+                ChunkLoadPoll::Pending => {
+                    assert!(!until.expired(Instant::now()));
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        let ready = state
+            .live_chunk_facts(target)
+            .is_some_and(|facts| facts.phase == LiveChunkPhase::Ready);
+        let active = state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Companion(id))
+            .is_some_and(|actor| actor.lifecycle == ActorLifecycle::Active);
+        if ready && active {
+            break;
+        }
+        thread::yield_now();
+    }
+    let facts = state.live_chunk_facts(target).unwrap();
+    assert_eq!(
+        (
+            facts.phase,
+            facts.revision,
+            facts.persisted_revision,
+            facts.needs_rewrite,
+            facts.recovered
+        ),
+        (LiveChunkPhase::Ready, 9, 9, false, false)
+    );
+    assert_eq!(
+        source_materialized(&state, target),
+        source_companion_ground()
+    );
+    source_companion_active(&state, id, [0.5, 65.0, 0.5], false);
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
+    fixture.close();
+}
+
+/// A4: eight actual native warm jobs fill CPU admission before the automatic
+/// missing-companion load; the target reaches NeedsGeneration with its
+/// Generate retained queued, never Failed and never started. After the warm
+/// jobs drain off-tick, the same queued candidate starts real generation and
+/// reaches Ready without any Capacity-induced reload.
+#[test]
+fn source_acquisition_actual_generation_capacity_retains_missing() {
+    let target = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) =
+        source_acquisition_fixture(None, Dimension::OVERWORLD, ChunkPos::new(0, 0), Vec::new());
+    // Actual native warm jobs in the real pool, distinct faraway keys; they
+    // stay owned until polled regardless of worker completion.
+    let warm: Vec<_> = (200..208)
+        .map(|x| {
+            fixture
+                .generation
+                .start_generation(key(Dimension::OVERWORLD, x, 0), 1)
+                .unwrap()
+        })
+        .collect();
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let first = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    let load = mornlea_server::core::source_acquisition::SourceChunkKind::Load;
+    let generate = mornlea_server::core::source_acquisition::SourceChunkKind::Generate;
+    assert!(
+        first
+            .started
+            .iter()
+            .any(|start| start.key == target && start.kind == load)
+    );
+    // Phase one: reach NeedsGeneration with the Generate retained queued.
+    let mut needs_generation_queued = None;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(
+            report
+                .started
+                .iter()
+                .all(|start| !(start.key == target && start.kind == generate))
+        );
+        let facts = state.live_chunk_facts(target).unwrap();
+        assert_ne!(facts.phase, LiveChunkPhase::Failed);
+        if facts.phase == LiveChunkPhase::NeedsGeneration && report.queued >= 1 {
+            needs_generation_queued = Some(facts.generation);
+            break;
+        }
+        thread::yield_now();
+    }
+    let retained_generation = needs_generation_queued.expect("queued Generate retained");
+    // Drain the warm native ownership off-tick with bounded deadlines.
+    let until = deadline();
+    for job in warm {
+        loop {
+            match fixture.generation.poll_generation(job) {
+                GenerationPoll::Ready(_) => break,
+                GenerationPoll::Failed(error) => panic!("native warm job {error:?}"),
+                GenerationPoll::Pending => {
+                    assert!(!until.expired(Instant::now()));
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+    // Phase two: the same candidate automatically starts generation and
+    // becomes Ready with no reload and an unchanged load generation.
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(
+            report
+                .started
+                .iter()
+                .all(|start| !(start.key == target && start.kind == load))
+        );
+        let facts = state.live_chunk_facts(target).unwrap();
+        assert_eq!(facts.generation, retained_generation);
+        let ready = facts.phase == LiveChunkPhase::Ready;
+        let active = state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Companion(id))
+            .is_some_and(|actor| actor.lifecycle == ActorLifecycle::Active);
+        if ready && active {
+            break;
+        }
+        thread::yield_now();
+    }
+    let facts = state.live_chunk_facts(target).unwrap();
+    assert_eq!(
+        (
+            facts.phase,
+            facts.revision,
+            facts.persisted_revision,
+            facts.needs_rewrite,
+            facts.recovered
+        ),
+        (LiveChunkPhase::Ready, 1, 0, false, false)
+    );
+    let expected = mornlea_server::core::generation::ChunkGenerator::try_new(42, false)
+        .unwrap()
+        .generate(target)
+        .unwrap();
+    assert_eq!(source_materialized(&state, target), expected);
+    // Test-only cleanup: settle the started provider jobs before close.
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
+    fixture.close();
+}
+
+/// A7 manual control: the original current/Safe recipe ordering with
+/// unmodified `Fixture::acquire` and `state.advance_tick` only. The early far
+/// Safe chunk stays Ready until the current/manual scan, and the later
+/// acquisition, restoration and native motion behave exactly as before. No
+/// `SourceAcquisition` is constructed here; this control must pass before any
+/// producer integration changes the automatic path.
+#[test]
+fn source_acquisition_manual_fixture_early_offer_control() {
+    let mut save = saved_player();
+    save.current.dimension = 1;
+    save.safe = Some(PlayerLocation {
+        dimension: 0,
+        position: [56.5, 64., 8.5],
+    });
+    let current = key(Dimension::DEPTHS, 0, 0);
+    let safe = key(Dimension::OVERWORLD, 3, 0);
+    let (mut fixture, mut state) = Fixture::new(
+        Some(save.clone()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(2, -1),
+        vec![(current, air()), (safe, floor())],
+    );
+    let (mut login, mut transport, connection, session, clock) =
+        handshake(&mut fixture, &mut state);
+    pending(&state, session, Dimension::OVERWORLD, [32.5, 321., -15.5]);
+    let waiting = fixture.acquire(&mut state, safe);
+    assert!(!local(&waiting).ready());
+    assert!(!local(&waiting).reset());
+    // The early far Safe offer survives as Ready until the current scan.
+    assert_eq!(
+        state.live_chunk_facts(safe).unwrap().phase,
+        LiveChunkPhase::Ready
+    );
+    pending(&state, session, Dimension::OVERWORLD, [32.5, 321., -15.5]);
+    for packet in [
+        ClientPacket::PlayerInput(
+            PlayerInput::new(1, 1, 0, false, 1.2, 0.3, false, false, false, false).unwrap(),
+        ),
+        ClientPacket::SelectHotbar(SelectHotbar::new(2, 5).unwrap()),
+    ] {
+        assert!(!matches!(
+            transport.send(
+                connection,
+                MemoryTransport::encode_frame(&packet).unwrap(),
+                &mut login.bind(&mut state, &mut fixture.store),
+                &clock
+            ),
+            ConnectionProgress::Closed { .. }
+        ));
+    }
+    let publication = fixture.acquire(&mut state, current);
+    assert_eq!(publication.counters.commands, 2);
+    assert_eq!(state.session(session).unwrap().last_applied_sequence, 2);
+    activated(
+        &state,
+        session,
+        &publication,
+        Dimension::DEPTHS,
+        save.current.position,
+        false,
+        Some(&save),
+    );
+    for packet in [
+        ClientPacket::PlayerInput(
+            PlayerInput::new(3, 1, 0, false, 1.2, 0.3, false, false, false, false).unwrap(),
+        ),
+        ClientPacket::SelectHotbar(SelectHotbar::new(4, 5).unwrap()),
+    ] {
+        assert!(!matches!(
+            transport.send(
+                connection,
+                MemoryTransport::encode_frame(&packet).unwrap(),
+                &mut login.bind(&mut state, &mut fixture.store),
+                &clock
+            ),
+            ConnectionProgress::Closed { .. }
+        ));
+    }
+    let publication = state.advance_tick(TickBudget::full()).unwrap();
+    let view = state.settled_read().unwrap();
+    let actor = view.actor(ActorKey::Player(session)).unwrap();
+    let pos = actor.motion.position().get();
+    assert!(
+        pos[0] != save.current.position[0] || pos[2] != save.current.position[2],
+        "actual native horizontal motion"
+    );
+    assert_eq!(publication.counters.commands, 2);
+    assert_eq!(state.session(session).unwrap().last_applied_sequence, 4);
+    assert_eq!((actor.look.yaw(), actor.look.pitch()), (1.2, 0.3));
+    assert_eq!(local(&publication).last_input_sequence(), 3);
+    assert!(!local(&publication).reset());
+    assert_eq!(view.inventory(actor.key).unwrap().selected.get(), 5);
+    fixture.close();
+}
+
+/// Ticket-parameterised copy of the actual `handshake` recipe above: the
+/// identical protocol decode, transport poll, login drive and ACK path,
+/// differing only in the expected store login ticket echoed by `poll_login`.
+/// The player ticket allocator belongs to the store, so a fresh identical
+/// login over the reopened owner draws the next ticket rather than reusing
+/// the hardcoded first one.
+fn source_acquisition_handshake_ticket(
+    fixture: &mut Fixture,
+    state: &mut AuthorityState,
+    expected: LoginTicket,
+) -> (
+    LoginDriver,
+    MemoryTransport,
+    ConnectionId,
+    SessionKey,
+    StepClock,
+) {
+    let mut login = LoginDriver::new();
+    let clock = StepClock(Instant::now());
+    let mut transport = MemoryTransport::new();
+    let connection = transport.connect(clock.monotonic()).unwrap();
+    let hello = ClientPacket::ClientHello(
+        ClientHello::decode_inbound(&encode_uvarint(Identities::current().protocol)).unwrap(),
+    );
+    transport.send(
+        connection,
+        MemoryTransport::encode_frame(&hello).unwrap(),
+        &mut login.bind(state, &mut fixture.store),
+        &clock,
+    );
+    let hello = decode(&receive(&mut transport, connection), State::Handshake);
+    assert_eq!(
+        hello,
+        ServerPacket::ServerHello(
+            mornlea_protocol::ServerHello::new(Identities::current().protocol).unwrap()
+        )
+    );
+    transport.acknowledge(connection, 1, &mut login.bind(state, &mut fixture.store));
+    let start = LoginStart::new(player(), "Ada", 8).unwrap();
+    let start =
+        ClientPacket::LoginStart(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap());
+    transport.send(
+        connection,
+        MemoryTransport::encode_frame(&start).unwrap(),
+        &mut login.bind(state, &mut fixture.store),
+        &clock,
+    );
+    let until = Instant::now() + BOUND;
+    let (session, success) = loop {
+        fixture.store.drive_workers();
+        transport.poll(
+            connection,
+            &mut login.bind(state, &mut fixture.store),
+            &clock,
+        );
+        match login.bind(state, &mut fixture.store).poll_login(expected) {
+            LoginPoll::Ready { session, success } => break (session, success),
+            LoginPoll::Failed { error, .. } => panic!("actual login load failed: {error:?}"),
+            LoginPoll::Pending => {
+                assert!(Instant::now() < until);
+                thread::yield_now();
+            }
+        }
+    };
+    assert_eq!(
+        state.session(session).unwrap().phase,
+        SessionPhase::Prepared
+    );
+    transport.poll(
+        connection,
+        &mut login.bind(state, &mut fixture.store),
+        &clock,
+    );
+    assert_eq!(
+        decode(&receive(&mut transport, connection), State::Login),
+        success
+    );
+    assert!(matches!(success, ServerPacket::LoginSuccess(_)));
+    transport.acknowledge(connection, 1, &mut login.bind(state, &mut fixture.store));
+    assert_eq!(login.pending(), 0);
+    let active = state.session(session).unwrap();
+    assert_eq!(active.phase, SessionPhase::Active);
+    assert_eq!(active.player_id, player());
+    (login, transport, connection, session, clock)
+}
+
+/// Closes the fixture's real background store to release its world lease and
+/// region cache, corrupts the saved payload of one entry (chunk `entry` of
+/// region r.0.0.0 in `dimension`) into a typed `FutureVersion` body exactly
+/// like the verified chunk_driver pattern, writes the file back and reopens a
+/// fresh real `DiskStore` owner over the same tree. The closed owner is
+/// replaced, never mutated while cached live. Returns the path and corrupt
+/// bytes so the caller can prove the file stays unchanged.
+fn source_acquisition_corrupt_future(
+    fixture: &mut Fixture,
+    dimension: Dimension,
+    entry: usize,
+) -> (PathBuf, Vec<u8>) {
+    use mornlea_storage::{
+        BANK_A_START_SECTOR, BANK_B_START_SECTOR, BANK_SIZE, RegionKey, SECTOR_SIZE, crc32c,
+        decode_region_bank, encode_region_bank,
+    };
+    fixture.store.close(deadline()).unwrap();
+    let path = fixture.root.0.join(format!(
+        "dimensions/{}/regions/r.0.0.region",
+        i32::from(dimension.get())
+    ));
+    let mut bytes = fs::read(&path).unwrap();
+    let rk = RegionKey {
+        dimension: i32::from(dimension.get()),
+        x: 0,
+        z: 0,
+    };
+    for sector in [BANK_A_START_SECTOR, BANK_B_START_SECTOR] {
+        let at = sector as usize * SECTOR_SIZE as usize;
+        let mut bank =
+            decode_region_bank(rk, &bytes[at..at + BANK_SIZE], bytes.len() as i64).unwrap();
+        let e = &mut bank.entries[entry];
+        if e.offset_sector == 0 {
+            continue;
+        }
+        let payload = e.offset_sector as usize * SECTOR_SIZE as usize;
+        let end = payload + e.payload_length as usize;
+        bytes[payload + 8..payload + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        e.payload_crc32c = crc32c(&bytes[payload..end]);
+        bytes[at..at + BANK_SIZE].copy_from_slice(&encode_region_bank(rk, &bank).unwrap());
+    }
+    fs::write(&path, &bytes).unwrap();
+    fixture.store = AutosaveScheduler::try_new(
+        SchedulerConfig::default(),
+        StoreMailbox::try_new_background(
+            StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap(),
+            DiskStore::open(
+                &fixture.root.0,
+                options(Dimension::OVERWORLD, ChunkPos::new(0, 0)),
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    (path, bytes)
+}
+
+/// A5: the saved player's real Depths target chunk is corrupted on disk into
+/// a typed `FutureVersion` load failure. The Pending saved-restore candidate
+/// produces Failed, never NeedsGeneration/Generate; three unchanged extra
+/// automatic ticks stay quiet with one target load start. Retiring the Memory
+/// session and admitting a fresh identical saved login is a real owner change
+/// that dirties the inputs and issues a new target Load generation.
+#[test]
+fn source_acquisition_actual_typed_restore_failure_quiet_and_dirty_retry() {
+    let mut save = saved_player();
+    save.current.dimension = i32::from(Dimension::DEPTHS.get());
+    save.current.position = [168.5, 65.0, 8.5];
+    let target = key(Dimension::DEPTHS, 10, 0);
+    let (mut fixture, mut state) = source_acquisition_fixture(
+        Some(save.clone()),
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(target, floor())],
+    );
+    // Corrupt (closing and reopening the store) before the first handshake, so
+    // ticket 1 and the later ticket 2 both refer to the same reopened owner.
+    let (path, corrupt) = source_acquisition_corrupt_future(&mut fixture, Dimension::DEPTHS, 10);
+    let (_login, _transport, _connection, session, _clock) = handshake(&mut fixture, &mut state);
+    let load = mornlea_server::core::source_acquisition::SourceChunkKind::Load;
+    let generate = mornlea_server::core::source_acquisition::SourceChunkKind::Generate;
+    let target_loads =
+        |report: &mornlea_server::core::source_acquisition::SourceAcquisitionTick| {
+            report
+                .started
+                .iter()
+                .filter(|start| start.key == target && start.kind == load)
+                .count()
+        };
+    let no_target_generate =
+        |report: &mornlea_server::core::source_acquisition::SourceAcquisitionTick| {
+            report
+                .started
+                .iter()
+                .all(|start| !(start.key == target && start.kind == generate))
+        };
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let mut target_load_starts = 0usize;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(no_target_generate(&report));
+        target_load_starts += target_loads(&report);
+        if state
+            .live_chunk_facts(target)
+            .is_some_and(|facts| facts.phase == LiveChunkPhase::Failed)
+        {
+            break;
+        }
+        thread::yield_now();
+    }
+    let facts = state
+        .live_chunk_facts(target)
+        .expect("typed target failure");
+    assert_eq!(facts.phase, LiveChunkPhase::Failed);
+    let failed_generation = facts.generation;
+    let typed = || {
+        Some(&ServerError::Storage {
+            family: "chunk",
+            kind: StorageFailure::FutureVersion,
+        })
+    };
+    assert_eq!(state.live_chunk_error(target), typed());
+    // Unchanged saved-restore inputs: three extra automatic quiet ticks keep
+    // the failed generation and typed error, with exactly one target load
+    // start despite unrelated view-key requests.
+    for _ in 0..3 {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(no_target_generate(&report));
+        target_load_starts += target_loads(&report);
+    }
+    let facts = state.live_chunk_facts(target).unwrap();
+    assert_eq!(facts.phase, LiveChunkPhase::Failed);
+    assert_eq!(facts.generation, failed_generation);
+    assert_eq!(state.live_chunk_error(target), typed());
+    assert_eq!(target_load_starts, 1);
+    // Real owner change: retire prunes the old source owner on the next real
+    // advance, then the fresh identical Memory login dirties a new Load.
+    state.retire(session, CloseReason::PeerGone).unwrap();
+    source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+    let (_login, _transport, _connection, _session, _clock) = source_acquisition_handshake_ticket(
+        &mut fixture,
+        &mut state,
+        LoginTicket::try_from_raw(2).unwrap(),
+    );
+    let mut retried_load_starts = 0usize;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(no_target_generate(&report));
+        retried_load_starts += target_loads(&report);
+        if state
+            .live_chunk_facts(target)
+            .is_some_and(|facts| facts.generation > failed_generation)
+        {
+            break;
+        }
+        thread::yield_now();
+    }
+    assert!(
+        retried_load_starts >= 1,
+        "dirty retry starts a new target load"
+    );
+    let facts = state
+        .live_chunk_facts(target)
+        .expect("dirty retry target facts");
+    assert!(facts.generation > failed_generation);
+    assert_eq!(fs::read(&path).unwrap(), corrupt);
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
+    fixture.close();
+}
+
+/// A6: the missing-body registered companion's pending spawn scans an anchor
+/// whose actual on-disk load fails typed. Unlike the quiet saved-restore
+/// candidate of A5, the pending spawn dirty path retries Load on later
+/// reconciliations, so the target load generation advances across repeated
+/// starts and never turns into Generate.
+#[test]
+fn source_acquisition_actual_pending_spawn_failed_retries() {
+    let target = key(Dimension::OVERWORLD, 0, 0);
+    let (mut fixture, mut state) = source_acquisition_fixture(
+        None,
+        Dimension::OVERWORLD,
+        ChunkPos::new(0, 0),
+        vec![(target, floor())],
+    );
+    let (path, corrupt) = source_acquisition_corrupt_future(&mut fixture, Dimension::OVERWORLD, 0);
+    let id = source_companion_id(8);
+    state
+        .register_source_companion(id, ChunkPos::new(0, 0), None)
+        .unwrap();
+    let load = mornlea_server::core::source_acquisition::SourceChunkKind::Load;
+    let generate = mornlea_server::core::source_acquisition::SourceChunkKind::Generate;
+    let mut acquisition = mornlea_server::core::source_acquisition::SourceAcquisition::new();
+    let mut target_load_starts = 0usize;
+    let mut first_generation: Option<u64> = None;
+    let until = Instant::now() + SOURCE_ACQUISITION_BOUND;
+    while Instant::now() < until {
+        let report = source_acquisition_step(&mut acquisition, &mut state, &mut fixture);
+        assert!(
+            report
+                .started
+                .iter()
+                .all(|start| !(start.key == target && start.kind == generate))
+        );
+        if report
+            .started
+            .iter()
+            .any(|start| start.key == target && start.kind == load)
+        {
+            target_load_starts += 1;
+            if first_generation.is_none() {
+                first_generation = state.live_chunk_facts(target).map(|facts| facts.generation);
+            }
+        }
+        if target_load_starts >= 2
+            && state
+                .live_chunk_facts(target)
+                .is_some_and(|facts| first_generation.is_some_and(|first| facts.generation > first))
+        {
+            break;
+        }
+        thread::yield_now();
+    }
+    assert!(
+        target_load_starts >= 2,
+        "pending spawn retries the typed load"
+    );
+    let facts = state.live_chunk_facts(target).expect("target facts");
+    assert!(first_generation.is_some_and(|first| facts.generation > first));
+    assert_eq!(fs::read(&path).unwrap(), corrupt);
+    source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
+    fixture.close();
+}

@@ -220,6 +220,11 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
         self.backpressured
     }
 
+    /// Chunk-load admission slots for the automatic source acquisition caller.
+    pub(crate) fn source_chunk_slots(&self) -> Result<usize, ServerError> {
+        self.store.source_chunk_slots()
+    }
+
     /// Retry cohorts waiting for their backoff tick.
     pub fn pending_retry_jobs(&self) -> usize {
         self.pending.len()

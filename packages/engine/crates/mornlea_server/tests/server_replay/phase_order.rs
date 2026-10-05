@@ -196,6 +196,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "admit_command",
     "companions::run",
     "world_acquisition::run",
+    "source_companion_restore::advance",
     "source_player_restore::advance",
     "player_survival::run",
     "eating::run",
@@ -810,34 +811,44 @@ fn snow_capture_order() {
     let body = fn_body(&code, "fn dispatch_rows");
     let capture = "source_player_restore::capture_snow";
     let settle = "source_player_restore::settle_snow";
+    // The passive capture rides the PassiveStepDeaths dispatch after the
+    // source-player deaths, and its copied cells settle between the
+    // source-player and legacy generic Snow regions (Go players-then-passives).
+    let passive_capture = "passives::run_with_snow";
+    let passive_settle = "passives::settle_snow";
     let chain = [
         "RulePhase::PlayerPostPhysics",
         "source_player_restore::capture_trample",
         capture,
         "source_player_restore::checkpoint_safe",
         "source_player_restore::settle_deaths",
+        passive_capture,
         "RulePhase::Trample",
         "source_player_restore::settle_tramples",
         "crops::settle_tramples",
         "RulePhase::SnowFootprint",
         settle,
+        passive_settle,
         "crops::settle_snow_footprints",
         "RulePhase::RandomBlock",
     ];
     chain_positions(body, &chain);
-    for marker in [capture, settle] {
+    for marker in [capture, settle, passive_capture, passive_settle] {
         assert_eq!(marker_count(body, marker), 1);
     }
     for (first, last) in [
         ("source_player_restore::capture_trample", capture),
         (capture, "source_player_restore::checkpoint_safe"),
+        (passive_capture, "RulePhase::Trample"),
         ("RulePhase::SnowFootprint", settle),
+        (settle, passive_settle),
+        (passive_settle, "crops::settle_snow_footprints"),
         (settle, "crops::settle_snow_footprints"),
     ] {
         let swapped = swap_markers(body, first, last);
         assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
     }
-    for marker in [capture, settle] {
+    for marker in [capture, settle, passive_capture, passive_settle] {
         let repeat = format!("{body}\n{marker}");
         assert!(std::panic::catch_unwind(|| assert_eq!(marker_count(&repeat, marker), 1)).is_err());
     }
@@ -869,4 +880,69 @@ fn action_costs_source_regions_order() {
     assert!(std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err());
     let duplicate = body.replacen(marker, &format!("{marker} {marker}"), 1);
     assert_ne!(marker_count(&duplicate, marker), 2);
+}
+
+#[test]
+fn dispatch_guard_rejects_player_restore_before_companion() {
+    // Companion pending advancement must precede pending players: the swap
+    // keeps both markers present, so only the order probe can refuse.
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let swapped = swap_markers(
+        body,
+        "source_companion_restore::advance",
+        "source_player_restore::advance",
+    );
+    assert_eq!(
+        marker_count(&swapped, "source_companion_restore::advance"),
+        1
+    );
+    assert_eq!(marker_count(&swapped, "source_player_restore::advance"), 1);
+    let result = std::panic::catch_unwind(|| chain_positions(&swapped, DISPATCH_CHAIN));
+    assert!(
+        result.is_err(),
+        "both markers survive but the companion-before-player-restore guard must refuse"
+    );
+}
+
+#[test]
+fn source_acquisition_completion_phase_order() {
+    // The independently bounded acquisition phase closes the dispatch goals
+    // before the world acquisition runs and reopens them before companion
+    // restoration, so no provider call site can straddle the boundary.
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let chain = [
+        "goals.before_acquire(",
+        "world_acquisition::run(",
+        "goals.after_acquire(",
+        "source_companion_restore::advance(",
+    ];
+    chain_positions(body, &chain);
+    // Negative control: swapping two of this guard's own markers must break
+    // the order probe, proving the chain actually bites.
+    let swapped = swap_markers(body, "goals.before_acquire(", "world_acquisition::run(");
+    assert!(
+        std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err(),
+        "a swapped acquisition phase must break the frozen chain"
+    );
+}
+
+#[test]
+fn source_acquisition_reconcile_phase_order() {
+    // Companion motion goals reconcile before hostile planning, so the
+    // bounded phase always settles its own goals ahead of hostile intent.
+    let code = step_source();
+    let body = fn_body(&code, "fn dispatch_rows");
+    let chain = [
+        "RulePhase::CompanionMotion",
+        "goals.reconcile(",
+        "hostile_actions::plan(",
+    ];
+    chain_positions(body, &chain);
+    let swapped = swap_markers(body, "goals.reconcile(", "hostile_actions::plan(");
+    assert!(
+        std::panic::catch_unwind(|| chain_positions(&swapped, &chain)).is_err(),
+        "a swapped reconcile phase must break the frozen chain"
+    );
 }

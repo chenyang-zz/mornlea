@@ -708,7 +708,12 @@ fn covers(
 /// effective cells refuses, the trim keeps interior holes, recipes compare
 /// in ascending order, and the mirror retries once only where the flag
 /// allows it. Rotations and vertical flips are never in the semantics.
-fn match_grid(size: u8, slots: &[ItemStack; CRAFTING_GRID_SLOTS]) -> Option<(usize, ItemStack)> {
+/// This is the frozen recipe matcher shared by the take provider and the
+/// crafting publication.
+pub(crate) fn match_grid(
+    size: u8,
+    slots: &[ItemStack; CRAFTING_GRID_SLOTS],
+) -> Option<(usize, ItemStack)> {
     if size != 2 && size != 3 {
         return None;
     }
@@ -1050,6 +1055,9 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
                 return Err(ServerError::InvalidInput { field: "crafting" });
             }
             stage_patch(ctx, actor, before, after)?;
+            // An accepted move settles into the owner record and the private
+            // grid, so it marks both owner-only publication lanes.
+            ctx.record_crafting_command_publication_dirty(session);
             Ok(applied_report())
         }
         Command::TakeCraftingOutput => {
@@ -1083,6 +1091,9 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
             after.slots = next_slots;
             after.crafting = consumed;
             stage_patch(ctx, actor, before, after)?;
+            // An accepted take, like the move above, marks both owner-only
+            // publication lanes.
+            ctx.record_crafting_command_publication_dirty(session);
             Ok(applied_report())
         }
         // The bench open rides the same admitted-open surface as the

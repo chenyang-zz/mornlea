@@ -70,8 +70,11 @@ if __name__ == "__main__":
 EOF
 }
 
+# Every helper routed through `py` imports only the standard library, so
+# `-S` (skip `site` initialization) and `-E` (ignore PYTHON* environment
+# overrides) reduce interpreter startup cost without changing semantics.
 py() {
-    python3 - "$@"
+    python3 -S -E - "$@"
 }
 
 # An unreaped Linux zombie has exited and released its writer resources;
@@ -132,18 +135,6 @@ canon() {
     py "$1" <<'EOF'
 import os, sys
 print(os.path.realpath(sys.argv[1]))
-EOF
-}
-
-# Refuses a leaf symlink alias. Confinement runs on canonical paths, so an
-# alias can never point outside the disposable root; refusing the leaf
-# keeps the manifest binding exactly the directory the operator named.
-reject_symlink_alias() {
-    local path="$1"
-    py "$path" <<'EOF' || fail "invalid_manifest" "symlink alias in $1"
-import os, sys
-if os.path.islink(sys.argv[1]):
-    sys.exit(1)
 EOF
 }
 
@@ -213,6 +204,38 @@ elif isinstance(value, (dict, list)):
     print(json.dumps(value, sort_keys=True), end="")
 else:
     print(value, end="")
+EOF
+}
+
+# Reads several named fields from one manifest record in a single
+# interpreter start and prints one decoded value per field, NUL-separated,
+# in the argument order. Decoding matches `manifest_get` exactly,
+# including the empty value for an absent field, so batching removes
+# startup cost only. JSON `\u0000` decodes to a literal NUL inside a
+# string field, so a field carrying one would be treated as a separator
+# and misalign every later consumer. Fields are checked and emitted one by
+# one in argument order, so refusing a later field can leave earlier
+# fields already printed; the consumers therefore treat any short batch as
+# the typed `invalid_manifest` refusal and never consume a partial stream.
+manifest_get_batch() {
+    py "$@" <<'EOF'
+import json, sys
+with open(sys.argv[1]) as handle:
+    manifest = json.load(handle)
+for name in sys.argv[2:]:
+    value = manifest.get(name)
+    if value is None:
+        text = ""
+    elif isinstance(value, bool):
+        text = "true" if value else "false"
+    elif isinstance(value, (dict, list)):
+        text = json.dumps(value, sort_keys=True)
+    else:
+        text = str(value)
+    if "\0" in text:
+        print("FAIL invalid_manifest manifest field %s contains an embedded NUL" % name, file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.write(text + "\0")
 EOF
 }
 
@@ -466,39 +489,75 @@ EOF
 }
 
 # Confines every managed path inside the disposable run root, which itself
-# must live inside a system temporary tree. Rejects symlink aliases.
+# must live inside a system temporary tree. Rejects leaf symlink aliases:
+# confinement runs on canonical paths, so an alias can never point outside
+# the disposable root, and refusing the leaf keeps the manifest binding
+# exactly the directory the operator named. One interpreter start performs
+# every canonicalization and alias check in the original order, and each
+# refusal keeps its exact typed identity and message.
 confine_paths() {
-    local world="$1"
-    local backup="$2"
-    local run_dir="$3"
-    local run_canon
-    run_canon="$(canon "$run_dir")"
-    local inside_root=0
-    local candidate tmp_canon
-    for candidate in "${TMPDIR:-/tmp}" "/tmp" "/var/tmp"; do
-        tmp_canon="$(canon "$candidate" 2>/dev/null)" || continue
-        case "$run_canon" in
-            "$tmp_canon"/*) inside_root=1 ;;
-        esac
-    done
-    [ "$inside_root" = "1" ] || fail "invalid_manifest" "run directory escapes the disposable root"
-    local world_canon
-    world_canon="$(canon "$world")"
-    local backup_canon
-    backup_canon="$(canon "$backup")"
-    case "$world_canon" in
-        "$run_canon"/*) ;;
-        *) fail "invalid_manifest" "world path escapes the disposable root" ;;
-    esac
-    case "$backup_canon" in
-        "$run_canon"/*) ;;
-        *) fail "invalid_manifest" "backup path escapes the disposable root" ;;
-    esac
-    [ "$world_canon" != "$backup_canon" ] || fail "invalid_manifest" "world and backup coincide"
-    [ "$world_canon" != "$run_canon" ] || fail "invalid_manifest" "world coincides with the run directory"
-    reject_symlink_alias "$world"
-    reject_symlink_alias "$backup"
-    reject_symlink_alias "$run_dir"
+    py "$1" "$2" "$3" <<'EOF' || exit 1
+import os, sys
+world, backup, run_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+def refuse(message):
+    print("FAIL invalid_manifest " + message, file=sys.stderr)
+    sys.exit(1)
+def canon(path):
+    try:
+        return os.path.realpath(path)
+    except OSError:
+        return ""
+run_canon = canon(run_dir)
+inside_root = False
+for candidate in (os.environ.get("TMPDIR") or "/tmp", "/tmp", "/var/tmp"):
+    tmp_canon = canon(candidate)
+    if tmp_canon and run_canon.startswith(tmp_canon + "/"):
+        inside_root = True
+if not inside_root:
+    refuse("run directory escapes the disposable root")
+world_canon = canon(world)
+backup_canon = canon(backup)
+if not world_canon.startswith(run_canon + "/"):
+    refuse("world path escapes the disposable root")
+if not backup_canon.startswith(run_canon + "/"):
+    refuse("backup path escapes the disposable root")
+if world_canon == backup_canon:
+    refuse("world and backup coincide")
+if world_canon == run_canon:
+    refuse("world coincides with the run directory")
+# Realpath keeps the spelling an operator typed, so on a case-insensitive
+# filesystem one directory can answer to WORLD and world while every text
+# comparison above still sees two names. Overlap therefore also carries a
+# native device/inode ancestry check beside the textual prefixes.
+def native_ancestor(root, path):
+    try:
+        root_info = os.stat(root)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        refuse("managed path cannot be inspected: " + str(error))
+    ancestor = path
+    while True:
+        try:
+            info = os.stat(ancestor)
+        except FileNotFoundError:
+            info = None
+        except OSError as error:
+            refuse("managed path cannot be inspected: " + str(error))
+        if info is not None and (info.st_dev, info.st_ino) == (root_info.st_dev, root_info.st_ino):
+            return True
+        if os.path.dirname(ancestor) == ancestor:
+            return False
+        ancestor = os.path.dirname(ancestor)
+if (world_canon.startswith(backup_canon + "/")
+        or backup_canon.startswith(world_canon + "/")
+        or native_ancestor(world_canon, backup_canon)
+        or native_ancestor(backup_canon, world_canon)):
+    refuse("world and backup trees overlap")
+for path in (world, backup, run_dir):
+    if os.path.islink(path):
+        refuse("symlink alias in " + path)
+EOF
 }
 
 # Reads the bound game address back from the previous runtime startup log.
@@ -537,18 +596,21 @@ EOF
 check_baseline_identities() {
     local manifest="$1"
     [ "$(manifest_get "$manifest" "protocol_version")" = "$BASE_PROTOCOL" ] || fail "incompatible_save" "protocol identity diverges"
-    local schemas
-    schemas="$(manifest_get "$manifest" "save_schemas")"
-    for pair in "player:$BASE_PLAYER_SCHEMA" "chunk:$BASE_CHUNK_SCHEMA" "world_metadata:$BASE_WORLD_METADATA_SCHEMA" "companions_ai:$BASE_COMPANIONS_SCHEMA" "hostile_mobs:$BASE_HOSTILE_SCHEMA" "passive_mobs:$BASE_PASSIVE_SCHEMA"; do
-        local family="${pair%%:*}"
-        local version="${pair##*:}"
-        py "$schemas" "$family" "$version" <<'EOF' || fail "incompatible_save" "save schema diverges"
+    # One interpreter start walks every family in the listed order and
+    # refuses on the first divergence, exactly like the previous
+    # per-family loop; batching only removes startup cost.
+    py "$manifest" \
+        "player:$BASE_PLAYER_SCHEMA" "chunk:$BASE_CHUNK_SCHEMA" \
+        "world_metadata:$BASE_WORLD_METADATA_SCHEMA" "companions_ai:$BASE_COMPANIONS_SCHEMA" \
+        "hostile_mobs:$BASE_HOSTILE_SCHEMA" "passive_mobs:$BASE_PASSIVE_SCHEMA" <<'EOF' || fail "incompatible_save" "save schema diverges"
 import json, sys
-schemas = json.loads(sys.argv[1])
-if type(schemas) is not dict or type(schemas.get(sys.argv[2])) is not int or schemas.get(sys.argv[2]) != int(sys.argv[3]):
-    sys.exit(1)
+with open(sys.argv[1]) as handle:
+    schemas = json.load(handle).get("save_schemas")
+for pair in sys.argv[2:]:
+    family, _, version = pair.partition(":")
+    if type(schemas) is not dict or type(schemas.get(family)) is not int or schemas.get(family) != int(version):
+        sys.exit(1)
 EOF
-    done
 }
 
 # The sealed package remains independent of every mutable activation tree.
@@ -558,7 +620,7 @@ previous_package_validate() {
 import hashlib, json, os, re, stat, sys
 package_path, previous_bin, previous_hash, world, backup, run = sys.argv[1:]
 source = "d042982d33bb1694d768b75b01c297bd02534a08"
-oracle = "e1a98fea6276b7efb35e6945c5d7c31dda5dedbca734ccf6d4edbef87388d9c9"
+oracle = "360609e43e63ec04a4602d8a6ea42202ebc9070f6eb6aa10611b8c8a6a880f5e"
 schemas = {"player": 9, "chunk": 9, "world_metadata": 6, "companions_ai": 5, "hostile_mobs": 2, "passive_mobs": 1}
 
 class Refusal(Exception):
@@ -684,9 +746,16 @@ EOF
 # Resume must bind the exact package record before any existing writer stops.
 previous_binding_validate() {
     local manifest="$1" world="$2" backup="$3" run="$4"
-    local package_path current
-    package_path="$(manifest_get "$manifest" "previous_manifest")"
-    current="$(previous_package_validate "$package_path" "$(manifest_get "$manifest" "previous_executable")" "$(manifest_get "$manifest" "previous_sha256")" "$world" "$backup" "$run")" || exit 1
+    local package_path previous recorded
+    # A short or failed batch read leaves later fields empty and misaligned,
+    # so each read must refuse instead of proceeding with partial bindings.
+    {
+        IFS= read -rd '' package_path || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' previous || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' recorded || fail "invalid_manifest" "manifest field batch is incomplete"
+    } < <(manifest_get_batch "$manifest" "previous_manifest" "previous_executable" "previous_sha256")
+    local current
+    current="$(previous_package_validate "$package_path" "$previous" "$recorded" "$world" "$backup" "$run")" || exit 1
     py "$manifest" "$package_path" "$current" <<'EOF'
 import hashlib, json, sys
 try:
@@ -914,6 +983,7 @@ EOF
         if [ -e "$backup_canon" ]; then
             local current
             adopted_tree="$(tree_hash "$backup_canon" "$BACKUP_SKIP")" || fail "backup_mismatch" "pre-existing backup does not hash"
+            backup_verify "$backup_canon" "$adopted_tree"
             current="$(tree_hash "$world_canon" "$LOCK_BASENAME")" || fail "invalid_manifest" "world does not hash"
             [ "$adopted_tree" = "$current" ] || fail "backup_mismatch" "pre-existing backup diverges from the world"
         fi
@@ -1250,23 +1320,29 @@ cmd_rollback() {
     manifest_require "$manifest"
     local manifest_canon
     manifest_canon="$(canon "$manifest")"
-    local world backup socket nonce
-    world="$(manifest_get "$manifest" "world_path")"
-    backup="$(manifest_get "$manifest" "backup_path")"
-    socket="$(manifest_get "$manifest" "control_socket")"
-    nonce="$(manifest_get "$manifest" "start_nonce")"
+    # One batched read fetches every manifest field the straight-line
+    # prework consults; per-field decoding matches `manifest_get`, and the
+    # consumers below keep their original check order and refusals. The
+    # NUL-delimited split keeps an empty field value in its own slot, and
+    # any short read refuses rather than silently emptying later fields.
+    local world backup socket nonce previous recorded_previous phase
+    {
+        IFS= read -rd '' world || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' backup || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' socket || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' nonce || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' previous || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' recorded_previous || fail "invalid_manifest" "manifest field batch is incomplete"
+        IFS= read -rd '' phase || fail "invalid_manifest" "manifest field batch is incomplete"
+    } < <(manifest_get_batch "$manifest" "world_path" "backup_path" "control_socket" "start_nonce" "previous_executable" "previous_sha256" "phase")
     local run_canon
     run_canon="$(canon "$(dirname "$manifest_canon")")"
     confine_paths "$world" "$backup" "$run_canon"
     previous_binding_validate "$manifest" "$world" "$backup" "$run_canon" || exit 1
-    local previous recorded_previous
-    previous="$(manifest_get "$manifest" "previous_executable")"
-    recorded_previous="$(manifest_get "$manifest" "previous_sha256")"
     [ -f "$previous" ] || fail "identity_mismatch" "previous binary is absent"
     [ "$(sha256_file "$previous")" = "$recorded_previous" ] || fail "identity_mismatch" "previous binary diverges from the manifest"
 
-    local phase resumed_previous=0
-    phase="$(manifest_get "$manifest" "phase")"
+    local resumed_previous=0
     if [ "$phase" = "PreviousRunning" ]; then
         if [ "$(lock_probe "$world")" = "LOCKED" ]; then
             local listen_file="$run_canon/previous-listen.addr"

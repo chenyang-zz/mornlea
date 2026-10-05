@@ -1,0 +1,40 @@
+{
+ "name": "04-persistence-failure",
+ "argv": [
+  "rustup",
+  "run",
+  "1.97.1",
+  "cargo",
+  "test",
+  "--offline",
+  "--manifest-path",
+  "packages/engine/Cargo.toml",
+  "--target-dir",
+  "packages/engine/target/cargo",
+  "-p",
+  "mornlea_server",
+  "--locked",
+  "--test",
+  "persistence_failure"
+ ],
+ "cwd": "/Users/chen/work/mornlea-f2-37-zcode",
+ "start": "2026-10-03T07:39:17.732258+00:00",
+ "end": "2026-10-03T07:39:46.080770+00:00",
+ "elapsed_seconds": 28.348,
+ "exit": 101,
+ "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+ "worktree_status_porcelain": "?? zcode-37-evidence/",
+ "env": {
+  "MORNLEA_AGENT_PYTHON": "/Users/chen/work/mornlea/packages/agent/.venv/bin/python",
+  "PYTHONPATH": "/Users/chen/work/mornlea-f2-37-zcode/packages/agent/app/src:/Users/chen/work/mornlea-f2-37-zcode/packages/agent/harness/src:/Users/chen/work/mornlea-f2-37-zcode/packages/agent/extension-api/src",
+  "TMPDIR": "/private/tmp/f2z37",
+  "CARGO_NET_OFFLINE": "true",
+  "CARGO_BUILD_JOBS": null,
+  "GOWORK": "auto",
+  "GOFLAGS": "-mod=readonly",
+  "GOPROXY": "off",
+  "GOCACHE": "/Users/chen/work/mornlea-f2-37-zcode/zcode-37-evidence/go-cache",
+  "GOMAXPROCS": "4",
+  "PATH": "/Users/chen/.cargo/bin:/Users/chen/.gvm/pkgsets/go1.26.0/global/bin:/Users/chen/.gvm/gos/go1.26.0/bin:/Users/chen/.gvm/pkgsets/go1.26.0/global/overlay/bin:/Users/chen/.gvm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ }
+}

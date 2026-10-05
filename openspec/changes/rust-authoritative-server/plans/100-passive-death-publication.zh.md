@@ -1,0 +1,7 @@
+# R4 passive removal-cause recovery
+
+Authorized baseline 29f853d4326a614b2af8e5aa60c943a9ee1e0704; R4 evidence 585e28d79cd9b89f0c35d1036432d4a2df710179. The same-named English plan is the precise execution contract. Only five Rust files may be modified by Claude. The host manages plans and evidence and does not check overall 3.7.
+
+In Go, death takes priority over a same-tick vision exit, but movement falling out of the world is Vanished. In Rust both are Dead, so TickContext records the quiet identity only after movement terminates successfully, hands it over with TickOutcome, and clears it; the publication side classifies Dead identities once and excludes quiet, then selects the cause via the session-mirror set difference. Keep the protocol, batch cap 64, ordering, and session isolation; do not fix chat/wanted/other P1.
+
+The baseline R4 counterexamples go RED first; add real-movement quiet, death+vision exit, ordinary exit, duplicate suppression, mixed IDs, and both sides' actual Memory/TCP ordered-byte / non-observer isolation verification. The host executes locked offline single-compile-process Cargo tests, clippy, and fmt, retaining commands/counts/log hash/source hash. Static review only checks implementation and evidence; the final clean SHA is bound through external attestation and does not embed its own commit hash. At most four calls, two rounds, budget null; on timeout or cleanup refusal stop, with no automatic retry. No push/merge/deploy; architecture skill unchanged.

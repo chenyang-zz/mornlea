@@ -777,7 +777,19 @@ func TestRuntimeMigrationCanonicalPaths(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				t.Fatal(err)
 			}
-			runtimeMigrationWrite(t, path, []byte("alias"))
+			if alias == "players/"+strings.ToUpper(fixturePlayerID().String())+".player" {
+				// Rename creates a noncanonical directory entry on both
+				// case-sensitive and case-insensitive filesystems.
+				canonical := filepath.Join(root, "players", fixturePlayerID().String()+".player")
+				if err := os.Rename(canonical, path); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := player.Decode(fixturePlayerID(), runtimeMigrationRead(t, path)); err != nil {
+					t.Fatalf("noncanonical fixture must retain valid player bytes: %v", err)
+				}
+			} else {
+				runtimeMigrationWrite(t, path, []byte("alias"))
+			}
 			runtimeMigrationAssert(t, root, false, alias)
 		})
 	}
@@ -899,9 +911,11 @@ func runtimeMigrationBanks(t *testing.T, data []byte, key region.RegionKey) ([2]
 	return banks, active
 }
 
-func runtimeMigrationPutBank(t *testing.T, data []byte, key region.RegionKey, index int, bank region.Bank) {
+// Borrow the selected fixture bank; the validated encoder makes its own
+// value snapshot without a second large indexed-value argument copy.
+func runtimeMigrationPutBank(t *testing.T, data []byte, key region.RegionKey, index int, bank *region.Bank) {
 	t.Helper()
-	encoded, err := region.EncodeRegionBank(key, bank)
+	encoded, err := region.EncodeRegionBank(key, *bank)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +968,7 @@ func TestRuntimeMigrationRegionRecovery(t *testing.T) {
 				}
 				if kind == "corrupt active decode recovery" || kind == "future active payload" {
 					banks[active].Entries[slot].PayloadCRC32C = crc32.Checksum(payload, region.CRCTable)
-					runtimeMigrationPutBank(t, data, key, active, banks[active])
+					runtimeMigrationPutBank(t, data, key, active, &banks[active])
 				}
 				if kind == "corrupt payload with malformed standby" {
 					data[bankOffset(standby)] ^= 0xff
@@ -972,7 +986,7 @@ func TestRuntimeMigrationRegionRecovery(t *testing.T) {
 					index = active
 				}
 				// Start with a real encoded bank and maintain its checksum after the future version mutation.
-				runtimeMigrationPutBank(t, data, key, index, banks[index])
+				runtimeMigrationPutBank(t, data, key, index, &banks[index])
 				offset := bankOffset(index)
 				bank := data[offset : offset+region.BankSize]
 				binary.LittleEndian.PutUint32(bank[4:], binary.LittleEndian.Uint32(bank[4:])+1)
@@ -989,7 +1003,7 @@ func TestRuntimeMigrationRegionRecovery(t *testing.T) {
 				super := region.EncodeSuperblock(key)
 				copy(data, super[:])
 				for index, bank := range banks {
-					runtimeMigrationPutBank(t, data, key, index, bank)
+					runtimeMigrationPutBank(t, data, key, index, &bank)
 				}
 				target := filepath.Join(root, "dimensions/0/regions/r.2147483647.0.region")
 				if err := os.Rename(path, target); err != nil {
@@ -1043,8 +1057,8 @@ func TestRuntimeMigrationOlderSchemas(t *testing.T) {
 	copy(data, super[:])
 	bank := region.Bank{Generation: 1}
 	bank.Entries[slot] = region.Entry{OffsetSector: region.DataStartSector, SectorCount: uint32(sectors), PayloadLength: uint32(len(payload)), Revision: 19, PayloadCRC32C: crc32.Checksum(payload, region.CRCTable)}
-	runtimeMigrationPutBank(t, data, regionKey, 0, bank)
-	runtimeMigrationPutBank(t, data, regionKey, 1, region.Bank{})
+	runtimeMigrationPutBank(t, data, regionKey, 0, &bank)
+	runtimeMigrationPutBank(t, data, regionKey, 1, &region.Bank{})
 	copy(data[region.DataStartSector*region.SectorSize:], payload)
 	runtimeMigrationWrite(t, filepath.Join(root, filepath.FromSlash(runtimeMigrationRegionRelative)), data)
 	report := runtimeMigrationAssert(t, root, true, "")

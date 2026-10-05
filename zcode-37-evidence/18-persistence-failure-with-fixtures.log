@@ -1,0 +1,536 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/persistence_failure.rs (packages/engine/target/cargo/debug/deps/persistence_failure-b02079f399f0af4d)
+
+running 271 tests
+test activation::activation_restore_lease::held_real_world_lease_refuses_exact_restore_wrapper_without_mutation ... FAILED
+test activation::activation_restore_lease::kill_after_exact_exchange_or_retirement_resumes_with_directory_roles_even_for_equal_hashes ... FAILED
+test activation::activation_restore_lease::kill_at_actual_legacy_return_resumes_prequalified_original_and_normalizes_staging ... FAILED
+test activation::activation_restore_lease::historical_installed_checkpoint_qualifies_same_lineage_and_refuses_split_lineage ... FAILED
+test activation::activation_restore_lease::actual_boundaries_hold_one_inode_against_rust_and_previous_go ... FAILED
+test activation::activation_restore_lease::backup_overlapping_restore_siblings_refuses_without_deleting_verified_source ... FAILED
+test activation::activation_restore_lease::installed_restore_is_idempotent_and_rejects_a_live_owner_through_each_alias ... FAILED
+test activation::activation_restore_lease::legacy_missing_stage_recovers_and_foreign_current_collision_refuses ... FAILED
+test activation::activation_restore_lease::legacy_return_retry_refuses_foreign_current_collisions_and_unqualified_history ... FAILED
+test activation::activation_restore_lease::legacy_return_sync_refusal_recovers_through_actual_cli_with_or_without_staging ... FAILED
+test activation::activation_verifier::actual_future_family_refuses_before_previous_start ... FAILED
+test activation::activation_verifier::actual_restore_and_crashed_previous_reverify ... FAILED
+test activation::activation_verifier::actual_timeout_kills_and_collects_only_the_verifier_child ... FAILED
+test activation::activation_restore_lease::native_unavailable_copy_failure_and_barrier_failure_keep_real_artifacts ... FAILED
+test activation::activation_verifier::fifo_log_with_held_reader_refuses_before_verifier_spawn ... FAILED
+test activation::activation_verifier::fifo_log_without_reader_refuses_before_verifier_spawn ... FAILED
+test activation::activation_verifier::invalid_package_layout_shape_and_overlap_precede_activation_artifacts ... FAILED
+test activation::activation_verifier::missing_previous_manifest_is_usage ... FAILED
+test activation::activation_verifier::package_identity_refuses_before_stopping_live_rust ... FAILED
+test activation::activation_verifier::preexisting_corrupt_distant_region_refuses ... FAILED
+test activation::activation_verifier::preexisting_corrupt_unloaded_player_refuses ... FAILED
+test activation::activation_verifier::rejected_restore_retains_installed_backup_and_retired_world ... FAILED
+test activation::activation_verifier::strict_report_rejections_are_negative_contract_evidence ... FAILED
+test activation::activation_verifier::unsafe_report_and_log_aliases_refuse_without_world_mutation ... FAILED
+test activation::activation_restore_lease::restore_sibling_symlink_aliases_and_loops_are_typed_immutable_refusals ... FAILED
+test activation::activation_restore_lease::secondary_copied_stage_descriptor_remains_held_until_installed_boundary_returns ... FAILED
+test activation::activation_restore_lease::streamed_copy_preserves_regular_file_and_directory_metadata ... FAILED
+test activation::activation_restore_lease::stale_and_legacy_copied_stage_locks_are_guarded_before_deletion_or_rebinding ... FAILED
+test activation::activation_restore_lease::strict_manifest_backup_and_lock_identity_refuse_before_mutation ... FAILED
+test activation::activation_restore_lease::uncertain_retirement_barrier_is_retried_before_installed_publication ... FAILED
+test activation::control_retirement_accepts_only_eof_or_reset ... ok
+test activation::activation_verifier::actual_valid_rust_save_rolls_back ... FAILED
+test activation::default_startup_paths_untouched ... ok
+test activation::actual_activate_stop_compatible_rollback ... FAILED
+test activation::manifest_fixture_shape ... ok
+test activation::actual_backup_restore ... FAILED
+test activation::control_incomplete_request_cannot_block_shutdown ... FAILED
+test activation::control_dribbled_request_obeys_absolute_deadline ... FAILED
+test activation::control_rejects_world_actions ... FAILED
+test activation::control_oversized_request_is_retired_before_next_request ... FAILED
+test activation::process_termination_live_child_stays_unproven_until_collected ... ok
+test actor_projection::actual_player_pose_and_inventory_projection_survive_disk_reopen ... ok
+test atomic_file::all_families_round_trip ... ok
+test atomic_file::cancellation_straddles_rename ... ok
+test atomic_file::directory_sync_error_not_success ... ok
+test activation::process_termination_positive_pid_and_non_linux_absence_required ... ok
+test atomic_file::equal_revision_conflict ... ok
+test atomic_file::future_and_corrupt_preserved ... ok
+test atomic_file::legacy_load_keeps_migration_facts_without_write ... ok
+test atomic_file::metadata_same_time_new_weather ... ok
+test atomic_file::metadata_sequence_follows_physical_publication ... ok
+test atomic_file::open_requires_existing_root_and_retries_root_barrier ... ok
+test activation::interrupted_each_phase ... FAILED
+test atomic_file::partial_zero_close_and_cancellation_refuse ... ok
+test background::drive_returns_while_backend_write_is_held ... ok
+test background::failed_close_retries_on_same_owner_and_success_joins ... ok
+test background::flush_checks_caller_and_host_time_while_inline_keeps_virtual_time ... ok
+test background::maximum_jobs_stay_charged_through_completed_replies ... ok
+test background::queued_expired_sync_performs_no_backend_call ... ok
+test background::real_payload_write_keeps_tick_free_and_lease_until_close_join ... ok
+test background::close_deadline_bounds_backend_drop_and_retry_joins_once ... ok
+test atomic_file::each_failure_complete_file ... ok
+test background::scheduler_flush_waits_for_real_final_metadata_and_all_families ... ok
+test background::slots_cancellation_partial_results_and_occupancy_are_retained ... ok
+test activation::process_termination_stat_identity_and_read_errors_fail_closed ... ok
+test background::stationary_caller_clock_cannot_extend_background_flush_wait ... ok
+test background::unexpected_owner_exit_retains_lifecycle_failure ... ok
+test background::wrong_ticket_and_panic_preserve_original_snapshots_and_owner ... ok
+test chunk_driver::actual_corrupt_future_reads_offer_typed_failure_and_never_start_generation ... ok
+test background::scheduler_metadata_timeout_keeps_ticket_for_retry_without_duplicate_write ... ok
+test chunk_driver::actual_driver_recovered_load_retains_original_rewrite_and_body_when_rewanted ... ok
+test background::started_close_timeout_retains_success_for_join_without_replay ... ok
+test chunk_driver::actual_forgotten_native_success_installs_unloading_without_cancel ... ok
+test background::started_sync_timeout_retry_consumes_one_outcome ... ok
+test chunk_driver::actual_staged_loads_keep_eight_aliases_charged_until_tick ... ok
+test chunk_driver::actual_scheduler_saved_load_installs_exact_slots_heights_and_facts_at_acquire ... ok
+test chunk_driver::closed_authority_retains_completion_without_permanent_fault_and_stop_is_idempotent ... ok
+test chunk_driver::current_key_duplicate_across_sources_refuses_before_provider_start ... ok
+test chunk_driver::declaration_and_reservation_refusals_precede_provider_calls ... ok
+test chunk_driver::duplicate_alias_quarantines_unbound_start_without_polling_or_cancel ... ok
+test chunk_driver::duplicate_generation_alias_quarantines_only_ambiguous_start ... ok
+test chunk_driver::eight_per_source_limit_and_duplicate_refuse_before_provider_work ... ok
+test chunk_driver::actual_stopped_driver_offers_existing_completion_while_authority_closes ... ok
+test chunk_driver::actual_sixty_four_missing_and_failed_forget_cycles_leave_no_driver_history ... ok
+test chunk_driver::offers_keep_authority_lane_charged_until_actual_acquire ... ok
+test chunk_driver::prematurely_consumed_alias_returns_stale_completion_without_repolling ... ok
+test chunk_driver::separate_source_aliases_with_equal_numeric_ids_offer_independently ... ok
+test chunk_driver::sixteen_bound_polls_follow_source_then_key_order_without_history ... ok
+test chunk_driver::typed_start_refusals_abort_exactly_without_cancellation ... ok
+test chunk_driver::wrong_prepared_identity_retains_original_and_independent_source_continues ... ok
+test chunk_driver::existing_live_consumer_tick_does_not_start_saved_key_requests ... ok
+test chunk_encoding::actual_missing_native_generation_then_deliberate_unloading_capture_encodes ... ok
+test chunk_driver::held_actual_disk_entry_repeated_driver_polls_ticks_and_forget_do_not_block ... ok
+test chunk_driver::actual_missing_load_then_native_generation_has_pending_and_ready_durability ... ok
+test chunk_view::checked_capture_identity_and_zero_generation_refuse_without_scheduling ... ok
+test chunk_encoding::actual_saved_revision_nine_load_capture_cpu_fifo_memory_and_disk_reopen ... ok
+test chunk_retirement::actual_loaded_clean_retire_rewant_and_disk_reload_preserve_body ... ok
+test chunk_view::chunk_lane_refusal_returns_original_captures_and_outer_tampering_refuses ... ok
+test chunk_retirement::actual_generated_dirty_and_inflight_retire_only_after_real_disk_ack ... ok
+test chunk_view::forged_sibling_refuses_and_unknown_and_direct_metadata_lanes_remain ... ok
+test chunk_view::direct_disk_normalizes_equal_independent_captures_and_echoes_originals ... ok
+test chunk_view::independent_captures_acknowledge_only_the_echoed_token ... ok
+test chunk_view::independent_captures_return_dirty_only_the_echoed_token ... ok
+test integration::incomplete_completion_is_not_durable_success ... ok
+test integration::invalid_completion_preserves_all_inflight_ownership ... ok
+test integration::metadata_completion_keeps_current_revision_and_other_jobs ... ok
+test integration::partial_completion_retains_retry_tokens_without_dirty_duplicates ... ok
+test integration::failed_read_at_startup_reports_without_blank_world ... ok
+test integration::save_completions_settle_only_their_owned_submission ... ok
+test io::cancel_clone ... ok
+test io::decoded_migration_and_partial_commit ... ok
+test io::error_classes ... ok
+test io::partial_interrupted_write ... ok
+test io::zero_write_refuses ... ok
+test activation::prepare_previous::inputs_refuse_before_destination_changes_or_builds ... ok
+test integration::real_save_restart_round_trip_through_store ... ok
+test chunk_view::held_real_io_preserves_lazy_ownership_and_reuses_one_backend_thread ... ok
+test live_acquisition::actual_corrupt_and_future_chunk_files_preserve_their_typed_errors ... ok
+test live_acquisition::enabled_mode_refuses_raw_results_and_closing_accepts_final_prepared_batch ... ok
+test live_acquisition::actual_saved_background_load_installs_only_at_acquire ... ok
+test live_acquisition::actual_recovered_prepared_load_retains_rewrite_facts_when_forgotten ... ok
+test live_acquisition::prepared_mismatch_returns_original_body_and_typed_failure_never_generates ... ok
+test activation::live_writer_and_bad_previous_identity ... FAILED
+test live_acquisition::held_real_disk_read_does_not_block_tick_and_forgotten_results_are_retained_or_removed ... ok
+test live_acquisition::legacy_prepared_completion_missing_installation_witness ... ok
+test live_acquisition::actual_missing_disk_then_native_generation_installs ... ok
+test live_chunk_saves::actual_generated_dirty_chunk_is_automatically_selected ... ok
+test live_chunk_saves::actual_admission_refusal_returns_exact_capture_and_allows_fresh_recapture ... ok
+test loads::background_chunk_capacity_remains_charged_through_started_and_ready ... ok
+test loads::bounded_lanes_hold_queued_completed_and_consumed_identity ... ok
+test loads::close_timeout_keeps_load_admission_frozen_across_retry ... ok
+test loads::flush_preserves_load_ownership_and_consumption ... ok
+test live_chunk_saves::actual_disk_ack_advances_resident_durability_and_reopens_exact_body ... ok
+test loads::held_load_keeps_authority_calls_free ... ok
+test loads::inline_non_send_cancel_and_expiry_do_not_load_until_drive ... ok
+test live_chunk_saves::actual_held_write_preserves_flight_and_rewant_generation_without_blocking_ticks ... ok
+test loads::queued_close_freezes_and_cancellation_releases_without_disk ... ok
+test loads::mixed_save_load_fifo_fairness_and_same_owner ... ok
+test loads::player_reply_moves_allocation_and_preserves_rewrite_fact ... ok
+test loads::started_cancel_retains_capacity_and_close_freezes_admission ... ok
+test chunk_view::failure_retry_keeps_exact_capture_and_newer_authority_target ... ok
+test loads::typed_failures_panic_and_missing_keep_owner_alive ... ok
+test loads::wrong_player_future_corrupt_and_malformed_chunk_are_typed ... ok
+test mailbox::cancel_before_after_durability ... ok
+test mailbox::chunk_lane_eight_then_nine ... ok
+test mailbox::dirty_retention_temp_world ... ok
+test mailbox::encoded_ceiling_plus_one ... ok
+test mailbox::failed_write_returns_snapshots ... ok
+test mailbox::mixed_lanes_count_once ... ok
+test mailbox::non_chunk_snapshot_cap_plus_one ... ok
+test metadata_live::actual_tick_reaches_metadata_target ... ok
+test live_chunk_saves::actual_write_failure_retains_flight_through_scheduler_backoff_and_flush ... ok
+test metadata_live::captures_distinct_live_targets_and_preserves_owned_startup_fields ... ok
+test live_chunk_saves::actual_recovered_body_latest_ack_clears_rewrite_and_keeps_unloading_identity ... ok
+test loads::real_background_save_load_values_missing_read_gate_and_world_lease ... ok
+test metadata_live::live_capture_reads_display_offset_and_weather_but_keeps_startup_difficulty ... ok
+test metadata_live::new_world_uses_canonical_depths_salt ... ok
+test loads::real_recovered_chunk_preserves_facts_and_does_not_rewrite_disk ... ok
+test metadata_live::startup_refuses_invalid_metadata ... ok
+test metadata_live::startup_retains_raw_codec_fields_until_live_capture ... ok
+test metadata_live::background_autosave_and_final_flush_resume_actual_climate_after_reopen ... ok
+test metadata_live::flush_capture_failure_drains_tracked_metadata_before_same_owner_recovery ... ok
+test metadata_live::flush_capture_failure_retains_owner_and_retries_without_submitting_stale_bytes ... ok
+test metadata_live::poll_capture_failure_preserves_pending_target_and_recovers_next_tick ... ok
+test recovery::backup_rejects_self_and_cancellation_without_publishing ... ok
+test recovery::absence_creates_metadata_once_and_existing_seed_wins ... ok
+test recovery::backup_copies_extra_files_and_skips_lock_and_temporary_files ... ok
+test recovery::backup_rejects_temporary_named_symlink_before_filtering ... ok
+test recovery::backup_source_close_failure_never_publishes ... ok
+test recovery::backup_copies_hidden_canonical_names_but_skips_go_temporary_patterns ... ok
+test recovery::backup_rejects_symlinks_and_fifo_source_entries ... ok
+test recovery::bad_identity_and_revision_refuse_whole_batch ... ok
+test recovery::backup_source_read_refusal_never_publishes ... ok
+test recovery::backup_wrong_identity_is_unchanged ... ok
+test recovery::closed_disk_refuses_new_operations ... ok
+test recovery::cancellation_during_backup_copy_leaves_no_named_target ... ok
+test recovery::corrupt_metadata_is_preserved_and_lock_refuses_concurrent_owner ... ok
+test recovery::compaction_policy_requires_both_waste_and_ratio ... ok
+test recovery::failed_backup_cleans_read_only_temporary_tree ... ok
+test recovery::failed_close_sync_retains_world_lock_until_retry ... ok
+test recovery::backup_preserves_persisted_codecs_and_directory_contents ... ok
+test recovery::future_metadata_is_not_replaced ... ok
+test recovery::failed_backup_parent_sync_leaves_reusable_complete_target ... ok
+test recovery::failed_eviction_close_can_reopen_region_and_finish_close ... ok
+test recovery::failed_region_close_retains_world_lock_until_retry ... ok
+test activation::prepare_previous::actual_package_binds_sealed_source_native_and_offline_reader ... FAILED
+test activation::prepare_previous::missing_make_preserves_export_without_completed_package ... FAILED
+test recovery::identity_write_fault_reports_payload_operation_and_no_target ... ok
+test recovery::highest_duplicate_wins_and_equal_highest_conflict_refuses ... ok
+test recovery::partial_backup_write_never_publishes_target ... ok
+test recovery::later_family_fault_preserves_earlier_commit_and_snapshot_ownership ... ok
+test recovery::later_region_fault_preserves_earlier_region_commit ... ok
+test recovery::symlink_world_lock_is_refused_without_following_target ... ok
+test recovery::recovered_standby_chunk_is_read_only_until_authority_resaves ... ok
+test region_io::active_extent_not_overwritten ... ok
+test recovery::one_region_handle_eviction_reopens_previous_region ... ok
+test recovery::retry_rechecks_parent_barrier_after_partial_region_directory_create ... ok
+test region_io::cancellation_before_bank_retains_old_generation ... ok
+test recovery::six_families_roundtrip_and_missing_chunk_does_not_create_region ... ok
+test region_io::compaction_parent_retry_after_directory_close_fault ... ok
+test region_io::compact_atomic ... ok
+test region_io::crash_child ... ok
+test region_io::compaction_parent_retry_after_directory_sync_fault ... ok
+test region_io::compaction_parent_retry_after_rename_fault ... ok
+test region_io::creation_parent_retry_on_reopen ... ok
+test region_io::corrupt_active_recovers_older_payload_without_rewrite ... ok
+test region_io::directory_close_failure_is_not_durable_success ... ok
+test region_io::failed_reopen_never_uses_stale_bank_view ... ok
+test region_io::highest_revision_wins_irrespective_of_lower_conflicts ... ok
+test region_io::generation_ties_and_overflow ... ok
+test region_io::partial_regions ... ok
+test region_io::roundtrip_and_revision_conflict ... ok
+test region_io::uncertain_bank_barrier_failure_never_acknowledges ... ok
+test region_io::unsupported_dimension_refuses_before_publication ... ok
+test scheduler::final_metadata ... ok
+test scheduler::future_stale_foreign_ack ... ok
+test scheduler::nil_error_omission ... ok
+test scheduler::partial_ack ... ok
+test scheduler::retry_and_hysteresis ... ok
+test scheduler::selection_first_oversized ... ok
+test region_io::uncertain_bank_retry_refreshes_and_syncs ... ok
+test region_io::four_crash_points_old_or_new ... ok
+test region_io::zero_payload_write_preserves_old_bank ... ok
+test region_io::compact_atomic_fault_boundaries ... ok
+test source_player_restore::action_costs_actual_clear_only_mining ... ok
+test source_player_restore::action_costs_actual_refused_and_incomplete ... ok
+test source_player_restore::action_costs_actual_till_then_mining ... ok
+test source_player_restore::actual_solid_current_and_finite_invalid_safe_fall_back_to_anchor ... ok
+test source_player_restore::actual_loaded_current_waits_for_acquire_and_pending_commands_stay_inert ... ok
+test source_player_restore::action_costs_actual_late_till ... ok
+test source_player_restore::actual_solid_current_waits_then_activates_supported_safe ... ok
+test source_player_restore::death_actual_drowning_restarts_current_dimension ... ok
+test source_player_restore::death_actual_impossible_repack_fences_partial_tick ... ok
+test recovery::go_flock_and_rust_lease_exclude_each_other_across_processes ... ok
+test source_player_restore::actual_missing_player_ignores_fully_ready_canonical_current ... ok
+test source_player_restore::death_actual_melee_restarts_current_dimension ... ok
+test source_player_restore::death_actual_live_bed_activates_on_following_tick ... ok
+test source_player_restore::height_actual_companion_lower ... ok
+test source_player_restore::height_actual_companion_missing_column ... ok
+test source_player_restore::height_actual_companion_upper ... ok
+test source_player_restore::death_actual_projectile_restarts_current_dimension ... ok
+test source_player_restore::death_actual_starvation_restarts_current_dimension ... ok
+test source_player_restore::height_actual_hostile_lower ... ok
+test source_player_restore::height_actual_hostile_missing_column ... ok
+test source_player_restore::height_actual_hostile_upper ... ok
+test source_player_restore::height_actual_passive_lower ... ok
+test source_player_restore::height_actual_passive_missing_column ... ok
+test source_player_restore::height_disabled_companion_controls ... ok
+test source_player_restore::height_disabled_hostile_controls ... ok
+test source_player_restore::height_disabled_passive_controls ... ok
+test source_player_restore::height_disabled_player_controls ... ok
+test source_player_restore::height_actual_passive_upper ... ok
+test source_player_restore::death_actual_native_landing_restarts_current_dimension ... ok
+test source_player_restore::height_actual_player_lower_uses_live_native_air ... ok
+test source_player_restore::height_actual_player_missing_column_stays_blocking ... ok
+test source_player_restore::height_actual_player_upper_uses_live_native_air ... ok
+test source_player_restore::recovery_actual_blocked_pose_enters_pending ... ok
+test source_player_restore::recovery_actual_embedded_pose_lifts_before_native ... ok
+test source_player_restore::recovery_actual_unknown_footprint_enters_pending ... ok
+test source_player_restore::recovery_actual_native_fall_reactivates_captured_anchor ... ok
+test source_player_restore::safe_actual_top_floor_accepts_out_of_height_head ... ok
+test source_player_restore::safe_actual_killing_landing_precedes_death ... ok
+test source_player_restore::safe_actual_native_landing_updates_current_dimension ... ok
+test source_player_restore::snow_actual_activation_is_quiet ... ok
+test source_player_restore::snow_actual_lethal_landing_settles_original_cell ... ok
+test source_player_restore::snow_actual_native_travel_crosses_two_cells ... ok
+test source_player_restore::trample_actual_activation_is_not_a_landing ... ok
+test source_player_restore::trample_actual_surviving_native_bare_landing ... ok
+test source_player_restore::trample_actual_lethal_native_crop_landing ... ok
+test recovery::go_and_rust_reuse_each_others_named_backup_identity ... ok
+test loads::started_expiry_keeps_real_outcome_and_queued_expiry_never_calls ... ok
+
+failures:
+
+---- activation::activation_restore_lease::held_real_world_lease_refuses_exact_restore_wrapper_without_mutation stdout ----
+
+thread 'activation::activation_restore_lease::held_real_world_lease_refuses_exact_restore_wrapper_without_mutation' (61726037) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- activation::activation_restore_lease::kill_after_exact_exchange_or_retirement_resumes_with_directory_roles_even_for_equal_hashes stdout ----
+
+thread 'activation::activation_restore_lease::kill_after_exact_exchange_or_retirement_resumes_with_directory_roles_even_for_equal_hashes' (61726040) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::kill_at_actual_legacy_return_resumes_prequalified_original_and_normalizes_staging stdout ----
+
+thread 'activation::activation_restore_lease::kill_at_actual_legacy_return_resumes_prequalified_original_and_normalizes_staging' (61726041) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::historical_installed_checkpoint_qualifies_same_lineage_and_refuses_split_lineage stdout ----
+
+thread 'activation::activation_restore_lease::historical_installed_checkpoint_qualifies_same_lineage_and_refuses_split_lineage' (61726038) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::actual_boundaries_hold_one_inode_against_rust_and_previous_go stdout ----
+
+thread 'activation::activation_restore_lease::actual_boundaries_hold_one_inode_against_rust_and_previous_go' (61726035) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::backup_overlapping_restore_siblings_refuses_without_deleting_verified_source stdout ----
+
+thread 'activation::activation_restore_lease::backup_overlapping_restore_siblings_refuses_without_deleting_verified_source' (61726036) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::installed_restore_is_idempotent_and_rejects_a_live_owner_through_each_alias stdout ----
+
+thread 'activation::activation_restore_lease::installed_restore_is_idempotent_and_rejects_a_live_owner_through_each_alias' (61726039) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::legacy_missing_stage_recovers_and_foreign_current_collision_refuses stdout ----
+
+thread 'activation::activation_restore_lease::legacy_missing_stage_recovers_and_foreign_current_collision_refuses' (61726042) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::legacy_return_retry_refuses_foreign_current_collisions_and_unqualified_history stdout ----
+
+thread 'activation::activation_restore_lease::legacy_return_retry_refuses_foreign_current_collisions_and_unqualified_history' (61726134) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::legacy_return_sync_refusal_recovers_through_actual_cli_with_or_without_staging stdout ----
+
+thread 'activation::activation_restore_lease::legacy_return_sync_refusal_recovers_through_actual_cli_with_or_without_staging' (61726142) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::actual_future_family_refuses_before_previous_start stdout ----
+
+thread 'activation::activation_verifier::actual_future_family_refuses_before_previous_start' (61726241) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::actual_restore_and_crashed_previous_reverify stdout ----
+
+thread 'activation::activation_verifier::actual_restore_and_crashed_previous_reverify' (61726242) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::actual_timeout_kills_and_collects_only_the_verifier_child stdout ----
+
+thread 'activation::activation_verifier::actual_timeout_kills_and_collects_only_the_verifier_child' (61726243) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::native_unavailable_copy_failure_and_barrier_failure_keep_real_artifacts stdout ----
+
+thread 'activation::activation_restore_lease::native_unavailable_copy_failure_and_barrier_failure_keep_real_artifacts' (61726150) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::fifo_log_with_held_reader_refuses_before_verifier_spawn stdout ----
+
+thread 'activation::activation_verifier::fifo_log_with_held_reader_refuses_before_verifier_spawn' (61726253) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::fifo_log_without_reader_refuses_before_verifier_spawn stdout ----
+
+thread 'activation::activation_verifier::fifo_log_without_reader_refuses_before_verifier_spawn' (61726254) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::invalid_package_layout_shape_and_overlap_precede_activation_artifacts stdout ----
+
+thread 'activation::activation_verifier::invalid_package_layout_shape_and_overlap_precede_activation_artifacts' (61726255) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::missing_previous_manifest_is_usage stdout ----
+
+thread 'activation::activation_verifier::missing_previous_manifest_is_usage' (61726256) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::package_identity_refuses_before_stopping_live_rust stdout ----
+
+thread 'activation::activation_verifier::package_identity_refuses_before_stopping_live_rust' (61726257) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::preexisting_corrupt_distant_region_refuses stdout ----
+
+thread 'activation::activation_verifier::preexisting_corrupt_distant_region_refuses' (61726258) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::preexisting_corrupt_unloaded_player_refuses stdout ----
+
+thread 'activation::activation_verifier::preexisting_corrupt_unloaded_player_refuses' (61726259) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::rejected_restore_retains_installed_backup_and_retired_world stdout ----
+
+thread 'activation::activation_verifier::rejected_restore_retains_installed_backup_and_retired_world' (61726260) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::strict_report_rejections_are_negative_contract_evidence stdout ----
+
+thread 'activation::activation_verifier::strict_report_rejections_are_negative_contract_evidence' (61726261) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::unsafe_report_and_log_aliases_refuse_without_world_mutation stdout ----
+
+thread 'activation::activation_verifier::unsafe_report_and_log_aliases_refuse_without_world_mutation' (61726262) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::restore_sibling_symlink_aliases_and_loops_are_typed_immutable_refusals stdout ----
+
+thread 'activation::activation_restore_lease::restore_sibling_symlink_aliases_and_loops_are_typed_immutable_refusals' (61726158) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::secondary_copied_stage_descriptor_remains_held_until_installed_boundary_returns stdout ----
+
+thread 'activation::activation_restore_lease::secondary_copied_stage_descriptor_remains_held_until_installed_boundary_returns' (61726166) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::streamed_copy_preserves_regular_file_and_directory_metadata stdout ----
+
+thread 'activation::activation_restore_lease::streamed_copy_preserves_regular_file_and_directory_metadata' (61726186) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::stale_and_legacy_copied_stage_locks_are_guarded_before_deletion_or_rebinding stdout ----
+
+thread 'activation::activation_restore_lease::stale_and_legacy_copied_stage_locks_are_guarded_before_deletion_or_rebinding' (61726167) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::strict_manifest_backup_and_lock_identity_refuse_before_mutation stdout ----
+
+thread 'activation::activation_restore_lease::strict_manifest_backup_and_lock_identity_refuse_before_mutation' (61726200) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_restore_lease::uncertain_retirement_barrier_is_retried_before_installed_publication stdout ----
+
+thread 'activation::activation_restore_lease::uncertain_retirement_barrier_is_retried_before_installed_publication' (61726232) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::activation_verifier::actual_valid_rust_save_rolls_back stdout ----
+
+thread 'activation::activation_verifier::actual_valid_rust_save_rolls_back' (61726244) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::actual_activate_stop_compatible_rollback stdout ----
+
+thread 'activation::actual_activate_stop_compatible_rollback' (61726263) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::actual_backup_restore stdout ----
+
+thread 'activation::actual_backup_restore' (61726271) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::control_incomplete_request_cannot_block_shutdown stdout ----
+
+thread 'activation::control_incomplete_request_cannot_block_shutdown' (61726282) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::control_dribbled_request_obeys_absolute_deadline stdout ----
+
+thread 'activation::control_dribbled_request_obeys_absolute_deadline' (61726280) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::control_rejects_world_actions stdout ----
+
+thread 'activation::control_rejects_world_actions' (61726328) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::control_oversized_request_is_retired_before_next_request stdout ----
+
+thread 'activation::control_oversized_request_is_retired_before_next_request' (61726319) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::interrupted_each_phase stdout ----
+
+thread 'activation::interrupted_each_phase' (61726361) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::live_writer_and_bad_previous_identity stdout ----
+
+thread 'activation::live_writer_and_bad_previous_identity' (61726392) panicked at crates/mornlea_server/tests/persistence_failure/activation.rs:506:60:
+read /Users/chen/Documents/Codex/2026-10-03/task-3/mornlea-f2-mac-20261003/mac-evidence/previous-package3
+
+---- activation::prepare_previous::actual_package_binds_sealed_source_native_and_offline_reader stdout ----
+
+thread 'activation::prepare_previous::actual_package_binds_sealed_source_native_and_offline_reader' (61726417) panicked at crates/mornlea_server/tests/persistence_failure/prepare_previous.rs:60:5:
+assertion `left == right` failed: actual new-command contract: Traceback (most recent call last):
+  File "<stdin>", line 72, in <module>
+TypeError: extractall() got an unexpected keyword argument 'filter'
+
+  left: 1
+ right: 0
+
+---- activation::prepare_previous::missing_make_preserves_export_without_completed_package stdout ----
+
+thread 'activation::prepare_previous::missing_make_preserves_export_without_completed_package' (61726450) panicked at crates/mornlea_server/tests/persistence_failure/prepare_previous.rs:285:5:
+Output { status: ExitStatus(unix_wait_status(256)), stdout: "", stderr: "Traceback (most recent call last):\n  File \"<stdin>\", line 72, in <module>\nTypeError: extractall() got an unexpected keyword argument 'filter'\n" }
+
+
+failures:
+    activation::activation_restore_lease::actual_boundaries_hold_one_inode_against_rust_and_previous_go
+    activation::activation_restore_lease::backup_overlapping_restore_siblings_refuses_without_deleting_verified_source
+    activation::activation_restore_lease::held_real_world_lease_refuses_exact_restore_wrapper_without_mutation
+    activation::activation_restore_lease::historical_installed_checkpoint_qualifies_same_lineage_and_refuses_split_lineage
+    activation::activation_restore_lease::installed_restore_is_idempotent_and_rejects_a_live_owner_through_each_alias
+    activation::activation_restore_lease::kill_after_exact_exchange_or_retirement_resumes_with_directory_roles_even_for_equal_hashes
+    activation::activation_restore_lease::kill_at_actual_legacy_return_resumes_prequalified_original_and_normalizes_staging
+    activation::activation_restore_lease::legacy_missing_stage_recovers_and_foreign_current_collision_refuses
+    activation::activation_restore_lease::legacy_return_retry_refuses_foreign_current_collisions_and_unqualified_history
+    activation::activation_restore_lease::legacy_return_sync_refusal_recovers_through_actual_cli_with_or_without_staging
+    activation::activation_restore_lease::native_unavailable_copy_failure_and_barrier_failure_keep_real_artifacts
+    activation::activation_restore_lease::restore_sibling_symlink_aliases_and_loops_are_typed_immutable_refusals
+    activation::activation_restore_lease::secondary_copied_stage_descriptor_remains_held_until_installed_boundary_returns
+    activation::activation_restore_lease::stale_and_legacy_copied_stage_locks_are_guarded_before_deletion_or_rebinding
+    activation::activation_restore_lease::streamed_copy_preserves_regular_file_and_directory_metadata
+    activation::activation_restore_lease::strict_manifest_backup_and_lock_identity_refuse_before_mutation
+    activation::activation_restore_lease::uncertain_retirement_barrier_is_retried_before_installed_publication
+    activation::activation_verifier::actual_future_family_refuses_before_previous_start
+    activation::activation_verifier::actual_restore_and_crashed_previous_reverify
+    activation::activation_verifier::actual_timeout_kills_and_collects_only_the_verifier_child
+    activation::activation_verifier::actual_valid_rust_save_rolls_back
+    activation::activation_verifier::fifo_log_with_held_reader_refuses_before_verifier_spawn
+    activation::activation_verifier::fifo_log_without_reader_refuses_before_verifier_spawn
+    activation::activation_verifier::invalid_package_layout_shape_and_overlap_precede_activation_artifacts
+    activation::activation_verifier::missing_previous_manifest_is_usage
+    activation::activation_verifier::package_identity_refuses_before_stopping_live_rust
+    activation::activation_verifier::preexisting_corrupt_distant_region_refuses
+    activation::activation_verifier::preexisting_corrupt_unloaded_player_refuses
+    activation::activation_verifier::rejected_restore_retains_installed_backup_and_retired_world
+    activation::activation_verifier::strict_report_rejections_are_negative_contract_evidence
+    activation::activation_verifier::unsafe_report_and_log_aliases_refuse_without_world_mutation
+    activation::actual_activate_stop_compatible_rollback
+    activation::actual_backup_restore
+    activation::control_dribbled_request_obeys_absolute_deadline
+    activation::control_incomplete_request_cannot_block_shutdown
+    activation::control_oversized_request_is_retired_before_next_request
+    activation::control_rejects_world_actions
+    activation::interrupted_each_phase
+    activation::live_writer_and_bad_previous_identity
+    activation::prepare_previous::actual_package_binds_sealed_source_native_and_offline_reader
+    activation::prepare_previous::missing_make_preserves_export_without_completed_package
+
+test result: FAILED. 230 passed; 41 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.84s
+
+error: test failed, to rerun pass `-p mornlea_server --test persistence_failure`

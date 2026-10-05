@@ -4,6 +4,17 @@ This directory owns off-tick save queues, durable acknowledgments and the real
 filesystem provider boundary. Save bytes and schema validation remain in
 `mornlea_storage`; the tick never performs file I/O.
 
+## Admission query for the automatic source acquisition caller
+
+The background mailbox exposes one nonblocking load-capacity query:
+`source_chunk_slots` refuses an inline owner before any drive, keeps the
+original frozen/closed phase refusals, and otherwise forwards the free
+chunk-load ledger slots (eight minus queued, started and unconsumed
+results). The automatic source acquisition caller issues it after tick and
+budget validation but before driving any provider, and treats zero slots as
+a retain-queue answer rather than an error. Save occupancy is not load
+capacity; the scheduler only forwards the query.
+
 ## Map and ownership
 
 - `mailbox.rs` and `scheduler.rs` retain owned snapshots through queue, worker,

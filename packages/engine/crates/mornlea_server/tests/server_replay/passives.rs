@@ -612,6 +612,291 @@ fn maximum_home_z_rolls_back_without_overflow() {
     assert_far_home_axis(2, i32::MAX, -2.5, -1);
 }
 
+/// Scene configuration for one native motion guard: the starting ground
+/// contact, a stationary variant, the support block under the room floor and
+/// the foot block present before the pursuit runs.
+struct SnowScene {
+    grounded: bool,
+    stationary: bool,
+    support: u16,
+    initial_foot: u16,
+}
+
+/// Thick Snow (87 and 88) under the cow's foot cell consumes the shared snow
+/// tuning inside the actual native motion pass while a real wheat holder
+/// holds the pursuit heading; the scene controls vary the ground contact,
+/// holder distance, support and staged foot blocks.
+fn assert_motion_snow_case(scene: SnowScene, foot: u16, want_z: f32, want_vz: f32) {
+    // The fixture cow id misses the tick graze roll, so the scene stays free
+    // of a grazing freeze and the pursued heading is temptation alone.
+    let cow = first_non_hit_id(0, 0, 21);
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .expect("session");
+    let mut context = harness_context(&mut state);
+    context
+        .stage(RuleEffect::Environment(environment(1)))
+        .expect("environment");
+    stage_room(&mut context, 0, 5, -7, 5, 3);
+    let foot_cell = BlockPos::new(2, 1, 2);
+    let support_cell = BlockPos::new(2, 0, 2);
+    if scene.support != GRASS {
+        context.preload_block(observation(support_cell, scene.support));
+    }
+    if scene.initial_foot != AIR {
+        context.preload_block(observation(foot_cell, scene.initial_foot));
+    }
+    // A requested foot that differs from the staged one rewrites the same
+    // cell through the live support transaction.
+    if foot != scene.initial_foot {
+        let observed = context
+            .read()
+            .observation(Dimension::OVERWORLD, foot_cell)
+            .expect("ready foot observation");
+        let write = BlockWrite::try_new(observed, foot).expect("foot block write");
+        let outcome = context
+            .transaction()
+            .try_system(SystemRule::Support, vec![write])
+            .expect("support system write");
+        assert_eq!(outcome.changed.len(), 1);
+    }
+    // The cow starts at the scene's ground contact and speed; the motion
+    // state and the mirrored passive body stay consistent before staging.
+    let speed = if scene.stationary { 0.0 } else { -4.3 };
+    let mut prepared = passive_actor(cow, [2.5, 1.0, 2.5], 0.0, 20, ActorLifecycle::Active);
+    prepared.motion = MotionState::new(MotionStateParts {
+        position: FiniteVec3::try_new([2.5, 1.0, 2.5]).expect("position"),
+        velocity: FiniteVec3::try_new([0.0, 0.0, speed]).expect("velocity"),
+        on_ground: scene.grounded,
+    });
+    {
+        let ActorBody::Passive(body) = &mut prepared.body else {
+            panic!("passive body");
+        };
+        body.velocity = [0.0, 0.0, speed];
+        body.on_ground = scene.grounded;
+    }
+    context
+        .stage(RuleEffect::Actor(prepared.clone()))
+        .expect("cow");
+    context
+        .stage(RuleEffect::Runtime(passive_runtime(
+            cow,
+            passive_aux(BlockPos::new(2, 1, 2), 0, None, false),
+        )))
+        .expect("cow runtime");
+    // Wheat held exactly 8 blocks ahead on -z tempts the cow straight at the
+    // holder (move_z 1, yaw 0), so the tick is real temptation plus native
+    // physics with no double step; the stationary guard parks the holder
+    // inside the 2.5 stop distance for a genuine zero intent.
+    let holder = if scene.stationary {
+        [2.5, 1.0, 1.5]
+    } else {
+        [2.5, 1.0, -5.5]
+    };
+    context
+        .stage(RuleEffect::Actor(player_actor(session, holder)))
+        .expect("player");
+    context.preload_inventory(ActorKey::Player(session), wheat_inventory(5));
+    let runtime = context.read().runtime(passive_key(cow)).cloned();
+    let environment = context.read().environment().cloned();
+    let player = context
+        .read()
+        .actors()
+        .iter()
+        .find(|actor| matches!(actor.key, ActorKey::Player(_)))
+        .cloned()
+        .expect("player record");
+    let inventory = context.read().inventory(ActorKey::Player(session)).cloned();
+    let foot_observed = context.read().observation(Dimension::OVERWORLD, foot_cell);
+    let support_observed = context
+        .read()
+        .observation(Dimension::OVERWORLD, support_cell);
+    let events = context.events().to_vec();
+
+    provider::run(&mut context, passive_call()).expect("snow motion tick");
+
+    let next = context.read().actor(passive_key(cow)).expect("cow").clone();
+    let position = next.motion.position().get();
+    let velocity = next.motion.velocity().get();
+    assert_eq!(position[0], 2.5, "foot {foot}");
+    // The support variations replace only the center floor cell; the
+    // surrounding grass floor keeps the body in contact (y stays 1), so the
+    // decisive pin is the unslowed horizontal step over the AIR foot cell.
+    assert_eq!(position[1], 1.0, "foot {foot}");
+    assert!(next.motion.on_ground());
+    assert!(
+        (position[2] - want_z).abs() < 1e-5,
+        "foot {foot}: z {}",
+        position[2]
+    );
+    assert!(
+        (velocity[2] - want_vz).abs() < 1e-6,
+        "foot {foot}: vz {}",
+        velocity[2]
+    );
+    assert_eq!(next.look.yaw(), 0.0);
+    assert_eq!(next.key, prepared.key);
+    assert_eq!(next.lifecycle, ActorLifecycle::Active);
+    assert_eq!(next.survival, prepared.survival);
+    let ActorBody::Passive(body) = &next.body else {
+        panic!("passive body");
+    };
+    let ActorBody::Passive(want) = &prepared.body else {
+        panic!("passive body");
+    };
+    assert_eq!(body.id, want.id);
+    assert_eq!(body.health, want.health);
+    assert_eq!(body.position, position);
+    assert_eq!(body.velocity, velocity);
+    assert_eq!(body.on_ground, next.motion.on_ground());
+    assert_eq!(body.yaw, 0.0);
+    assert_eq!(context.read().runtime(passive_key(cow)), runtime.as_ref());
+    assert_eq!(
+        context
+            .read()
+            .actors()
+            .iter()
+            .find(|actor| matches!(actor.key, ActorKey::Player(_)))
+            .cloned(),
+        Some(player),
+        "the unrelated player record is unchanged"
+    );
+    assert_eq!(
+        context.read().inventory(ActorKey::Player(session)).cloned(),
+        inventory,
+        "temptation consumes no wheat"
+    );
+    assert_eq!(context.read().environment(), environment.as_ref());
+    assert_eq!(
+        context.read().observation(Dimension::OVERWORLD, foot_cell),
+        foot_observed,
+        "the borrowed foot cell is unchanged"
+    );
+    assert_eq!(
+        context
+            .read()
+            .observation(Dimension::OVERWORLD, support_cell),
+        support_observed,
+        "the support cell is unchanged"
+    );
+    assert_eq!(context.events(), events);
+}
+
+/// The grounded wrapper: a grass floor and an air foot cell before the final
+/// foot write.
+fn assert_motion_snow_native_displacement(foot: u16, want_z: f32, want_vz: f32) {
+    assert_motion_snow_case(
+        SnowScene {
+            grounded: true,
+            stationary: false,
+            support: GRASS,
+            initial_foot: AIR,
+        },
+        foot,
+        want_z,
+        want_vz,
+    );
+}
+
+/// Thick Snow (87 and 88) under the cow's foot consumes the shared snow
+/// tuning inside the actual native motion pass; the thin Snow controls
+/// (85 and 86), the AIR control scene, airborne starts, stationary intents,
+/// removed supports and same-tick foot rewrites keep the uncut walk speed or
+/// hold the start pose.
+#[test]
+fn motion_snow_thick_native_displacement() {
+    for (foot, want_z, want_vz) in [
+        (85, 2.285, -4.3),
+        (86, 2.285, -4.3),
+        (87, 2.349_5, -3.01),
+        (88, 2.349_5, -3.01),
+        (AIR, 2.285, -4.3),
+    ] {
+        assert_motion_snow_native_displacement(foot, want_z, want_vz);
+    }
+    // An airborne start ignores the foot block until it lands, and a holder
+    // inside the stop distance holds the start pose.
+    for foot in [AIR, 87, 88] {
+        assert_motion_snow_case(
+            SnowScene {
+                grounded: false,
+                stationary: false,
+                support: GRASS,
+                initial_foot: AIR,
+            },
+            foot,
+            2.285,
+            -4.3,
+        );
+        assert_motion_snow_case(
+            SnowScene {
+                grounded: true,
+                stationary: true,
+                support: GRASS,
+                initial_foot: AIR,
+            },
+            foot,
+            2.5,
+            0.0,
+        );
+    }
+    // Center-only support variations (air or walk-through snow) keep the
+    // surrounding floor in contact; the unslowed horizontal pin over the AIR
+    // foot cell stays decisive.
+    for support in [AIR, 87, 88] {
+        assert_motion_snow_case(
+            SnowScene {
+                grounded: true,
+                stationary: false,
+                support,
+                initial_foot: AIR,
+            },
+            AIR,
+            2.285,
+            -4.3,
+        );
+    }
+    // Same-tick foot rewrites through the support transaction: clearing thick
+    // Snow keeps the uncut speed, writing it mid-tick consumes the tuning.
+    assert_motion_snow_case(
+        SnowScene {
+            grounded: true,
+            stationary: false,
+            support: GRASS,
+            initial_foot: 87,
+        },
+        AIR,
+        2.285,
+        -4.3,
+    );
+    assert_motion_snow_case(
+        SnowScene {
+            grounded: true,
+            stationary: false,
+            support: GRASS,
+            initial_foot: AIR,
+        },
+        88,
+        2.349_5,
+        -3.01,
+    );
+}
+
+// The isolated tests each qualify one foot cell directly, so a negative
+// control shows the snow scaling before the first failure stops the
+// composite fixture.
+#[test]
+fn motion_snow_isolated_87() {
+    assert_motion_snow_native_displacement(87, 2.349_5, -3.01);
+}
+
+#[test]
+fn motion_snow_isolated_88() {
+    assert_motion_snow_native_displacement(88, 2.349_5, -3.01);
+}
+
 fn first_hit_id(seed: i64, tick: u64, from: u64) -> u64 {
     (from..)
         .find(|&id| graze_hit(seed, tick, id))

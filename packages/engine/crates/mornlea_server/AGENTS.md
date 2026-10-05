@@ -14,6 +14,28 @@ Python Agent process. Workspace membership is `packages/engine/Cargo.toml`.
 No dependency-direction test guards this crate yet; review the manifest
 against this file.
 
+## Automatic source acquisition
+
+The producer phase of plan 109 adds one explicit `SourceAcquisition` caller:
+it owns a single chunk driver plus the private `SourceGoals` book, borrows the
+background scheduler and the generation pool without closing or cancelling
+them, and validates sticky failure, Running phase, the tick budget and live
+acquisition before driving any provider. Session geometry comes from the
+shared checked `publication_project::wanted_square`; store admission comes
+from the scheduler's `source_chunk_slots` query. Only Active source sessions
+and registered Active or Pending actors produce automatic goals; dead,
+respawning and absent actors contribute nothing. Completed companion scans
+retain their Active actor's radius-one interest. An exceeded registration
+bound is a typed invariant failure rather than a silent truncation. The goal
+book reconciles changed wants after companion motion, takes per-record
+completion overrides at the Acquire row, and admits a bounded strict FIFO
+prefix through the existing independent load and generation lanes. Quiet
+passes compare small inputs; final capture prunes only unstarted keys by
+owner membership and carries late changes into the next tick. Borrowers own
+provider draining and close. This caller does not qualify whole-exe or save
+composition; focused source-acquisition tests and the scoped review qualify
+its producer boundary.
+
 ## Agent boundary
 
 [`src/agent/AGENTS.md`](src/agent/AGENTS.md) owns loopback HTTP, lease, host,
@@ -48,6 +70,24 @@ consume its cancellation and error contracts before joining the real backend.
   with checked endpoints and no world reads, body-height or restore predicates.
   Private Snow geometry checks only the source foot-cell floors in axis order,
   without support, height-clamp, probe subtraction or world reads.
+
+- `src/core/actor_snow.rs` owns copied nonplayer speed tuning over the borrowed
+  raw foot cell. Quiet guards precede checked XYZ floors; source outside-height
+  AIR precedes the single raw read. Thick Snow changes only copied walk speed,
+  preserving other tuning bits and caller-owned actor state. Work is at most
+  three checked floors and one read, with no allocation or retained owner.
+  Private scalar doubles qualify this shared contract; actual companion,
+  hostile and passive native integrations remain separately owned.
+
+- `src/rules/passives.rs` privately owns the retained passive Snow producer:
+  a 32-slot Option tracker table plus a 32-cell copied pending batch and a
+  fixed tick-local owned registry that excludes exactly those residents from
+  the legacy single-tick collector. Capture follows valid native motion, the
+  home rollback and staging, before death settlement; the late settle drains
+  the frozen prefix through the existing crop Snow consumer in bounded
+  slices. Admission, newborn and death resets clear only tracker slots, so
+  queued coordinates survive; the public batch entry keeps its book-less
+  None behavior unchanged.
 
 - `src/core/pending_restore.rs` retains bounded candidate, wanted-key, nearest
   column, fallback and exhausted-revision progress over borrowed placement reads.
@@ -134,8 +174,24 @@ consume its cancellation and error contracts before joining the real backend.
   and Mining through scalar-only indexed context borrows. Each accepted player
   consumes only its own bounded receipts; later refusal preserves that scalar
   prefix and foreign receipt order until context Drop.
-  Passive Snow timing, subscriptions, publication, automatic actor save/cache
+  Subscriptions, publication, automatic actor save/cache
   eligibility and executable runtime acceptance remain separately owned.
+
+- `src/core/source_companion_restore.rs` owns the checked source startup
+  pending companion producer: bounded four-id registration, the canonical body
+  mapping and one retained radius-16 scan per identity with its captured wants.
+  Advance runs in id byte order after Acquire and before pending players; only
+  Pending entries advance, Waiting/Exhausted progress stays retained, and
+  activation stages one fixed actor+runtime compound at the chosen pose with
+  zero velocity, ground certificate and reset=true while preserving
+  look/body/inventory, then discards only that newly activated id's inactive
+  action envelopes. The reducer moves the book as the fifth exclusive owner
+  across the context loan and returns it after context drop on success, typed
+  failure and unwind; publication clears reset only for registered Active
+  companions with no observer. Active companion recovery, unstick and
+  below-world reset, companion-rule edits and generic pending-actor
+  reinterpretation remain excluded, and the existing pending restore
+  algorithms stay read-only.
 
 - `src/core/actor_projection.rs` borrows one settled actor and optional fixed
   inventory/runtime overlays to produce checked existing storage values. Player
@@ -386,7 +442,11 @@ consume its cancellation and error contracts before joining the real backend.
   quick-move credit, armor points 2/6/5/2 with wear only on actual reduction
   (fall damage bypasses). Item conservation is the invariant and a refused
   settlement stages nothing; sequence gating and actor-lifecycle checks stay
-  with the ordering/admission layer, mirroring Go's layering.
+  with the ordering/admission layer, mirroring Go's layering. Accepted
+  settlements that staged a changed patch — plus an accepted equal
+  `EquipArmor` swap — also mark the tick-local owner-only dirty publication
+  lane, so the projection emits one final owner `InventoryState`; refusals
+  and the idempotent re-select mark nothing.
 - `src/rules/tools.rs` owns authority-ray hoe, bone meal and bucket commands.
   Soil/crop/water writes and selected-item debit use the same atomic placement
   transaction. Receipt and tick-local mining-suppression capacity are checked
@@ -408,7 +468,10 @@ consume its cancellation and error contracts before joining the real backend.
   intervals, restore-zero preserving kind and regenerating duration). The
   mirrored constants and KAT literals reproduce the Go engine exactly;
   staging goes through `RuleEffect::Environment` plus the world publication
-  record.
+  record. The tick-start freeze preserves the committed checked
+  `EnvironmentState` tunables; only the metadata fallback seeds
+  `RuleTunables::source_defaults()`, and every provider consumes that same
+  frozen record — no CLI configuration loading exists.
 - `src/core/companion_ingress.rs` owns the sessionless companion candidate
   admission: whole-payload validation (provenance, digest, generation,
   source tick, finite yaw, world-Y target bound) before a global four-slot
@@ -517,7 +580,13 @@ consume its cancellation and error contracts before joining the real backend.
   before staging on full output or failed repack rehearsal, close repacks
   or refuses. The command-close grid-size drop belongs to the container
   provider's `CloseContainer`; the bench-anchor recheck arm waits for a
-  contract surface that can express the anchor.
+  contract surface that can express the anchor. Accepted `MoveCrafting` and
+  `TakeCraftingOutput` settlements reuse the tick-local owner-only dirty
+  publication lanes after their whole-record patch stages: one recorder call
+  marks both the owner inventory state and the private crafting identity, so
+  the projection republishes each complete owner family once even on a
+  settle-back round trip. Refused commands, generic staging and the lifecycle
+  open/close mark nothing; other crafting writers remain future work.
 - `src/rules/farmland.rs` owns bounded moisture checks on the `Farmland`
   phase: one check per candidate, the 162-read neighborhood reservation
   before any scan, events staged before rescan work, x-fastest/z/y cursor
@@ -592,7 +661,11 @@ consume its cancellation and error contracts before joining the real backend.
   clearing the view. Output slot 38 is a legal drop source, never a transfer
   destination. Inventory, container and drop writes settle in one compound;
   every successful explicit container patch durably touches its chunk even
-  when its slots remain equal. Reach invalidation belongs to publication after
+  when its slots remain equal. Accepted transfers and the equal-record panel
+  drop also mark the tick-local owner-only inventory dirty lane after that
+  successful compound; refusals and lifecycle open/close mark nothing, and a
+  quiet container publication cadence remains future work.
+  Reach invalidation belongs to publication after
   transfers. The serial reducer owns net viewer commit, retirement pruning and
   real phase scheduling; workbench anchor mutual exclusion remains separate.
 - `src/store/scheduler.rs` owns save scheduling over the accepted mailbox:
