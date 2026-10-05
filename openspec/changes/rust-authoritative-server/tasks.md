@@ -209,6 +209,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3cq Settle Crafting-view partial and quick moves with atomic source-compatible state and final owner publication ([packet](plans/110-crafting-partial-quick.md)) — direct Codex implementation; independent native source review SCOPED_PASS; genuine7behavior RED plus2refusal controls, initial9GREEN and final525 replay PASS; Rust fmt/Clippy75suites3460results PASS. Only this command node is accepted; broad3.8/4.1/4.2 remain open.
 
+- [x] 3.7l3dp Preserve full surviving drop wire values and source remove-before-upsert event order ([packet](plans/111-drop-wire-mirror.md)). Accepted direct Codex node:2genuine behavior RED plusquiet control,3GREEN, full528replay and75Rust suites3463results PASS; independent native SCOPED_PASS. Event construction only; queue admission/mirror and broad3.8/4.1/4.2 remain open.
+
 ## 4. Closeout
 
 

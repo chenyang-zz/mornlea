@@ -1316,8 +1316,10 @@ fn emit_projectiles(
     }
 }
 
-/// Item-drop upserts for newly visible stacks and the
+/// Item-drop upserts for newly visible or changed stacks and the
 /// removes batch for the ones that left, both split at the drop wire cap.
+/// Removes precede changed/new upserts as in the source server. The mirror
+/// compares only the complete wire value, so lifecycle counters stay quiet.
 fn emit_drops(
     view_list: &mut [SessionView],
     observers: &[Observer],
@@ -1329,10 +1331,10 @@ fn emit_drops(
     for ((observer, view), visibility) in
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
-        let mut published = visibility.drops.clone();
+        let mut published = BTreeMap::new();
         let mut upserts = Vec::new();
         for record in drops {
-            if !visibility.drops.contains(&record.id) || view.visible_drops.contains(&record.id) {
+            if !visibility.drops.contains(&record.id) {
                 continue;
             }
             let position = record.position.get();
@@ -1341,32 +1343,22 @@ fn emit_drops(
                 position[1].floor() as i32,
                 position[2].floor() as i32,
             );
-            match ItemDrop::try_new(ItemDropParts {
+            if let Ok(drop) = ItemDrop::try_new(ItemDropParts {
                 id: record.id,
                 block_index: mornlea_domain::chunk_block_index(cell),
                 stack: domain_stack(record.stack),
             }) {
-                Ok(drop) => upserts.push(drop),
-                Err(_) => {
-                    published.remove(&record.id);
+                if view.visible_drops.get(&record.id) != Some(&drop) {
+                    upserts.push(drop);
                 }
+                published.insert(record.id, drop);
             }
         }
         upserts.sort_by_key(|drop| drop.id());
-        for group in upserts.chunks(DROP_BATCH_CAP) {
-            if let Ok(batch) = ItemDropUpserts::try_new(ItemDropUpsertsParts {
-                server_tick: tick,
-                drops: group.to_vec().into_boxed_slice(),
-            }) {
-                events.push(RoutedEvent::new(
-                    EventRecipient::Session(observer.session.get()),
-                    Event::ItemDropUpserts(batch),
-                ));
-            }
-        }
         let removes: Vec<mornlea_domain::DropId> = view
             .visible_drops
-            .difference(&visibility.drops)
+            .keys()
+            .filter(|id| !visibility.drops.contains(id))
             .copied()
             .collect();
         for group in removes.chunks(DROP_BATCH_CAP) {
@@ -1377,6 +1369,17 @@ fn emit_drops(
                 events.push(RoutedEvent::new(
                     EventRecipient::Session(observer.session.get()),
                     Event::ItemDropRemoves(batch),
+                ));
+            }
+        }
+        for group in upserts.chunks(DROP_BATCH_CAP) {
+            if let Ok(batch) = ItemDropUpserts::try_new(ItemDropUpsertsParts {
+                server_tick: tick,
+                drops: group.to_vec().into_boxed_slice(),
+            }) {
+                events.push(RoutedEvent::new(
+                    EventRecipient::Session(observer.session.get()),
+                    Event::ItemDropUpserts(batch),
                 ));
             }
         }

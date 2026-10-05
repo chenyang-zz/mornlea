@@ -36,6 +36,12 @@ provider draining and close. This caller does not qualify whole-exe or save
 composition; focused source-acquisition tests and the scoped review qualify
 its producer boundary.
 
+The drop publisher retains fixed copied ItemDrop wire values by ID, compares
+surviving values, and emits sorted remove batches before changed/new upserts.
+Age and pickup timers remain authority-only and do not trigger wire publication.
+This private event construction does not accept the separately pending queue
+admission/mirror acknowledgment transaction or executable composition.
+
 ## Agent boundary
 
 Crafting-view partial and quick moves settle in the crafting provider during

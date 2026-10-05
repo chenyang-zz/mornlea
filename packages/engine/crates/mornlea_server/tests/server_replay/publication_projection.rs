@@ -5202,3 +5202,141 @@ fn projection_crafting_stack_round_trip(quick: bool) {
     let quiet = state.advance_tick(TickBudget::full()).unwrap();
     assert!(projection_crafting_record_states(&events_for(&quiet, owner)).is_empty());
 }
+
+fn projection_drop_wire_events(events: &[Event]) -> Vec<Event> {
+    events
+        .iter()
+        .filter(|event| matches!(event, Event::ItemDropUpserts(_) | Event::ItemDropRemoves(_)))
+        .cloned()
+        .collect()
+}
+
+fn projection_drop_wire_upsert(tick: u64, slot: u8, cell: BlockPos, item: u16, count: u8) -> Event {
+    Event::ItemDropUpserts(
+        ItemDropUpserts::try_new(mornlea_domain::ItemDropUpsertsParts {
+            server_tick: tick,
+            drops: vec![
+                ItemDrop::try_new(ItemDropParts {
+                    id: DropId::try_new(0, ChunkPos::new(0, 0), slot, 1).unwrap(),
+                    block_index: mornlea_domain::chunk_block_index(cell),
+                    stack: stack(item, count),
+                })
+                .unwrap(),
+            ]
+            .into_boxed_slice(),
+        })
+        .unwrap(),
+    )
+}
+
+#[test]
+fn projection_drop_wire_partial_pickup_updates_surviving_id() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login_with(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0, |player| {
+        player.inventory.hotbar.slots.fill(storage(ITEM_STONE, 64));
+        player.inventory.backpack.fill(storage(ITEM_STONE, 64));
+        player.inventory.hotbar.slots[0] = storage(ITEM_DIRT, 63);
+    });
+    let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    stage(&mut state, |context| {
+        let mut drop = drop_record(2, 0, [0.5, 65.5, 0.5]);
+        drop.stack = storage(ITEM_DIRT, 5);
+        drop.pickup_delay = 2;
+        context.preload_drop(drop);
+    });
+    let join = state.advance_tick(TickBudget::full()).unwrap();
+    let cell = BlockPos::new(0, 65, 0);
+    let initial = vec![projection_drop_wire_upsert(0, 2, cell, ITEM_DIRT, 5)];
+    assert_eq!(
+        projection_drop_wire_events(&events_for(&join, owner)),
+        initial
+    );
+    assert_eq!(
+        projection_drop_wire_events(&events_for(&join, other)),
+        initial
+    );
+    let pickup = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state.residents().inventories[&ActorKey::Player(owner)].slots[0],
+        storage(ITEM_DIRT, 64)
+    );
+    let reduced = vec![projection_drop_wire_upsert(1, 2, cell, ITEM_DIRT, 4)];
+    assert_eq!(
+        projection_drop_wire_events(&events_for(&pickup, owner)),
+        reduced
+    );
+    assert_eq!(
+        projection_drop_wire_events(&events_for(&pickup, other)),
+        reduced
+    );
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(projection_drop_wire_events(&events_for(&quiet, owner)).is_empty());
+    assert!(projection_drop_wire_events(&events_for(&quiet, other)).is_empty());
+}
+
+#[test]
+fn projection_drop_wire_mixed_transition_removes_before_upserts() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    stage(&mut state, |context| {
+        context.preload_drop(drop_record(3, 5_998, [0.5, 65.5, 2.5]));
+    });
+    let initial = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        projection_drop_wire_events(&events_for(&initial, owner)),
+        vec![projection_drop_wire_upsert(
+            0,
+            3,
+            BlockPos::new(0, 65, 2),
+            ITEM_COAL,
+            2
+        )]
+    );
+    stage(&mut state, |context| {
+        context.preload_drop(drop_record(2, 0, [1.5, 65.5, 2.5]));
+    });
+    let mixed = state.advance_tick(TickBudget::full()).unwrap();
+    let remove = Event::ItemDropRemoves(
+        mornlea_domain::ItemDropRemoves::try_new(mornlea_domain::ItemDropRemovesParts {
+            server_tick: 1,
+            ids: vec![DropId::try_new(0, ChunkPos::new(0, 0), 3, 1).unwrap()].into_boxed_slice(),
+        })
+        .unwrap(),
+    );
+    assert_eq!(
+        projection_drop_wire_events(&events_for(&mixed, owner)),
+        vec![
+            remove,
+            projection_drop_wire_upsert(1, 2, BlockPos::new(1, 65, 2), ITEM_COAL, 2)
+        ]
+    );
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(projection_drop_wire_events(&events_for(&quiet, owner)).is_empty());
+}
+
+#[test]
+fn projection_drop_wire_nonwire_aging_is_quiet() {
+    let mut state = authority();
+    seed_world(&mut state);
+    let owner = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    stage(&mut state, |context| {
+        context.preload_drop(drop_record(2, 0, [8.5, 65.5, 8.5]));
+    });
+    let initial = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        projection_drop_wire_events(&events_for(&initial, owner)),
+        vec![projection_drop_wire_upsert(
+            0,
+            2,
+            BlockPos::new(8, 65, 8),
+            ITEM_COAL,
+            2
+        )]
+    );
+    for _ in 0..3 {
+        let quiet = state.advance_tick(TickBudget::full()).unwrap();
+        assert!(projection_drop_wire_events(&events_for(&quiet, owner)).is_empty());
+    }
+}

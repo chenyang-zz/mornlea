@@ -9,7 +9,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mornlea_domain::{
-    CompanionId, ContainerRef, CraftingSize, DropId, HostileId, PassiveId, PlayerId, ProjectileId,
+    CompanionId, ContainerRef, CraftingSize, DropId, HostileId, ItemDrop, PassiveId, PlayerId,
+    ProjectileId,
 };
 
 use crate::contracts::{ChunkKey, ContainerRecord, InventoryRecord, ViewLease};
@@ -44,8 +45,9 @@ pub(crate) struct SessionView {
     pub(crate) visible_passives: BTreeSet<PassiveId>,
     /// Last tick's visible projectile identities.
     pub(crate) visible_projectiles: BTreeSet<ProjectileId>,
-    /// Last tick's visible dropped-stack identities.
-    pub(crate) visible_drops: BTreeSet<DropId>,
+    /// Last emitted dropped-stack wire values. Authority-only age and pickup
+    /// timers never participate in this diff.
+    pub(crate) visible_drops: BTreeMap<DropId, ItemDrop>,
     /// Last published full inventory snapshot of the owning actor.
     pub(crate) last_inventory: Option<InventoryRecord>,
     /// Last published crafting grid and size.
