@@ -117,6 +117,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7l3ac Settle successful source player Till and Mining exhaustion in their same-tick regions ([packet](plans/96-source-player-action-costs.md)).
 - [x] 3.7l3ns0 Qualify the common raw-foot nonplayer thick-Snow speed contract before actual native consumers ([packet](plans/97-nonplayer-snow-scalar-contract.md)) — accepted 2026-10-04: fresh library 374/374 including the 6 prescribed Snow contracts; independent Codex source review PASS; evidence source `255a3e205`; actual native consumers were subsequently accepted in their separate companion `cd3a74b` and hostile/passive `d4aaae` stages; this node remains the scalar-contract boundary.
 - [x] 3.7l3ps Retain actual passive Snow travel/cell ownership and settle captured cells in the existing late Snow region ([plan](plans/103-passive-snow-capture.md)) — accepted 2026-10-05 at `3be1988a586950cbdfb51520a836a05ee856787b`: real Claude implementation; actual Native 2 intended RED -> 5/5 GREEN, private boundaries 8/8, complete Rust gate 3402 passed/0 failed/0 ignored, release and Go SnowFootprint PASS, independent GPT-6.1-sol scoped review PASS. Original 4.1/4.2 remain open.
+- [x] 3.7l3ct Preserve committed checked tuning through actual tick freeze ([plan](plans/104-committed-tick-tunables.md)) — accepted 2026-10-05 runtime SHA `d8b394add28aa2ba0f2272d0680536c950ebeb24`: real local Claude CLI implementation, tests-only `34f8596d3` actual 1 control PASS/2 intended RED -> 3/3 GREEN; full Rust 3405 passed/0 failed/0 ignored, release, three relevant Go tests and OpenSpec128 PASS; independent GPT-6.1-sol scoped PASS. This accepts committed-record consumption only; configuration-file loading and executable assembly remain open.
 - [x] 3.7m0 Capture live metadata targets and preserve restart continuity ([packet](plans/50-live-metadata-target.md)).
 - [x] 3.7r0 Move resident ownership through live ticks and finalize changed chunks only ([packet](plans/52-owned-resident-tick.md)).
 - [x] 3.7r1 Bound defensive compound rollback to touched resident keys ([packet](plans/53-bounded-compound-undo.md)).
@@ -202,7 +203,5 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 ## 4. Closeout
 
-- [ ] 3.7l3ct Preserve committed checked tuning through actual tick freeze ([plan](plans/104-committed-tick-tunables.md)); full tuple and actual Till RED/GREEN, defaults/clock guards, applicable gates and independent review required. Config loading and executable assembly remain open.
-
-- [ ] 4.1 Reconcile zero-gap inventory, real-provider/integration evidence and guides.
+- [ ] 4.1 Reconcile zero-gap inventory, real-provider/integration evidence and guides. Verified remaining source gaps: automatic acquisition subscription union, dirty-publication outcome reconciliation, automatic actor save/cache lifecycle, nonempty bootstrap, assembled gameplay executable, every supported Go-to-Rust outcome inventory, and configuration-file loading/runtime ownership. Declared session-radius wanted/resync publication and passive-death reason publication are already present; do not reopen them.
 - [ ] 4.2 Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA.
