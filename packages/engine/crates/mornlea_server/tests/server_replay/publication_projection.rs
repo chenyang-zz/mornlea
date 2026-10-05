@@ -4853,3 +4853,300 @@ fn projection_crafting_dirty_refused_commands_publish_nothing() {
         "a quiet tick publishes neither state"
     );
 }
+
+/// The shared container-dirty fixture: a seeded ready world, one front
+/// container with a single occupied panel source, both sessions logged in, the
+/// join baseline carrying exactly one complete owner inventory state, and the
+/// committed owner record as the join left it.
+fn projection_container_dirty_fixture(
+    kind: ContainerKind,
+) -> (
+    AuthorityState,
+    SessionKey,
+    SessionKey,
+    ContainerRef,
+    Vec<Event>,
+    Inventory,
+) {
+    let mut state = authority();
+    seed_world(&mut state);
+    let mut front = ground_chunk();
+    let reference = match kind {
+        ContainerKind::Chest => chest_in_chunk(
+            &mut front,
+            BlockPos::new(0, 66, -1),
+            storage_array(&[(0, ITEM_DIRT, 5)]),
+        ),
+        ContainerKind::Furnace => furnace_in_chunk(
+            &mut front,
+            BlockPos::new(0, 66, -1),
+            storage(ITEM_RAW_IRON, 2),
+            StorageStack::default(),
+            StorageStack::default(),
+            0,
+            0,
+        ),
+        _ => unreachable!("the fixture covers the chest and furnace panels"),
+    };
+    stage(&mut state, |context| {
+        context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, front).unwrap());
+    });
+    let owner = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
+    let other = login(&mut state, 2, "Ben", [4.5, 65.0, 4.5], 0.0, 0.0);
+    let join = state.advance_tick(TickBudget::full()).unwrap();
+    let baseline = projection_inventory_states(&events_for(&join, owner));
+    assert_eq!(
+        baseline.len(),
+        1,
+        "the join publication carries exactly one complete owner inventory state"
+    );
+    let record = state
+        .residents()
+        .inventories
+        .get(&ActorKey::Player(owner))
+        .copied()
+        .unwrap();
+    (state, owner, other, reference, baseline, record)
+}
+
+/// projection_container_dirty_chest_panel_drop_publishes_once — dropping the
+/// chest's only stack from the open panel empties the container through the
+/// real ray and lease yet leaves the committed owner record equal to the join
+/// snapshot, so only the dirty lane can publish, and it publishes exactly one
+/// complete owner inventory state, never to the foreign session.
+#[test]
+fn projection_container_dirty_chest_panel_drop_publishes_once() {
+    let (mut state, owner, other, chest, baseline, joined) =
+        projection_container_dirty_fixture(ContainerKind::Chest);
+
+    // Opening the chest through the real look ray publishes its exact source
+    // contents, proving the lease covers this container.
+    submit(&mut state, owner, 1, Command::OpenContainer(look(0.0, 0.0)));
+    let opened = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = mornlea_domain::ChestState::try_new(mornlea_domain::ChestStateParts {
+        container: chest,
+        items: item_array(&[(0, ITEM_DIRT, 5)]),
+    })
+    .unwrap();
+    assert_eq!(
+        find_event(&events_for(&opened, owner), |event| matches!(
+            event,
+            Event::ChestState(_)
+        )),
+        Some(&Event::ChestState(expected)),
+        "the open publishes the exact chest state through the real ray and lease"
+    );
+
+    // Dropping the only chest stack from the panel empties the container even
+    // though the owner record stays exactly where the join left it.
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::DropStack(StackSource::try_new(StackView::Container(chest), 36).unwrap()),
+    );
+    let dirty = state.advance_tick(TickBudget::full()).unwrap();
+    let emptied = mornlea_domain::ChestState::try_new(mornlea_domain::ChestStateParts {
+        container: chest,
+        items: item_array(&[]),
+    })
+    .unwrap();
+    assert_eq!(
+        find_event(&events_for(&dirty, owner), |event| matches!(
+            event,
+            Event::ChestState(_)
+        )),
+        Some(&Event::ChestState(emptied)),
+        "the panel drop publishes the emptied chest state"
+    );
+    assert_eq!(
+        state
+            .residents()
+            .inventories
+            .get(&ActorKey::Player(owner))
+            .copied()
+            .unwrap(),
+        joined,
+        "the panel drop leaves the committed owner record equal to the join snapshot"
+    );
+    assert_eq!(
+        projection_inventory_states(&events_for(&dirty, owner)),
+        baseline,
+        "the equal-record panel drop still publishes exactly one complete owner inventory state"
+    );
+    assert!(
+        !events_for(&dirty, other)
+            .iter()
+            .any(|event| matches!(event, Event::InventoryState(_))),
+        "the foreign session never sees the owner inventory"
+    );
+
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_inventory_states(&events_for(&quiet, owner)).is_empty(),
+        "a quiet tick publishes no inventory state"
+    );
+}
+
+/// projection_container_dirty_furnace_panel_drop_publishes_once — the same
+/// equal-record panel drop through a furnace lease: the input stack empties,
+/// the owner record stays at the join snapshot, and the dirty lane still
+/// publishes exactly one complete owner inventory state before the furnace
+/// family.
+#[test]
+fn projection_container_dirty_furnace_panel_drop_publishes_once() {
+    let (mut state, owner, other, furnace, baseline, joined) =
+        projection_container_dirty_fixture(ContainerKind::Furnace);
+
+    // Opening the furnace through the real look ray publishes its exact cold
+    // source state, proving the lease covers this container.
+    submit(&mut state, owner, 1, Command::OpenContainer(look(0.0, 0.0)));
+    let opened = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = mornlea_domain::FurnaceState::try_new(mornlea_domain::FurnaceStateParts {
+        container: furnace,
+        input: stack(ITEM_RAW_IRON, 2),
+        fuel: ItemStack::EMPTY,
+        output: ItemStack::EMPTY,
+        progress_ticks: 0,
+        burn_ticks: 0,
+    })
+    .unwrap();
+    assert_eq!(
+        find_event(&events_for(&opened, owner), |event| matches!(
+            event,
+            Event::FurnaceState(_)
+        )),
+        Some(&Event::FurnaceState(expected)),
+        "the open publishes the exact furnace state through the real ray and lease"
+    );
+
+    // Dropping the furnace input from the panel empties the container even
+    // though the owner record stays exactly where the join left it.
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::DropStack(
+            StackSource::try_new(StackView::Container(furnace), 36).unwrap(),
+        ),
+    );
+    let dirty = state.advance_tick(TickBudget::full()).unwrap();
+    let dirty_events = events_for(&dirty, owner);
+    let emptied = mornlea_domain::FurnaceState::try_new(mornlea_domain::FurnaceStateParts {
+        container: furnace,
+        input: ItemStack::EMPTY,
+        fuel: ItemStack::EMPTY,
+        output: ItemStack::EMPTY,
+        progress_ticks: 0,
+        burn_ticks: 0,
+    })
+    .unwrap();
+    assert_eq!(
+        find_event(&dirty_events, |event| matches!(
+            event,
+            Event::FurnaceState(_)
+        )),
+        Some(&Event::FurnaceState(emptied)),
+        "the panel drop publishes the completely emptied furnace state"
+    );
+    assert_eq!(
+        state
+            .residents()
+            .inventories
+            .get(&ActorKey::Player(owner))
+            .copied()
+            .unwrap(),
+        joined,
+        "the panel drop leaves the committed owner record equal to the join snapshot"
+    );
+    assert_eq!(
+        projection_inventory_states(&dirty_events),
+        baseline,
+        "the equal-record panel drop still publishes exactly one complete owner inventory state"
+    );
+    let inventory_index = dirty_events
+        .iter()
+        .position(|event| matches!(event, Event::InventoryState(_)))
+        .expect("the dirty tick publishes the owner inventory state");
+    let furnace_index = dirty_events
+        .iter()
+        .position(|event| matches!(event, Event::FurnaceState(_)))
+        .expect("the dirty tick publishes the furnace state");
+    assert!(
+        inventory_index < furnace_index,
+        "the inventory family precedes the furnace family"
+    );
+    assert!(
+        !events_for(&dirty, other)
+            .iter()
+            .any(|event| matches!(event, Event::InventoryState(_))),
+        "the foreign session never sees the owner inventory"
+    );
+
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_inventory_states(&events_for(&quiet, owner)).is_empty(),
+        "a quiet tick publishes no inventory state"
+    );
+}
+
+/// projection_container_dirty_no_lease_publishes_nothing — a container drop
+/// without a held lease is refused without effect: no owner or foreign
+/// inventory state publishes, the full record stays unchanged, and the source
+/// still opens with its original contents afterwards.
+#[test]
+fn projection_container_dirty_no_lease_publishes_nothing() {
+    let (mut state, owner, other, chest, _baseline, joined) =
+        projection_container_dirty_fixture(ContainerKind::Chest);
+
+    // The owner never opens the chest, so the panel drop is refused without a
+    // lease and publishes no inventory lane.
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::DropStack(StackSource::try_new(StackView::Container(chest), 36).unwrap()),
+    );
+    let refused = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_inventory_states(&events_for(&refused, owner)).is_empty(),
+        "the refused drop publishes no owner inventory state"
+    );
+    assert!(
+        projection_inventory_states(&events_for(&refused, other)).is_empty(),
+        "the refused drop publishes nothing to the foreign session"
+    );
+    assert_eq!(
+        state
+            .residents()
+            .inventories
+            .get(&ActorKey::Player(owner))
+            .copied()
+            .unwrap(),
+        joined,
+        "the refused drop leaves the full committed record unchanged"
+    );
+
+    // Opening afterwards still publishes the untouched source contents.
+    submit(&mut state, owner, 2, Command::OpenContainer(look(0.0, 0.0)));
+    let opened = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = mornlea_domain::ChestState::try_new(mornlea_domain::ChestStateParts {
+        container: chest,
+        items: item_array(&[(0, ITEM_DIRT, 5)]),
+    })
+    .unwrap();
+    assert_eq!(
+        find_event(&events_for(&opened, owner), |event| matches!(
+            event,
+            Event::ChestState(_)
+        )),
+        Some(&Event::ChestState(expected)),
+        "the source survives the refusal unchanged"
+    );
+
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        projection_inventory_states(&events_for(&quiet, owner)).is_empty(),
+        "a quiet tick publishes no inventory state"
+    );
+}
