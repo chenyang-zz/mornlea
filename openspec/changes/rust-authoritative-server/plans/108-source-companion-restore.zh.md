@@ -1,0 +1,11 @@
+# 伙伴待恢复 producer 实施计划
+
+同步英文权威计划：108-source-companion-restore.md。原4.1补齐已存在 companion scan 的实际注册、保留 wanted、Ready 后激活及同 tick Native 消费；不引入 Go 明确排除的主动脱困/越界重置。沿用干净6193及已有隔离树。
+
+主 Agent 冻结：最多4个伙伴、radius16/1089列/9spawn chunks/每saved候选最多4chunk、pending union最多52key；startup checked注册仅Overworld，body ID及project_companion校验、全量背包/look保真、常量 Actor+Runtime compound；Acquire后pending companion先于player扫描，激活 tick忽略此前Pending动作但照常中性Native物理。scan由authority独占、tick借出归还（包括失败），完成scan不重放，reset按source发布阶段消费。
+
+三内部阶段属同一交付：真实Claude仅追加6测试，缺API编译失败单列declaration RED；真实Claude实现注册/映射/retained book但不接advance，host在真实Disk/Acquire运行上核验Pending-vs-Active behavioral RED；真实Claude接实际推进/动作丢弃/发布reset消费/phase guard后，6GREEN、完整Rust/release、实际非空GoCompanion、strictOpenSpec及精确SHA独立review。不可将声明/双重或手工seed激活当作实际producer验收。
+
+单写者7路径/精确签名/错误优先级/6个具体fixture/oracle及英文注释要求详见英文计划。新增源文件仅由主 Agent创建空白路径metadata供冻结Edit-only使用，所有Rust正文由实际Claude写。继续使用已核实b9 frozen，不改主Loom、路由、秘密、安全、安装或output上限，nullcallsrounds及有限deadlinecleanup保留。
+
+完成后沿原依赖进入acquisition；存储非空bootstrap/save/cache、其他dirty发布/config/gameplay/fullGo/audit/整体4.1/4.2仍开放。不推送、合并或部署。Architecture skill: no change.
