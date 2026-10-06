@@ -28,6 +28,7 @@ use mornlea_domain::{
     RejectReason, order_commands,
 };
 
+use super::command_outcome::RejectionStage;
 use super::contracts::{
     ActorKey, ActorLifecycle, AuthorityInteraction, ChunkKey, ContainerSlots, FinalReducer,
     InteractionKind, PhaseReport, RuleCall, RulePhase, RuleReject, ServerError, ServerPhase,
@@ -251,6 +252,8 @@ fn reduce_tick_inner(
     let mut passive_snow = std::mem::take(state.passive_snow_mut());
     let mut context = TickContext::for_tick(state, budget);
     let result = catch_unwind(AssertUnwindSafe(|| {
+        // Initialization stays inside the owner-restoration fence.
+        context.begin_command_rejections(drained.dispatched.len())?;
         // Seeded logins land before the first provider row, so this tick's own
         // dispatch already observes freshly joined players.
         for seeded in logins {
@@ -280,6 +283,10 @@ fn reduce_tick_inner(
             .filter(|event| !matches!(event.event(), mornlea_domain::Event::PlayerState(_)))
             .cloned()
             .partition(|event| matches!(event.event(), mornlea_domain::Event::CombatHit(_)));
+        // Source refusals precede every success and final state family.
+        let mut refusals = context.take_command_rejections()?;
+        refusals.extend(events);
+        let events = refusals;
         let counters = TickCounters {
             executed_tick: tick,
             commands: drained.commands,
@@ -660,6 +667,12 @@ fn admit_command(
     envelope: &CommandEnvelope,
 ) -> Result<(), ServerError> {
     if !context.source_player_command_ready(envelope)? {
+        context.reject_source_pending_input(envelope)?;
+        context.record_command_rejection(
+            envelope,
+            RejectReason::PlayerNotReady,
+            RejectionStage::Admission,
+        )?;
         return Ok(());
     }
     context.record_player_input(envelope);

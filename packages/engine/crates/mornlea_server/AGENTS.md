@@ -191,6 +191,12 @@ separate caller responsibilities.
   Compact admission and settlement lanes retain original session/sequence,
   at most 4096 command plus eight held-input refusals. Contract/double tests
   qualify this surface; real providers and the serial tick own integration.
+  The reducer initializes an actual-prefix refusal owner inside its restoration
+  fence and consumes it once before successes/records. Pending source admission
+  records PlayerNotReady with the original identity; rejected input clears only
+  held mining/eating/sneaking plus mining/bow progress, preserving old movement,
+  look, sprinting, eating progress and acknowledgment before later activation.
+  Missing live ownership is hard; raw direct phase harnesses stay compatibility-only.
 
 - `src/core/actor_placement.rs` owns bounded borrowed restoration, support,
   Safe checkpoint and single-column spawn geometry. It reuses the motion

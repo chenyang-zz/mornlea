@@ -38,6 +38,7 @@ use super::acquisition::{
 };
 use super::actor_save::ActorSaveLedger;
 use super::block_observations::ChunkBlockObservations;
+use super::command_outcome::{CommandRejections, RejectionStage};
 use super::companion_chat::{
     Addressed, CompanionChatBook, CompanionChatIssuer, CompanionChatQueueView, CompanionChatTask,
     DecidedChatFact, MAX_DECIDED_FACTS, MAX_EXTERNAL_LIFECYCLE, STOP_COMMAND, parse_chat_address,
@@ -3779,6 +3780,9 @@ pub struct TickContext<'a> {
     spent_snapshot_chunks: usize,
     spent_snapshot_bytes: usize,
     events: Vec<RoutedEvent>,
+    /// The serial reducer initializes the actual prefix once. Raw phase
+    /// harnesses intentionally have no production refusal publication owner.
+    command_rejections: Option<CommandRejections>,
     projectiles: Vec<ProjectileRecord>,
     damage_intents: Vec<DamageIntent>,
     deferred: DeferredCommands,
@@ -4382,6 +4386,7 @@ impl<'a> TickContext<'a> {
             spent_snapshot_chunks: 0,
             spent_snapshot_bytes: 0,
             events: Vec::new(),
+            command_rejections: None,
             projectiles: Vec::new(),
             damage_intents: Vec::new(),
             deferred: DeferredCommands::default(),
@@ -5278,6 +5283,99 @@ impl<'a> TickContext<'a> {
             .sessions
             .get(&session)
             .is_some_and(|record| record.phase == SessionPhase::Active)
+    }
+
+    /// Establish the sole refusal owner before dispatch starts. Reinitializing
+    /// would discard accepted identities, so it is an internal failure.
+    pub(crate) fn begin_command_rejections(
+        &mut self,
+        command_limit: usize,
+    ) -> Result<(), ServerError> {
+        if self.command_rejections.is_some() {
+            return Err(ServerError::Internal {
+                invariant: "command rejection owner",
+            });
+        }
+        self.command_rejections = Some(CommandRejections::try_new(
+            command_limit,
+            self.authority.limits.max_players(),
+        )?);
+        Ok(())
+    }
+
+    /// Actual tick providers require the initialized bounded owner. The raw
+    /// harness branch preserves direct phase compatibility without pretending
+    /// that those calls execute the production publication pipeline.
+    pub(crate) fn record_command_rejection(
+        &mut self,
+        envelope: &CommandEnvelope,
+        reason: RejectReason,
+        stage: RejectionStage,
+    ) -> Result<(), ServerError> {
+        match self.command_rejections.as_mut() {
+            Some(log) => log.record_command(envelope, reason, stage),
+            None if self.resident_loan.is_none() => Ok(()),
+            None => Err(ServerError::Internal {
+                invariant: "command rejection owner",
+            }),
+        }
+    }
+
+    /// Consume the tick-local identity log once before successes and records.
+    pub(crate) fn take_command_rejections(&mut self) -> Result<Vec<RoutedEvent>, ServerError> {
+        match self.command_rejections.take() {
+            Some(log) => Ok(log.into_events()),
+            None if self.resident_loan.is_none() => Ok(Vec::new()),
+            None => Err(ServerError::Internal {
+                invariant: "command rejection owner",
+            }),
+        }
+    }
+
+    /// Pending input clears only source held intents and mining/bow progress.
+    /// Old movement, look, sprinting, eating progress and acknowledgment remain
+    /// owned by their existing paths until later activation or reset.
+    pub(crate) fn reject_source_pending_input(
+        &mut self,
+        envelope: &CommandEnvelope,
+    ) -> Result<(), ServerError> {
+        if !matches!(envelope.command(), mornlea_domain::Command::PlayerInput(_)) {
+            return Ok(());
+        }
+        let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+            invariant: "source player registration",
+        })?;
+        let actor = ActorKey::Player(session);
+        let mut runtime = self
+            .read()
+            .runtime(actor)
+            .cloned()
+            .ok_or(ServerError::Internal {
+                invariant: "source player registration",
+            })?;
+        runtime.controls = runtime.controls.map(|control| {
+            mornlea_domain::PlayerControl::new(mornlea_domain::PlayerControlParts {
+                movement: control.movement(),
+                look: control.look(),
+                actions: mornlea_domain::HeldActions {
+                    primary: false,
+                    eating: false,
+                    sprinting: control.actions().sprinting,
+                    sneaking: false,
+                },
+            })
+        });
+        runtime.bow = None;
+        self.stage(RuleEffect::Compound(vec![
+            RuleEffect::Runtime(runtime),
+            RuleEffect::Mining {
+                actor,
+                progress: None,
+            },
+        ]))
+        .map_err(|_| ServerError::Internal {
+            invariant: "pending player input staging",
+        })
     }
 
     /// Pending source actors admit only the source's unconditional exceptions.
@@ -12197,6 +12295,332 @@ mod source_player_restore_tests {
         })
         .unwrap()
     }
+    #[test]
+    fn source_pending_commands_publish_original_owner_rejections() {
+        use mornlea_domain::{
+            Command, CommandRejection, ContainerKind, CraftingMove, Event, InventoryMove,
+            PartialMove, PlacementIntent, StackSource, StackView,
+        };
+        let (mut a, s) = fixture();
+        let foreign = register(&mut a, 2, Some(saved(2)));
+        let actor = ActorKey::Player(s);
+        let pack = a.residents.inventories[&actor];
+        let old_look = player(&a, s).look;
+        let look = LookAngles::try_new(1.2, 0.3).unwrap();
+        let control = mornlea_domain::PlayerControl::new(mornlea_domain::PlayerControlParts {
+            movement: mornlea_domain::Movement {
+                move_x: 1,
+                move_z: 0,
+                jump: false,
+            },
+            look,
+            actions: mornlea_domain::HeldActions {
+                primary: true,
+                eating: true,
+                sprinting: true,
+                sneaking: true,
+            },
+        });
+        let reference =
+            ContainerRef::try_new(ChunkPos::new(0, 0), ContainerKind::Chest, 0, 1).unwrap();
+        let mut commands = vec![
+            Command::PlayerInput(control),
+            Command::PlaceBlock(PlacementIntent::try_new(look, 0).unwrap()),
+            Command::SelectHotbar(HotbarSlot::new(5).unwrap()),
+            Command::OpenContainer(look),
+            Command::TillSoil(look),
+            Command::BoneMeal(look),
+            Command::CollectWater(look),
+            Command::PlaceWater(look),
+            Command::MoveInventory(InventoryMove::try_new(0, 1).unwrap()),
+            Command::MoveCrafting(CraftingMove::try_new(9, 0).unwrap()),
+            Command::DropSelectedItem,
+            Command::TakeCraftingOutput,
+            Command::EquipArmor,
+        ];
+        for (view, from, to) in [
+            (StackView::Inventory, 0, 1),
+            (StackView::Crafting, 9, 5),
+            (StackView::Container(reference), 0, 36),
+        ] {
+            commands.push(Command::MovePartial(
+                PartialMove::try_new(view, from, to, false).unwrap(),
+            ));
+            commands.push(Command::QuickMove(StackSource::try_new(view, to).unwrap()));
+            commands.push(Command::DropStack(StackSource::try_new(view, to).unwrap()));
+        }
+        assert_eq!(commands.len(), 22);
+        for (index, command) in commands.into_iter().enumerate() {
+            a.accept(
+                s,
+                PlayIntent::Sequenced {
+                    sequence: index as u64 + 1,
+                    command,
+                },
+            )
+            .unwrap();
+        }
+        let tick = a.advance_tick(TickBudget::full()).unwrap();
+        let expected: Vec<_> = (1..=22)
+            .map(|sequence| {
+                RoutedEvent::new(
+                    EventRecipient::Session(s.get()),
+                    Event::CommandRejected(CommandRejection::new(
+                        sequence,
+                        RejectReason::PlayerNotReady,
+                    )),
+                )
+            })
+            .collect();
+        let actual: Vec<_> = tick
+            .events
+            .iter()
+            .filter(|event| matches!(event.event(), Event::CommandRejected(_)))
+            .cloned()
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(&tick.events[..22], expected.as_slice());
+        assert!(!tick.events.iter().any(|event| event.recipient()
+            == EventRecipient::Session(foreign.get())
+            && matches!(event.event(), Event::CommandRejected(_))));
+        assert_eq!(a.residents.inventories[&actor], pack);
+        assert_eq!(player(&a, s).look, old_look);
+        assert_eq!(local(&tick).last_input_sequence(), 0);
+        a.accept(
+            s,
+            PlayIntent::Sequenced {
+                sequence: 1,
+                command: Command::DropSelectedItem,
+            },
+        )
+        .unwrap();
+        let next = a.advance_tick(TickBudget::full()).unwrap();
+        assert!(
+            !next
+                .events
+                .iter()
+                .any(|event| matches!(event.event(), Event::CommandRejected(_)))
+        );
+    }
+
+    fn check_pending_input_after_admission(
+        context: &mut TickContext<'_>,
+    ) -> Result<(), ServerError> {
+        let s = SessionKey::from_raw(1).unwrap();
+        let actor = ActorKey::Player(s);
+        let read = context.read();
+        let runtime = read.runtime(actor).unwrap();
+        let control = runtime.controls.unwrap();
+        assert_eq!(
+            control.movement(),
+            mornlea_domain::Movement {
+                move_x: 1,
+                move_z: -1,
+                jump: true
+            }
+        );
+        assert_eq!(control.look(), LookAngles::try_new(0.1, 0.2).unwrap());
+        assert_eq!(
+            control.actions(),
+            mornlea_domain::HeldActions {
+                primary: false,
+                eating: false,
+                sprinting: true,
+                sneaking: false
+            }
+        );
+        assert_eq!(
+            runtime.eating,
+            Some(EatingProgress {
+                slot: HotbarSlot::new(3).unwrap(),
+                item: 36,
+                ticks: 6
+            })
+        );
+        assert!(runtime.bow.is_none());
+        assert!(read.mining(actor).is_none());
+        assert_eq!(
+            read.actor(actor).unwrap().look,
+            LookAngles::try_new(0.1, 0.2).unwrap()
+        );
+        assert_eq!(
+            read.actor(actor).unwrap().lifecycle,
+            ActorLifecycle::Pending
+        );
+        assert_eq!(context.authority.sessions[&s].last_input_sequence, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn source_pending_input_cleanup_precedes_current_activation() {
+        let (mut a, s) = fixture();
+        offer(&mut a, key(Dimension::DEPTHS, 3, 0), 1);
+        let waiting = a.advance_tick(TickBudget::full()).unwrap();
+        assert!(!local(&waiting).ready());
+        let actor = ActorKey::Player(s);
+        // Trusted preparation leaves stale intents in a Pending actor. The
+        // actual source admission must defend against them before activation.
+        let runtime = a.residents.runtimes.get_mut(&actor).unwrap();
+        runtime.controls = Some(mornlea_domain::PlayerControl::new(
+            mornlea_domain::PlayerControlParts {
+                movement: mornlea_domain::Movement {
+                    move_x: 1,
+                    move_z: -1,
+                    jump: true,
+                },
+                look: LookAngles::try_new(0.1, 0.2).unwrap(),
+                actions: mornlea_domain::HeldActions {
+                    primary: true,
+                    eating: true,
+                    sprinting: true,
+                    sneaking: true,
+                },
+            },
+        ));
+        runtime.eating = Some(EatingProgress {
+            slot: HotbarSlot::new(3).unwrap(),
+            item: 36,
+            ticks: 6,
+        });
+        runtime.bow = Some(BowProgress {
+            slot: HotbarSlot::new(3).unwrap(),
+            ticks: 8,
+        });
+        a.residents.mining.insert(
+            actor,
+            MiningProgress {
+                actor,
+                dimension: Dimension::OVERWORLD,
+                target: BlockPos::new(0, 66, 1),
+                observed_block: 45,
+                tool_slot: HotbarSlot::new(3).unwrap(),
+                tool: mornlea_storage::ItemStack::default(),
+                elapsed: 4,
+                required: 15,
+                last_tick: 0,
+            },
+        );
+        a.accept(
+            s,
+            PlayIntent::try_from(mornlea_protocol::ClientPacket::PlayerInput(
+                PlayerInput::new(1, 1, 0, false, 1.2, 0.3, false, false, false, false).unwrap(),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        offer(&mut a, key(Dimension::OVERWORLD, 0, 0), 0);
+        set_dispatch_hook(Some(check_pending_input_after_admission));
+        let tick = a.advance_tick(TickBudget::full()).unwrap();
+        assert!(local(&tick).ready() && local(&tick).reset());
+        assert_eq!(local(&tick).last_input_sequence(), 0);
+        assert_eq!(
+            tick.events[0],
+            RoutedEvent::new(
+                EventRecipient::Session(s.get()),
+                mornlea_domain::Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                    1,
+                    RejectReason::PlayerNotReady
+                ))
+            )
+        );
+    }
+
+    fn overfill_rejection_log(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        context.record_command_rejection(
+            &envelope(
+                SessionKey::from_raw(1).unwrap(),
+                mornlea_domain::Command::DropSelectedItem,
+            ),
+            RejectReason::InvalidInput,
+            super::super::command_outcome::RejectionStage::Admission,
+        )
+    }
+
+    #[test]
+    fn source_refusal_log_overflow_fences_actual_tick() {
+        let (mut a, s) = fixture();
+        a.accept(
+            s,
+            PlayIntent::try_from(mornlea_protocol::ClientPacket::PlayerInput(
+                PlayerInput::new(1, 1, 0, false, 1.2, 0.3, false, false, false, false).unwrap(),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        a.take_outbox(s, 1024, 1_048_576).unwrap();
+        assert!(a.take_outbox(s, 1024, 1_048_576).unwrap().is_empty());
+        let tick = a.next_tick();
+        let error = ServerError::Capacity {
+            resource: Resource::Commands,
+            limit: 1,
+            observed: 2,
+        };
+        // One real admitted refusal fills the prefix quota; the trusted hook
+        // attempts an impossible extra record to exercise the hard fence.
+        set_dispatch_hook(Some(overfill_rejection_log));
+        assert_eq!(a.advance_tick(TickBudget::full()), Err(error));
+        assert_eq!(a.phase(), ServerPhase::Closing);
+        assert_eq!(a.next_tick(), tick);
+        assert_eq!(a.settled_read().err(), Some(error));
+        assert!(a.take_outbox(s, 1024, 1_048_576).unwrap().is_empty());
+        for _ in 0..2 {
+            assert_eq!(a.advance_tick(TickBudget::full()), Err(error));
+            assert_eq!(a.run_final(&mut AuthoritativeFinalReducer), Err(error));
+            assert_eq!(a.next_tick(), tick);
+        }
+    }
+
+    #[test]
+    fn source_refusal_owner_requires_live_initialization_and_consumes_once() {
+        use super::super::command_outcome::RejectionStage;
+        let (mut a, s) = fixture();
+        let command = envelope(s, mornlea_domain::Command::DropSelectedItem);
+        let error = ServerError::Internal {
+            invariant: "command rejection owner",
+        };
+        {
+            let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+            assert_eq!(
+                context.record_command_rejection(
+                    &command,
+                    RejectReason::InvalidSlot,
+                    RejectionStage::Admission
+                ),
+                Err(error)
+            );
+            context.begin_command_rejections(1).unwrap();
+            assert_eq!(context.begin_command_rejections(0), Err(error));
+            context
+                .record_command_rejection(
+                    &command,
+                    RejectReason::InvalidSlot,
+                    RejectionStage::Admission,
+                )
+                .unwrap();
+            assert_eq!(
+                context.take_command_rejections().unwrap(),
+                vec![RoutedEvent::new(
+                    EventRecipient::Session(s.get()),
+                    mornlea_domain::Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                        1,
+                        RejectReason::InvalidSlot
+                    ))
+                )]
+            );
+            assert_eq!(context.take_command_rejections(), Err(error));
+        }
+        let mut context = TickContext::harness(&mut a, TickBudget::full());
+        assert_eq!(
+            context.record_command_rejection(
+                &command,
+                RejectReason::InvalidSlot,
+                RejectionStage::Admission
+            ),
+            Ok(())
+        );
+        assert!(context.take_command_rejections().unwrap().is_empty());
+    }
+
     #[test]
     fn source_pending_gate_keeps_only_close_resync_and_whole_move_exceptions() {
         use mornlea_domain::{
