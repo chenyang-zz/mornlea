@@ -31,8 +31,8 @@ use mornlea_domain::{
 use super::command_outcome::{CommandDisposition, RejectionStage};
 use super::contracts::{
     ActorKey, ActorLifecycle, AuthorityInteraction, ChunkKey, ContainerSlots, FinalReducer,
-    InteractionKind, PhaseReport, RuleCall, RulePhase, RuleReject, ServerError, ServerPhase,
-    SessionKey, SessionPhase, TickBudget, TickCounters, TickPublication,
+    InteractionKind, PhaseReport, RuleCall, RulePhase, ServerError, ServerPhase, SessionKey,
+    SessionPhase, TickBudget, TickCounters, TickPublication,
 };
 use super::publication;
 use super::source_acquisition::SourceGoals;
@@ -751,17 +751,18 @@ fn admit_command(
             context.defer(*envelope, RulePhase::Interaction)?;
             return Ok(());
         }
-        Command::OpenContainer(look) => {
-            if matches!(
-                containers::settle_command(context, envelope),
-                Err(RuleReject::Wire(RejectReason::NoTarget))
-            ) {
-                let _ = crafting::settle_bench_open(context, envelope, look);
+        Command::OpenContainer(_) | Command::CloseContainer => {
+            match containers::admit_lifecycle(context, envelope)? {
+                CommandDisposition::Settled(_) => {}
+                CommandDisposition::Refused(reason) => {
+                    context.record_command_rejection(envelope, reason, RejectionStage::Admission)?
+                }
+                CommandDisposition::Unowned => {
+                    return Err(ServerError::Internal {
+                        invariant: "lifecycle command owner",
+                    });
+                }
             }
-            return Ok(());
-        }
-        Command::CloseContainer => {
-            let _ = containers::settle_command(context, envelope);
             return Ok(());
         }
         _ => {}

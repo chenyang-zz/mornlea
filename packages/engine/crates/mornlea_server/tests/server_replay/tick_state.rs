@@ -336,15 +336,16 @@ fn live_player_state_retains_last_input_sequence_after_invalid_controls() {
     assert_eq!(private_player_state(&publication).last_input_sequence(), 7);
 }
 
-/// Full admitted batches must reach the final environment phase and the next tick.
+/// Full open refusals settle before the environment and retire a saturated receiver.
 #[test]
-fn actual_full_open_batch_reaches_environment_end() {
+fn actual_full_open_refusals_reach_environment_and_close_saturated_receiver() {
     let mut clocks = Vec::new();
     for count in [2_049, 4_096] {
         let mut authority = authority();
         let session = authority
             .admit(admitted(1, "Ada"), TransportKind::Memory)
             .unwrap();
+        authority.take_outbox(session, 512, 1_048_576).unwrap();
         for sequence in 1..=count {
             authority
                 .submit(
@@ -365,22 +366,61 @@ fn actual_full_open_batch_reaches_environment_end() {
             authority.session(session).unwrap().last_applied_sequence,
             count
         );
+        assert!(authority.residents().actors.is_empty());
+        let owner_events: Vec<_> = publication
+            .events
+            .iter()
+            .filter(|event| {
+                event.recipient() == mornlea_domain::EventRecipient::Session(session.get())
+            })
+            .map(|event| event.event().clone())
+            .collect();
+        let expected: Vec<_> = (1..=count)
+            .map(|sequence| {
+                mornlea_domain::Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                    sequence,
+                    mornlea_domain::RejectReason::PlayerNotReady,
+                ))
+            })
+            .collect();
+        assert_eq!(&owner_events[..expected.len()], expected.as_slice());
+        assert_eq!(
+            owner_events
+                .iter()
+                .filter(|event| matches!(event, mornlea_domain::Event::CommandRejected(_)))
+                .count(),
+            count as usize
+        );
+        assert_eq!(
+            authority.session(session).unwrap().phase,
+            mornlea_server::contracts::SessionPhase::Retired
+        );
+        assert_eq!(
+            authority
+                .take_outbox(session, 512, 1_048_576)
+                .unwrap()
+                .len(),
+            512
+        );
+        assert!(
+            authority
+                .take_outbox(session, 512, 1_048_576)
+                .unwrap()
+                .is_empty()
+        );
         let first = authority.residents().environment.unwrap();
-        authority
-            .submit(
+        assert_eq!(
+            authority.submit(
                 session,
                 mornlea_protocol::PlayIntent::Sequenced {
                     sequence: count + 1,
                     command: mornlea_domain::Command::SelectHotbar(HotbarSlot::new(2).unwrap()),
-                },
-            )
-            .unwrap();
+                }
+            ),
+            Err(ServerError::StaleSession { session })
+        );
         authority.advance_tick(TickBudget::full()).unwrap();
         assert_eq!(authority.next_tick(), 2);
-        assert_eq!(
-            authority.session(session).unwrap().last_applied_sequence,
-            count + 1
-        );
         let second = authority.residents().environment.unwrap();
         clocks.push((
             count,

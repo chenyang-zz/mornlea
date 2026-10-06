@@ -49,6 +49,7 @@ use crate::contracts::{
     InventoryPatch, InventoryRecord, PhaseReport, RuleCall, RuleEffect, RulePhase, RuleReject,
     ServerError, SessionKey, ViewLease,
 };
+use crate::core::command_outcome::{CommandDisposition, CommandResult};
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::rules::{crafting, drops};
 use crate::state::{AuthorityReadView, TickContext};
@@ -319,6 +320,93 @@ fn move_basis(
     Some(MoveBasis { viewer, stored })
 }
 
+/// Raw callers retain their typed rejects; live admission separates semantic
+/// refusal from trusted atomic staging before publishing an outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LifecycleFailure {
+    Refused(RejectReason),
+    Trusted(RuleReject),
+}
+
+impl LifecycleFailure {
+    fn into_raw(self) -> RuleReject {
+        match self {
+            Self::Refused(reason) => RuleReject::Wire(reason),
+            Self::Trusted(reject) => reject,
+        }
+    }
+
+    fn into_live(self) -> CommandResult {
+        match self {
+            Self::Refused(reason) => Ok(CommandDisposition::Refused(reason)),
+            Self::Trusted(_) => Err(ServerError::Internal {
+                invariant: "container lifecycle staging",
+            }),
+        }
+    }
+}
+
+fn stage_lifecycle_effects(
+    ctx: &mut TickContext<'_>,
+    effects: Vec<RuleEffect>,
+) -> Result<(), LifecycleFailure> {
+    ctx.stage(RuleEffect::Compound(effects))
+        .map_err(LifecycleFailure::Trusted)
+}
+
+/// Only a semantic no-target result may try the bench owner. A failed trusted
+/// mutation never falls through, and explicit close has no Active-player gate.
+pub(crate) fn admit_lifecycle(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+) -> CommandResult {
+    if !matches!(
+        envelope.command(),
+        Command::OpenContainer(_) | Command::CloseContainer
+    ) {
+        return Ok(CommandDisposition::Unowned);
+    }
+    let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+        invariant: "container lifecycle session",
+    })?;
+    let result = match envelope.command() {
+        Command::OpenContainer(look) => {
+            let view = ctx.read();
+            let actor = ActorKey::Player(session);
+            if !view
+                .actor(actor)
+                .is_some_and(|record| record.lifecycle == ActorLifecycle::Active)
+            {
+                return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady));
+            }
+            view.inventory(actor).ok_or(ServerError::Internal {
+                invariant: "container lifecycle owner",
+            })?;
+            view.environment().ok_or(ServerError::Internal {
+                invariant: "container lifecycle environment",
+            })?;
+            match checked_open(ctx, session, look) {
+                Err(LifecycleFailure::Refused(RejectReason::NoTarget)) => {
+                    return crafting::admit_bench_open(ctx, envelope, look);
+                }
+                result => result,
+            }
+        }
+        Command::CloseContainer => checked_close(ctx, session),
+        _ => return Ok(CommandDisposition::Unowned),
+    };
+    match result {
+        Ok(true) => Ok(CommandDisposition::Settled(PhaseReport {
+            examined: 1,
+            applied: 1,
+            carried: 0,
+            rejected: 0,
+        })),
+        Ok(false) => Ok(CommandDisposition::Refused(RejectReason::InvalidInput)),
+        Err(failure) => failure.into_live(),
+    }
+}
+
 /// Settles one open: the authority ray from the current look must meet a
 /// furnace or a chest block within reach. A workbench hit refuses without
 /// effect — the workbench is an ordinary block whose opens only widen the
@@ -331,50 +419,64 @@ fn settle_open(
     session: SessionKey,
     look: LookAngles,
 ) -> Result<bool, RuleReject> {
+    checked_open(ctx, session, look).map_err(LifecycleFailure::into_raw)
+}
+
+fn checked_open(
+    ctx: &mut TickContext<'_>,
+    session: SessionKey,
+    look: LookAngles,
+) -> Result<bool, LifecycleFailure> {
     let actor = ActorKey::Player(session);
     let view = ctx.read();
     let record = match view.actor(actor) {
         Some(record) if record.lifecycle == ActorLifecycle::Active => record.clone(),
-        _ => return Err(RuleReject::Wire(RejectReason::PlayerNotReady)),
+        _ => return Err(LifecycleFailure::Refused(RejectReason::PlayerNotReady)),
     };
     view.inventory(actor)
-        .ok_or(RuleReject::Wire(RejectReason::PlayerNotReady))?;
+        .ok_or(LifecycleFailure::Refused(RejectReason::PlayerNotReady))?;
     if record.dimension != Dimension::OVERWORLD {
-        return Err(RuleReject::Wire(RejectReason::InvalidInput));
+        return Err(LifecycleFailure::Refused(RejectReason::InvalidInput));
     }
     let basis = match actor_basis(&view, &record) {
         Some(basis) => basis,
-        None => return Err(RuleReject::Wire(RejectReason::InvalidInput)),
+        None => return Err(LifecycleFailure::Refused(RejectReason::InvalidInput)),
     };
     let direction = look_direction(look.yaw(), look.pitch());
     let hit = match cast_ray(&view, basis.dimension, basis.eye, direction, basis.reach) {
         Ok(hit) => hit,
-        Err(RayFailure::Unavailable) => return Err(RuleReject::Wire(RejectReason::ChunkNotReady)),
-        Err(RayFailure::Invalid) => return Err(RuleReject::Wire(RejectReason::InvalidRay)),
+        Err(RayFailure::Unavailable) => {
+            return Err(LifecycleFailure::Refused(RejectReason::ChunkNotReady));
+        }
+        Err(RayFailure::Invalid) => {
+            return Err(LifecycleFailure::Refused(RejectReason::InvalidRay));
+        }
     };
-    let hit = hit.ok_or(RuleReject::Wire(RejectReason::NoTarget))?;
+    let hit = hit.ok_or(LifecycleFailure::Refused(RejectReason::NoTarget))?;
     let kind = match hit.observed.block {
         FURNACE_BLOCK => ContainerKind::Furnace,
         CHEST_BLOCK => ContainerKind::Chest,
-        _ => return Err(RuleReject::Wire(RejectReason::NoTarget)),
+        _ => return Err(LifecycleFailure::Refused(RejectReason::NoTarget)),
     };
-    if !view.ready_chunk(hit.observed.key) {
-        return Err(RuleReject::Wire(RejectReason::ChunkNotReady));
-    }
-    let stored = view
-        .container_at(Dimension::OVERWORLD, hit.observed.pos, kind)
-        .ok_or(RuleReject::Wire(RejectReason::NoTarget))?;
+    // A recognized physical target is sneak-ineligible even without an active slot.
     if view
         .runtime(actor)
         .and_then(|runtime| runtime.controls)
         .is_some_and(|control| control.actions().sneaking)
     {
-        return Err(RuleReject::Wire(RejectReason::InvalidInput));
+        return Err(LifecycleFailure::Refused(RejectReason::InvalidInput));
     }
+    if !view.ready_chunk(hit.observed.key) {
+        return Err(LifecycleFailure::Refused(RejectReason::ChunkNotReady));
+    }
+    let stored = view
+        .container_at(Dimension::OVERWORLD, hit.observed.pos, kind)
+        .ok_or(LifecycleFailure::Refused(RejectReason::NoTarget))?;
     ctx.stage(RuleEffect::Viewer {
         session,
         view: Some(ViewLease::new(session, stored.reference)),
-    })?;
+    })
+    .map_err(LifecycleFailure::Trusted)?;
     Ok(true)
 }
 
@@ -383,24 +485,28 @@ fn settle_open(
 /// the Go close row that refuses while the workbench grid cannot reclaim.
 /// The preview mutates nothing until the inventory and lease stage together.
 fn settle_close(ctx: &mut TickContext<'_>, session: SessionKey) -> Result<bool, RuleReject> {
+    checked_close(ctx, session).map_err(LifecycleFailure::into_raw)
+}
+
+fn checked_close(ctx: &mut TickContext<'_>, session: SessionKey) -> Result<bool, LifecycleFailure> {
     let actor = ActorKey::Player(session);
     let mut effects = Vec::with_capacity(2);
     let mut was_workbench = false;
     if let Some(before) = ctx.read().inventory(actor).copied() {
         was_workbench = before.crafting_size == CraftingSize::Workbench;
         let after = crafting::closed_inventory(before)
-            .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+            .ok_or(LifecycleFailure::Refused(RejectReason::InvalidInput))?;
         if after != before {
-            effects.push(RuleEffect::Inventory(InventoryPatch::try_new(
-                actor, before, after,
-            )?));
+            effects.push(RuleEffect::Inventory(
+                InventoryPatch::try_new(actor, before, after).map_err(LifecycleFailure::Trusted)?,
+            ));
         }
     }
     effects.push(RuleEffect::Viewer {
         session,
         view: None,
     });
-    ctx.stage(RuleEffect::Compound(effects))?;
+    stage_lifecycle_effects(ctx, effects)?;
     // Retain source close intent only after inventory and lease settle together.
     if was_workbench {
         ctx.record_crafting_command_publication_dirty(session);
@@ -1437,5 +1543,50 @@ fn cast_ray(
         if batch.is_done() {
             return Ok(None);
         }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::contracts::{ServerLimits, TickBudget};
+    use crate::state::AuthorityState;
+    use mornlea_domain::HotbarSlot;
+
+    #[test]
+    fn lifecycle_stale_compound_preserves_trusted_failure_identity() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let mut context = TickContext::harness(&mut authority, TickBudget::full());
+        let session = SessionKey::from_raw(1).unwrap();
+        let actor = ActorKey::Player(session);
+        let before = InventoryRecord::empty();
+        let current = before.with_selected(HotbarSlot::new(2).unwrap());
+        let after = before.with_selected(HotbarSlot::new(1).unwrap());
+        context.preload_inventory(actor, current);
+        let failure = stage_lifecycle_effects(
+            &mut context,
+            vec![
+                RuleEffect::Inventory(InventoryPatch::try_new(actor, before, after).unwrap()),
+                RuleEffect::Viewer {
+                    session,
+                    view: None,
+                },
+            ],
+        )
+        .unwrap_err();
+        assert_eq!(failure.into_raw(), RuleReject::StaleObservation);
+        assert_eq!(
+            failure.into_live(),
+            Err(ServerError::Internal {
+                invariant: "container lifecycle staging"
+            })
+        );
+        assert_eq!(context.read().inventory(actor), Some(&current));
+        assert!(context.read().viewer(session).is_none());
+        assert!(context.events().is_empty());
     }
 }

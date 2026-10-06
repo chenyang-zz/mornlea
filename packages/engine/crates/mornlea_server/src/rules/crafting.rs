@@ -1374,26 +1374,42 @@ pub(crate) fn settle_bench_open(
     envelope: &CommandEnvelope,
     look: LookAngles,
 ) -> OpenOutcome {
-    let Some(session) = SessionKey::from_raw(envelope.session()) else {
-        return OpenOutcome::Refused;
-    };
+    match admit_bench_open(ctx, envelope, look) {
+        Ok(CommandDisposition::Settled(report)) if report.applied != 0 => OpenOutcome::Applied,
+        Ok(CommandDisposition::Settled(_)) => OpenOutcome::Carried,
+        _ => OpenOutcome::Refused,
+    }
+}
+
+/// Live semantic refusals retain their reason; raw lifecycle callers continue
+/// to count refusal, while trusted owner and compound errors stop live intake.
+pub(crate) fn admit_bench_open(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+    look: LookAngles,
+) -> CommandResult {
+    if !matches!(envelope.command(), Command::OpenContainer(_)) {
+        return Ok(CommandDisposition::Unowned);
+    }
+    let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+        invariant: "bench admission session",
+    })?;
     let actor = ActorKey::Player(session);
     let record = match ctx.read().actor(actor) {
         Some(record) if record.lifecycle == ActorLifecycle::Active => record.clone(),
-        _ => return OpenOutcome::Refused,
+        _ => return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady)),
     };
     if record.dimension != Dimension::OVERWORLD {
-        return OpenOutcome::Refused;
+        return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
     }
-    let before = match ctx.read().inventory(actor) {
-        Some(inventory) => *inventory,
-        None => return OpenOutcome::Refused,
-    };
+    let before = *ctx.read().inventory(actor).ok_or(ServerError::Internal {
+        invariant: "bench admission owner",
+    })?;
     let hit = {
         let view = ctx.read();
-        let Some(environment) = view.environment() else {
-            return OpenOutcome::Refused;
-        };
+        let environment = view.environment().ok_or(ServerError::Internal {
+            invariant: "bench admission environment",
+        })?;
         let position = record.motion.position().get();
         let eye = [
             position[0],
@@ -1409,11 +1425,12 @@ pub(crate) fn settle_bench_open(
             environment.tunables.interaction_reach(),
         ) {
             Ok(Some(hit)) => hit,
-            _ => return OpenOutcome::Refused,
+            Ok(None) => return Ok(CommandDisposition::Refused(RejectReason::NoTarget)),
+            Err(reason) => return Ok(CommandDisposition::Refused(reason)),
         }
     };
     if hit.observed.block != WORKBENCH_BLOCK {
-        return OpenOutcome::Refused;
+        return Ok(CommandDisposition::Refused(RejectReason::NoTarget));
     }
     // Classify the target first; current held sneaking refuses without
     // ending a prior view or recording a successful grid-open intent.
@@ -1423,24 +1440,32 @@ pub(crate) fn settle_bench_open(
         .and_then(|runtime| runtime.controls)
         .is_some_and(|controls| controls.actions().sneaking)
     {
-        return OpenOutcome::Refused;
+        return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
     }
     let mut after = before;
     after.crafting_size = CraftingSize::Workbench;
     let mut runtime = match anchor_base(&ctx.read(), actor) {
         Some(runtime) => runtime,
-        None => return OpenOutcome::Refused,
+        None => {
+            return Err(ServerError::Internal {
+                invariant: "bench runtime owner",
+            });
+        }
     };
     match &mut runtime.aux {
         ActorAux::Player { workbench, .. } => *workbench = Some(hit.observed.pos),
-        _ => return OpenOutcome::Refused,
+        _ => {
+            return Err(ServerError::Internal {
+                invariant: "bench runtime owner",
+            });
+        }
     }
     let mut effects = Vec::with_capacity(3);
     if after != before {
-        let patch = match InventoryPatch::try_new(actor, before, after) {
-            Ok(patch) => patch,
-            Err(_) => return OpenOutcome::Refused,
-        };
+        let patch =
+            InventoryPatch::try_new(actor, before, after).map_err(|_| ServerError::Internal {
+                invariant: "bench inventory patch",
+            })?;
         effects.push(RuleEffect::Inventory(patch));
     }
     let anchor_settled = match ctx.read().runtime(actor) {
@@ -1462,15 +1487,26 @@ pub(crate) fn settle_bench_open(
     if effects.is_empty() {
         // A successful reopen restates the grid even when its anchor is unchanged.
         ctx.record_crafting_publication_dirty(session);
-        return OpenOutcome::Carried;
+        return Ok(CommandDisposition::Settled(PhaseReport {
+            examined: 1,
+            applied: 0,
+            carried: 1,
+            rejected: 0,
+        }));
     }
-    match ctx.stage(RuleEffect::Compound(effects)) {
-        Ok(()) => {
-            ctx.record_crafting_publication_dirty(session);
-            OpenOutcome::Applied
-        }
-        Err(_) => OpenOutcome::Refused,
-    }
+    stage_bench_effects(ctx, effects)?;
+    ctx.record_crafting_publication_dirty(session);
+    Ok(CommandDisposition::Settled(applied_report()))
+}
+
+fn stage_bench_effects(
+    ctx: &mut TickContext<'_>,
+    effects: Vec<RuleEffect>,
+) -> Result<(), ServerError> {
+    ctx.stage(RuleEffect::Compound(effects))
+        .map_err(|_| ServerError::Internal {
+            invariant: "bench staging",
+        })
 }
 
 /// Neutral runtime base for the anchor lane: the staged record wins, and a
@@ -1646,22 +1682,23 @@ fn cast_ray(
     origin: [f32; 3],
     direction: [f32; 3],
     reach: f32,
-) -> Result<Option<RayHit>, ServerError> {
-    const REFUSAL: ServerError = ServerError::InvalidInput { field: "crafting" };
-    let normalized = normalized_direction(direction).ok_or(REFUSAL)?;
+) -> Result<Option<RayHit>, RejectReason> {
+    let normalized = normalized_direction(direction).ok_or(RejectReason::InvalidRay)?;
     let mut cursor = RayCursor::try_new(Ray {
         origin,
         direction: normalized,
         maximum: reach,
     })
-    .map_err(|_| REFUSAL)?;
+    .map_err(|_| RejectReason::InvalidRay)?;
     loop {
-        let batch = NativeRaycast.next_batch(&mut cursor).map_err(|_| REFUSAL)?;
+        let batch = NativeRaycast
+            .next_batch(&mut cursor)
+            .map_err(|_| RejectReason::InvalidRay)?;
         for record in batch.records() {
             let cell =
                 mornlea_domain::BlockPos::new(record.cell[0], record.cell[1], record.cell[2]);
             match view.observation(dimension, cell) {
-                None => return Err(REFUSAL),
+                None => return Err(RejectReason::ChunkNotReady),
                 Some(observed) if !target_block(view, dimension, cell, observed.block) => {}
                 Some(observed) => return Ok(Some(RayHit { observed })),
             }
@@ -1769,6 +1806,37 @@ mod tests {
                 invariant: "crafting patch"
             })
         );
+        assert!(context.events().is_empty());
+    }
+    #[test]
+    fn bench_stale_compound_remains_hard() {
+        let mut authority = patch_authority();
+        let mut context =
+            TickContext::harness(&mut authority, crate::contracts::TickBudget::full());
+        let session = SessionKey::from_raw(1).unwrap();
+        let actor = ActorKey::Player(session);
+        let before = InventoryRecord::empty();
+        let current = before.with_selected(mornlea_domain::HotbarSlot::new(2).unwrap());
+        let after = before.with_selected(mornlea_domain::HotbarSlot::new(1).unwrap());
+        context.preload_inventory(actor, current);
+        let result = stage_bench_effects(
+            &mut context,
+            vec![
+                RuleEffect::Inventory(InventoryPatch::try_new(actor, before, after).unwrap()),
+                RuleEffect::Viewer {
+                    session,
+                    view: None,
+                },
+            ],
+        );
+        assert_eq!(
+            result,
+            Err(ServerError::Internal {
+                invariant: "bench staging"
+            })
+        );
+        assert_eq!(context.read().inventory(actor), Some(&current));
+        assert!(context.read().viewer(session).is_none());
         assert!(context.events().is_empty());
     }
 }

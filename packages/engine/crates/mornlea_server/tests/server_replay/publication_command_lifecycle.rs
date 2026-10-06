@@ -1578,3 +1578,305 @@ fn native_crafting_outcome_success_round_trips_and_output() {
         assert!(projection_crafting_record_states(&events_for(&quiet, owner)).is_empty());
     }
 }
+
+fn lifecycle_sneak(sneaking: bool) -> Command {
+    Command::PlayerInput(PlayerControl::new(PlayerControlParts {
+        movement: Movement {
+            move_x: 0,
+            move_z: 0,
+            jump: false,
+        },
+        look: look(0.0, 0.0),
+        actions: HeldActions {
+            primary: false,
+            eating: false,
+            sprinting: false,
+            sneaking,
+        },
+    }))
+}
+
+fn lifecycle_refusal(
+    tick: &mornlea_server::contracts::TickPublication,
+    owner: SessionKey,
+    other: SessionKey,
+    sequence: u64,
+    reason: mornlea_domain::RejectReason,
+    ack: u64,
+) {
+    let expected = Event::CommandRejected(mornlea_domain::CommandRejection::new(sequence, reason));
+    let events = events_for(tick, owner);
+    assert_eq!(events.first(), Some(&expected));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::CommandRejected(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !events_for(tick, other)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+    assert_eq!(native_input_ack(tick, owner), ack);
+}
+
+fn replace_forward_lifecycle_target(state: &mut AuthorityState, block: u16) {
+    // Ready geometry and missing physical slots are prepared causes for real command consumers.
+    stage(state, |context| {
+        let mut front = ground_chunk();
+        set_cell(&mut front, BlockPos::new(0, 66, -1), block);
+        context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, front).unwrap());
+    });
+}
+
+#[test]
+fn native_lifecycle_outcome_physical_slot_sneak_precedence() {
+    for (kind, block) in [(ContainerKind::Chest, 11), (ContainerKind::Furnace, 9)] {
+        for sneaking in [false, true] {
+            let (mut state, owner, other, _) = scene(kind);
+            replace_forward_lifecycle_target(&mut state, block);
+            let before = record(&state, owner);
+            submit(&mut state, owner, 1, lifecycle_sneak(sneaking));
+            submit(&mut state, owner, 2, Command::OpenContainer(look(0.0, 0.0)));
+            let tick = state.advance_tick(TickBudget::full()).unwrap();
+            assert_eq!(record(&state, owner), before);
+            assert!(state.settled_read().unwrap().viewer(owner).is_none());
+            assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+            assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+            assert_eq!(state.session(owner).unwrap().last_applied_sequence, 2);
+            lifecycle_refusal(
+                &tick,
+                owner,
+                other,
+                2,
+                if sneaking {
+                    mornlea_domain::RejectReason::InvalidInput
+                } else {
+                    mornlea_domain::RejectReason::NoTarget
+                },
+                1,
+            );
+        }
+    }
+}
+
+#[test]
+fn native_lifecycle_outcome_unrecognized_sneak() {
+    for block in [0, 1] {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        replace_forward_lifecycle_target(&mut state, block);
+        let before = record(&state, owner);
+        submit(&mut state, owner, 1, lifecycle_sneak(true));
+        submit(&mut state, owner, 2, Command::OpenContainer(look(0.0, 0.0)));
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(record(&state, owner), before);
+        assert!(state.settled_read().unwrap().viewer(owner).is_none());
+        assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+        lifecycle_refusal(
+            &tick,
+            owner,
+            other,
+            2,
+            mornlea_domain::RejectReason::NoTarget,
+            1,
+        );
+    }
+}
+
+#[test]
+fn native_lifecycle_outcome_unavailable_ray() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    // The owner stays over Ready ground; only the forward ray crosses unavailable geometry.
+    stage(&mut state, |context| {
+        let mut actor = context
+            .read()
+            .actor(ActorKey::Player(owner))
+            .cloned()
+            .unwrap();
+        actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([0.5, 65.0, 31.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+    });
+    let before = record(&state, owner);
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::OpenContainer(look(std::f32::consts::PI, 0.0)),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), before);
+    assert!(state.settled_read().unwrap().viewer(owner).is_none());
+    assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+    lifecycle_refusal(
+        &tick,
+        owner,
+        other,
+        1,
+        mornlea_domain::RejectReason::ChunkNotReady,
+        0,
+    );
+}
+
+#[test]
+fn native_lifecycle_outcome_bench_sneak_preserves_view() {
+    let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+    submit(&mut state, owner, 1, Command::OpenContainer(look(0.0, 0.0)));
+    state.advance_tick(TickBudget::full()).unwrap();
+    let before = record(&state, owner);
+    submit(&mut state, owner, 2, lifecycle_sneak(true));
+    open_bench(&mut state, owner, 3);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .viewer(owner)
+            .unwrap()
+            .reference(),
+        reference
+    );
+    assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+    lifecycle_refusal(
+        &tick,
+        owner,
+        other,
+        3,
+        mornlea_domain::RejectReason::InvalidInput,
+        2,
+    );
+}
+
+#[test]
+fn native_lifecycle_outcome_failed_close_preserves_all() {
+    let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+    open_bench(&mut state, owner, 1);
+    submit(&mut state, owner, 2, Command::OpenContainer(look(0.0, 0.0)));
+    state.advance_tick(TickBudget::full()).unwrap();
+    // The impossible repack is prepared; the actual open established a valid bench anchor.
+    prepared_inventory_outcome(&mut state, owner, |inventory| {
+        inventory.slots = [storage(1, 64); 36];
+        inventory.crafting[4] = storage(ITEM_DIRT, 5);
+    });
+    let before = record(&state, owner);
+    let anchor = state.residents().runtimes[&ActorKey::Player(owner)]
+        .aux
+        .clone();
+    submit(&mut state, owner, 3, Command::CloseContainer);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(
+        state.residents().runtimes[&ActorKey::Player(owner)].aux,
+        anchor
+    );
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .viewer(owner)
+            .unwrap()
+            .reference(),
+        reference
+    );
+    assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+    lifecycle_refusal(
+        &tick,
+        owner,
+        other,
+        3,
+        mornlea_domain::RejectReason::InvalidInput,
+        0,
+    );
+}
+
+#[test]
+fn native_lifecycle_outcome_refusal_then_valid_open() {
+    let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+    let before = record(&state, owner);
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::OpenContainer(look(std::f32::consts::FRAC_PI_2, 0.0)),
+    );
+    submit(&mut state, owner, 2, Command::OpenContainer(look(0.0, 0.0)));
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .viewer(owner)
+            .unwrap()
+            .reference(),
+        reference
+    );
+    assert!(
+        events_for(&tick, owner)
+            .iter()
+            .any(|event| matches!(event, Event::ChestState(_)))
+    );
+    assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+    assert_eq!(state.session(owner).unwrap().last_applied_sequence, 2);
+    lifecycle_refusal(
+        &tick,
+        owner,
+        other,
+        1,
+        mornlea_domain::RejectReason::NoTarget,
+        0,
+    );
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::OpenContainer(look(std::f32::consts::FRAC_PI_2, 0.0)),
+    );
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), before);
+    assert!(
+        !events_for(&quiet, owner)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+}
+
+#[test]
+fn native_lifecycle_outcome_success_close_intent() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let before = record(&state, owner);
+    open_bench(&mut state, owner, 1);
+    submit(&mut state, owner, 2, Command::CloseContainer);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)).len(),
+        1
+    );
+    assert_eq!(
+        projection_crafting_record_states(&events_for(&tick, owner)).len(),
+        2
+    );
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+    assert!(
+        !events_for(&tick, owner)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+    assert_eq!(native_input_ack(&tick, owner), 0);
+    submit(&mut state, owner, 3, Command::CloseContainer);
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(projection_crafting_record_states(&events_for(&quiet, owner)).is_empty());
+    assert!(
+        !events_for(&quiet, owner)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+}

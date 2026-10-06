@@ -262,6 +262,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3cfr Publish source ordinary crafting admission dispositions with atomic owner intent and trusted failure separation ([packet](plans/136-source-crafting-command-outcomes.md)). Direct Codex: six native causalRED/onecontrol then7GREEN, two actual trustedfaultRED/GREEN;76Rust suites3739PASS0failed/ignored/replay608, unchangedGo15top/14sub and externaloracle4top/0sub race/count1PASS, independent SCOPED_PASS. Prepared causes do not accept upstream/runtime; othercommand/held/queue/config/runtime and broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3lor Publish exact immediate Open/Close refusal outcomes and physical sneak precedence with hard trusted staging ([packet](plans/137-source-lifecycle-command-outcomes.md)). Broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 

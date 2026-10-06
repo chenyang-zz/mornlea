@@ -67,6 +67,15 @@ observe durable aggregate changes or compose Agent shutdown.
 
 ## Agent boundary
 
+Immediate Open/Close use a private checked lifecycle adapter. Recognized physical
+container blocks refuse held sneak before active-slot lookup; semantic no-target
+alone tries the checked bench owner. The actual tick publishes original admission
+refusals and propagates trusted staging failure. Explicit failed repack preserves
+inventory, grid and view; automatic close keeps its separate hard policy. Raw
+provider callers retain typed rejects and bench refusal-count compatibility.
+Prepared geometry/fault causes and native command consumers qualify this library
+boundary; executable and whole queue composition remain separately owned.
+
 Ordinary crafting has a private checked admission adapter for whole, partial,
 quick moves and output take. Dynamic grid extents refuse InvalidSlot before
 stack/repack InvalidInput; successful atomic settlements mark both owner lanes.
