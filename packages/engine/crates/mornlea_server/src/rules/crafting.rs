@@ -1412,10 +1412,15 @@ fn settle_bench_open(
         });
     }
     if effects.is_empty() {
+        // A successful reopen restates the grid even when its anchor is unchanged.
+        ctx.record_crafting_publication_dirty(session);
         return OpenOutcome::Carried;
     }
     match ctx.stage(RuleEffect::Compound(effects)) {
-        Ok(()) => OpenOutcome::Applied,
+        Ok(()) => {
+            ctx.record_crafting_publication_dirty(session);
+            OpenOutcome::Applied
+        }
         Err(_) => OpenOutcome::Refused,
     }
 }

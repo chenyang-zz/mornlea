@@ -165,6 +165,8 @@ pub fn advance(ctx: &mut TickContext<'_>, active: &[ChunkKey]) -> Result<PhaseRe
                     },
                 ]))
                 .map_err(|_| ServerError::InvalidInput { field: "drop_step" })?;
+                // Publication observes the final inventory even if an earlier bite cancels its diff.
+                ctx.record_inventory_publication_dirty(session);
                 changed = true;
                 match next {
                     Some(reduced) => aged = reduced,

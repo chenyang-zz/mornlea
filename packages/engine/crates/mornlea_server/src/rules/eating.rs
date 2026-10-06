@@ -287,6 +287,11 @@ fn settle_completion(
         ActorBody::Player(save),
     )
     .map_err(|_| STAGE)?;
+    let ActorKey::Player(session) = record.key else {
+        return Err(ServerError::Internal {
+            invariant: "eating player identity",
+        });
+    };
     runtime.saturation_milli = u32::from(new_saturation);
     runtime.eating = None;
     let patch = InventoryPatch::try_new(record.key, inventory, after).map_err(|_| STAGE)?;
@@ -296,5 +301,7 @@ fn settle_completion(
         RuleEffect::Runtime(runtime),
     ]))
     .map_err(|_| STAGE)?;
+    // Later pickups can restore these slots; the accepted bite still publishes once.
+    ctx.record_inventory_publication_dirty(session);
     Ok(step_report(true))
 }

@@ -4474,9 +4474,9 @@ impl<'a> TickContext<'a> {
         }
     }
 
-    /// Records one session's accepted inventory-command publication intent.
-    /// Only the inventory, crafting command and container providers reach
-    /// this, after a settled command staged its changed patch, after an
+    /// Records one session's accepted inventory publication intent.
+    /// Inventory, crafting, container, eating and pickup providers call this
+    /// only after settlement: a changed patch, a completed bite or pickup, an
     /// accepted equal armor swap, or after an accepted container compound
     /// (including the equal-record panel drop), so no arbitrary session and
     /// no extra owner can force an owner-only inventory publication.
@@ -4491,6 +4491,11 @@ impl<'a> TickContext<'a> {
     /// staged.
     pub(crate) fn record_crafting_command_publication_dirty(&mut self, session: SessionKey) {
         self.record_inventory_publication_dirty(session);
+        self.record_crafting_publication_dirty(session);
+    }
+
+    /// Marks a successfully opened grid without dirtying the inventory wire lane.
+    pub(crate) fn record_crafting_publication_dirty(&mut self, session: SessionKey) {
         self.crafting_publication_dirty.insert(session);
     }
 

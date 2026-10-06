@@ -5540,3 +5540,6 @@ fn projection_entity_order_passive_mixed_transition() {
 fn projection_entity_order_projectile_mixed_transition() {
     projection_entity_order_mixed(2);
 }
+
+#[path = "publication_owner_intent.rs"]
+mod owner_intent;

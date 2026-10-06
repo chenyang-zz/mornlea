@@ -338,8 +338,9 @@ impl AuthorityState {
     /// accepted inventory, crafting or container commands marked the
     /// tick-local dirty lane still publishes exactly one final owner state
     /// even when the
-    /// settled record equals the last published snapshot (the select round
-    /// trip, the accepted equal armor swap, the crafting round trips).
+    /// settled wire record equals the last published snapshot (the select
+    /// round trip, accepted armor swap, crafting round trip, or a bite followed
+    /// by an identical pickup). Pending actors preserve both owner mirrors.
     fn emit_records(
         &mut self,
         observers: &[Observer],
@@ -357,14 +358,14 @@ impl AuthorityState {
             let crafting_dirty =
                 observer.has_actor && outcome.crafting_dirty.contains(&observer.session);
             // The inventory state comes first.
-            if let Some(record) = record
-                && (view.last_inventory.as_ref() != Some(&record) || inventory_dirty)
+            if observer.has_actor
+                && let Some(record) = record
             {
-                events.push(RoutedEvent::new(
-                    owner,
-                    Event::InventoryState(inventory_event(&record)),
-                ));
-                view.last_inventory = Some(record);
+                let inventory = inventory_event(&record);
+                if view.last_inventory.as_ref() != Some(&inventory) || inventory_dirty {
+                    events.push(RoutedEvent::new(owner, Event::InventoryState(inventory)));
+                    view.last_inventory = Some(inventory);
+                }
             }
             // The viewed chest publishes next; a furnace defers until after
             // the crafting grid so the frozen order holds for both kinds.
@@ -394,7 +395,9 @@ impl AuthorityState {
             view.last_lease = lease;
             // The crafting grid follows the close notice, with the matched
             // output from the frozen recipe matcher the take provider owns.
-            if let Some(record) = record {
+            if observer.has_actor
+                && let Some(record) = record
+            {
                 let crafting = (record.crafting, record.crafting_size);
                 if view.last_crafting.as_ref() != Some(&crafting) || crafting_dirty {
                     let extent = crate::rules::crafting::grid_extent(record.crafting_size);

@@ -68,6 +68,15 @@ owner inventory and crafting publication lanes. Inventory and container views
 retain their separate providers and phases. Prepared rule cases and actual
 reducer publication cases qualify this command boundary, not executable startup.
 
+Owner inventory and crafting publication require an Active player. Inventory
+mirrors retain the checked selected/hotbar/backpack wire value, so armor and
+grid-only changes require their explicit accepted intent rather than an
+unrelated whole-record diff. Successful workbench open/reopen marks only the
+grid lane; completed bites and pickups mark inventory after atomic settlement.
+Equal final records still publish once, while Pending records preserve mirrors
+until activation. The publication owner-intent topic executes actual providers
+with prepared runtime/lifecycle controls; queue receipts remain separate.
+
 [`src/agent/AGENTS.md`](src/agent/AGENTS.md) owns loopback HTTP, lease, host,
 memory, snapshot and MCP lifecycle guidance. The actual `McpService` implements
 `McpLifecycle`; successful explicit deadline-aware close proves every admitted
