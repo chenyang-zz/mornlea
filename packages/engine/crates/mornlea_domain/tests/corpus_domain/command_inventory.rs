@@ -465,7 +465,7 @@ fn execute_chat_intent(
         },
         None => match constructed {
             Ok(text_value) => {
-                let intent = ChatIntent::new(text_value);
+                let intent = ChatIntent::try_new(text_value).unwrap();
                 let mut fields = JsonMap::new();
                 fields.insert(
                     "text".to_string(),

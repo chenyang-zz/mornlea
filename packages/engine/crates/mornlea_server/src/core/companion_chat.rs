@@ -16,6 +16,10 @@ use mornlea_domain::{
 
 use super::contracts::{AgentPlan, PlanStep, ServerError, SessionKey};
 
+#[path = "companion_chat_persistence.rs"]
+mod persistence;
+pub use persistence::RestoredCompanionTasks;
+
 /// Maximum immutable configured companions.
 pub const MAX_CONFIGURED_COMPANIONS: usize = 4;
 /// Maximum pending commands per companion besides the current task.
@@ -35,8 +39,8 @@ pub const STOP_COMMAND: &str = "停止";
 /// Issuer facts captured at the authoritative chat ingress boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompanionChatIssuer {
-    /// Session that issued the command.
-    pub session: SessionKey,
+    /// Original issuing session; restored provenance has no live human session.
+    pub session: Option<SessionKey>,
     /// Player identity of the issuer.
     pub player_id: PlayerId,
     /// Display name of the issuer.
@@ -56,7 +60,7 @@ pub enum CompanionChatPhase {
     Queued,
     /// Taken for planning, awaiting a validated plan install.
     Planning,
-    /// Running with an installed checked plan.
+    /// Running with checked steps installed or restored into authoritative runtime ownership.
     Running,
 }
 
@@ -65,7 +69,7 @@ pub enum CompanionChatPhase {
 pub struct CompanionChatTask {
     /// Checked generation naming this task.
     pub generation: u64,
-    /// Exact trimmed instruction.
+    /// Exact admitted instruction, including source-valid saved whitespace.
     pub command: CommandText,
     /// Original issuer captured at ingress.
     pub issuer: CompanionChatIssuer,
@@ -73,7 +77,7 @@ pub struct CompanionChatTask {
     pub source_tick: u64,
     /// Current phase.
     pub phase: CompanionChatPhase,
-    /// Installed checked plan while running.
+    /// Installed model plan; restored running steps stay in the authoritative runtime.
     pub plan: Option<AgentPlan>,
 }
 
@@ -92,6 +96,8 @@ struct ChatSlot {
     generation: u64,
     current: Option<CompanionChatTask>,
     pending: VecDeque<(CommandText, CompanionChatIssuer, u64)>,
+    /// Saved terminal-follow ownership without fabricating a missing model summary.
+    restored_follow: bool,
 }
 
 /// One decided chat fact awaiting the publication drain.
@@ -187,6 +193,7 @@ impl CompanionChatBook {
                 generation: 0,
                 current: None,
                 pending: VecDeque::new(),
+                restored_follow: false,
             });
         }
         self.ever_configured = true;
@@ -359,6 +366,7 @@ impl CompanionChatBook {
             let (command, issuer, source_tick) =
                 slot.pending.pop_front().expect("checked pending head");
             slot.generation = next;
+            slot.restored_follow = false;
             slot.current = Some(CompanionChatTask {
                 generation: next,
                 command,
@@ -373,19 +381,21 @@ impl CompanionChatBook {
 
     /// Returns the current task when it can be stopped, without mutation.
     ///
-    /// Only a `Running` task carrying a checked plan whose last step is a
-    /// terminal `Follow` is stoppable; earlier finite steps before that
-    /// terminal follow are permitted. Idle, queued, planning, plan-less, or
-    /// non-follow running tasks all yield `None`.
+    /// A `Running` task is stoppable when its checked installed or restored
+    /// plan ends in `Follow`. Restored plans remain in runtime ownership;
+    /// a private marker preserves that fact without inventing model text.
     pub(crate) fn peek_stoppable(&self, id: CompanionId) -> Option<CompanionChatTask> {
-        let current = self.slots.get(&id)?.current.as_ref()?;
+        let slot = self.slots.get(&id)?;
+        let current = slot.current.as_ref()?;
         if current.phase != CompanionChatPhase::Running {
             return None;
         }
-        if !matches!(
-            current.plan.as_ref()?.steps.last(),
-            Some(PlanStep::Follow { .. })
-        ) {
+        if !slot.restored_follow
+            && !matches!(
+                current.plan.as_ref().and_then(|plan| plan.steps.last()),
+                Some(PlanStep::Follow { .. })
+            )
+        {
             return None;
         }
         Some(current.clone())
@@ -398,7 +408,9 @@ impl CompanionChatBook {
     /// are untouched.
     pub(crate) fn stop_current(&mut self, id: CompanionId) -> Option<CompanionChatTask> {
         self.peek_stoppable(id)?;
-        self.slots.get_mut(&id)?.current.take()
+        let slot = self.slots.get_mut(&id)?;
+        slot.restored_follow = false;
+        slot.current.take()
     }
 
     /// Whether one companion holds a running task of this generation.
@@ -437,11 +449,13 @@ impl CompanionChatBook {
         generation: u64,
         plan: AgentPlan,
     ) -> Option<CompanionChatTask> {
-        let current = self.slots.get_mut(&id)?.current.as_mut()?;
+        let slot = self.slots.get_mut(&id)?;
+        let current = slot.current.as_mut()?;
         if current.phase != CompanionChatPhase::Planning || current.generation != generation {
             return None;
         }
         current.phase = CompanionChatPhase::Running;
+        slot.restored_follow = false;
         current.plan = Some(plan);
         Some(current.clone())
     }
@@ -487,7 +501,9 @@ impl CompanionChatBook {
         state: TaskState,
     ) -> Option<CompanionChatTask> {
         self.peek_finishable(id, generation, state)?;
-        self.slots.get_mut(&id)?.current.take()
+        let slot = self.slots.get_mut(&id)?;
+        slot.restored_follow = false;
+        slot.current.take()
     }
 }
 
@@ -551,7 +567,7 @@ mod tests {
 
     fn test_issuer() -> CompanionChatIssuer {
         CompanionChatIssuer {
-            session: SessionKey::from_raw(1).unwrap(),
+            session: Some(SessionKey::from_raw(1).unwrap()),
             player_id: PlayerId::try_from_bytes(test_uuid(1)).unwrap(),
             player_name: DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
             position: FiniteVec3::try_new([0.0, 1.0, 0.0]).unwrap(),
@@ -622,3 +638,7 @@ mod tests {
         assert!(book.take_queued_for_planning(id).is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "companion_chat_persistence_tests.rs"]
+mod persistence_tests;

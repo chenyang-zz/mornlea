@@ -163,9 +163,12 @@ fn retired_key_refuses_submit() {
 fn chat_and_keepalive_stay_control_plane() {
     let mut state = authority();
     let key = session::admit(&mut state, login(23, "Chatty"), TransportKind::Memory).unwrap();
-    let chat = PlayIntent::Chat(mornlea_domain::ChatIntent::new(
-        CommandText::try_from_canonical("hello".to_owned()).unwrap(),
-    ));
+    let chat = PlayIntent::Chat(
+        mornlea_domain::ChatIntent::try_new(
+            CommandText::try_from_canonical("hello".to_owned()).unwrap(),
+        )
+        .unwrap(),
+    );
     assert_eq!(
         session::submit(&mut state, key, chat).unwrap(),
         SubmissionReceipt::ControlAccepted

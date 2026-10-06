@@ -87,6 +87,8 @@ rather than checking that it omits a few names.
   ServerPacket`. Errors are `ProtocolError` with explicit mappings, and there
   is no catch-all arm in any direction: a new registry variant or a new domain
   variant is a compile error rather than a silent fallthrough.
+- Chat conversion calls checked `ChatIntent::try_new` after the unchanged
+  canonical wire command gate; saved task text does not widen client admission.
 - The client map is one intent per registered client key: the 19 sequenced
   Play commands map to exactly one `DOMAIN::Command` variant each (the domain
   `input/inventory.rs` payloads are the targets, including the `StackView

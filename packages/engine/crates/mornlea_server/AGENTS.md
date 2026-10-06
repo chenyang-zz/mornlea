@@ -47,6 +47,17 @@ and survivor states within each observer's family. Previous membership remains
 intact until all three blocks complete, preserving survivor-only state selection
 and passive death reasons. This event ordering does not qualify queue admission.
 
+Private `core/companion_chat_persistence.rs` prepares a complete configured
+chat owner and fresh runtime task handoff from an already accepted v5 aggregate.
+Running progress remains in the authoritative stored task; a private terminal
+follow marker permits stop without inventing model summary. Source-valid saved
+commands keep every byte and restored issuers have no human session. Complete
+queue snapshots normalize Planning to Queued, preserve matched Running progress
+and ordered FIFO, and validate the aggregate/configuration join. The actual
+chat projector consumes IDs for wire-invalid saved command restatements and
+continues later facts. This pure task contract does not load/register actors,
+observe durable aggregate changes or compose Agent shutdown.
+
 ## Agent boundary
 
 Crafting-view partial and quick moves settle in the crafting provider during

@@ -155,9 +155,12 @@ fn valid_receipt() {
             arrival_index: 1
         }
     );
-    let chat = PlayIntent::Chat(mornlea_domain::ChatIntent::new(
-        CommandText::try_from_canonical("hello".to_owned()).unwrap(),
-    ));
+    let chat = PlayIntent::Chat(
+        mornlea_domain::ChatIntent::try_new(
+            CommandText::try_from_canonical("hello".to_owned()).unwrap(),
+        )
+        .unwrap(),
+    );
     assert_eq!(
         endpoint.submit(session, chat).unwrap(),
         SubmissionReceipt::ControlAccepted

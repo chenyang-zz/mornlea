@@ -1410,7 +1410,7 @@ impl AuthorityState {
             });
         let look_hit = Self::capture_look_hit(&view, position, look, dimension);
         Ok(CompanionChatIssuer {
-            session: entry.session,
+            session: Some(entry.session),
             player_id: entry.player_id,
             player_name: entry.display_name.clone(),
             position,
@@ -16731,9 +16731,9 @@ mod companion_chat_boundary_tests {
     }
 
     fn chat(text: &str) -> PlayIntent {
-        PlayIntent::Chat(ChatIntent::new(
-            CommandText::try_from_canonical(text.to_owned()).unwrap(),
-        ))
+        PlayIntent::Chat(
+            ChatIntent::try_new(CommandText::try_from_canonical(text.to_owned()).unwrap()).unwrap(),
+        )
     }
 
     fn companion_actor(id: CompanionId) -> ActorRecord {
@@ -16942,5 +16942,101 @@ mod companion_chat_boundary_tests {
         assert_eq!(current.source_tick, u64::MAX);
         assert_eq!(current.generation, 1);
         assert_eq!(a.next_tick, u64::MAX);
+    }
+    #[test]
+    fn restored_padded_terminal_fact_consumes_id_and_preserves_later_publication() {
+        let mut a = fresh();
+        logged(&mut a);
+        let (id, name) = amu();
+        let actor = companion_actor(id);
+        let ActorBody::Companion(body) = &actor.body else {
+            unreachable!()
+        };
+        let raw = mornlea_storage::PlayerId::from_bytes(id.bytes());
+        let loaded = mornlea_storage::StoredCompanions {
+            source_schema: 5,
+            revision: 1,
+            agent_namespace_id: raw,
+            records: vec![body.clone()],
+            lifecycles: vec![mornlea_storage::StoredCompanionLifecycle {
+                id: raw,
+                active: true,
+                memory_epoch: 1,
+                memory_revision: 0,
+                memory_operation_id: Default::default(),
+                summary: String::new(),
+                tombstone_operation_id: Default::default(),
+            }],
+            queues: vec![mornlea_storage::StoredCompanionQueue {
+                id: raw,
+                has_current: true,
+                current: StoredCompanionTask {
+                    command: " follow ".into(),
+                    state: COMPANION_TASK_RUNNING,
+                    plan_steps: vec![StoredPlanStep {
+                        kind: COMPANION_PLAN_STEP_FOLLOW,
+                        player_id: raw,
+                        ..Default::default()
+                    }],
+                    start_tick: 7,
+                    ..Default::default()
+                },
+                pending: vec!["dig".into()],
+                summary: String::new(),
+            }],
+        };
+        let (book, tasks) =
+            CompanionChatBook::from_persisted(&[(id, name.clone())], &loaded).unwrap();
+        let issuer = book.queue_view(id).unwrap().current.unwrap().issuer;
+        a.companion_chat = book;
+        a.residents.actors.push(actor);
+        let mut runtime = companion_runtime(id);
+        if let ActorAux::Companion {
+            generation, task, ..
+        } = &mut runtime.aux
+        {
+            *generation = tasks[&id].0;
+            *task = tasks[&id].1.clone();
+        }
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), runtime);
+        assert!(
+            a.finish_companion_chat_task(id, 1, TaskState::Completed)
+                .unwrap()
+        );
+        a.companion_chat
+            .push_decided(DecidedChatFact::broadcast(
+                issuer.player_id,
+                issuer.player_name,
+                ChatBody::Task {
+                    companion: mornlea_domain::CompanionSpeaker::new(id, name),
+                    command: CommandText::try_from_canonical("dig".into()).unwrap(),
+                    state: TaskState::Progress,
+                },
+            ))
+            .unwrap();
+        let outcome = super::super::publication_project::TickOutcome {
+            block_batches: Vec::new(),
+            resyncs: Vec::new(),
+            quiet_passive_removals: BTreeSet::new(),
+            inventory_dirty: BTreeSet::new(),
+            crafting_dirty: BTreeSet::new(),
+        };
+        let published = a.project_tick_publication(0, &outcome);
+        let chat: Vec<_> = published
+            .iter()
+            .filter_map(|event| match event.event() {
+                mornlea_domain::Event::Chat(chat) => Some(chat),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chat.len(), 1);
+        assert_eq!(chat[0].event_id(), 2);
+        assert_eq!(a.next_chat_event_id, 3);
+        let queue = a.companion_chat_queue(id).unwrap();
+        assert!(queue.current.is_none());
+        assert_eq!(queue.pending[0].0.as_str(), "dig");
+        assert!(a.companion_chat.decided.is_empty());
     }
 }

@@ -717,9 +717,10 @@ fn submit_chat(state: &mut AuthorityState, session: SessionKey, text: &str) {
     state
         .submit(
             session,
-            PlayIntent::Chat(ChatIntent::new(
-                CommandText::try_from_canonical(text.to_owned()).unwrap(),
-            )),
+            PlayIntent::Chat(
+                ChatIntent::try_new(CommandText::try_from_canonical(text.to_owned()).unwrap())
+                    .unwrap(),
+            ),
         )
         .unwrap();
 }
@@ -2122,9 +2123,9 @@ fn projection_chat_contract_intake_limit_and_stop_phrases() {
     let sender = login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0);
     configure_amu(&mut state);
     let chat = |text: &str| {
-        PlayIntent::Chat(ChatIntent::new(
-            CommandText::try_from_canonical(text.to_owned()).unwrap(),
-        ))
+        PlayIntent::Chat(
+            ChatIntent::try_new(CommandText::try_from_canonical(text.to_owned()).unwrap()).unwrap(),
+        )
     };
     for _ in 0..256 {
         state.submit(sender, chat("@阿木 dig")).unwrap();
@@ -2966,7 +2967,7 @@ fn projection_chat_contract_issuer_capture_and_ray() {
         .expect("current")
         .issuer
         .clone();
-    assert_eq!(issuer.session, sender);
+    assert_eq!(issuer.session, Some(sender));
     assert_eq!(issuer.player_id, PlayerId::try_from_bytes(uuid(1)).unwrap());
     assert_eq!(issuer.player_name.as_str(), "Ada");
     assert_eq!(issuer.position.get(), [0.5, 65.0, 0.5]);

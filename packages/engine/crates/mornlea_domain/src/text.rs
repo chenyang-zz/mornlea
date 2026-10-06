@@ -178,16 +178,32 @@ impl CompanionName {
     }
 }
 
-/// Canonical player command text, bounded by `COMMAND_TEXT_MAX_BYTES`.
+/// Authoritative command text, bounded by `COMMAND_TEXT_MAX_BYTES`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandText(String);
 
 impl CommandText {
+    /// Restores source-valid saved text without trimming away persisted instruction bytes.
+    /// Live admission continues to use the separate strict canonical constructor.
+    pub fn try_from_persisted(persisted: String) -> Result<Self, DomainError> {
+        if persisted.len() > COMMAND_TEXT_MAX_BYTES
+            || trim_pinned_whitespace(&persisted).is_empty()
+            || persisted.chars().any(is_pinned_control)
+        {
+            return Err(DomainError::InvalidText);
+        }
+        Ok(Self(persisted))
+    }
+
     pub fn try_from_canonical(canonical: String) -> Result<Self, DomainError> {
         if !is_canonical_bounded_text(&canonical, COMMAND_TEXT_MAX_BYTES) {
             return Err(DomainError::InvalidText);
         }
         Ok(Self(canonical))
+    }
+
+    pub(crate) fn is_canonical(&self) -> bool {
+        !has_surrounding_whitespace(&self.0)
     }
 
     pub fn as_str(&self) -> &str {
@@ -251,5 +267,119 @@ mod tests {
         assert_eq!(trim_pinned_whitespace("\u{200B}n"), "\u{200B}n");
         assert_eq!(trim_pinned_whitespace(""), "");
         assert_eq!(trim_pinned_whitespace("plain"), "plain");
+    }
+}
+
+#[cfg(test)]
+mod persisted_command_tests {
+    use super::*;
+
+    #[test]
+    fn persisted_command_preserves_source_whitespace_without_relaxing_live_admission() {
+        for text in [" work ", "\u{00a0}工作\u{3000}", "\u{200b}"] {
+            let saved = CommandText::try_from_persisted(text.to_owned()).unwrap();
+            assert_eq!(saved.as_str(), text);
+            assert_eq!(
+                CommandText::try_from_canonical(text.to_owned()).is_ok(),
+                text == "\u{200b}"
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_command_keeps_byte_ceiling_and_control_refusals() {
+        let text = "x".repeat(COMMAND_TEXT_MAX_BYTES);
+        assert_eq!(
+            CommandText::try_from_persisted(text.clone())
+                .unwrap()
+                .as_str(),
+            text
+        );
+        for text in [
+            String::new(),
+            " \u{00a0}".into(),
+            "a\nb".into(),
+            "a\u{0085}b".into(),
+            "x".repeat(COMMAND_TEXT_MAX_BYTES + 1),
+        ] {
+            assert!(CommandText::try_from_persisted(text).is_err());
+        }
+        assert!(CommandText::try_from_persisted("界".repeat(342)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod restored_chat_event_tests {
+    use super::*;
+    use crate::{
+        ChatBody, ChatEvent, ChatEventParts, CompanionId, CompanionSpeaker, PlayerId, TaskState,
+    };
+
+    fn parts(body: ChatBody) -> ChatEventParts {
+        let mut raw = [0; 16];
+        raw[6] = 0x40;
+        raw[8] = 0x80;
+        ChatEventParts {
+            event_id: 1,
+            player_id: PlayerId::try_from_bytes(raw).unwrap(),
+            player_name: DisplayName::try_from_canonical("Ada".into()).unwrap(),
+            body,
+        }
+    }
+    fn companion() -> CompanionSpeaker {
+        let mut raw = [0; 16];
+        raw[6] = 0x40;
+        raw[8] = 0x80;
+        CompanionSpeaker::new(
+            CompanionId::try_from_bytes(raw).unwrap(),
+            CompanionName::try_from_canonical("Nova".into()).unwrap(),
+        )
+    }
+    #[test]
+    fn restored_padded_commands_cannot_escape_as_immutable_chat_events() {
+        for text in [" work ", "\u{00a0}work\u{3000}"] {
+            let command = CommandText::try_from_persisted(text.into()).unwrap();
+            let companion = companion();
+            for body in [
+                ChatBody::Accepted {
+                    companion: companion.clone(),
+                    command: command.clone(),
+                },
+                ChatBody::QueueFull {
+                    companion: companion.clone(),
+                    command: command.clone(),
+                },
+                ChatBody::NotFollowing {
+                    companion: companion.clone(),
+                    command: command.clone(),
+                },
+                ChatBody::Task {
+                    companion,
+                    command: command.clone(),
+                    state: TaskState::Completed,
+                },
+            ] {
+                assert_eq!(
+                    ChatEvent::try_new(parts(body)),
+                    Err(DomainError::InvalidText)
+                );
+            }
+        }
+        let body = ChatBody::Task {
+            companion: companion(),
+            command: CommandText::try_from_persisted("work".into()).unwrap(),
+            state: TaskState::Completed,
+        };
+        assert!(ChatEvent::try_new(parts(body)).is_ok());
+    }
+    #[test]
+    fn zero_event_identity_precedes_restored_command_refusal() {
+        let mut parts = parts(ChatBody::Task {
+            companion: companion(),
+            command: CommandText::try_from_persisted(" work ".into()).unwrap(),
+            state: TaskState::Completed,
+        });
+        parts.event_id = 0;
+        assert_eq!(ChatEvent::try_new(parts), Err(DomainError::InvalidIdentity));
     }
 }

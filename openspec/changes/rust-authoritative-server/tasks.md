@@ -226,6 +226,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3cm Land source-compatible pure companion missing/legacy/v5 configuration and lifecycle merge before authoritative consumers ([packet](plans/118-companion-configuration-merge.md)). Direct Codex: declaration-only REDs,24GREEN including19actual unchanged Go merge/encode outcomes and original non-Clone entropy I/O cause; full Rust76suites3567results PASS, independent revised SCOPED_PASS. Startup/capture/CAS consumers and broad3.8/4.1/4.2 remain open.
 
+- [x] 3.7l3tp Qualify complete chat-owned companion task restoration and settled queue normalization before authoritative consumers ([packet](plans/119-companion-task-persistence.md)). Direct Codex: declaration-only REDs plus genuine typed-chat/publication REDs,20new focused GREEN; full Rust76suites3587results and all4actual Go restore controls PASS after verified permission restoration; independent SCOPED_PASS/DOCS_PASS. This accepts task owner and prepared publication only; automatic bootstrap/capture/path/Agent/executable and broad3.8/4.1/4.2 remain open.
+
 ## 4. Closeout
 
 

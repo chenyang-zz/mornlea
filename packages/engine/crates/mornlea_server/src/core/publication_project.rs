@@ -297,21 +297,23 @@ impl AuthorityState {
     /// the monotonic event ids in decided order at the existing family slot.
     /// Accepted and lifecycle facts broadcast while sender-only rejections
     /// address the issuing session. The pre-tick budget proves id headroom,
-    /// so allocation cannot run out; already decided broadcasts are never
-    /// rechecked or suppressed here.
+    /// so allocation cannot run out. Source-invalid restatements consume their
+    /// allocated id but emit nothing; later valid facts and task mutations survive.
     fn emit_chat(&mut self, _entities: &Entities, events: &mut Vec<RoutedEvent>) {
         for fact in self.take_decided_chat_facts() {
             let Some(event_id) = self.allocate_chat_event_id() else {
                 break;
             };
-            let event = ChatEvent::try_new(ChatEventParts {
+            let Ok(chat) = ChatEvent::try_new(ChatEventParts {
                 event_id,
                 player_id: fact.player_id,
                 player_name: fact.player_name,
                 body: fact.body,
-            })
-            .map(Event::Chat)
-            .expect("decided chat facts carry nonzero event ids");
+            }) else {
+                // Saved task text is broader than wire chat text; Go skips invalid facts too.
+                continue;
+            };
+            let event = Event::Chat(chat);
             let recipient = match fact.recipient {
                 None => EventRecipient::Broadcast,
                 Some(session) => EventRecipient::Session(session.get()),

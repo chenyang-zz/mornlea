@@ -347,10 +347,11 @@ fn command_inventory_command_carries_every_variant_and_stays_distinct() {
 
 #[test]
 fn command_inventory_chat_intent_retains_text_verbatim() {
-    let intent = ChatIntent::new(
+    let intent = ChatIntent::try_new(
         CommandText::try_from_canonical("@Bob 停止".to_string())
             .expect("a bounded, trimmed command text is publishable"),
-    );
+    )
+    .unwrap();
     // The mention is retained byte for byte: this payload performs no
     // addressing, warp, stop or queue policy, and it carries no sequence, so a
     // replay sees exactly the text the player typed.
