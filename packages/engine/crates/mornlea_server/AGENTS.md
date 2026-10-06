@@ -185,6 +185,13 @@ separate caller responsibilities.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
+- `src/core/command_outcome.rs` owns checked command disposition and bounded
+  refusal identity/order. Only Unowned falls through; Settled and semantic
+  Refused consume the envelope, while hard ServerError remains separate.
+  Compact admission and settlement lanes retain original session/sequence,
+  at most 4096 command plus eight held-input refusals. Contract/double tests
+  qualify this surface; real providers and the serial tick own integration.
+
 - `src/core/actor_placement.rs` owns bounded borrowed restoration, support,
   Safe checkpoint and single-column spawn geometry. It reuses the motion
   collision mapping with source float arithmetic, strict contact, whole-footprint Ready gating and

@@ -58,3 +58,6 @@ mod prepared_delivery;
 
 #[path = "server_contract/chunk_encoding.rs"]
 mod chunk_encoding;
+
+#[path = "server_contract/command_outcome.rs"]
+mod command_outcome;

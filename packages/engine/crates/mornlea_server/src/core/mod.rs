@@ -9,6 +9,7 @@ pub mod block_observations;
 pub mod chunk_driver;
 pub mod chunk_encoding;
 pub mod chunk_retirement;
+pub mod command_outcome;
 pub mod companion_chat;
 pub mod companion_ingress;
 mod container_store;
