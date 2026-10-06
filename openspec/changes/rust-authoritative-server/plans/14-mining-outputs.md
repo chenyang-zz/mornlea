@@ -108,3 +108,7 @@ Bed mining tests. Record nonzero counts, behavioral REDs, exact source evidence
 and scoped commit. Main obtains independent review before integration; rollback
 reverts only this node and invalidates dependent evidence. No default runtime,
 wire/save schema or new item/geometry change.
+
+## Source suspension reconciliation
+
+The earlier output acceptance preserved existing bow-progress/command suppression only. Packet127 separately qualifies source runtime reset/subscription, current container view and either selected bow form at the sole human mining provider; it leaves the accepted harvest/output tables unchanged.

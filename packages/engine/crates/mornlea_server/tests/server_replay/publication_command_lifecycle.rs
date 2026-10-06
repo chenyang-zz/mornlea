@@ -1,7 +1,7 @@
 //! Native lifecycle command ordering and real held eating advancement.
 use super::*;
 
-fn scene(kind: ContainerKind) -> (AuthorityState, SessionKey, SessionKey, ContainerRef) {
+pub(super) fn scene(kind: ContainerKind) -> (AuthorityState, SessionKey, SessionKey, ContainerRef) {
     let mut state = authority();
     state.enable_source_player_restoration(1).unwrap();
     seed_world(&mut state);

@@ -5543,3 +5543,6 @@ mod container_lifecycle;
 
 #[path = "publication_command_lifecycle.rs"]
 mod command_lifecycle;
+
+#[path = "publication_mining_lifecycle.rs"]
+mod mining_lifecycle;

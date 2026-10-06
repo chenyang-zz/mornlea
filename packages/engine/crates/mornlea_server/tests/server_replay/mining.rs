@@ -232,7 +232,7 @@ fn human_runtime(key: ActorKey, held: PlayerControl, bow: bool) -> ActorRuntime 
     ActorRuntime {
         key,
         controls: Some(held),
-        has_view: false,
+        has_view: true,
         reset: false,
         attack_cooldown: 0,
         hurt_cooldown: 0,
@@ -1998,4 +1998,90 @@ fn action_costs_capacity_precedes_completion() {
         }
         assert_eq!(c.take_charges(), prefix);
     }
+}
+
+fn human_suspension_guard(cause: u8) {
+    let target = BlockPos::new(0, 65, 1);
+    let mut state = authority();
+    let session = state
+        .admit(admitted(111, "suspension"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let actor = south_scene(&mut context, session, ItemStack::default(), &[(target, 45)]);
+    let call = mine_call(actor);
+    for elapsed in 1..=2 {
+        provider::run(&mut context, call).unwrap();
+        assert_eq!(context.read().mining(actor).unwrap().elapsed, elapsed);
+    }
+    let original_runtime = context.read().runtime(actor).unwrap().clone();
+    let original_inventory = *context.read().inventory(actor).unwrap();
+    let mut runtime = original_runtime.clone();
+    let mut inventory = original_inventory;
+    match cause {
+        0 => runtime.reset = true,
+        1 => runtime.has_view = false,
+        2 => inventory.slots[0] = tool(62, 100),
+        3 => inventory.slots[0] = tool(65, 0),
+        _ => panic!("unknown suspension cause"),
+    }
+    context.stage(RuleEffect::Runtime(runtime)).unwrap();
+    context.preload_inventory(actor, inventory);
+    let cell = context.read().observation(Dimension::OVERWORLD, target);
+    let events = context.events().len();
+    for applied in [1, 0] {
+        assert_eq!(
+            provider::run(&mut context, call).unwrap(),
+            PhaseReport {
+                examined: 1,
+                applied,
+                carried: 0,
+                rejected: 0,
+            }
+        );
+        assert_eq!(context.read().mining(actor), None);
+        assert_eq!(context.read().inventory(actor), Some(&inventory));
+        assert_eq!(
+            context.read().observation(Dimension::OVERWORLD, target),
+            cell
+        );
+        assert_eq!(context.events().len(), events);
+        assert!(context.take_charges().is_empty());
+        assert!(
+            context
+                .read()
+                .runtime(actor)
+                .unwrap()
+                .controls
+                .unwrap()
+                .actions()
+                .primary
+        );
+        assert!(context.read().runtime(actor).unwrap().bow.is_none());
+    }
+    context
+        .stage(RuleEffect::Runtime(original_runtime))
+        .unwrap();
+    context.preload_inventory(actor, original_inventory);
+    provider::run(&mut context, call).unwrap();
+    assert_eq!(context.read().mining(actor).unwrap().elapsed, 1);
+}
+
+#[test]
+fn human_suspension_reset_clears_and_restarts_quietly() {
+    human_suspension_guard(0);
+}
+
+#[test]
+fn human_suspension_unavailable_view_clears_and_restarts_quietly() {
+    human_suspension_guard(1);
+}
+
+#[test]
+fn human_suspension_intact_bow_without_draw_clears_and_restarts_quietly() {
+    human_suspension_guard(2);
+}
+
+#[test]
+fn human_suspension_broken_bow_without_draw_clears_and_restarts_quietly() {
+    human_suspension_guard(3);
 }

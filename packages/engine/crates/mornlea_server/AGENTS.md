@@ -777,6 +777,10 @@ separate caller responsibilities.
   restarts at 1, completions through the 1.6 transaction exactly once, human
   failure clearing vs companion-full retaining saturated progress, the
   human-only snow clear without drop capacity, and bow-draw suppression.
+  Human eligibility also reads current staged reset, subscription and viewer
+  state, and excludes either selected bow form even without a draw. Suspension
+  clears progress quietly while preserving held controls; the next eligible
+  tick starts at one. Target Ready geometry remains a separate check.
   Successful human completion preflights the bounded charge lane before its
   transaction and earns one Mining receipt after progress clears; companion,
   incomplete and refused work earns none.

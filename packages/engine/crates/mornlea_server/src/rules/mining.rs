@@ -543,7 +543,7 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
         .actor
         .ok_or(ServerError::InvalidInput { field: "actor" })?;
     match actor {
-        ActorKey::Player(_) => {
+        ActorKey::Player(session) => {
             // Successful bucket use owns this tick's interaction. The receipt
             // lives only in the tick context, so held mining resumes next tick.
             if ctx.mining_suppressed(actor) {
@@ -551,6 +551,22 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
                 return stage_clear(ctx, actor, prior);
             }
             let view = ctx.read();
+            // Current source subscription and viewer state gate the action before
+            // ray resolution. Either bow form owns primary even without a draw.
+            if view
+                .runtime(actor)
+                .is_none_or(|runtime| runtime.reset || !runtime.has_view)
+                || view.viewer(session).is_some()
+                || view.inventory(actor).is_some_and(|inventory| {
+                    matches!(
+                        inventory.slots[usize::from(inventory.selected.get())].item,
+                        62 | 65
+                    )
+                })
+            {
+                let prior = view.mining(actor).cloned();
+                return stage_clear(ctx, actor, prior);
+            }
             let held = view.runtime(actor).and_then(|record| record.controls);
             let bow_drawn = view
                 .runtime(actor)
