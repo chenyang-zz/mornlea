@@ -110,7 +110,7 @@ struct Entities {
 
 /// One observer's new visible identity sets for this tick.
 struct Visibility {
-    remotes: BTreeSet<PlayerId>,
+    remotes: BTreeMap<PlayerId, SessionKey>,
     companions: BTreeSet<CompanionId>,
     hostiles: BTreeSet<HostileId>,
     passives: BTreeSet<PassiveId>,
@@ -582,7 +582,7 @@ fn visibility_of(
     drops: &[DropRecord],
 ) -> Visibility {
     let mut visibility = Visibility {
-        remotes: BTreeSet::new(),
+        remotes: BTreeMap::new(),
         companions: BTreeSet::new(),
         hostiles: BTreeSet::new(),
         passives: BTreeSet::new(),
@@ -607,7 +607,7 @@ fn visibility_of(
             ))
             && let Some(speaker) = speakers.iter().find(|speaker| speaker.session == target)
         {
-            visibility.remotes.insert(speaker.player_id);
+            visibility.remotes.insert(speaker.player_id, target);
         }
     }
     for (id, index) in &entities.companions {
@@ -707,9 +707,10 @@ fn apply_resync_requests(
     }
 }
 
-/// Remote-player and companion despawn diffs. Both families
-/// are pure interest exits, so an entity that merely failed to publish is not
-/// despawned. Every family emitter stores this tick's visible set back on the
+/// Remote-player and companion despawn diffs. A remote authority incarnation
+/// change despawns the old identity even when interest remains unchanged;
+/// companions retain their interest-exit boundary. Every family emitter stores
+/// this tick's visible identities back on the
 /// session view, so a departure publishes its despawn or removal exactly
 /// once, until the entity becomes visible again and correctly re-spawns.
 fn emit_despawns(
@@ -721,7 +722,10 @@ fn emit_despawns(
     for ((observer, view), visibility) in
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
-        for id in view.visible_remotes.difference(&visibility.remotes) {
+        for (id, previous) in &view.visible_remotes {
+            if visibility.remotes.get(id) == Some(previous) {
+                continue;
+            }
             events.push(RoutedEvent::new(
                 EventRecipient::Session(observer.session.get()),
                 Event::RemotePlayerDespawn(RemotePlayerDespawn::new(*id)),
@@ -987,11 +991,14 @@ fn emit_remotes(
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
         let mut published = visibility.remotes.clone();
-        for id in visibility.remotes.difference(&view.visible_remotes) {
+        for (id, session) in &visibility.remotes {
+            if view.visible_remotes.get(id) == Some(session) {
+                continue;
+            }
             let Some(speaker) = inputs
                 .speakers
                 .iter()
-                .find(|speaker| speaker.player_id == *id)
+                .find(|speaker| speaker.player_id == *id && speaker.session == *session)
             else {
                 published.remove(id);
                 continue;
@@ -1020,16 +1027,14 @@ fn emit_remotes(
             ));
         }
         let mut states = Vec::new();
-        for id in visibility
-            .remotes
-            .intersection(&view.visible_remotes)
-            .copied()
-            .collect::<Vec<_>>()
-        {
+        for (&id, &session) in &visibility.remotes {
+            if view.visible_remotes.get(&id) != Some(&session) {
+                continue;
+            }
             let Some(speaker) = inputs
                 .speakers
                 .iter()
-                .find(|speaker| speaker.player_id == id)
+                .find(|speaker| speaker.player_id == id && speaker.session == session)
             else {
                 continue;
             };

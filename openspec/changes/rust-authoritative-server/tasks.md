@@ -282,6 +282,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3arr Preserve captured remote and companion reset with unchanged source consumption cadence ([packet](plans/146-source-actor-reset-capture.md)). Only this private projection node; other actor/queue/runtime work and broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3rri Distinguish same-UUID remote session replacement and preserve despawn/spawn/survivor ordering ([packet](plans/147-source-remote-reconnect-identity.md)). Other actor/queue/runtime work and broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 

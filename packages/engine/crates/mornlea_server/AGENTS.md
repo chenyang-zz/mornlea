@@ -1330,3 +1330,9 @@ state batches; actor-only fixtures without runtimes retain false. Reset consumpt
 follows tick-result capture, including no-observer and closed-queue cases, and is
 independent of queue admission. The projector borrows runtime flags only through
 its synchronous family pass.
+
+Remote observer mirrors retain PlayerId together with the nonreused authority
+session key. A same-identity session replacement despawns the old incarnation
+before spawning the new one; survivor states require both values to match and
+exclude the replacement on its spawn tick. This private map retains the current
+projection ownership pending separate queue-admission acceptance.

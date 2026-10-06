@@ -13,7 +13,7 @@ use mornlea_domain::{
     ProjectileId,
 };
 
-use crate::contracts::ChunkKey;
+use crate::contracts::{ChunkKey, SessionKey};
 
 /// One chunk column's publication state on a single session's mirror.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -38,8 +38,9 @@ pub(crate) struct SessionView {
     pub(crate) chunks: BTreeMap<ChunkKey, ChunkPublication>,
     /// Last tick's visible companion identities.
     pub(crate) visible_companions: BTreeSet<CompanionId>,
-    /// Last tick's visible remote player identities.
-    pub(crate) visible_remotes: BTreeSet<PlayerId>,
+    /// Last tick's visible remote identities and authority incarnations.
+    /// Session keys never repeat within the authority that owns this view.
+    pub(crate) visible_remotes: BTreeMap<PlayerId, SessionKey>,
     /// Last tick's visible hostile identities.
     pub(crate) visible_hostiles: BTreeSet<HostileId>,
     /// Last tick's visible passive identities.

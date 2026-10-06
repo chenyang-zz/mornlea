@@ -5819,3 +5819,187 @@ fn projection_actor_reset_activation_capture_controls() {
         }
     }
 }
+
+fn projection_reconnect_scene() -> (AuthorityState, SessionKey, SessionKey) {
+    let (mut state, observer, previous, _) = command_lifecycle::scene(ContainerKind::Chest);
+    let peer = login(&mut state, 3, "Cleo", [8.5, 65.0, 8.5], 0.0, 0.0);
+    state.advance_tick(TickBudget::full()).unwrap();
+    for session in [observer, previous, peer] {
+        state.take_outbox(session, 512, 1_048_576).unwrap();
+    }
+    (state, observer, previous)
+}
+
+fn projection_reconnect_events(
+    publication: &mornlea_server::contracts::TickPublication,
+    session: SessionKey,
+) -> Vec<Event> {
+    events_for(publication, session)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::RemotePlayerDespawn(_)
+                    | Event::RemotePlayerSpawn(_)
+                    | Event::RemotePlayerStates(_)
+            )
+        })
+        .collect()
+}
+
+fn projection_reconnect_spawn(tick: u64, position: [f32; 3]) -> Event {
+    Event::RemotePlayerSpawn(RemotePlayerSpawn::new(RemotePlayerSpawnParts {
+        player_id: PlayerId::try_from_bytes(uuid(2)).unwrap(),
+        display_name: DisplayName::try_from_canonical("Berta".to_owned()).unwrap(),
+        server_tick: tick,
+        dimension: Dimension::OVERWORLD,
+        position: FiniteVec3::try_new(position).unwrap(),
+        look: look(0.75, -0.25),
+    }))
+}
+
+fn projection_reconnect_states(tick: u64, replacement: Option<[f32; 3]>) -> Event {
+    let mut states = Vec::new();
+    if let Some(position) = replacement {
+        states.push(RemotePlayerState::new(RemotePlayerStateParts {
+            player_id: PlayerId::try_from_bytes(uuid(2)).unwrap(),
+            dimension: Dimension::OVERWORLD,
+            position: FiniteVec3::try_new(position).unwrap(),
+            look: look(0.75, -0.25),
+            reset: false,
+        }));
+    }
+    states.push(RemotePlayerState::new(RemotePlayerStateParts {
+        player_id: PlayerId::try_from_bytes(uuid(3)).unwrap(),
+        dimension: Dimension::OVERWORLD,
+        position: FiniteVec3::try_new([8.5, 65.0, 8.5]).unwrap(),
+        look: look(0.0, 0.0),
+        reset: false,
+    }));
+    Event::RemotePlayerStates(
+        RemotePlayerStates::try_new(mornlea_domain::RemotePlayerStatesParts {
+            server_tick: tick,
+            states: states.into_boxed_slice(),
+        })
+        .unwrap(),
+    )
+}
+
+/// Checks actual queued remote frames in their captured family order.
+fn projection_reconnect_wire_order(
+    state: &mut AuthorityState,
+    session: SessionKey,
+    events: &[Event],
+) {
+    let expected: Vec<_> = events
+        .iter()
+        .map(|event| {
+            mornlea_server::core::publication::PreparedFrame::encode(
+                &mut mornlea_protocol::ProtocolCodec::new().unwrap(),
+                &mornlea_protocol::ServerPacket::try_from(event.clone()).unwrap(),
+            )
+            .unwrap()
+            .as_bytes()
+            .to_vec()
+        })
+        .collect();
+    let frames = state.take_outbox(session, 512, 1_048_576).unwrap();
+    let observed: Vec<_> = frames
+        .into_iter()
+        .filter(|frame| expected.contains(frame))
+        .collect();
+    assert_eq!(observed, expected);
+}
+
+#[test]
+fn projection_remote_reconnect_same_uuid_replaces_visible_incarnation() {
+    let (mut state, observer, previous) = projection_reconnect_scene();
+    state.retire(previous, CloseReason::PeerGone).unwrap();
+    let position = [12.5, 65.0, 4.5];
+    let replacement = login(&mut state, 2, "Berta", position, 0.75, -0.25);
+    assert!(replacement > previous);
+    assert_eq!(
+        state.session(previous).unwrap().phase,
+        mornlea_server::contracts::SessionPhase::Retired
+    );
+    let replaced = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(replacement))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Active
+    );
+    let expected = vec![
+        Event::RemotePlayerDespawn(mornlea_domain::RemotePlayerDespawn::new(
+            PlayerId::try_from_bytes(uuid(2)).unwrap(),
+        )),
+        projection_reconnect_spawn(replaced.tick, position),
+        projection_reconnect_states(replaced.tick, None),
+    ];
+    assert_eq!(projection_reconnect_events(&replaced, observer), expected);
+    projection_reconnect_wire_order(&mut state, observer, &expected);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = vec![projection_reconnect_states(following.tick, Some(position))];
+    assert_eq!(projection_reconnect_events(&following, observer), expected);
+    projection_reconnect_wire_order(&mut state, observer, &expected);
+}
+
+#[test]
+fn projection_remote_reconnect_pending_gap_control() {
+    let (mut state, observer, previous) = projection_reconnect_scene();
+    state.retire(previous, CloseReason::PeerGone).unwrap();
+    let position = [32.5, 65.0, 4.5];
+    assert!(!state.settled_read().unwrap().ready_chunk(chunk_key(2, 0)));
+    let replacement = login(&mut state, 2, "Berta", position, 0.75, -0.25);
+    assert!(replacement > previous);
+    let pending = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(replacement))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Pending
+    );
+    let expected = vec![
+        Event::RemotePlayerDespawn(mornlea_domain::RemotePlayerDespawn::new(
+            PlayerId::try_from_bytes(uuid(2)).unwrap(),
+        )),
+        projection_reconnect_states(pending.tick, None),
+    ];
+    assert_eq!(projection_reconnect_events(&pending, observer), expected);
+    projection_reconnect_wire_order(&mut state, observer, &expected);
+    let waiting = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = vec![projection_reconnect_states(waiting.tick, None)];
+    assert_eq!(projection_reconnect_events(&waiting, observer), expected);
+    projection_reconnect_wire_order(&mut state, observer, &expected);
+    stage(&mut state, |context| {
+        context.preload_ready_chunk(
+            ReadyChunk::try_new(chunk_key(2, 0), 1, 1, ground_chunk()).unwrap(),
+        )
+    });
+    let acquired = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(replacement))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Active
+    );
+    let expected = vec![
+        projection_reconnect_spawn(acquired.tick, position),
+        projection_reconnect_states(acquired.tick, None),
+    ];
+    assert_eq!(projection_reconnect_events(&acquired, observer), expected);
+    projection_reconnect_wire_order(&mut state, observer, &expected);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = vec![projection_reconnect_states(following.tick, Some(position))];
+    assert_eq!(projection_reconnect_events(&following, observer), expected);
+    projection_reconnect_wire_order(&mut state, observer, &expected);
+}
