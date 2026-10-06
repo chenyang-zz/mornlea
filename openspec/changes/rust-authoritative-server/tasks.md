@@ -264,6 +264,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3lor Publish exact immediate Open/Close refusal outcomes and physical sneak precedence with hard trusted staging ([packet](plans/137-source-lifecycle-command-outcomes.md)). Broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3ctr Publish exact late whole/partial/quick container transfer outcomes and hard trusted staging ([packet](plans/138-source-container-transfer-outcomes.md)). Container drop/other outcomes and broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 

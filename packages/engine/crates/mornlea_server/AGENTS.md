@@ -1254,3 +1254,12 @@ The raw provider shares settlement while retaining actor-free inventory fixtures
 and its semantic error shape. Late hotbar selection keeps its separate schedule
 and does not repeat an Active gate after combat. Accepted equal armor swaps
 retain publication intent even when the complete inventory record is unchanged.
+
+Late whole, partial and quick container transfers share privately tagged raw
+settlement algorithms with the live checked drain. Semantic refusals enter the
+settlement collector with original identity; trusted patches and durable revision
+failures stop the tick. Successful transfers retain inventory intent and a
+coalesced per-chunk dirty barrier, including equal final records. Container drops
+and raw lifecycle drains retain their separate compatibility policy. Prepared
+capacity/repack/revision causes qualify actual consumers; cross-dimension and
+whole queue/runtime composition remain separate.

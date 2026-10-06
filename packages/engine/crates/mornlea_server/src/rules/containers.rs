@@ -49,7 +49,7 @@ use crate::contracts::{
     InventoryPatch, InventoryRecord, PhaseReport, RuleCall, RuleEffect, RulePhase, RuleReject,
     ServerError, SessionKey, ViewLease,
 };
-use crate::core::command_outcome::{CommandDisposition, CommandResult};
+use crate::core::command_outcome::{CommandDisposition, CommandResult, RejectionStage};
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::rules::{crafting, drops};
 use crate::state::{AuthorityReadView, TickContext};
@@ -226,18 +226,20 @@ pub fn settle_command(
     let accepted = match envelope.command() {
         Command::OpenContainer(look) => settle_open(ctx, session, look)?,
         Command::CloseContainer => settle_close(ctx, session)?,
-        Command::MoveContainer(movement) => settle_whole(ctx, *envelope, movement)?,
+        Command::MoveContainer(movement) => {
+            settle_whole(ctx, *envelope, movement).map_err(TransferFailure::into_raw)?
+        }
         Command::MovePartial(partial) => {
             let StackView::Container(reference) = partial.view() else {
                 return Err(RuleReject::Wire(RejectReason::InvalidInput));
             };
-            settle_partial(ctx, *envelope, reference, partial)?
+            settle_partial(ctx, *envelope, reference, partial).map_err(TransferFailure::into_raw)?
         }
         Command::QuickMove(source) => {
             let StackView::Container(reference) = source.view() else {
                 return Err(RuleReject::Wire(RejectReason::InvalidInput));
             };
-            settle_quick(ctx, *envelope, reference, source)?
+            settle_quick(ctx, *envelope, reference, source).map_err(TransferFailure::into_raw)?
         }
         Command::DropStack(source) => {
             let StackView::Container(reference) = source.view() else {
@@ -258,11 +260,134 @@ pub fn settle_command(
     })
 }
 
+/// Ordinary transfer refusals retain their provenance across the raw wrapper.
+/// A wire-shaped staging failure is still an invariant failure for the live tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransferFailure {
+    Refused(RejectReason),
+    Trusted(RuleReject),
+}
+
+impl TransferFailure {
+    fn into_raw(self) -> RuleReject {
+        match self {
+            Self::Refused(reason) => RuleReject::Wire(reason),
+            Self::Trusted(error) => error,
+        }
+    }
+
+    fn into_live(self) -> CommandResult {
+        match self {
+            Self::Refused(reason) => Ok(CommandDisposition::Refused(reason)),
+            Self::Trusted(_) => Err(ServerError::Internal {
+                invariant: "container transfer staging",
+            }),
+        }
+    }
+}
+
+/// The live late transfer owner consumes only its three command families.
+/// Authority readiness is read here, after combat and before final view invalidation.
+pub(crate) fn settle_transfer(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+) -> CommandResult {
+    let owned = match envelope.command() {
+        Command::MoveContainer(_) => true,
+        Command::MovePartial(partial) => matches!(partial.view(), StackView::Container(_)),
+        Command::QuickMove(source) => matches!(source.view(), StackView::Container(_)),
+        _ => false,
+    };
+    if !owned {
+        return Ok(CommandDisposition::Unowned);
+    }
+    let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+        invariant: "container transfer session",
+    })?;
+    {
+        let view = ctx.read();
+        let actor = ActorKey::Player(session);
+        let Some(record) = view
+            .actor(actor)
+            .filter(|record| record.lifecycle == ActorLifecycle::Active)
+        else {
+            return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady));
+        };
+        if record.dimension != Dimension::OVERWORLD {
+            return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
+        }
+        if view.inventory(actor).is_none() {
+            return Err(ServerError::Internal {
+                invariant: "container transfer owner",
+            });
+        }
+    }
+    let result = match envelope.command() {
+        Command::MoveContainer(movement) => settle_whole(ctx, *envelope, movement),
+        Command::MovePartial(partial) => {
+            let StackView::Container(reference) = partial.view() else {
+                unreachable!()
+            };
+            settle_partial(ctx, *envelope, reference, partial)
+        }
+        Command::QuickMove(source) => {
+            let StackView::Container(reference) = source.view() else {
+                unreachable!()
+            };
+            settle_quick(ctx, *envelope, reference, source)
+        }
+        _ => unreachable!(),
+    };
+    match result {
+        Ok(true) => Ok(CommandDisposition::Settled(PhaseReport {
+            examined: 1,
+            applied: 1,
+            carried: 0,
+            rejected: 0,
+        })),
+        Ok(false) => Ok(CommandDisposition::Refused(RejectReason::InvalidInput)),
+        Err(error) => error.into_live(),
+    }
+}
+
+/// Drain the admitted bag once. Only semantic owned outcomes enter the wire
+/// collector; raw compatibility families keep their separately qualified policy.
+pub(crate) fn drain_commands(ctx: &mut TickContext<'_>) -> Result<PhaseReport, ServerError> {
+    let mut report = PhaseReport {
+        examined: 0,
+        applied: 0,
+        carried: 0,
+        rejected: 0,
+    };
+    for envelope in ctx.deferred(RulePhase::ContainerMove) {
+        report.examined += 1;
+        match settle_transfer(ctx, &envelope)? {
+            CommandDisposition::Settled(settled) => {
+                report.applied += settled.applied;
+                report.carried += settled.carried;
+                report.rejected += settled.rejected;
+            }
+            CommandDisposition::Refused(reason) => {
+                ctx.record_command_rejection(&envelope, reason, RejectionStage::Settlement)?;
+                report.rejected += 1;
+            }
+            CommandDisposition::Unowned => {
+                if settle_command(ctx, &envelope).is_ok() {
+                    report.applied += 1;
+                } else {
+                    report.rejected += 1;
+                }
+            }
+        }
+    }
+    Ok(report)
+}
+
 /// The viewer basis one settlement needs: an active player in the container
 /// dimension with a staged inventory. Container references are inherently
 /// overworld values (`ContainerRef` in `mornlea_domain::locations`), so a
-/// viewer anywhere else refuses, mirroring the Go dimension side of the view
-/// gate.
+/// viewer anywhere else retains the existing refusal policy. Cross-dimension
+/// parity is separately unqualified.
 struct ViewerBasis {
     session: SessionKey,
     actor: ActorKey,
@@ -523,9 +648,9 @@ fn settle_whole(
     ctx: &mut TickContext<'_>,
     envelope: CommandEnvelope,
     movement: ContainerMove,
-) -> Result<bool, RuleReject> {
+) -> Result<bool, TransferFailure> {
     let basis = move_basis(ctx, envelope, movement.container())
-        .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+        .ok_or(TransferFailure::Refused(RejectReason::InvalidInput))?;
     let from = movement.from() as usize;
     let to = movement.to() as usize;
     let computed = match &basis.stored.slots {
@@ -555,7 +680,8 @@ fn settle_whole(
             })
         }
     };
-    let (inventory, slots) = computed.ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    let (inventory, slots) =
+        computed.ok_or(TransferFailure::Refused(RejectReason::InvalidInput))?;
     commit(ctx, &basis.viewer, &basis.stored, inventory, slots)?;
     Ok(true)
 }
@@ -570,9 +696,9 @@ fn settle_partial(
     envelope: CommandEnvelope,
     reference: ContainerRef,
     partial: PartialMove,
-) -> Result<bool, RuleReject> {
-    let basis =
-        move_basis(ctx, envelope, reference).ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+) -> Result<bool, TransferFailure> {
+    let basis = move_basis(ctx, envelope, reference)
+        .ok_or(TransferFailure::Refused(RejectReason::InvalidInput))?;
     let from = partial.from() as usize;
     let to = partial.to() as usize;
     let computed = match &basis.stored.slots {
@@ -606,7 +732,8 @@ fn settle_partial(
             )
         }
     };
-    let (inventory, slots) = computed.ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    let (inventory, slots) =
+        computed.ok_or(TransferFailure::Refused(RejectReason::InvalidInput))?;
     commit(ctx, &basis.viewer, &basis.stored, inventory, slots)?;
     Ok(true)
 }
@@ -620,9 +747,9 @@ fn settle_quick(
     envelope: CommandEnvelope,
     reference: ContainerRef,
     source: StackSource,
-) -> Result<bool, RuleReject> {
-    let basis =
-        move_basis(ctx, envelope, reference).ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+) -> Result<bool, TransferFailure> {
+    let basis = move_basis(ctx, envelope, reference)
+        .ok_or(TransferFailure::Refused(RejectReason::InvalidInput))?;
     let from = source.slot() as usize;
     let computed = match &basis.stored.slots {
         ContainerSlots::Chest(cells) => quick_chest(&basis.viewer.inventory, cells, from)
@@ -651,7 +778,8 @@ fn settle_quick(
             })
         }
     };
-    let (inventory, slots) = computed.ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    let (inventory, slots) =
+        computed.ok_or(TransferFailure::Refused(RejectReason::InvalidInput))?;
     commit(ctx, &basis.viewer, &basis.stored, inventory, slots)?;
     Ok(true)
 }
@@ -739,16 +867,17 @@ fn commit(
     stored: &ContainerRecord,
     inventory: InventoryRecord,
     slots: ContainerSlots,
-) -> Result<(), RuleReject> {
+) -> Result<(), TransferFailure> {
     if !stacks_valid(&inventory, &slots) {
-        return Err(RuleReject::Wire(RejectReason::InvalidInput));
+        return Err(TransferFailure::Refused(RejectReason::InvalidInput));
     }
     if !can_repack(&inventory.slots, &inventory.crafting) {
-        return Err(RuleReject::Wire(RejectReason::InvalidInput));
+        return Err(TransferFailure::Refused(RejectReason::InvalidInput));
     }
     let mut effects = Vec::with_capacity(2);
     if inventory != viewer.inventory {
-        let patch = InventoryPatch::try_new(viewer.actor, viewer.inventory, inventory)?;
+        let patch = InventoryPatch::try_new(viewer.actor, viewer.inventory, inventory)
+            .map_err(TransferFailure::Trusted)?;
         effects.push(RuleEffect::Inventory(patch));
     }
     let next = ContainerRecord {
@@ -761,7 +890,8 @@ fn commit(
         after: next,
     });
     // A rejected durable container write must not spend the source inventory.
-    ctx.stage(RuleEffect::Compound(effects))?;
+    ctx.stage(RuleEffect::Compound(effects))
+        .map_err(TransferFailure::Trusted)?;
     ctx.record_inventory_publication_dirty(viewer.session);
     Ok(())
 }
@@ -1587,6 +1717,50 @@ mod lifecycle_tests {
         );
         assert_eq!(context.read().inventory(actor), Some(&current));
         assert!(context.read().viewer(session).is_none());
+        assert!(context.events().is_empty());
+    }
+
+    #[test]
+    fn transfer_adapter_ownership_and_missing_actor() {
+        use mornlea_domain::CommandEnvelopeParts;
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let mut context = TickContext::harness(&mut authority, TickBudget::full());
+        let make = |command| {
+            CommandEnvelope::try_new(CommandEnvelopeParts {
+                tick: 0,
+                session: 1,
+                sequence: 1,
+                arrival_index: 1,
+                command,
+            })
+            .unwrap()
+        };
+        let movement = ContainerMove::try_new(
+            mornlea_domain::ChunkPos::new(0, -1),
+            ContainerKind::Chest,
+            0,
+            1,
+            36,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            settle_transfer(&mut context, &make(Command::MoveContainer(movement))),
+            Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady))
+        );
+        for command in [
+            Command::CloseContainer,
+            Command::MoveInventory(mornlea_domain::InventoryMove::try_new(0, 1).unwrap()),
+        ] {
+            assert_eq!(
+                settle_transfer(&mut context, &make(command)),
+                Ok(CommandDisposition::Unowned)
+            );
+        }
         assert!(context.events().is_empty());
     }
 }

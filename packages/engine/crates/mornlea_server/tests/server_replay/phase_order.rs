@@ -242,7 +242,7 @@ const DISPATCH_CHAIN: &[&str] = &[
     "crops::settle_snow_footprints",
     "random_blocks::run",
     "random_blocks::advance",
-    "containers::run",
+    "containers::drain_commands",
     "mining::run",
     "source_player_restore::settle_action_costs",
     "crafting::run",
@@ -378,7 +378,11 @@ fn containers_before_mining_after_random() {
     let body = fn_body(&code, "fn dispatch_rows");
     chain_positions(
         body,
-        &["random_blocks::advance", "containers::run", "mining::run"],
+        &[
+            "random_blocks::advance",
+            "containers::drain_commands",
+            "mining::run",
+        ],
     );
 }
 

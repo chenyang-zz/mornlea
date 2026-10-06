@@ -1880,3 +1880,331 @@ fn native_lifecycle_outcome_success_close_intent() {
             .any(|event| matches!(event, Event::CommandRejected(_)))
     );
 }
+
+fn transfer_outcome_commands(reference: ContainerRef, from: u8, to: u8) -> [Command; 3] {
+    [
+        Command::MoveContainer(
+            mornlea_domain::ContainerMove::try_new(
+                reference.chunk(),
+                reference.kind(),
+                reference.slot(),
+                reference.generation(),
+                from,
+                to,
+            )
+            .unwrap(),
+        ),
+        Command::MovePartial(
+            PartialMove::try_new(StackView::Container(reference), from, to, false).unwrap(),
+        ),
+        Command::QuickMove(StackSource::try_new(StackView::Container(reference), from).unwrap()),
+    ]
+}
+
+fn transfer_outcome_open(state: &mut AuthorityState, owner: SessionKey) {
+    submit(state, owner, 1, Command::OpenContainer(look(0.0, 0.0)));
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        !events_for(&tick, owner)
+            .iter()
+            .any(|e| matches!(e, Event::CommandRejected(_)))
+    );
+    assert!(state.settled_read().unwrap().viewer(owner).is_some());
+}
+
+fn transfer_outcome_quiet(
+    state: &mut AuthorityState,
+    owner: SessionKey,
+    other: SessionKey,
+    sequence: u64,
+    command: Command,
+) {
+    let inventory = record(state, owner);
+    let containers = state.residents().container_records();
+    let lease = state.settled_read().unwrap().viewer(owner);
+    submit(state, owner, sequence, command);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(state, owner), inventory);
+    assert_eq!(state.residents().container_records(), containers);
+    assert_eq!(state.settled_read().unwrap().viewer(owner), lease);
+    assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+    assert_inventory_outcome_refusal(
+        &tick,
+        owner,
+        other,
+        sequence,
+        mornlea_domain::RejectReason::InvalidInput,
+    );
+}
+
+#[test]
+fn native_transfer_outcome_no_view() {
+    for index in 0..3 {
+        let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+        transfer_outcome_quiet(
+            &mut state,
+            owner,
+            other,
+            1,
+            transfer_outcome_commands(reference, 36, 0)[index],
+        );
+    }
+}
+
+#[test]
+fn native_transfer_outcome_empty_source() {
+    for index in 0..3 {
+        let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+        transfer_outcome_open(&mut state, owner);
+        transfer_outcome_quiet(
+            &mut state,
+            owner,
+            other,
+            2,
+            transfer_outcome_commands(reference, 37, 0)[index],
+        );
+    }
+}
+
+#[test]
+fn native_transfer_outcome_stale_reference() {
+    for index in 0..3 {
+        let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+        transfer_outcome_open(&mut state, owner);
+        let stale = ContainerRef::try_new(reference.chunk(), reference.kind(), reference.slot(), 2)
+            .unwrap();
+        transfer_outcome_quiet(
+            &mut state,
+            owner,
+            other,
+            2,
+            transfer_outcome_commands(stale, 36, 0)[index],
+        );
+    }
+}
+
+#[test]
+fn native_transfer_outcome_furnace_output_destination() {
+    for single in [false, true] {
+        let (mut state, owner, other, reference) = scene(ContainerKind::Furnace);
+        transfer_outcome_open(&mut state, owner);
+        prepared_inventory_outcome(&mut state, owner, |inv| {
+            inv.slots[0] = storage(ITEM_RAW_IRON, 3)
+        });
+        let command = Command::MovePartial(
+            PartialMove::try_new(StackView::Container(reference), 0, 38, single).unwrap(),
+        );
+        transfer_outcome_quiet(&mut state, owner, other, 2, command);
+    }
+}
+
+#[test]
+fn native_transfer_outcome_quick_no_absorption() {
+    for source in [36, 0] {
+        let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+        transfer_outcome_open(&mut state, owner);
+        prepared_inventory_outcome(&mut state, owner, |inv| {
+            inv.slots.fill(storage(ITEM_STONE, 64))
+        });
+        if source == 0 {
+            // Full physical storage is a prepared capacity cause for the real quick move.
+            stage(&mut state, |context| {
+                let mut front = ground_chunk();
+                assert_eq!(
+                    chest_in_chunk(
+                        &mut front,
+                        BlockPos::new(0, 66, -1),
+                        [storage(ITEM_DIRT, 64); 27]
+                    ),
+                    reference
+                );
+                context.preload_ready_chunk(
+                    ReadyChunk::try_new(chunk_key(0, -1), 1, 1, front).unwrap(),
+                );
+            });
+            state.advance_tick(TickBudget::full()).unwrap();
+        }
+        let command = Command::QuickMove(
+            StackSource::try_new(StackView::Container(reference), source).unwrap(),
+        );
+        transfer_outcome_quiet(&mut state, owner, other, 2, command);
+    }
+}
+
+#[test]
+fn native_transfer_outcome_repack() {
+    for index in 0..3 {
+        let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+        transfer_outcome_open(&mut state, owner);
+        prepared_inventory_outcome(&mut state, owner, |inv| {
+            inv.slots.fill(storage(ITEM_STONE, 64));
+            inv.slots[0] = StorageStack::default();
+            inv.crafting[0] = storage(ITEM_DIRT, 64);
+        });
+        transfer_outcome_quiet(
+            &mut state,
+            owner,
+            other,
+            2,
+            transfer_outcome_commands(reference, 36, 0)[index],
+        );
+    }
+}
+
+#[test]
+fn native_transfer_outcome_admission_then_settlement_order() {
+    let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+    transfer_outcome_open(&mut state, owner);
+    submit(
+        &mut state,
+        owner,
+        2,
+        transfer_outcome_commands(reference, 37, 0)[0],
+    );
+    submit(
+        &mut state,
+        owner,
+        3,
+        Command::OpenContainer(look(std::f32::consts::FRAC_PI_2, 0.0)),
+    );
+    submit(
+        &mut state,
+        owner,
+        4,
+        transfer_outcome_commands(reference, 36, 1)[0],
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let events = events_for(&tick, owner);
+    let expected = [
+        Event::CommandRejected(mornlea_domain::CommandRejection::new(
+            3,
+            mornlea_domain::RejectReason::NoTarget,
+        )),
+        Event::CommandRejected(mornlea_domain::CommandRejection::new(
+            2,
+            mornlea_domain::RejectReason::InvalidInput,
+        )),
+    ];
+    assert_eq!(&events[..2], &expected);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::CommandRejected(_)))
+            .count(),
+        2
+    );
+    assert_eq!(record(&state, owner).slots[1], storage(ITEM_DIRT, 5));
+    assert!(
+        matches!(&state.residents().container_records()[&reference].slots,
+        mornlea_server::contracts::ContainerSlots::Chest(cells) if cells[0] == StorageStack::default())
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::InventoryState(_)))
+            .count(),
+        1
+    );
+    assert!(!events.iter().any(|e| matches!(e, Event::CraftingState(_))));
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+    assert!(
+        !events_for(&tick, other)
+            .iter()
+            .any(|e| matches!(e, Event::CommandRejected(_)))
+    );
+    assert_eq!(state.session(owner).unwrap().last_applied_sequence, 4);
+    assert_eq!(native_input_ack(&tick, owner), 0);
+    submit(
+        &mut state,
+        owner,
+        2,
+        transfer_outcome_commands(reference, 37, 0)[0],
+    );
+    let next = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        !events_for(&next, owner)
+            .iter()
+            .any(|e| matches!(e, Event::CommandRejected(_)))
+    );
+}
+
+#[test]
+fn native_transfer_outcome_equal_roundtrip_intent() {
+    let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+    transfer_outcome_open(&mut state, owner);
+    let inventory = record(&state, owner);
+    let before = state.residents().container_records()[&reference].clone();
+    submit(
+        &mut state,
+        owner,
+        2,
+        transfer_outcome_commands(reference, 36, 1)[0],
+    );
+    submit(
+        &mut state,
+        owner,
+        3,
+        transfer_outcome_commands(reference, 1, 36)[0],
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), inventory);
+    let after = state.residents().container_records()[&reference].clone();
+    assert_eq!(after.slots, before.slots);
+    assert_eq!(after.revision, before.revision + 1);
+    let events = events_for(&tick, owner);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::InventoryState(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::CommandRejected(_) | Event::CraftingState(_)))
+    );
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+}
+
+#[test]
+fn native_transfer_outcome_exhausted_revision_is_hard() {
+    let (mut state, owner, _, reference) = scene(ContainerKind::Chest);
+    transfer_outcome_open(&mut state, owner);
+    // Exhausted durable revision is a prepared invariant cause, never client input.
+    stage(&mut state, |context| {
+        let mut front = ground_chunk();
+        assert_eq!(
+            chest_in_chunk(
+                &mut front,
+                BlockPos::new(0, 66, -1),
+                storage_array(&[(0, ITEM_DIRT, 5)])
+            ),
+            reference
+        );
+        context.preload_ready_chunk(
+            ReadyChunk::try_new(chunk_key(0, -1), 1, u64::MAX, front).unwrap(),
+        );
+    });
+    let inventory = record(&state, owner);
+    let containers = state.residents().container_records();
+    let drops = state.residents().drop_records();
+    submit(
+        &mut state,
+        owner,
+        2,
+        transfer_outcome_commands(reference, 36, 0)[0],
+    );
+    let error = state.advance_tick(TickBudget::full()).unwrap_err();
+    assert_eq!(
+        error,
+        ServerError::Internal {
+            invariant: "container transfer staging"
+        }
+    );
+    assert_eq!(record(&state, owner), inventory);
+    assert_eq!(state.residents().container_records(), containers);
+    assert_eq!(state.residents().drop_records(), drops);
+    assert_eq!(state.advance_tick(TickBudget::full()).unwrap_err(), error);
+}

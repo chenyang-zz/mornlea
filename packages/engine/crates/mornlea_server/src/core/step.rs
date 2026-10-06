@@ -632,7 +632,7 @@ fn dispatch_rows(
     crops::settle_snow_footprints(&mut footprints, context)?;
     random_blocks::run(context, batch_call(RulePhase::RandomBlock))?;
     random_blocks::advance(context, &active_keys)?;
-    containers::run(context, batch_call(RulePhase::ContainerMove))?;
+    containers::drain_commands(context)?;
     for actor in mining_actors(context) {
         per_actor(context, RulePhase::MiningStep, actor, mining::run)?;
     }
