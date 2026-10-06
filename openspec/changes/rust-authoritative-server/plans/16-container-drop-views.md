@@ -144,3 +144,7 @@ clippy -D warnings, fmt, make rust then Go entity/runtime filters
 no-match is not evidence. Main strict OpenSpec and diff checks, independent
 review, then scoped acceptance commit. Main owns integration/rollback of the
 whole node and revalidation of its shared foot/crafting/container dependencies.
+
+## Verified live command-phase reconciliation
+
+Actual Go source opens and closes during PlayerCommand before Eating. Packet126 consumes existing checked settlement inline in the live reducer; lifecycle envelopes never enter the historical deferred container/bench bags. The raw deferred provider-call compatibility contract and its isolated report controls remain deliberately available, but are not evidence of source live command timing. Automatic lifecycle revalidation stays after Mining and transfers stay deferred. See [the live command packet](126-immediate-container-lifecycle-commands.md). No historical acceptance is erased or broadened.

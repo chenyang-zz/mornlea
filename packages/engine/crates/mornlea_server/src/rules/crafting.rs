@@ -1311,7 +1311,7 @@ fn advance(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport
 }
 
 /// The outcome of one settled bench open.
-enum OpenOutcome {
+pub(crate) enum OpenOutcome {
     /// The grid, anchor or lease staging changed the view.
     Applied,
     /// The grid already holds the bench size over the same anchor with no
@@ -1321,7 +1321,8 @@ enum OpenOutcome {
     Refused,
 }
 
-/// Settles one deferred bench open through the authoritative ray, the
+/// The live command owner and raw lifecycle compatibility share this atomic arm.
+/// Settles one bench open through the authoritative ray, the
 /// `openContainer` workbench arm (`packages/server/sim/entity/container.go`):
 /// the same eye position, reach and loaded-cell walk the container opens
 /// use, but only a workbench hit settles. The hit stages one atomic
@@ -1331,7 +1332,7 @@ enum OpenOutcome {
 /// container provider's or nobody's hit. Re-opening an already bench-sized
 /// grid re-anchors to the new hit and clears the lease again without
 /// touching the grid or size.
-fn settle_bench_open(
+pub(crate) fn settle_bench_open(
     ctx: &mut TickContext<'_>,
     envelope: &CommandEnvelope,
     look: LookAngles,

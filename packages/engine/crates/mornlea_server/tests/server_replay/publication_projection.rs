@@ -5540,3 +5540,6 @@ mod world_boundaries;
 
 #[path = "publication_container_lifecycle.rs"]
 mod container_lifecycle;
+
+#[path = "publication_command_lifecycle.rs"]
+mod command_lifecycle;

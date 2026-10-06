@@ -247,6 +247,8 @@ pub(crate) fn prepare(
     }
     // Shared initialization preserves hunger and all transient defaults; only bed rounding differs.
     let mut runtime = crate::rules::player_survival::merged_runtime(view, &seeded.actor)?;
+    // Source registration establishes the subscription independently of loaded geometry.
+    runtime.has_view = true;
     runtime.aux = ActorAux::Player {
         respawn: source_bed(save),
         workbench: None,

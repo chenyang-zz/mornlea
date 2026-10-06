@@ -10856,12 +10856,22 @@ mod failed_tick_tests {
         })
     }
     fn fill(a: &mut AuthorityState, session: SessionKey) {
+        // Physical transfers retain deferred admission and fill the fault budget.
+        let movement = mornlea_domain::ContainerMove::try_new(
+            ChunkPos::new(0, 0),
+            mornlea_domain::ContainerKind::Chest,
+            0,
+            1,
+            0,
+            1,
+        )
+        .unwrap();
         for sequence in 1..=4096 {
             a.submit(
                 session,
                 PlayIntent::Sequenced {
                     sequence,
-                    command: Command::CloseContainer,
+                    command: Command::MoveContainer(movement),
                 },
             )
             .unwrap();
@@ -12076,7 +12086,8 @@ mod source_player_restore_tests {
             (5000, 0, 300, 321.)
         );
         assert_eq!(runtime.controls, None);
-        assert!(!runtime.has_view && !runtime.reset);
+        // Registered source sessions already own a view while actor placement remains pending.
+        assert!(runtime.has_view && !runtime.reset);
         assert_eq!(
             runtime.aux,
             ActorAux::Player {

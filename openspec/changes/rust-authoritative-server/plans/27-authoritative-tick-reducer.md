@@ -132,3 +132,7 @@ evidence to main; no invented policy. Main owns rollback and revalidation.
 Save cadence stays scheduler-owned (3.4b); agent install stays
 endpoint-driven (3.6d); subscriber despawn projection stays
 publication-owned — all recorded pointers, none pinned here.
+
+## Verified live command-phase reconciliation
+
+Actual Go source opens and closes during PlayerCommand before Eating. Packet126 consumes existing checked settlement inline in the live reducer; lifecycle envelopes never enter the historical deferred container/bench bags. The raw deferred provider-call compatibility contract and its isolated report controls remain deliberately available, but are not evidence of source live command timing. Automatic lifecycle revalidation stays after Mining and transfers stay deferred. See [the live command packet](126-immediate-container-lifecycle-commands.md). No historical acceptance is erased or broadened.

@@ -4799,9 +4799,8 @@ fn wire_container(
 }
 
 /// The record-state scenario: real commands publish the exact owner-only
-/// inventory, chest, crafting, and furnace states, a close publishes the
-/// container-closed notice, and one refused command publishes no record
-/// event at all.
+/// inventory, chest, crafting, and furnace states. Explicit close silently
+/// releases its view, and one refused command publishes no record event.
 fn record_state_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication> {
     // The world: standing ground with a furnace behind Ada, and a chest
     // chunk in front of her.
@@ -5052,8 +5051,8 @@ fn record_state_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication
 }
 
 /// The owner-only record states through both real adapters: exact inventory,
-/// chest, crafting, and furnace publications from real commands, the exact
-/// container-closed notice, a refused command publishing nothing, and
+/// chest, crafting, and furnace publications from real commands, silent
+/// explicit close, a refused command publishing nothing, and
 /// identical publications on every tick.
 #[test]
 fn record_state_publications_match_across_adapters() {

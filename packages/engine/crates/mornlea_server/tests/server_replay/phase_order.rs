@@ -170,8 +170,8 @@ const WRAPPER_CHAIN: &[&str] = &[
 /// own; the behavioral cases below pin their accounting.
 const MAILBOX_CHAIN: &[&str] = &["freeze_eligible", "order_commands"];
 
-/// The intake admits in envelope order: motion, inventory, containers,
-/// crafting. An open lands in both the container and the workbench bags.
+/// Lifecycle commands settle before the ordinary intake chain below.
+/// Other envelopes retain motion, inventory, container and crafting admission.
 const ADMIT_CHAIN: &[&str] = &[
     "source_player_command_ready",
     "record_player_input",

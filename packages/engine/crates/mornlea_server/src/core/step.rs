@@ -25,13 +25,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use mornlea_domain::{
     BlockPos, ChunkPos, Command, CommandEnvelope, CommandOrderScratch, ContainerRef, Dimension,
-    order_commands,
+    RejectReason, order_commands,
 };
 
 use super::contracts::{
     ActorKey, ActorLifecycle, AuthorityInteraction, ChunkKey, ContainerSlots, FinalReducer,
-    InteractionKind, PhaseReport, RuleCall, RulePhase, ServerError, ServerPhase, SessionKey,
-    SessionPhase, TickBudget, TickCounters, TickPublication,
+    InteractionKind, PhaseReport, RuleCall, RulePhase, RuleReject, ServerError, ServerPhase,
+    SessionKey, SessionPhase, TickBudget, TickCounters, TickPublication,
 };
 use super::publication;
 use super::source_acquisition::SourceGoals;
@@ -647,9 +647,10 @@ fn batch_call(phase: RulePhase) -> RuleCall<'static> {
     }
 }
 
-/// Admits one sorted envelope into the intake providers. Every admit whose
-/// gate accepts the envelope runs: an open lands in both the container and
-/// the workbench bags. A `Command::Resync` envelope is provider-owned intake:
+/// Settles lifecycle envelopes against their sorted prefix before actor actions.
+/// Ordinary envelopes run every intake provider whose gate accepts them;
+/// physical transfers retain their later chunk-write phase.
+/// A `Command::Resync` envelope is provider-owned intake:
 /// it records its resync request on the tick outcome's lane and counts as
 /// applied here, never riding the interaction bag. Resource and sequencing
 /// failures stop the tick; gate refusals fall through. An envelope no intake
@@ -662,6 +663,24 @@ fn admit_command(
         return Ok(());
     }
     context.record_player_input(envelope);
+    // Lifecycle commands settle against the command prefix before actor actions.
+    // Physical transfers keep their later chunk-write phase.
+    match envelope.command() {
+        Command::OpenContainer(look) => {
+            if matches!(
+                containers::settle_command(context, envelope),
+                Err(RuleReject::Wire(RejectReason::NoTarget))
+            ) {
+                let _ = crafting::settle_bench_open(context, envelope, look);
+            }
+            return Ok(());
+        }
+        Command::CloseContainer => {
+            let _ = containers::settle_command(context, envelope);
+            return Ok(());
+        }
+        _ => {}
+    }
     let admits: [ProviderCall; 4] = [
         player_motion::run,
         inventory::run,

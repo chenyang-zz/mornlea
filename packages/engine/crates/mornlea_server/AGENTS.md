@@ -1165,3 +1165,20 @@ the persistence
 failure retirement topic executes actual disk acquisition, qualified durable
 ACK, CPU disposal collection and fresh-generation reload. Executable caller
 coordination remains separate.
+
+## Live lifecycle command ownership
+
+The live reducer settles `OpenContainer` and `CloseContainer` in admitted
+sequence order before Eating and Mining. It consumes checked container
+settlement immediately and tries the existing disjoint bench arm only on
+`NoTarget`; these lifecycle envelopes never enter the raw deferred provider
+bags. Transfers retain `ContainerMove` and automatic bench validation remains
+after Mining. Raw deferred provider-call compatibility is qualified separately
+and does not describe live command timing or wire refusal publication.
+
+Source player registration establishes `ActorRuntime.has_view` independently
+of loaded geometry, including Pending actors. Actor lifecycle, restoration and
+Ready physical reads keep their separate action gates. Ordinary legacy runtime
+defaults and explicitly unavailable-view controls remain false. The real held
+eating integration topic advances progress through actual commands and ticks;
+its saved body and physical Ready inputs are prepared fixtures.
