@@ -176,3 +176,19 @@
   3. `codex/b36-axes-shovels` 未认领在途分支与脏 worktree（改动含本表与 golden）连续八轮无收敛，认领登记与处置属控制会话裁决。
   4. 无 backlog 行但已合入 `main` 的控制会话 change 是否追溯补履历行，待用户裁决（维持不补先例）。
   5. 遗留未动项：重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、torch proposal 延期章节占位符、F-04 仍无本机 worktree 可核对；待澄清累计清单见 09-29 轮第 6 项（本轮无新增）。
+
+## 2026-10-06（规划者第十二轮）
+
+- **读取输入**：`docs/feature-backlog.md`、`docs/notes/agent-runs.md`（上轮 2026-10-05 第十一轮）、`docs/notes/progress.md`、根 `AGENTS.md`（版本矩阵仍为协议 v45、玩家 schema v9、区块 schema v9、metadata v6、`companions.ai` v5、`hostile_mobs` v2、`passive_mobs` v1、engine ABI v11、client ABI v19、benchmark scenario v23）、`openspec/config.yaml`、Discussion #71（`gh api graphql` 未认证撞共享限流 403，按先例不再重试；经旧 URL `channing771/mornlea` 公开页读取：首次命中缓存旧快照（60 条、止于 08-30，与上轮记录不符），以 no-cache 复核——共 68 条、可见时间戳止于 2026-09-13（B-35 完成）——**上轮以来无新评论、无正文更新**）、`origin/main`（fetch 后头仍 `7f671d3a8`，上轮以来零新提交、零功能合入）、`git branch -a`/`git worktree list`（22 个 worktree，含 B-36 脏 worktree）及 B-36 worktree 头 SHA 与脏状态、`codex/b36-axes-shovels` 未并入 `main` 核实、归档横扫（`git log --all --since=2026-10-05 -- openspec/changes/archive/` 零结果；main 最新归档仍 `2026-09-24-rust-protocol-completion`、dev 最新仍 `2026-09-27-rust-native-numerical-closure`）、来源引用抽查（B-37..B-52、D-13..D-21、E-15..E-21、F-09..F-11 行内引用路径逐一对 `origin/main` 树核对）。
+- **变更行**：**无新增行**——讨论零新评论、零新归档、MC 覆盖 2026-09-29 已全量复核且其后 `main` 零功能合入（本轮无变化）。校对（仅备注、状态不变）：`B-36`（`codex/b36-axes-shovels` 头仍 `2a745374`、最后提交仍 2026-09-15、未并入 `main`，`.worktrees/codex-b36-axes-shovels` 脏改动未收敛（含本表与 golden）→ 连续第九轮维持排队不晋升）；另按 `origin/main` 树证据更正三处已归档 change 的陈旧来源路径——`B-42` 备注中 touched 路径 `openspec/changes/sneak-double-tap-sprint`、`B-45` 来源 `openspec/changes/survival-empty-start/design.md`、`B-46` 来源 `openspec/changes/survival-empty-start/specs/common-block-materials/spec.md`，均更正为 `openspec/changes/archive/2026-09-11-*` 归档位置（归档侧内容在树内核实存在）。其余行状态与 git 一致，无待标完成行。晋升检查：串行队首 B-36 前序已完成、版本槽空闲，但 worktree 证据不一致，按规则不晋升；各组尾号不变（B-52/D-21/E-21/F-11/C-11）。
+- **未落行（判定）**：本轮三通道均为空，无新请求可判定；待澄清累计清单继续挂起（讨论通道仍不可用，无法补挂评论）。
+- **提交**：两笔均在临时 detached worktree（`/tmp/mornlea-planner-20261006`，独立命名避免并行会话同名冲突，不触碰 `dev` 工作区与其在途提交）制作：`docs: recheck B-36 and fix archived source paths` + 本运行记录提交。
+- **推送**：**成功**——首笔（backlog）先行快进推送 `7f671d3a8..126bfaa83` 验证通道，通道正常后本笔随即同路推送；两笔均以 SSH URL `ssh://git@github.com/chenyang-zz/mornlea.git HEAD:main` 快进（HTTPS 凭据不可用沿既有先例），推送结果以 `origin/main` 实际头为准。
+- **讨论同步**：**未执行**——`gh` 未认证撞共享限流（连续第十二轮）；正文 `--update` 与状态变更评论（本轮为 B-36 备注复核与三处来源路径校对）均发不出；正文镜像已落后十一轮，以仓库文件为准。
+- **留给下一轮 / 用户**：
+  1. `gh` 凭据连续第十二轮不可用；Discussion 镜像与评论积压待恢复后补发；`chenyang-zz/mornlea/discussions/71` 可达性仍待确认（旧 `channing771` 路径仍可读，但公开页存在缓存快照——复核时需 no-cache，本轮首次读取曾命中 09-02 旧快照）。
+  2. `dev` 分支领先 `origin/main` 253 提交（与上轮持平；Rust 权威服务端/Godot 目标架构在途线）；合入节奏与追溯属控制会话/用户裁决，规划者未触碰。
+  3. `codex/b36-axes-shovels` 未认领在途分支与脏 worktree（改动含本表与 golden）连续九轮无收敛，认领登记与处置属控制会话裁决。
+  4. 无 backlog 行但已合入 `main` 的控制会话 change 是否追溯补履历行，待用户裁决（维持不补先例）。
+  5. 遗留未动项：重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、torch proposal 延期章节占位符、F-04 仍无本机 worktree 可核对；待澄清累计清单见 09-29 轮第 6 项（本轮无新增）。
+  6. AOCI 备注：本轮为 docs-only 规划轮，未改动任何 AOCI 管理对象（`aoci.txt`/`aoci.meta.txt`/`aoci.code.txt`/`.aoci/` 为用户侧未跟踪资产，未触碰）；AOCI 认知本轮已按 `aoci_rules` → 全量 `aoci_overview`（含 Attestation PASS）建立，规划提交发生在 `origin/main` 谱系的临时 worktree，不触发维护。
