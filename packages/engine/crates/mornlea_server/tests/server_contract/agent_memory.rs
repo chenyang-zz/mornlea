@@ -7,6 +7,9 @@
 //! errors re-arm reconcile for the same operation, and shutdown retries
 //! pending memory work under a fresh context per attempt).
 
+#[path = "agent_memory_authority.rs"]
+mod authority;
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};

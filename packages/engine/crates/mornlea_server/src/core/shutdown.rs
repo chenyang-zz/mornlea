@@ -139,7 +139,7 @@ fn run_phase(
             ports.workers.wait(deadline)
         }
         ShutdownPhase::FinalizeMemory => {
-            finalize_memory(ports.memory, ports.clock, deadline, report)
+            finalize_memory(state, ports.memory, ports.clock, deadline, report)
         }
         ShutdownPhase::FlushPlayers => flush_lane(state, ports, deadline, report, Lane::Players),
         ShutdownPhase::FlushCompanions => {
@@ -179,6 +179,7 @@ fn run_phase(
 /// Both public shutdown entry points share the same retained-memory barrier.
 /// The caller records the report and resumes at this phase after a failure.
 pub(crate) fn finalize_memory(
+    authority: &mut AuthorityState,
     memory: &mut dyn MemoryFinalizer,
     clock: &dyn Clock,
     deadline: Deadline,
@@ -202,7 +203,7 @@ pub(crate) fn finalize_memory(
                 operation: Operation::Shutdown,
             });
         }
-        let progress = match memory.drain(deadline) {
+        let progress = match memory.drain_authority(authority, deadline) {
             Ok(memory) => memory,
             Err(error) => {
                 report.outstanding = memory.pending().outstanding;

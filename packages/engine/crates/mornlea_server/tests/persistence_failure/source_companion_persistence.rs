@@ -1,6 +1,8 @@
 //! Complete companion startup and prepared resident changes exercise the actual authority owner.
 #[path = "source_companion_memory.rs"]
 mod memory;
+#[path = "source_companion_memory_agent.rs"]
+mod memory_agent;
 use mornlea_domain::{CompanionId, CompanionName};
 use mornlea_server::{contracts::*, state::AuthorityState};
 use mornlea_storage::{

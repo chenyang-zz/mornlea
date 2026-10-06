@@ -159,6 +159,14 @@ Private lifecycle controls and actual failed-target retry/reopen evidence remain
 distinct. Agent settlement and finalizer composition must retain proposal
 ownership through this CAS before accepting a remote working mirror.
 
+The private Agent memory authority adapter consumes these lifecycle ports inside
+terminal polling. Its explicit finalizer receives the same mutable authority
+from both shutdown callers, accepts ledger updates before semantic completion,
+and leaves physical durability to the following companion flush and store sync.
+Remote-only provider controls keep their original scope. Configured Agent/task
+composition, returned dialogue effects and an assembled executable remain
+separate caller responsibilities.
+
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
 - `src/core/actor_placement.rs` owns bounded borrowed restoration, support,

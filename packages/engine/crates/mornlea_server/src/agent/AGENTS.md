@@ -10,7 +10,8 @@ change; the crate guide owns production dependency review.
 - `http.rs`: closed-schema Agent HTTP, absolute request deadlines and cancellation.
 - `lease.rs`: checked remote lease identity, freeze fences and release eligibility.
 - `host.rs`: bounded task/dialogue/control requests and retained terminal cleanup.
-- `memory.rs`: commit/reconcile ownership and retryable finalization.
+- `memory.rs`: commit/reconcile ownership and retryable finalization;
+  private `memory_authority.rs` gates outcomes against complete authoritative persistence.
 - `snapshot.rs`: immutable snapshot capabilities, expiry and shared cancellation.
 - `mcp.rs`: frozen HTTP tools, bounded connection admission and actual MCP close.
 - `mod.rs`: topic registration; integration composition remains with callers.
@@ -51,6 +52,31 @@ exercise MCP deadline refusal and retry, and prove actual shared/direct close
 cancellation and typed poison failure. They expose no production fault API.
 
 ## Helpers and regression evidence
+
+Authoritative memory polls bind response request/client/namespace/companion
+identity, then use latest ledger lifecycle metadata. Commit CAS precedes working
+mirror replacement and complete reservation fulfillment; refusal retains the
+proposal and retires only its HTTP attempt. Reconcile compares authoritative
+active epoch and revision, accepts exact equality without a write, and passes
+higher state through CAS before readiness. Inactive reconcile and delete replies
+acknowledge an already durable tombstone; they do not create a local lifecycle
+transition. Sticky or Closed authority refuses acceptance.
+
+`AuthoritativeMemoryFinalizer` borrows the existing memory owner and requires the
+shutdown machine's same authority through `MemoryFinalizer::drain_authority`.
+It refuses authority-free drain. The trait default also refuses an enabled complete
+companion owner, so a bare remote provider cannot bypass CAS in configured shutdown. Pending semantic work and cleanup joins remain
+charged across fresh attempts; completion means ledger acceptance, while the
+following aggregate flush/sync owns physical durability. Bare memory polls and
+finalizers remain pure remote-provider controls. Configured callers must choose
+the explicit authoritative variants; this adapter does not assemble a runtime
+or publish the returned reservation's separately authorized dialogue effect.
+
+The memory-authority contract descendant uses a scripted Agent, the companion
+persistence descendant uses actual DiskStore with a scripted Agent, and the
+Agent-process descendant uses actual Python HTTP with a prepared complete
+authority ledger. Those independent cases do not claim combined physical
+shutdown or configured executable integration.
 
 `tests/server_contract/agent_mcp.rs` owns the MCP snapshot and raw HTTP harness;
 its `mcp_lifecycle.rs` child owns held-tool/client helpers. The real loopback

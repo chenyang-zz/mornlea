@@ -232,8 +232,10 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3mw Land source-compatible lifecycle memory reads/CAS over the sole companion ledger, including occupied-revision refusal and healthy Closing capture ([packet](plans/121-companion-lifecycle-memory-cas.md)).
 
+- [x] 3.7l3ma Gate Agent memory settlement and final drain through authoritative lifecycle CAS before mirror/readiness/reservation acceptance ([packet](plans/122-authoritative-memory-settlement.md)).
+
 ## 4. Closeout
 
 
-- [ ] 4.1 Reconcile zero-gap inventory, real-provider/integration evidence and guides. Verified remaining source gaps: dirty-publication outcome reconciliation, companion Agent memory settlement/final durable handoff and configured bootstrap/Agent execution, assembled gameplay executable including acquisition composition and accepted player/mob persistence, every supported Go-to-Rust outcome inventory, trusted-observer composition, and configuration-file loading/runtime ownership. The explicit library acquisition union/driver caller is accepted by 3.7l3ca; this does not accept executable integration. Declared session-radius wanted/resync publication and passive-death reason publication are already present; do not reopen them.
+- [ ] 4.1 Reconcile zero-gap inventory, real-provider/integration evidence and guides. Verified remaining source gaps: dirty-publication outcome reconciliation, configured companion bootstrap/Agent execution and combined durable shutdown handoff, assembled gameplay executable including acquisition composition and accepted player/mob persistence, every supported Go-to-Rust outcome inventory, trusted-observer composition, and configuration-file loading/runtime ownership. The explicit library acquisition union/driver caller is accepted by 3.7l3ca; this does not accept executable integration. Declared session-radius wanted/resync publication and passive-death reason publication are already present; do not reopen them.
 - [ ] 4.2 Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA.

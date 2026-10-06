@@ -2931,7 +2931,7 @@ impl AuthorityState {
                 io.workers.wait(deadline)
             }
             ShutdownPhase::FinalizeMemory => {
-                super::shutdown::finalize_memory(io.memory, io.clock, deadline, report)
+                super::shutdown::finalize_memory(self, io.memory, io.clock, deadline, report)
             }
             ShutdownPhase::FlushPlayers => {
                 for (key, record) in &self.sessions {

@@ -2,6 +2,9 @@
 //! memory commit with reconcile, block with cancel and shutdown, and release
 //! retry with expiry.
 
+#[path = "memory_authority.rs"]
+mod memory_authority;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};

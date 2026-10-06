@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 
 use mornlea_domain::CompanionId;
 
+#[path = "memory_authority.rs"]
+mod authority;
+use crate::core::state::AuthorityState;
+pub use authority::{AuthoritativeMemoryFinalizer, CommitSettlement};
+
 use crate::contracts::{
     AgentHandle, AgentRequest, AgentRequestId, BaseIdentity, ClientInstanceId, Clock,
     CommitRequest, CommitResponse, Deadline, DeleteRequest, DeleteResponse, LeaseId,
@@ -504,6 +509,16 @@ impl MemoryOwner {
 
     /// Polls admitted commits once and applies fenced outcomes.
     pub fn poll_commits(&mut self) -> Vec<CommitSettled> {
+        self.poll_commits_inner(None)
+            .into_iter()
+            .map(|settled| settled.outcome)
+            .collect()
+    }
+
+    fn poll_commits_inner(
+        &mut self,
+        mut authority: Option<&mut AuthorityState>,
+    ) -> Vec<CommitSettlement> {
         self.reap_retirements();
         let pending: Vec<(CompanionId, CommitInflight)> = self
             .commits
@@ -523,18 +538,59 @@ impl MemoryOwner {
                 crate::contracts::AgentPoll::Completed(
                     crate::contracts::AgentResponse::Commit(response),
                 ) => {
-                    settled.push(self.apply_commit_response(companion, &response));
+                    let malformed = authority.is_some()
+                        && self
+                            .reservations
+                            .get(&companion)
+                            .is_some_and(|proposal| !Self::valid_authority_proposal(proposal));
+                    let proposal = authority.as_ref().and_then(|_| {
+                        self.reservations
+                            .get(&companion)
+                            .filter(|proposal| Self::valid_authority_proposal(proposal))
+                            .cloned()
+                    });
+                    let outcome = if authority.is_some()
+                        && !self.matches_authority_response(
+                            &response.leased,
+                            record.request_id,
+                            response.companion_id,
+                            companion,
+                        ) {
+                        CommitSettled::Fenced { companion }
+                    } else if malformed {
+                        self.ready.insert(companion, false);
+                        CommitSettled::Failed {
+                            companion,
+                            error: ServerError::InvalidInput {
+                                field: "memory_proposal",
+                            },
+                        }
+                    } else {
+                        self.apply_commit_response(companion, &response, authority.as_deref_mut())
+                    };
+                    let fulfilled = if matches!(outcome, CommitSettled::Applied { .. }) {
+                        proposal
+                    } else {
+                        None
+                    };
+                    settled.push(CommitSettlement { outcome, fulfilled });
                 }
                 crate::contracts::AgentPoll::Completed(_) => {
                     self.commits.remove(&companion);
-                    settled.push(CommitSettled::Failed {
-                        companion,
-                        error: unavailable(),
+                    settled.push(CommitSettlement {
+                        outcome: CommitSettled::Failed {
+                            companion,
+                            error: unavailable(),
+                        },
+                        fulfilled: None,
                     });
                 }
                 crate::contracts::AgentPoll::Failed(error) => {
                     self.commits.remove(&companion);
-                    settled.push(CommitSettled::Failed { companion, error });
+                    settled.push(CommitSettlement {
+                        outcome: CommitSettled::Failed { companion, error },
+                        fulfilled: None,
+                    });
                 }
             }
             if terminal {
@@ -595,6 +651,13 @@ impl MemoryOwner {
     /// Polls admitted reconciles once; one companion's failure never stops
     /// the later companions and rearms its own backoff.
     pub fn poll_reconciles(&mut self) -> Vec<ReconcileSettled> {
+        self.poll_reconciles_inner(None)
+    }
+
+    fn poll_reconciles_inner(
+        &mut self,
+        mut authority: Option<&mut AuthorityState>,
+    ) -> Vec<ReconcileSettled> {
         self.reap_retirements();
         let pending: Vec<(CompanionId, ReconcileInflight)> = self
             .reconciles
@@ -614,7 +677,35 @@ impl MemoryOwner {
                 crate::contracts::AgentPoll::Completed(
                     crate::contracts::AgentResponse::Reconcile(response),
                 ) => {
-                    settled.push(self.apply_reconcile_response(companion, record.epoch, &response));
+                    let (leased, response_companion) = match &response {
+                        ReconcileResponse::Active {
+                            leased,
+                            companion_id,
+                            ..
+                        }
+                        | ReconcileResponse::Inactive {
+                            leased,
+                            companion_id,
+                            ..
+                        } => (leased, *companion_id),
+                    };
+                    let outcome = if authority.is_some()
+                        && !self.matches_authority_response(
+                            leased,
+                            record.request_id,
+                            response_companion,
+                            companion,
+                        ) {
+                        ReconcileSettled::Fenced { companion }
+                    } else {
+                        self.apply_reconcile_response(
+                            companion,
+                            record.epoch,
+                            &response,
+                            authority.as_deref_mut(),
+                        )
+                    };
+                    settled.push(outcome);
                 }
                 crate::contracts::AgentPoll::Completed(_) => {
                     self.reconciles.remove(&companion);
@@ -706,6 +797,13 @@ impl MemoryOwner {
 
     /// Polls admitted deletes once and installs matching tombstones.
     pub fn poll_deletes(&mut self) -> Vec<DeleteSettled> {
+        self.poll_deletes_inner(None)
+    }
+
+    fn poll_deletes_inner(
+        &mut self,
+        mut authority: Option<&mut AuthorityState>,
+    ) -> Vec<DeleteSettled> {
         self.reap_retirements();
         let pending: Vec<(CompanionId, DeleteInflight)> = self
             .deletes
@@ -725,7 +823,30 @@ impl MemoryOwner {
                 crate::contracts::AgentPoll::Completed(
                     crate::contracts::AgentResponse::Delete(response),
                 ) => {
-                    settled.push(self.apply_delete_response(&record, companion, &response));
+                    let outcome = if authority.is_some()
+                        && (!self.matches_authority_response(
+                            &response.leased,
+                            record.request_id,
+                            response.companion_id,
+                            companion,
+                        ) || response.memory_epoch != record.new_epoch
+                            || response.tombstone_operation_id != record.tombstone)
+                    {
+                        DeleteSettled::Fenced { companion }
+                    } else if let Some(authority) = authority.as_deref_mut() {
+                        match self
+                            .confirm_delete_authority(authority, companion, &record, &response)
+                        {
+                            Ok(()) => self.apply_delete_response(&record, companion, &response),
+                            Err(error) => {
+                                self.ready.insert(companion, false);
+                                DeleteSettled::Failed { companion, error }
+                            }
+                        }
+                    } else {
+                        self.apply_delete_response(&record, companion, &response)
+                    };
+                    settled.push(outcome);
                 }
                 crate::contracts::AgentPoll::Completed(_) => {
                     self.deletes.remove(&companion);
@@ -909,6 +1030,7 @@ impl MemoryOwner {
         &mut self,
         companion: CompanionId,
         response: &CommitResponse,
+        authority: Option<&mut AuthorityState>,
     ) -> CommitSettled {
         let Some(reservation) = self.reservations.get(&companion).cloned() else {
             self.commits.remove(&companion);
@@ -922,7 +1044,13 @@ impl MemoryOwner {
             return CommitSettled::Fenced { companion };
         }
         let revision = response.committed_revision.get();
-        if let Some(mirror) = self.mirrors.get_mut(&companion) {
+        if let Some(authority) = authority {
+            if let Err(error) = self.accept_commit_authority(authority, &reservation, revision) {
+                self.ready.insert(companion, false);
+                self.commits.remove(&companion);
+                return CommitSettled::Failed { companion, error };
+            }
+        } else if let Some(mirror) = self.mirrors.get_mut(&companion) {
             mirror.revision = revision;
             mirror.operation = Some(reservation.operation);
             mirror.summary = reservation.summary.clone();
@@ -942,6 +1070,7 @@ impl MemoryOwner {
         companion: CompanionId,
         requested_epoch: u64,
         response: &ReconcileResponse,
+        authority: Option<&mut AuthorityState>,
     ) -> ReconcileSettled {
         match response {
             ReconcileResponse::Active {
@@ -953,7 +1082,11 @@ impl MemoryOwner {
                     self.reconciles.remove(&companion);
                     return ReconcileSettled::Fenced { companion };
                 }
-                self.apply_active_reconcile(companion, *memory_epoch, memory)
+                if let Some(authority) = authority {
+                    self.apply_active_authority(authority, companion, *memory_epoch, memory)
+                } else {
+                    self.apply_active_reconcile(companion, *memory_epoch, memory)
+                }
             }
             ReconcileResponse::Inactive {
                 memory_epoch,
@@ -963,6 +1096,14 @@ impl MemoryOwner {
                 if *memory_epoch != requested_epoch {
                     self.reconciles.remove(&companion);
                     return ReconcileSettled::Fenced { companion };
+                }
+                if let Some(authority) = authority {
+                    return self.apply_inactive_authority(
+                        authority,
+                        companion,
+                        *memory_epoch,
+                        *tombstone_operation_id,
+                    );
                 }
                 let mirror = self.mirrors.get(&companion).cloned();
                 let Some(mirror) = mirror else {
@@ -1118,6 +1259,16 @@ impl MemoryFinalizer for MemoryOwner {
     /// One bounded progress turn: consume terminals once and schedule at most
     /// 64 semantic candidates. Pending work is reported without pretending it timed out.
     fn drain(&mut self, deadline: Deadline) -> Result<MemoryFinalizationReport, ServerError> {
+        self.drain_inner(None, deadline)
+    }
+}
+
+impl MemoryOwner {
+    fn drain_inner(
+        &mut self,
+        mut authority: Option<&mut AuthorityState>,
+        deadline: Deadline,
+    ) -> Result<MemoryFinalizationReport, ServerError> {
         if self.attempt_deadline.is_none() && self.pending().outstanding != 0 {
             return Err(ServerError::InvalidInput {
                 field: "memory finalization attempt",
@@ -1125,12 +1276,12 @@ impl MemoryFinalizer for MemoryOwner {
         }
         self.reap_retirements();
         let mut completed = 0;
-        for outcome in self.poll_commits() {
-            if matches!(outcome, CommitSettled::Applied { .. }) {
+        for outcome in self.poll_commits_inner(authority.as_deref_mut()) {
+            if matches!(outcome.outcome, CommitSettled::Applied { .. }) {
                 completed += 1;
             }
         }
-        for outcome in self.poll_reconciles() {
+        for outcome in self.poll_reconciles_inner(authority.as_deref_mut()) {
             if let ReconcileSettled::Ready {
                 companion,
                 fulfilled,
@@ -1143,7 +1294,7 @@ impl MemoryFinalizer for MemoryOwner {
                 }
             }
         }
-        for outcome in self.poll_deletes() {
+        for outcome in self.poll_deletes_inner(authority) {
             if matches!(outcome, DeleteSettled::Deleted { .. }) {
                 completed += 1;
             }

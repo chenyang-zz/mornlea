@@ -2955,6 +2955,20 @@ pub trait MemoryFinalizer {
     fn pending(&self) -> MemoryFinalizationReport;
     fn begin_attempt(&mut self, deadline: Deadline) -> Result<(), ServerError>;
     fn drain(&mut self, deadline: Deadline) -> Result<MemoryFinalizationReport, ServerError>;
+    /// Configured finalizers settle against the same authority before its aggregate flush.
+    /// Pure provider controls and lifecycle doubles retain their authority-free drain.
+    fn drain_authority(
+        &mut self,
+        authority: &mut crate::core::state::AuthorityState,
+        deadline: Deadline,
+    ) -> Result<MemoryFinalizationReport, ServerError> {
+        if authority.companion_persistence_enabled() {
+            return Err(ServerError::InvalidInput {
+                field: "memory_authority",
+            });
+        }
+        self.drain(deadline)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
