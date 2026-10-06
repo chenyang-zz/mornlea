@@ -245,7 +245,8 @@ pub fn settle_command(
             let StackView::Container(reference) = source.view() else {
                 return Err(RuleReject::Wire(RejectReason::InvalidInput));
             };
-            return settle_drop(ctx, *envelope, reference, source);
+            return settle_drop(ctx, *envelope, reference, source)
+                .map_err(TransferFailure::into_raw);
         }
         _ => return Err(RuleReject::Wire(RejectReason::InvalidInput)),
     };
@@ -276,12 +277,10 @@ impl TransferFailure {
         }
     }
 
-    fn into_live(self) -> CommandResult {
+    fn into_live(self, invariant: &'static str) -> CommandResult {
         match self {
             Self::Refused(reason) => Ok(CommandDisposition::Refused(reason)),
-            Self::Trusted(_) => Err(ServerError::Internal {
-                invariant: "container transfer staging",
-            }),
+            Self::Trusted(_) => Err(ServerError::Internal { invariant }),
         }
     }
 }
@@ -346,7 +345,46 @@ pub(crate) fn settle_transfer(
             rejected: 0,
         })),
         Ok(false) => Ok(CommandDisposition::Refused(RejectReason::InvalidInput)),
-        Err(error) => error.into_live(),
+        Err(error) => error.into_live("container transfer staging"),
+    }
+}
+
+/// Container drops consume their exact late lease and debit only after the
+/// foot output and durable source touch pass one atomic staging boundary.
+pub(crate) fn settle_drop_command(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+) -> CommandResult {
+    let Command::DropStack(source) = envelope.command() else {
+        return Ok(CommandDisposition::Unowned);
+    };
+    let StackView::Container(reference) = source.view() else {
+        return Ok(CommandDisposition::Unowned);
+    };
+    let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+        invariant: "container drop session",
+    })?;
+    {
+        let view = ctx.read();
+        let actor = ActorKey::Player(session);
+        let Some(record) = view
+            .actor(actor)
+            .filter(|record| record.lifecycle == ActorLifecycle::Active)
+        else {
+            return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady));
+        };
+        if record.dimension != Dimension::OVERWORLD {
+            return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
+        }
+        if view.inventory(actor).is_none() {
+            return Err(ServerError::Internal {
+                invariant: "container drop owner",
+            });
+        }
+    }
+    match settle_drop(ctx, *envelope, reference, source) {
+        Ok(report) => Ok(CommandDisposition::Settled(report)),
+        Err(error) => error.into_live("container drop staging"),
     }
 }
 
@@ -371,13 +409,24 @@ pub(crate) fn drain_commands(ctx: &mut TickContext<'_>) -> Result<PhaseReport, S
                 ctx.record_command_rejection(&envelope, reason, RejectionStage::Settlement)?;
                 report.rejected += 1;
             }
-            CommandDisposition::Unowned => {
-                if settle_command(ctx, &envelope).is_ok() {
-                    report.applied += 1;
-                } else {
+            CommandDisposition::Unowned => match settle_drop_command(ctx, &envelope)? {
+                CommandDisposition::Settled(settled) => {
+                    report.applied += settled.applied;
+                    report.carried += settled.carried;
+                    report.rejected += settled.rejected;
+                }
+                CommandDisposition::Refused(reason) => {
+                    ctx.record_command_rejection(&envelope, reason, RejectionStage::Settlement)?;
                     report.rejected += 1;
                 }
-            }
+                CommandDisposition::Unowned => {
+                    if settle_command(ctx, &envelope).is_ok() {
+                        report.applied += 1;
+                    } else {
+                        report.rejected += 1;
+                    }
+                }
+            },
         }
     }
     Ok(report)
@@ -791,18 +840,18 @@ fn settle_drop(
     envelope: CommandEnvelope,
     reference: ContainerRef,
     source: StackSource,
-) -> Result<PhaseReport, RuleReject> {
-    let basis =
-        move_basis(ctx, envelope, reference).ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+) -> Result<PhaseReport, TransferFailure> {
+    let basis = move_basis(ctx, envelope, reference)
+        .ok_or(TransferFailure::Refused(RejectReason::InvalidInput))?;
     let slot = usize::from(source.slot());
     let mut inventory = basis.viewer.inventory;
     let mut slots = basis.stored.slots.clone();
     let held = match &mut slots {
         ContainerSlots::Chest(cells) => {
             let held = chest_slot(&inventory.slots, cells, slot)
-                .ok_or(RuleReject::Wire(RejectReason::InvalidSlot))?;
+                .ok_or(TransferFailure::Refused(RejectReason::InvalidSlot))?;
             if !set_chest_slot(&mut inventory.slots, cells, slot, ItemStack::default()) {
-                return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+                return Err(TransferFailure::Refused(RejectReason::InvalidSlot));
             }
             held
         }
@@ -819,9 +868,9 @@ fn settle_drop(
                 progress: *progress,
             };
             let held = furnace_slot(&inventory.slots, &view, slot)
-                .ok_or(RuleReject::Wire(RejectReason::InvalidSlot))?;
+                .ok_or(TransferFailure::Refused(RejectReason::InvalidSlot))?;
             if !set_furnace_slot(&mut inventory.slots, &mut view, slot, ItemStack::default()) {
-                return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+                return Err(TransferFailure::Refused(RejectReason::InvalidSlot));
             }
             *slots = [view.input, view.fuel_slot, view.output];
             *fuel = view.fuel;
@@ -830,10 +879,19 @@ fn settle_drop(
         }
     };
     if held.count == 0 {
-        return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+        return Err(TransferFailure::Refused(RejectReason::InvalidSlot));
     }
-    let batch = drops::prepare_player_drop(ctx, basis.viewer.session, envelope.sequence(), held)?;
-    let patch = InventoryPatch::try_new(basis.viewer.actor, basis.viewer.inventory, inventory)?;
+    if !stacks_valid(&inventory, &slots) {
+        return Err(TransferFailure::Refused(RejectReason::InvalidInput));
+    }
+    let batch =
+        drops::prepare_player_drop_checked(ctx, basis.viewer.session, envelope.sequence(), held)
+            .map_err(|error| match error {
+                drops::PlayerDropFailure::Refused(reason) => TransferFailure::Refused(reason),
+                drops::PlayerDropFailure::Trusted(error) => TransferFailure::Trusted(error),
+            })?;
+    let patch = InventoryPatch::try_new(basis.viewer.actor, basis.viewer.inventory, inventory)
+        .map_err(TransferFailure::Trusted)?;
     let next = ContainerRecord {
         reference: basis.stored.reference,
         revision: basis.stored.revision,
@@ -846,7 +904,8 @@ fn settle_drop(
             after: next,
         },
         RuleEffect::Drops(batch),
-    ]))?;
+    ]))
+    .map_err(TransferFailure::Trusted)?;
     ctx.record_inventory_publication_dirty(basis.viewer.session);
     Ok(PhaseReport {
         examined: 1,
@@ -1761,6 +1820,62 @@ mod lifecycle_tests {
                 Ok(CommandDisposition::Unowned)
             );
         }
+        assert!(context.events().is_empty());
+    }
+
+    #[test]
+    fn drop_adapter_ownership_and_preparation_readiness() {
+        use mornlea_domain::CommandEnvelopeParts;
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let mut context = TickContext::harness(&mut authority, TickBudget::full());
+        let session = SessionKey::from_raw(1).unwrap();
+        let reference = ContainerRef::try_new(
+            mornlea_domain::ChunkPos::new(0, -1),
+            ContainerKind::Chest,
+            0,
+            1,
+        )
+        .unwrap();
+        let make = |command| {
+            CommandEnvelope::try_new(CommandEnvelopeParts {
+                tick: 0,
+                session: 1,
+                sequence: 1,
+                arrival_index: 1,
+                command,
+            })
+            .unwrap()
+        };
+        let source = StackSource::try_new(StackView::Container(reference), 36).unwrap();
+        assert_eq!(
+            settle_drop_command(&mut context, &make(Command::DropStack(source))),
+            Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady))
+        );
+        for command in [Command::CloseContainer, Command::QuickMove(source)] {
+            assert_eq!(
+                settle_drop_command(&mut context, &make(command)),
+                Ok(CommandDisposition::Unowned)
+            );
+        }
+        assert!(matches!(
+            drops::prepare_player_drop_checked(
+                &context,
+                session,
+                1,
+                ItemStack {
+                    item: 2,
+                    count: 5,
+                    durability: 0
+                }
+            ),
+            Err(drops::PlayerDropFailure::Refused(
+                RejectReason::PlayerNotReady
+            ))
+        ));
         assert!(context.events().is_empty());
     }
 }

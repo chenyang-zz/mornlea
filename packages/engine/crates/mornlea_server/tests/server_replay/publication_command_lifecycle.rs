@@ -2208,3 +2208,344 @@ fn native_transfer_outcome_exhausted_revision_is_hard() {
     assert_eq!(state.residents().drop_records(), drops);
     assert_eq!(state.advance_tick(TickBudget::full()).unwrap_err(), error);
 }
+
+fn container_drop_command(reference: ContainerRef, slot: u8) -> Command {
+    Command::DropStack(StackSource::try_new(StackView::Container(reference), slot).unwrap())
+}
+
+fn container_drop_scene(
+    kind: ContainerKind,
+) -> (AuthorityState, SessionKey, SessionKey, ContainerRef) {
+    let (mut state, owner, other, reference) = scene(kind);
+    if kind == ContainerKind::Furnace {
+        // Valid fuel is prepared; opening and dropping use the actual command path.
+        stage(&mut state, |context| {
+            let mut front = ground_chunk();
+            assert_eq!(
+                furnace_in_chunk(
+                    &mut front,
+                    BlockPos::new(0, 66, -1),
+                    StorageStack::default(),
+                    storage(ITEM_COAL, 3),
+                    StorageStack::default(),
+                    0,
+                    0
+                ),
+                reference
+            );
+            context
+                .preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, -1), 1, 1, front).unwrap());
+        });
+        state.advance_tick(TickBudget::full()).unwrap();
+    }
+    (state, owner, other, reference)
+}
+
+fn container_drop_quantities(state: &AuthorityState) -> Vec<(DropId, FiniteVec3, StorageStack)> {
+    state
+        .residents()
+        .drop_records()
+        .into_iter()
+        .map(|drop| (drop.id, drop.position, drop.stack))
+        .collect()
+}
+
+fn container_drop_refused(
+    state: &mut AuthorityState,
+    owner: SessionKey,
+    other: SessionKey,
+    sequence: u64,
+    command: Command,
+    reason: mornlea_domain::RejectReason,
+) -> mornlea_server::contracts::TickPublication {
+    let inventory = record(state, owner);
+    let containers = state.residents().container_records();
+    let quantities = container_drop_quantities(state);
+    submit(state, owner, sequence, command);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(state, owner), inventory);
+    assert_eq!(state.residents().container_records(), containers);
+    assert_eq!(container_drop_quantities(state), quantities);
+    assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+    assert_inventory_outcome_refusal(&tick, owner, other, sequence, reason);
+    tick
+}
+
+#[test]
+fn native_container_drop_outcome_no_view() {
+    for kind in [ContainerKind::Chest, ContainerKind::Furnace] {
+        let (mut state, owner, other, reference) = scene(kind);
+        container_drop_refused(
+            &mut state,
+            owner,
+            other,
+            1,
+            container_drop_command(reference, 36),
+            mornlea_domain::RejectReason::InvalidInput,
+        );
+        assert!(state.settled_read().unwrap().viewer(owner).is_none());
+    }
+}
+
+#[test]
+fn native_container_drop_outcome_empty() {
+    for (kind, slot) in [(ContainerKind::Chest, 37), (ContainerKind::Furnace, 36)] {
+        let (mut state, owner, other, reference) = scene(kind);
+        transfer_outcome_open(&mut state, owner);
+        let lease = state.settled_read().unwrap().viewer(owner);
+        container_drop_refused(
+            &mut state,
+            owner,
+            other,
+            2,
+            container_drop_command(reference, slot),
+            mornlea_domain::RejectReason::InvalidSlot,
+        );
+        assert_eq!(state.settled_read().unwrap().viewer(owner), lease);
+    }
+}
+
+#[test]
+fn native_container_drop_outcome_stale() {
+    let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+    transfer_outcome_open(&mut state, owner);
+    let lease = state.settled_read().unwrap().viewer(owner);
+    let stale =
+        ContainerRef::try_new(reference.chunk(), reference.kind(), reference.slot(), 2).unwrap();
+    container_drop_refused(
+        &mut state,
+        owner,
+        other,
+        2,
+        container_drop_command(stale, 36),
+        mornlea_domain::RejectReason::InvalidInput,
+    );
+    assert_eq!(state.settled_read().unwrap().viewer(owner), lease);
+}
+
+#[test]
+fn native_container_drop_outcome_unavailable_feet() {
+    let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+    transfer_outcome_open(&mut state, owner);
+    // The retained lease is real; the unavailable foot-column pose is prepared.
+    stage(&mut state, |context| {
+        let mut actor = context
+            .read()
+            .actor(ActorKey::Player(owner))
+            .cloned()
+            .unwrap();
+        actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new([32.5, 65.0, 0.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+    });
+    // Direct settlement precedes source recovery and separately qualifies the foot gate.
+    stage(&mut state, |context| {
+        let envelope =
+            mornlea_domain::CommandEnvelope::try_new(mornlea_domain::CommandEnvelopeParts {
+                tick: 2,
+                session: owner.get(),
+                sequence: 2,
+                arrival_index: 1,
+                command: container_drop_command(reference, 36),
+            })
+            .unwrap();
+        let inventory = *context.read().inventory(ActorKey::Player(owner)).unwrap();
+        let container = context.read().container(reference).unwrap();
+        assert_eq!(
+            mornlea_server::rules::containers::settle_command(context, &envelope),
+            Err(mornlea_server::contracts::RuleReject::Wire(
+                mornlea_domain::RejectReason::ChunkNotReady
+            ))
+        );
+        assert_eq!(
+            context.read().inventory(ActorKey::Player(owner)),
+            Some(&inventory)
+        );
+        assert_eq!(context.read().container(reference), Some(container));
+    });
+    let tick = container_drop_refused(
+        &mut state,
+        owner,
+        other,
+        2,
+        container_drop_command(reference, 36),
+        mornlea_domain::RejectReason::PlayerNotReady,
+    );
+    assert_eq!(
+        state
+            .residents()
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Player(owner))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Pending
+    );
+    assert!(state.settled_read().unwrap().viewer(owner).is_none());
+    assert!(
+        events_for(&tick, owner)
+            .iter()
+            .any(|event| matches!(event, Event::ContainerClosed(_)))
+    );
+}
+
+#[test]
+fn native_container_drop_outcome_capacity() {
+    for (kind, slot) in [(ContainerKind::Chest, 36), (ContainerKind::Furnace, 37)] {
+        let (mut state, owner, other, reference) = container_drop_scene(kind);
+        transfer_outcome_open(&mut state, owner);
+        // All fixed physical slots are prepared full and remain pickup-delayed.
+        stage(&mut state, |context| {
+            let mut home = ground_chunk();
+            home.drops.fill(mornlea_storage::DropSlot {
+                generation: 1,
+                active: true,
+                stack: storage(ITEM_STONE, 64),
+                block_index: mornlea_domain::chunk_block_index(BlockPos::new(0, 65, 0)) as u32,
+                age_ticks: 0,
+                pickup_delay_ticks: 200,
+            });
+            context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, 0), 1, 1, home).unwrap());
+        });
+        container_drop_refused(
+            &mut state,
+            owner,
+            other,
+            2,
+            container_drop_command(reference, slot),
+            mornlea_domain::RejectReason::DropCapacity,
+        );
+        assert_eq!(state.residents().drop_records().len(), 32);
+        assert!(
+            state
+                .residents()
+                .drop_records()
+                .iter()
+                .all(|drop| drop.age == 1 && drop.pickup_delay == 199)
+        );
+    }
+}
+
+#[test]
+fn native_container_drop_outcome_close_precedes_late_drop() {
+    let (mut state, owner, other, reference) = scene(ContainerKind::Chest);
+    transfer_outcome_open(&mut state, owner);
+    let inventory = record(&state, owner);
+    let containers = state.residents().container_records();
+    submit(&mut state, owner, 2, container_drop_command(reference, 36));
+    submit(&mut state, owner, 3, Command::CloseContainer);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), inventory);
+    assert_eq!(state.residents().container_records(), containers);
+    assert!(state.residents().drop_records().is_empty());
+    assert!(state.settled_read().unwrap().viewer(owner).is_none());
+    assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+    assert_inventory_outcome_refusal(
+        &tick,
+        owner,
+        other,
+        2,
+        mornlea_domain::RejectReason::InvalidInput,
+    );
+}
+
+#[test]
+fn native_container_drop_outcome_exhausted_revision_hard() {
+    for foot in [false, true] {
+        let (mut state, owner, _, reference) = scene(ContainerKind::Chest);
+        transfer_outcome_open(&mut state, owner);
+        // Each exhausted revision independently exercises a trusted atomic boundary.
+        stage(&mut state, |context| {
+            let mut chunk = ground_chunk();
+            let key = if foot {
+                chunk_key(0, 0)
+            } else {
+                assert_eq!(
+                    chest_in_chunk(
+                        &mut chunk,
+                        BlockPos::new(0, 66, -1),
+                        storage_array(&[(0, ITEM_DIRT, 5)])
+                    ),
+                    reference
+                );
+                chunk_key(0, -1)
+            };
+            context.preload_ready_chunk(ReadyChunk::try_new(key, 1, u64::MAX, chunk).unwrap());
+        });
+        let inventory = record(&state, owner);
+        let containers = state.residents().container_records();
+        let drops = state.residents().drop_records();
+        submit(&mut state, owner, 2, container_drop_command(reference, 36));
+        let error = state.advance_tick(TickBudget::full()).unwrap_err();
+        assert_eq!(
+            error,
+            ServerError::Internal {
+                invariant: "container drop staging"
+            }
+        );
+        assert_eq!(record(&state, owner), inventory);
+        assert_eq!(state.residents().container_records(), containers);
+        assert_eq!(state.residents().drop_records(), drops);
+        assert_eq!(state.advance_tick(TickBudget::full()).unwrap_err(), error);
+    }
+}
+
+#[test]
+fn native_container_drop_outcome_success_intent() {
+    for (kind, slot, item, count) in [
+        (ContainerKind::Chest, 36, ITEM_DIRT, 5),
+        (ContainerKind::Furnace, 37, ITEM_COAL, 3),
+    ] {
+        let (mut state, owner, other, reference) = container_drop_scene(kind);
+        transfer_outcome_open(&mut state, owner);
+        let inventory = record(&state, owner);
+        submit(
+            &mut state,
+            owner,
+            2,
+            container_drop_command(reference, slot),
+        );
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(record(&state, owner), inventory);
+        let events = events_for(&tick, owner);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::InventoryState(_)))
+                .count(),
+            1
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::CraftingState(_) | Event::CommandRejected(_)))
+        );
+        assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+        let drops = state.residents().drop_records();
+        assert_eq!(drops.len(), 1);
+        assert_eq!(drops[0].stack, storage(item, count));
+        assert_eq!(drops[0].pickup_delay, 40);
+        assert!(events.contains(&projection_drop_wire_upsert(
+            tick.tick,
+            0,
+            BlockPos::new(0, 65, 0),
+            item,
+            count
+        )));
+        let stored = state.residents().container_records()[&reference].clone();
+        match stored.slots {
+            mornlea_server::contracts::ContainerSlots::Chest(cells) => {
+                assert_eq!(cells[0], StorageStack::default())
+            }
+            mornlea_server::contracts::ContainerSlots::Furnace { slots, .. } => {
+                assert_eq!(slots[1], StorageStack::default())
+            }
+        }
+        assert_eq!(native_input_ack(&tick, owner), 0);
+    }
+}

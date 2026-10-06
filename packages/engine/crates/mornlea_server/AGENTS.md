@@ -1259,7 +1259,16 @@ Late whole, partial and quick container transfers share privately tagged raw
 settlement algorithms with the live checked drain. Semantic refusals enter the
 settlement collector with original identity; trusted patches and durable revision
 failures stop the tick. Successful transfers retain inventory intent and a
-coalesced per-chunk dirty barrier, including equal final records. Container drops
-and raw lifecycle drains retain their separate compatibility policy. Prepared
+coalesced per-chunk dirty barrier, including equal final records. Raw lifecycle drains retain their separate compatibility policy; container drops
+consume the checked preparation and late settlement described below. Prepared
 capacity/repack/revision causes qualify actual consumers; cross-dimension and
 whole queue/runtime composition remain separate.
+
+Late container panel drops consume a checked preparation outcome: ordinary
+readiness and physical capacity are wire refusals, while invalid trusted batches,
+missing owned records and exhausted durable revisions remain hard. The raw foot
+preparation wrapper retains its typed contract. Container removal and foot output
+stage atomically before inventory intent; no crafting repack veto is introduced.
+Ordinary drop timers and final view reach invalidation remain separate phases.
+Prepared pose/capacity/revision causes qualify these consumers, not upstream
+producers or whole queued-mirror/runtime composition.

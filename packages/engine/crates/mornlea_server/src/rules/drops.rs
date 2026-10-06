@@ -181,19 +181,45 @@ pub fn advance(ctx: &mut TickContext<'_>, active: &[ChunkKey]) -> Result<PhaseRe
     Ok(report)
 }
 
-/// Prepare one foot-position output without debiting its source. Container
-/// settlement reuses this check, then atomically stages its own source debit.
+/// Keep physical capacity refusals distinct from invalid trusted preparation.
+/// Raw callers recover their original typed error; live callers retain provenance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlayerDropFailure {
+    Refused(RejectReason),
+    Trusted(RuleReject),
+}
+
+impl PlayerDropFailure {
+    fn into_raw(self) -> RuleReject {
+        match self {
+            Self::Refused(reason) => RuleReject::Wire(reason),
+            Self::Trusted(error) => error,
+        }
+    }
+}
+
 pub(crate) fn prepare_player_drop(
     ctx: &TickContext<'_>,
     session: SessionKey,
     sequence: u64,
     stack: ItemStack,
 ) -> Result<DropBatch, RuleReject> {
+    prepare_player_drop_checked(ctx, session, sequence, stack).map_err(PlayerDropFailure::into_raw)
+}
+
+/// Prepare one foot-position output without debiting its source. Container
+/// settlement reuses this check, then atomically stages its own source debit.
+pub(crate) fn prepare_player_drop_checked(
+    ctx: &TickContext<'_>,
+    session: SessionKey,
+    sequence: u64,
+    stack: ItemStack,
+) -> Result<DropBatch, PlayerDropFailure> {
     let view = ctx.read();
     let actor = view
         .actor(ActorKey::Player(session))
         .filter(|actor| actor.lifecycle == ActorLifecycle::Active)
-        .ok_or(RuleReject::Wire(RejectReason::PlayerNotReady))?;
+        .ok_or(PlayerDropFailure::Refused(RejectReason::PlayerNotReady))?;
     let origin = actor.motion.position();
     // Check in f64 before narrowing: the f32 representation of i32::MAX
     // rounds outside the integer range and must never saturate into a chunk.
@@ -203,26 +229,34 @@ pub(crate) fn prepare_player_drop(
         .any(|value| *value < f64::from(i32::MIN) || *value > f64::from(i32::MAX))
         || !(-64.0..320.0).contains(&feet[1])
     {
-        return Err(RuleReject::Wire(RejectReason::ChunkNotReady));
+        return Err(PlayerDropFailure::Refused(RejectReason::ChunkNotReady));
     }
     let key = ChunkKey {
         dimension: actor.dimension,
         pos: ChunkPos::new((feet[0] as i32) >> 4, (feet[2] as i32) >> 4),
     };
     if !view.ready_chunk(key) {
-        return Err(RuleReject::Wire(RejectReason::ChunkNotReady));
+        return Err(PlayerDropFailure::Refused(RejectReason::ChunkNotReady));
     }
     let environment = view
         .environment()
-        .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+        .ok_or(PlayerDropFailure::Trusted(RuleReject::Wire(
+            RejectReason::InvalidInput,
+        )))?;
     let batch = DropBatch::try_new(
         DropSource::Panel { session, sequence },
         actor.dimension,
         origin,
         vec![stack],
         environment.tunables.player_drop_pickup_delay_ticks(),
-    )?;
-    view.check_drop_batch(&batch)?;
+    )
+    .map_err(PlayerDropFailure::Trusted)?;
+    view.check_drop_batch(&batch).map_err(|error| match error {
+        RuleReject::Wire(RejectReason::DropCapacity) => {
+            PlayerDropFailure::Refused(RejectReason::DropCapacity)
+        }
+        other => PlayerDropFailure::Trusted(other),
+    })?;
     Ok(batch)
 }
 
