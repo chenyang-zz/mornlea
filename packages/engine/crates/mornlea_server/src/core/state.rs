@@ -61,6 +61,8 @@ use crate::rules::passives::PassiveSnowBook;
 
 #[path = "state_actor_saves.rs"]
 mod actor_saves;
+#[path = "state_companion_persistence.rs"]
+mod companion_persistence;
 #[path = "state_mob_persistence.rs"]
 mod mob_persistence;
 #[path = "state_player_persistence.rs"]
@@ -234,6 +236,7 @@ pub struct AuthorityState {
     /// Source cache leases share the actor ledger current and immutable flight owners.
     player_persistence: Option<player_persistence::PlayerPersistence>,
     mob_persistence: bool,
+    companion_persistence: Option<companion_persistence::CompanionPersistence>,
     cancelled_chunks: BTreeSet<ChunkRequestId>,
     chunk_cancel_discards: usize,
     chunk_duplicate_discards: usize,
@@ -326,6 +329,7 @@ impl AuthorityState {
             actor_saves_next: true,
             player_persistence: None,
             mob_persistence: false,
+            companion_persistence: None,
             cancelled_chunks: BTreeSet::new(),
             chunk_cancel_discards: 0,
             chunk_duplicate_discards: 0,
@@ -839,7 +843,7 @@ impl AuthorityState {
         if self.phase != ServerPhase::Running {
             return Err(ServerError::InvalidState { phase: self.phase });
         }
-        if self.next_tick != 0 {
+        if self.next_tick != 0 || self.companion_persistence.is_some() {
             return Err(ServerError::InvalidInput {
                 field: "source_companion_registration",
             });

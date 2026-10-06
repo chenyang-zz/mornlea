@@ -18,6 +18,7 @@ use super::contracts::{AgentPlan, PlanStep, ServerError, SessionKey};
 
 #[path = "companion_chat_persistence.rs"]
 mod persistence;
+pub(crate) use persistence::CompanionTaskObservation;
 pub use persistence::RestoredCompanionTasks;
 
 /// Maximum immutable configured companions.

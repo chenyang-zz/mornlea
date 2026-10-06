@@ -215,6 +215,19 @@ impl ActorSaveLedger {
         Ok(changed)
     }
 
+    /// Preserves a raw task change whose normalized save content is equal.
+    /// Exact ACK still recomputes dirty from wire content; this does not replace a held target.
+    pub(crate) fn mark_observation_changed(&mut self, key: &SaveKey) -> Result<(), ServerError> {
+        self.check_open()?;
+        let key = Key::from_save(key).ok_or(INVALID)?;
+        let entry = self.entries.get_mut(&key).ok_or(INVALID)?;
+        if !entry.eligible {
+            return Err(INVALID);
+        }
+        entry.dirty = true;
+        Ok(())
+    }
+
     /// Pins caller-owned prepared/live/cache obligations independently of dirty state.
     pub fn set_pinned(&mut self, key: &SaveKey, pinned: bool) -> Result<(), ServerError> {
         self.check_open()?;

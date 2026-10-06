@@ -59,3 +59,6 @@ mod source_player_persistence;
 
 #[path = "persistence_failure/source_mob_persistence.rs"]
 mod source_mob_persistence;
+
+#[path = "persistence_failure/source_companion_persistence.rs"]
+mod source_companion_persistence;

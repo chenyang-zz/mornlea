@@ -226,6 +226,7 @@ fn reduce_tick_inner(
     mut goals: Option<&mut SourceGoals>,
 ) -> Result<TickPublication, ServerError> {
     state.preflight_mob_persistence()?;
+    state.preflight_companion_persistence()?;
     let tick = state.next_tick();
     // Staged chat ingress runs before the mailbox/companion drain: admission,
     // stop handling, and promotion decide facts once, and a successful stop
@@ -341,6 +342,8 @@ fn reduce_tick_inner(
     if let Some(goals) = goals {
         goals.finish_tick(state)?;
     }
+    // Complete companion body and task observations follow all settled motion and publication.
+    state.capture_companion_saves()?;
     // Publication consumes terminal identities before complete roster retirement and capture.
     state.capture_mob_saves()?;
     // The source cache observes only fully settled current players, including final execution.

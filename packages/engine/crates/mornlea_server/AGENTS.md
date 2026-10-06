@@ -130,6 +130,22 @@ This library operation does not qualify executable startup or shutdown compositi
 and the narrowly confined native-close adapters. Region and standalone providers
 consume its cancellation and error contracts before joining the real backend.
 
+`core/state_companion_persistence.rs` joins one durably merged complete aggregate
+to configured Pending bodies, neutral runtimes, inventories and the restored chat
+owner before any tick. All bounded preparation precedes ledger admission, then
+owned transfers cannot partially fail. Runtime and inventory capacity include the
+new owners. Later per-ID registration is fenced. Before tick loans and after
+settlement, bounded identity checks require complete configured ownership.
+Active bodies and authoritative Running tasks are captured with all inactive and
+Pending records, namespace and lifecycle memory preserved. The actor ledger alone
+owns aggregate content and immutable targets. The private cache retains raw task
+observations: phase, generation and model summary changes may dirty an equal
+normalized payload; exact ACK still recomputes dirty from wire content. Ordinary
+and unpublished final reducers share capture. The persistence topic separates
+prepared controls and actual Go comparisons from real disk placement, autosave,
+failed target retry, final flush and reopen. This opt-in library owner does not
+assemble configuration, Agent execution, memory CAS or executable shutdown.
+
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 
 - `src/core/actor_placement.rs` owns bounded borrowed restoration, support,

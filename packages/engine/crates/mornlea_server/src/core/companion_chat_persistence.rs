@@ -12,6 +12,15 @@ use std::convert::Infallible;
 /// Fresh task generations and saved runtime payloads, independent of actor placement.
 pub type RestoredCompanionTasks = BTreeMap<CompanionId, (u64, StoredCompanionTask)>;
 
+/// Source dirty comparison includes volatile task facts omitted by the durable wire format.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CompanionTaskObservation {
+    queue: StoredCompanionQueue,
+    generation: Option<u64>,
+    phase: Option<CompanionChatPhase>,
+    summary: String,
+}
+
 const INVALID: ServerError = ServerError::InvalidInput {
     field: "companion_task_persistence",
 };
@@ -20,6 +29,47 @@ const INVARIANT: ServerError = ServerError::Internal {
 };
 
 impl CompanionChatBook {
+    /// Captures bounded raw facts only after the complete normalized queue join is validated.
+    /// Idle slots are absent, matching the source owner's nil-to-empty quiet observation.
+    pub(crate) fn persistence_observation(
+        &self,
+        queues: &[StoredCompanionQueue],
+    ) -> Result<Vec<CompanionTaskObservation>, ServerError> {
+        if queues.len() > MAX_CONFIGURED_COMPANIONS {
+            return Err(INVARIANT);
+        }
+        let mut observations = Vec::with_capacity(queues.len());
+        for queue in queues {
+            let id = CompanionId::try_from_bytes(queue.id.to_bytes()).map_err(|_| INVARIANT)?;
+            let slot = self.slots.get(&id).ok_or(INVARIANT)?;
+            let current = slot.current.as_ref();
+            let summary = current
+                .and_then(|task| task.plan.as_ref())
+                .map_or("", |plan| plan.summary.as_str());
+            if queue.pending.len() > MAX_PENDING_COMMANDS
+                || queue.current.command.len() > mornlea_storage::COMPANION_MAX_TASK_COMMAND_BYTES
+                || queue.current.plan_steps.len() > COMPANION_MAX_PLAN_STEPS
+                || queue.pending.iter().any(|command| {
+                    command.len() > mornlea_storage::COMPANION_MAX_TASK_COMMAND_BYTES
+                })
+                || summary.len() > 512
+                || current
+                    .and_then(|task| task.plan.as_ref())
+                    .is_some_and(|plan| plan.steps.len() > COMPANION_MAX_PLAN_STEPS)
+                || queue.has_current != current.is_some()
+            {
+                return Err(INVARIANT);
+            }
+            observations.push(CompanionTaskObservation {
+                queue: queue.clone(),
+                generation: current.map(|task| task.generation),
+                phase: current.map(|task| task.phase),
+                summary: summary.to_owned(),
+            });
+        }
+        Ok(observations)
+    }
+
     /// Prepares the whole configured owner and runtime handoff without events or partial mutation.
     /// The caller must first durably accept the v5 merge, then install neutral actor runtimes.
     pub fn from_persisted(
@@ -211,3 +261,7 @@ fn restored_issuer() -> CompanionChatIssuer {
         look_hit: None,
     }
 }
+
+#[cfg(test)]
+#[path = "companion_chat_observation_tests.rs"]
+mod observation_tests;
