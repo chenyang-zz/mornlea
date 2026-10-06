@@ -137,6 +137,8 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.7n0c Land the narrow transport session contract ([packet](plans/56-live-transport-login.md)).
 - [x] 3.7n0 Bind actual Memory/TCP login to the background store ([packet](plans/56-live-transport-login.md)).
 - [x] 3.7a1 Retain bounded MCP connections through actual deadline-aware shutdown ([packet](plans/58-owned-mcp-shutdown.md)).
+- [x] 3.7l3ir Publish source Active PlayerInput admission refusals with original acknowledgment and defensive cleanup ([packet](plans/134-source-active-input-refusals.md)). Direct Codex: four causal REDs/four new GREEN plus strengthened4096input saturation/clock case; corrected76Rust suites3722PASS0failed/ignored/replay595, source Go movement3/action2/overlay2/outbox2 race/count1PASS, revised independent SCOPED_PASS. No-tests receipts excluded; other outcomes/queue/runtime and broad3.8/4.1/4.2 OPEN.
+
 - [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)).
 - [x] 3.8r0 Retain the exclusive world lease throughout actual backup restoration ([packet](plans/65-restore-world-lease.md)).
 - [x] 3.8v0 Qualify the actual previous Go read-only save verifier ([packet](plans/54-previous-runtime-verifier.md)).

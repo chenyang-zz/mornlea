@@ -803,3 +803,302 @@ fn native_placement_held_and_same_tick_yaw_normalizes_once_near_pi() {
         );
     }
 }
+
+fn input_refusal_control(move_x: i8, move_z: i8, pitch: f32) -> PlayerControl {
+    PlayerControl::new(PlayerControlParts {
+        movement: Movement {
+            move_x,
+            move_z,
+            jump: true,
+        },
+        look: look(0.75, pitch),
+        actions: HeldActions {
+            primary: true,
+            eating: true,
+            sprinting: true,
+            sneaking: true,
+        },
+    })
+}
+
+fn assert_input_refusals(
+    tick: &mornlea_server::contracts::TickPublication,
+    owner: SessionKey,
+    other: SessionKey,
+    sequences: &[u64],
+) {
+    let expected: Vec<_> = sequences
+        .iter()
+        .map(|sequence| {
+            Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                *sequence,
+                mornlea_domain::RejectReason::InvalidInput,
+            ))
+        })
+        .collect();
+    let events = events_for(tick, owner);
+    let actual: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event, Event::CommandRejected(_)))
+        .cloned()
+        .collect();
+    assert_eq!(actual, expected);
+    assert_eq!(&events[..expected.len()], expected.as_slice());
+    assert!(
+        !events_for(tick, other)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+}
+
+#[test]
+fn native_input_refusal_preserves_look_inventory_and_acknowledges() {
+    for (move_x, move_z, pitch) in [
+        (-2, 0, 0.0),
+        (2, 0, 0.0),
+        (0, -2, 0.0),
+        (0, 2, 0.0),
+        (0, 0, -2.0),
+        (0, 0, 2.0),
+    ] {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        let (mut reference, reference_owner, _, _) = scene(ContainerKind::Chest);
+        for (authority, session) in [(&mut state, owner), (&mut reference, reference_owner)] {
+            submit(
+                authority,
+                session,
+                1,
+                Command::PlayerInput(placement_move_control(0.25, 0.1)),
+            );
+            authority.advance_tick(TickBudget::full()).unwrap();
+        }
+        let before_inventory = record(&state, owner);
+        let before_look = state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .look;
+        submit(
+            &mut state,
+            owner,
+            2,
+            Command::PlayerInput(input_refusal_control(move_x, move_z, pitch)),
+        );
+        let neutral = PlayerControl::new(PlayerControlParts {
+            movement: Movement {
+                move_x: 0,
+                move_z: 0,
+                jump: false,
+            },
+            look: before_look,
+            actions: HeldActions {
+                primary: false,
+                eating: false,
+                sprinting: false,
+                sneaking: false,
+            },
+        });
+        submit(
+            &mut reference,
+            reference_owner,
+            2,
+            Command::PlayerInput(neutral),
+        );
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        reference.advance_tick(TickBudget::full()).unwrap();
+        let view = state.settled_read().unwrap();
+        let actor = ActorKey::Player(owner);
+        let runtime = view.runtime(actor).unwrap();
+        assert_eq!(runtime.controls, None);
+        assert_eq!(runtime.eating, None);
+        assert_eq!(runtime.bow, None);
+        assert_eq!(view.mining(actor), None);
+        assert_eq!(view.actor(actor).unwrap().look, before_look);
+        assert_eq!(
+            view.actor(actor).unwrap().motion,
+            reference
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(reference_owner))
+                .unwrap()
+                .motion
+        );
+        assert_eq!(record(&state, owner), before_inventory);
+        assert_eq!(native_input_ack(&tick, owner), 2);
+        assert_input_refusals(&tick, owner, other, &[2]);
+        submit(
+            &mut state,
+            owner,
+            2,
+            Command::PlayerInput(input_refusal_control(move_x, move_z, pitch)),
+        );
+        let stale = state.advance_tick(TickBudget::full()).unwrap();
+        assert_input_refusals(&stale, owner, other, &[]);
+        assert_eq!(native_input_ack(&stale, owner), 2);
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .runtime(actor)
+                .unwrap()
+                .controls,
+            None
+        );
+    }
+}
+
+#[test]
+fn native_input_refusal_then_valid_keeps_prefix_identity() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let before = record(&state, owner);
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::PlayerInput(input_refusal_control(2, 0, 0.0)),
+    );
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::PlayerInput(input_refusal_control(0, 0, 2.0)),
+    );
+    let valid = placement_move_control(0.25, 0.1);
+    submit(&mut state, owner, 3, Command::PlayerInput(valid));
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(native_input_ack(&tick, owner), 3);
+    let view = state.settled_read().unwrap();
+    assert_eq!(
+        view.runtime(ActorKey::Player(owner)).unwrap().controls,
+        Some(valid)
+    );
+    assert_eq!(
+        view.actor(ActorKey::Player(owner)).unwrap().look,
+        valid.look()
+    );
+    assert_eq!(record(&state, owner), before);
+    assert_input_refusals(&tick, owner, other, &[1, 2]);
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::PlayerInput(input_refusal_control(2, 0, 0.0)),
+    );
+    let stale = state.advance_tick(TickBudget::full()).unwrap();
+    assert_input_refusals(&stale, owner, other, &[]);
+    assert_eq!(native_input_ack(&stale, owner), 3);
+}
+
+#[test]
+fn native_input_refusal_interrupts_actual_eating_before_completion() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    submit(&mut state, owner, 1, held_eating());
+    let required = RuleTunables::source_defaults().eating_ticks();
+    for _ in 0..required - 1 {
+        state.advance_tick(TickBudget::full()).unwrap();
+    }
+    assert_eq!(eating_ticks(&state, owner), Some(required - 1));
+    let before = record(&state, owner);
+    let before_survival = state
+        .settled_read()
+        .unwrap()
+        .actor(ActorKey::Player(owner))
+        .unwrap()
+        .survival;
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::PlayerInput(input_refusal_control(2, 0, 0.0)),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(eating_ticks(&state, owner), None);
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .survival
+            .health(),
+        before_survival.health()
+    );
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .survival
+            .hunger(),
+        before_survival.hunger()
+    );
+    assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+    assert_eq!(native_input_ack(&tick, owner), 2);
+    assert_input_refusals(&tick, owner, other, &[2]);
+    let idle = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(native_input_ack(&idle, owner), 2);
+    assert_input_refusals(&idle, owner, other, &[]);
+}
+
+#[test]
+fn native_input_refusal_clears_prepared_bow_and_mining_without_release() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let actor = ActorKey::Player(owner);
+    // Action progress is a prepared cause; the refused input and consumers are real.
+    stage(&mut state, |context| {
+        let mut runtime = context.read().runtime(actor).unwrap().clone();
+        runtime.controls = Some(input_refusal_control(0, 0, 0.0));
+        runtime.bow = Some(mornlea_server::contracts::BowProgress {
+            slot: HotbarSlot::new(3).unwrap(),
+            ticks: 15,
+        });
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+        context
+            .stage(RuleEffect::Mining {
+                actor,
+                progress: Some(mornlea_server::contracts::MiningProgress {
+                    actor,
+                    dimension: Dimension::OVERWORLD,
+                    target: BlockPos::new(0, 64, 0),
+                    observed_block: 1,
+                    tool_slot: HotbarSlot::new(0).unwrap(),
+                    tool: StorageStack::default(),
+                    elapsed: 3,
+                    required: 10,
+                    last_tick: 0,
+                }),
+            })
+            .unwrap();
+    });
+    let before = record(&state, owner);
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::PlayerInput(input_refusal_control(2, 0, 0.0)),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let view = state.settled_read().unwrap();
+    let runtime = view.runtime(actor).unwrap();
+    assert_eq!(runtime.controls, None);
+    assert_eq!(runtime.bow, None);
+    assert_eq!(runtime.eating, None);
+    assert_eq!(view.mining(actor), None);
+    assert_eq!(record(&state, owner), before);
+    assert!(view.projectiles().is_empty());
+    for x in -1..=1 {
+        for z in -1..=1 {
+            assert!(view.drops(chunk_key(x, z)).is_empty());
+        }
+    }
+    assert!(!events_for(&tick, owner).iter().any(|event| matches!(
+        event,
+        Event::BlockChanges(_) | Event::ProjectileSpawn(_) | Event::ItemDropUpserts(_)
+    )));
+    assert_eq!(native_input_ack(&tick, owner), 1);
+    assert_input_refusals(&tick, owner, other, &[1]);
+}

@@ -679,6 +679,20 @@ fn admit_command(
     // Lifecycle commands settle against the command prefix before actor actions.
     // Physical transfers keep their later chunk-write phase.
     match envelope.command() {
+        Command::PlayerInput(_) => {
+            match player_motion::admit_input(context, envelope)? {
+                CommandDisposition::Settled(_) => {}
+                CommandDisposition::Refused(reason) => {
+                    context.record_command_rejection(envelope, reason, RejectionStage::Admission)?
+                }
+                CommandDisposition::Unowned => {
+                    return Err(ServerError::Internal {
+                        invariant: "input command owner",
+                    });
+                }
+            }
+            return Ok(());
+        }
         Command::PlaceBlock(_) => {
             match player_motion::admit_placement_look(context, envelope)? {
                 CommandDisposition::Settled(_) => {}

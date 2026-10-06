@@ -159,6 +159,38 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
     }
 }
 
+/// Consumes live input admission without routing a refused tombstone to other
+/// providers. Only the intake's explicit control refusal is a wire outcome;
+/// reservation, initialization and trusted staging errors remain hard failures.
+pub(crate) fn admit_input(ctx: &mut TickContext<'_>, envelope: &CommandEnvelope) -> CommandResult {
+    if !matches!(envelope.command(), Command::PlayerInput(_)) {
+        return Ok(CommandDisposition::Unowned);
+    }
+    let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+        invariant: "input admission session",
+    })?;
+    if !ctx
+        .read()
+        .actor(ActorKey::Player(session))
+        .is_some_and(|record| record.lifecycle == ActorLifecycle::Active)
+    {
+        return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady));
+    }
+    let call = RuleCall {
+        phase: RulePhase::PlayerCommand,
+        actor: None,
+        command: Some(envelope),
+        internal: None,
+    };
+    match run_intake(ctx, &call) {
+        Ok(report) => Ok(CommandDisposition::Settled(report)),
+        Err(ServerError::InvalidInput { field: "control" }) => {
+            Ok(CommandDisposition::Refused(RejectReason::InvalidInput))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Placement admission owns look before actor actions, independently of the
 /// later physical placement outcome. It preserves held actions and their progress.
 pub(crate) fn admit_placement_look(

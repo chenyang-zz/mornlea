@@ -1222,3 +1222,10 @@ retain their original control basis; a resident loan alone does not prove intake
 Real command-prefix motion uses the normalized authoritative actor look
 directly. Repeating float32 yaw normalization near pi can change its sign;
 raw supplied controls retain their separate single normalization path.
+
+Active `PlayerInput` admission consumes the private typed motion outcome before
+other command providers. Invalid input acknowledges its original sequence,
+retains its motion tombstone, clears held action progress and emits one ordered
+owner-only refusal. Only explicit control validation becomes a wire refusal;
+reservation, runtime initialization and staging errors remain hard failures.
+The public raw motion provider retains its established return contract.
