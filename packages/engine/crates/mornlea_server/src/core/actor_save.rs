@@ -265,6 +265,21 @@ impl ActorSaveLedger {
             .map(|entry| (entry.persisted, &entry.current))
     }
 
+    /// Checks source replacement capacity without allocating a revision or touching ownership.
+    /// A failed write retains its occupied flight, so its revision also fences later memory CAS.
+    pub(crate) fn check_replacement_revision(&self, key: &SaveKey) -> Result<(), ServerError> {
+        self.check_open()?;
+        let key = Key::from_save(key).ok_or(INVALID)?;
+        let entry = self.entries.get(&key).ok_or(INVALID)?;
+        let highest = entry.flight.as_ref().map_or(entry.persisted, |flight| {
+            entry.persisted.max(flight.revision)
+        });
+        highest.checked_add(1).ok_or(ServerError::Internal {
+            invariant: "actor save revision space",
+        })?;
+        Ok(())
+    }
+
     /// Captures a whole ordered prefix before changing any selected ownership.
     ///
     /// The first whole target may exceed the count/byte budget. Subsequent

@@ -2,7 +2,9 @@
 use super::*;
 use crate::core::actor_projection::project_companion;
 use crate::core::companion_chat::CompanionTaskObservation;
-use mornlea_storage::{CompanionSave, StoredCompanions};
+use mornlea_storage::{
+    COMPANION_MAX_SUMMARY_BYTES, CompanionSave, StoredCompanionLifecycle, StoredCompanions,
+};
 
 pub(super) struct CompanionPersistence {
     last_tasks: Vec<CompanionTaskObservation>,
@@ -133,6 +135,100 @@ impl AuthorityState {
 
     pub fn companion_persistence_enabled(&self) -> bool {
         self.companion_persistence.is_some()
+    }
+
+    /// Borrows complete latest lifecycle metadata; no remote readiness or disk receipt is implied.
+    pub fn companion_memory_lifecycles(&self) -> Option<&[StoredCompanionLifecycle]> {
+        self.companion_persistence.as_ref()?;
+        let (_, SaveValue::Companions(save)) =
+            self.actor_saves.as_ref()?.current(&SaveKey::Companions)?
+        else {
+            return None;
+        };
+        Some(&save.lifecycles)
+    }
+
+    /// Reads one latest active mirror or inactive tombstone without copying authority ownership.
+    pub fn companion_memory_lifecycle(&self, id: CompanionId) -> Option<&StoredCompanionLifecycle> {
+        self.companion_memory_lifecycles()?
+            .iter()
+            .find(|lifecycle| lifecycle.id.to_bytes() == id.bytes())
+    }
+
+    /// Applies source epoch/revision CAS without replacing bodies, queues or an immutable target.
+    /// Reconcile may advance several memory revisions; healthy Closing remains writable until flush.
+    pub fn replace_companion_memory(
+        &mut self,
+        id: CompanionId,
+        epoch: u64,
+        expected_revision: u64,
+        next_revision: u64,
+        operation: OperationId,
+        summary: String,
+    ) -> Result<(), ServerError> {
+        self.require_live_chunks(false)?;
+        if self.companion_persistence.is_none() {
+            return Err(ServerError::InvalidInput {
+                field: "companion_memory",
+            });
+        }
+        self.actor_saves
+            .as_ref()
+            .ok_or(OWNERSHIP)?
+            .check_replacement_revision(&SaveKey::Companions)?;
+        if epoch == 0
+            || next_revision == 0
+            || next_revision <= expected_revision
+            || summary.len() > COMPANION_MAX_SUMMARY_BYTES
+            || summary.contains('\0')
+        {
+            return Err(ServerError::InvalidInput {
+                field: "companion_memory",
+            });
+        }
+        let lifecycle = self
+            .companion_memory_lifecycle(id)
+            .ok_or(ServerError::InvalidInput {
+                field: "companion_memory_lifecycle",
+            })?;
+        if lifecycle.active
+            && lifecycle.memory_epoch == epoch
+            && lifecycle.memory_revision == next_revision
+            && lifecycle.memory_operation_id.to_bytes() == operation.bytes()
+            && lifecycle.summary == summary
+        {
+            return Ok(());
+        }
+        if !lifecycle.active
+            || lifecycle.memory_epoch != epoch
+            || lifecycle.memory_revision != expected_revision
+        {
+            return Err(ServerError::InvalidInput {
+                field: "companion_memory_cas",
+            });
+        }
+        let mut aggregate = self.current_companion_aggregate()?;
+        let lifecycle = aggregate
+            .lifecycles
+            .iter_mut()
+            .find(|lifecycle| lifecycle.id.to_bytes() == id.bytes())
+            .ok_or(OWNERSHIP)?;
+        lifecycle.memory_revision = next_revision;
+        lifecycle.memory_operation_id = StoredPlayerId::from_bytes(operation.bytes());
+        lifecycle.summary = summary;
+        lifecycle.tombstone_operation_id = StoredPlayerId::default();
+        self.actor_saves.as_mut().ok_or(OWNERSHIP)?.observe(
+            SaveValue::Companions(CompanionSave {
+                revision: 1,
+                agent_namespace_id: aggregate.agent_namespace_id,
+                records: aggregate.records,
+                lifecycles: aggregate.lifecycles,
+                queues: aggregate.queues,
+            }),
+            true,
+            false,
+        )?;
+        Ok(())
     }
 
     /// Refuses incoherent trusted owners before a tick moves any book or resident collection.
@@ -290,3 +386,7 @@ impl AuthorityState {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "state_companion_memory_tests.rs"]
+mod memory_tests;

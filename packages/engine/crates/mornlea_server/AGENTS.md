@@ -144,7 +144,20 @@ normalized payload; exact ACK still recomputes dirty from wire content. Ordinary
 and unpublished final reducers share capture. The persistence topic separates
 prepared controls and actual Go comparisons from real disk placement, autosave,
 failed target retry, final flush and reopen. This opt-in library owner does not
-assemble configuration, Agent execution, memory CAS or executable shutdown.
+assemble configuration, Agent execution or executable shutdown.
+
+Lifecycle reads borrow complete latest metadata, including inactive tombstones.
+Active-memory replacement checks open ownership and the highest occupied save
+revision before proposal validation or idempotence. Epoch and current memory
+revision fence replacement; reconciliation may install a higher revision jump.
+An exact installed operation/revision/summary is quiet with a stale expectation.
+Summaries retain source UTF-8 byte bounds and reject NUL. Replacement changes
+only lifecycle memory in the sole complete ledger; body/task capture preserves
+it, and older admitted targets remain immutable. Healthy Closing accepts memory
+before final flush, while frozen, Closed and sticky failures refuse mutation.
+Private lifecycle controls and actual failed-target retry/reopen evidence remain
+distinct. Agent settlement and finalizer composition must retain proposal
+ownership through this CAS before accepting a remote working mirror.
 
 ## Checked contracts (`src/core/contracts.rs`, `src/core/state.rs`)
 

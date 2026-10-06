@@ -1,4 +1,6 @@
 //! Complete companion startup and prepared resident changes exercise the actual authority owner.
+#[path = "source_companion_memory.rs"]
+mod memory;
 use mornlea_domain::{CompanionId, CompanionName};
 use mornlea_server::{contracts::*, state::AuthorityState};
 use mornlea_storage::{
@@ -693,9 +695,9 @@ mod actual_disk {
         time::{Duration, Instant},
     };
     static ROOTS: AtomicU64 = AtomicU64::new(0);
-    struct Root(PathBuf);
+    pub(super) struct Root(PathBuf);
     impl Root {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let path = std::env::temp_dir().join(format!(
                 "source-companion-persistence-{}-{}",
                 std::process::id(),
@@ -710,7 +712,7 @@ mod actual_disk {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
-    struct RealClock;
+    pub(super) struct RealClock;
     impl Clock for RealClock {
         fn monotonic(&self) -> Instant {
             Instant::now()
@@ -719,7 +721,7 @@ mod actual_disk {
             0
         }
     }
-    fn deadline() -> Deadline {
+    pub(super) fn deadline() -> Deadline {
         Deadline::after(Instant::now(), Duration::from_secs(10)).unwrap()
     }
     fn options() -> DiskOptions {
@@ -767,7 +769,7 @@ mod actual_disk {
         };
         OwnedSnapshot::try_new(key, revision, bytes, SaveUrgency::Autosave, value).unwrap()
     }
-    fn scheduler(disk: DiskStore) -> AutosaveScheduler<DiskStore> {
+    pub(super) fn scheduler(disk: DiskStore) -> AutosaveScheduler<DiskStore> {
         AutosaveScheduler::try_new(
             SchedulerConfig::default(),
             StoreMailbox::try_new_background(
@@ -778,7 +780,7 @@ mod actual_disk {
         )
         .unwrap()
     }
-    fn setup(
+    pub(super) fn setup(
         root: &Root,
         aggregate: StoredCompanions,
     ) -> (AuthorityState, AutosaveScheduler<DiskStore>) {
@@ -859,7 +861,7 @@ mod actual_disk {
         );
         (state, store)
     }
-    fn autosave(state: &mut AuthorityState, store: &mut AutosaveScheduler<DiskStore>) {
+    pub(super) fn autosave(state: &mut AuthorityState, store: &mut AutosaveScheduler<DiskStore>) {
         let until = deadline();
         let mut tick = 6000;
         loop {
@@ -877,7 +879,7 @@ mod actual_disk {
         }
         assert_eq!(store.last_error(), None);
     }
-    fn reopen(root: &Root, expected: mornlea_storage::CompanionSave) {
+    pub(super) fn reopen(root: &Root, expected: mornlea_storage::CompanionSave) {
         let mut disk = DiskStore::open(&root.0, options()).unwrap();
         assert_eq!(
             disk.load(SaveKey::Companions).unwrap(),
@@ -1004,7 +1006,7 @@ mod actual_disk {
             Ok(())
         }
     }
-    fn failing_disk(
+    pub(super) fn failing_disk(
         root: &Root,
         attempts: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
     ) -> DiskStore {
