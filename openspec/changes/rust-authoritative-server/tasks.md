@@ -276,6 +276,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3twr Publish source tool intake and late command outcomes with trusted failure separation and accepted inventory intent ([packet](plans/143-source-tool-command-outcomes.md)). Held and remaining runtime outcomes/broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3hmr Publish source held mining completion refusals and canonical held ray with trusted failure provenance ([packet](plans/144-source-held-mining-outcomes.md)). Only this provider node; broad3.8/4.1/4.2 and configured/runtime/queue/actor work OPEN.
+
 ## 4. Closeout
 
 

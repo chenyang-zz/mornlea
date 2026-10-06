@@ -5353,6 +5353,28 @@ impl<'a> TickContext<'a> {
         }
     }
 
+    /// A held completion uses retained source input identity, independent of command quota.
+    pub(crate) fn record_held_mining_rejection(
+        &mut self,
+        session: SessionKey,
+        reason: RejectReason,
+    ) -> Result<(), ServerError> {
+        let error = ServerError::Internal {
+            invariant: "held mining rejection owner",
+        };
+        let sequence = self
+            .authority
+            .sessions
+            .get(&session)
+            .filter(|record| record.phase == SessionPhase::Active)
+            .ok_or(error)?
+            .last_input_sequence;
+        self.command_rejections
+            .as_mut()
+            .ok_or(error)?
+            .record_held_input(session, sequence, reason)
+    }
+
     /// Consume the tick-local identity log once before successes and records.
     pub(crate) fn take_command_rejections(&mut self) -> Result<Vec<RoutedEvent>, ServerError> {
         match self.command_rejections.take() {
@@ -17558,5 +17580,63 @@ mod companion_chat_boundary_tests {
         assert!(queue.current.is_none());
         assert_eq!(queue.pending[0].0.as_str(), "dig");
         assert!(a.companion_chat.decided.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod held_mining_owner_contract_tests {
+    use super::*;
+    use mornlea_protocol::{LoginStart, admit_login};
+
+    #[test]
+    fn held_mining_contract_retained_zero_quota_and_missing_owner() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(1, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let mut bytes = [0u8; 16];
+        bytes[0] = 1;
+        bytes[6] = 64;
+        bytes[8] = 128;
+        let start = LoginStart::new(PlayerId::try_from_bytes(bytes).unwrap(), "Ada", 8).unwrap();
+        let login =
+            admit_login(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap()).unwrap();
+        let session = authority.admit(login, TransportKind::Memory).unwrap();
+        assert_eq!(authority.sessions[&session].last_input_sequence, 0);
+        let mut context = TickContext::harness(&mut authority, TickBudget::full());
+        let hard = ServerError::Internal {
+            invariant: "held mining rejection owner",
+        };
+        assert_eq!(
+            context.record_held_mining_rejection(session, RejectReason::DropCapacity),
+            Err(hard)
+        );
+        context.begin_command_rejections(0).unwrap();
+        context
+            .record_held_mining_rejection(session, RejectReason::DropCapacity)
+            .unwrap();
+        assert_eq!(
+            context.record_held_mining_rejection(session, RejectReason::DropCapacity),
+            Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: 1,
+                observed: 2
+            })
+        );
+        assert_eq!(
+            context.take_command_rejections().unwrap(),
+            vec![RoutedEvent::new(
+                EventRecipient::Session(session.get()),
+                mornlea_domain::Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                    0,
+                    RejectReason::DropCapacity
+                ))
+            )]
+        );
+        assert_eq!(
+            context.record_held_mining_rejection(session, RejectReason::DropCapacity),
+            Err(hard)
+        );
     }
 }

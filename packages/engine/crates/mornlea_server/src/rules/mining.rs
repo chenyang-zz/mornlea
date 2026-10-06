@@ -44,7 +44,9 @@
 //! drop providers: this node pins only the atomic commit-or-refusal of the
 //! resolver footprint.
 
-use mornlea_domain::{BlockPos, CompanionId, Dimension, HotbarSlot, PlayerControl, RejectReason};
+use mornlea_domain::{
+    BlockPos, CompanionId, Dimension, HotbarSlot, PlayerControl, PlayerControlParts, RejectReason,
+};
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
 use mornlea_storage::ItemStack;
@@ -55,8 +57,8 @@ use crate::core::contracts::{
 };
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::core::mutation::{
-    is_crop, is_farmland, is_fluid, is_snow_layer, is_torch, is_wild_grass, mining_rule,
-    resolve_companion_mine, resolve_mine,
+    MiningResolveFailure, is_crop, is_farmland, is_fluid, is_snow_layer, is_torch, is_wild_grass,
+    mining_rule, resolve_companion_mine, resolve_mine_checked,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
 
@@ -153,7 +155,9 @@ fn stage_clear(
     actor: ActorKey,
     prior: Option<MiningProgress>,
 ) -> Result<PhaseReport, ServerError> {
-    const STAGE: ServerError = ServerError::InvalidInput { field: "mining" };
+    const STAGE: ServerError = ServerError::Internal {
+        invariant: "mining clear",
+    };
     let applied = usize::from(prior.is_some());
     ctx.stage(RuleEffect::Mining {
         actor,
@@ -176,7 +180,9 @@ fn stage_progress(
     record: MiningProgress,
     prior: Option<MiningProgress>,
 ) -> Result<PhaseReport, ServerError> {
-    const STAGE: ServerError = ServerError::InvalidInput { field: "mining" };
+    const STAGE: ServerError = ServerError::Internal {
+        invariant: "mining progress",
+    };
     let applied = usize::from(prior.as_ref() != Some(&record));
     ctx.stage(RuleEffect::Mining {
         actor: record.actor,
@@ -247,15 +253,14 @@ fn advance_progress(
 /// Settles one human actor tick: held primary after combat precedence drives
 /// the progress key, and saturation completes exactly once through the
 /// accepted resolver and transaction. Transaction refusal clears the human
-/// record before the collapsed error shape surfaces; receipt capacity refusal
-/// precedes the transaction and retains the current attempt.
+/// record before an ordinary completion refusal reaches its owner. Trusted
+/// resolution and commit faults stay hard; action capacity precedes commit.
 fn run_human(
     ctx: &mut TickContext<'_>,
     actor: ActorKey,
     control: PlayerControl,
     bow_drawn: bool,
 ) -> Result<PhaseReport, ServerError> {
-    const REFUSAL: ServerError = ServerError::InvalidInput { field: "mining" };
     // Combat precedence: an active bow draw owns the held primary this tick,
     // so mining neither progresses nor completes.
     if bow_drawn || !control.actions().primary {
@@ -269,6 +274,22 @@ fn run_human(
             let prior = view.mining(actor).cloned();
             return stage_clear(ctx, actor, prior);
         }
+    };
+    // Live intake owns the once-normalized look; raw fixtures retain explicit control geometry.
+    let control = if ctx.owns_command_prefix() {
+        let look = view
+            .actor(actor)
+            .ok_or(ServerError::Internal {
+                invariant: "human mining basis",
+            })?
+            .look;
+        PlayerControl::new(PlayerControlParts {
+            movement: control.movement(),
+            look,
+            actions: control.actions(),
+        })
+    } else {
+        control
     };
     let look = control.look();
     let outcome = walk_target(
@@ -309,13 +330,17 @@ fn run_human(
     if !completable {
         return stage_progress(ctx, record, prior);
     }
-    let outcome = resolve_mine(actor, &control, &ctx.read());
+    let outcome = resolve_mine_checked(actor, &control, &ctx.read());
     let resolved = match outcome {
         Ok(Some(resolved)) => resolved,
         Ok(None) => return stage_clear(ctx, actor, prior),
-        Err(_) => {
-            stage_clear(ctx, actor, prior)?;
-            return Err(REFUSAL);
+        Err(MiningResolveFailure::Refused(reason)) => {
+            return completion_refusal(ctx, actor, prior, reason);
+        }
+        Err(MiningResolveFailure::Trusted(_)) => {
+            return Err(ServerError::Internal {
+                invariant: "mining resolution",
+            });
         }
     };
     // Capacity refusal preserves the completed attempt before any transaction.
@@ -331,11 +356,34 @@ fn run_human(
                 rejected: 0,
             })
         }
-        Err(_) => {
-            stage_clear(ctx, actor, prior)?;
-            Err(REFUSAL)
+        Err(RuleReject::Wire(RejectReason::DropCapacity)) => {
+            completion_refusal(ctx, actor, prior, RejectReason::DropCapacity)
         }
+        Err(_) => Err(ServerError::Internal {
+            invariant: "mining staging",
+        }),
     }
+}
+
+/// Clears a semantic completion attempt before the bounded owner publishes its source identity.
+fn completion_refusal(
+    ctx: &mut TickContext<'_>,
+    actor: ActorKey,
+    prior: Option<MiningProgress>,
+    reason: RejectReason,
+) -> Result<PhaseReport, ServerError> {
+    let mut report = stage_clear(ctx, actor, prior)?;
+    if !ctx.owns_command_prefix() {
+        return Err(ServerError::InvalidInput { field: "mining" });
+    }
+    let ActorKey::Player(session) = actor else {
+        return Err(ServerError::Internal {
+            invariant: "held mining rejection owner",
+        });
+    };
+    ctx.record_held_mining_rejection(session, reason)?;
+    report.rejected = 1;
+    Ok(report)
 }
 
 /// Settles one companion actor tick: the first valid selected `MineHold`
@@ -551,6 +599,18 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
                 return stage_clear(ctx, actor, prior);
             }
             let view = ctx.read();
+            if ctx.owns_command_prefix()
+                && view
+                    .actor(actor)
+                    .is_some_and(|record| record.lifecycle == ActorLifecycle::Active)
+                && (view.runtime(actor).is_none()
+                    || view.inventory(actor).is_none()
+                    || view.environment().is_none())
+            {
+                return Err(ServerError::Internal {
+                    invariant: "human mining basis",
+                });
+            }
             // Current source subscription and viewer state gate the action before
             // ray resolution. Either bow form owns primary even without a draw.
             if view

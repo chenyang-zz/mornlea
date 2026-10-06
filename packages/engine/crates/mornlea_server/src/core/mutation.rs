@@ -886,6 +886,24 @@ fn mining_writes(
     struck: BlockObservation,
     companion: bool,
 ) -> Result<(Vec<BlockWrite>, BlockPos), RuleReject> {
+    mining_writes_checked(view, dimension, struck, companion)
+        .map_err(MiningResolveFailure::into_raw)
+}
+
+// A derived clear is trusted independently of the constructor's raw error shape.
+fn mining_write(
+    observed: BlockObservation,
+    replacement: u16,
+) -> Result<BlockWrite, MiningResolveFailure> {
+    BlockWrite::try_new(observed, replacement).map_err(MiningResolveFailure::Trusted)
+}
+
+fn mining_writes_checked(
+    view: &AuthorityReadView<'_>,
+    dimension: Dimension,
+    struck: BlockObservation,
+    companion: bool,
+) -> Result<(Vec<BlockWrite>, BlockPos), MiningResolveFailure> {
     let target = struck.pos;
     let mut positions = Vec::with_capacity(2);
     let mut anchor = target;
@@ -897,12 +915,12 @@ fn mining_writes(
             target
                 .x()
                 .checked_add(if head { -dx } else { dx })
-                .ok_or(RuleReject::StaleObservation)?,
+                .ok_or(MiningResolveFailure::Trusted(RuleReject::StaleObservation))?,
             target.y(),
             target
                 .z()
                 .checked_add(if head { -dz } else { dz })
-                .ok_or(RuleReject::StaleObservation)?,
+                .ok_or(MiningResolveFailure::Trusted(RuleReject::StaleObservation))?,
         );
         positions.push(if head { other } else { target });
         positions.push(if head { target } else { other });
@@ -911,7 +929,7 @@ fn mining_writes(
         let other_y = target
             .y()
             .checked_add(if upper { -1 } else { 1 })
-            .ok_or(RuleReject::StaleObservation)?;
+            .ok_or(MiningResolveFailure::Trusted(RuleReject::StaleObservation))?;
         let other = BlockPos::new(target.x(), other_y, target.z());
         anchor = if upper { other } else { target };
         positions.push(anchor);
@@ -922,15 +940,15 @@ fn mining_writes(
     let mut writes = Vec::with_capacity(positions.len());
     for pos in positions {
         if !(-64..320).contains(&pos.y()) {
-            return Err(RuleReject::Wire(RejectReason::ChunkNotReady));
+            return Err(MiningResolveFailure::Refused(RejectReason::ChunkNotReady));
         }
         let observed = if pos == target {
             struck
         } else {
             view.observation(dimension, pos)
-                .ok_or(RuleReject::Wire(RejectReason::ChunkNotReady))?
+                .ok_or(MiningResolveFailure::Refused(RejectReason::ChunkNotReady))?
         };
-        writes.push(BlockWrite::try_new(observed, AIR)?);
+        writes.push(mining_write(observed, AIR)?);
     }
     Ok((writes, anchor))
 }
@@ -1138,13 +1156,51 @@ pub fn resolve_mine(
     control: &PlayerControl,
     view: &AuthorityReadView<'_>,
 ) -> Result<Option<ResolvedMining>, RuleReject> {
+    resolve_mine_checked(actor, control, view).map_err(MiningResolveFailure::into_raw)
+}
+
+/// Human completion keeps gameplay preflight separate from owned construction failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MiningResolveFailure {
+    Refused(RejectReason),
+    Trusted(RuleReject),
+}
+
+impl MiningResolveFailure {
+    fn into_raw(self) -> RuleReject {
+        match self {
+            Self::Refused(reason) => RuleReject::Wire(reason),
+            Self::Trusted(error) => error,
+        }
+    }
+
+    // Only ray and structural preflight helpers may unwrap a semantic wire refusal.
+    fn from_preflight(error: RuleReject) -> Self {
+        match error {
+            RuleReject::Wire(reason) => Self::Refused(reason),
+            other => Self::Trusted(other),
+        }
+    }
+}
+
+/// The bounded trace must pass before an apparent gameplay refusal can escape.
+pub(crate) fn resolve_mine_checked(
+    actor: ActorKey,
+    control: &PlayerControl,
+    view: &AuthorityReadView<'_>,
+) -> Result<Option<ResolvedMining>, MiningResolveFailure> {
     let trace = RefCell::new(ObservationTrace::default());
     let result = resolve_mine_inner(actor, control, &view.with_observation_trace(&trace));
     let trace = trace.into_inner();
-    trace.check_capacity()?;
+    trace
+        .check_capacity()
+        .map_err(MiningResolveFailure::Trusted)?;
     let mut resolved = result?;
     if let Some(resolved) = &mut resolved {
-        resolved.txn.read_basis = Some(view.mutation_basis(actor, &trace)?);
+        resolved.txn.read_basis = Some(
+            view.mutation_basis(actor, &trace)
+                .map_err(MiningResolveFailure::Trusted)?,
+        );
     }
     Ok(resolved)
 }
@@ -1153,11 +1209,11 @@ fn resolve_mine_inner(
     actor: ActorKey,
     control: &PlayerControl,
     view: &AuthorityReadView<'_>,
-) -> Result<Option<ResolvedMining>, RuleReject> {
+) -> Result<Option<ResolvedMining>, MiningResolveFailure> {
     if !control.actions().primary {
         return Ok(None);
     }
-    let basis = actor_basis(view, actor)?;
+    let basis = actor_basis(view, actor).map_err(MiningResolveFailure::Trusted)?;
     let look = control.look();
     let direction = look_direction(look.yaw(), look.pitch());
     let Some(hit) = cast_interaction_ray(
@@ -1167,18 +1223,21 @@ fn resolve_mine_inner(
         direction,
         basis.reach,
         RuleReject::Wire(RejectReason::ChunkNotReady),
-    )?
+    )
+    .map_err(MiningResolveFailure::from_preflight)?
     else {
         return Ok(None);
     };
     let observed = hit.observed;
-    let inventory = *view.inventory(actor).ok_or(RuleReject::StaleObservation)?;
+    let inventory = *view
+        .inventory(actor)
+        .ok_or(MiningResolveFailure::Trusted(RuleReject::StaleObservation))?;
     let held = inventory.slots[usize::from(inventory.selected.get())];
     let (required, harvestable) = mining_rule(observed.block, held.item);
     if required == 0 {
-        return Err(RuleReject::Wire(RejectReason::ProtectedBlock));
+        return Err(MiningResolveFailure::Refused(RejectReason::ProtectedBlock));
     }
-    let (writes, anchor) = mining_writes(view, basis.dimension, observed, false)?;
+    let (writes, anchor) = mining_writes_checked(view, basis.dimension, observed, false)?;
     let mut stacks = Vec::new();
     let mut containers = Vec::new();
     if observed.block == CHEST_BLOCK || observed.block == FURNACE_BLOCK {
@@ -1188,7 +1247,8 @@ fn resolve_mine_inner(
             observed.pos,
             observed.block,
             RuleReject::Wire(RejectReason::ChunkNotReady),
-        )?;
+        )
+        .map_err(MiningResolveFailure::from_preflight)?;
         if harvestable {
             stacks.push(output_stack(
                 block_drop(observed.block).expect("registered container"),
@@ -1209,16 +1269,22 @@ fn resolve_mine_inner(
             stacks.push(output_stack(46, 1));
         }
     } else if is_wild_grass(observed.block) {
-        let seed = view.environment().ok_or(RuleReject::StaleObservation)?.seed;
+        let seed = view
+            .environment()
+            .ok_or(MiningResolveFailure::Trusted(RuleReject::StaleObservation))?
+            .seed;
         if harvest::short_grass(seed, u32::from(basis.dimension.get()), observed.pos) {
             stacks.push(output_stack(34, 1));
         }
     } else if is_snow_layer(observed.block) {
         // Snow has no item representation, but a durable selected tool still wears.
     } else if harvestable {
-        let item =
-            block_drop(observed.block).ok_or(RuleReject::Wire(RejectReason::ProtectedBlock))?;
-        let seed = view.environment().ok_or(RuleReject::StaleObservation)?.seed;
+        let item = block_drop(observed.block)
+            .ok_or(MiningResolveFailure::Refused(RejectReason::ProtectedBlock))?;
+        let seed = view
+            .environment()
+            .ok_or(MiningResolveFailure::Trusted(RuleReject::StaleObservation))?
+            .seed;
         let dimension = u32::from(basis.dimension.get());
         match observed.block {
             44 => {
@@ -1248,9 +1314,11 @@ fn resolve_mine_inner(
             _ => stacks.push(output_stack(item, 1)),
         }
     }
-    let patch = wear_selected_tool(&inventory, observed.block).map(|after| {
-        InventoryPatch::try_new(actor, inventory, after).expect("wear keeps the actor key")
-    });
+    let patch = wear_selected_tool(&inventory, observed.block)
+        .map(|after| {
+            InventoryPatch::try_new(actor, inventory, after).map_err(MiningResolveFailure::Trusted)
+        })
+        .transpose()?;
     // An empty result never reserves a drop slot. For nonempty output the
     // checked batch and captured world cells revalidate together at commit.
     let drops = if stacks.is_empty() {
@@ -1266,8 +1334,14 @@ fn resolve_mine_inner(
             block_center(anchor),
             stacks,
             basis.drop_pickup_delay,
-        )?;
-        view.check_drop_batch(&batch)?;
+        )
+        .map_err(MiningResolveFailure::Trusted)?;
+        view.check_drop_batch(&batch).map_err(|error| match error {
+            RuleReject::Wire(
+                reason @ (RejectReason::DropCapacity | RejectReason::ChunkNotReady),
+            ) => MiningResolveFailure::Refused(reason),
+            other => MiningResolveFailure::Trusted(other),
+        })?;
         Some(batch)
     };
     let txn = BlockTxn {
@@ -1706,6 +1780,72 @@ mod placement_checked_contract_tests {
             Err(PlacementResolveFailure::Trusted(RuleReject::Wire(
                 RejectReason::InvalidBlock
             )))
+        );
+    }
+}
+
+#[cfg(test)]
+mod held_mining_contract_tests {
+    use super::*;
+    use crate::contracts::{ServerLimits, SessionKey, TickBudget};
+    use crate::state::{AuthorityState, TickContext};
+    use mornlea_domain::{HeldActions, LookAngles, Movement, PlayerControlParts};
+
+    #[test]
+    fn held_mining_contract_missing_basis_and_release() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let context = TickContext::harness(&mut authority, TickBudget::full());
+        let actor = ActorKey::Player(SessionKey::from_raw(1).unwrap());
+        let mut parts = PlayerControlParts {
+            movement: Movement {
+                move_x: 0,
+                move_z: 0,
+                jump: false,
+            },
+            look: LookAngles::try_new(0.0, 0.0).unwrap(),
+            actions: HeldActions {
+                primary: true,
+                eating: false,
+                sprinting: false,
+                sneaking: false,
+            },
+        };
+        let control = PlayerControl::new(parts);
+        assert!(matches!(
+            resolve_mine_checked(actor, &control, &context.read()),
+            Err(MiningResolveFailure::Trusted(RuleReject::StaleObservation))
+        ));
+        assert!(matches!(
+            resolve_mine(actor, &control, &context.read()),
+            Err(RuleReject::StaleObservation)
+        ));
+        parts.actions.primary = false;
+        assert!(matches!(
+            resolve_mine_checked(actor, &PlayerControl::new(parts), &context.read()),
+            Ok(None)
+        ));
+        assert!(context.events().is_empty());
+    }
+
+    #[test]
+    fn held_mining_contract_derived_write_keeps_wire_error_trusted() {
+        // This invalid replacement executes the derived-construction seam only.
+        let pos = BlockPos::new(0, 65, 0);
+        let observed =
+            BlockObservation::try_new(chunk_key(Dimension::OVERWORLD, pos), 1, 1, pos, 2).unwrap();
+        assert_eq!(
+            mining_write(observed, u16::MAX),
+            Err(MiningResolveFailure::Trusted(RuleReject::Wire(
+                RejectReason::InvalidBlock
+            )))
+        );
+        assert_eq!(
+            mining_write(observed, AIR),
+            Ok(BlockWrite::try_new(observed, AIR).unwrap())
         );
     }
 }

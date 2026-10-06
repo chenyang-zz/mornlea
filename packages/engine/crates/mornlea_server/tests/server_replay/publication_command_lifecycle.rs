@@ -3709,3 +3709,450 @@ fn native_tool_outcome_bone_meal_late_selected() {
     )));
     assert_eq!(native_input_ack(&tick, owner), 0);
 }
+
+fn held_outcome_control(primary: bool, yaw: f32) -> Command {
+    Command::PlayerInput(PlayerControl::new(PlayerControlParts {
+        movement: Movement {
+            move_x: 0,
+            move_z: 0,
+            jump: false,
+        },
+        look: look(yaw, 0.0),
+        actions: HeldActions {
+            primary,
+            eating: false,
+            sprinting: false,
+            sneaking: false,
+        },
+    }))
+}
+
+fn held_outcome_rejections(
+    tick: &mornlea_server::contracts::TickPublication,
+    session: SessionKey,
+) -> Vec<Event> {
+    events_for(tick, session)
+        .into_iter()
+        .filter(|event| matches!(event, Event::CommandRejected(_)))
+        .collect()
+}
+
+fn held_outcome_active(state: &AuthorityState, owner: SessionKey) {
+    let view = state.settled_read().unwrap();
+    let actor = ActorKey::Player(owner);
+    assert_eq!(view.actor(actor).unwrap().lifecycle, ActorLifecycle::Active);
+    assert!(view.runtime(actor).unwrap().has_view);
+}
+
+fn held_outcome_rejection(sequence: u64, reason: mornlea_domain::RejectReason) -> Event {
+    Event::CommandRejected(mornlea_domain::CommandRejection::new(sequence, reason))
+}
+
+#[test]
+fn native_held_mining_outcome_capacity_order_repeat() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let actor = ActorKey::Player(owner);
+    let target = BlockPos::new(0, 66, 3);
+    tool_outcome_stock(
+        &mut state,
+        owner,
+        StorageStack {
+            item: 10,
+            count: 1,
+            durability: 1,
+        },
+    );
+    // Full fixed slots are prepared; real held intake and all mining ticks run below.
+    live_placement_ready(&mut state, 1, |chunk| {
+        tool_outcome_set_cell(chunk, target, 3);
+        chunk.drops.fill(mornlea_storage::DropSlot {
+            generation: 1,
+            active: true,
+            stack: storage(ITEM_STONE, 64),
+            block_index: mornlea_domain::chunk_block_index(BlockPos::new(10, 65, 10)) as u32,
+            age_ticks: 0,
+            pickup_delay_ticks: 200,
+        });
+    });
+    let inventory = record(&state, owner);
+    let exhaustion = state.residents().runtimes[&actor].exhaustion_milli;
+    let quantities = container_drop_quantities(&state);
+    assert_eq!(quantities.len(), 32);
+    submit(
+        &mut state,
+        owner,
+        17,
+        held_outcome_control(true, std::f32::consts::PI),
+    );
+    for elapsed in 1..=4 {
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        held_outcome_active(&state, owner);
+        assert_eq!(
+            state.settled_read().unwrap().mining(actor).unwrap().elapsed,
+            elapsed
+        );
+        assert!(held_outcome_rejections(&tick, owner).is_empty());
+        assert_eq!(record(&state, owner), inventory);
+    }
+    submit(
+        &mut state,
+        owner,
+        18,
+        Command::TillSoil(look(0.0, std::f32::consts::FRAC_PI_2)),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    held_outcome_active(&state, owner);
+    assert_eq!(record(&state, owner), inventory);
+    assert_eq!(
+        container_drop_quantities(&state)
+            .iter()
+            .map(|(id, _, stack)| (*id, *stack))
+            .collect::<Vec<_>>(),
+        quantities
+            .iter()
+            .map(|(id, _, stack)| (*id, *stack))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .observation(Dimension::OVERWORLD, target)
+            .unwrap()
+            .block,
+        3
+    );
+    assert_eq!(state.settled_read().unwrap().mining(actor), None);
+    assert_eq!(
+        state.residents().runtimes[&actor].exhaustion_milli,
+        exhaustion
+    );
+    assert_eq!(native_input_ack(&tick, owner), 17);
+    assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+    assert!(
+        !events_for(&tick, owner)
+            .iter()
+            .any(|event| matches!(event, Event::PlaceBlockSucceeded(_)))
+    );
+    assert!(held_outcome_rejections(&tick, other).is_empty());
+    assert_eq!(
+        held_outcome_rejections(&tick, owner),
+        vec![
+            held_outcome_rejection(18, mornlea_domain::RejectReason::InvalidInput),
+            held_outcome_rejection(17, mornlea_domain::RejectReason::DropCapacity),
+        ]
+    );
+    for elapsed in 1..=4 {
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert!(held_outcome_rejections(&tick, owner).is_empty());
+        assert_eq!(
+            state.settled_read().unwrap().mining(actor).unwrap().elapsed,
+            elapsed
+        );
+    }
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        held_outcome_rejections(&tick, owner),
+        vec![held_outcome_rejection(
+            17,
+            mornlea_domain::RejectReason::DropCapacity
+        )]
+    );
+    assert_eq!(state.settled_read().unwrap().mining(actor), None);
+    assert_eq!(
+        state.residents().runtimes[&actor].exhaustion_milli,
+        exhaustion
+    );
+    assert_eq!(record(&state, owner), inventory);
+    assert!(held_outcome_rejections(&tick, other).is_empty());
+}
+
+#[test]
+fn native_held_mining_outcome_footprint_unready() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let actor = ActorKey::Player(owner);
+    let target = BlockPos::new(31, 66, 3);
+    // The supported pose and incomplete paired structure qualify the late consumer.
+    stage(&mut state, |context| {
+        let mut chunk = ground_chunk();
+        tool_outcome_set_cell(&mut chunk, target, 79);
+        tool_outcome_set_cell(&mut chunk, BlockPos::new(31, 65, 3), 2);
+        context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(1, 0), 1, 1, chunk).unwrap());
+    });
+    live_placement_pose(&mut state, owner, [28.5, 65.0, 3.5]);
+    let inventory = record(&state, owner);
+    submit(
+        &mut state,
+        owner,
+        23,
+        held_outcome_control(true, -std::f32::consts::FRAC_PI_2),
+    );
+    for elapsed in 1..=14 {
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        held_outcome_active(&state, owner);
+        let view = state.settled_read().unwrap();
+        assert_eq!(
+            (
+                view.mining(actor).unwrap().target,
+                view.mining(actor).unwrap().elapsed
+            ),
+            (target, elapsed)
+        );
+        assert_eq!(
+            view.observation(Dimension::OVERWORLD, target)
+                .unwrap()
+                .block,
+            79
+        );
+        assert!(held_outcome_rejections(&tick, owner).is_empty());
+    }
+    let drops = container_drop_quantities(&state);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    held_outcome_active(&state, owner);
+    assert_eq!(record(&state, owner), inventory);
+    assert_eq!(container_drop_quantities(&state), drops);
+    let view = state.settled_read().unwrap();
+    assert_eq!(view.mining(actor), None);
+    assert_eq!(
+        view.observation(Dimension::OVERWORLD, target)
+            .unwrap()
+            .block,
+        79
+    );
+    assert!(
+        view.observation(Dimension::OVERWORLD, BlockPos::new(32, 66, 3))
+            .is_none()
+    );
+    assert_eq!(native_input_ack(&tick, owner), 23);
+    assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+    assert!(held_outcome_rejections(&tick, other).is_empty());
+    assert_eq!(
+        held_outcome_rejections(&tick, owner),
+        vec![held_outcome_rejection(
+            23,
+            mornlea_domain::RejectReason::ChunkNotReady
+        )]
+    );
+}
+
+#[test]
+fn native_held_mining_outcome_trusted_revision() {
+    let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+    let actor = ActorKey::Player(owner);
+    let target = BlockPos::new(0, 66, 3);
+    tool_outcome_stock(
+        &mut state,
+        owner,
+        StorageStack {
+            item: 10,
+            count: 1,
+            durability: 1,
+        },
+    );
+    live_placement_ready(&mut state, u64::MAX, |chunk| {
+        tool_outcome_set_cell(chunk, target, 3);
+    });
+    let inventory = record(&state, owner);
+    let exhaustion = state.residents().runtimes[&actor].exhaustion_milli;
+    submit(
+        &mut state,
+        owner,
+        29,
+        held_outcome_control(true, std::f32::consts::PI),
+    );
+    for elapsed in 1..=4 {
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        held_outcome_active(&state, owner);
+        let view = state.settled_read().unwrap();
+        let progress = view.mining(actor).unwrap();
+        assert_eq!(
+            (progress.target, progress.elapsed, progress.required),
+            (target, elapsed, 5)
+        );
+        assert_eq!(
+            view.observation(Dimension::OVERWORLD, target)
+                .unwrap()
+                .block,
+            3
+        );
+        assert_eq!(view.runtime(actor).unwrap().exhaustion_milli, exhaustion);
+        assert_eq!(record(&state, owner), inventory);
+        assert!(held_outcome_rejections(&tick, owner).is_empty());
+        assert!(state.residents().drop_records().is_empty());
+    }
+    // The real resolver reaches the nonempty drop rehearsal before any commit.
+    stage(&mut state, |context| {
+        let view = context.read();
+        let control = view.runtime(actor).unwrap().controls.unwrap();
+        assert_eq!(
+            mornlea_server::core::mutation::resolve_mine(actor, &control, &view),
+            Err(mornlea_server::contracts::RuleReject::StaleObservation)
+        );
+    });
+    let chunks = state.residents().ready_snapshot();
+    let next_tick = state.next_tick();
+    let want = Err(ServerError::Internal {
+        invariant: "mining resolution",
+    });
+    assert_eq!(state.advance_tick(TickBudget::full()), want);
+    assert_eq!(record(&state, owner), inventory);
+    assert_eq!(state.residents().ready_snapshot(), chunks);
+    assert_eq!(
+        state.residents().runtimes[&actor].exhaustion_milli,
+        exhaustion
+    );
+    assert_eq!(state.next_tick(), next_tick);
+    assert_eq!(state.advance_tick(TickBudget::full()), want);
+}
+
+#[test]
+fn native_held_mining_outcome_canonical_look() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let actor = ActorKey::Player(owner);
+    let target = BlockPos::new(6, 66, 6);
+    live_placement_ready(&mut state, 1, |chunk| {
+        tool_outcome_set_cell(chunk, target, 3)
+    });
+    live_placement_pose(&mut state, owner, [8.5, 65.0, 8.5]);
+    let exhaustion = state.residents().runtimes[&actor].exhaustion_milli;
+    let yaw = 1.0e16_f32;
+    submit(&mut state, owner, 31, held_outcome_control(true, yaw));
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    held_outcome_active(&state, owner);
+    let view = state.settled_read().unwrap();
+    assert_eq!(
+        view.runtime(actor)
+            .unwrap()
+            .controls
+            .unwrap()
+            .look()
+            .yaw()
+            .to_bits(),
+        yaw.to_bits()
+    );
+    assert_eq!(
+        view.actor(actor).unwrap().look.yaw().to_bits(),
+        0.728_576_54_f32.to_bits()
+    );
+    assert_eq!(native_input_ack(&tick, owner), 31);
+    assert_eq!(
+        (
+            view.mining(actor)
+                .expect("canonical ray has actual progress")
+                .target,
+            view.mining(actor).unwrap().elapsed,
+            view.mining(actor).unwrap().required
+        ),
+        (target, 1, 5)
+    );
+    assert_eq!(view.runtime(actor).unwrap().exhaustion_milli, exhaustion);
+    for _ in 1..5 {
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert!(held_outcome_rejections(&tick, owner).is_empty());
+        assert!(held_outcome_rejections(&tick, other).is_empty());
+    }
+    let view = state.settled_read().unwrap();
+    assert_eq!(
+        view.observation(Dimension::OVERWORLD, target)
+            .unwrap()
+            .block,
+        0
+    );
+    assert_eq!(view.mining(actor), None);
+    assert_eq!(
+        view.runtime(actor).unwrap().exhaustion_milli,
+        exhaustion + 5
+    );
+    let drops = state.residents().drop_records();
+    assert_eq!(drops.len(), 1);
+    assert_eq!(drops[0].stack, storage(ITEM_DIRT, 1));
+    assert!(held_outcome_rejections(&tick, owner).is_empty());
+    assert!(held_outcome_rejections(&tick, other).is_empty());
+}
+
+#[test]
+fn native_held_mining_outcome_quiet_controls() {
+    for cause in 0..4 {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        let actor = ActorKey::Player(owner);
+        let mut yaw = std::f32::consts::PI;
+        if cause == 0 {
+            yaw = std::f32::consts::FRAC_PI_2;
+        }
+        if cause == 1 {
+            live_placement_ready(&mut state, 1, |chunk| {
+                tool_outcome_set_cell(chunk, BlockPos::new(0, 66, 3), 5)
+            });
+        }
+        if cause == 2 {
+            live_placement_pose(&mut state, owner, [31.5, 65.0, 0.5]);
+            yaw = -std::f32::consts::FRAC_PI_2;
+        }
+        let inventory = record(&state, owner);
+        let drops = container_drop_quantities(&state);
+        submit(&mut state, owner, 1, held_outcome_control(true, yaw));
+        let mut tick = state.advance_tick(TickBudget::full()).unwrap();
+        if cause == 3 {
+            for elapsed in 1..=4 {
+                assert_eq!(
+                    state.settled_read().unwrap().mining(actor).unwrap().elapsed,
+                    elapsed
+                );
+                if elapsed < 4 {
+                    state.advance_tick(TickBudget::full()).unwrap();
+                }
+            }
+            submit(&mut state, owner, 2, held_outcome_control(false, yaw));
+            tick = state.advance_tick(TickBudget::full()).unwrap();
+        }
+        held_outcome_active(&state, owner);
+        assert_eq!(state.settled_read().unwrap().mining(actor), None);
+        assert_eq!(record(&state, owner), inventory);
+        assert_eq!(container_drop_quantities(&state), drops);
+        assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+        for session in [owner, other] {
+            assert!(held_outcome_rejections(&tick, session).is_empty());
+            assert!(
+                !events_for(&tick, session)
+                    .iter()
+                    .any(|event| matches!(event, Event::PlaceBlockSucceeded(_)))
+            );
+        }
+    }
+}
+
+#[test]
+fn native_held_mining_outcome_trusted_clear_only_staging() {
+    let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+    tool_outcome_stock(
+        &mut state,
+        owner,
+        StorageStack {
+            item: 10,
+            count: 1,
+            durability: 1,
+        },
+    );
+    // Supported snow has no drop batch, so revision admission reaches the actual commit.
+    live_placement_ready(&mut state, u64::MAX, |chunk| {
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 65, 3), 2);
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 66, 3), 85);
+    });
+    let inventory = record(&state, owner);
+    let chunks = state.residents().ready_snapshot();
+    let next_tick = state.next_tick();
+    submit(
+        &mut state,
+        owner,
+        37,
+        held_outcome_control(true, std::f32::consts::PI),
+    );
+    let want = Err(ServerError::Internal {
+        invariant: "mining staging",
+    });
+    assert_eq!(state.advance_tick(TickBudget::full()), want);
+    assert_eq!(record(&state, owner), inventory);
+    assert_eq!(state.residents().ready_snapshot(), chunks);
+    assert_eq!(state.next_tick(), next_tick);
+    assert_eq!(state.advance_tick(TickBudget::full()), want);
+}

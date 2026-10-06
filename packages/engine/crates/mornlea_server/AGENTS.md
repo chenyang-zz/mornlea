@@ -1314,3 +1314,6 @@ accepted transform retains inventory intent, including same-tick exchanges back
 to the original record; only buckets confirm success. Direct raw providers share
 the atomic core with generic semantic errors. Prepared fault/pose inputs qualify
 consumers separately from runtime, queued-mirror and executable composition.
+
+
+Human held mining completes through a private tagged resolver: contextual ray/paired-cell/container/output capacity refusals stay semantic, while bounded traces, owned basis, derived patches/batches and other transaction failures stay hard. Live held rays consume the exact canonical actor look admitted once; retained raw controls and raw explicit-control fixtures keep their ownership. Completion refusal clears progress before the existing bounded command-rejection owner records the current retained input sequence, including a prepared zero or repeated sequence across ticks. Initial no-target/unready/required-zero and released or suspended intent remain quiet. No command envelope, new queue or input acknowledgment is manufactured; the separate player quota and Admission-before-Settlement order stay with the collector. Companion output retry remains unchanged; shared clear/progress staging faults are hard.
