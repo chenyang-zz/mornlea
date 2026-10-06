@@ -172,7 +172,7 @@ impl AuthorityState {
         let entities = classify_entities(&actors);
         let inventories = self.resident_inventories().clone();
         let projectiles = self.resident_projectiles().to_vec();
-        let drops = self.resident_drop_records();
+        let drops = source_drop_records(self, &actors, &entities, &speakers);
         let mut views = self.take_session_views();
         let mut observers = Vec::with_capacity(speakers.len());
         let mut view_list: Vec<SessionView> = Vec::with_capacity(speakers.len());
@@ -454,6 +454,35 @@ fn observer_of(
     }
 }
 
+/// Copies only physical Ready drop slots in the Active players' source interest.
+/// Eight players contribute at most two hundred keys and thirty-two slots per key.
+fn source_drop_records(
+    state: &AuthorityState,
+    actors: &[ActorRecord],
+    entities: &Entities,
+    speakers: &[Speaker],
+) -> Vec<DropRecord> {
+    let mut keys = BTreeSet::new();
+    for speaker in speakers {
+        if let Some(&index) = entities
+            .players
+            .iter()
+            .find(|&&index| actors[index].key == ActorKey::Player(speaker.session))
+        {
+            keys.extend(wanted_columns(&actors[index], 2));
+        }
+    }
+    // Projection runs only after the healthy reducer has committed its exclusive loan.
+    let view = state.settled_read().expect("healthy publication authority");
+    let mut records = Vec::new();
+    for key in keys {
+        if view.ready_chunk(key) {
+            records.extend_from_slice(view.drops(key));
+        }
+    }
+    records
+}
+
 /// The per-session wanted chunk columns around one actor's foot position in
 /// its own dimension: the inclusive square centered on floor(X/Z) >> 4 with
 /// the given radius.
@@ -631,11 +660,19 @@ fn visibility_of(
             visibility.projectiles.insert(record.id);
         }
     }
+    // Drops use physical radius two even when snapshot interest is narrower or wider.
+    let drop_wanted = entities
+        .players
+        .iter()
+        .copied()
+        .find(|&index| actors[index].key == ActorKey::Player(observer.session))
+        .map(|index| wanted_columns(&actors[index], 2))
+        .unwrap_or_default();
     for record in drops {
         if let Some(dimension) = u8::try_from(record.id.dimension())
             .ok()
             .and_then(|raw| Dimension::new(raw).ok())
-            && observer.wanted.contains(&ChunkKey {
+            && drop_wanted.contains(&ChunkKey {
                 dimension,
                 pos: record.id.chunk(),
             })
@@ -828,7 +865,10 @@ fn emit_block_batches(
             }
             if entry.last_revision == *base {
                 entry.last_revision = *new;
-                for group in changes.chunks(BLOCK_CHANGES_CAP) {
+                for group in changes
+                    .chunks(BLOCK_CHANGES_CAP)
+                    .chain(changes.is_empty().then_some(&[][..]))
+                {
                     if let Ok(batch) = BlockChanges::try_new(BlockChangesParts {
                         dimension: key.dimension,
                         chunk: key.pos,

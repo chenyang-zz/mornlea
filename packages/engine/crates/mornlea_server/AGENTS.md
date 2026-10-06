@@ -38,7 +38,14 @@ its producer boundary.
 
 The drop publisher retains fixed copied ItemDrop wire values by ID, compares
 surviving values, and emits sorted remove batches before changed/new upserts.
-Age and pickup timers remain authority-only and do not trigger wire publication.
+Age and pickup timers remain authority-only and do not trigger wire publication. Physical drop publication copies only the union of Active players'
+radius-two Ready keys: at most two hundred keys and thirty-two slots each.
+Each observer uses that same fixed square, independently of session radius or
+queued snapshots; unavailable and Unloading owners contribute no records.
+Slot-only accepted mutations emit one empty chunk revision barrier from the
+existing dirty-key index, keeping later block deltas contiguous. Counter-only
+aging emits no barrier. The world-boundaries topic distinguishes native command
+consumers from prepared physical drop controls; queue acknowledgment stays separate.
 This private event construction does not accept the separately pending queue
 admission/mirror acknowledgment transaction or executable composition.
 

@@ -5543,3 +5543,6 @@ fn projection_entity_order_projectile_mixed_transition() {
 
 #[path = "publication_owner_intent.rs"]
 mod owner_intent;
+
+#[path = "publication_world_boundaries.rs"]
+mod world_boundaries;

@@ -1903,11 +1903,6 @@ impl AuthorityState {
         &self.residents.projectiles
     }
 
-    /// Every committed drop record across all chunk owners.
-    pub(crate) fn resident_drop_records(&self) -> Vec<DropRecord> {
-        self.residents.drop_records()
-    }
-
     /// The live container record a reference names, Ready-chunk state before
     /// any sparse fixture owner.
     pub(crate) fn resident_container(&self, reference: ContainerRef) -> Option<ContainerRecord> {
@@ -4434,10 +4429,9 @@ impl<'a> TickContext<'a> {
     /// this tick, plus the dispatch resync lane. The base revision is the
     /// pre-commit committed revision and the new one includes this tick's
     /// accepted work, exactly the transition the commit finalizes. A chunk
-    /// whose revision advanced without block changes (slots-only work) emits
-    /// no block batch; mirrors may then take the gap-resnapshot path on the
-    /// next real change, which is safe because container and drop content
-    /// travels in its own families.
+    /// whose physical slots advanced without block changes emits one empty
+    /// barrier, preserving the next block delta's contiguous revision base.
+    /// Counter-only drop aging stays outside the dirty key index.
     pub(crate) fn capture_publication_outcome(&mut self) -> TickOutcome {
         let mut batches: BTreeMap<ChunkKey, Vec<BlockChange>> = BTreeMap::new();
         for observed in self.changed_blocks() {
@@ -4447,6 +4441,10 @@ impl<'a> TickContext<'a> {
             if let Ok(change) = BlockChange::try_new(observed.pos, observed.block) {
                 batches.entry(observed.key).or_default().push(change);
             }
+        }
+        // The same accepted dirty index covers blocks, drops and containers.
+        for key in &self.dirty_chunks {
+            batches.entry(*key).or_default();
         }
         let mut block_batches = Vec::with_capacity(batches.len());
         for (key, changes) in batches {
