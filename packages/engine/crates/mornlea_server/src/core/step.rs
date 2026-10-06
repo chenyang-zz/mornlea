@@ -725,6 +725,26 @@ fn admit_command(
             }
             return Ok(());
         }
+        command
+            if matches!(
+                command,
+                Command::MoveCrafting(_) | Command::TakeCraftingOutput
+            ) || matches!(command, Command::MovePartial(partial) if partial.view() == mornlea_domain::StackView::Crafting)
+                || matches!(command, Command::QuickMove(source) if source.view() == mornlea_domain::StackView::Crafting) =>
+        {
+            match crafting::admit_command(context, envelope)? {
+                CommandDisposition::Settled(_) => {}
+                CommandDisposition::Refused(reason) => {
+                    context.record_command_rejection(envelope, reason, RejectionStage::Admission)?
+                }
+                CommandDisposition::Unowned => {
+                    return Err(ServerError::Internal {
+                        invariant: "crafting command owner",
+                    });
+                }
+            }
+            return Ok(());
+        }
         Command::SelectHotbar(_) => {
             // Actors retain the admission-time selection; this envelope settles
             // in prefix order with drops and other deferred interactions.

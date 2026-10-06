@@ -1349,3 +1349,232 @@ fn native_inventory_outcome_absorption_and_equal_equip_succeed() {
         assert_eq!(native_input_ack(&tick, owner), 0);
     }
 }
+
+fn crafting_outcome_moves(from: u8, to: u8) -> [Command; 4] {
+    [
+        Command::MoveCrafting(mornlea_domain::CraftingMove::try_new(from, to).unwrap()),
+        Command::MovePartial(PartialMove::try_new(StackView::Crafting, from, to, false).unwrap()),
+        Command::MovePartial(PartialMove::try_new(StackView::Crafting, from, to, true).unwrap()),
+        Command::QuickMove(StackSource::try_new(StackView::Crafting, from).unwrap()),
+    ]
+}
+
+fn assert_crafting_outcome_quiet(
+    state: &AuthorityState,
+    tick: &mornlea_server::contracts::TickPublication,
+    owner: SessionKey,
+    other: SessionKey,
+    before: mornlea_server::contracts::InventoryRecord,
+    reason: mornlea_domain::RejectReason,
+) {
+    assert_eq!(record(state, owner), before);
+    assert!(projection_crafting_record_states(&events_for(tick, owner)).is_empty());
+    assert!(projection_crafting_record_states(&events_for(tick, other)).is_empty());
+    assert_inventory_outcome_refusal(tick, owner, other, 1, reason);
+}
+
+#[test]
+fn native_crafting_outcome_personal_extent() {
+    let commands = crafting_outcome_moves(4, 9)
+        .into_iter()
+        .chain(crafting_outcome_moves(9, 4).into_iter().take(3));
+    for command in commands {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        let before = record(&state, owner);
+        submit(&mut state, owner, 1, command);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_crafting_outcome_quiet(
+            &state,
+            &tick,
+            owner,
+            other,
+            before,
+            mornlea_domain::RejectReason::InvalidSlot,
+        );
+    }
+}
+
+#[test]
+fn native_crafting_outcome_partial_pack_pair() {
+    for single in [false, true] {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        prepared_inventory_outcome(&mut state, owner, |inventory| {
+            inventory.slots[0] = storage(ITEM_DIRT, 5);
+        });
+        let before = record(&state, owner);
+        submit(
+            &mut state,
+            owner,
+            1,
+            Command::MovePartial(PartialMove::try_new(StackView::Crafting, 9, 10, single).unwrap()),
+        );
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_crafting_outcome_quiet(
+            &state,
+            &tick,
+            owner,
+            other,
+            before,
+            mornlea_domain::RejectReason::InvalidInput,
+        );
+    }
+}
+
+#[test]
+fn native_crafting_outcome_empty_and_no_recipe() {
+    for command in crafting_outcome_moves(0, 9)
+        .into_iter()
+        .chain([Command::TakeCraftingOutput])
+    {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        let before = record(&state, owner);
+        submit(&mut state, owner, 1, command);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_crafting_outcome_quiet(
+            &state,
+            &tick,
+            owner,
+            other,
+            before,
+            mornlea_domain::RejectReason::InvalidInput,
+        );
+    }
+}
+
+#[test]
+fn native_crafting_outcome_no_absorption() {
+    for command in crafting_outcome_moves(0, 9) {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        // This non-repackable inventory is a prepared consumer cause.
+        prepared_inventory_outcome(&mut state, owner, |inventory| {
+            inventory.slots = [storage(ITEM_DIRT, 64); 36];
+            inventory.crafting[0] = storage(ITEM_DIRT, 5);
+        });
+        let before = record(&state, owner);
+        submit(&mut state, owner, 1, command);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_crafting_outcome_quiet(
+            &state,
+            &tick,
+            owner,
+            other,
+            before,
+            mornlea_domain::RejectReason::InvalidInput,
+        );
+    }
+}
+
+#[test]
+fn native_crafting_outcome_output_full() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    // A prepared full pack isolates output insertion, not upstream repack production.
+    prepared_inventory_outcome(&mut state, owner, |inventory| {
+        inventory.slots = [storage(1, 64); 36];
+        inventory.crafting[0] = storage(20, 2);
+    });
+    let before = record(&state, owner);
+    submit(&mut state, owner, 1, Command::TakeCraftingOutput);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_crafting_outcome_quiet(
+        &state,
+        &tick,
+        owner,
+        other,
+        before,
+        mornlea_domain::RejectReason::InvalidInput,
+    );
+}
+
+#[test]
+fn native_crafting_outcome_extent_then_open_and_success() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    prepared_inventory_outcome(&mut state, owner, |inventory| {
+        inventory.slots[0] = storage(ITEM_DIRT, 5);
+    });
+    let mut expected = record(&state, owner);
+    expected.crafting_size = CraftingSize::Workbench;
+    expected.crafting[4] = storage(ITEM_DIRT, 5);
+    expected.slots[0] = StorageStack::default();
+    submit(&mut state, owner, 1, crafting_outcome_moves(9, 4)[0]);
+    open_bench(&mut state, owner, 2);
+    submit(&mut state, owner, 3, crafting_outcome_moves(9, 4)[0]);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), expected);
+    assert_eq!(state.session(owner).unwrap().last_applied_sequence, 3);
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)).len(),
+        1
+    );
+    assert_eq!(
+        projection_crafting_record_states(&events_for(&tick, owner)).len(),
+        2
+    );
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+    assert_inventory_outcome_refusal(
+        &tick,
+        owner,
+        other,
+        1,
+        mornlea_domain::RejectReason::InvalidSlot,
+    );
+    submit(&mut state, owner, 1, crafting_outcome_moves(9, 4)[0]);
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), expected);
+    assert!(projection_crafting_record_states(&events_for(&quiet, owner)).is_empty());
+    assert!(
+        !events_for(&quiet, owner)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+}
+
+#[test]
+fn native_crafting_outcome_success_round_trips_and_output() {
+    for mode in 0..4 {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        prepared_inventory_outcome(&mut state, owner, |inventory| {
+            inventory.slots[0] = if mode == 3 {
+                storage(20, 2)
+            } else {
+                storage(ITEM_DIRT, 5)
+            };
+        });
+        let mut expected = record(&state, owner);
+        let outward = match mode {
+            1 => crafting_outcome_moves(9, 0)[1],
+            2 => crafting_outcome_moves(9, 0)[3],
+            _ => crafting_outcome_moves(9, 0)[0],
+        };
+        let inward = match mode {
+            0 => crafting_outcome_moves(0, 9)[0],
+            3 => {
+                expected.slots[0] = storage(21, 4);
+                expected.crafting[0] = storage(20, 1);
+                Command::TakeCraftingOutput
+            }
+            _ => crafting_outcome_moves(0, 9)[3],
+        };
+        submit(&mut state, owner, 1, outward);
+        submit(&mut state, owner, 2, inward);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(record(&state, owner), expected);
+        assert_eq!(
+            projection_inventory_states(&events_for(&tick, owner)).len(),
+            1
+        );
+        assert_eq!(
+            projection_crafting_record_states(&events_for(&tick, owner)).len(),
+            2
+        );
+        assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+        assert!(
+            !events_for(&tick, owner)
+                .iter()
+                .any(|event| matches!(event, Event::CommandRejected(_)))
+        );
+        assert_eq!(native_input_ack(&tick, owner), 0);
+        let quiet = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(record(&state, owner), expected);
+        assert!(projection_crafting_record_states(&events_for(&quiet, owner)).is_empty());
+    }
+}

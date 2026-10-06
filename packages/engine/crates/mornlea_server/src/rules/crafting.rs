@@ -32,7 +32,7 @@
 //!   before the grid returns to the personal size.
 //! - `packages/server/sim/entity/tick.go` (`CommandMoveCraftingStack`,
 //!   `CommandTakeCraftingOutput`): the player-command settlement rows whose
-//!   refusal reason this provider collapses into its single error shape.
+//!   typed admission refusals preserve exact reasons at the actual tick boundary.
 //! - `packages/server/sim/entity/container.go` (`openContainer`): the bench
 //!   arm of the authoritative open ray. The bench is an ordinary block, not
 //!   a container: a settled open widens that player's grid, anchors the hit
@@ -43,7 +43,8 @@
 //! input debit and the grid side of a settlement are one atomic staging: a
 //! refused rehearsal stages nothing and the whole view is unchanged.
 use mornlea_domain::{
-    BlockPos, ChunkPos, Command, CommandEnvelope, CraftingSize, Dimension, LookAngles, StackView,
+    BlockPos, ChunkPos, Command, CommandEnvelope, CraftingSize, Dimension, LookAngles,
+    RejectReason, StackView,
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
@@ -54,6 +55,7 @@ use crate::contracts::{
     InventoryPatch, InventoryRecord, PhaseReport, RuleCall, RuleEffect, RulePhase, ServerError,
     SessionKey,
 };
+use crate::core::command_outcome::{CommandDisposition, CommandResult};
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::state::{AuthorityReadView, TickContext};
 
@@ -982,10 +984,16 @@ fn stage_patch(
     if after == before {
         return Ok(());
     }
-    let patch = InventoryPatch::try_new(actor, before, after)
-        .map_err(|_| ServerError::InvalidInput { field: "inventory" })?;
+    // Semantic rehearsal has already succeeded; patch identity and staging
+    // failures are trusted ownership failures, never client refusals.
+    let patch =
+        InventoryPatch::try_new(actor, before, after).map_err(|_| ServerError::Internal {
+            invariant: "crafting patch",
+        })?;
     ctx.stage(RuleEffect::Inventory(patch))
-        .map_err(|_| ServerError::InvalidInput { field: "inventory" })
+        .map_err(|_| ServerError::Internal {
+            invariant: "crafting staging",
+        })
 }
 
 /// The applied report of one settled player command.
@@ -1074,23 +1082,82 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
         .ok_or(ServerError::InvalidInput { field: "command" })?;
     let session = SessionKey::from_raw(envelope.session())
         .ok_or(ServerError::InvalidInput { field: "session" })?;
+    if matches!(envelope.command(), Command::OpenContainer(_)) {
+        // Direct phase harnesses retain their original deferred bench owner.
+        ctx.defer(*envelope, RulePhase::WorkbenchLifecycle)?;
+        return Ok(applied_report());
+    }
+    if !owns_command(envelope.command()) {
+        return Err(ServerError::InvalidInput { field: "command" });
+    }
+    let before = *ctx
+        .read()
+        .inventory(ActorKey::Player(session))
+        .ok_or(ServerError::InvalidInput { field: "session" })?;
+    match settle_owned(ctx, envelope, session, before)? {
+        CommandDisposition::Settled(report) => Ok(report),
+        CommandDisposition::Refused(_) => Err(ServerError::InvalidInput { field: "crafting" }),
+        CommandDisposition::Unowned => Err(ServerError::InvalidInput { field: "command" }),
+    }
+}
+
+fn owns_command(command: Command) -> bool {
+    matches!(
+        command,
+        Command::MoveCrafting(_) | Command::TakeCraftingOutput
+    ) || matches!(command, Command::MovePartial(partial) if partial.view() == StackView::Crafting)
+        || matches!(command, Command::QuickMove(source) if source.view() == StackView::Crafting)
+}
+
+/// Live admission owns only ordinary crafting; raw harnesses retain their
+/// actor-free wrapper, while missing live inventory remains an invariant.
+pub(crate) fn admit_command(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+) -> CommandResult {
+    if !owns_command(envelope.command()) {
+        return Ok(CommandDisposition::Unowned);
+    }
+    let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+        invariant: "crafting admission session",
+    })?;
+    let actor = ActorKey::Player(session);
+    if !ctx
+        .read()
+        .actor(actor)
+        .is_some_and(|record| record.lifecycle == ActorLifecycle::Active)
+    {
+        return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady));
+    }
+    let before = *ctx.read().inventory(actor).ok_or(ServerError::Internal {
+        invariant: "crafting admission owner",
+    })?;
+    settle_owned(ctx, envelope, session, before)
+}
+
+/// Settlement on one private copy keeps dynamic slot refusal ahead of
+/// stack and repack checks; successful staging marks both owner lanes.
+fn settle_owned(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+    session: SessionKey,
+    before: InventoryRecord,
+) -> CommandResult {
     let actor = ActorKey::Player(session);
     match envelope.command() {
         Command::MovePartial(movement) if movement.view() == StackView::Crafting => {
             let from = usize::from(movement.from());
             let to = usize::from(movement.to());
-            let before = *ctx
-                .read()
-                .inventory(actor)
-                .ok_or(ServerError::InvalidInput { field: "session" })?;
             let mut after = before;
             let extent = usize::from(grid_extent(after.crafting_size));
-            if (from >= CRAFTING_GRID_SLOTS && to >= CRAFTING_GRID_SLOTS)
-                || [from, to]
-                    .into_iter()
-                    .any(|slot| slot < CRAFTING_GRID_SLOTS && slot >= extent * extent)
+            if [from, to]
+                .into_iter()
+                .any(|slot| slot < CRAFTING_GRID_SLOTS && slot >= extent * extent)
             {
-                return Err(ServerError::InvalidInput { field: "crafting" });
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidSlot));
+            }
+            if from >= CRAFTING_GRID_SLOTS && to >= CRAFTING_GRID_SLOTS {
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
             }
             // The client chooses half or single; the current authority stack
             // supplies the count, including odd halves rounded upward.
@@ -1101,36 +1168,29 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
                 count.div_ceil(2)
             };
             if !move_view_stack(&mut after, from, to, amount) {
-                return Err(ServerError::InvalidInput { field: "crafting" });
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
             }
             stage_patch(ctx, actor, before, after)?;
             ctx.record_crafting_command_publication_dirty(session);
-            Ok(applied_report())
+            Ok(CommandDisposition::Settled(applied_report()))
         }
         Command::QuickMove(source) if source.view() == StackView::Crafting => {
             let from = usize::from(source.slot());
-            let before = *ctx
-                .read()
-                .inventory(actor)
-                .ok_or(ServerError::InvalidInput { field: "session" })?;
             let mut after = before;
             let extent = usize::from(grid_extent(after.crafting_size));
-            if (from < CRAFTING_GRID_SLOTS && from >= extent * extent)
-                || !quick_move_view(&mut after, from)
-            {
-                return Err(ServerError::InvalidInput { field: "crafting" });
+            if from < CRAFTING_GRID_SLOTS && from >= extent * extent {
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidSlot));
+            }
+            if !quick_move_view(&mut after, from) {
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
             }
             stage_patch(ctx, actor, before, after)?;
             ctx.record_crafting_command_publication_dirty(session);
-            Ok(applied_report())
+            Ok(CommandDisposition::Settled(applied_report()))
         }
         Command::MoveCrafting(movement) => {
             let from = usize::from(movement.from());
             let to = usize::from(movement.to());
-            let before = *ctx
-                .read()
-                .inventory(actor)
-                .ok_or(ServerError::InvalidInput { field: "session" })?;
             let mut after = before;
             // The size gate of `craftingMoveCommandReasons`: a grid-side end
             // beyond the effective cells refuses, so the personal grid
@@ -1140,7 +1200,7 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
             let edge = usize::from(grid_extent(after.crafting_size));
             for end in [from, to] {
                 if end < CRAFTING_GRID_SLOTS && end >= edge * edge {
-                    return Err(ServerError::InvalidInput { field: "crafting" });
+                    return Ok(CommandDisposition::Refused(RejectReason::InvalidSlot));
                 }
             }
             // The whole-stack amount is the source's current count, the
@@ -1148,30 +1208,26 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
             // `packages/server/sim/entity/tick.go`.
             let amount = view_slot(&after, from).count;
             if !move_view_stack(&mut after, from, to, amount) {
-                return Err(ServerError::InvalidInput { field: "crafting" });
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
             }
             stage_patch(ctx, actor, before, after)?;
             // An accepted move settles into the owner record and the private
             // grid, so it marks both owner-only publication lanes.
             ctx.record_crafting_command_publication_dirty(session);
-            Ok(applied_report())
+            Ok(CommandDisposition::Settled(applied_report()))
         }
         Command::TakeCraftingOutput => {
-            let before = *ctx
-                .read()
-                .inventory(actor)
-                .ok_or(ServerError::InvalidInput { field: "session" })?;
             let mut after = before;
             let size = grid_extent(after.crafting_size);
             let Some((index, output)) = match_grid(size, &after.crafting) else {
-                return Err(ServerError::InvalidInput { field: "crafting" });
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
             };
             let pattern = &RECIPES[index];
             // Matching and consuming differ in strictness, so a successful
             // match does not imply a successful consume; the refusal is
             // stable and leaves every cell unchanged.
             let Some(consumed) = consume_grid(size, &after.crafting, pattern) else {
-                return Err(ServerError::InvalidInput { field: "crafting" });
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
             };
             // `tryAddPreservingCrafting`: the full output must enter the
             // pack and the pack after that must still absorb the consumed
@@ -1179,10 +1235,10 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
             // full-result-slot refusal of a full pack.
             let (next_slots, leftover) = add_stack(&after.slots, output);
             if leftover.count != 0 {
-                return Err(ServerError::InvalidInput { field: "crafting" });
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
             }
             if !can_repack(&next_slots, &consumed) {
-                return Err(ServerError::InvalidInput { field: "crafting" });
+                return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
             }
             after.slots = next_slots;
             after.crafting = consumed;
@@ -1190,19 +1246,9 @@ fn admit(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport, 
             // An accepted take, like the move above, marks both owner-only
             // publication lanes.
             ctx.record_crafting_command_publication_dirty(session);
-            Ok(applied_report())
+            Ok(CommandDisposition::Settled(applied_report()))
         }
-        // The bench open rides the same admitted-open surface as the
-        // container opens: the envelope carries only the look, so the
-        // authoritative ray decides at settlement time whether the hit is a
-        // bench (this phase) or a furnace or chest (the container
-        // provider's phase, whose drain refuses bench hits without effect).
-        Command::OpenContainer(_) => {
-            ctx.defer(*envelope, RulePhase::WorkbenchLifecycle)?;
-            Ok(applied_report())
-        }
-        // Every other command kind belongs to its own provider.
-        _ => Err(ServerError::InvalidInput { field: "command" }),
+        _ => Ok(CommandDisposition::Unowned),
     }
 }
 
@@ -1680,5 +1726,49 @@ mod tests {
         let after = repack_all(before).expect("empty grid always repacks");
         assert_eq!(after.crafting_size, CraftingSize::Personal);
         assert_eq!(after.slots[9], stack(35, 3));
+    }
+    fn patch_authority() -> crate::state::AuthorityState {
+        crate::state::AuthorityState::try_new(
+            crate::contracts::ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn crafting_patch_stale_preimage_remains_hard() {
+        let mut authority = patch_authority();
+        let mut context =
+            TickContext::harness(&mut authority, crate::contracts::TickBudget::full());
+        let actor = ActorKey::Player(SessionKey::from_raw(1).unwrap());
+        let before = InventoryRecord::empty();
+        let current = before.with_selected(mornlea_domain::HotbarSlot::new(2).unwrap());
+        let after = before.with_selected(mornlea_domain::HotbarSlot::new(1).unwrap());
+        context.preload_inventory(actor, current);
+        assert_eq!(
+            stage_patch(&mut context, actor, before, after),
+            Err(ServerError::Internal {
+                invariant: "crafting staging"
+            })
+        );
+        assert_eq!(context.read().inventory(actor), Some(&current));
+        assert!(context.events().is_empty());
+    }
+
+    #[test]
+    fn crafting_patch_non_owner_remains_hard() {
+        let mut authority = patch_authority();
+        let mut context =
+            TickContext::harness(&mut authority, crate::contracts::TickBudget::full());
+        let actor = ActorKey::Hostile(mornlea_domain::HostileId::try_new(1).unwrap());
+        let before = InventoryRecord::empty();
+        let after = before.with_selected(mornlea_domain::HotbarSlot::new(1).unwrap());
+        assert_eq!(
+            stage_patch(&mut context, actor, before, after),
+            Err(ServerError::Internal {
+                invariant: "crafting patch"
+            })
+        );
+        assert!(context.events().is_empty());
     }
 }

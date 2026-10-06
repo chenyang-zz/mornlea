@@ -67,6 +67,14 @@ observe durable aggregate changes or compose Agent shutdown.
 
 ## Agent boundary
 
+Ordinary crafting has a private checked admission adapter for whole, partial,
+quick moves and output take. Dynamic grid extents refuse InvalidSlot before
+stack/repack InvalidInput; successful atomic settlements mark both owner lanes.
+Trusted patch identity and staging errors remain hard. The actual reducer consumes
+these outcomes with original admission identity; raw actor-free phase fixtures
+retain their old semantic error and deferred bench compatibility. Native command
+and prepared trusted-fault cases qualify this boundary, not runtime composition.
+
 Crafting-view partial and quick moves settle in the crafting provider during
 PlayerCommand using a copied whole-record inventory patch. Quick movement uses
 the first fitting active grid cell or the existing four-phase pack insertion;
