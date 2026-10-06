@@ -1275,3 +1275,241 @@ fn mutation_before_fluid_support_order() {
     );
     assert_eq!(context.events().len(), 0);
 }
+
+fn placement_preflight_source_scene(
+    context: &mut TickContext<'_>,
+    session: SessionKey,
+    position: [f32; 3],
+    look: LookAngles,
+    item: u16,
+    cells: &[(BlockPos, u16)],
+) -> ActorKey {
+    let actor = ActorKey::Player(session);
+    context
+        .stage(RuleEffect::Environment(environment()))
+        .unwrap();
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            position,
+            look.yaw(),
+            look.pitch(),
+        )))
+        .unwrap();
+    context.preload_inventory(actor, hotbar_inventory(0, item, 2));
+    for &(cell, block) in cells {
+        context.preload_block(observation(cell, block));
+    }
+    actor
+}
+
+fn placement_preflight_source_refused(
+    context: &TickContext<'_>,
+    actor: ActorKey,
+    look: LookAngles,
+    cells: &[BlockPos],
+    reason: RejectReason,
+) {
+    let before = probe(context, cells, &[actor]);
+    let intent = PlacementIntent::try_new(look, 0).unwrap();
+    assert_eq!(
+        resolve_place(actor, &intent, &context.read()),
+        Err(RuleReject::Wire(reason))
+    );
+    assert_eq!(probe(context, cells, &[actor]), before);
+}
+
+#[test]
+fn placement_preflight_source_partner_readiness_before_fluid() {
+    let look = LookAngles::try_new(std::f32::consts::PI, 0.0).unwrap();
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let cells = [
+        (BlockPos::new(0, 319, 0), AIR),
+        (BlockPos::new(0, 319, 1), 27),
+        (BlockPos::new(0, 319, 2), STONE),
+    ];
+    let actor = placement_preflight_source_scene(
+        &mut context,
+        session,
+        [0.5, 318.0, 0.5],
+        look,
+        ITEM_DOOR,
+        &cells,
+    );
+    placement_preflight_source_refused(
+        &context,
+        actor,
+        look,
+        &[cells[0].0, cells[1].0, cells[2].0, BlockPos::new(0, 320, 1)],
+        RejectReason::ChunkNotReady,
+    );
+
+    let look = LookAngles::try_new(-std::f32::consts::FRAC_PI_2, -1.4).unwrap();
+    let mut state = authority();
+    let session = state
+        .admit(admitted(2, "Bea"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    let cells = [
+        (BlockPos::new(15, 67, 0), AIR),
+        (BlockPos::new(15, 66, 0), AIR),
+        (BlockPos::new(15, 65, 0), 27),
+        (BlockPos::new(15, 64, 0), STONE),
+    ];
+    let actor = placement_preflight_source_scene(
+        &mut context,
+        session,
+        [15.1, 66.0, 0.5],
+        look,
+        ITEM_BED,
+        &cells,
+    );
+    placement_preflight_source_refused(
+        &context,
+        actor,
+        look,
+        &[
+            cells[0].0,
+            cells[1].0,
+            cells[2].0,
+            cells[3].0,
+            BlockPos::new(16, 65, 0),
+        ],
+        RejectReason::ChunkNotReady,
+    );
+}
+
+#[test]
+fn placement_preflight_source_bed_support_readiness_before_eligibility() {
+    let look = LookAngles::try_new(std::f32::consts::PI, 0.0).unwrap();
+    let mut state = authority();
+    let session = state
+        .admit(admitted(1, "Ada"), TransportKind::Memory)
+        .unwrap();
+    let mut context = harness_context(&mut state);
+    // Sparse support omission qualifies this resolver, not a whole Ready column.
+    let cells = [
+        (BlockPos::new(0, 65, 0), AIR),
+        (BlockPos::new(0, 65, 1), AIR),
+        (BlockPos::new(0, 65, 2), STONE),
+        (BlockPos::new(0, 64, 1), AIR),
+    ];
+    let actor = placement_preflight_source_scene(
+        &mut context,
+        session,
+        [0.5, 64.0, 0.5],
+        look,
+        ITEM_BED,
+        &cells,
+    );
+    placement_preflight_source_refused(
+        &context,
+        actor,
+        look,
+        &[
+            cells[0].0,
+            cells[1].0,
+            cells[2].0,
+            cells[3].0,
+            BlockPos::new(0, 64, 0),
+        ],
+        RejectReason::ChunkNotReady,
+    );
+}
+
+#[test]
+fn placement_preflight_source_outside_height_support_is_air() {
+    for item in [ITEM_DOOR, 57] {
+        let look = LookAngles::try_new(std::f32::consts::PI, 0.0).unwrap();
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        // Actor pose is prepared; this check does not run source recovery.
+        let cells = [
+            (BlockPos::new(0, -64, 0), AIR),
+            (BlockPos::new(0, -64, 1), AIR),
+            (BlockPos::new(0, -64, 2), STONE),
+            (BlockPos::new(0, -63, 1), AIR),
+        ];
+        let actor = placement_preflight_source_scene(
+            &mut context,
+            session,
+            [0.5, -65.5, 0.5],
+            look,
+            item,
+            &cells,
+        );
+        placement_preflight_source_refused(
+            &context,
+            actor,
+            look,
+            &[
+                cells[0].0,
+                cells[1].0,
+                cells[2].0,
+                cells[3].0,
+                BlockPos::new(0, -65, 1),
+            ],
+            RejectReason::InvalidBlock,
+        );
+    }
+}
+
+#[test]
+fn placement_preflight_source_ordinary_partner_and_support_controls() {
+    for fluid in [true, false] {
+        let look = LookAngles::try_new(std::f32::consts::PI, 0.0).unwrap();
+        let mut state = authority();
+        let session = state
+            .admit(admitted(1, "Ada"), TransportKind::Memory)
+            .unwrap();
+        let mut context = harness_context(&mut state);
+        let cells = [
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 65, 1), if fluid { 27 } else { AIR }),
+            (BlockPos::new(0, 65, 2), STONE),
+            (BlockPos::new(0, 66, 1), AIR),
+            (BlockPos::new(0, 64, 1), STONE),
+        ];
+        let actor = placement_preflight_source_scene(
+            &mut context,
+            session,
+            [0.5, 64.0, 0.5],
+            look,
+            ITEM_DOOR,
+            &cells,
+        );
+        if fluid {
+            placement_preflight_source_refused(
+                &context,
+                actor,
+                look,
+                &[cells[0].0, cells[1].0, cells[2].0, cells[3].0, cells[4].0],
+                RejectReason::Occupied,
+            );
+        } else {
+            let resolved = resolve_place(
+                actor,
+                &PlacementIntent::try_new(look, 0).unwrap(),
+                &context.read(),
+            )
+            .unwrap();
+            context.transaction().try_place(resolved).unwrap();
+            assert_eq!(
+                context.read().block(Dimension::OVERWORLD, cells[1].0),
+                Some(DOOR_LOWER_NORTH_CLOSED)
+            );
+            assert_eq!(
+                context.read().block(Dimension::OVERWORLD, cells[3].0),
+                Some(DOOR_UPPER)
+            );
+            assert_eq!(context.read().inventory(actor).unwrap().slots[0].count, 1);
+        }
+    }
+}

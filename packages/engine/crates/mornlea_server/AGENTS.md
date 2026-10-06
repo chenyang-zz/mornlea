@@ -597,6 +597,12 @@ separate caller responsibilities.
   tool and events unchanged. The `resolve_*` stubs at the end of `state.rs`
   remain the consumer double's scaffold until the endpoint rewire; the
   per-`SystemRule` replacement tables belong to their rule providers.
+  Human placement's private checked resolver distinguishes semantic preflight
+  refusals from trusted write, inventory, trace and basis failures; the public
+  raw wrapper retains typed errors. Door and bed read partner readiness before
+  strict air occupancy, and bed reads both supports before eligibility. Support
+  beyond world height is immutable air without a synthetic mutation address.
+  This resolver contract does not accept live wire outcomes or success events.
 - `src/rules/inventory.rs` owns the inventory authority provider: ordinary
   inventory/armor settlement for `SelectHotbar`/`MoveInventory`/`EquipArmor`/
   `MovePartial`/`QuickMove` over whole-record `InventoryPatch` staging —

@@ -526,6 +526,20 @@ fn require_air(
     }
 }
 
+/// Outside-world support is immutable air, not an unavailable mutation cell.
+fn placement_support_block(
+    view: &AuthorityReadView<'_>,
+    dimension: Dimension,
+    pos: BlockPos,
+) -> Result<u16, RuleReject> {
+    if !(-64..320).contains(&pos.y()) {
+        return Ok(AIR);
+    }
+    view.observation(dimension, pos)
+        .map(|observed| observed.block)
+        .ok_or(RuleReject::Wire(RejectReason::ChunkNotReady))
+}
+
 /// One observed cell below a footprint cell that must be solid support;
 /// unobserved reports `ChunkNotReady` and a non-supporting block reports
 /// `InvalidBlock` (the door and bed placement rules,
@@ -535,10 +549,10 @@ fn require_support(
     dimension: Dimension,
     pos: BlockPos,
 ) -> Result<(), RuleReject> {
-    match view.observation(dimension, pos) {
-        None => Err(RuleReject::Wire(RejectReason::ChunkNotReady)),
-        Some(below) if solid_support(below.block) => Ok(()),
-        Some(_) => Err(RuleReject::Wire(RejectReason::InvalidBlock)),
+    if solid_support(placement_support_block(view, dimension, pos)?) {
+        Ok(())
+    } else {
+        Err(RuleReject::Wire(RejectReason::InvalidBlock))
     }
 }
 
@@ -635,10 +649,7 @@ fn require_single_cell_support(
         target.y().checked_add(dy).ok_or(unavailable)?,
         target.z().checked_add(dz).ok_or(unavailable)?,
     );
-    let block = view
-        .observation(dimension, support)
-        .ok_or(unavailable)?
-        .block;
+    let block = placement_support_block(view, dimension, support)?;
     let supported = if is_crop(form) {
         is_farmland(block)
     } else if is_sapling(form) {
@@ -938,31 +949,79 @@ pub fn resolve_place(
     intent: &PlacementIntent,
     view: &AuthorityReadView<'_>,
 ) -> Result<ResolvedPlacement, RuleReject> {
+    resolve_place_checked(actor, intent, view).map_err(PlacementResolveFailure::into_raw)
+}
+
+/// Keeps gameplay preflight refusals distinct from trusted construction failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlacementResolveFailure {
+    Refused(RejectReason),
+    Trusted(RuleReject),
+}
+
+impl PlacementResolveFailure {
+    fn into_raw(self) -> RuleReject {
+        match self {
+            Self::Refused(reason) => RuleReject::Wire(reason),
+            Self::Trusted(error) => error,
+        }
+    }
+
+    // Only semantic preflight helpers may erase the raw wire wrapper.
+    fn from_preflight(error: RuleReject) -> Self {
+        match error {
+            RuleReject::Wire(reason) => Self::Refused(reason),
+            other => Self::Trusted(other),
+        }
+    }
+}
+
+/// Resolves through the same raw provider while preserving failure provenance.
+pub(crate) fn resolve_place_checked(
+    actor: ActorKey,
+    intent: &PlacementIntent,
+    view: &AuthorityReadView<'_>,
+) -> Result<ResolvedPlacement, PlacementResolveFailure> {
     let trace = RefCell::new(ObservationTrace::default());
     let result = resolve_place_inner(actor, intent, &view.with_observation_trace(&trace));
     let trace = trace.into_inner();
-    trace.check_capacity()?;
+    trace
+        .check_capacity()
+        .map_err(PlacementResolveFailure::Trusted)?;
     let mut resolved = result?;
-    resolved.txn.read_basis = Some(view.mutation_basis(actor, &trace)?);
+    resolved.txn.read_basis = Some(
+        view.mutation_basis(actor, &trace)
+            .map_err(PlacementResolveFailure::Trusted)?,
+    );
     Ok(resolved)
+}
+
+// A derived write is trusted even when its constructor returns a wire-shaped error.
+fn placement_write(
+    observed: BlockObservation,
+    replacement: u16,
+) -> Result<BlockWrite, PlacementResolveFailure> {
+    BlockWrite::try_new(observed, replacement).map_err(PlacementResolveFailure::Trusted)
 }
 
 fn resolve_place_inner(
     actor: ActorKey,
     intent: &PlacementIntent,
     view: &AuthorityReadView<'_>,
-) -> Result<ResolvedPlacement, RuleReject> {
-    let basis = actor_basis(view, actor)?;
-    let inventory = *view.inventory(actor).ok_or(RuleReject::StaleObservation)?;
+) -> Result<ResolvedPlacement, PlacementResolveFailure> {
+    use PlacementResolveFailure::{Refused, Trusted};
+    let basis = actor_basis(view, actor).map_err(Trusted)?;
+    let inventory = *view
+        .inventory(actor)
+        .ok_or(Trusted(RuleReject::StaleObservation))?;
     let slot = usize::from(intent.slot().get());
     let held = inventory.slots[slot];
     // Item eligibility and the private debit precede ray failures. Torch
     // eligibility is independent of the face; its form is resolved below.
     if item_placement(held.item).is_none() && held.item != ITEM_TORCH {
-        return Err(RuleReject::Wire(RejectReason::InvalidBlock));
+        return Err(Refused(RejectReason::InvalidBlock));
     }
-    let after =
-        consume_hotbar_one(&inventory, slot).ok_or(RuleReject::Wire(RejectReason::InvalidBlock))?;
+    let after = consume_hotbar_one(&inventory, slot).ok_or(Refused(RejectReason::InvalidBlock))?;
     let look = intent.look();
     let direction = look_direction(look.yaw(), look.pitch());
     let hit = cast_interaction_ray(
@@ -972,35 +1031,30 @@ fn resolve_place_inner(
         direction,
         basis.reach,
         RuleReject::Wire(RejectReason::ChunkNotReady),
-    )?
-    .ok_or(RuleReject::Wire(RejectReason::NoTarget))?;
+    )
+    .map_err(PlacementResolveFailure::from_preflight)?
+    .ok_or(Refused(RejectReason::NoTarget))?;
     if hit.face == RayFace::Origin {
         // The ray starts inside a solid cell, so there is no entry face to
         // place against; Go rejects the faceless hit as `Occupied`.
-        return Err(RuleReject::Wire(RejectReason::Occupied));
+        return Err(Refused(RejectReason::Occupied));
     }
-    let form = placeable_block_at_face(held.item, hit.face)
-        .ok_or(RuleReject::Wire(RejectReason::InvalidBlock))?;
+    let form =
+        placeable_block_at_face(held.item, hit.face).ok_or(Refused(RejectReason::InvalidBlock))?;
     let target = adjacent(hit.observed.pos, hit.face);
     let target_observed = view
         .observation(basis.dimension, target)
-        .ok_or(RuleReject::Wire(RejectReason::ChunkNotReady))?;
+        .ok_or(Refused(RejectReason::ChunkNotReady))?;
     // Admission uses the source item form before yaw expands door/bed writes.
     if (target_observed.block != AIR && !is_fluid(target_observed.block))
         || placement_overlaps_player(form, target, basis.position)
     {
-        return Err(RuleReject::Wire(RejectReason::Occupied));
+        return Err(Refused(RejectReason::Occupied));
     }
-    // Ordinary single-cell forms replace fluids. Multi-cell footprints keep
-    // strict occupancy, while plants and torches require an air destination
-    // with the item-specific refusal from the Go placement oracle.
-    if target_observed.block != AIR {
-        if is_door(form) || is_bed(form) {
-            return Err(RuleReject::Wire(RejectReason::Occupied));
-        }
-        if is_crop(form) || is_sapling(form) || is_torch(form) {
-            return Err(RuleReject::Wire(RejectReason::InvalidBlock));
-        }
+    // Paired forms read their partner before strict occupancy; plants and
+    // torches reject a fluid destination before support admission.
+    if target_observed.block != AIR && (is_crop(form) || is_sapling(form) || is_torch(form)) {
+        return Err(Refused(RejectReason::InvalidBlock));
     }
     // Door and bed footprint cells and supports are prefetched before any
     // write is built (`tryPlaceDoor`, `packages/server/sim/entity/door.go`;
@@ -1009,58 +1063,63 @@ fn resolve_place_inner(
     let mut writes = Vec::with_capacity(2);
     if is_door(form) {
         let upper = BlockPos::new(target.x(), target.y() + 1, target.z());
-        let upper_observed = require_air(
-            view,
-            basis.dimension,
-            upper,
-            RuleReject::Wire(RejectReason::ChunkNotReady),
-        )?;
+        let upper_observed = view
+            .observation(basis.dimension, upper)
+            .ok_or(Refused(RejectReason::ChunkNotReady))?;
+        if target_observed.block != AIR || upper_observed.block != AIR {
+            return Err(Refused(RejectReason::Occupied));
+        }
         require_support(
             view,
             basis.dimension,
             BlockPos::new(target.x(), target.y() - 1, target.z()),
-        )?;
-        writes.push(BlockWrite::try_new(
-            target_observed,
-            door_lower_closed(facing),
-        )?);
-        writes.push(BlockWrite::try_new(upper_observed, DOOR_UPPER)?);
+        )
+        .map_err(PlacementResolveFailure::from_preflight)?;
+        writes.push(placement_write(target_observed, door_lower_closed(facing))?);
+        writes.push(placement_write(upper_observed, DOOR_UPPER)?);
     } else if is_bed(form) {
         let (dx, dz) = bed_head_offset(facing);
         let head = BlockPos::new(target.x() + dx, target.y(), target.z() + dz);
-        let head_observed = require_air(
-            view,
-            basis.dimension,
-            head,
-            RuleReject::Wire(RejectReason::ChunkNotReady),
-        )?;
-        require_support(
+        let head_observed = view
+            .observation(basis.dimension, head)
+            .ok_or(Refused(RejectReason::ChunkNotReady))?;
+        if target_observed.block != AIR || head_observed.block != AIR {
+            return Err(Refused(RejectReason::Occupied));
+        }
+        // Both support reads precede eligibility, including an unsuitable first cell.
+        let foot_support = placement_support_block(
             view,
             basis.dimension,
             BlockPos::new(target.x(), target.y() - 1, target.z()),
-        )?;
-        require_support(
+        )
+        .map_err(PlacementResolveFailure::from_preflight)?;
+        let head_support = placement_support_block(
             view,
             basis.dimension,
             BlockPos::new(head.x(), head.y() - 1, head.z()),
-        )?;
-        writes.push(BlockWrite::try_new(target_observed, bed_foot_id(facing))?);
-        writes.push(BlockWrite::try_new(head_observed, bed_head_id(facing))?);
+        )
+        .map_err(PlacementResolveFailure::from_preflight)?;
+        if !solid_support(foot_support) || !solid_support(head_support) {
+            return Err(Refused(RejectReason::InvalidBlock));
+        }
+        writes.push(placement_write(target_observed, bed_foot_id(facing))?);
+        writes.push(placement_write(head_observed, bed_head_id(facing))?);
     } else {
         // Torches have no generic collision boxes but reserve their full cell
         // before support admission (`torchCellOverlapsPlayer` in Go).
         if is_torch(form) && shape_overlaps_player([[0.0; 3], [1.0; 3]], target, basis.position) {
-            return Err(RuleReject::Wire(RejectReason::Occupied));
+            return Err(Refused(RejectReason::Occupied));
         }
-        require_single_cell_support(view, basis.dimension, target, form)?;
-        writes.push(BlockWrite::try_new(target_observed, form)?);
+        require_single_cell_support(view, basis.dimension, target, form)
+            .map_err(PlacementResolveFailure::from_preflight)?;
+        writes.push(placement_write(target_observed, form)?);
     }
     let txn = BlockTxn {
         producer: MutationProducer::Actor(actor),
         tick: view.tick(),
         read_basis: None,
         writes,
-        inventory: Some(InventoryPatch::try_new(actor, inventory, after)?),
+        inventory: Some(InventoryPatch::try_new(actor, inventory, after).map_err(Trusted)?),
         containers: Vec::new(),
         drops: None,
         mining: None,
@@ -1467,18 +1526,46 @@ mod placement_support_tests {
     fn torch_unreachable_missing_or_unrepresentable_support_rows() {
         let mut state = authority();
         let context = TickContext::harness(&mut state, TickBudget::full());
-        for (target, form) in [
-            (BlockPos::new(0, 65, 0), TORCH_STANDING),
-            (BlockPos::new(0, -64, 0), TORCH_STANDING),
-            (BlockPos::new(0, i32::MIN, 0), TORCH_STANDING),
-            (BlockPos::new(i32::MIN, 65, 0), TORCH_WALL_POS_X),
-            (BlockPos::new(i32::MAX, 65, 0), TORCH_WALL_NEG_X),
-            (BlockPos::new(0, 65, i32::MIN), TORCH_WALL_POS_Z),
-            (BlockPos::new(0, 65, i32::MAX), TORCH_WALL_NEG_Z),
+        for (target, form, reason) in [
+            (
+                BlockPos::new(0, 65, 0),
+                TORCH_STANDING,
+                RejectReason::ChunkNotReady,
+            ),
+            (
+                BlockPos::new(0, -64, 0),
+                TORCH_STANDING,
+                RejectReason::InvalidBlock,
+            ),
+            (
+                BlockPos::new(0, i32::MIN, 0),
+                TORCH_STANDING,
+                RejectReason::ChunkNotReady,
+            ),
+            (
+                BlockPos::new(i32::MIN, 65, 0),
+                TORCH_WALL_POS_X,
+                RejectReason::ChunkNotReady,
+            ),
+            (
+                BlockPos::new(i32::MAX, 65, 0),
+                TORCH_WALL_NEG_X,
+                RejectReason::ChunkNotReady,
+            ),
+            (
+                BlockPos::new(0, 65, i32::MIN),
+                TORCH_WALL_POS_Z,
+                RejectReason::ChunkNotReady,
+            ),
+            (
+                BlockPos::new(0, 65, i32::MAX),
+                TORCH_WALL_NEG_Z,
+                RejectReason::ChunkNotReady,
+            ),
         ] {
             assert_eq!(
                 require_single_cell_support(&context.read(), Dimension::OVERWORLD, target, form),
-                Err(RuleReject::Wire(RejectReason::ChunkNotReady))
+                Err(RuleReject::Wire(reason))
             );
             assert!(context.events().is_empty());
         }
@@ -1538,5 +1625,87 @@ mod placement_body_tests {
             ));
             assert!(!placement_overlaps_player(form, target, [0.5, 65.0, 0.5]));
         }
+    }
+}
+
+#[cfg(test)]
+mod placement_checked_contract_tests {
+    use super::*;
+    use crate::contracts::{PhaseReport, ServerError, ServerLimits, SessionKey, TickBudget};
+    use crate::core::command_outcome::{CommandDisposition, CommandResult};
+    use crate::state::{AuthorityState, TickContext};
+
+    fn example_consumer(
+        actor: ActorKey,
+        intent: &PlacementIntent,
+        view: &AuthorityReadView<'_>,
+    ) -> CommandResult {
+        match resolve_place_checked(actor, intent, view) {
+            Ok(_) => Ok(CommandDisposition::Settled(PhaseReport {
+                examined: 1,
+                applied: 0,
+                carried: 1,
+                rejected: 0,
+            })),
+            Err(PlacementResolveFailure::Refused(reason)) => {
+                Ok(CommandDisposition::Refused(reason))
+            }
+            Err(PlacementResolveFailure::Trusted(_)) => Err(ServerError::Internal {
+                invariant: "placement resolver example",
+            }),
+        }
+    }
+
+    #[test]
+    fn placement_checked_contract_missing_owned_basis() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let context = TickContext::harness(&mut authority, TickBudget::full());
+        let actor = ActorKey::Player(SessionKey::from_raw(1).unwrap());
+        let intent =
+            PlacementIntent::try_new(mornlea_domain::LookAngles::try_new(0.0, 0.0).unwrap(), 0)
+                .unwrap();
+        assert_eq!(
+            resolve_place_checked(actor, &intent, &context.read()),
+            Err(PlacementResolveFailure::Trusted(
+                RuleReject::StaleObservation
+            ))
+        );
+        assert_eq!(
+            resolve_place(actor, &intent, &context.read()),
+            Err(RuleReject::StaleObservation)
+        );
+        assert_eq!(
+            example_consumer(actor, &intent, &context.read()),
+            Err(ServerError::Internal {
+                invariant: "placement resolver example"
+            })
+        );
+        assert!(context.events().is_empty());
+    }
+
+    #[test]
+    fn placement_checked_contract_invalid_derived_write() {
+        // An invalid derived replacement is trusted even though its raw error has a wire shape.
+        let observed = BlockObservation::try_new(
+            ChunkKey {
+                dimension: Dimension::OVERWORLD,
+                pos: ChunkPos::new(0, 0),
+            },
+            1,
+            1,
+            BlockPos::new(0, 65, 0),
+            AIR,
+        )
+        .unwrap();
+        assert_eq!(
+            placement_write(observed, u16::MAX),
+            Err(PlacementResolveFailure::Trusted(RuleReject::Wire(
+                RejectReason::InvalidBlock
+            )))
+        );
     }
 }

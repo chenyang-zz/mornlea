@@ -2685,7 +2685,7 @@ fn placement_invalid_item_precedes_ray_and_destination_refusals() {
 #[test]
 fn placement_forms_refuse_water_with_source_reason_and_no_effects() {
     // Seeds, potatoes, carrots, saplings and torches require air. Doors and
-    // beds retain their strict footprint occupancy refusal for water.
+    // beds refuse water after observing the complete footprint.
     for (item, reason) in [
         (34, RejectReason::InvalidBlock),
         (40, RejectReason::InvalidBlock),
@@ -2707,6 +2707,8 @@ fn placement_forms_refuse_water_with_source_reason_and_no_effects() {
                 },
                 |context, session| {
                     let actor = ActorKey::Player(session);
+                    // The paired occupancy witness requires a ready upper cell.
+                    context.preload_block(observation(BlockPos::new(0, 66, 1), AIR));
                     let cells = [
                         BlockPos::new(0, 65, 0),
                         BlockPos::new(0, 65, 1),

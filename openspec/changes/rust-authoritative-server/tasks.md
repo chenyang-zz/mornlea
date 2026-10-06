@@ -270,6 +270,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3idr Publish selected and inline panel drop intake/settlement outcomes ([packet](plans/140-source-inline-drop-outcomes.md)). Native8/private1 GREEN; eight initial causal REDs plus review-caused panel lifecycle RED;76Rust3776/replay640, Go5 source oracle and unchanged controls race/count1 PASS, independent corrected source SCOPED_PASS. Selected late8 versus panel current empty9/foot3 afteractualreset; rawtypedcompat preserved; docs/immutable closing evidence in packet. Other outcomes and broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3pfr Land checked placement preflight provenance and source footprint/support readiness ([packet](plans/141-source-placement-preflight-contract.md)). Raw4/private2 GREEN; three causal REDs/onecontrol plus existing torch/water fixture reconciliation;76Rust3782/replay644, Go4 actual source oracle and12top/18sub controls race/count1 PASS, independent finalFOURsource SCOPED_PASS. Sparse support/owned pose consumer qualifications retained; live placement wire/success and broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 
