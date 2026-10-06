@@ -280,6 +280,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3hmr Publish source held mining completion refusals and canonical held ray with trusted failure provenance ([packet](plans/144-source-held-mining-outcomes.md)). Only this provider node; broad3.8/4.1/4.2 and configured/runtime/queue/actor work OPEN.
 
+- [x] 3.7l3arr Preserve captured remote and companion reset with unchanged source consumption cadence ([packet](plans/146-source-actor-reset-capture.md)). Only this private projection node; other actor/queue/runtime work and broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 

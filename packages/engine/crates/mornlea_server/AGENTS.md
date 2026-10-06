@@ -1323,3 +1323,10 @@ frame enters the real FIFO. Projection and preparation are not admission; existi
 closure and new saturation remain distinct so only saturation retires a slow peer.
 Other publication mirror families and automatic background encoding retain their
 separate migration acceptance boundaries.
+
+Remote-player and companion survivor states capture the committed runtime reset
+before the existing source result clearers run. New spawns remain excluded from
+state batches; actor-only fixtures without runtimes retain false. Reset consumption
+follows tick-result capture, including no-observer and closed-queue cases, and is
+independent of queue admission. The projector borrows runtime flags only through
+its synchronous family pass.

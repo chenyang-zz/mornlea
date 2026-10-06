@@ -1899,6 +1899,12 @@ impl AuthorityState {
         &self.residents.inventories
     }
 
+    /// Borrows committed runtime flags before tick-result capture consumes reset.
+    /// The projection loan ends before either source reset owner can mutate them.
+    pub(crate) fn resident_runtimes(&self) -> &BTreeMap<ActorKey, ActorRuntime> {
+        &self.residents.runtimes
+    }
+
     /// Committed resident projectile records.
     pub(crate) fn resident_projectiles(&self) -> &[ProjectileRecord] {
         &self.residents.projectiles

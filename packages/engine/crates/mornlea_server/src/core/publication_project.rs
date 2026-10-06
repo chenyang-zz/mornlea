@@ -30,8 +30,8 @@ use mornlea_domain::{
 };
 
 use crate::contracts::{
-    ActorBody, ActorKey, ActorLifecycle, ActorRecord, ChunkKey, ContainerSlots, DropRecord,
-    InventoryRecord, ProjectileRecord, ServerError, SessionKey,
+    ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, ChunkKey, ContainerSlots,
+    DropRecord, InventoryRecord, ProjectileRecord, ServerError, SessionKey,
 };
 use crate::core::session_view::SessionView;
 use crate::state::{AuthorityState, Speaker};
@@ -74,6 +74,9 @@ pub(crate) struct TickOutcome {
 /// The shared read-only world facts the per-family emitters consume.
 struct WorldInputs<'a> {
     actors: &'a [ActorRecord],
+    /// Reset is captured before source clearers run, independently of delivery.
+    /// Actor-only fixtures have no runtime and retain the neutral false flag.
+    runtimes: &'a BTreeMap<ActorKey, ActorRuntime>,
     entities: &'a Entities,
     speakers: &'a [Speaker],
     tick: u64,
@@ -214,6 +217,7 @@ impl AuthorityState {
         }
         let inputs = WorldInputs {
             actors: &actors,
+            runtimes: self.resident_runtimes(),
             entities: &entities,
             speakers: &speakers,
             tick,
@@ -947,7 +951,10 @@ fn emit_companions(
                 dimension: actor.dimension,
                 position: actor.motion.position(),
                 look: actor.look,
-                reset: false,
+                reset: inputs
+                    .runtimes
+                    .get(&actor.key)
+                    .is_some_and(|runtime| runtime.reset),
             }) {
                 states.push(record);
             }
@@ -1041,7 +1048,10 @@ fn emit_remotes(
                 dimension: actor.dimension,
                 position: actor.motion.position(),
                 look: actor.look,
-                reset: false,
+                reset: inputs
+                    .runtimes
+                    .get(&actor.key)
+                    .is_some_and(|runtime| runtime.reset),
             }));
         }
         for group in states.chunks(REMOTE_STATES_CAP) {

@@ -5552,3 +5552,270 @@ mod bench_eligibility;
 
 #[path = "publication_bench_close.rs"]
 mod bench_close;
+
+/// Prepares a reset input while preserving the real source-owned runtime.
+fn projection_reset_runtime(state: &mut AuthorityState, key: ActorKey) {
+    stage(state, |context| {
+        let mut runtime = context.read().runtime(key).unwrap().clone();
+        runtime.reset = true;
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+    });
+}
+
+/// Checks the actual FIFO against the codec for the captured event.
+fn projection_reset_wire(state: &mut AuthorityState, session: SessionKey, event: &Event) {
+    let encoded = mornlea_server::core::publication::PreparedFrame::encode(
+        &mut mornlea_protocol::ProtocolCodec::new().unwrap(),
+        &mornlea_protocol::ServerPacket::try_from(event.clone()).unwrap(),
+    )
+    .unwrap();
+    let frames = state.take_outbox(session, 512, 1_048_576).unwrap();
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.as_slice() == encoded.as_bytes())
+    );
+}
+
+fn projection_reset_remote_event(tick: u64, reset: bool) -> Event {
+    Event::RemotePlayerStates(
+        RemotePlayerStates::try_new(mornlea_domain::RemotePlayerStatesParts {
+            server_tick: tick,
+            states: vec![RemotePlayerState::new(RemotePlayerStateParts {
+                player_id: PlayerId::try_from_bytes(uuid(2)).unwrap(),
+                dimension: Dimension::OVERWORLD,
+                position: FiniteVec3::try_new([4.5, 65.0, 4.5]).unwrap(),
+                look: look(0.0, 0.0),
+                reset,
+            })]
+            .into_boxed_slice(),
+        })
+        .unwrap(),
+    )
+}
+
+#[test]
+fn projection_actor_reset_remote_captured_once() {
+    let (mut state, observer, owner, _) = command_lifecycle::scene(ContainerKind::Chest);
+    for session in [observer, owner] {
+        state.take_outbox(session, 512, 1_048_576).unwrap();
+    }
+    projection_reset_runtime(&mut state, ActorKey::Player(owner));
+    let captured = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = projection_reset_remote_event(captured.tick, true);
+    let events = events_for(&captured, observer);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::RemotePlayerStates(_)))
+            .collect::<Vec<_>>(),
+        vec![&expected],
+    );
+    assert!(
+        events_for(&captured, owner)
+            .iter()
+            .any(|event| matches!(event, Event::PlayerState(local) if local.reset()))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::PlayerState(local) if local.reset()))
+    );
+    assert!(
+        !state
+            .settled_read()
+            .unwrap()
+            .runtime(ActorKey::Player(owner))
+            .unwrap()
+            .reset
+    );
+    projection_reset_wire(&mut state, observer, &expected);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = projection_reset_remote_event(following.tick, false);
+    assert!(events_for(&following, observer).contains(&expected));
+    assert!(
+        !events_for(&following, observer)
+            .iter()
+            .any(|event| matches!(event, Event::RemotePlayerSpawn(_)))
+    );
+    projection_reset_wire(&mut state, observer, &expected);
+    // Capture consumes source reset even when this observer cannot queue it.
+    projection_reset_runtime(&mut state, ActorKey::Player(owner));
+    state.close_outbox(observer, CloseReason::PeerGone);
+    let closed = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        events_for(&closed, observer).contains(&projection_reset_remote_event(closed.tick, true))
+    );
+    assert!(
+        state
+            .take_outbox(observer, 512, 1_048_576)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !state
+            .settled_read()
+            .unwrap()
+            .runtime(ActorKey::Player(owner))
+            .unwrap()
+            .reset
+    );
+}
+
+fn projection_reset_companion_scene(
+    observer: bool,
+) -> (AuthorityState, CompanionId, Option<SessionKey>) {
+    let mut state = authority();
+    state.enable_source_player_restoration(1).unwrap();
+    seed_world(&mut state);
+    let id = companion_id(10);
+    state
+        .register_source_companion(
+            id,
+            ChunkPos::new(0, 0),
+            Some(CompanionBody {
+                id: SavePlayerId::from_bytes(id.bytes()),
+                dimension: 0,
+                position: [8.5, 65.0, 8.5],
+                yaw: 0.1,
+                pitch: 0.2,
+                inventory: Inventory::default(),
+            }),
+        )
+        .unwrap();
+    let session = observer.then(|| login(&mut state, 1, "Ada", [0.5, 65.0, 0.5], 0.0, 0.0));
+    (state, id, session)
+}
+
+fn projection_reset_companion_event(tick: u64, id: CompanionId, reset: bool) -> Event {
+    Event::CompanionStates(
+        CompanionStates::try_new(mornlea_domain::CompanionStatesParts {
+            server_tick: tick,
+            states: vec![
+                mornlea_domain::CompanionState::try_new(mornlea_domain::CompanionStateParts {
+                    id,
+                    dimension: Dimension::OVERWORLD,
+                    position: FiniteVec3::try_new([8.5, 65.0, 8.5]).unwrap(),
+                    look: look(0.1, 0.2),
+                    reset,
+                })
+                .unwrap(),
+            ]
+            .into_boxed_slice(),
+        })
+        .unwrap(),
+    )
+}
+
+#[test]
+fn projection_actor_reset_companion_captured_once() {
+    let (mut state, id, observer) = projection_reset_companion_scene(true);
+    let observer = observer.unwrap();
+    let activation = state.advance_tick(TickBudget::full()).unwrap();
+    let events = events_for(&activation, observer);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::CompanionSpawn(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::CompanionStates(_)))
+    );
+    assert!(
+        !state
+            .settled_read()
+            .unwrap()
+            .runtime(ActorKey::Companion(id))
+            .unwrap()
+            .reset
+    );
+    state.take_outbox(observer, 512, 1_048_576).unwrap();
+    projection_reset_runtime(&mut state, ActorKey::Companion(id));
+    let captured = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = projection_reset_companion_event(captured.tick, id, true);
+    let events = events_for(&captured, observer);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::CompanionStates(_)))
+            .collect::<Vec<_>>(),
+        vec![&expected]
+    );
+    assert!(
+        !state
+            .settled_read()
+            .unwrap()
+            .runtime(ActorKey::Companion(id))
+            .unwrap()
+            .reset
+    );
+    projection_reset_wire(&mut state, observer, &expected);
+    let following = state.advance_tick(TickBudget::full()).unwrap();
+    let expected = projection_reset_companion_event(following.tick, id, false);
+    assert!(events_for(&following, observer).contains(&expected));
+    assert!(
+        !events_for(&following, observer)
+            .iter()
+            .any(|event| matches!(event, Event::CompanionSpawn(_)))
+    );
+    projection_reset_wire(&mut state, observer, &expected);
+}
+
+#[test]
+fn projection_actor_reset_activation_capture_controls() {
+    for with_observer in [false, true] {
+        let (mut state, id, observer) = projection_reset_companion_scene(with_observer);
+        let activation = state.advance_tick(TickBudget::full()).unwrap();
+        let read = state.settled_read().unwrap();
+        assert_eq!(
+            read.actor(ActorKey::Companion(id)).unwrap().lifecycle,
+            ActorLifecycle::Active
+        );
+        assert!(!read.runtime(ActorKey::Companion(id)).unwrap().reset);
+        if let Some(observer) = observer {
+            let events = events_for(&activation, observer);
+            let expected = Event::CompanionSpawn(
+                CompanionSpawn::try_new(CompanionSpawnParts {
+                    id,
+                    name: CompanionName::try_from_canonical(derived_name(id)).unwrap(),
+                    server_tick: activation.tick,
+                    dimension: Dimension::OVERWORLD,
+                    position: FiniteVec3::try_new([8.5, 65.0, 8.5]).unwrap(),
+                    look: look(0.1, 0.2),
+                })
+                .unwrap(),
+            );
+            assert!(events.contains(&expected));
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, Event::CompanionStates(_)))
+            );
+            projection_reset_wire(&mut state, observer, &expected);
+            let following = state.advance_tick(TickBudget::full()).unwrap();
+            assert!(
+                events_for(&following, observer).contains(&projection_reset_companion_event(
+                    following.tick,
+                    id,
+                    false
+                ))
+            );
+        } else {
+            assert!(activation.events.is_empty());
+            let following = state.advance_tick(TickBudget::full()).unwrap();
+            assert!(following.events.is_empty());
+            assert!(
+                !state
+                    .settled_read()
+                    .unwrap()
+                    .runtime(ActorKey::Companion(id))
+                    .unwrap()
+                    .reset
+            );
+        }
+    }
+}
