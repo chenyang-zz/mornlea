@@ -1185,10 +1185,9 @@ fn capacity_close_repack() {
     );
     assert_eq!(inventory_of(&context, actor), before);
 
-    // A close whose extended cells cannot repack refuses with the whole view
-    // unchanged (`TestCraftingCloseCommandRejectedWhenRepackImpossible`):
-    // the state is hook-constructed because no legal command path reaches
-    // it, mirroring the Go `SetPlayerCraftingGridForTest` setup.
+    // Automatic close cannot recover a corrupt repack invariant. The
+    // trusted setup is unreachable through legal commands; preserve every
+    // cell and propagate the source lifecycle's hard failure.
     let session = player_session(34, "stuck");
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
     let mut context = TickContext::harness(&mut state, TickBudget::full());
@@ -1202,11 +1201,12 @@ fn capacity_close_repack() {
     }
     let actor = scene(&mut context, session, inventory, ActorLifecycle::Dead);
     let stuck = inventory_of(&context, actor);
-    let report = drain(&mut context).expect("drain reports the refused close");
-    assert_eq!(report.examined, 1);
-    assert_eq!(report.applied, 0);
-    assert_eq!(report.carried, 0);
-    assert_eq!(report.rejected, 1, "the un-repackable close refuses");
+    assert_eq!(
+        drain(&mut context),
+        Err(ServerError::Internal {
+            invariant: "automatic workbench repack",
+        })
+    );
     assert_eq!(
         inventory_of(&context, actor),
         stuck,
@@ -2143,10 +2143,8 @@ fn bench_dimension_move_closes() {
 }
 
 #[test]
-fn bench_repack_impossible_keeps_anchor_and_sibling_closes() {
-    // The no-loss ruling for a close that cannot repack: the stuck bench
-    // keeps its grid, size and anchor with `rejected` counted and nothing
-    // staged, while the repackable sibling in the same pass still closes.
+fn bench_repack_impossible_is_hard_and_preserves_sibling() {
+    // An automatic close invariant failure stops the pass without losing items.
     let (stuck_session, sibling_session) = session_pair(67, 68);
     let mut state = AuthorityState::try_new(limits(), 7).expect("authority");
     let mut context = TickContext::harness(&mut state, TickBudget::full());
@@ -2199,14 +2197,13 @@ fn bench_repack_impossible_keeps_anchor_and_sibling_closes() {
         sibling_inventory,
         ActorLifecycle::Dead,
     );
-    let report = drain(&mut context).expect("drain closes what it can");
-    assert_eq!(report.examined, 2, "both bench sessions examined");
-    assert_eq!(report.applied, 1, "the repackable sibling closes");
-    assert_eq!(report.carried, 0);
     assert_eq!(
-        report.rejected, 1,
-        "the stuck bench stays open without loss"
+        drain(&mut context),
+        Err(mornlea_server::contracts::ServerError::Internal {
+            invariant: "automatic workbench repack",
+        })
     );
+    assert_eq!(inventory_of(&context, stuck), stuck_inventory);
     let kept = inventory_of(&context, stuck);
     assert_eq!(kept.crafting_size, CraftingSize::Workbench);
     for cell in 4..9 {
@@ -2221,13 +2218,7 @@ fn bench_repack_impossible_keeps_anchor_and_sibling_closes() {
         Some(BlockPos::new(0, 63, 0)),
         "the refused close keeps the anchor"
     );
-    let closed = inventory_of(&context, sibling);
-    assert_eq!(closed.crafting_size, CraftingSize::Personal);
-    assert_eq!(
-        closed.crafting[4],
-        ItemStack::default(),
-        "the sibling reclaims its extended cell"
-    );
+    assert_eq!(inventory_of(&context, sibling), sibling_inventory);
 }
 
 #[test]
@@ -2682,4 +2673,76 @@ fn bench_sneaking_raw_compatibility_preserves_grid_anchor_and_lease() {
     assert_eq!(inventory_of(&context, actor), inventory);
     assert_eq!(anchor_of(&context, actor), anchor);
     assert_eq!(context.read().viewer(session), lease);
+}
+
+fn raw_automatic_repack_failure(lifecycle: ActorLifecycle, missing_environment: bool) {
+    let session = player_session(113, "automatic-close");
+    let mut state = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let actor = ActorKey::Player(session);
+    if !missing_environment {
+        context
+            .stage(RuleEffect::Environment(environment()))
+            .unwrap();
+    }
+    context
+        .stage(RuleEffect::Actor(player_actor(
+            session,
+            [0.5, 64.0, 0.5],
+            0.0,
+            0.0,
+            lifecycle,
+        )))
+        .unwrap();
+    let anchor = BlockPos::new(0, 63, 0);
+    context
+        .stage(RuleEffect::Runtime(ActorRuntime {
+            key: actor,
+            controls: None,
+            has_view: false,
+            reset: false,
+            attack_cooldown: 0,
+            hurt_cooldown: 0,
+            burn_cooldown: 0,
+            oxygen: 300,
+            peak_y: 64.0,
+            exhaustion_milli: 0,
+            saturation_milli: 5_000,
+            since_damage_ticks: 0,
+            drown_ticks: 0,
+            starvation_ticks: 0,
+            eating: None,
+            bow: None,
+            path: None,
+            aux: ActorAux::Player {
+                respawn: None,
+                workbench: Some(anchor),
+            },
+        }))
+        .unwrap();
+    let mut inventory = InventoryRecord::empty();
+    inventory.crafting_size = CraftingSize::Workbench;
+    inventory.slots.fill(stack(ITEM_STONE, 64));
+    inventory.crafting[4] = stack(ITEM_OAK_LOG, 64);
+    context.preload_inventory(actor, inventory);
+    let events = context.events().len();
+    assert_eq!(
+        drain(&mut context),
+        Err(mornlea_server::contracts::ServerError::Internal {
+            invariant: "automatic workbench repack",
+        })
+    );
+    assert_eq!(inventory_of(&context, actor), inventory);
+    assert_eq!(anchor_of(&context, actor), Some(anchor));
+    assert_eq!(context.events().len(), events);
+}
+
+#[test]
+fn automatic_close_dead_repack_is_hard() {
+    raw_automatic_repack_failure(ActorLifecycle::Dead, false);
+}
+
+#[test]
+fn automatic_close_without_environment_repack_is_hard() {
+    raw_automatic_repack_failure(ActorLifecycle::Active, true);
 }

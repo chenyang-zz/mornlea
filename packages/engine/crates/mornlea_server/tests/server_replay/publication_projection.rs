@@ -5549,3 +5549,6 @@ mod mining_lifecycle;
 
 #[path = "publication_bench_eligibility.rs"]
 mod bench_eligibility;
+
+#[path = "publication_bench_close.rs"]
+mod bench_close;

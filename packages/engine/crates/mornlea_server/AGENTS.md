@@ -720,7 +720,10 @@ separate caller responsibilities.
   the projection republishes each complete owner family once even on a
   settle-back round trip. Refused commands and generic staging mark nothing.
   Successful bench open/reopen marks only the crafting identity; ordinary
-  lifecycle close relies on the final owner record projection.
+  explicit and automatic bench close mark both owner records after atomic
+  staging, including an unchanged pack. An impossible automatic repack
+  propagates an internal failure to the sticky failed-tick owner before later
+  actors settle; explicit command close retains ordinary wire refusal.
 - `src/rules/farmland.rs` owns bounded moisture checks on the `Farmland`
   phase: one check per candidate, the 162-read neighborhood reservation
   before any scan, events staged before rescan work, x-fastest/z/y cursor

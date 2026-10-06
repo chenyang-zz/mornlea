@@ -141,3 +141,7 @@ crafting legality, re-open overwrite (not idempotent skip), and the
 lease-clear/lease-preserve asymmetry are explicitly covered above. Death and
 disconnect repack-first remain owner-gated constraints for 2.7c2 and session
 lifecycle, not acceptance of this node.
+
+## Verified source close outcome correction
+
+Packet129 supersedes only the historical repack-impossible continuation ruling: verified Go automatic close failure is an internal invariant panic, so Rust propagates typed Internal to the accepted sticky failed-tick owner and stops later actors while preserving all content. Successful explicit/automatic close also retains source inventory/crafting dirty intent after atomic stage, including an empty extended grid. Explicit failed close remains ordinary wire InvalidInput. Original source history and accepted anchor/output scopes remain recorded.

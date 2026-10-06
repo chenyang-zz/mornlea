@@ -1234,8 +1234,8 @@ fn advance(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport
     // close exactly as before; Active actors run the staged anchor against
     // the chunk, block and reach gates. A bench with no staged anchor keeps
     // the lapsed-only behavior: there is nothing to invalidate. A close the
-    // grid cannot repack keeps the bench open with `rejected` counted and
-    // nothing staged, which is the no-loss property the Go close guards.
+    // grid cannot repack stages nothing and stops the caller with a hard
+    // invariant failure, preserving contents without settling later actors.
     let mut bench: Vec<ActorKey> = ctx
         .read()
         .actors()
@@ -1254,11 +1254,8 @@ fn advance(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport
         examined += 1;
         let basis = ctx.read().actor(actor).cloned();
         let Some(record) = basis.filter(|record| record.lifecycle == ActorLifecycle::Active) else {
-            if close_bench(ctx, actor) {
-                applied += 1;
-            } else {
-                rejected += 1;
-            }
+            close_bench(ctx, actor)?;
+            applied += 1;
             continue;
         };
         let anchored = match ctx.read().runtime(actor) {
@@ -1274,11 +1271,8 @@ fn advance(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport
         let Some(environment) = ctx.read().environment().cloned() else {
             // Without tunables the reach check cannot run, so the bench
             // fails closed exactly like a failed block lookup.
-            if close_bench(ctx, actor) {
-                applied += 1;
-            } else {
-                rejected += 1;
-            }
+            close_bench(ctx, actor)?;
+            applied += 1;
             continue;
         };
         let position = record.motion.position().get();
@@ -1296,11 +1290,8 @@ fn advance(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseReport
         ) {
             continue;
         }
-        if close_bench(ctx, actor) {
-            applied += 1;
-        } else {
-            rejected += 1;
-        }
+        close_bench(ctx, actor)?;
+        applied += 1;
     }
     Ok(PhaseReport {
         examined,
@@ -1514,20 +1505,24 @@ fn anchor_valid(
 /// pack through the pickup order and the grid returns to the personal size,
 /// the exact `closeWorkbench` row over `repackCraftingSlots`
 /// (`packages/server/sim/entity/crafting.go`). A cell that cannot fully
-/// credit refuses the close with the whole view unchanged, which is the
-/// accepted post-repack invalidation gate in reverse: the close never
-/// strands grid content, and the caller keeps the bench open on a refusal.
-fn close_bench(ctx: &mut TickContext<'_>, actor: ActorKey) -> bool {
-    let Some(before) = ctx.read().inventory(actor).copied() else {
-        return false;
+/// credit preserves the whole view and propagates a hard invariant failure.
+/// The failed-tick owner fences publication and capture instead of allowing
+/// the automatic lifecycle to continue with a stranded grid.
+fn close_bench(ctx: &mut TickContext<'_>, actor: ActorKey) -> Result<(), ServerError> {
+    let failure = ServerError::Internal {
+        invariant: "automatic workbench repack",
     };
+    let before = ctx.read().inventory(actor).copied().ok_or(failure)?;
     if before.crafting_size != CraftingSize::Workbench {
-        return false;
+        return Err(failure);
     }
-    let Some(after) = closed_inventory(before) else {
-        return false;
-    };
-    stage_patch(ctx, actor, before, after).is_ok()
+    let after = closed_inventory(before).ok_or(failure)?;
+    stage_patch(ctx, actor, before, after).map_err(|_| failure)?;
+    // Source close marks both owner records even when the pack is unchanged.
+    if let ActorKey::Player(session) = actor {
+        ctx.record_crafting_command_publication_dirty(session);
+    }
+    Ok(())
 }
 
 /// Previews only the extended bench cells before returning to a personal grid.

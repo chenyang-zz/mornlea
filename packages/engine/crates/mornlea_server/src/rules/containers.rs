@@ -37,8 +37,8 @@
 /// record immediately, and close removes it; the reducer commits the set and
 /// prunes retired sessions. Publication owns later reach invalidation.
 use mornlea_domain::{
-    BlockPos, Command, CommandEnvelope, ContainerKind, ContainerMove, ContainerRef, Dimension,
-    LookAngles, PartialMove, RejectReason, StackSource, StackView,
+    BlockPos, Command, CommandEnvelope, ContainerKind, ContainerMove, ContainerRef, CraftingSize,
+    Dimension, LookAngles, PartialMove, RejectReason, StackSource, StackView,
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
@@ -385,7 +385,9 @@ fn settle_open(
 fn settle_close(ctx: &mut TickContext<'_>, session: SessionKey) -> Result<bool, RuleReject> {
     let actor = ActorKey::Player(session);
     let mut effects = Vec::with_capacity(2);
+    let mut was_workbench = false;
     if let Some(before) = ctx.read().inventory(actor).copied() {
+        was_workbench = before.crafting_size == CraftingSize::Workbench;
         let after = crafting::closed_inventory(before)
             .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
         if after != before {
@@ -399,6 +401,10 @@ fn settle_close(ctx: &mut TickContext<'_>, session: SessionKey) -> Result<bool, 
         view: None,
     });
     ctx.stage(RuleEffect::Compound(effects))?;
+    // Retain source close intent only after inventory and lease settle together.
+    if was_workbench {
+        ctx.record_crafting_command_publication_dirty(session);
+    }
     Ok(true)
 }
 
