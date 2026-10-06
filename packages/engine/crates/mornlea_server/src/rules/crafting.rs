@@ -1378,6 +1378,16 @@ pub(crate) fn settle_bench_open(
     if hit.observed.block != WORKBENCH_BLOCK {
         return OpenOutcome::Refused;
     }
+    // Classify the target first; current held sneaking refuses without
+    // ending a prior view or recording a successful grid-open intent.
+    if ctx
+        .read()
+        .runtime(actor)
+        .and_then(|runtime| runtime.controls)
+        .is_some_and(|controls| controls.actions().sneaking)
+    {
+        return OpenOutcome::Refused;
+    }
     let mut after = before;
     after.crafting_size = CraftingSize::Workbench;
     let mut runtime = match anchor_base(&ctx.read(), actor) {

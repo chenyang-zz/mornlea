@@ -2631,3 +2631,55 @@ fn crafting_stack_partial_repeated_settlement_reads_current_source() {
     after.crafting[0] = stack(ITEM_DIRT, 4);
     assert_eq!(inventory_of(&context, actor), after);
 }
+
+#[test]
+fn bench_sneaking_raw_compatibility_preserves_grid_anchor_and_lease() {
+    let session = player_session(112, "sneaking-bench");
+    let mut state = AuthorityState::try_new(limits(), 7).unwrap();
+    let mut context = TickContext::harness(&mut state, TickBudget::full());
+    let actor = scene(
+        &mut context,
+        session,
+        InventoryRecord::empty(),
+        ActorLifecycle::Active,
+    );
+    context.preload_ready_chunk(ready_chunk(
+        overworld_key(BlockPos::new(0, 63, 0)),
+        &[
+            (BlockPos::new(0, 65, 0), AIR),
+            (BlockPos::new(0, 64, 0), AIR),
+            (BlockPos::new(0, 63, 0), WORKBENCH_BLOCK),
+        ],
+    ));
+    admit(&mut context, &open_down(session, 1)).unwrap();
+    drain(&mut context).unwrap();
+    let mut runtime = context.read().runtime(actor).unwrap().clone();
+    runtime.controls = Some(mornlea_domain::PlayerControl::new(
+        mornlea_domain::PlayerControlParts {
+            movement: mornlea_domain::Movement {
+                move_x: 0,
+                move_z: 0,
+                jump: false,
+            },
+            look: LookAngles::try_new(0.0, -FRAC_PI_2).unwrap(),
+            actions: mornlea_domain::HeldActions {
+                primary: false,
+                eating: false,
+                sprinting: false,
+                sneaking: true,
+            },
+        },
+    ));
+    context.stage(RuleEffect::Runtime(runtime)).unwrap();
+    stage_lease(&mut context, session);
+    let inventory = inventory_of(&context, actor);
+    let anchor = anchor_of(&context, actor);
+    let lease = context.read().viewer(session);
+    admit(&mut context, &open_down(session, 2)).unwrap();
+    let report = drain(&mut context).unwrap();
+    assert_eq!(report.examined, 3);
+    assert_eq!((report.applied, report.carried, report.rejected), (0, 0, 2));
+    assert_eq!(inventory_of(&context, actor), inventory);
+    assert_eq!(anchor_of(&context, actor), anchor);
+    assert_eq!(context.read().viewer(session), lease);
+}

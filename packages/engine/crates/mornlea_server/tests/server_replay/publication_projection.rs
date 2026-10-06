@@ -5546,3 +5546,6 @@ mod command_lifecycle;
 
 #[path = "publication_mining_lifecycle.rs"]
 mod mining_lifecycle;
+
+#[path = "publication_bench_eligibility.rs"]
+mod bench_eligibility;

@@ -711,14 +711,16 @@ separate caller responsibilities.
   ingredient, and one whole-record patch per settlement — take refuses
   before staging on full output or failed repack rehearsal, close repacks
   or refuses. The command-close grid-size drop belongs to the container
-  provider's `CloseContainer`; the bench-anchor recheck arm waits for a
-  contract surface that can express the anchor. Accepted `MoveCrafting` and
+  provider's `CloseContainer`; crafting owns the late bench-anchor recheck.
+  The shared atomic bench-open arm classifies the target before checking
+  current held sneaking; refusal preserves grid, anchor, lease and intent. Accepted `MoveCrafting` and
   `TakeCraftingOutput` settlements reuse the tick-local owner-only dirty
   publication lanes after their whole-record patch stages: one recorder call
   marks both the owner inventory state and the private crafting identity, so
   the projection republishes each complete owner family once even on a
-  settle-back round trip. Refused commands, generic staging and the lifecycle
-  open/close mark nothing; other crafting writers remain future work.
+  settle-back round trip. Refused commands and generic staging mark nothing.
+  Successful bench open/reopen marks only the crafting identity; ordinary
+  lifecycle close relies on the final owner record projection.
 - `src/rules/farmland.rs` owns bounded moisture checks on the `Farmland`
   phase: one check per candidate, the 162-read neighborhood reservation
   before any scan, events staged before rescan work, x-fastest/z/y cursor
