@@ -707,6 +707,24 @@ fn admit_command(
             }
             return Ok(());
         }
+        command
+            if matches!(command, Command::MoveInventory(_) | Command::EquipArmor)
+                || matches!(command, Command::MovePartial(partial) if partial.view() == mornlea_domain::StackView::Inventory)
+                || matches!(command, Command::QuickMove(source) if source.view() == mornlea_domain::StackView::Inventory) =>
+        {
+            match inventory::admit_command(context, envelope)? {
+                CommandDisposition::Settled(_) => {}
+                CommandDisposition::Refused(reason) => {
+                    context.record_command_rejection(envelope, reason, RejectionStage::Admission)?
+                }
+                CommandDisposition::Unowned => {
+                    return Err(ServerError::Internal {
+                        invariant: "inventory command owner",
+                    });
+                }
+            }
+            return Ok(());
+        }
         Command::SelectHotbar(_) => {
             // Actors retain the admission-time selection; this envelope settles
             // in prefix order with drops and other deferred interactions.

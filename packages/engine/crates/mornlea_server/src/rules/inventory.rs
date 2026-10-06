@@ -19,13 +19,14 @@
 //! the duplicate-visible rows at this boundary are the idempotent re-select
 //! and the source-empty refusal.
 
-use mornlea_domain::{Command, StackView};
+use mornlea_domain::{Command, CommandEnvelope, RejectReason, StackView};
 use mornlea_storage::ItemStack;
 
 use crate::contracts::{
-    ActorKey, DamageCause, InventoryPatch, InventoryRecord, PhaseReport, RuleCall, RuleEffect,
-    RulePhase, ServerError, SessionKey,
+    ActorKey, ActorLifecycle, DamageCause, InventoryPatch, InventoryRecord, PhaseReport, RuleCall,
+    RuleEffect, RulePhase, ServerError, SessionKey,
 };
+use crate::core::command_outcome::{CommandDisposition, CommandResult};
 use crate::state::TickContext;
 
 /// Hotbar length inside the unified inventory (`core.HotbarSlots`,
@@ -359,6 +360,55 @@ fn equip_armor(record: &mut InventoryRecord) -> bool {
     true
 }
 
+/// Owns immediate inventory families at live admission. Raw provider callers
+/// may hold inventory without an actor; live admission requires an active owner.
+pub(crate) fn admit_command(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+) -> CommandResult {
+    let owned = match envelope.command() {
+        Command::MoveInventory(_) | Command::EquipArmor => true,
+        Command::MovePartial(partial) => partial.view() == StackView::Inventory,
+        Command::QuickMove(source) => source.view() == StackView::Inventory,
+        _ => false,
+    };
+    if !owned {
+        return Ok(CommandDisposition::Unowned);
+    }
+    let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+        invariant: "inventory admission session",
+    })?;
+    let actor = ActorKey::Player(session);
+    if !ctx
+        .read()
+        .actor(actor)
+        .is_some_and(|record| record.lifecycle == ActorLifecycle::Active)
+    {
+        return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady));
+    }
+    let before = *ctx.read().inventory(actor).ok_or(ServerError::Internal {
+        invariant: "inventory admission owner",
+    })?;
+    settle_owned(ctx, envelope, session, before)
+}
+
+/// A patch failure describes trusted ownership, not a client move refusal.
+fn stage_inventory_change(
+    ctx: &mut TickContext<'_>,
+    actor: ActorKey,
+    before: InventoryRecord,
+    after: InventoryRecord,
+) -> Result<(), ServerError> {
+    let patch =
+        InventoryPatch::try_new(actor, before, after).map_err(|_| ServerError::Internal {
+            invariant: "inventory patch",
+        })?;
+    ctx.stage(RuleEffect::Inventory(patch))
+        .map_err(|_| ServerError::Internal {
+            invariant: "inventory staging",
+        })
+}
+
 /// Settles one inventory or armor player command and stages exactly one
 /// whole-record inventory effect for every state change. The envelope's
 /// session is the sole identity source for the player-command phase; a
@@ -378,6 +428,22 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
         .read()
         .inventory(actor)
         .ok_or(ServerError::InvalidInput { field: "session" })?;
+    match settle_owned(ctx, envelope, session, before)? {
+        CommandDisposition::Settled(report) => Ok(report),
+        CommandDisposition::Refused(_) => Err(ServerError::InvalidInput { field: "inventory" }),
+        CommandDisposition::Unowned => Err(ServerError::InvalidInput { field: "command" }),
+    }
+}
+
+/// Shared settlement keeps semantic refusal separate from patch ownership and
+/// preserves dirty intent, including an accepted equal armor swap.
+fn settle_owned(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+    session: SessionKey,
+    before: InventoryRecord,
+) -> CommandResult {
+    let actor = ActorKey::Player(session);
     let mut after = before;
     let settled = match envelope.command() {
         // The select settlement writes only on a real change and never
@@ -405,16 +471,19 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
         }
         // Every other command kind, and the crafting and container stack
         // views, belong to their own providers: refuse without effect.
-        _ => return Err(ServerError::InvalidInput { field: "command" }),
+        _ => return Ok(CommandDisposition::Unowned),
     };
     if !settled {
-        return Err(ServerError::InvalidInput { field: "inventory" });
+        return Ok(CommandDisposition::Refused(
+            if matches!(envelope.command(), Command::EquipArmor) {
+                RejectReason::NotArmor
+            } else {
+                RejectReason::InvalidInput
+            },
+        ));
     }
     if after != before {
-        let patch = InventoryPatch::try_new(actor, before, after)
-            .map_err(|_| ServerError::InvalidInput { field: "inventory" })?;
-        ctx.stage(RuleEffect::Inventory(patch))
-            .map_err(|_| ServerError::InvalidInput { field: "inventory" })?;
+        stage_inventory_change(ctx, actor, before, after)?;
     }
     // The owner publication lane follows the Go tick row: every accepted
     // settlement that staged a changed patch marks the owner dirty, and an
@@ -425,10 +494,62 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
     if after != before || matches!(envelope.command(), Command::EquipArmor) {
         ctx.record_inventory_publication_dirty(session);
     }
-    Ok(PhaseReport {
+    Ok(CommandDisposition::Settled(PhaseReport {
         examined: 1,
         applied: 1,
         carried: 0,
         rejected: 0,
-    })
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contracts::{ServerLimits, TickBudget};
+    use crate::state::AuthorityState;
+    use mornlea_domain::{HostileId, HotbarSlot};
+
+    fn authority() -> AuthorityState {
+        AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn inventory_stale_patch_remains_hard_and_preserves_current_owner() {
+        let mut authority = authority();
+        let mut context = TickContext::harness(&mut authority, TickBudget::full());
+        let actor = ActorKey::Player(SessionKey::from_raw(1).unwrap());
+        let before = InventoryRecord::empty();
+        let current = before.with_selected(HotbarSlot::new(2).unwrap());
+        let after = before.with_selected(HotbarSlot::new(1).unwrap());
+        context.preload_inventory(actor, current);
+        assert_eq!(
+            stage_inventory_change(&mut context, actor, before, after),
+            Err(ServerError::Internal {
+                invariant: "inventory staging"
+            })
+        );
+        assert_eq!(context.read().inventory(actor), Some(&current));
+        assert!(context.events().is_empty());
+    }
+
+    #[test]
+    fn inventory_non_owner_patch_remains_hard_before_staging() {
+        let mut authority = authority();
+        let mut context = TickContext::harness(&mut authority, TickBudget::full());
+        let actor = ActorKey::Hostile(HostileId::try_new(1).unwrap());
+        let before = InventoryRecord::empty();
+        let after = before.with_selected(HotbarSlot::new(1).unwrap());
+        assert_eq!(
+            stage_inventory_change(&mut context, actor, before, after),
+            Err(ServerError::Internal {
+                invariant: "inventory patch"
+            })
+        );
+        assert_eq!(context.read().inventory(actor), None);
+        assert!(context.events().is_empty());
+    }
 }

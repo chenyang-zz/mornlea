@@ -1102,3 +1102,250 @@ fn native_input_refusal_clears_prepared_bow_and_mining_without_release() {
     assert_eq!(native_input_ack(&tick, owner), 1);
     assert_input_refusals(&tick, owner, other, &[1]);
 }
+
+fn prepared_inventory_outcome(
+    state: &mut AuthorityState,
+    owner: SessionKey,
+    edit: impl FnOnce(&mut mornlea_server::contracts::InventoryRecord),
+) {
+    // Inventory is prepared; the following command and publication consumers are real.
+    stage(state, |context| {
+        let actor = ActorKey::Player(owner);
+        let mut inventory = *context.read().inventory(actor).unwrap();
+        edit(&mut inventory);
+        context.preload_inventory(actor, inventory);
+    });
+    state.advance_tick(TickBudget::full()).unwrap();
+}
+
+fn assert_inventory_outcome_refusal(
+    tick: &mornlea_server::contracts::TickPublication,
+    owner: SessionKey,
+    other: SessionKey,
+    sequence: u64,
+    reason: mornlea_domain::RejectReason,
+) {
+    let expected = Event::CommandRejected(mornlea_domain::CommandRejection::new(sequence, reason));
+    let events = events_for(tick, owner);
+    assert_eq!(events.first(), Some(&expected));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::CommandRejected(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !events_for(tick, other)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+    assert_eq!(native_input_ack(tick, owner), 0);
+}
+
+fn inventory_outcome_moves(from: u8, to: u8) -> [Command; 4] {
+    [
+        Command::MoveInventory(mornlea_domain::InventoryMove::try_new(from, to).unwrap()),
+        Command::MovePartial(PartialMove::try_new(StackView::Inventory, from, to, false).unwrap()),
+        Command::MovePartial(PartialMove::try_new(StackView::Inventory, from, to, true).unwrap()),
+        Command::QuickMove(StackSource::try_new(StackView::Inventory, from).unwrap()),
+    ]
+}
+
+#[test]
+fn native_inventory_outcome_empty_sources() {
+    for command in inventory_outcome_moves(5, 6) {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        let before = record(&state, owner);
+        submit(&mut state, owner, 1, command);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(record(&state, owner), before);
+        assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+        assert_inventory_outcome_refusal(
+            &tick,
+            owner,
+            other,
+            1,
+            mornlea_domain::RejectReason::InvalidInput,
+        );
+    }
+}
+
+#[test]
+fn native_inventory_outcome_full_destinations() {
+    for command in inventory_outcome_moves(0, 9) {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        prepared_inventory_outcome(&mut state, owner, |inventory| {
+            inventory.slots[0] = storage(ITEM_DIRT, 5);
+            for slot in &mut inventory.slots[9..] {
+                *slot = storage(ITEM_DIRT, 64);
+            }
+        });
+        let before = record(&state, owner);
+        submit(&mut state, owner, 1, command);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(record(&state, owner), before);
+        assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+        assert_inventory_outcome_refusal(
+            &tick,
+            owner,
+            other,
+            1,
+            mornlea_domain::RejectReason::InvalidInput,
+        );
+    }
+}
+
+#[test]
+fn native_inventory_outcome_equip_not_armor() {
+    for empty in [false, true] {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        if empty {
+            prepared_inventory_outcome(&mut state, owner, |inventory| {
+                inventory.selected = HotbarSlot::new(8).unwrap();
+            });
+        }
+        let before = record(&state, owner);
+        submit(&mut state, owner, 1, Command::EquipArmor);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(record(&state, owner), before);
+        assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+        assert_inventory_outcome_refusal(
+            &tick,
+            owner,
+            other,
+            1,
+            mornlea_domain::RejectReason::NotArmor,
+        );
+    }
+}
+
+#[test]
+fn native_inventory_outcome_refusal_then_success_retains_prefix() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    prepared_inventory_outcome(&mut state, owner, |inventory| {
+        inventory.slots[0] = storage(ITEM_DIRT, 5);
+    });
+    let mut expected = record(&state, owner);
+    expected.slots[0] = StorageStack::default();
+    expected.slots[9] = storage(ITEM_DIRT, 5);
+    submit(&mut state, owner, 1, inventory_outcome_moves(5, 6)[0]);
+    submit(&mut state, owner, 2, inventory_outcome_moves(0, 9)[0]);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), expected);
+    assert_eq!(state.session(owner).unwrap().last_applied_sequence, 2);
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)).len(),
+        1
+    );
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+    assert_inventory_outcome_refusal(
+        &tick,
+        owner,
+        other,
+        1,
+        mornlea_domain::RejectReason::InvalidInput,
+    );
+    submit(&mut state, owner, 1, inventory_outcome_moves(5, 6)[0]);
+    let stale = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(projection_inventory_states(&events_for(&stale, owner)).is_empty());
+    assert!(
+        !events_for(&stale, owner)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+    assert_eq!(record(&state, owner), expected);
+}
+
+#[test]
+fn native_inventory_outcome_partial_never_swaps() {
+    for whole in [false, true] {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        prepared_inventory_outcome(&mut state, owner, |inventory| {
+            inventory.slots[0] = storage(ITEM_DIRT, 5);
+            inventory.slots[9] = storage(1, 3);
+        });
+        let mut expected = record(&state, owner);
+        let command = inventory_outcome_moves(0, 9)[if whole { 0 } else { 1 }];
+        submit(&mut state, owner, 1, command);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        if whole {
+            expected.slots.swap(0, 9);
+            assert_eq!(record(&state, owner), expected);
+            assert_eq!(
+                projection_inventory_states(&events_for(&tick, owner)).len(),
+                1
+            );
+            assert!(
+                !events_for(&tick, owner)
+                    .iter()
+                    .any(|event| matches!(event, Event::CommandRejected(_)))
+            );
+            assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+        } else {
+            assert_eq!(record(&state, owner), expected);
+            assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+            assert_inventory_outcome_refusal(
+                &tick,
+                owner,
+                other,
+                1,
+                mornlea_domain::RejectReason::InvalidInput,
+            );
+        }
+    }
+}
+
+#[test]
+fn native_inventory_outcome_absorption_and_equal_equip_succeed() {
+    for mode in 0..3 {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        prepared_inventory_outcome(&mut state, owner, |inventory| {
+            if mode == 2 {
+                let helmet = StorageStack {
+                    item: 58,
+                    count: 1,
+                    durability: 165,
+                };
+                inventory.slots[0] = helmet;
+                inventory.armor[0] = helmet;
+            } else {
+                inventory.slots[0] = storage(ITEM_DIRT, 5);
+                if mode == 0 {
+                    for slot in &mut inventory.slots[9..] {
+                        *slot = storage(1, 64);
+                    }
+                    inventory.slots[9] = storage(ITEM_DIRT, 63);
+                }
+            }
+        });
+        let mut expected = record(&state, owner);
+        let command = match mode {
+            0 => {
+                expected.slots[0] = storage(ITEM_DIRT, 4);
+                expected.slots[9] = storage(ITEM_DIRT, 64);
+                inventory_outcome_moves(0, 9)[3]
+            }
+            1 => {
+                expected.slots[0] = storage(ITEM_DIRT, 2);
+                expected.slots[9] = storage(ITEM_DIRT, 3);
+                inventory_outcome_moves(0, 9)[1]
+            }
+            _ => Command::EquipArmor,
+        };
+        submit(&mut state, owner, 1, command);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(record(&state, owner), expected);
+        assert_eq!(
+            projection_inventory_states(&events_for(&tick, owner)).len(),
+            1
+        );
+        assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+        assert!(
+            !events_for(&tick, owner)
+                .iter()
+                .any(|event| matches!(event, Event::CommandRejected(_)))
+        );
+        assert_eq!(native_input_ack(&tick, owner), 0);
+    }
+}

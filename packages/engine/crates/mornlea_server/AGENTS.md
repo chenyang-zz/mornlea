@@ -1229,3 +1229,11 @@ retains its motion tombstone, clears held action progress and emits one ordered
 owner-only refusal. Only explicit control validation becomes a wire refusal;
 reservation, runtime initialization and staging errors remain hard failures.
 The public raw motion provider retains its established return contract.
+
+Immediate whole, partial and quick inventory moves and armor equip consume
+typed inventory admission outcomes. Semantic helper refusals preserve their
+source wire reasons; patch identity and staging failures remain hard errors.
+The raw provider shares settlement while retaining actor-free inventory fixtures
+and its semantic error shape. Late hotbar selection keeps its separate schedule
+and does not repeat an Active gate after combat. Accepted equal armor swaps
+retain publication intent even when the complete inventory record is unchanged.
