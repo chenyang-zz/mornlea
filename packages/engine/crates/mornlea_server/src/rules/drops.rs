@@ -4,6 +4,7 @@
 //! provider debits authoritative player stacks and transfers existing world
 //! quantities into active inventories through the accepted staging contract.
 
+use crate::core::command_outcome::{CommandDisposition, CommandResult};
 use crate::core::contracts::{
     ActorKey, ActorLifecycle, ChunkKey, DropBatch, DropSource, InventoryPatch, PhaseReport,
     Resource, RuleCall, RuleEffect, RulePhase, RuleReject, ServerError, SessionKey,
@@ -198,15 +199,6 @@ impl PlayerDropFailure {
     }
 }
 
-pub(crate) fn prepare_player_drop(
-    ctx: &TickContext<'_>,
-    session: SessionKey,
-    sequence: u64,
-    stack: ItemStack,
-) -> Result<DropBatch, RuleReject> {
-    prepare_player_drop_checked(ctx, session, sequence, stack).map_err(PlayerDropFailure::into_raw)
-}
-
 /// Prepare one foot-position output without debiting its source. Container
 /// settlement reuses this check, then atomically stages its own source debit.
 pub(crate) fn prepare_player_drop_checked(
@@ -215,10 +207,21 @@ pub(crate) fn prepare_player_drop_checked(
     sequence: u64,
     stack: ItemStack,
 ) -> Result<DropBatch, PlayerDropFailure> {
+    prepare_player_drop_inner(ctx, session, sequence, stack, true)
+}
+
+// Panel settlement uses current state after admission; recovery does not repeat its Active gate.
+fn prepare_player_drop_inner(
+    ctx: &TickContext<'_>,
+    session: SessionKey,
+    sequence: u64,
+    stack: ItemStack,
+    require_active: bool,
+) -> Result<DropBatch, PlayerDropFailure> {
     let view = ctx.read();
     let actor = view
         .actor(ActorKey::Player(session))
-        .filter(|actor| actor.lifecycle == ActorLifecycle::Active)
+        .filter(|actor| !require_active || actor.lifecycle == ActorLifecycle::Active)
         .ok_or(PlayerDropFailure::Refused(RejectReason::PlayerNotReady))?;
     let origin = actor.motion.position();
     // Check in f64 before narrowing: the f32 representation of i32::MAX
@@ -260,32 +263,134 @@ pub(crate) fn prepare_player_drop_checked(
     Ok(batch)
 }
 
-/// Settle one admitted player's selected or inline panel drop. The current
-/// source is read at settlement, so preceding commands cannot mint stale items.
+/// Preserve the typed raw drop contract while the live adapter retains provenance.
 pub fn settle_command(
     ctx: &mut TickContext<'_>,
     envelope: &CommandEnvelope,
 ) -> Result<PhaseReport, RuleReject> {
-    let session = SessionKey::from_raw(envelope.session())
-        .ok_or(RuleReject::Wire(RejectReason::InvalidInput))?;
+    settle_owned(ctx, envelope, true).map_err(PlayerDropFailure::into_raw)
+}
+
+fn owns_inline(command: Command) -> bool {
+    matches!(command, Command::DropSelectedItem)
+        || matches!(command, Command::DropStack(source)
+            if matches!(source.view(), StackView::Inventory | StackView::Crafting))
+}
+
+/// Live owner absence is an invariant; lifecycle refusal remains ordinary.
+fn check_inline_owner(
+    ctx: &TickContext<'_>,
+    envelope: &CommandEnvelope,
+    require_active: bool,
+) -> Result<bool, ServerError> {
+    let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+        invariant: "inline drop session",
+    })?;
+    let actor = ActorKey::Player(session);
+    let view = ctx.read();
+    let Some(record) = view.actor(actor) else {
+        return if require_active {
+            Ok(false)
+        } else {
+            Err(ServerError::Internal {
+                invariant: "inline drop owner",
+            })
+        };
+    };
+    if require_active && record.lifecycle != ActorLifecycle::Active {
+        return Ok(false);
+    }
+    if view.inventory(actor).is_none() {
+        return Err(ServerError::Internal {
+            invariant: "inline drop owner",
+        });
+    }
+    Ok(true)
+}
+
+/// Cheap grid extent validation precedes actors; debits wait for Interaction.
+pub(crate) fn admit_inline(ctx: &mut TickContext<'_>, envelope: &CommandEnvelope) -> CommandResult {
+    if !owns_inline(envelope.command()) {
+        return Ok(CommandDisposition::Unowned);
+    }
+    if !check_inline_owner(ctx, envelope, true)? {
+        return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady));
+    }
+    if let Command::DropStack(source) = envelope.command()
+        && source.view() == StackView::Crafting
+        && source.slot() < 9
+    {
+        let session = SessionKey::from_raw(envelope.session()).expect("checked session");
+        let extent = grid_extent(
+            ctx.read()
+                .inventory(ActorKey::Player(session))
+                .expect("checked owner")
+                .crafting_size,
+        );
+        if source.slot() >= extent * extent {
+            return Ok(CommandDisposition::Refused(RejectReason::InvalidSlot));
+        }
+    }
+    ctx.defer(*envelope, RulePhase::Interaction)?;
+    Ok(CommandDisposition::Settled(PhaseReport {
+        examined: 1,
+        applied: 0,
+        carried: 1,
+        rejected: 0,
+    }))
+}
+
+/// Only this provider owns inline drops; trusted preparation never becomes refusal.
+pub(crate) fn settle_inline_command(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+) -> CommandResult {
+    if !owns_inline(envelope.command()) {
+        return Ok(CommandDisposition::Unowned);
+    }
+    let require_active = matches!(envelope.command(), Command::DropSelectedItem);
+    if !check_inline_owner(ctx, envelope, require_active)? {
+        return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady));
+    }
+    match settle_owned(ctx, envelope, require_active) {
+        Ok(report) => Ok(CommandDisposition::Settled(report)),
+        Err(PlayerDropFailure::Refused(reason)) => Ok(CommandDisposition::Refused(reason)),
+        Err(PlayerDropFailure::Trusted(_)) => Err(ServerError::Internal {
+            invariant: "inline drop staging",
+        }),
+    }
+}
+
+/// Settle one admitted player's selected or inline panel drop. The current
+/// source is read at settlement, so preceding commands cannot mint stale items.
+fn settle_owned(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+    require_active: bool,
+) -> Result<PhaseReport, PlayerDropFailure> {
+    let session = SessionKey::from_raw(envelope.session()).ok_or(PlayerDropFailure::Trusted(
+        RuleReject::Wire(RejectReason::InvalidInput),
+    ))?;
     let actor = ActorKey::Player(session);
     let view = ctx.read();
     if !view
         .actor(actor)
-        .is_some_and(|record| record.lifecycle == ActorLifecycle::Active)
+        .is_some_and(|record| !require_active || record.lifecycle == ActorLifecycle::Active)
     {
-        return Err(RuleReject::Wire(RejectReason::PlayerNotReady));
+        return Err(PlayerDropFailure::Refused(RejectReason::PlayerNotReady));
     }
     let before = *view
         .inventory(actor)
-        .ok_or(RuleReject::Wire(RejectReason::PlayerNotReady))?;
+        .ok_or(PlayerDropFailure::Trusted(RuleReject::Wire(
+            RejectReason::PlayerNotReady,
+        )))?;
     let mut after = before;
     let source = match envelope.command() {
         Command::DropSelectedItem => {
             let slot = usize::from(before.selected.get());
             let mut source = before.slots[slot];
             if source.count == 0 {
-                return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+                return Err(PlayerDropFailure::Refused(RejectReason::InvalidSlot));
             }
             after.slots[slot].count -= 1;
             if after.slots[slot].count == 0 {
@@ -305,33 +410,115 @@ pub fn settle_command(
                 StackView::Crafting => {
                     let extent = usize::from(grid_extent(before.crafting_size));
                     if slot < 9 && slot >= extent * extent {
-                        return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+                        return Err(PlayerDropFailure::Refused(RejectReason::InvalidSlot));
                     }
                     let stack = view_slot(&before, slot);
                     set_view_slot(&mut after, slot, ItemStack::default());
                     stack
                 }
                 StackView::Container(_) => {
-                    return Err(RuleReject::Wire(RejectReason::InvalidInput));
+                    return Err(PlayerDropFailure::Refused(RejectReason::InvalidInput));
                 }
             }
         }
-        _ => return Err(RuleReject::Wire(RejectReason::InvalidInput)),
+        _ => return Err(PlayerDropFailure::Refused(RejectReason::InvalidInput)),
     };
     if source.count == 0 {
-        return Err(RuleReject::Wire(RejectReason::InvalidSlot));
+        return Err(PlayerDropFailure::Refused(RejectReason::InvalidSlot));
     }
-    let batch = prepare_player_drop(ctx, session, envelope.sequence(), source)?;
+    if matches!(envelope.command(), Command::DropStack(_))
+        && !after.slots.iter().all(ItemStack::is_valid)
+    {
+        return Err(PlayerDropFailure::Refused(RejectReason::InvalidInput));
+    }
+    let batch =
+        prepare_player_drop_inner(ctx, session, envelope.sequence(), source, require_active)?;
     // A debit frees capacity; repacking crafting inputs would add a credit-only
     // veto absent from the source command contract.
     ctx.stage(RuleEffect::Compound(vec![
-        RuleEffect::Inventory(InventoryPatch::try_new(actor, before, after)?),
+        RuleEffect::Inventory(
+            InventoryPatch::try_new(actor, before, after).map_err(PlayerDropFailure::Trusted)?,
+        ),
         RuleEffect::Drops(batch),
-    ]))?;
+    ]))
+    .map_err(PlayerDropFailure::Trusted)?;
+    // A grid debit still publishes inventory intent even when the pack is equal.
+    ctx.record_inventory_publication_dirty(session);
+    if matches!(envelope.command(), Command::DropStack(source)
+        if source.view() == StackView::Crafting && source.slot() < 9)
+    {
+        ctx.record_crafting_publication_dirty(session);
+    }
     Ok(PhaseReport {
         examined: 1,
         applied: 1,
         carried: 0,
         rejected: 0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::command_outcome::CommandDisposition;
+    use crate::core::contracts::{ServerLimits, TickBudget};
+    use crate::core::state::AuthorityState;
+    use mornlea_domain::{CommandEnvelopeParts, ContainerKind, ContainerRef, StackSource};
+
+    #[test]
+    fn inline_drop_adapter_ownership_and_readiness() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let mut context = TickContext::harness(&mut authority, TickBudget::full());
+        let make = |command| {
+            CommandEnvelope::try_new(CommandEnvelopeParts {
+                tick: 0,
+                session: 1,
+                sequence: 1,
+                arrival_index: 1,
+                command,
+            })
+            .unwrap()
+        };
+        for command in [
+            Command::DropSelectedItem,
+            Command::DropStack(StackSource::try_new(StackView::Inventory, 0).unwrap()),
+            Command::DropStack(StackSource::try_new(StackView::Crafting, 0).unwrap()),
+        ] {
+            assert_eq!(
+                admit_inline(&mut context, &make(command)),
+                Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady))
+            );
+            assert_eq!(
+                settle_inline_command(&mut context, &make(command)),
+                if matches!(command, Command::DropSelectedItem) {
+                    Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady))
+                } else {
+                    Err(ServerError::Internal {
+                        invariant: "inline drop owner",
+                    })
+                }
+            );
+        }
+        let reference =
+            ContainerRef::try_new(ChunkPos::new(0, -1), ContainerKind::Chest, 0, 1).unwrap();
+        for command in [
+            Command::CloseContainer,
+            Command::DropStack(StackSource::try_new(StackView::Container(reference), 36).unwrap()),
+        ] {
+            assert_eq!(
+                admit_inline(&mut context, &make(command)),
+                Ok(CommandDisposition::Unowned)
+            );
+            assert_eq!(
+                settle_inline_command(&mut context, &make(command)),
+                Ok(CommandDisposition::Unowned)
+            );
+        }
+        assert!(context.events().is_empty());
+        assert!(context.deferred(RulePhase::Interaction).is_empty());
+    }
 }

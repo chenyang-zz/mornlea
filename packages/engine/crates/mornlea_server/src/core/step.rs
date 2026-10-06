@@ -693,6 +693,28 @@ fn admit_command(
             }
             return Ok(());
         }
+        command
+            if matches!(command, Command::DropSelectedItem)
+                || matches!(command, Command::DropStack(source)
+                if matches!(source.view(), mornlea_domain::StackView::Inventory | mornlea_domain::StackView::Crafting)) =>
+        {
+            match drops::admit_inline(context, envelope)? {
+                CommandDisposition::Settled(_) => {}
+                CommandDisposition::Refused(reason) => {
+                    context.record_command_rejection(
+                        envelope,
+                        reason,
+                        RejectionStage::Admission,
+                    )?;
+                }
+                CommandDisposition::Unowned => {
+                    return Err(ServerError::Internal {
+                        invariant: "inline drop command owner",
+                    });
+                }
+            }
+            return Ok(());
+        }
         Command::PlaceBlock(_) => {
             match player_motion::admit_placement_look(context, envelope)? {
                 CommandDisposition::Settled(_) => {}
@@ -837,6 +859,14 @@ fn route_interaction(
     context: &mut TickContext<'_>,
     envelope: &CommandEnvelope,
 ) -> Result<(), ServerError> {
+    match drops::settle_inline_command(context, envelope)? {
+        CommandDisposition::Settled(_) => return Ok(()),
+        CommandDisposition::Refused(reason) => {
+            context.record_command_rejection(envelope, reason, RejectionStage::Settlement)?;
+            return Ok(());
+        }
+        CommandDisposition::Unowned => {}
+    }
     if matches!(envelope.command(), Command::SelectHotbar(_)) {
         // Reuse inventory settlement without changing its direct-call phase.
         // The live reducer exclusively owns the later selection schedule.

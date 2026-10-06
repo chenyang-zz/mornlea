@@ -2549,3 +2549,385 @@ fn native_container_drop_outcome_success_intent() {
         assert_eq!(native_input_ack(&tick, owner), 0);
     }
 }
+
+fn inline_drop_commands() -> [Command; 4] {
+    [
+        Command::DropSelectedItem,
+        Command::DropStack(StackSource::try_new(StackView::Inventory, 0).unwrap()),
+        Command::DropStack(StackSource::try_new(StackView::Crafting, 0).unwrap()),
+        Command::DropStack(StackSource::try_new(StackView::Crafting, 9).unwrap()),
+    ]
+}
+
+fn inline_drop_scene(domain: usize) -> (AuthorityState, SessionKey, SessionKey) {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    if domain == 2 {
+        prepared_inventory_outcome(&mut state, owner, |inventory| {
+            inventory.crafting[0] = storage(ITEM_DIRT, 3);
+        });
+    }
+    (state, owner, other)
+}
+
+#[test]
+fn native_inline_drop_outcome_empty() {
+    for (domain, command) in [
+        (0, Command::DropSelectedItem),
+        (
+            1,
+            Command::DropStack(StackSource::try_new(StackView::Inventory, 1).unwrap()),
+        ),
+        (
+            2,
+            Command::DropStack(StackSource::try_new(StackView::Crafting, 0).unwrap()),
+        ),
+        (
+            3,
+            Command::DropStack(StackSource::try_new(StackView::Crafting, 10).unwrap()),
+        ),
+    ] {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        if domain == 0 {
+            prepared_inventory_outcome(&mut state, owner, |inventory| {
+                inventory.slots[0] = StorageStack::default();
+            });
+        }
+        container_drop_refused(
+            &mut state,
+            owner,
+            other,
+            1,
+            command,
+            mornlea_domain::RejectReason::InvalidSlot,
+        );
+    }
+}
+
+#[test]
+fn native_inline_drop_outcome_capacity() {
+    for (domain, command) in inline_drop_commands().into_iter().enumerate() {
+        let (mut state, owner, other) = inline_drop_scene(domain);
+        stage(&mut state, |context| {
+            let mut chunk = ground_chunk();
+            for slot in &mut chunk.drops {
+                *slot = mornlea_storage::DropSlot {
+                    generation: 1,
+                    active: true,
+                    block_index: mornlea_domain::chunk_block_index(BlockPos::new(0, 65, 0)) as u32,
+                    stack: storage(ITEM_STONE, 64),
+                    age_ticks: 0,
+                    pickup_delay_ticks: 200,
+                };
+            }
+            context.preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, 0), 1, 1, chunk).unwrap());
+        });
+        container_drop_refused(
+            &mut state,
+            owner,
+            other,
+            1,
+            command,
+            mornlea_domain::RejectReason::DropCapacity,
+        );
+        for drop in state.residents().drop_records() {
+            assert_eq!((drop.age, drop.pickup_delay), (1, 199));
+        }
+    }
+}
+
+#[test]
+fn native_inline_drop_outcome_personal_extent_admission() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let before = record(&state, owner);
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::DropStack(StackSource::try_new(StackView::Crafting, 5).unwrap()),
+    );
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::OpenContainer(LookAngles::try_new(0.0, -1.0).unwrap()),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let refusals: Vec<_> = events_for(&tick, owner)
+        .into_iter()
+        .filter(|e| matches!(e, Event::CommandRejected(_)))
+        .collect();
+    assert_eq!(
+        refusals,
+        vec![
+            Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                1,
+                mornlea_domain::RejectReason::InvalidSlot
+            )),
+            Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                2,
+                mornlea_domain::RejectReason::NoTarget
+            )),
+        ]
+    );
+    assert_eq!(record(&state, owner), before);
+    assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+    assert_eq!(native_input_ack(&tick, owner), 0);
+}
+
+#[test]
+fn native_inline_drop_outcome_unavailable_feet() {
+    for (domain, command) in inline_drop_commands().into_iter().enumerate() {
+        let (mut state, owner, other) = inline_drop_scene(domain);
+        // Direct preparation and the full source recovery have separate acceptance boundaries.
+        stage(&mut state, |context| {
+            let mut actor = context
+                .read()
+                .actor(ActorKey::Player(owner))
+                .cloned()
+                .unwrap();
+            actor.motion = MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new([32.5, 65.0, 0.5]).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            });
+            context.stage(RuleEffect::Actor(actor)).unwrap();
+            let envelope =
+                mornlea_domain::CommandEnvelope::try_new(mornlea_domain::CommandEnvelopeParts {
+                    tick: 2,
+                    session: owner.get(),
+                    sequence: 1,
+                    arrival_index: 1,
+                    command,
+                })
+                .unwrap();
+            let inventory = *context.read().inventory(ActorKey::Player(owner)).unwrap();
+            assert_eq!(
+                mornlea_server::rules::drops::settle_command(context, &envelope),
+                Err(mornlea_server::contracts::RuleReject::Wire(
+                    mornlea_domain::RejectReason::ChunkNotReady
+                ))
+            );
+            assert_eq!(
+                context.read().inventory(ActorKey::Player(owner)),
+                Some(&inventory)
+            );
+        });
+        container_drop_refused(
+            &mut state,
+            owner,
+            other,
+            1,
+            command,
+            if domain == 0 {
+                mornlea_domain::RejectReason::PlayerNotReady
+            } else {
+                mornlea_domain::RejectReason::ChunkNotReady
+            },
+        );
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(owner))
+                .unwrap()
+                .lifecycle,
+            ActorLifecycle::Pending
+        );
+    }
+    for domain in 1..=3 {
+        let (mut state, owner, other) = inline_drop_scene(domain);
+        // Empty source precedence survives a real reset before panel settlement.
+        stage(&mut state, |context| {
+            let key = ActorKey::Player(owner);
+            let mut actor = context.read().actor(key).cloned().unwrap();
+            actor.motion = MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new([32.5, 65.0, 0.5]).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            });
+            context.stage(RuleEffect::Actor(actor)).unwrap();
+            let mut inventory = *context.read().inventory(key).unwrap();
+            if domain == 2 {
+                inventory.crafting[0] = StorageStack::default();
+            } else {
+                inventory.slots[0] = StorageStack::default();
+            }
+            context.preload_inventory(key, inventory);
+        });
+        container_drop_refused(
+            &mut state,
+            owner,
+            other,
+            1,
+            inline_drop_commands()[domain],
+            mornlea_domain::RejectReason::InvalidSlot,
+        );
+    }
+}
+
+#[test]
+fn native_inline_drop_outcome_refusal_then_success() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::DropStack(StackSource::try_new(StackView::Inventory, 1).unwrap()),
+    );
+    submit(&mut state, owner, 2, Command::DropSelectedItem);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_inventory_outcome_refusal(
+        &tick,
+        owner,
+        other,
+        1,
+        mornlea_domain::RejectReason::InvalidSlot,
+    );
+    assert_eq!(record(&state, owner).slots[0], storage(36, 1));
+    let drops = state.residents().drop_records();
+    assert_eq!(drops.len(), 1);
+    assert_eq!(
+        (drops[0].stack, drops[0].pickup_delay),
+        (storage(36, 1), 39)
+    );
+    assert_eq!(
+        events_for(&tick, owner)
+            .iter()
+            .filter(|e| matches!(e, Event::InventoryState(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !events_for(&tick, owner)
+            .iter()
+            .any(|e| matches!(e, Event::CraftingState(_)))
+    );
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+}
+
+#[test]
+fn native_inline_drop_outcome_admission_before_settlement() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    prepared_inventory_outcome(&mut state, owner, |inventory| {
+        inventory.slots[0] = StorageStack::default();
+    });
+    let before = record(&state, owner);
+    submit(&mut state, owner, 1, Command::DropSelectedItem);
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::DropStack(StackSource::try_new(StackView::Crafting, 5).unwrap()),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let refusals: Vec<_> = events_for(&tick, owner)
+        .into_iter()
+        .filter(|e| matches!(e, Event::CommandRejected(_)))
+        .collect();
+    assert_eq!(
+        refusals,
+        vec![
+            Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                2,
+                mornlea_domain::RejectReason::InvalidSlot
+            )),
+            Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                1,
+                mornlea_domain::RejectReason::InvalidSlot
+            )),
+        ]
+    );
+    assert_eq!(record(&state, owner), before);
+    assert!(container_drop_quantities(&state).is_empty());
+    assert!(projection_crafting_record_states(&events_for(&tick, owner)).is_empty());
+    assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+    assert_eq!(native_input_ack(&tick, owner), 0);
+}
+
+#[test]
+fn native_inline_drop_outcome_exhausted_revision_hard() {
+    for (domain, command) in inline_drop_commands().into_iter().enumerate() {
+        let (mut state, owner, _) = inline_drop_scene(domain);
+        // Revision exhaustion is a prepared trusted preflight cause, not a client command.
+        stage(&mut state, |context| {
+            context.preload_ready_chunk(
+                ReadyChunk::try_new(chunk_key(0, 0), 1, u64::MAX, ground_chunk()).unwrap(),
+            );
+        });
+        let before = record(&state, owner);
+        let drops = state.residents().drop_records();
+        submit(&mut state, owner, 1, command);
+        let error = state.advance_tick(TickBudget::full()).unwrap_err();
+        assert_eq!(
+            error,
+            ServerError::Internal {
+                invariant: "inline drop staging"
+            }
+        );
+        assert_eq!(record(&state, owner), before);
+        assert_eq!(state.residents().drop_records(), drops);
+        assert_eq!(state.advance_tick(TickBudget::full()).unwrap_err(), error);
+    }
+}
+
+#[test]
+fn native_inline_drop_outcome_success_intent() {
+    for (domain, command) in inline_drop_commands().into_iter().enumerate() {
+        let (mut state, owner, other) = inline_drop_scene(domain);
+        submit(&mut state, owner, 1, command);
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        let events = events_for(&tick, owner);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Event::CommandRejected(_)))
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::InventoryState(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::CraftingState(_)))
+                .count(),
+            usize::from(domain == 2)
+        );
+        let want = if domain == 2 {
+            storage(ITEM_DIRT, 3)
+        } else {
+            storage(36, if domain == 0 { 1 } else { 2 })
+        };
+        let drops = state.residents().drop_records();
+        assert_eq!(drops.len(), 1);
+        assert_eq!(
+            (drops[0].stack, drops[0].pickup_delay, drops[0].age),
+            (want, 39, 1)
+        );
+        if domain == 2 {
+            assert_eq!(record(&state, owner).crafting[0], StorageStack::default());
+        } else {
+            assert_eq!(
+                record(&state, owner).slots[0],
+                if domain == 0 {
+                    storage(36, 1)
+                } else {
+                    StorageStack::default()
+                }
+            );
+        }
+        assert!(events.contains(&projection_drop_wire_upsert(
+            tick.tick,
+            0,
+            BlockPos::new(0, 65, 0),
+            want.item,
+            want.count
+        )));
+        assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
+        assert_eq!(native_input_ack(&tick, owner), 0);
+    }
+}

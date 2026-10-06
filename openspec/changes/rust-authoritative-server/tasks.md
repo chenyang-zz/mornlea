@@ -268,6 +268,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3cdr Publish exact late container drop refusals and hard trusted preparation/staging ([packet](plans/139-source-container-drop-outcomes.md)). Native8/private1 GREEN; six causal REDs, one recovery-precedence qualification, one control;76Rust3767/replay632, Go4 oracle and actual controls race/count1 PASS, independent source SCOPED_PASS. Full-tick recovery8 and direct phase3 separately qualified; docs/immutable closing evidence in packet. Other outcomes and broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3idr Publish selected and inline panel drop intake/settlement outcomes ([packet](plans/140-source-inline-drop-outcomes.md)). Native8/private1 GREEN; eight initial causal REDs plus review-caused panel lifecycle RED;76Rust3776/replay640, Go5 source oracle and unchanged controls race/count1 PASS, independent corrected source SCOPED_PASS. Selected late8 versus panel current empty9/foot3 afteractualreset; rawtypedcompat preserved; docs/immutable closing evidence in packet. Other outcomes and broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 

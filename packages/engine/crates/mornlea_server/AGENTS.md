@@ -1266,9 +1266,27 @@ whole queue/runtime composition remain separate.
 
 Late container panel drops consume a checked preparation outcome: ordinary
 readiness and physical capacity are wire refusals, while invalid trusted batches,
-missing owned records and exhausted durable revisions remain hard. The raw foot
-preparation wrapper retains its typed contract. Container removal and foot output
+missing owned records and exhausted durable revisions remain hard. The raw drop
+command wrapper retains its typed contract. Container removal and foot output
 stage atomically before inventory intent; no crafting repack veto is introduced.
 Ordinary drop timers and final view reach invalidation remain separate phases.
 Prepared pose/capacity/revision causes qualify these consumers, not upstream
 producers or whole queued-mirror/runtime composition.
+
+Selected-item and Inventory/Crafting panel drops have checked intake and live
+settlement. Personal grid extent refuses before actor advancement; source debit
+and bounded foot output wait for Interaction. Semantic outcomes preserve
+original command identity while trusted preparation and atomic staging stop
+the tick. Grid-source success retains both private publication intentions;
+other sources retain inventory intent only. Raw typed wrappers share this core.
+Interaction outputs age later in the tick; container outputs retain their
+separate late schedule. Prepared fault causes and direct foot checks do not
+qualify ordinary upstream motion or complete queued-mirror/runtime composition.
+
+Inline panel settlement preserves the source late lifecycle distinction:
+selected-item drops repeat the Active check, while already admitted panel
+drops read their current source and foot position after recovery. Empty source
+refusal precedes foot readiness; a Pending reset does not become a second panel
+admission. Missing owned actor or inventory remains a trusted failure. The
+accepted checked foot preparation retains Active semantics for container and
+selected drops; the private panel variant shares geometry and capacity checks.
