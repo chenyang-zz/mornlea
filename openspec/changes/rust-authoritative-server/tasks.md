@@ -141,6 +141,8 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 
 - [x] 3.7l3iv Publish source inventory and equip command admission outcomes while retaining hard trusted staging failures ([packet](plans/135-source-inventory-command-outcomes.md)). Direct Codex: fivecausalRED/onecontrol→sixnativeGREEN and2private declaration qualifications/actualtrusted invariantGREEN;76Rust suites3730PASS0failed/ignored/replay601, Go runtime4/4 entity11/11 oracle4/0 race/count1PASS, independent SCOPED_PASS. Rawactor-free/lateSelect/dirtyintent retained; otheroutcomes/queue/runtime and broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3qor Advance owner inventory/crafting mirrors only after actual queue admission ([packet](plans/145-source-owner-record-admission.md)). Other mirrors/background encoding/runtime and broad3.8/4.1/4.2 OPEN.
+
 - [ ] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)).
 - [x] 3.8r0 Retain the exclusive world lease throughout actual backup restoration ([packet](plans/65-restore-world-lease.md)).
 - [x] 3.8v0 Qualify the actual previous Go read-only save verifier ([packet](plans/54-previous-runtime-verifier.md)).

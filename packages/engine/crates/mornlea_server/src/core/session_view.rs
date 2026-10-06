@@ -27,8 +27,9 @@ pub(crate) struct ChunkPublication {
 }
 
 /// The previous tick's derived interest and published snapshots of one
-/// session. All fields are owned copies; the projection replaces them in
-/// place after it has emitted this tick's events.
+/// session. All fields are owned copies. Inventory and crafting mirrors advance
+/// only after the actual frame enters the FIFO; other families retain their
+/// current projection-owned migration behavior.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SessionView {
     /// This session's chunk interest as derived from its player actor.
@@ -48,8 +49,8 @@ pub(crate) struct SessionView {
     /// Last emitted dropped-stack wire values. Authority-only age and pickup
     /// timers never participate in this diff.
     pub(crate) visible_drops: BTreeMap<DropId, ItemDrop>,
-    /// Last published inventory wire value; grid and armor have separate intent.
+    /// Last queue-admitted inventory wire value; grid and armor have separate intent.
     pub(crate) last_inventory: Option<InventoryState>,
-    /// Last published crafting grid and size.
+    /// Last queue-admitted crafting grid and size.
     pub(crate) last_crafting: Option<([mornlea_storage::ItemStack; 9], CraftingSize)>,
 }

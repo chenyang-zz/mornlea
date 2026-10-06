@@ -1317,3 +1317,9 @@ consumers separately from runtime, queued-mirror and executable composition.
 
 
 Human held mining completes through a private tagged resolver: contextual ray/paired-cell/container/output capacity refusals stay semantic, while bounded traces, owned basis, derived patches/batches and other transaction failures stay hard. Live held rays consume the exact canonical actor look admitted once; retained raw controls and raw explicit-control fixtures keep their ownership. Completion refusal clears progress before the existing bounded command-rejection owner records the current retained input sequence, including a prepared zero or repeated sequence across ticks. Initial no-target/unready/required-zero and released or suspended intent remain quiet. No command envelope, new queue or input acknowledgment is manufactured; the separate player quota and Admission-before-Settlement order stay with the collector. Companion output retry remains unchanged; shared clear/progress staging faults are hard.
+
+Owner inventory and crafting record mirrors advance only when their exact encoded
+frame enters the real FIFO. Projection and preparation are not admission; existing
+closure and new saturation remain distinct so only saturation retires a slow peer.
+Other publication mirror families and automatic background encoding retain their
+separate migration acceptance boundaries.

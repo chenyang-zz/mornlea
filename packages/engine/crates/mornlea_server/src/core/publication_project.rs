@@ -353,6 +353,7 @@ impl AuthorityState {
                 observer.has_actor && outcome.inventory_dirty.contains(&observer.session);
             let crafting_dirty =
                 observer.has_actor && outcome.crafting_dirty.contains(&observer.session);
+            // Record selection observes admitted mirrors; the FIFO owns their updates.
             // The inventory state comes first.
             if observer.has_actor
                 && let Some(record) = record
@@ -360,7 +361,6 @@ impl AuthorityState {
                 let inventory = inventory_event(&record);
                 if view.last_inventory.as_ref() != Some(&inventory) || inventory_dirty {
                     events.push(RoutedEvent::new(owner, Event::InventoryState(inventory)));
-                    view.last_inventory = Some(inventory);
                 }
             }
             // Crafting precedes both container kinds in the source wire order.
@@ -379,7 +379,6 @@ impl AuthorityState {
                         output: matched,
                     }) {
                         events.push(RoutedEvent::new(owner, Event::CraftingState(state)));
-                        view.last_crafting = Some(crafting);
                     }
                 }
             }

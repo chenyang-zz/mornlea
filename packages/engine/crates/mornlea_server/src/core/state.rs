@@ -2301,7 +2301,11 @@ impl AuthorityState {
                     if !self.sessions.contains_key(&session) {
                         return Err(ServerError::StaleSession { session });
                     }
-                    pending.push(PendingFrame::One { session, frame });
+                    pending.push(PendingFrame::One {
+                        session,
+                        frame,
+                        record: QueuedRecordMirror::from_event(event.event()).map(Box::new),
+                    });
                 }
                 EventRecipient::Broadcast => pending.push(PendingFrame::Broadcast { frame }),
             }
@@ -2316,22 +2320,34 @@ impl AuthorityState {
             pending.push(PendingFrame::One {
                 session: reply.session,
                 frame,
+                record: None,
             });
         }
         let mut slow = Vec::new();
         for item in pending {
             match item {
-                PendingFrame::One { session, frame } => {
-                    if self.append_frame(session, frame) {
-                        slow.push(session);
+                PendingFrame::One {
+                    session,
+                    frame,
+                    record,
+                } => match self.append_frame(session, frame) {
+                    AppendOutcome::Queued => {
+                        if let Some(record) = record {
+                            self.accept_record_mirror(session, *record);
+                        }
                     }
-                }
+                    AppendOutcome::Saturated => slow.push(session),
+                    AppendOutcome::Closed => {}
+                },
                 PendingFrame::Broadcast { frame } => {
                     let sessions: Vec<SessionKey> = self.current_sessions.iter().copied().collect();
                     for session in sessions {
                         #[cfg(test)]
                         CURRENT_PUBLICATION_VISITS.with(|visits| visits.set(visits.get() + 1));
-                        if self.append_frame(session, frame.clone()) {
+                        if matches!(
+                            self.append_frame(session, frame.clone()),
+                            AppendOutcome::Saturated
+                        ) {
                             slow.push(session);
                         }
                     }
@@ -2348,22 +2364,46 @@ impl AuthorityState {
         Ok(())
     }
 
-    /// Appends one frame to a receiver's outbox. Returns `true` only when
-    /// this append saturated the outbox and flipped it closed; the overflowing
-    /// frame is dropped and the caller owns the slow-receiver retirement.
-    fn append_frame(&mut self, session: SessionKey, frame: PreparedFrame) -> bool {
+    /// Distinguishes a real append from existing closure and newly saturated closure.
+    /// Only saturation transfers slow-receiver retirement to the caller.
+    fn append_frame(&mut self, session: SessionKey, frame: PreparedFrame) -> AppendOutcome {
         let Some(record) = self.sessions.get_mut(&session) else {
-            return false;
+            return AppendOutcome::Closed;
         };
         if record.outbox_closed {
-            return false;
+            return AppendOutcome::Closed;
         }
         if record.outbox.len() >= self.limits.session_outbox() {
             record.outbox_closed = true;
-            return true;
+            return AppendOutcome::Saturated;
         }
         record.outbox.push_back(frame);
-        false
+        AppendOutcome::Queued
+    }
+
+    /// The checked record belongs to the exact frame that the FIFO just accepted.
+    /// Projection and byte preparation alone never certify a client observation.
+    fn accept_record_mirror(&mut self, session: SessionKey, record: QueuedRecordMirror) {
+        if !self.session_active(session) {
+            return;
+        }
+        let Some(view) = self.session_views.get_mut(&session) else {
+            return;
+        };
+        match record {
+            QueuedRecordMirror::Inventory(inventory) => view.last_inventory = Some(inventory),
+            QueuedRecordMirror::Crafting(crafting) => {
+                let slots = std::array::from_fn(|index| {
+                    let stack = crafting.slots()[index];
+                    mornlea_storage::ItemStack {
+                        item: stack.item(),
+                        count: stack.count(),
+                        durability: stack.durability(),
+                    }
+                });
+                view.last_crafting = Some((slots, crafting.size()));
+            }
+        }
     }
 
     /// Admits an immutable Play owner; the receipt certifies queue admission only.
@@ -2384,11 +2424,14 @@ impl AuthorityState {
         if record.phase != SessionPhase::Active || record.outbox_closed {
             return Ok(EnqueueOutcome::Closed);
         }
-        if self.append_frame(session, frame) {
-            self.retire(session, CloseReason::SlowReceiver)?;
-            return Ok(EnqueueOutcome::Closed);
+        match self.append_frame(session, frame) {
+            AppendOutcome::Queued => Ok(EnqueueOutcome::Queued),
+            AppendOutcome::Closed => Ok(EnqueueOutcome::Closed),
+            AppendOutcome::Saturated => {
+                self.retire(session, CloseReason::SlowReceiver)?;
+                Ok(EnqueueOutcome::Closed)
+            }
         }
-        Ok(EnqueueOutcome::Queued)
     }
 
     /// Moves whole immutable owners from the one FIFO, including retained prefixes.
@@ -3162,10 +3205,36 @@ fn save_from_stored(stored: StoredPlayer) -> Result<PlayerSave, ServerError> {
     Ok(save)
 }
 
+/// A closed FIFO and a newly overflowing FIFO have different retirement owners.
+enum AppendOutcome {
+    Queued,
+    Closed,
+    Saturated,
+}
+
+/// Checked owner-record metadata stays paired with its immutable encoded frame.
+/// Other publication mirrors retain their separate migration ownership.
+#[derive(Clone, Copy)]
+enum QueuedRecordMirror {
+    Inventory(mornlea_domain::InventoryState),
+    Crafting(mornlea_domain::CraftingState),
+}
+
+impl QueuedRecordMirror {
+    fn from_event(event: &mornlea_domain::Event) -> Option<Self> {
+        match event {
+            mornlea_domain::Event::InventoryState(value) => Some(Self::Inventory(*value)),
+            mornlea_domain::Event::CraftingState(value) => Some(Self::Crafting(*value)),
+            _ => None,
+        }
+    }
+}
+
 enum PendingFrame {
     One {
         session: SessionKey,
         frame: PreparedFrame,
+        record: Option<Box<QueuedRecordMirror>>,
     },
     Broadcast {
         frame: PreparedFrame,
@@ -17638,5 +17707,253 @@ mod held_mining_owner_contract_tests {
             context.record_held_mining_rejection(session, RejectReason::DropCapacity),
             Err(hard)
         );
+    }
+}
+
+#[cfg(test)]
+mod owner_record_admission_tests {
+    use super::*;
+    use mornlea_domain::{CraftingState, Event, InventoryState};
+    use mornlea_protocol::{LoginStart, admit_login};
+
+    fn fixture(outbox: usize, players: u8) -> (AuthorityState, Vec<SessionKey>) {
+        let mut state = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, outbox, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        let mut sessions = Vec::new();
+        for tag in 1..=players {
+            let mut bytes = [0u8; 16];
+            bytes[0] = tag;
+            bytes[6] = 64;
+            bytes[8] = 128;
+            let player = PlayerId::try_from_bytes(bytes).unwrap();
+            let start = LoginStart::new(player, "Ada", 8).unwrap();
+            let login =
+                admit_login(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap()).unwrap();
+            let session = state.admit(login, TransportKind::Memory).unwrap();
+            let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+            context.stage_login(
+                seed_player(session, &canonical_player(player, "Ada").unwrap()).unwrap(),
+            );
+            context.commit_carried();
+            drop(context);
+            sessions.push(session);
+        }
+        (state, sessions)
+    }
+
+    fn project(state: &mut AuthorityState, dirty: &[SessionKey]) -> Vec<RoutedEvent> {
+        // Seeded actors and empty outcome lanes qualify the real projection consumer.
+        state
+            .project_tick_publication(
+                0,
+                &TickOutcome {
+                    block_batches: vec![],
+                    resyncs: vec![],
+                    quiet_passive_removals: BTreeSet::new(),
+                    inventory_dirty: dirty.iter().copied().collect(),
+                    crafting_dirty: dirty.iter().copied().collect(),
+                },
+            )
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event.event(),
+                    Event::InventoryState(_) | Event::CraftingState(_)
+                )
+            })
+            .collect()
+    }
+
+    fn publication(events: Vec<RoutedEvent>) -> TickPublication {
+        TickPublication {
+            tick: 0,
+            events,
+            control: vec![],
+            counters: TickCounters::default(),
+        }
+    }
+
+    fn records(events: &[RoutedEvent], session: SessionKey) -> (InventoryState, CraftingState) {
+        let owned: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(session.get()))
+            .collect();
+        assert_eq!(owned.len(), 2);
+        let (Event::InventoryState(inventory), Event::CraftingState(crafting)) =
+            (owned[0].event(), owned[1].event())
+        else {
+            panic!("record order")
+        };
+        (*inventory, *crafting)
+    }
+
+    fn mirrors_empty(state: &AuthorityState, session: SessionKey) {
+        let view = &state.session_views[&session];
+        assert_eq!(view.last_inventory, None);
+        assert_eq!(view.last_crafting, None);
+    }
+
+    fn mirrors_match(
+        state: &AuthorityState,
+        session: SessionKey,
+        inventory: InventoryState,
+        crafting: CraftingState,
+    ) {
+        let view = &state.session_views[&session];
+        assert_eq!(view.last_inventory, Some(inventory));
+        let slots: [mornlea_storage::ItemStack; 9] = std::array::from_fn(|i| {
+            let stack = crafting.slots()[i];
+            mornlea_storage::ItemStack {
+                item: stack.item(),
+                count: stack.count(),
+                durability: stack.durability(),
+            }
+        });
+        assert_eq!(view.last_crafting, Some((slots, crafting.size())));
+    }
+
+    fn frame(event: &Event) -> Vec<u8> {
+        PreparedFrame::encode(
+            &mut ProtocolCodec::new().unwrap(),
+            &ServerPacket::try_from(event.clone()).unwrap(),
+        )
+        .unwrap()
+        .as_bytes()
+        .to_vec()
+    }
+
+    #[test]
+    fn owner_record_admission_projection_then_queued() {
+        let (mut state, sessions) = fixture(512, 1);
+        let owner = sessions[0];
+        let events = project(&mut state, &[]);
+        let (inventory, crafting) = records(&events, owner);
+        mirrors_empty(&state, owner);
+        assert_eq!(project(&mut state, &[]), events);
+        let frames: Vec<_> = events.iter().map(|e| frame(e.event())).collect();
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 8, 4096).unwrap(), frames);
+        mirrors_match(&state, owner, inventory, crafting);
+        assert!(project(&mut state, &[]).is_empty());
+        let equal = project(&mut state, &[owner]);
+        assert_eq!(records(&equal, owner), (inventory, crafting));
+        state.publish(publication(equal)).unwrap();
+        assert_eq!(state.take_outbox(owner, 8, 4096).unwrap(), frames);
+        mirrors_match(&state, owner, inventory, crafting);
+    }
+
+    #[test]
+    fn owner_record_admission_closed_owner_and_peer() {
+        let (mut state, sessions) = fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let events = project(&mut state, &[]);
+        let (inventory, crafting) = records(&events, peer);
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Active);
+        assert!(state.take_outbox(owner, 8, 4096).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 8, 4096).unwrap().len(), 2);
+        mirrors_empty(&state, owner);
+        mirrors_match(&state, peer, inventory, crafting);
+        let retry = project(&mut state, &[]);
+        records(&retry, owner);
+        assert!(
+            retry
+                .iter()
+                .all(|e| e.recipient() == EventRecipient::Session(owner.get()))
+        );
+    }
+
+    fn preflight_failure(invalid_packet: bool) {
+        let (mut state, sessions) = fixture(512, 1);
+        let owner = sessions[0];
+        let mut events = project(&mut state, &[]);
+        records(&events, owner);
+        let want = if invalid_packet {
+            let states = (1u8..=8)
+                .map(|tag| {
+                    let mut bytes = [0u8; 16];
+                    bytes[0] = tag;
+                    bytes[6] = 64;
+                    bytes[8] = 128;
+                    mornlea_domain::RemotePlayerState::new(mornlea_domain::RemotePlayerStateParts {
+                        player_id: PlayerId::try_from_bytes(bytes).unwrap(),
+                        dimension: Dimension::OVERWORLD,
+                        position: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                        look: LookAngles::try_new(0.0, 0.0).unwrap(),
+                        reset: false,
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let batch = mornlea_domain::RemotePlayerStates::try_new(
+                mornlea_domain::RemotePlayerStatesParts {
+                    server_tick: 0,
+                    states,
+                },
+            )
+            .unwrap();
+            events.push(RoutedEvent::new(
+                EventRecipient::Session(owner.get()),
+                Event::RemotePlayerStates(batch),
+            ));
+            ServerError::InvalidInput { field: "packet" }
+        } else {
+            let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+            events.push(RoutedEvent::new(
+                EventRecipient::Session(unknown.get()),
+                Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                    0,
+                    RejectReason::InvalidInput,
+                )),
+            ));
+            ServerError::StaleSession { session: unknown }
+        };
+        assert_eq!(state.publish(publication(events)), Err(want));
+        assert!(state.take_outbox(owner, 8, 4096).unwrap().is_empty());
+        mirrors_empty(&state, owner);
+        records(&project(&mut state, &[]), owner);
+    }
+
+    #[test]
+    fn owner_record_admission_preflight_recipient_failure() {
+        preflight_failure(false);
+    }
+
+    #[test]
+    fn owner_record_admission_preflight_packet_failure() {
+        preflight_failure(true);
+    }
+
+    #[test]
+    fn owner_record_admission_saturated_prefix_isolates_peer() {
+        let (mut state, sessions) = fixture(2, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let rejection = Event::CommandRejected(mornlea_domain::CommandRejection::new(
+            11,
+            RejectReason::InvalidInput,
+        ));
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(owner.get()),
+                rejection.clone(),
+            )]))
+            .unwrap();
+        let events = project(&mut state, &[]);
+        let (inventory, crafting) = records(&events, peer);
+        let (owner_inventory, _) = records(&events, owner);
+        let expected = vec![
+            frame(&rejection),
+            frame(&Event::InventoryState(owner_inventory)),
+        ];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(state.take_outbox(owner, 8, 4096).unwrap(), expected);
+        assert_eq!(state.take_outbox(peer, 8, 4096).unwrap().len(), 2);
+        mirrors_match(&state, peer, inventory, crafting);
     }
 }
