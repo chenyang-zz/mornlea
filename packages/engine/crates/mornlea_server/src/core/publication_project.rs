@@ -14,9 +14,9 @@ use mornlea_domain::{
     self, BlockChange, BlockChanges, BlockChangesParts, BlockPos, ChatEvent, ChatEventParts,
     ChunkPos, CompanionDespawn, CompanionId, CompanionName, CompanionSpawn, CompanionSpawnParts,
     CompanionState, CompanionStateParts, CompanionStates, CompanionStatesParts, ContainerClosed,
-    CraftingState, CraftingStateParts, Dimension, Event, EventRecipient, ForgetChunks,
-    ForgetChunksParts, HostileDespawn, HostileDespawnParts, HostileId, HostileKind, HostileSpawn,
-    HostileSpawnParts, HostileSpawnRecord, HostileSpawnRecordParts, HostileState,
+    ContainerRef, CraftingState, CraftingStateParts, Dimension, Event, EventRecipient,
+    ForgetChunks, ForgetChunksParts, HostileDespawn, HostileDespawnParts, HostileId, HostileKind,
+    HostileSpawn, HostileSpawnParts, HostileSpawnRecord, HostileSpawnRecordParts, HostileState,
     HostileStateParts, HostileStateRecord, HostileStateRecordParts, ItemDrop, ItemDropParts,
     ItemDropRemoves, ItemDropRemovesParts, ItemDropUpserts, ItemDropUpsertsParts, ItemStack,
     PassiveDespawn, PassiveDespawnParts, PassiveDespawnReason, PassiveDespawnRecord, PassiveId,
@@ -31,7 +31,7 @@ use mornlea_domain::{
 
 use crate::contracts::{
     ActorBody, ActorKey, ActorLifecycle, ActorRecord, ChunkKey, ContainerSlots, DropRecord,
-    InventoryRecord, ProjectileRecord, ServerError, SessionKey, ViewLease,
+    InventoryRecord, ProjectileRecord, ServerError, SessionKey,
 };
 use crate::core::session_view::SessionView;
 use crate::state::{AuthorityState, Speaker};
@@ -164,6 +164,7 @@ impl AuthorityState {
         tick: u64,
         outcome: &TickOutcome,
     ) -> Vec<RoutedEvent> {
+        let invalidated_containers = self.invalidate_container_views();
         let speakers = self.active_speakers();
         if speakers.is_empty() {
             return Vec::new();
@@ -274,6 +275,7 @@ impl AuthorityState {
         self.emit_records(
             &observers,
             &inventories,
+            &invalidated_containers,
             outcome,
             &mut view_list,
             &mut events,
@@ -322,16 +324,9 @@ impl AuthorityState {
         }
     }
 
-    /// The owner-only record families: inventory state, the viewed chest
-    /// state, the container-closed notice, the crafting state and the viewed
-    /// furnace state, in exactly that per-session order. The inventory state
-    /// and the crafting state add the accepted command intent described
-    /// below to their record diffs; every other family diffs against the last
-    /// published snapshot stored on the session view alone, so an unchanged
-    /// record and a refused command publish nothing. A session
-    /// holds at most one container lease, so the chest and furnace slots of
-    /// the order never compete: the chest publishes before the close notice
-    /// and the grid, and the furnace after the grid.
+    /// Owner records follow inventory, crafting, furnace, chest and close.
+    /// Valid physical views publish complete state every tick. The ephemeral
+    /// close facts name only final invalidations, never explicit releases.
     ///
     /// The inventory state and the crafting state are the two families with
     /// an explicit command intent beside their record diffs: a session whose
@@ -345,6 +340,7 @@ impl AuthorityState {
         &mut self,
         observers: &[Observer],
         inventories: &BTreeMap<ActorKey, InventoryRecord>,
+        invalidated_containers: &BTreeMap<SessionKey, ContainerRef>,
         outcome: &TickOutcome,
         view_list: &mut [SessionView],
         events: &mut Vec<RoutedEvent>,
@@ -367,34 +363,7 @@ impl AuthorityState {
                     view.last_inventory = Some(inventory);
                 }
             }
-            // The viewed chest publishes next; a furnace defers until after
-            // the crafting grid so the frozen order holds for both kinds.
-            let lease = self.committed_lease(observer.session);
-            let mut deferred_furnace = None;
-            if let Some(reference) = lease.map(ViewLease::reference) {
-                if let Some(held) = self.resident_container(reference)
-                    && view.leased_containers.get(&reference) != Some(&held)
-                    && let Some(event) = container_event(reference, &held.slots)
-                {
-                    match event {
-                        Event::FurnaceState(_) => deferred_furnace = Some(event),
-                        chest => events.push(RoutedEvent::new(owner, chest)),
-                    }
-                    view.leased_containers.insert(reference, held);
-                }
-            } else {
-                view.leased_containers.clear();
-            }
-            // The close notice follows the record states of the same tick.
-            if let Some(released) = view.last_lease.filter(|_| lease.is_none()) {
-                events.push(RoutedEvent::new(
-                    owner,
-                    Event::ContainerClosed(ContainerClosed::new(released.reference())),
-                ));
-            }
-            view.last_lease = lease;
-            // The crafting grid follows the close notice, with the matched
-            // output from the frozen recipe matcher the take provider owns.
+            // Crafting precedes both container kinds in the source wire order.
             if observer.has_actor
                 && let Some(record) = record
             {
@@ -414,9 +383,19 @@ impl AuthorityState {
                     }
                 }
             }
-            // The viewed furnace closes the record families.
-            if let Some(event) = deferred_furnace {
-                events.push(RoutedEvent::new(owner, event));
+            if let Some(lease) = self.committed_lease(observer.session) {
+                let reference = lease.reference();
+                if let Some(held) = self.resident_container(reference)
+                    && let Some(event) = container_event(reference, &held.slots)
+                {
+                    events.push(RoutedEvent::new(owner, event));
+                }
+            }
+            if let Some(&reference) = invalidated_containers.get(&observer.session) {
+                events.push(RoutedEvent::new(
+                    owner,
+                    Event::ContainerClosed(ContainerClosed::new(reference)),
+                ));
             }
         }
     }

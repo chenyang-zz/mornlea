@@ -4945,17 +4945,19 @@ fn record_state_scenario(adapter: &mut dyn ParityAdapter) -> Vec<TickPublication
     let _ = adapter.drain(ada.session);
     let _ = adapter.drain(bea.session);
 
-    // Closing publishes the exact released reference.
+    // Explicit close is silent on both adapters; invalidation owns notices.
     adapter.send_packet(
         ada.conn,
         &ClientPacket::CloseContainer(mornlea_protocol::CloseContainer::new(4)),
     );
     let tick_four = adapter.tick();
     assert!(
-        session_events(&tick_four, ada.session)
+        !session_events(&tick_four, ada.session)
             .iter()
-            .any(|event| matches!(event, Event::ContainerClosed(closed)
-                if *closed == mornlea_domain::ContainerClosed::new(chest_domain)))
+            .any(|event| matches!(
+                event,
+                Event::ContainerClosed(_) | Event::ChestState(_) | Event::FurnaceState(_)
+            ))
     );
     let _ = adapter.drain(ada.session);
     let _ = adapter.drain(bea.session);

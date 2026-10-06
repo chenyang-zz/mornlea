@@ -75,6 +75,26 @@ impl ContainerState {
         })
     }
 
+    /// Recover the physical cell only after the exact live slot is proven.
+    /// Wire references carry no dimension; the owning chunk key supplies it.
+    pub(crate) fn position(&self, key: ChunkKey, reference: ContainerRef) -> Option<BlockPos> {
+        self.record(key, reference)?;
+        let index = match reference.kind() {
+            ContainerKind::Chest => self.chests[usize::from(reference.slot())].block_index,
+            ContainerKind::Furnace => self.furnaces[usize::from(reference.slot())].block_index,
+        };
+        if index >= 16 * 16 * 384 {
+            return None;
+        }
+        let x = i64::from(key.pos.x()) * 16 + i64::from(index & 15);
+        let z = i64::from(key.pos.z()) * 16 + i64::from((index >> 4) & 15);
+        Some(BlockPos::new(
+            i32::try_from(x).ok()?,
+            i32::try_from(index >> 8).ok()? - 64,
+            i32::try_from(z).ok()?,
+        ))
+    }
+
     pub(crate) fn at(
         &self,
         key: ChunkKey,

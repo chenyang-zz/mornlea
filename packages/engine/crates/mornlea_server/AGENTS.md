@@ -796,9 +796,13 @@ separate caller responsibilities.
   when its slots remain equal. Accepted transfers and the equal-record panel
   drop also mark the tick-local owner-only inventory dirty lane after that
   successful compound; refusals and lifecycle open/close mark nothing, and a
-  quiet container publication cadence remains future work.
-  Reach invalidation belongs to publication after
-  transfers. The serial reducer owns net viewer commit, retirement pruning and
+  valid physical container views publish complete state every tick.
+  Final publication validates Active overworld ownership, Ready exact generation
+  and float32 eye reach after transfers; invalid views clear with one exact close.
+  Explicit close and replacement produce no invalidation notice. Owner record
+  order is inventory, crafting, furnace, chest, invalidation close, private player.
+  Fixed-slot cell recovery performs checked coordinates without chunk materialization.
+  Reach invalidation belongs to publication after transfers. The serial reducer owns net viewer commit, retirement pruning and
   real phase scheduling; workbench anchor mutual exclusion remains separate.
 - `src/store/scheduler.rs` owns save scheduling over the accepted mailbox:
   completions before due retries before urgent before cadence autosave (latched

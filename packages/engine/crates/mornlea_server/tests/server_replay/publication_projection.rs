@@ -3367,7 +3367,7 @@ fn projection_chat_accepted_broadcast_and_rejects_sender_only() {
 
 /// projection::record_states_inventory_chest_container_crafting_furnace —
 /// real commands publish the exact owner-only record states, a close
-/// publishes the container-closed notice, and a refused command publishes
+/// clears the view without an invalidation notice, and a refused command publishes
 /// nothing.
 #[test]
 fn projection_record_states_inventory_chest_container_crafting_furnace() {
@@ -3500,8 +3500,8 @@ fn projection_record_states_inventory_chest_container_crafting_furnace() {
         Some(&Event::ChestState(expected))
     );
 
-    // Closing publishes the exact released reference, and a crafting grid
-    // staged in the same window publishes after the close notice.
+    // Explicit close releases the view silently; the same-window grid remains
+    // an independently changed owner record.
     submit(&mut state, owner, 4, Command::CloseContainer);
     stage(&mut state, |context| {
         let actor = ActorKey::Player(owner);
@@ -3516,26 +3516,17 @@ fn projection_record_states_inventory_chest_container_crafting_furnace() {
     });
     let tick_four = state.advance_tick(TickBudget::full()).unwrap();
     let tick_four_events = events_for(&tick_four, owner);
-    assert_eq!(
+    assert!(
         find_event(&tick_four_events, |event| matches!(
             event,
             Event::ContainerClosed(_)
-        )),
-        Some(&Event::ContainerClosed(
-            mornlea_domain::ContainerClosed::new(chest_ref)
         ))
+        .is_none()
     );
-    let closed_at = tick_four_events
-        .iter()
-        .position(|event| matches!(event, Event::ContainerClosed(_)))
-        .unwrap();
-    let crafting_at = tick_four_events
-        .iter()
-        .position(|event| matches!(event, Event::CraftingState(_)))
-        .unwrap();
     assert!(
-        closed_at < crafting_at,
-        "the close notice precedes the crafting family"
+        tick_four_events
+            .iter()
+            .any(|event| matches!(event, Event::CraftingState(_)))
     );
 
     // The staged personal grid is the two-by-two stone-hoe pattern
@@ -5546,3 +5537,6 @@ mod owner_intent;
 
 #[path = "publication_world_boundaries.rs"]
 mod world_boundaries;
+
+#[path = "publication_container_lifecycle.rs"]
+mod container_lifecycle;

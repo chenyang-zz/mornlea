@@ -9,11 +9,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mornlea_domain::{
-    CompanionId, ContainerRef, CraftingSize, DropId, HostileId, InventoryState, ItemDrop,
-    PassiveId, PlayerId, ProjectileId,
+    CompanionId, CraftingSize, DropId, HostileId, InventoryState, ItemDrop, PassiveId, PlayerId,
+    ProjectileId,
 };
 
-use crate::contracts::{ChunkKey, ContainerRecord, ViewLease};
+use crate::contracts::ChunkKey;
 
 /// One chunk column's publication state on a single session's mirror.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -52,8 +52,4 @@ pub(crate) struct SessionView {
     pub(crate) last_inventory: Option<InventoryState>,
     /// Last published crafting grid and size.
     pub(crate) last_crafting: Option<([mornlea_storage::ItemStack; 9], CraftingSize)>,
-    /// Last published record per container this session holds a lease on.
-    pub(crate) leased_containers: BTreeMap<ContainerRef, ContainerRecord>,
-    /// Last tick's committed viewer lease, if any.
-    pub(crate) last_lease: Option<ViewLease>,
 }

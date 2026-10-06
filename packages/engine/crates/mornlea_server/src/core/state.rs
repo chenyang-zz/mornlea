@@ -1916,6 +1916,52 @@ impl AuthorityState {
         self.residents.containers.get(&reference).cloned()
     }
 
+    /// Validate the bounded current views after all resident settlement.
+    /// Only invalidation produces a close fact; explicit close and replacement
+    /// already removed their lease and must not acquire an inferred notice.
+    pub(crate) fn invalidate_container_views(&mut self) -> BTreeMap<SessionKey, ContainerRef> {
+        let read = self.settled_read().expect("healthy publication authority");
+        let mut invalid = BTreeMap::new();
+        for (&session, &lease) in &self.views {
+            let reference = lease.reference();
+            let valid = (|| {
+                let actor = read.actor(ActorKey::Player(session))?;
+                if actor.lifecycle != ActorLifecycle::Active
+                    || actor.dimension != Dimension::OVERWORLD
+                {
+                    return None;
+                }
+                let key = ChunkKey {
+                    dimension: Dimension::OVERWORLD,
+                    pos: reference.chunk(),
+                };
+                if !read.ready_chunk(key) {
+                    return None;
+                }
+                let cell = self
+                    .residents
+                    .container_chunks
+                    .get(&key)?
+                    .position(key, reference)?;
+                let tunables = read.environment()?.tunables;
+                let position = actor.motion.position().get();
+                let dx = (cell.x() as f32 + 0.5) - position[0];
+                let dy = (cell.y() as f32 + 0.5) - (position[1] + tunables.eye_height());
+                let dz = (cell.z() as f32 + 0.5) - position[2];
+                // Preserve source float32 vector length and inclusive reach.
+                ((dx * dx + dy * dy + dz * dz).sqrt() <= tunables.interaction_reach()).then_some(())
+            })()
+            .is_some();
+            if !valid {
+                invalid.insert(session, reference);
+            }
+        }
+        for session in invalid.keys() {
+            self.views.remove(session);
+        }
+        invalid
+    }
+
     /// The committed viewer lease one session holds, if any.
     pub(crate) fn committed_lease(&self, session: SessionKey) -> Option<ViewLease> {
         self.views.get(&session).copied()
