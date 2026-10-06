@@ -4523,12 +4523,9 @@ impl<'a> TickContext<'a> {
         }
     }
 
-    /// Records one session's accepted inventory publication intent.
-    /// Inventory, crafting, container, eating and pickup providers call this
-    /// only after settlement: a changed patch, a completed bite or pickup, an
-    /// accepted equal armor swap, or after an accepted container compound
-    /// (including the equal-record panel drop), so no arbitrary session and
-    /// no extra owner can force an owner-only inventory publication.
+    /// Records accepted inventory intent only after successful owner settlement.
+    /// Equal final records still publish after accepted swaps or exchanges; a
+    /// refusal or arbitrary session cannot manufacture owner publication.
     pub(crate) fn record_inventory_publication_dirty(&mut self, session: SessionKey) {
         self.inventory_publication_dirty.insert(session);
     }

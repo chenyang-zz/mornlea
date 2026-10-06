@@ -1303,3 +1303,14 @@ refusal precedes foot readiness; a Pending reset does not become a second panel
 admission. Missing owned actor or inventory remains a trusted failure. The
 accepted checked foot preparation retains Active semantics for container and
 selected drops; the private panel variant shares geometry and capacity checks.
+
+Live farming and bucket commands validate pitch at intake without updating
+retained actor look or input acknowledgment. Their late checked provider repeats
+Active, uses current selected inventory and owned geometry, and has no separate
+placement-view gate. Source semantic refusals retain original identity; owned
+basis, bounded trace and atomic staging faults remain hard. Outside-height ray
+and till-support reads are immutable air without mutation observations. Every
+accepted transform retains inventory intent, including same-tick exchanges back
+to the original record; only buckets confirm success. Direct raw providers share
+the atomic core with generic semantic errors. Prepared fault/pose inputs qualify
+consumers separately from runtime, queued-mirror and executable composition.

@@ -3279,3 +3279,433 @@ fn native_live_placement_outcome_late_recovery() {
         ActorLifecycle::Pending
     );
 }
+
+fn tool_outcome_command(family: usize, yaw: f32, pitch: f32) -> Command {
+    let angles = look(yaw, pitch);
+    match family {
+        0 => Command::TillSoil(angles),
+        1 => Command::BoneMeal(angles),
+        2 => Command::CollectWater(angles),
+        3 => Command::PlaceWater(angles),
+        _ => unreachable!("four tool families"),
+    }
+}
+
+fn tool_outcome_stock(state: &mut AuthorityState, owner: SessionKey, stack: StorageStack) {
+    prepared_inventory_outcome(state, owner, |inventory| inventory.slots[0] = stack);
+}
+
+fn tool_outcome_set_cell(chunk: &mut Chunk, pos: BlockPos, block: u16) {
+    // Tool fixtures replace a prior cell; the inherited helper only initializes empty bits.
+    set_cell(chunk, pos, 0);
+    let index = mornlea_domain::chunk_block_index(pos) as usize;
+    let shift = (index % 4) * 15;
+    let word = &mut chunk.sections[index / 4096].packed[(index % 4096) / 4];
+    *word = (*word & !(0x7fff_u64 << shift)) | (u64::from(block) << shift);
+}
+
+#[test]
+fn native_tool_outcome_admission_invalid_pitch() {
+    for family in 0..4 {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        let before = state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .look;
+        live_placement_refused(
+            &mut state,
+            owner,
+            other,
+            tool_outcome_command(family, std::f32::consts::PI, std::f32::consts::FRAC_PI_2),
+            &[],
+            mornlea_domain::RejectReason::InvalidInput,
+        );
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(owner))
+                .unwrap()
+                .look,
+            before
+        );
+    }
+}
+
+#[test]
+fn native_tool_outcome_semantic() {
+    for (family, reason) in [
+        (0, mornlea_domain::RejectReason::InvalidBlock),
+        (1, mornlea_domain::RejectReason::InvalidBlock),
+        (2, mornlea_domain::RejectReason::NotFluidSource),
+        (3, mornlea_domain::RejectReason::BucketMismatch),
+    ] {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        live_placement_ready(&mut state, 1, |_| {});
+        live_placement_refused(
+            &mut state,
+            owner,
+            other,
+            tool_outcome_command(family, std::f32::consts::PI, 0.0),
+            &[BlockPos::new(0, 66, 2), BlockPos::new(0, 66, 3)],
+            reason,
+        );
+    }
+}
+
+#[test]
+fn native_tool_outcome_no_target() {
+    for family in 0..4 {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        live_placement_refused(
+            &mut state,
+            owner,
+            other,
+            tool_outcome_command(family, std::f32::consts::FRAC_PI_2, 0.0),
+            &[],
+            mornlea_domain::RejectReason::NoTarget,
+        );
+    }
+}
+
+#[test]
+fn native_tool_outcome_unready_ray() {
+    for family in 0..4 {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        // The current foot stays in a Ready column; only the ray enters its unavailable neighbor.
+        live_placement_pose(&mut state, owner, [31.5, 65.0, 0.5]);
+        live_placement_refused(
+            &mut state,
+            owner,
+            other,
+            tool_outcome_command(family, -std::f32::consts::FRAC_PI_2, 0.0),
+            &[],
+            mornlea_domain::RejectReason::ChunkNotReady,
+        );
+    }
+}
+
+#[test]
+fn native_tool_outcome_till_above_occupied() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    live_placement_ready(&mut state, 1, |chunk| {
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 66, 3), 3);
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 67, 3), 2);
+    });
+    live_placement_refused(
+        &mut state,
+        owner,
+        other,
+        tool_outcome_command(0, std::f32::consts::PI, 0.0),
+        &[BlockPos::new(0, 66, 3), BlockPos::new(0, 67, 3)],
+        mornlea_domain::RejectReason::Occupied,
+    );
+}
+
+#[test]
+fn native_tool_outcome_collect_bucket_mismatch() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    live_placement_ready(&mut state, 1, |chunk| {
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 66, 3), 27)
+    });
+    live_placement_refused(
+        &mut state,
+        owner,
+        other,
+        tool_outcome_command(2, std::f32::consts::PI, 0.0),
+        &[BlockPos::new(0, 66, 3)],
+        mornlea_domain::RejectReason::BucketMismatch,
+    );
+}
+
+#[test]
+fn native_tool_outcome_place_water_occupied() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    live_placement_ready(&mut state, 1, |chunk| {
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 66, 2), 27)
+    });
+    live_placement_refused(
+        &mut state,
+        owner,
+        other,
+        tool_outcome_command(3, std::f32::consts::PI, 0.0),
+        &[BlockPos::new(0, 66, 2)],
+        mornlea_domain::RejectReason::Occupied,
+    );
+}
+
+#[test]
+fn native_tool_outcome_bucket_settle_back_intent() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    tool_outcome_stock(&mut state, owner, storage(55, 1));
+    live_placement_ready(&mut state, 1, |chunk| {
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 66, 2), 27)
+    });
+    stage(&mut state, |context| {
+        let mut runtime = context
+            .read()
+            .runtime(ActorKey::Player(owner))
+            .cloned()
+            .unwrap();
+        runtime.has_view = false;
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+    });
+    let before = record(&state, owner);
+    submit(
+        &mut state,
+        owner,
+        1,
+        tool_outcome_command(2, std::f32::consts::PI, 0.0),
+    );
+    submit(
+        &mut state,
+        owner,
+        2,
+        tool_outcome_command(3, std::f32::consts::PI, 0.0),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(
+        live_placement_cells(&state, &[BlockPos::new(0, 66, 2)])[0]
+            .unwrap()
+            .block,
+        27
+    );
+    let events = events_for(&tick, owner);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+    let receipts: Vec<_> = events
+        .iter()
+        .filter_map(|event| {
+            if let Event::PlaceBlockSucceeded(value) = event {
+                Some(*value)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        receipts,
+        vec![
+            mornlea_domain::PlacementSuccess::new(1),
+            mornlea_domain::PlacementSuccess::new(2)
+        ]
+    );
+    assert_eq!(projection_inventory_states(&events).len(), 1);
+    assert!(!events_for(&tick, other).iter().any(|event| matches!(
+        event,
+        Event::PlaceBlockSucceeded(_) | Event::InventoryState(_)
+    )));
+    assert_eq!(native_input_ack(&tick, owner), 0);
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        !events_for(&quiet, owner)
+            .iter()
+            .any(|event| matches!(event, Event::PlaceBlockSucceeded(_)))
+    );
+}
+
+#[test]
+fn native_tool_outcome_late_recovery() {
+    for family in 0..4 {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        live_placement_pose(&mut state, owner, [1_000_000.5, 65.0, 0.5]);
+        live_placement_refused(
+            &mut state,
+            owner,
+            other,
+            tool_outcome_command(family, 0.0, 0.0),
+            &[],
+            mornlea_domain::RejectReason::PlayerNotReady,
+        );
+    }
+}
+
+#[test]
+fn native_tool_outcome_trusted_revision() {
+    for family in 0..4 {
+        let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+        let held = match family {
+            0 => StorageStack {
+                item: 30,
+                count: 1,
+                durability: 1,
+            },
+            1 => storage(39, 2),
+            2 => storage(55, 1),
+            _ => storage(56, 1),
+        };
+        tool_outcome_stock(&mut state, owner, held);
+        live_placement_ready(&mut state, u64::MAX, |chunk| {
+            let block = match family {
+                0 => 3,
+                1 => 37,
+                2 => 27,
+                _ => 2,
+            };
+            tool_outcome_set_cell(chunk, BlockPos::new(0, 66, 3), block);
+        });
+        let before = record(&state, owner);
+        let chunks = state.residents().ready_snapshot();
+        let next_tick = state.next_tick();
+        submit(
+            &mut state,
+            owner,
+            1,
+            tool_outcome_command(family, std::f32::consts::PI, 0.0),
+        );
+        let want = Err(ServerError::Internal {
+            invariant: "tool staging",
+        });
+        assert_eq!(state.advance_tick(TickBudget::full()), want);
+        assert_eq!(record(&state, owner), before);
+        assert_eq!(state.residents().ready_snapshot(), chunks);
+        assert_eq!(state.next_tick(), next_tick);
+        assert_eq!(state.advance_tick(TickBudget::full()), want);
+    }
+}
+
+#[test]
+fn native_tool_outcome_preserves_actor_look_control() {
+    for family in 0..4 {
+        let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+        live_placement_ready(&mut state, 1, |_| {});
+        let before = record(&state, owner);
+        let actor_look = state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .look;
+        submit(
+            &mut state,
+            owner,
+            1,
+            tool_outcome_command(family, std::f32::consts::PI, 0.0),
+        );
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(owner))
+                .unwrap()
+                .look,
+            actor_look
+        );
+        assert_eq!(record(&state, owner), before);
+        assert_eq!(native_input_ack(&tick, owner), 0);
+        assert!(
+            !events_for(&tick, owner)
+                .iter()
+                .any(|event| matches!(event, Event::PlaceBlockSucceeded(_)))
+        );
+    }
+}
+
+#[test]
+fn native_tool_outcome_till_top_height() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    tool_outcome_stock(
+        &mut state,
+        owner,
+        StorageStack {
+            item: 30,
+            count: 1,
+            durability: 1,
+        },
+    );
+    live_placement_ready(&mut state, 1, |chunk| {
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 317, 0), 2);
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 319, 3), 3);
+    });
+    live_placement_pose(&mut state, owner, [0.5, 318.0, 0.5]);
+    submit(
+        &mut state,
+        owner,
+        1,
+        tool_outcome_command(0, std::f32::consts::PI, 0.0),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Active
+    );
+    assert_eq!(
+        live_placement_cells(&state, &[BlockPos::new(0, 319, 3)])[0]
+            .unwrap()
+            .block,
+        35
+    );
+    assert_eq!(record(&state, owner).slots[0], storage(32, 1));
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)).len(),
+        1
+    );
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+    assert!(!events_for(&tick, owner).iter().any(|event| matches!(
+        event,
+        Event::CommandRejected(_) | Event::PlaceBlockSucceeded(_)
+    )));
+    assert_eq!(native_input_ack(&tick, owner), 0);
+}
+
+#[test]
+fn native_tool_outcome_bone_meal_late_selected() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    prepared_inventory_outcome(&mut state, owner, |inventory| {
+        inventory.slots[1] = storage(39, 2)
+    });
+    live_placement_ready(&mut state, 1, |chunk| {
+        tool_outcome_set_cell(chunk, BlockPos::new(0, 66, 3), 37)
+    });
+    assert_eq!(
+        live_placement_cells(&state, &[BlockPos::new(0, 66, 3)])[0]
+            .unwrap()
+            .block,
+        37
+    );
+    let mut want = record(&state, owner);
+    want.selected = HotbarSlot::new(1).unwrap();
+    want.slots[1] = storage(39, 1);
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::SelectHotbar(HotbarSlot::new(1).unwrap()),
+    );
+    submit(
+        &mut state,
+        owner,
+        2,
+        tool_outcome_command(1, std::f32::consts::PI, 0.0),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), want);
+    assert_eq!(
+        live_placement_cells(&state, &[BlockPos::new(0, 66, 3)])[0]
+            .unwrap()
+            .block,
+        38
+    );
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)).len(),
+        1
+    );
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+    assert!(!events_for(&tick, owner).iter().any(|event| matches!(
+        event,
+        Event::CommandRejected(_) | Event::PlaceBlockSucceeded(_)
+    )));
+    assert_eq!(native_input_ack(&tick, owner), 0);
+}

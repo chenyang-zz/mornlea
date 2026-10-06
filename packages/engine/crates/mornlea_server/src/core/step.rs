@@ -729,6 +729,23 @@ fn admit_command(
             }
             return Ok(());
         }
+        Command::TillSoil(_)
+        | Command::BoneMeal(_)
+        | Command::CollectWater(_)
+        | Command::PlaceWater(_) => {
+            match tools::admit_command(context, envelope)? {
+                CommandDisposition::Settled(_) => {}
+                CommandDisposition::Refused(reason) => {
+                    context.record_command_rejection(envelope, reason, RejectionStage::Admission)?
+                }
+                CommandDisposition::Unowned => {
+                    return Err(ServerError::Internal {
+                        invariant: "tool command owner",
+                    });
+                }
+            }
+            return Ok(());
+        }
         command
             if matches!(command, Command::MoveInventory(_) | Command::EquipArmor)
                 || matches!(command, Command::MovePartial(partial) if partial.view() == mornlea_domain::StackView::Inventory)
@@ -868,6 +885,14 @@ fn route_interaction(
         CommandDisposition::Unowned => {}
     }
     match world_mutation::settle_command(context, envelope)? {
+        CommandDisposition::Settled(_) => return Ok(()),
+        CommandDisposition::Refused(reason) => {
+            context.record_command_rejection(envelope, reason, RejectionStage::Settlement)?;
+            return Ok(());
+        }
+        CommandDisposition::Unowned => {}
+    }
+    match tools::settle_command(context, envelope)? {
         CommandDisposition::Settled(_) => return Ok(()),
         CommandDisposition::Refused(reason) => {
             context.record_command_rejection(envelope, reason, RejectionStage::Settlement)?;
