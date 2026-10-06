@@ -5303,6 +5303,12 @@ impl<'a> TickContext<'a> {
         Ok(())
     }
 
+    /// Initialized dispatch owns the admitted control basis until all providers
+    /// finish. Raw fixtures and public restaging do not establish that prefix.
+    pub(crate) fn owns_command_prefix(&self) -> bool {
+        self.command_rejections.is_some()
+    }
+
     /// Actual tick providers require the initialized bounded owner. The raw
     /// harness branch preserves direct phase compatibility without pretending
     /// that those calls execute the production publication pipeline.

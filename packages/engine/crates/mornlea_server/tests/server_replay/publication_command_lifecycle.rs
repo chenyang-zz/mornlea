@@ -451,3 +451,355 @@ fn native_hotbar_selection_before_drop_keeps_prefix_order() {
     );
     assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
 }
+
+fn placement_move_control(yaw: f32, pitch: f32) -> PlayerControl {
+    PlayerControl::new(PlayerControlParts {
+        movement: Movement {
+            move_x: 0,
+            move_z: 1,
+            jump: false,
+        },
+        look: look(yaw, pitch),
+        actions: HeldActions {
+            primary: false,
+            eating: false,
+            sprinting: false,
+            sneaking: false,
+        },
+    })
+}
+
+fn place_with_empty_slot(yaw: f32, pitch: f32) -> Command {
+    Command::PlaceBlock(mornlea_domain::PlacementIntent::try_new(look(yaw, pitch), 8).unwrap())
+}
+
+fn native_input_ack(tick: &mornlea_server::contracts::TickPublication, owner: SessionKey) -> u64 {
+    events_for(tick, owner)
+        .iter()
+        .find_map(|event| match event {
+            Event::PlayerState(value) => Some(value.last_input_sequence()),
+            _ => None,
+        })
+        .expect("native player state")
+}
+
+#[test]
+fn native_placement_admission_keeps_look_after_refused_world_action() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let before = record(&state, owner);
+    submit(&mut state, owner, 1, place_with_empty_slot(0.75, 0.25));
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .look,
+        look(0.75, 0.25)
+    );
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(
+        state.residents().runtimes[&ActorKey::Player(owner)].controls,
+        None
+    );
+    assert_eq!(native_input_ack(&tick, owner), 0);
+    assert_eq!(state.session(owner).unwrap().last_applied_sequence, 1);
+    assert!(!events_for(&tick, owner).iter().any(|event| matches!(
+        event,
+        Event::PlaceBlockSucceeded(_) | Event::BlockChanges(_)
+    )));
+    assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+}
+
+#[test]
+fn native_placement_after_same_tick_input_uses_current_motion_yaw() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let (mut reference, reference_owner, _, _) = scene(ContainerKind::Chest);
+    let before = record(&state, owner);
+    let new_yaw = std::f32::consts::FRAC_PI_2;
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::PlayerInput(placement_move_control(0.0, 0.0)),
+    );
+    submit(&mut state, owner, 2, place_with_empty_slot(new_yaw, 0.25));
+    submit(
+        &mut reference,
+        reference_owner,
+        1,
+        Command::PlayerInput(placement_move_control(new_yaw, 0.25)),
+    );
+    submit(
+        &mut reference,
+        reference_owner,
+        2,
+        place_with_empty_slot(new_yaw, 0.25),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    reference.advance_tick(TickBudget::full()).unwrap();
+    let view = state.settled_read().unwrap();
+    let expected = reference.settled_read().unwrap();
+    let actor = ActorKey::Player(owner);
+    let reference_actor = ActorKey::Player(reference_owner);
+    assert_eq!(
+        view.actor(actor).unwrap().motion,
+        expected.actor(reference_actor).unwrap().motion
+    );
+    assert_eq!(view.actor(actor).unwrap().look, look(new_yaw, 0.25));
+    assert_eq!(
+        view.runtime(actor).unwrap().controls,
+        Some(placement_move_control(new_yaw, 0.25))
+    );
+    assert_eq!(native_input_ack(&tick, owner), 1);
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(record(&reference, reference_owner), before);
+    assert!(
+        !events_for(&tick, owner)
+            .iter()
+            .any(|event| matches!(event, Event::PlaceBlockSucceeded(_)))
+    );
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+}
+
+#[test]
+fn native_placement_changes_previously_held_motion_yaw() {
+    let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+    let (mut reference, reference_owner, _, _) = scene(ContainerKind::Chest);
+    for (authority, session) in [(&mut state, owner), (&mut reference, reference_owner)] {
+        submit(
+            authority,
+            session,
+            1,
+            Command::PlayerInput(placement_move_control(0.0, 0.0)),
+        );
+        authority.advance_tick(TickBudget::full()).unwrap();
+    }
+    let new_yaw = std::f32::consts::FRAC_PI_2;
+    submit(&mut state, owner, 2, place_with_empty_slot(new_yaw, 0.25));
+    submit(
+        &mut reference,
+        reference_owner,
+        2,
+        Command::PlayerInput(placement_move_control(new_yaw, 0.25)),
+    );
+    submit(
+        &mut reference,
+        reference_owner,
+        3,
+        place_with_empty_slot(new_yaw, 0.25),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let reference_tick = reference.advance_tick(TickBudget::full()).unwrap();
+    let view = state.settled_read().unwrap();
+    let expected = reference.settled_read().unwrap();
+    let actor = ActorKey::Player(owner);
+    let reference_actor = ActorKey::Player(reference_owner);
+    assert_eq!(
+        view.actor(actor).unwrap().motion,
+        expected.actor(reference_actor).unwrap().motion
+    );
+    assert_eq!(view.actor(actor).unwrap().look, look(new_yaw, 0.25));
+    assert_eq!(view.runtime(actor), expected.runtime(reference_actor));
+    assert_eq!(native_input_ack(&tick, owner), 1);
+    assert_eq!(native_input_ack(&reference_tick, reference_owner), 2);
+    assert_eq!(record(&state, owner), record(&reference, reference_owner));
+}
+
+#[test]
+fn native_placement_before_input_keeps_later_input_authority() {
+    let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+    let before = record(&state, owner);
+    submit(&mut state, owner, 1, place_with_empty_slot(0.75, 0.25));
+    let input = placement_move_control(0.0, 0.0);
+    submit(&mut state, owner, 2, Command::PlayerInput(input));
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    let view = state.settled_read().unwrap();
+    assert_eq!(
+        view.actor(ActorKey::Player(owner)).unwrap().look,
+        input.look()
+    );
+    assert_eq!(
+        view.runtime(ActorKey::Player(owner)).unwrap().controls,
+        Some(input)
+    );
+    assert_eq!(native_input_ack(&tick, owner), 2);
+    assert_eq!(record(&state, owner), before);
+}
+
+#[test]
+fn native_placement_invalid_pitch_preserves_held_basis_and_rejects_first() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let (mut reference, reference_owner, _, _) = scene(ContainerKind::Chest);
+    for (authority, session) in [(&mut state, owner), (&mut reference, reference_owner)] {
+        submit(
+            authority,
+            session,
+            1,
+            Command::PlayerInput(placement_move_control(0.0, 0.0)),
+        );
+        authority.advance_tick(TickBudget::full()).unwrap();
+    }
+    submit(&mut state, owner, 2, place_with_empty_slot(0.75, 2.0));
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    reference.advance_tick(TickBudget::full()).unwrap();
+    let view = state.settled_read().unwrap();
+    let expected = reference.settled_read().unwrap();
+    assert_eq!(
+        view.actor(ActorKey::Player(owner)),
+        expected.actor(ActorKey::Player(reference_owner))
+    );
+    assert_eq!(
+        view.runtime(ActorKey::Player(owner)),
+        expected.runtime(ActorKey::Player(reference_owner))
+    );
+    assert_eq!(record(&state, owner), record(&reference, reference_owner));
+    assert_eq!(native_input_ack(&tick, owner), 1);
+    let refusal = Event::CommandRejected(mornlea_domain::CommandRejection::new(
+        2,
+        mornlea_domain::RejectReason::InvalidInput,
+    ));
+    let events = events_for(&tick, owner);
+    assert_eq!(events.first(), Some(&refusal));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::CommandRejected(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !events_for(&tick, other)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::PlaceBlockSucceeded(_)))
+    );
+}
+
+#[test]
+fn native_placement_pitch_boundary_and_normalized_yaw_match_source_bits() {
+    // These bits come from the executed Go look oracle, including f32 rounding.
+    let bound = f32::from_bits(0x3fc7c82d);
+    for (yaw, pitch, normalized) in [
+        (0.0, -bound, 0.0),
+        (0.0, bound, 0.0),
+        (f32::from_bits(0x40d10fdb), 0.0, f32::from_bits(0x3e800006)),
+    ] {
+        let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+        submit(&mut state, owner, 1, place_with_empty_slot(yaw, pitch));
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(owner))
+                .unwrap()
+                .look,
+            look(normalized, pitch)
+        );
+        assert_eq!(native_input_ack(&tick, owner), 0);
+        assert!(
+            !events_for(&tick, owner)
+                .iter()
+                .any(|event| matches!(event, Event::CommandRejected(_)))
+        );
+    }
+}
+
+#[test]
+fn native_placement_held_and_same_tick_yaw_normalizes_once_near_pi() {
+    let raw = f32::from_bits(0x4116cbe4);
+    let normalized = f32::from_bits(0xc0490fdb);
+    for same_tick in [true, false] {
+        let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+        let (mut reference, reference_owner, _, _) = scene(ContainerKind::Chest);
+        if !same_tick {
+            for (authority, session) in [(&mut state, owner), (&mut reference, reference_owner)] {
+                submit(
+                    authority,
+                    session,
+                    1,
+                    Command::PlayerInput(placement_move_control(0.0, 0.0)),
+                );
+                authority.advance_tick(TickBudget::full()).unwrap();
+            }
+        } else {
+            submit(
+                &mut state,
+                owner,
+                1,
+                Command::PlayerInput(placement_move_control(0.0, 0.0)),
+            );
+        }
+        submit(&mut state, owner, 2, place_with_empty_slot(raw, 0.25));
+        let reference_sequence = if same_tick { 1 } else { 2 };
+        submit(
+            &mut reference,
+            reference_owner,
+            reference_sequence,
+            Command::PlayerInput(placement_move_control(raw, 0.25)),
+        );
+        let tick = state.advance_tick(TickBudget::full()).unwrap();
+        let reference_tick = reference.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(owner))
+                .unwrap()
+                .look,
+            look(normalized, 0.25)
+        );
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(owner))
+                .unwrap()
+                .motion,
+            reference
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(reference_owner))
+                .unwrap()
+                .motion
+        );
+        assert_eq!(native_input_ack(&tick, owner), 1);
+        assert_eq!(
+            native_input_ack(&reference_tick, reference_owner),
+            reference_sequence
+        );
+        assert_eq!(record(&state, owner), record(&reference, reference_owner));
+        state.advance_tick(TickBudget::full()).unwrap();
+        reference.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(owner))
+                .unwrap()
+                .look,
+            look(normalized, 0.25)
+        );
+        assert_eq!(
+            state
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(owner))
+                .unwrap()
+                .motion,
+            reference
+                .settled_read()
+                .unwrap()
+                .actor(ActorKey::Player(reference_owner))
+                .unwrap()
+                .motion
+        );
+    }
+}

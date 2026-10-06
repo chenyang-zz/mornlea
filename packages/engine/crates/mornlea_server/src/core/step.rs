@@ -28,7 +28,7 @@ use mornlea_domain::{
     RejectReason, order_commands,
 };
 
-use super::command_outcome::RejectionStage;
+use super::command_outcome::{CommandDisposition, RejectionStage};
 use super::contracts::{
     ActorKey, ActorLifecycle, AuthorityInteraction, ChunkKey, ContainerSlots, FinalReducer,
     InteractionKind, PhaseReport, RuleCall, RulePhase, RuleReject, ServerError, ServerPhase,
@@ -679,6 +679,20 @@ fn admit_command(
     // Lifecycle commands settle against the command prefix before actor actions.
     // Physical transfers keep their later chunk-write phase.
     match envelope.command() {
+        Command::PlaceBlock(_) => {
+            match player_motion::admit_placement_look(context, envelope)? {
+                CommandDisposition::Settled(_) => {}
+                CommandDisposition::Refused(reason) => {
+                    context.record_command_rejection(envelope, reason, RejectionStage::Admission)?
+                }
+                CommandDisposition::Unowned => {
+                    return Err(ServerError::Internal {
+                        invariant: "placement command owner",
+                    });
+                }
+            }
+            return Ok(());
+        }
         Command::SelectHotbar(_) => {
             // Actors retain the admission-time selection; this envelope settles
             // in prefix order with drops and other deferred interactions.

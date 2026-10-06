@@ -1211,3 +1211,14 @@ Earlier deferred drops observe the old selection; immediate inventory/equip
 commands and Eating retain the admission-time basis. The existing inventory
 provider still settles direct raw calls in `PlayerCommand`; only the live serial
 reducer owns the later schedule. Wire refusal mapping remains separate.
+
+Placement admission belongs to the motion owner: valid look updates actor
+yaw/pitch and retained movement yaw before actor actions, while physical
+placement stays deferred. Invalid pitch leaves held state and input acknowledgment
+intact and emits an admission refusal. Actual initialized command-prefix motion
+uses its already admitted runtime controls so later placement look cannot be
+overwritten by an older input envelope. Raw direct-defer and public restaging
+retain their original control basis; a resident loan alone does not prove intake.
+Real command-prefix motion uses the normalized authoritative actor look
+directly. Repeating float32 yaw normalization near pi can change its sign;
+raw supplied controls retain their separate single normalization path.

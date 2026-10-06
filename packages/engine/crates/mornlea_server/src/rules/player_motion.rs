@@ -4,9 +4,10 @@
 //! `PlayerInput` commands, and the per-actor `PlayerMotion`-phase advance. The
 //! intake validates one envelope, commits held controls and look before action
 //! advancement, and defers it to the motion phase through [`TickContext::defer`].
-//! The advance resolves the latest deferred envelope per session and steps the
-//! actor through the accepted F1 kernels. A tick without a new envelope retains
-//! the runtime's held controls. Intake order
+//! Initialized command-prefix advancement uses the canonical admitted runtime
+//! controls, including a later placement look; raw direct calls resolve their
+//! supplied deferred input. Both paths step the accepted F1 kernels, and an idle
+//! tick retains held controls. Intake order
 //! is arrival order, so the first envelope kept at a tied sequence is the
 //! earliest arrival, matching the ordering layer's tie rule (`order_commands`
 //! in `mornlea_domain`).
@@ -59,8 +60,8 @@
 //! qualification at their motion and lifecycle boundaries.
 
 use mornlea_domain::{
-    BlockPos, Command, Dimension, FiniteVec3, LookAngles, MotionState, MotionStateParts,
-    PlayerControl,
+    BlockPos, Command, CommandEnvelope, Dimension, FiniteVec3, LookAngles, MotionState,
+    MotionStateParts, PlayerControl, PlayerControlParts, RejectReason,
 };
 use mornlea_engine::native::contracts::collision::{Aabb, CollisionCell, CollisionGrid};
 use mornlea_engine::native::contracts::physics::{
@@ -68,6 +69,7 @@ use mornlea_engine::native::contracts::physics::{
 };
 use mornlea_engine::native::physics::NativePhysics;
 
+use crate::core::command_outcome::{CommandDisposition, CommandResult};
 use crate::core::contracts::{
     ActorKey, ActorLifecycle, ActorRecord, PhaseReport, RuleCall, RuleEffect, RulePhase,
     ServerError, SessionKey,
@@ -155,6 +157,57 @@ pub fn run(ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport,
         RulePhase::PlayerMotion => run_motion(ctx, &call),
         _ => Err(ServerError::InvalidInput { field: "phase" }),
     }
+}
+
+/// Placement admission owns look before actor actions, independently of the
+/// later physical placement outcome. It preserves held actions and their progress.
+pub(crate) fn admit_placement_look(
+    ctx: &mut TickContext<'_>,
+    envelope: &CommandEnvelope,
+) -> CommandResult {
+    let Command::PlaceBlock(intent) = envelope.command() else {
+        return Ok(CommandDisposition::Unowned);
+    };
+    let session = SessionKey::from_raw(envelope.session()).ok_or(ServerError::Internal {
+        invariant: "placement admission session",
+    })?;
+    let actor = ActorKey::Player(session);
+    let mut record = match ctx.read().actor(actor) {
+        Some(record) if record.lifecycle == ActorLifecycle::Active => record.clone(),
+        _ => return Ok(CommandDisposition::Refused(RejectReason::PlayerNotReady)),
+    };
+    let look = intent.look();
+    if !(-MAX_PITCH..=MAX_PITCH).contains(&look.pitch()) {
+        return Ok(CommandDisposition::Refused(RejectReason::InvalidInput));
+    }
+    record.look = LookAngles::try_new(normalize_yaw(look.yaw()), look.pitch()).map_err(|_| {
+        ServerError::Internal {
+            invariant: "placement admission look",
+        }
+    })?;
+    let mut runtime = merged_runtime(&ctx.read(), &record)?;
+    runtime.controls = runtime.controls.map(|control| {
+        PlayerControl::new(PlayerControlParts {
+            movement: control.movement(),
+            look: record.look,
+            actions: control.actions(),
+        })
+    });
+    // Reserve the bounded interaction before committing the control basis.
+    ctx.defer(*envelope, RulePhase::Interaction)?;
+    ctx.stage(RuleEffect::Compound(vec![
+        RuleEffect::Actor(record),
+        RuleEffect::Runtime(runtime),
+    ]))
+    .map_err(|_| ServerError::Internal {
+        invariant: "placement admission staging",
+    })?;
+    Ok(CommandDisposition::Settled(PhaseReport {
+        examined: 1,
+        applied: 1,
+        carried: 0,
+        rejected: 0,
+    }))
 }
 
 /// One intake: validate a `PlayerInput` envelope and commit controls and look
@@ -286,7 +339,15 @@ fn run_motion(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
     // invalid latest explicitly clears it (`ApplyPlayerCommands` in tick.go).
     let held = match latest_deferred(ctx, session) {
         Some(envelope) => match envelope.command() {
-            Command::PlayerInput(control) if valid_control(control) => Some(control),
+            Command::PlayerInput(control) if valid_control(control) => {
+                // The real prefix already staged its canonical controls, including
+                // a later placement look. Raw direct-defer callers supply the basis.
+                if ctx.owns_command_prefix() {
+                    runtime.controls
+                } else {
+                    Some(control)
+                }
+            }
             _ => None,
         },
         None => runtime.controls,
@@ -310,9 +371,16 @@ fn run_motion(ctx: &mut TickContext<'_>, call: &RuleCall<'_>) -> Result<PhaseRep
         Some(control) => {
             let movement = control.movement();
             let actions = control.actions();
+            // Real admission already normalized actor look. Normalizing its f32
+            // boundary again can flip the sign near pi; raw fixtures normalize once.
+            let (yaw, pitch) = if ctx.owns_command_prefix() {
+                (record.look.yaw(), record.look.pitch())
+            } else {
+                (normalize_yaw(control.look().yaw()), control.look().pitch())
+            };
             (
-                normalize_yaw(control.look().yaw()),
-                control.look().pitch(),
+                yaw,
+                pitch,
                 movement.move_x,
                 movement.move_z,
                 movement.jump,

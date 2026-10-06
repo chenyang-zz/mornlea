@@ -871,10 +871,10 @@ fn post_physics(
     })
 }
 
-/// Held input mirror: the latest valid deferred envelope, falling back to the
-/// staged controls when no new input arrived; an invalid latest clears to
-/// neutral instead of reusing stale input, mirroring the intake clearing in
-/// `ApplyPlayerCommands` (`packages/server/sim/entity/tick.go`).
+/// Initialized command dispatch retains its canonical controls, including a
+/// later placement look, across oxygen and post-physics writeback. Raw direct
+/// calls use the latest valid deferred input; an invalid latest clears to
+/// neutral, and no incoming input retains the staged basis.
 fn held_control(
     ctx: &TickContext<'_>,
     session: SessionKey,
@@ -892,7 +892,13 @@ fn held_control(
     }
     match latest {
         Some(envelope) => match envelope.command() {
-            Command::PlayerInput(control) if valid_control(control) => Some(control),
+            Command::PlayerInput(control) if valid_control(control) => {
+                if ctx.owns_command_prefix() {
+                    staged
+                } else {
+                    Some(control)
+                }
+            }
             _ => None,
         },
         None => staged,
