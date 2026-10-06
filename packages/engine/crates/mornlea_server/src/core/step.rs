@@ -867,6 +867,14 @@ fn route_interaction(
         }
         CommandDisposition::Unowned => {}
     }
+    match world_mutation::settle_command(context, envelope)? {
+        CommandDisposition::Settled(_) => return Ok(()),
+        CommandDisposition::Refused(reason) => {
+            context.record_command_rejection(envelope, reason, RejectionStage::Settlement)?;
+            return Ok(());
+        }
+        CommandDisposition::Unowned => {}
+    }
     if matches!(envelope.command(), Command::SelectHotbar(_)) {
         // Reuse inventory settlement without changing its direct-call phase.
         // The live reducer exclusively owns the later selection schedule.

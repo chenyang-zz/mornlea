@@ -602,7 +602,14 @@ separate caller responsibilities.
   raw wrapper retains typed errors. Door and bed read partner readiness before
   strict air occupancy, and bed reads both supports before eligibility. Support
   beyond world height is immutable air without a synthetic mutation address.
-  This resolver contract does not accept live wire outcomes or success events.
+  The resolver alone does not publish command outcomes or success events.
+  The live placement command adapter consumes that checked contract before raw
+  fallback gates, preserves late Active/view/geometry/physical-capacity reasons,
+  and keeps trusted resolution/staging failures hard. After atomic commit it
+  records owner inventory intent and emits only that session's original-sequence
+  success. Current source view readiness uses the post-motion owned center
+  invariant and runtime subscription fact, never previous publication interest.
+  Raw rule calls and authority-owned door/bed routing retain compatibility.
 - `src/rules/inventory.rs` owns the inventory authority provider: ordinary
   inventory/armor settlement for `SelectHotbar`/`MoveInventory`/`EquipArmor`/
   `MovePartial`/`QuickMove` over whole-record `InventoryPatch` staging —

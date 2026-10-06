@@ -691,7 +691,7 @@ fn native_placement_pitch_boundary_and_normalized_yaw_match_source_bits() {
         (0.0, bound, 0.0),
         (f32::from_bits(0x40d10fdb), 0.0, f32::from_bits(0x3e800006)),
     ] {
-        let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
         submit(&mut state, owner, 1, place_with_empty_slot(yaw, pitch));
         let tick = state.advance_tick(TickBudget::full()).unwrap();
         assert_eq!(
@@ -704,10 +704,12 @@ fn native_placement_pitch_boundary_and_normalized_yaw_match_source_bits() {
             look(normalized, pitch)
         );
         assert_eq!(native_input_ack(&tick, owner), 0);
-        assert!(
-            !events_for(&tick, owner)
-                .iter()
-                .any(|event| matches!(event, Event::CommandRejected(_)))
+        assert_inventory_outcome_refusal(
+            &tick,
+            owner,
+            other,
+            1,
+            mornlea_domain::RejectReason::InvalidBlock,
         );
     }
 }
@@ -2930,4 +2932,350 @@ fn native_inline_drop_outcome_success_intent() {
         assert!(projection_crafting_record_states(&events_for(&tick, other)).is_empty());
         assert_eq!(native_input_ack(&tick, owner), 0);
     }
+}
+
+fn live_placement_command(slot: u8, yaw: f32, pitch: f32) -> Command {
+    Command::PlaceBlock(mornlea_domain::PlacementIntent::try_new(look(yaw, pitch), slot).unwrap())
+}
+
+fn live_placement_stock(state: &mut AuthorityState, owner: SessionKey, slot: usize, item: u16) {
+    stage(state, |context| {
+        let actor = ActorKey::Player(owner);
+        let mut inventory = *context.read().inventory(actor).unwrap();
+        inventory.slots[slot] = storage(item, 2);
+        context.preload_inventory(actor, inventory);
+    });
+    state.advance_tick(TickBudget::full()).unwrap();
+}
+
+fn live_placement_ready(state: &mut AuthorityState, revision: u64, edit: impl FnOnce(&mut Chunk)) {
+    let mut chunk = ground_chunk();
+    set_cell(&mut chunk, BlockPos::new(0, 66, 3), 2);
+    edit(&mut chunk);
+    stage(state, |context| {
+        context
+            .preload_ready_chunk(ReadyChunk::try_new(chunk_key(0, 0), 1, revision, chunk).unwrap());
+    });
+}
+
+fn live_placement_pose(state: &mut AuthorityState, owner: SessionKey, position: [f32; 3]) {
+    stage(state, |context| {
+        let mut actor = context
+            .read()
+            .actor(ActorKey::Player(owner))
+            .cloned()
+            .unwrap();
+        actor.motion = MotionState::new(MotionStateParts {
+            position: FiniteVec3::try_new(position).unwrap(),
+            velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+            on_ground: true,
+        });
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+    });
+}
+
+fn live_placement_cells(
+    state: &AuthorityState,
+    cells: &[BlockPos],
+) -> Vec<Option<mornlea_server::contracts::BlockObservation>> {
+    let view = state.settled_read().unwrap();
+    cells
+        .iter()
+        .map(|pos| view.observation(Dimension::OVERWORLD, *pos))
+        .collect()
+}
+
+fn live_placement_refused(
+    state: &mut AuthorityState,
+    owner: SessionKey,
+    other: SessionKey,
+    command: Command,
+    cells: &[BlockPos],
+    reason: mornlea_domain::RejectReason,
+) -> mornlea_server::contracts::TickPublication {
+    let before = record(state, owner);
+    let blocks = live_placement_cells(state, cells);
+    let chunks = state.residents().ready_snapshot();
+    submit(state, owner, 1, command);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(state, owner), before);
+    assert_eq!(state.residents().ready_snapshot(), chunks);
+    let lifecycle = state
+        .settled_read()
+        .unwrap()
+        .actor(ActorKey::Player(owner))
+        .unwrap()
+        .lifecycle;
+    assert_eq!(
+        lifecycle,
+        if reason == mornlea_domain::RejectReason::PlayerNotReady {
+            ActorLifecycle::Pending
+        } else {
+            ActorLifecycle::Active
+        }
+    );
+    assert_eq!(live_placement_cells(state, cells), blocks);
+    assert_inventory_outcome_refusal(&tick, owner, other, 1, reason);
+    assert!(projection_inventory_states(&events_for(&tick, owner)).is_empty());
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+    for viewer in [owner, other] {
+        assert!(!events_for(&tick, viewer).iter().any(|event| matches!(
+            event,
+            Event::PlaceBlockSucceeded(_) | Event::BlockChanges(_)
+        )));
+    }
+    assert_eq!(state.session(owner).unwrap().last_applied_sequence, 1);
+    tick
+}
+
+#[test]
+fn native_live_placement_outcome_eligibility() {
+    for slot in [0, 8] {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        live_placement_refused(
+            &mut state,
+            owner,
+            other,
+            live_placement_command(slot, 0.0, 0.0),
+            &[BlockPos::new(0, 66, 1)],
+            mornlea_domain::RejectReason::InvalidBlock,
+        );
+    }
+}
+
+#[test]
+fn native_live_placement_outcome_no_target() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    live_placement_stock(&mut state, owner, 0, ITEM_STONE);
+    live_placement_refused(
+        &mut state,
+        owner,
+        other,
+        live_placement_command(0, std::f32::consts::FRAC_PI_2, 0.0),
+        &[BlockPos::new(0, 66, 0)],
+        mornlea_domain::RejectReason::NoTarget,
+    );
+}
+
+#[test]
+fn native_live_placement_outcome_occupied() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    live_placement_stock(&mut state, owner, 0, ITEM_STONE);
+    live_placement_refused(
+        &mut state,
+        owner,
+        other,
+        live_placement_command(0, 0.0, -1.4),
+        &[BlockPos::new(0, 64, 0), BlockPos::new(0, 65, 0)],
+        mornlea_domain::RejectReason::Occupied,
+    );
+}
+
+#[test]
+fn native_live_placement_outcome_view_before_eligibility() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    // This is a prepared subscription basis, not a source registration producer.
+    stage(&mut state, |context| {
+        let actor = ActorKey::Player(owner);
+        let mut runtime = context.read().runtime(actor).cloned().unwrap();
+        runtime.has_view = false;
+        context.stage(RuleEffect::Runtime(runtime)).unwrap();
+    });
+    live_placement_refused(
+        &mut state,
+        owner,
+        other,
+        live_placement_command(8, 0.0, 0.0),
+        &[BlockPos::new(0, 66, 1)],
+        mornlea_domain::RejectReason::InvalidRay,
+    );
+}
+
+#[test]
+fn native_live_placement_outcome_upper_height() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    // Owned pose and Ready terrain are prepared; actual late motion and placement follow.
+    live_placement_stock(&mut state, owner, 0, 43);
+    live_placement_ready(&mut state, 1, |chunk| {
+        set_cell(chunk, BlockPos::new(0, 317, 0), 2);
+        set_cell(chunk, BlockPos::new(0, 319, 1), 27);
+        set_cell(chunk, BlockPos::new(0, 319, 2), 2);
+    });
+    live_placement_pose(&mut state, owner, [0.5, 318.0, 0.5]);
+    live_placement_refused(
+        &mut state,
+        owner,
+        other,
+        live_placement_command(0, std::f32::consts::PI, 0.0),
+        &[BlockPos::new(0, 319, 1), BlockPos::new(0, 319, 2)],
+        mornlea_domain::RejectReason::ChunkNotReady,
+    );
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Active
+    );
+}
+
+#[test]
+fn native_live_placement_outcome_capacity() {
+    for (item, furnace) in [(14, false), (8, true)] {
+        let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+        live_placement_stock(&mut state, owner, 0, item);
+        // Exhausted inactive generations are a prepared physical-capacity consumer cause.
+        live_placement_ready(&mut state, 1, |chunk| {
+            if furnace {
+                for slot in &mut chunk.furnaces {
+                    slot.generation = u32::MAX;
+                }
+            } else {
+                for slot in &mut chunk.chests {
+                    slot.generation = u32::MAX;
+                }
+            }
+        });
+        let containers = state.residents().container_records();
+        live_placement_refused(
+            &mut state,
+            owner,
+            other,
+            live_placement_command(0, std::f32::consts::PI, 0.0),
+            &[BlockPos::new(0, 66, 2), BlockPos::new(0, 66, 3)],
+            mornlea_domain::RejectReason::ContainerCapacity,
+        );
+        assert_eq!(state.residents().container_records(), containers);
+    }
+}
+
+#[test]
+fn native_live_placement_outcome_success_requested_slot() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    live_placement_ready(&mut state, 1, |_| {});
+    stage(&mut state, |context| {
+        let actor = ActorKey::Player(owner);
+        let mut inventory = *context.read().inventory(actor).unwrap();
+        inventory.slots[1] = storage(ITEM_DIRT, 5);
+        inventory.slots[2] = storage(ITEM_STONE, 2);
+        context.preload_inventory(actor, inventory);
+    });
+    let mut expected = record(&state, owner);
+    expected.selected = mornlea_domain::HotbarSlot::new(2).unwrap();
+    expected.slots[1] = storage(ITEM_DIRT, 4);
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::SelectHotbar(mornlea_domain::HotbarSlot::new(2).unwrap()),
+    );
+    submit(
+        &mut state,
+        owner,
+        2,
+        live_placement_command(1, std::f32::consts::PI, 0.0),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), expected);
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .observation(Dimension::OVERWORLD, BlockPos::new(0, 66, 2))
+            .unwrap()
+            .block,
+        3
+    );
+    let success = Event::PlaceBlockSucceeded(mornlea_domain::PlacementSuccess::new(2));
+    assert_eq!(
+        events_for(&tick, owner)
+            .iter()
+            .filter(|event| **event == success)
+            .count(),
+        1
+    );
+    assert!(
+        !events_for(&tick, owner)
+            .iter()
+            .any(|event| matches!(event, Event::CommandRejected(_)))
+    );
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)).len(),
+        1
+    );
+    assert!(!events_for(&tick, other).iter().any(|event| matches!(
+        event,
+        Event::PlaceBlockSucceeded(_) | Event::InventoryState(_)
+    )));
+    assert_eq!(native_input_ack(&tick, owner), 0);
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(
+        !events_for(&quiet, owner)
+            .iter()
+            .any(|event| matches!(event, Event::PlaceBlockSucceeded(_)))
+    );
+}
+
+#[test]
+fn native_live_placement_outcome_trusted_revision() {
+    let (mut state, owner, _, _) = scene(ContainerKind::Chest);
+    live_placement_stock(&mut state, owner, 0, ITEM_STONE);
+    // The exhausted durable revision is a trusted staging cause, not a client input.
+    live_placement_ready(&mut state, u64::MAX, |_| {});
+    let before = record(&state, owner);
+    let cells = [BlockPos::new(0, 66, 2), BlockPos::new(0, 66, 3)];
+    let blocks = live_placement_cells(&state, &cells);
+    let chunks = state.residents().ready_snapshot();
+    let next = state.next_tick();
+    submit(
+        &mut state,
+        owner,
+        1,
+        live_placement_command(0, std::f32::consts::PI, 0.0),
+    );
+    let error = state.advance_tick(TickBudget::full()).unwrap_err();
+    assert_eq!(
+        error,
+        ServerError::Internal {
+            invariant: "placement staging"
+        }
+    );
+    assert_eq!(record(&state, owner), before);
+    assert_eq!(state.next_tick(), next);
+    assert_eq!(state.advance_tick(TickBudget::full()).unwrap_err(), error);
+    // Resident terrain retains its exact preimage even though a failed tick has no settled read.
+    assert_eq!(state.residents().ready_snapshot(), chunks);
+    assert_eq!(
+        blocks
+            .iter()
+            .map(|cell| cell.unwrap().block)
+            .collect::<Vec<_>>(),
+        vec![0, 2]
+    );
+}
+
+#[test]
+fn native_live_placement_outcome_late_recovery() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    live_placement_stock(&mut state, owner, 0, 43);
+    live_placement_pose(&mut state, owner, [1_000_000.5, 65.0, 0.5]);
+    live_placement_refused(
+        &mut state,
+        owner,
+        other,
+        live_placement_command(0, 0.0, 0.0),
+        &[],
+        mornlea_domain::RejectReason::PlayerNotReady,
+    );
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .lifecycle,
+        ActorLifecycle::Pending
+    );
 }

@@ -5309,6 +5309,35 @@ impl<'a> TickContext<'a> {
         self.command_rejections.is_some()
     }
 
+    /// Source goals reconcile after motion: each Active session owns the square
+    /// around its current feet, and the eye differs only in height. That square
+    /// always includes the origin column; previous publication interest is not
+    /// a subscription basis. Legacy raw fixtures have no source subscription.
+    pub(crate) fn source_placement_view_ready(
+        &self,
+        session: SessionKey,
+    ) -> Result<Option<bool>, ServerError> {
+        if self.authority.source_player_radius.is_none() {
+            return Ok(None);
+        }
+        let invalid = ServerError::Internal {
+            invariant: "placement source view",
+        };
+        self.authority
+            .source_session_radius(session)
+            .ok_or(invalid)?;
+        let view = self.read();
+        let actor = ActorKey::Player(session);
+        if view
+            .actor(actor)
+            .is_none_or(|record| record.lifecycle != ActorLifecycle::Active)
+        {
+            return Err(invalid);
+        }
+        let runtime = view.runtime(actor).ok_or(invalid)?;
+        Ok(Some(runtime.has_view))
+    }
+
     /// Actual tick providers require the initialized bounded owner. The raw
     /// harness branch preserves direct phase compatibility without pretending
     /// that those calls execute the production publication pipeline.

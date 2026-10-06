@@ -272,6 +272,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3pfr Land checked placement preflight provenance and source footprint/support readiness ([packet](plans/141-source-placement-preflight-contract.md)). Raw4/private2 GREEN; three causal REDs/onecontrol plus existing torch/water fixture reconciliation;76Rust3782/replay644, Go4 actual source oracle and12top/18sub controls race/count1 PASS, independent finalFOURsource SCOPED_PASS. Sparse support/owned pose consumer qualifications retained; live placement wire/success and broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3pwr Publish exact live placement outcomes and post-commit owner confirmation ([packet](plans/142-source-live-placement-outcomes.md)). Native9/private1 GREEN; eight original causal failures plus corrected physical capacity witness, all history retained;76Rust3792/replay653, Go5 source oracle and7top/2sub controls race/count1 PASS, independent finalFIVEsource SCOPED_PASS. Prepared consumer versus real runtime qualifications and docs/immutable closing evidence retained. Other command/runtime outcomes and broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 
