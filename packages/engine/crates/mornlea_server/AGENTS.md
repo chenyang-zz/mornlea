@@ -1204,3 +1204,10 @@ Ready physical reads keep their separate action gates. Ordinary legacy runtime
 defaults and explicitly unavailable-view controls remain false. The real held
 eating integration topic advances progress through actual commands and ticks;
 its saved body and physical Ready inputs are prepared fixtures.
+
+Live `SelectHotbar` admission retains the source readiness gate and defers
+selection to its original ordered Interaction position after actors and combat.
+Earlier deferred drops observe the old selection; immediate inventory/equip
+commands and Eating retain the admission-time basis. The existing inventory
+provider still settles direct raw calls in `PlayerCommand`; only the live serial
+reducer owns the later schedule. Wire refusal mapping remains separate.

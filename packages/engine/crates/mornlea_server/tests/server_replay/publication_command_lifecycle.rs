@@ -293,3 +293,161 @@ fn source_registration_owns_view_marker_before_any_ready_chunk() {
     );
     assert!(read.runtime(ActorKey::Player(owner)).unwrap().has_view);
 }
+
+fn hotbar_wire(selected: u8, bread: u8) -> Event {
+    Event::InventoryState(InventoryState::new(InventoryStateParts {
+        selected: HotbarSlot::new(selected).unwrap(),
+        hotbar: item_array(&[(0, 36, bread)]),
+        backpack: item_array(&[]),
+    }))
+}
+
+#[test]
+fn native_hotbar_drop_before_selection_uses_old_slot() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let mut expected = record(&state, owner);
+    expected.selected = HotbarSlot::new(1).unwrap();
+    expected.slots[0] = storage(36, 1);
+    submit(&mut state, owner, 1, Command::DropSelectedItem);
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::SelectHotbar(HotbarSlot::new(1).unwrap()),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), expected);
+    let drops = state.residents().drop_records();
+    assert_eq!(drops.len(), 1);
+    assert_eq!(drops[0].stack, storage(36, 1));
+    assert_eq!(
+        projection_drop_wire_events(&events_for(&tick, owner)),
+        vec![projection_drop_wire_upsert(
+            tick.tick,
+            0,
+            BlockPos::new(0, 65, 0),
+            36,
+            1
+        )]
+    );
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)),
+        vec![hotbar_wire(1, 1)]
+    );
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+    let quiet = state.advance_tick(TickBudget::full()).unwrap();
+    assert!(projection_inventory_states(&events_for(&quiet, owner)).is_empty());
+}
+
+#[test]
+fn native_hotbar_selection_after_eating_completion() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    submit(&mut state, owner, 1, held_eating());
+    let required = RuleTunables::source_defaults().eating_ticks();
+    for _ in 0..required - 1 {
+        state.advance_tick(TickBudget::full()).unwrap();
+    }
+    assert_eq!(eating_ticks(&state, owner), Some(required - 1));
+    assert_eq!(record(&state, owner).slots[0], storage(36, 2));
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .survival
+            .hunger(),
+        10
+    );
+    let mut expected = record(&state, owner);
+    expected.selected = HotbarSlot::new(1).unwrap();
+    expected.slots[0] = storage(36, 1);
+    submit(
+        &mut state,
+        owner,
+        2,
+        Command::SelectHotbar(HotbarSlot::new(1).unwrap()),
+    );
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), expected);
+    assert_eq!(
+        state
+            .settled_read()
+            .unwrap()
+            .actor(ActorKey::Player(owner))
+            .unwrap()
+            .survival
+            .hunger(),
+        15
+    );
+    assert_eq!(eating_ticks(&state, owner), None);
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)),
+        vec![hotbar_wire(1, 1)]
+    );
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+    state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(eating_ticks(&state, owner), None);
+}
+
+#[test]
+fn native_hotbar_selection_does_not_change_immediate_equip_basis() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    // The saved pack cause is prepared; both commands use actual admission.
+    stage(&mut state, |context| {
+        let actor = ActorKey::Player(owner);
+        let mut inventory = *context.read().inventory(actor).unwrap();
+        inventory.slots[1] = StorageStack {
+            item: 58,
+            count: 1,
+            durability: 165,
+        };
+        context.preload_inventory(actor, inventory);
+    });
+    let mut expected = record(&state, owner);
+    expected.selected = HotbarSlot::new(1).unwrap();
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::SelectHotbar(HotbarSlot::new(1).unwrap()),
+    );
+    submit(&mut state, owner, 2, Command::EquipArmor);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), expected);
+    let mut hotbar = item_array(&[(0, 36, 2)]);
+    hotbar[1] = ItemStack::try_new(58, 1, 165).unwrap();
+    let wire = Event::InventoryState(InventoryState::new(InventoryStateParts {
+        selected: HotbarSlot::new(1).unwrap(),
+        hotbar,
+        backpack: item_array(&[]),
+    }));
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)),
+        vec![wire]
+    );
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+}
+
+#[test]
+fn native_hotbar_selection_before_drop_keeps_prefix_order() {
+    let (mut state, owner, other, _) = scene(ContainerKind::Chest);
+    let mut expected = record(&state, owner);
+    expected.selected = HotbarSlot::new(1).unwrap();
+    submit(
+        &mut state,
+        owner,
+        1,
+        Command::SelectHotbar(HotbarSlot::new(1).unwrap()),
+    );
+    submit(&mut state, owner, 2, Command::DropSelectedItem);
+    let tick = state.advance_tick(TickBudget::full()).unwrap();
+    assert_eq!(record(&state, owner), expected);
+    assert!(state.residents().drop_records().is_empty());
+    assert!(projection_drop_wire_events(&events_for(&tick, owner)).is_empty());
+    assert_eq!(
+        projection_inventory_states(&events_for(&tick, owner)),
+        vec![hotbar_wire(1, 2)]
+    );
+    assert!(projection_inventory_states(&events_for(&tick, other)).is_empty());
+}

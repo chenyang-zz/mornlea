@@ -679,6 +679,12 @@ fn admit_command(
     // Lifecycle commands settle against the command prefix before actor actions.
     // Physical transfers keep their later chunk-write phase.
     match envelope.command() {
+        Command::SelectHotbar(_) => {
+            // Actors retain the admission-time selection; this envelope settles
+            // in prefix order with drops and other deferred interactions.
+            context.defer(*envelope, RulePhase::Interaction)?;
+            return Ok(());
+        }
         Command::OpenContainer(look) => {
             if matches!(
                 containers::settle_command(context, envelope),
@@ -764,6 +770,22 @@ fn route_interaction(
     context: &mut TickContext<'_>,
     envelope: &CommandEnvelope,
 ) -> Result<(), ServerError> {
+    if matches!(envelope.command(), Command::SelectHotbar(_)) {
+        // Reuse inventory settlement without changing its direct-call phase.
+        // The live reducer exclusively owns the later selection schedule.
+        return match inventory::run(
+            context,
+            RuleCall {
+                phase: RulePhase::PlayerCommand,
+                actor: None,
+                command: Some(envelope),
+                internal: None,
+            },
+        ) {
+            Ok(_) | Err(ServerError::InvalidInput { .. }) => Ok(()),
+            Err(error) => Err(error),
+        };
+    }
     let gates: [ProviderCall; 3] = [world_mutation::run, tools::run, drops::run];
     route_interaction_with(context, envelope, gates)
 }
