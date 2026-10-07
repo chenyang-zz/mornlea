@@ -1428,3 +1428,14 @@ same shutdown owner for close retry, without promising result recovery.
 Actual pool/factory/builder tests qualify this ownership boundary; current
 Wanted/world-version selection and configured runtime composition remain
 separate consumers. No authority borrow or synchronous fallback lives here.
+
+The private `core/state_source_snapshot.rs` child exposes current Ready scalar
+identity and fresh immutable network captures without save scheduling estimates
+or caller-side section normalization. Sticky failure and Running phase precede
+lookup; managed readiness requires matching acquisition and resident owners,
+while Unloading remains eligible only for its separate persistence capture.
+Checked pending revisions refuse exhaustion before immutable capture. Query
+and capture share the same physical slot revision; counter-only slot changes
+retain distinct tokens with equal revisions. Actual CPU and disk/native
+generation consumers qualify this producer separately from asynchronous
+selection, pending publication and executable lifecycle composition.

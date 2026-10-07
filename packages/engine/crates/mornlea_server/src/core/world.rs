@@ -655,6 +655,17 @@ impl ReadyChunk {
 
     /// One durable identity covers every accepted mutation in this tick.
     /// Carried cell overlays alone never create another revision.
+    /// Refuses exhausted snapshot identity before immutable capture can panic.
+    pub(crate) fn checked_pending_revision(&self, slots_dirty: bool) -> Result<u64, ServerError> {
+        if self.blocks_dirty || slots_dirty {
+            self.revision.checked_add(1).ok_or(ServerError::Internal {
+                invariant: "source snapshot revision",
+            })
+        } else {
+            Ok(self.revision)
+        }
+    }
+
     pub(crate) fn pending_revision(&self, slots_dirty: bool) -> u64 {
         if self.blocks_dirty || slots_dirty {
             self.revision

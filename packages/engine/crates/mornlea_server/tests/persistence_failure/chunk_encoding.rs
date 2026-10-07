@@ -272,7 +272,11 @@ fn actual_saved_revision_nine_load_capture_cpu_fifo_memory_and_disk_reopen() {
     let facts = state.live_chunk_facts(key(0)).unwrap();
     assert_eq!(facts.phase, LiveChunkPhase::Ready);
     assert_eq!((facts.revision, facts.persisted_revision), (9, 9));
-    let token = capture(&state);
+    let token = state.capture_source_snapshot(key(0)).unwrap().unwrap();
+    assert_eq!(
+        state.source_snapshot_identity(key(0)),
+        Ok(Some((token.generation(), token.revision())))
+    );
     let encoded = fixture.encode(token.clone());
     assert_eq!(encoded.capture(), &token);
     assert_eq!(
@@ -332,7 +336,11 @@ fn actual_missing_native_generation_then_deliberate_unloading_capture_encodes() 
         state.live_chunk_facts(key(0)).unwrap().phase,
         LiveChunkPhase::Ready
     );
-    let token = capture(&state);
+    let token = state.capture_source_snapshot(key(0)).unwrap().unwrap();
+    assert_eq!(
+        state.source_snapshot_identity(key(0)),
+        Ok(Some((token.generation(), token.revision())))
+    );
     let output = fixture.encode(token.clone());
     assert_eq!(output.capture(), &token);
     let generated = actual_frame(&output);
@@ -343,6 +351,8 @@ fn actual_missing_native_generation_then_deliberate_unloading_capture_encodes() 
     );
     // Encoding a deliberately supplied save capture does not grant publication
     // eligibility. The source publisher must qualify wanted Ready captures.
+    let source_identity = state.source_snapshot_identity(key(0));
+    let source_capture = state.capture_source_snapshot(key(0));
     let unloading = capture(&state);
     let encoded = fixture.encode(unloading.clone());
     assert_eq!(encoded.capture(), &unloading);
@@ -351,6 +361,8 @@ fn actual_missing_native_generation_then_deliberate_unloading_capture_encodes() 
     let mut reopened = DiskStore::open(&fixture.root.0, options()).unwrap();
     let loaded = reopened.load(SaveKey::Chunk(key(0)));
     reopened.close().unwrap();
+    assert_eq!(source_identity, Ok(None));
+    assert_eq!(source_capture, Ok(None));
     assert!(matches!(
         loaded,
         Err(ServerError::Io {

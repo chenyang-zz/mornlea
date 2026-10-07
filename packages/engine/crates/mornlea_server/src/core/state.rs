@@ -68,6 +68,8 @@ mod companion_persistence;
 mod mob_persistence;
 #[path = "state_player_persistence.rs"]
 mod player_persistence;
+#[path = "state_source_snapshot.rs"]
+mod source_snapshot;
 
 const COMPANION_INBOX: usize = 4;
 /// Freshly missing keys one Acquire row may stage for the source generation
