@@ -61,6 +61,71 @@ pub fn close_receiver(state: &mut AuthorityState, session: SessionKey, reason: C
     state.close_outbox(session, reason)
 }
 
+/// Owns immutable semantic output paired with up to eight CPU snapshot frames.
+/// Private fields and append-only construction prevent event/frame replacement.
+pub struct PreparedSourcePublication {
+    publication: TickPublication,
+    snapshots: Vec<(usize, PreparedFrame)>,
+}
+
+impl PreparedSourcePublication {
+    pub fn new(publication: TickPublication) -> Self {
+        Self {
+            publication,
+            snapshots: Vec::new(),
+        }
+    }
+
+    pub fn publication(&self) -> &TickPublication {
+        &self.publication
+    }
+
+    pub fn append_event(&mut self, event: mornlea_domain::RoutedEvent) {
+        self.publication.events.push(event);
+    }
+
+    pub fn append_encoded_snapshot(
+        &mut self,
+        session: SessionKey,
+        expected: &super::world::ChunkSaveView,
+        encoded: super::chunk_encoding::EncodedChunkSnapshot,
+    ) -> Result<(), ServerError> {
+        // Token refusal precedes capacity and neither can change the batch.
+        // The caller separately owns current source relevance and selection.
+        if encoded.capture() != expected {
+            return Err(ServerError::InvalidInput {
+                field: "chunk_encode_capture",
+            });
+        }
+        if self.snapshots.len() >= 8 {
+            return Err(ServerError::Capacity {
+                resource: super::contracts::Resource::Snapshots,
+                limit: 8,
+                observed: 9,
+            });
+        }
+        let index = self.publication.events.len();
+        let (_, snapshot, _, frame) = encoded.into_source_parts();
+        self.publication
+            .events
+            .push(mornlea_domain::RoutedEvent::new(
+                mornlea_domain::EventRecipient::Session(session.get()),
+                mornlea_domain::Event::ChunkSnapshot(snapshot),
+            ));
+        self.snapshots.push((index, frame));
+        Ok(())
+    }
+
+    /// Moves semantic output without delivering frames, including final reduction.
+    pub fn into_publication(self) -> TickPublication {
+        self.publication
+    }
+
+    pub(crate) fn into_parts(self) -> (TickPublication, Vec<(usize, PreparedFrame)>) {
+        (self.publication, self.snapshots)
+    }
+}
+
 /// Immutable canonical frame prepared off tick; clones share its owned bytes.
 ///
 /// A frame retains no codec, decoded packet or authority borrow. Construction

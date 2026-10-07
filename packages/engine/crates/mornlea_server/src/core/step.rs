@@ -342,13 +342,15 @@ fn reduce_tick_inner(
         control: Vec::new(),
         counters,
     };
-    if publish {
-        state.publish_source(
-            publication.clone(),
+    let publication = if publish {
+        state.publish_prepared_source(
+            super::publication::PreparedSourcePublication::new(publication),
             before_snapshots,
             projected.refused_sessions,
-        )?;
-    }
+        )?
+    } else {
+        publication
+    };
     // The final small-input capture stays inside the same trusted-error
     // fence: a late refusal or panic keeps the counter unbumped through the
     // ordinary fail_tick path, never after committed publication.

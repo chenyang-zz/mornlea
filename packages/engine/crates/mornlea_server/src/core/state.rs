@@ -2307,6 +2307,15 @@ impl AuthorityState {
         self.publish_source(publication, 0, Vec::new())
     }
 
+    /// Preflights the complete batch before admission and returns its semantic owner.
+    /// Prepared snapshot bodies are neither cloned nor encoded on this caller.
+    pub fn publish_prepared(
+        &mut self,
+        batch: super::publication::PreparedSourcePublication,
+    ) -> Result<TickPublication, ServerError> {
+        self.publish_prepared_source(batch, 0, Vec::new())
+    }
+
     /// Scalar refusals share whole-publication preflight and the exact source family boundary.
     pub(crate) fn publish_source(
         &mut self,
@@ -2314,6 +2323,23 @@ impl AuthorityState {
         before: usize,
         refusals: Vec<SessionKey>,
     ) -> Result<(), ServerError> {
+        self.publish_prepared_source(
+            super::publication::PreparedSourcePublication::new(publication),
+            before,
+            refusals,
+        )
+        .map(|_| ())
+    }
+
+    /// Source refusal markers retain their existing whole-preflight and retirement order.
+    pub(crate) fn publish_prepared_source(
+        &mut self,
+        batch: super::publication::PreparedSourcePublication,
+        before: usize,
+        refusals: Vec<SessionKey>,
+    ) -> Result<TickPublication, ServerError> {
+        let (publication, snapshots) = batch.into_parts();
+        let mut snapshots = snapshots.into_iter().peekable();
         if before > publication.events.len()
             || refusals.len() > 8
             || refusals.windows(2).any(|pair| pair[0] >= pair[1])
@@ -2338,9 +2364,18 @@ impl AuthorityState {
                         .map(|session| PendingFrame::Refuse { session: *session }),
                 );
             }
-            let packet = ServerPacket::try_from(event.event().clone())
-                .map_err(|_| ServerError::InvalidInput { field: "packet" })?;
-            let frame = PreparedFrame::encode(&mut codec, &packet)?;
+            let frame = if snapshots
+                .peek()
+                .is_some_and(|(position, _)| *position == index)
+            {
+                // Opaque builder construction pairs this immutable event with
+                // its original CPU frame; do not clone or encode the body here.
+                snapshots.next().expect("matched prepared snapshot").1
+            } else {
+                let packet = ServerPacket::try_from(event.event().clone())
+                    .map_err(|_| ServerError::InvalidInput { field: "packet" })?;
+                PreparedFrame::encode(&mut codec, &packet)?
+            };
             match event.recipient() {
                 EventRecipient::Session(raw) => {
                     let session = SessionKey::from_raw(raw)
@@ -2423,7 +2458,7 @@ impl AuthorityState {
         for session in slow {
             let _ = self.retire(session, CloseReason::SlowReceiver);
         }
-        Ok(())
+        Ok(publication)
     }
 
     /// Distinguishes a real append from existing closure and newly saturated closure.
@@ -23607,5 +23642,297 @@ mod owner_record_admission_tests {
         encoded_admission_drain(&mut state, owner, pointer, &bytes);
         unsent(&state, owner);
         assert_eq!(snapshot_project(&mut state, None, false).len(), 1);
+    }
+
+    use super::super::publication::PreparedSourcePublication;
+
+    fn prepared_source_append(
+        batch: &mut PreparedSourcePublication,
+        state: &AuthorityState,
+        session: SessionKey,
+    ) -> (*const mornlea_domain::PalettedSection, *const u8, Vec<u8>) {
+        let capture = encoded_admission_capture(state);
+        let encoded = encoded_admission_cpu(&capture);
+        let semantic = encoded.snapshot().sections().as_ptr();
+        let pointer = encoded.frame().as_bytes().as_ptr();
+        let bytes = encoded.frame().as_bytes().to_vec();
+        batch
+            .append_encoded_snapshot(session, &capture, encoded)
+            .unwrap();
+        (semantic, pointer, bytes)
+    }
+
+    fn prepared_source_semantic(
+        output: &TickPublication,
+        index: usize,
+        pointer: *const mornlea_domain::PalettedSection,
+    ) {
+        let Event::ChunkSnapshot(snapshot) = output.events[index].event() else {
+            panic!("expected complete semantic snapshot")
+        };
+        assert_eq!(snapshot.sections().as_ptr(), pointer);
+        assert_eq!(
+            (snapshot.dimension(), snapshot.chunk(), snapshot.revision()),
+            (Dimension::OVERWORLD, ChunkPos::new(0, 0), 9)
+        );
+        assert_eq!(snapshot.sections().len(), 24);
+        assert!(snapshot.sections().iter().all(|s| s.as_single() == Some(0)));
+    }
+
+    #[test]
+    fn prepared_source_queued_moves_semantic_and_frame() {
+        use crate::transport::memory::MemoryTransport;
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        snapshot_project(&mut state, None, false);
+        let prefix = marker_rejection(owner, 11);
+        let suffix = marker_rejection(owner, 12);
+        let mut output = publication(vec![prefix.clone()]);
+        output.tick = 37;
+        let mut batch = PreparedSourcePublication::new(output);
+        let (semantic, pointer, bytes) = prepared_source_append(&mut batch, &state, owner);
+        batch.append_event(suffix.clone());
+        prepared_source_semantic(batch.publication(), 1, semantic);
+        let expected = batch.publication().clone();
+        let returned = state.publish_prepared(batch).unwrap();
+        assert_eq!(returned, expected);
+        prepared_source_semantic(&returned, 1, semantic);
+        sent(&state, owner);
+        let frames =
+            MemoryTransport::drain_prepared_session(&mut state, owner, 8, usize::MAX).unwrap();
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0].as_bytes(), frame(prefix.event()));
+        assert_eq!(frames[1].as_bytes().as_ptr(), pointer);
+        assert_eq!(frames[1].as_bytes(), bytes);
+        assert_eq!(frames[2].as_bytes(), frame(suffix.event()));
+        assert!(
+            MemoryTransport::drain_prepared_session(&mut state, owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn prepared_source_closed_owner_preserves_peer() {
+        let (mut state, sessions) = snapshot_fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        snapshot_project(&mut state, None, false);
+        let previous = chunk_mirror(&state, owner);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let mut batch = PreparedSourcePublication::new(publication(vec![]));
+        let (owner_semantic, _, _) = prepared_source_append(&mut batch, &state, owner);
+        let (peer_semantic, pointer, bytes) = prepared_source_append(&mut batch, &state, peer);
+        let returned = state.publish_prepared(batch).unwrap();
+        prepared_source_semantic(&returned, 0, owner_semantic);
+        prepared_source_semantic(&returned, 1, peer_semantic);
+        assert_eq!(chunk_mirror(&state, owner), previous);
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+        sent(&state, peer);
+        encoded_admission_drain(&mut state, peer, pointer, &bytes);
+    }
+
+    #[test]
+    fn prepared_source_saturated_prefix_and_peer() {
+        let (mut state, sessions) = snapshot_fixture(1, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        snapshot_project(&mut state, None, false);
+        let prefix = PreparedFrame::encode(
+            &mut ProtocolCodec::new().unwrap(),
+            &ServerPacket::try_from(marker_rejection(owner, 11).event().clone()).unwrap(),
+        )
+        .unwrap();
+        let prefix_pointer = prefix.as_bytes().as_ptr();
+        let prefix_bytes = prefix.as_bytes().to_vec();
+        assert_eq!(
+            state.enqueue_prepared(owner, prefix),
+            Ok(EnqueueOutcome::Queued)
+        );
+        let mut batch = PreparedSourcePublication::new(publication(vec![]));
+        prepared_source_append(&mut batch, &state, owner);
+        let (semantic, pointer, bytes) = prepared_source_append(&mut batch, &state, peer);
+        let returned = state.publish_prepared(batch).unwrap();
+        prepared_source_semantic(&returned, 1, semantic);
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        encoded_admission_drain(&mut state, owner, prefix_pointer, &prefix_bytes);
+        assert_eq!(state.session(peer).unwrap().phase, SessionPhase::Active);
+        sent(&state, peer);
+        encoded_admission_drain(&mut state, peer, pointer, &bytes);
+    }
+
+    #[test]
+    fn prepared_source_late_stale_event_is_atomic() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        snapshot_project(&mut state, None, false);
+        let previous = chunk_mirror(&state, owner);
+        let mut batch = PreparedSourcePublication::new(publication(vec![]));
+        prepared_source_append(&mut batch, &state, owner);
+        batch.append_event(marker_rejection(unknown, 12));
+        assert_eq!(
+            state.publish_prepared_source(batch, 0, vec![owner]),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Active);
+        assert_eq!(chunk_mirror(&state, owner), previous);
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn prepared_source_late_invalid_control_is_atomic() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        snapshot_project(&mut state, None, false);
+        let previous = chunk_mirror(&state, owner);
+        let capture = encoded_admission_capture(&state);
+        let encoded = encoded_admission_cpu(&capture);
+        let wire = mornlea_protocol::read_frame_ref(encoded.frame().as_bytes()).unwrap();
+        let mut invalid = ProtocolCodec::new()
+            .unwrap()
+            .decode_snapshot(wire.payload)
+            .unwrap();
+        invalid.revision = 0;
+        let mut output = publication(vec![]);
+        output.control.push(ControlReply {
+            session: owner,
+            packet: ServerPacket::ChunkSnapshot(invalid),
+        });
+        let mut batch = PreparedSourcePublication::new(output);
+        batch
+            .append_encoded_snapshot(owner, &capture, encoded)
+            .unwrap();
+        assert_eq!(
+            state.publish_prepared(batch),
+            Err(ServerError::InvalidInput { field: "packet" })
+        );
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Active);
+        assert_eq!(chunk_mirror(&state, owner), previous);
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn prepared_source_refusal_boundary_keeps_prefix_and_peer() {
+        let (mut state, sessions) = snapshot_fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        snapshot_project(&mut state, None, false);
+        let prefix = marker_rejection(owner, 11);
+        let mut batch = PreparedSourcePublication::new(publication(vec![prefix.clone()]));
+        prepared_source_append(&mut batch, &state, owner);
+        let (semantic, pointer, bytes) = prepared_source_append(&mut batch, &state, peer);
+        let returned = state
+            .publish_prepared_source(batch, 1, vec![owner])
+            .unwrap();
+        prepared_source_semantic(&returned, 2, semantic);
+        validation_retired(&state, owner, 1);
+        assert_eq!(
+            state.take_outbox(owner, 8, usize::MAX).unwrap(),
+            vec![frame(prefix.event())]
+        );
+        sent(&state, peer);
+        encoded_admission_drain(&mut state, peer, pointer, &bytes);
+    }
+
+    #[test]
+    fn prepared_source_builder_token_and_capacity_refuse_without_mutation() {
+        let (state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let expected = encoded_admission_capture(&state);
+        let different = encoded_admission_capture(&state);
+        assert_eq!(
+            (expected.key(), expected.generation(), expected.revision()),
+            (
+                different.key(),
+                different.generation(),
+                different.revision()
+            )
+        );
+        assert_ne!(expected, different);
+        let mut batch = PreparedSourcePublication::new(publication(vec![]));
+        assert_eq!(
+            batch.append_encoded_snapshot(owner, &expected, encoded_admission_cpu(&different)),
+            Err(ServerError::InvalidInput {
+                field: "chunk_encode_capture"
+            })
+        );
+        assert!(batch.publication().events.is_empty());
+        for _ in 0..8 {
+            batch
+                .append_encoded_snapshot(owner, &expected, encoded_admission_cpu(&expected))
+                .unwrap();
+        }
+        let previous = batch.publication().clone();
+        assert_eq!(previous.events.len(), 8);
+        assert_eq!(
+            batch.append_encoded_snapshot(owner, &expected, encoded_admission_cpu(&expected)),
+            Err(ServerError::Capacity {
+                resource: Resource::Snapshots,
+                limit: 8,
+                observed: 9
+            })
+        );
+        assert_eq!(batch.publication(), &previous);
+        assert_eq!(
+            batch.append_encoded_snapshot(owner, &expected, encoded_admission_cpu(&different)),
+            Err(ServerError::InvalidInput {
+                field: "chunk_encode_capture"
+            })
+        );
+        assert_eq!(batch.publication(), &previous);
+    }
+
+    #[test]
+    fn prepared_source_ordinary_publication_remains_compatible() {
+        use crate::transport::memory::MemoryTransport;
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let events = snapshot_project(&mut state, None, false);
+        let Event::ChunkSnapshot(snapshot) = events[0].event() else {
+            panic!("expected ordinary snapshot")
+        };
+        let pointer = snapshot.sections().as_ptr();
+        let snapshot_bytes = frame(events[0].event());
+        let mut output = publication(events);
+        output.events.push(marker_rejection(owner, 11));
+        output.control.push(marker_control(owner));
+        let expected = output.clone();
+        let returned = state
+            .publish_prepared(PreparedSourcePublication::new(output))
+            .unwrap();
+        assert_eq!(returned, expected);
+        prepared_source_semantic(&returned, 0, pointer);
+        sent(&state, owner);
+        let frames =
+            MemoryTransport::drain_prepared_session(&mut state, owner, 8, usize::MAX).unwrap();
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0].as_bytes(), snapshot_bytes);
+        assert_eq!(
+            frames[1].as_bytes(),
+            frame(marker_rejection(owner, 11).event())
+        );
+        assert_eq!(
+            frames[2].as_bytes(),
+            frame(marker_rejection(owner, 21).event())
+        );
+        assert!(
+            MemoryTransport::drain_prepared_session(&mut state, owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

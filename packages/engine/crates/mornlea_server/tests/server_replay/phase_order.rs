@@ -162,7 +162,7 @@ const WRAPPER_CHAIN: &[&str] = &[
     "push_companion_action",
     "dispatch_rows",
     "commit_viewers",
-    "publish_source",
+    "publish_prepared_source",
 ];
 
 /// The mailbox composition: eligible freeze then the domain sort. The
@@ -298,7 +298,7 @@ fn environment_close_and_publication_run_exactly_once() {
         "the climate close runs once per tick"
     );
     assert_eq!(
-        marker_count(&code, "publish_source"),
+        marker_count(&code, "publish_prepared_source"),
         1,
         "the tick publishes once"
     );

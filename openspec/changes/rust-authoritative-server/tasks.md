@@ -319,3 +319,5 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.7l3esa Admit exactly correlated off-tick encoded snapshots into the authority FIFO with Queued-only snapshot mirrors ([private plan](plans/162-encoded-snapshot-admission.md)); actual CPU/full Memory ownership and context/error/Closed/saturation controls. Source async selection/runtime and broad3.8/4.1/4.2 remain OPEN.
 
 - [x] 3.7l3ecp Retain and move complete semantic snapshot/frame publication owners from actual CPU results ([private plan](plans/163-encoded-snapshot-publication-parts.md)); declaration/causal RED, actual factory/pool and independent scoped gates before consumer integration.
+
+- [x] 3.7l3esp Publish paired CPU snapshot frames through whole-publication preflight and move semantic output through the reducer ([private plan](plans/164-prepared-source-publication.md)); actual CPU/Memory ownership and atomic/Closed/prefix controls before source selector integration.
