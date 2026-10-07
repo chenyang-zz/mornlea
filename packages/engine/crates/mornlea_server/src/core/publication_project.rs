@@ -1144,14 +1144,13 @@ fn emit_hostiles(
                 ));
             }
         }
-        let mut published = visibility.hostiles.clone();
         let mut spawns = Vec::new();
         for (id, kind, index) in &inputs.entities.hostiles {
             if !visibility.hostiles.contains(id) || view.visible_hostiles.contains(id) {
                 continue;
             }
             let actor = &inputs.actors[*index];
-            match HostileSpawnRecord::try_new(HostileSpawnRecordParts {
+            if let Ok(record) = HostileSpawnRecord::try_new(HostileSpawnRecordParts {
                 id: *id,
                 dimension: actor.dimension,
                 position: actor.motion.position(),
@@ -1159,10 +1158,7 @@ fn emit_hostiles(
                 health: actor.survival.health(),
                 kind: *kind,
             }) {
-                Ok(record) => spawns.push(record),
-                Err(_) => {
-                    published.remove(id);
-                }
+                spawns.push(record);
             }
         }
         for group in spawns.chunks(MOB_BATCH_CAP) {
@@ -1204,7 +1200,6 @@ fn emit_hostiles(
                 ));
             }
         }
-        view.visible_hostiles = published;
     }
 }
 

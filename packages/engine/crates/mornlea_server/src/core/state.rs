@@ -13,8 +13,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use mornlea_domain::{
     BlockChange, BlockPos, ChatBody, ChunkPos, CommandEnvelope, CommandEnvelopeParts, CommandText,
     CompanionId, CompanionName, CompanionSpeaker, ContainerRef, Dimension, DisplayName,
-    EventRecipient, FiniteVec3, LookAngles, MotionState, PassiveId, PlayerId, RejectReason,
-    RoutedEvent, TaskFailure, TaskState, Weather, WorldState,
+    EventRecipient, FiniteVec3, HostileId, LookAngles, MotionState, PassiveId, PlayerId,
+    RejectReason, RoutedEvent, TaskFailure, TaskState, Weather, WorldState,
 };
 use mornlea_engine::native::contracts::raycast::{Ray, RayCursor, RaycastOp};
 use mornlea_engine::native::raycast::NativeRaycast;
@@ -2442,6 +2442,16 @@ impl AuthorityState {
             return;
         };
         match mirror {
+            QueuedPublicationMirror::HostileSpawn(batch) => {
+                for id in batch.ids.into_iter().take(usize::from(batch.count)) {
+                    view.visible_hostiles.insert(id);
+                }
+            }
+            QueuedPublicationMirror::HostileDespawn(batch) => {
+                for id in batch.ids.into_iter().take(usize::from(batch.count)) {
+                    view.visible_hostiles.remove(&id);
+                }
+            }
             QueuedPublicationMirror::CompanionSpawn(id) => {
                 view.visible_companions.insert(id);
             }
@@ -3299,10 +3309,38 @@ enum AppendOutcome {
     Saturated,
 }
 
-/// Checked scalar mirror metadata stays paired with its immutable encoded frame.
+/// Complete checked ID prefixes use the packet cap, never the larger domain cap.
+/// The unused tail repeats a real checked ID and is never a membership receipt.
+#[derive(Clone, Copy)]
+struct QueuedHostileIds<const N: usize> {
+    ids: [HostileId; N],
+    count: u8,
+}
+
+impl<const N: usize> QueuedHostileIds<N> {
+    fn from_ids(mut ids: impl Iterator<Item = HostileId>) -> Option<Self> {
+        if N == 0 {
+            return None;
+        }
+        let first = ids.next()?;
+        let mut copied = Self {
+            ids: [first; N],
+            count: 1,
+        };
+        for id in ids {
+            *copied.ids.get_mut(usize::from(copied.count))? = id;
+            copied.count = copied.count.checked_add(1)?;
+        }
+        Some(copied)
+    }
+}
+
+/// Checked mirror metadata stays paired with its immutable encoded frame.
 /// Other publication mirrors retain their separate migration ownership.
 #[derive(Clone, Copy)]
 enum QueuedPublicationMirror {
+    HostileSpawn(QueuedHostileIds<{ mornlea_protocol::HOSTILE_SPAWN_MAX_RECORDS as usize }>),
+    HostileDespawn(QueuedHostileIds<{ mornlea_protocol::MAX_HOSTILE_RECORDS as usize }>),
     CompanionSpawn(CompanionId),
     CompanionDespawn(CompanionId),
     RemoteSpawn {
@@ -3326,6 +3364,14 @@ enum QueuedPublicationMirror {
 impl QueuedPublicationMirror {
     fn from_event(event: &mornlea_domain::Event, state: &AuthorityState) -> Option<Self> {
         match event {
+            // Encoding already certifies the narrower wire cap. Copy the complete
+            // checked prefix without body allocation or source-liveness policy.
+            mornlea_domain::Event::HostileSpawn(value) => Some(Self::HostileSpawn(
+                QueuedHostileIds::from_ids(value.spawns().iter().map(|record| record.id()))?,
+            )),
+            mornlea_domain::Event::HostileDespawn(value) => Some(Self::HostileDespawn(
+                QueuedHostileIds::from_ids(value.ids().iter().copied())?,
+            )),
             // Companion wire identity is its own checked UUID namespace; source
             // registration and reset consumption remain separate authority owners.
             mornlea_domain::Event::CompanionSpawn(value) => Some(Self::CompanionSpawn(value.id())),
@@ -17857,7 +17903,7 @@ mod held_mining_owner_contract_tests {
 #[cfg(test)]
 mod owner_record_admission_tests {
     use super::*;
-    use mornlea_domain::{CraftingState, Event, InventoryState};
+    use mornlea_domain::{CraftingState, Event, HostileId, InventoryState};
     use mornlea_protocol::{LoginStart, admit_login};
 
     fn fixture(outbox: usize, players: u8) -> (AuthorityState, Vec<SessionKey>) {
@@ -19566,6 +19612,421 @@ mod owner_record_admission_tests {
         );
         companion_members(&state, sessions[0], &ids);
         companion_members(&state, sessions[1], &[]);
+        assert!(
+            state
+                .take_outbox(sessions[1], 512, 2_097_152)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    fn hostile_fixture(
+        outbox: usize,
+        count: u64,
+    ) -> (AuthorityState, Vec<SessionKey>, Vec<HostileId>) {
+        let (mut state, sessions) = remote_fixture(outbox);
+        let survival = state.residents.actors[0].survival;
+        let ids: Vec<_> = (1..=count)
+            .map(|id| HostileId::try_new(id).unwrap())
+            .collect();
+        // Prepared bodies isolate the real publication consumer without native mob creation.
+        for id in &ids {
+            let position = [0.5, 65.0, 0.5];
+            let actor = ActorRecord::try_new(
+                ActorKey::Hostile(*id),
+                ActorLifecycle::Active,
+                Dimension::OVERWORLD,
+                MotionState::new(mornlea_domain::MotionStateParts {
+                    position: FiniteVec3::try_new(position).unwrap(),
+                    velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                    on_ground: true,
+                }),
+                LookAngles::try_new(0.0, 0.0).unwrap(),
+                survival,
+                ActorBody::Hostile(mornlea_storage::HostileMob {
+                    id: id.get(),
+                    dimension: 0,
+                    position,
+                    velocity: [0.0; 3],
+                    on_ground: true,
+                    yaw: 0.0,
+                    health: 20,
+                    attack_cooldown: 0,
+                    hurt_cooldown: 0,
+                    burn_cooldown: 20,
+                    has_target: false,
+                    player_id: mornlea_storage::PlayerId::from_bytes([0; 16]),
+                    next_repath_ticks: 0,
+                    distant_ticks: 0,
+                    kind: 0,
+                }),
+            )
+            .unwrap();
+            let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+            context.stage(RuleEffect::Actor(actor)).unwrap();
+            context.commit_carried();
+        }
+        (state, sessions, ids)
+    }
+
+    fn hostile_lifecycle(state: &mut AuthorityState, id: HostileId, lifecycle: ActorLifecycle) {
+        // Prepared disappearance or arrival preserves the canonical identity and body fields.
+        let mut actor = state
+            .residents
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Hostile(id))
+            .unwrap()
+            .clone();
+        actor.lifecycle = lifecycle;
+        let mut context = TickContext::for_tick(state, TickBudget::full());
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+        context.commit_carried();
+    }
+
+    fn hostile_project(state: &mut AuthorityState) -> Vec<RoutedEvent> {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches.clear();
+        state
+            .project_tick_publication(0, &outcome)
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event.event(),
+                    Event::HostileSpawn(_) | Event::HostileDespawn(_) | Event::HostileState(_)
+                )
+            })
+            .collect()
+    }
+
+    fn hostile_members(state: &AuthorityState, session: SessionKey, ids: &[HostileId]) {
+        assert_eq!(
+            state.session_views[&session].visible_hostiles,
+            ids.iter().copied().collect::<BTreeSet<_>>(),
+            "hostile membership must reflect complete FIFO-admitted batches"
+        );
+    }
+
+    fn hostile_spawn_event(ids: &[HostileId]) -> Event {
+        Event::HostileSpawn(
+            mornlea_domain::HostileSpawn::try_new(mornlea_domain::HostileSpawnParts {
+                server_tick: 0,
+                spawns: ids
+                    .iter()
+                    .map(|id| {
+                        mornlea_domain::HostileSpawnRecord::try_new(
+                            mornlea_domain::HostileSpawnRecordParts {
+                                id: *id,
+                                dimension: Dimension::OVERWORLD,
+                                position: FiniteVec3::try_new([0.5, 65.0, 0.5]).unwrap(),
+                                yaw: 0.0,
+                                health: 20,
+                                kind: mornlea_domain::HostileKind::Nightwalker,
+                            },
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            })
+            .unwrap(),
+        )
+    }
+
+    fn hostile_initial(state: &mut AuthorityState, sessions: &[SessionKey], ids: &[HostileId]) {
+        let events = hostile_project(state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(event.event(), Event::HostileSpawn(value) if value.spawns().iter().map(|record| record.id()).collect::<Vec<_>>() == ids)));
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            hostile_members(state, *session, ids);
+        }
+    }
+
+    #[test]
+    fn hostile_admission_projection_then_queued() {
+        let (mut state, sessions, ids) = hostile_fixture(512, 1);
+        let events = hostile_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event.event(), Event::HostileSpawn(_)))
+        );
+        for session in &sessions {
+            hostile_members(&state, *session, &[]);
+        }
+        assert_eq!(hostile_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            hostile_members(&state, *session, &ids);
+        }
+        let next = hostile_project(&mut state);
+        assert_eq!(next.len(), 2);
+        assert!(
+            next.iter()
+                .all(|event| matches!(event.event(), Event::HostileState(_)))
+        );
+    }
+
+    #[test]
+    fn hostile_admission_closed_owner_and_peer() {
+        let (mut state, sessions, ids) = hostile_fixture(512, 1);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let events = hostile_project(&mut state);
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        hostile_members(&state, owner, &[]);
+        hostile_members(&state, peer, &ids);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        let next = hostile_project(&mut state);
+        assert!(next.iter().any(
+            |event| event.recipient() == EventRecipient::Session(owner.get())
+                && matches!(event.event(), Event::HostileSpawn(_))
+        ));
+        assert!(next.iter().any(
+            |event| event.recipient() == EventRecipient::Session(peer.get())
+                && matches!(event.event(), Event::HostileState(_))
+        ));
+    }
+
+    #[test]
+    fn hostile_admission_late_preflight_atomic() {
+        let (mut state, sessions, ids) = hostile_fixture(512, 1);
+        let events = hostile_project(&mut state);
+        let mut refused = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+            hostile_members(&state, *session, &[]);
+        }
+        assert_eq!(hostile_project(&mut state), events);
+        state.publish(publication(events)).unwrap();
+        for session in &sessions {
+            hostile_members(&state, *session, &ids);
+        }
+    }
+
+    #[test]
+    fn hostile_admission_despawn_preflight_retry() {
+        let (mut state, sessions, ids) = hostile_fixture(512, 1);
+        hostile_initial(&mut state, &sessions, &ids);
+        hostile_lifecycle(&mut state, ids[0], ActorLifecycle::Dead);
+        let events = hostile_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(
+            |event| matches!(event.event(), Event::HostileDespawn(value) if value.ids() == ids)
+        ));
+        let mut refused = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            hostile_members(&state, *session, &ids);
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(hostile_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            hostile_members(&state, *session, &[]);
+        }
+    }
+
+    #[test]
+    fn hostile_admission_departure_and_arrival() {
+        let (mut state, sessions, ids) = hostile_fixture(512, 2);
+        hostile_lifecycle(&mut state, ids[1], ActorLifecycle::Pending);
+        hostile_initial(&mut state, &sessions, &ids[..1]);
+        hostile_lifecycle(&mut state, ids[0], ActorLifecycle::Dead);
+        hostile_lifecycle(&mut state, ids[1], ActorLifecycle::Active);
+        let events = hostile_project(&mut state);
+        assert_eq!(events.len(), 4);
+        for session in &sessions {
+            let owned: Vec<_> = events
+                .iter()
+                .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+                .map(|event| event.event())
+                .collect();
+            assert!(
+                matches!(owned.as_slice(), [Event::HostileDespawn(old), Event::HostileSpawn(new)] if old.ids() == &ids[..1] && new.spawns().len() == 1 && new.spawns()[0].id() == ids[1])
+            );
+            hostile_members(&state, *session, &ids[..1]);
+        }
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            hostile_members(&state, *session, &ids[1..]);
+        }
+        assert!(
+            hostile_project(&mut state)
+                .iter()
+                .all(|event| matches!(event.event(), Event::HostileState(_)))
+        );
+    }
+
+    #[test]
+    fn hostile_admission_saturated_prefix_peer() {
+        let (mut state, sessions, ids) = hostile_fixture(1, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let prefix = marker_rejection(owner, 1);
+        state.publish(publication(vec![prefix.clone()])).unwrap();
+        let events = hostile_project(&mut state);
+        for session in &sessions {
+            hostile_members(&state, *session, &[]);
+        }
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(
+            state.take_outbox(owner, 512, 2_097_152).unwrap(),
+            vec![frame(prefix.event())]
+        );
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        hostile_members(&state, peer, &ids);
+    }
+
+    #[test]
+    fn hostile_admission_maximum_batch_and_packet_preflight() {
+        let (mut state, sessions, ids) = hostile_fixture(512, 64);
+        let events = hostile_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(event.event(), Event::HostileSpawn(value) if value.spawns().len() == 64 && value.spawns()[0].id() == ids[0] && value.spawns()[63].id() == ids[63])));
+        for session in &sessions {
+            hostile_members(&state, *session, &[]);
+        }
+        // Domain acceptance permits this complete batch; wire preflight must refuse it atomically.
+        let too_many: Vec<_> = (1..=65).map(|id| HostileId::try_new(id).unwrap()).collect();
+        let bad_spawn = hostile_spawn_event(&too_many);
+        let bad_despawn = Event::HostileDespawn(
+            mornlea_domain::HostileDespawn::try_new(mornlea_domain::HostileDespawnParts {
+                server_tick: 0,
+                ids: too_many.into_boxed_slice(),
+            })
+            .unwrap(),
+        );
+        for bad in [bad_spawn, bad_despawn] {
+            let mut refused = events.clone();
+            refused.push(RoutedEvent::new(
+                EventRecipient::Session(sessions[0].get()),
+                bad,
+            ));
+            assert_eq!(
+                state.publish(publication(refused)),
+                Err(ServerError::InvalidInput { field: "packet" })
+            );
+            for session in &sessions {
+                assert!(
+                    state
+                        .take_outbox(*session, 512, 2_097_152)
+                        .unwrap()
+                        .is_empty()
+                );
+                hostile_members(&state, *session, &[]);
+            }
+        }
+        assert_eq!(hostile_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            hostile_members(&state, *session, &ids);
+        }
+        for id in &ids {
+            hostile_lifecycle(&mut state, *id, ActorLifecycle::Dead);
+        }
+        let departures = hostile_project(&mut state);
+        assert_eq!(departures.len(), 2);
+        assert!(departures.iter().all(
+            |event| matches!(event.event(), Event::HostileDespawn(value) if value.ids() == ids)
+        ));
+        for session in &sessions {
+            hostile_members(&state, *session, &ids);
+        }
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&departures, *session))
+            .collect();
+        state.publish(publication(departures)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            hostile_members(&state, *session, &[]);
+        }
+        assert!(hostile_project(&mut state).is_empty());
+    }
+
+    #[test]
+    fn hostile_admission_targeted_and_broadcast_ownership() {
+        let (mut state, sessions, ids) = hostile_fixture(512, 2);
+        // Manual frames qualify receipt ownership independently of source actor production.
+        let spawn = hostile_spawn_event(&ids);
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Broadcast,
+                spawn.clone(),
+            )]))
+            .unwrap();
+        for session in &sessions {
+            assert_eq!(
+                state.take_outbox(*session, 512, 2_097_152).unwrap(),
+                vec![frame(&spawn)]
+            );
+            hostile_members(&state, *session, &[]);
+        }
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(sessions[0].get()),
+                spawn.clone(),
+            )]))
+            .unwrap();
+        assert_eq!(
+            state.take_outbox(sessions[0], 512, 2_097_152).unwrap(),
+            vec![frame(&spawn)]
+        );
+        hostile_members(&state, sessions[0], &ids);
+        hostile_members(&state, sessions[1], &[]);
         assert!(
             state
                 .take_outbox(sessions[1], 512, 2_097_152)
