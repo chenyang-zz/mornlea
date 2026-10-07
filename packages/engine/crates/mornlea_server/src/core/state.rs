@@ -2340,7 +2340,8 @@ impl AuthorityState {
                     pending.push(PendingFrame::One {
                         session,
                         frame,
-                        mirror: QueuedPublicationMirror::from_event(event.event()).map(Box::new),
+                        mirror: QueuedPublicationMirror::from_event(event.event(), self)
+                            .map(Box::new),
                     });
                 }
                 EventRecipient::Broadcast => pending.push(PendingFrame::Broadcast { frame }),
@@ -2441,6 +2442,17 @@ impl AuthorityState {
             return;
         };
         match mirror {
+            QueuedPublicationMirror::RemoteSpawn {
+                player,
+                incarnation,
+            } => {
+                // The scalar identity belongs to the admitted frame, even if another
+                // recipient's retirement removed its source after preflight.
+                view.visible_remotes.insert(player, incarnation);
+            }
+            QueuedPublicationMirror::RemoteDespawn(player) => {
+                view.visible_remotes.remove(&player);
+            }
             QueuedPublicationMirror::ChunkSnapshot { key, revision } => {
                 let entry = view.chunks.entry(key).or_default();
                 entry.snapshot_sent = true;
@@ -3285,6 +3297,11 @@ enum AppendOutcome {
 /// Other publication mirrors retain their separate migration ownership.
 #[derive(Clone, Copy)]
 enum QueuedPublicationMirror {
+    RemoteSpawn {
+        player: PlayerId,
+        incarnation: SessionKey,
+    },
+    RemoteDespawn(PlayerId),
     ChunkSnapshot {
         key: ChunkKey,
         revision: u64,
@@ -3299,8 +3316,25 @@ enum QueuedPublicationMirror {
 }
 
 impl QueuedPublicationMirror {
-    fn from_event(event: &mornlea_domain::Event) -> Option<Self> {
+    fn from_event(event: &mornlea_domain::Event, state: &AuthorityState) -> Option<Self> {
         match event {
+            mornlea_domain::Event::RemotePlayerSpawn(value) => {
+                // Wire UUIDs omit the authority incarnation. Resolve only bounded
+                // current keys, never retained history or a fabricated session key.
+                let player = value.player_id();
+                let incarnation = state.current_sessions.iter().copied().find(|key| {
+                    state.sessions.get(key).is_some_and(|record| {
+                        record.phase == SessionPhase::Active && record.player_id == player
+                    })
+                })?;
+                Some(Self::RemoteSpawn {
+                    player,
+                    incarnation,
+                })
+            }
+            mornlea_domain::Event::RemotePlayerDespawn(value) => {
+                Some(Self::RemoteDespawn(value.player_id()))
+            }
             mornlea_domain::Event::ChunkSnapshot(value) => Some(Self::ChunkSnapshot {
                 key: ChunkKey {
                     dimension: value.dimension(),
@@ -18771,6 +18805,314 @@ mod owner_record_admission_tests {
             state.take_outbox(peer, 512, 2_097_152).unwrap(),
             vec![frame(marker_rejection(peer, 21).event())]
         );
+    }
+
+    fn remote_fixture(outbox: usize) -> (AuthorityState, Vec<SessionKey>) {
+        let (mut state, sessions) = snapshot_fixture(outbox, 2);
+        // Prepared desired entries admit real captures without projecting discarded remote DTOs.
+        let snapshot = state.chunk_snapshot_event(snapshot_key()).unwrap();
+        let mut events = Vec::new();
+        for session in &sessions {
+            state
+                .session_views
+                .entry(*session)
+                .or_default()
+                .chunks
+                .entry(snapshot_key())
+                .or_default();
+            events.push(RoutedEvent::new(
+                EventRecipient::Session(session.get()),
+                Event::ChunkSnapshot(snapshot.clone()),
+            ));
+        }
+        state.publish(publication(events)).unwrap();
+        for session in &sessions {
+            assert_eq!(
+                state.take_outbox(*session, 512, 2_097_152).unwrap(),
+                vec![frame(&Event::ChunkSnapshot(snapshot.clone()))]
+            );
+            sent(&state, *session);
+            remote_empty(&state, *session);
+        }
+        (state, sessions)
+    }
+
+    fn remote_project(state: &mut AuthorityState) -> Vec<RoutedEvent> {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches.clear();
+        state
+            .project_tick_publication(0, &outcome)
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event.event(),
+                    Event::RemotePlayerSpawn(_)
+                        | Event::RemotePlayerDespawn(_)
+                        | Event::RemotePlayerStates(_)
+                )
+            })
+            .collect()
+    }
+
+    fn remote_empty(state: &AuthorityState, session: SessionKey) {
+        assert!(
+            state.session_views[&session].visible_remotes.is_empty(),
+            "projection must not certify remote FIFO admission"
+        );
+    }
+
+    fn remote_member(state: &AuthorityState, observer: SessionKey, target: SessionKey) {
+        let player = state.sessions[&target].player_id;
+        assert_eq!(
+            state.session_views[&observer].visible_remotes.get(&player),
+            Some(&target)
+        );
+    }
+
+    fn remote_initial(state: &mut AuthorityState, sessions: &[SessionKey]) {
+        let events = remote_project(state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event.event(), Event::RemotePlayerSpawn(_)))
+        );
+        state.publish(publication(events)).unwrap();
+        for session in sessions {
+            state.take_outbox(*session, 512, 2_097_152).unwrap();
+        }
+        remote_member(state, sessions[0], sessions[1]);
+        remote_member(state, sessions[1], sessions[0]);
+    }
+
+    #[test]
+    fn remote_admission_projection_then_queued() {
+        let (mut state, sessions) = remote_fixture(512);
+        let events = remote_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event.event(), Event::RemotePlayerSpawn(_)))
+        );
+        for session in &sessions {
+            remote_empty(&state, *session);
+        }
+        assert_eq!(remote_project(&mut state), events);
+        let expected: Vec<_> = events.iter().map(|e| frame(e.event())).collect();
+        state.publish(publication(events)).unwrap();
+        assert_eq!(
+            state.take_outbox(sessions[0], 512, 2_097_152).unwrap(),
+            vec![expected[0].clone()]
+        );
+        assert_eq!(
+            state.take_outbox(sessions[1], 512, 2_097_152).unwrap(),
+            vec![expected[1].clone()]
+        );
+        remote_member(&state, sessions[0], sessions[1]);
+        remote_member(&state, sessions[1], sessions[0]);
+        let survivors = remote_project(&mut state);
+        assert_eq!(survivors.len(), 2);
+        assert!(
+            survivors
+                .iter()
+                .all(|e| matches!(e.event(), Event::RemotePlayerStates(_)))
+        );
+    }
+
+    #[test]
+    fn remote_admission_closed_owner_and_peer() {
+        let (mut state, sessions) = remote_fixture(512);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let events = remote_project(&mut state);
+        remote_empty(&state, owner);
+        remote_empty(&state, peer);
+        let expected: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(peer.get()))
+            .map(|e| frame(e.event()))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        remote_empty(&state, owner);
+        remote_member(&state, peer, owner);
+        let retry = remote_project(&mut state);
+        assert_eq!(retry.len(), 2);
+        assert!(
+            retry
+                .iter()
+                .any(|e| e.recipient() == EventRecipient::Session(owner.get())
+                    && matches!(e.event(), Event::RemotePlayerSpawn(_)))
+        );
+        assert!(
+            retry
+                .iter()
+                .any(|e| e.recipient() == EventRecipient::Session(peer.get())
+                    && matches!(e.event(), Event::RemotePlayerStates(_)))
+        );
+        assert_eq!(state.session(peer).unwrap().phase, SessionPhase::Active);
+    }
+
+    #[test]
+    fn remote_admission_late_preflight_atomic() {
+        let (mut state, sessions) = remote_fixture(512);
+        let events = remote_project(&mut state);
+        let original = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        let mut failed = events;
+        failed.push(marker_rejection(unknown, 21));
+        assert_eq!(
+            state.publish(publication(failed)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            remote_empty(&state, *session);
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(remote_project(&mut state), original);
+        state.publish(publication(original)).unwrap();
+        remote_member(&state, sessions[0], sessions[1]);
+        remote_member(&state, sessions[1], sessions[0]);
+    }
+
+    #[test]
+    fn remote_admission_despawn_preflight_retry() {
+        let (mut state, sessions) = remote_fixture(512);
+        let (owner, target) = (sessions[0], sessions[1]);
+        remote_initial(&mut state, &sessions);
+        state.retire(target, CloseReason::PeerGone).unwrap();
+        let events = remote_project(&mut state);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event(), Event::RemotePlayerDespawn(_)));
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        let mut failed = events.clone();
+        failed.push(marker_rejection(unknown, 21));
+        assert_eq!(
+            state.publish(publication(failed)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        remote_member(&state, owner, target);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(remote_project(&mut state), events);
+        let expected = vec![frame(events[0].event())];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 512, 2_097_152).unwrap(), expected);
+        remote_empty(&state, owner);
+    }
+
+    #[test]
+    fn remote_admission_same_uuid_replacement() {
+        let (mut state, sessions) = remote_fixture(512);
+        let (owner, old) = (sessions[0], sessions[1]);
+        remote_initial(&mut state, &sessions);
+        let player = state.sessions[&old].player_id;
+        state.retire(old, CloseReason::PeerGone).unwrap();
+        let start = LoginStart::new(player, "Ada", 8).unwrap();
+        let login =
+            admit_login(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap()).unwrap();
+        let replacement = state.admit(login, TransportKind::Memory).unwrap();
+        assert_ne!(replacement, old);
+        // Session admission/retirement is real; the canonical Ready actor body is staged input.
+        let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+        context.stage_login(
+            seed_player(replacement, &canonical_player(player, "Ada").unwrap()).unwrap(),
+        );
+        context.commit_carried();
+        drop(context);
+        let events = remote_project(&mut state);
+        let owned: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(owner.get()))
+            .collect();
+        assert_eq!(owned.len(), 2);
+        assert!(matches!(owned[0].event(), Event::RemotePlayerDespawn(_)));
+        assert!(matches!(owned[1].event(), Event::RemotePlayerSpawn(_)));
+        remote_member(&state, owner, old);
+        let expected: Vec<_> = owned.iter().map(|e| frame(e.event())).collect();
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 512, 2_097_152).unwrap(), expected);
+        remote_member(&state, owner, replacement);
+        let survivors = remote_project(&mut state);
+        assert!(
+            survivors
+                .iter()
+                .filter(|e| e.recipient() == EventRecipient::Session(owner.get()))
+                .all(|e| matches!(e.event(), Event::RemotePlayerStates(_)))
+        );
+        assert!(
+            survivors
+                .iter()
+                .any(|e| e.recipient() == EventRecipient::Session(owner.get()))
+        );
+    }
+
+    #[test]
+    fn remote_admission_saturated_prefix_peer() {
+        let (mut state, sessions) = remote_fixture(1);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let prefix = marker_rejection(owner, 20);
+        state.publish(publication(vec![prefix.clone()])).unwrap();
+        let events = remote_project(&mut state);
+        remote_empty(&state, owner);
+        remote_empty(&state, peer);
+        let expected: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(peer.get()))
+            .map(|e| frame(e.event()))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        validation_retired(&state, owner, 1);
+        assert_eq!(
+            state.take_outbox(owner, 512, 2_097_152).unwrap(),
+            vec![frame(prefix.event())]
+        );
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        // This admitted captured DTO preserves the existing deferred cross-peer timing.
+        remote_member(&state, peer, owner);
+        assert_eq!(state.session(peer).unwrap().phase, SessionPhase::Active);
+    }
+
+    #[test]
+    fn remote_admission_unavailable_observer_preflight() {
+        let (mut state, sessions) = remote_fixture(512);
+        let (owner, target) = (sessions[0], sessions[1]);
+        remote_initial(&mut state, &sessions);
+        // Prepared unavailable lifecycle qualifies the consumer, not an ordinary death producer.
+        state
+            .residents
+            .actors
+            .iter_mut()
+            .find(|actor| actor.key == ActorKey::Player(owner))
+            .unwrap()
+            .lifecycle = ActorLifecycle::Dead;
+        let events = remote_project(&mut state);
+        let owned: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(owner.get()))
+            .collect();
+        assert_eq!(owned.len(), 1);
+        assert!(matches!(owned[0].event(), Event::RemotePlayerDespawn(_)));
+        let expected: Vec<_> = owned.iter().map(|e| frame(e.event())).collect();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        let mut failed = events.clone();
+        failed.push(marker_rejection(unknown, 21));
+        assert_eq!(
+            state.publish(publication(failed)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        remote_member(&state, owner, target);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(remote_project(&mut state), events);
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 512, 2_097_152).unwrap(), expected);
+        remote_empty(&state, owner);
     }
 
     fn delta_count_boundary(changes: Vec<BlockChange>) {

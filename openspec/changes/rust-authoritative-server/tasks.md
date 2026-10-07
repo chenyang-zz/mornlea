@@ -290,6 +290,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3qdv Reject invalid eligible whole delta publications at the source recipient queue boundary ([packet](plans/150-source-delta-validation.md)). Actor timing/encoding/runtime and broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3qrp Advance remote UUID/incarnation membership only after frame queue admission ([packet](plans/151-source-remote-queue-admission.md)). Foot visibility/other actor mirrors/cross-peer timing/runtime and broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 

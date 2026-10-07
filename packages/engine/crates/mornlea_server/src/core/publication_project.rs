@@ -741,10 +741,9 @@ fn apply_resync_requests(
 
 /// Remote-player and companion despawn diffs. A remote authority incarnation
 /// change despawns the old identity even when interest remains unchanged;
-/// companions retain their interest-exit boundary. Every family emitter stores
-/// this tick's visible identities back on the
-/// session view, so a departure publishes its despawn or removal exactly
-/// once, until the entity becomes visible again and correctly re-spawns.
+/// companions retain their interest-exit boundary. Remote membership advances
+/// only after queue admission, so refused departures remain retryable. Other
+/// visibility families retain their projection-owned migration state.
 fn emit_despawns(
     view_list: &mut [SessionView],
     observers: &[Observer],
@@ -1046,7 +1045,6 @@ fn emit_remotes(
     for ((observer, view), visibility) in
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
-        let mut published = visibility.remotes.clone();
         for (id, session) in &visibility.remotes {
             if view.visible_remotes.get(id) == Some(session) {
                 continue;
@@ -1056,7 +1054,6 @@ fn emit_remotes(
                 .iter()
                 .find(|speaker| speaker.player_id == *id && speaker.session == *session)
             else {
-                published.remove(id);
                 continue;
             };
             let Some(index) = inputs
@@ -1066,7 +1063,6 @@ fn emit_remotes(
                 .copied()
                 .find(|&index| inputs.actors[index].key == ActorKey::Player(speaker.session))
             else {
-                published.remove(id);
                 continue;
             };
             let actor = &inputs.actors[index];
@@ -1126,7 +1122,6 @@ fn emit_remotes(
                 ));
             }
         }
-        view.visible_remotes = published;
     }
 }
 

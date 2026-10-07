@@ -28,7 +28,7 @@ pub(crate) struct ChunkPublication {
 
 /// The previous tick's derived interest and published snapshots of one
 /// session. All fields are owned copies. Inventory, crafting, full snapshots and
-/// contiguous deltas advance only after their exact frames enter the FIFO. Other
+/// contiguous deltas and remote membership advance only after their exact frames enter the FIFO. Other
 /// families retain their current projection-owned migration behavior.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SessionView {
@@ -38,7 +38,7 @@ pub(crate) struct SessionView {
     pub(crate) chunks: BTreeMap<ChunkKey, ChunkPublication>,
     /// Last tick's visible companion identities.
     pub(crate) visible_companions: BTreeSet<CompanionId>,
-    /// Last tick's visible remote identities and authority incarnations.
+    /// FIFO-admitted remote identities and authority incarnations.
     /// Session keys never repeat within the authority that owns this view.
     pub(crate) visible_remotes: BTreeMap<PlayerId, SessionKey>,
     /// Last tick's visible hostile identities.
