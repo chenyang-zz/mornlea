@@ -315,3 +315,5 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.7l3psv Capture per-session publication subscriptions at the source mid-tick phase and publish registered Pending terrain ([private plan](plans/160-source-publication-subscriptions.md)); actual consumer RED/GREEN, private bounds and independent scoped closing gates. Pending entity families and broad3.8/4.1/4.2 remain OPEN.
 
 - [x] 3.7l3peo Publish four entity families for registered Pending observers from their captured per-session foot snapshots ([private plan](plans/161-source-pending-observer-entities.md)); actual tick/FIFO, Closed/prefix and unchanged Active guard controls. Broader runtime and3.8/4.1/4.2 remain OPEN.
+
+- [x] 3.7l3esa Admit exactly correlated off-tick encoded snapshots into the authority FIFO with Queued-only snapshot mirrors ([private plan](plans/162-encoded-snapshot-admission.md)); actual CPU/full Memory ownership and context/error/Closed/saturation controls. Source async selection/runtime and broad3.8/4.1/4.2 remain OPEN.

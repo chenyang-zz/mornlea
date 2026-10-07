@@ -2572,6 +2572,50 @@ impl AuthorityState {
         }
     }
 
+    /// Admits a correlated CPU result into an existing wanted publication context.
+    /// Exact capture identity precedes session errors; numeric identities cannot
+    /// substitute for it. The caller owns selection, cancellation and current
+    /// generation/revision relevance. This method neither encodes nor creates
+    /// interest; only Queued applies the frame's scalar snapshot mirror.
+    pub fn enqueue_encoded_snapshot(
+        &mut self,
+        session: SessionKey,
+        expected: &super::world::ChunkSaveView,
+        encoded: super::chunk_encoding::EncodedChunkSnapshot,
+    ) -> Result<EnqueueOutcome, ServerError> {
+        if encoded.capture() != expected {
+            return Err(ServerError::InvalidInput {
+                field: "chunk_encode_capture",
+            });
+        }
+        let record = self
+            .sessions
+            .get(&session)
+            .ok_or(ServerError::StaleSession { session })?;
+        if record.phase != SessionPhase::Active || record.outbox_closed {
+            return Ok(EnqueueOutcome::Closed);
+        }
+        let key = expected.key();
+        if !self
+            .session_views
+            .get(&session)
+            .is_some_and(|view| view.wanted.contains(&key) && view.chunks.contains_key(&key))
+        {
+            return Err(ServerError::InvalidInput {
+                field: "chunk_snapshot_publication",
+            });
+        }
+        let revision = expected.revision();
+        let receipt = self.enqueue_prepared(session, encoded.into_frame())?;
+        if receipt == EnqueueOutcome::Queued {
+            self.accept_publication_mirror(
+                session,
+                QueuedPublicationMirror::ChunkSnapshot { key, revision },
+            );
+        }
+        Ok(receipt)
+    }
+
     /// Moves whole immutable owners from the one FIFO, including retained prefixes.
     /// The first frame is exempt from the byte budget; later nonfits stay queued.
     pub fn take_prepared_outbox(
@@ -23206,5 +23250,362 @@ mod owner_record_admission_tests {
             drop_book(&state, *session, &values);
             selection_unsent(&state, *session, &[selection_key(1, 0)]);
         }
+    }
+
+    fn encoded_admission_capture(state: &AuthorityState) -> super::super::world::ChunkSaveView {
+        let snapshot = state
+            .capture_chunk_snapshot(snapshot_key(), SaveUrgency::Autosave)
+            .unwrap();
+        let SaveValue::ChunkView(capture) = snapshot.value else {
+            panic!("expected immutable live capture");
+        };
+        capture
+    }
+
+    fn encoded_admission_cpu(
+        capture: &super::super::world::ChunkSaveView,
+    ) -> super::super::chunk_encoding::EncodedChunkSnapshot {
+        use super::super::chunk_encoding::{ChunkEncodePoll, ChunkEncodePort};
+        use super::super::encoding_worker::ChunkEncodingPool;
+        use std::time::{Duration, Instant};
+        let mut pool = ChunkEncodingPool::try_new(1).unwrap();
+        let request = pool.start_encode(capture.clone()).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        let result = loop {
+            match pool.poll_encode(request) {
+                ChunkEncodePoll::Ready(encoded) => break encoded,
+                ChunkEncodePoll::Failed(error) => panic!("actual CPU encode failed: {error:?}"),
+                ChunkEncodePoll::Pending => {
+                    assert!(Instant::now() < until, "actual CPU completion deadline");
+                    std::thread::yield_now();
+                }
+            }
+        };
+        assert_eq!(result.capture(), capture);
+        assert_eq!(
+            (capture.key(), capture.generation(), capture.revision()),
+            (snapshot_key(), 1, 9)
+        );
+        assert_eq!(result.section_payload_bytes(), 48);
+        let wire = mornlea_protocol::read_frame_ref(result.frame().as_bytes()).unwrap();
+        assert_eq!(wire.consumed, result.frame().byte_len());
+        let decoded = ProtocolCodec::new()
+            .unwrap()
+            .decode_snapshot(wire.payload)
+            .unwrap();
+        assert_eq!(decoded.revision, 9);
+        assert_eq!(
+            (decoded.dimension, decoded.chunk_x, decoded.chunk_z),
+            (Dimension::OVERWORLD, 0, 0)
+        );
+        assert_eq!(decoded.sections.len(), 24);
+        assert!(decoded.sections.iter().all(|section| section.single == 0));
+        pool.stop_new().unwrap();
+        let deadline = Deadline::after(Instant::now(), Duration::from_secs(10)).unwrap();
+        pool.wait(deadline).unwrap();
+        pool.close(deadline).unwrap();
+        result
+    }
+
+    fn encoded_admission_drain(
+        state: &mut AuthorityState,
+        session: SessionKey,
+        pointer: *const u8,
+        bytes: &[u8],
+    ) {
+        use crate::transport::memory::MemoryTransport;
+        let received = MemoryTransport::drain_prepared_session(state, session, 8, 1).unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].as_bytes().as_ptr(), pointer);
+        assert_eq!(received[0].as_bytes(), bytes);
+        assert!(
+            MemoryTransport::drain_prepared_session(state, session, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn encoded_snapshot_admission_queued_owns_frame_and_mirror() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        assert_eq!(snapshot_project(&mut state, None, false).len(), 1);
+        unsent(&state, owner);
+        let capture = encoded_admission_capture(&state);
+        let encoded = encoded_admission_cpu(&capture);
+        let pointer = encoded.frame().as_bytes().as_ptr();
+        let bytes = encoded.frame().as_bytes().to_vec();
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded),
+            Ok(EnqueueOutcome::Queued)
+        );
+        sent(&state, owner);
+        encoded_admission_drain(&mut state, owner, pointer, &bytes);
+        assert!(snapshot_project(&mut state, None, false).is_empty());
+    }
+
+    #[test]
+    fn encoded_snapshot_admission_closed_retry_and_peer() {
+        let (mut state, sessions) = snapshot_fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        assert_eq!(snapshot_project(&mut state, None, false).len(), 2);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let capture = encoded_admission_capture(&state);
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded_admission_cpu(&capture)),
+            Ok(EnqueueOutcome::Closed)
+        );
+        unsent(&state, owner);
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+        let encoded = encoded_admission_cpu(&capture);
+        let pointer = encoded.frame().as_bytes().as_ptr();
+        let bytes = encoded.frame().as_bytes().to_vec();
+        assert_eq!(
+            state.enqueue_encoded_snapshot(peer, &capture, encoded),
+            Ok(EnqueueOutcome::Queued)
+        );
+        sent(&state, peer);
+        encoded_admission_drain(&mut state, peer, pointer, &bytes);
+        // A prepared reopening qualifies admission, not transport reconnection.
+        state.sessions.get_mut(&owner).unwrap().outbox_closed = false;
+        let encoded = encoded_admission_cpu(&capture);
+        let pointer = encoded.frame().as_bytes().as_ptr();
+        let bytes = encoded.frame().as_bytes().to_vec();
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded),
+            Ok(EnqueueOutcome::Queued)
+        );
+        sent(&state, owner);
+        encoded_admission_drain(&mut state, owner, pointer, &bytes);
+    }
+
+    #[test]
+    fn encoded_snapshot_admission_saturated_retains_prefix_and_peer() {
+        let (mut state, sessions) = snapshot_fixture(1, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        assert_eq!(snapshot_project(&mut state, None, false).len(), 2);
+        let marker = PreparedFrame::encode(
+            &mut ProtocolCodec::new().unwrap(),
+            &ServerPacket::CommandRejected(mornlea_protocol::CommandRejected::new(11, 1).unwrap()),
+        )
+        .unwrap();
+        let pointer = marker.as_bytes().as_ptr();
+        let bytes = marker.as_bytes().to_vec();
+        assert_eq!(
+            state.enqueue_prepared(owner, marker),
+            Ok(EnqueueOutcome::Queued)
+        );
+        let capture = encoded_admission_capture(&state);
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded_admission_cpu(&capture)),
+            Ok(EnqueueOutcome::Closed)
+        );
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        encoded_admission_drain(&mut state, owner, pointer, &bytes);
+        let encoded = encoded_admission_cpu(&capture);
+        let pointer = encoded.frame().as_bytes().as_ptr();
+        let bytes = encoded.frame().as_bytes().to_vec();
+        assert_eq!(
+            state.enqueue_encoded_snapshot(peer, &capture, encoded),
+            Ok(EnqueueOutcome::Queued)
+        );
+        sent(&state, peer);
+        encoded_admission_drain(&mut state, peer, pointer, &bytes);
+    }
+
+    #[test]
+    fn encoded_snapshot_admission_resync_changes_only_on_queued() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        snapshot_project(&mut state, None, false);
+        let entry = state
+            .session_views
+            .get_mut(&owner)
+            .unwrap()
+            .chunks
+            .get_mut(&snapshot_key())
+            .unwrap();
+        entry.snapshot_sent = true;
+        entry.last_revision = 7;
+        entry.resync_queued = true;
+        let previous = *entry;
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let capture = encoded_admission_capture(&state);
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded_admission_cpu(&capture)),
+            Ok(EnqueueOutcome::Closed)
+        );
+        assert_eq!(chunk_mirror(&state, owner), previous);
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+        state.sessions.get_mut(&owner).unwrap().outbox_closed = false;
+        let encoded = encoded_admission_cpu(&capture);
+        let pointer = encoded.frame().as_bytes().as_ptr();
+        let bytes = encoded.frame().as_bytes().to_vec();
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded),
+            Ok(EnqueueOutcome::Queued)
+        );
+        sent(&state, owner);
+        encoded_admission_drain(&mut state, owner, pointer, &bytes);
+    }
+
+    #[test]
+    fn encoded_snapshot_admission_equal_numbers_do_not_correlate() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        snapshot_project(&mut state, None, false);
+        let expected = encoded_admission_capture(&state);
+        let different = encoded_admission_capture(&state);
+        assert_eq!(
+            (expected.key(), expected.generation(), expected.revision()),
+            (
+                different.key(),
+                different.generation(),
+                different.revision()
+            )
+        );
+        assert_ne!(expected, different);
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &expected, encoded_admission_cpu(&different)),
+            Err(ServerError::InvalidInput {
+                field: "chunk_encode_capture"
+            })
+        );
+        unsent(&state, owner);
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        assert_eq!(
+            state.enqueue_encoded_snapshot(unknown, &expected, encoded_admission_cpu(&different)),
+            Err(ServerError::InvalidInput {
+                field: "chunk_encode_capture"
+            })
+        );
+    }
+
+    #[test]
+    fn encoded_snapshot_admission_session_errors_keep_history() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        snapshot_project(&mut state, None, false);
+        let previous = chunk_mirror(&state, owner);
+        let capture = encoded_admission_capture(&state);
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        assert_eq!(
+            state.enqueue_encoded_snapshot(unknown, &capture, encoded_admission_cpu(&capture)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        // Prepared phase/context controls preserve the actual queue provider.
+        state.sessions.get_mut(&owner).unwrap().phase = SessionPhase::Prepared;
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded_admission_cpu(&capture)),
+            Ok(EnqueueOutcome::Closed)
+        );
+        assert_eq!(chunk_mirror(&state, owner), previous);
+        state.sessions.get_mut(&owner).unwrap().phase = SessionPhase::Active;
+        state.sessions.get_mut(&owner).unwrap().outbox_closed = true;
+        state.session_views.remove(&owner);
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded_admission_cpu(&capture)),
+            Ok(EnqueueOutcome::Closed)
+        );
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn encoded_snapshot_admission_requires_existing_wanted_context() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        snapshot_project(&mut state, None, false);
+        let capture = encoded_admission_capture(&state);
+        let previous = chunk_mirror(&state, owner);
+        state
+            .session_views
+            .get_mut(&owner)
+            .unwrap()
+            .wanted
+            .remove(&snapshot_key());
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded_admission_cpu(&capture)),
+            Err(ServerError::InvalidInput {
+                field: "chunk_snapshot_publication"
+            })
+        );
+        assert_eq!(chunk_mirror(&state, owner), previous);
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+        let view = state.session_views.get_mut(&owner).unwrap();
+        view.wanted.insert(snapshot_key());
+        view.chunks.remove(&snapshot_key());
+        let others = view.chunks.clone();
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded_admission_cpu(&capture)),
+            Err(ServerError::InvalidInput {
+                field: "chunk_snapshot_publication"
+            })
+        );
+        assert_eq!(state.session_views[&owner].chunks, others);
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+        state.session_views.remove(&owner);
+        assert_eq!(
+            state.enqueue_encoded_snapshot(owner, &capture, encoded_admission_cpu(&capture)),
+            Err(ServerError::InvalidInput {
+                field: "chunk_snapshot_publication"
+            })
+        );
+        assert!(!state.session_views.contains_key(&owner));
+        assert!(
+            state
+                .take_prepared_outbox(owner, 8, usize::MAX)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn encoded_snapshot_admission_opaque_frames_do_not_certify_snapshot() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        snapshot_project(&mut state, None, false);
+        let capture = encoded_admission_capture(&state);
+        let encoded = encoded_admission_cpu(&capture);
+        let pointer = encoded.frame().as_bytes().as_ptr();
+        let bytes = encoded.frame().as_bytes().to_vec();
+        assert_eq!(
+            state.enqueue_prepared(owner, encoded.into_frame()),
+            Ok(EnqueueOutcome::Queued)
+        );
+        encoded_admission_drain(&mut state, owner, pointer, &bytes);
+        unsent(&state, owner);
+        assert_eq!(snapshot_project(&mut state, None, false).len(), 1);
     }
 }
