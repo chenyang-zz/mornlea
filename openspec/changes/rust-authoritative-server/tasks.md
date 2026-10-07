@@ -313,3 +313,5 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.7l3afv Gate Active observer actor foot visibility on per-session snapshot history and preserve early departure/late arrival order ([private plan](plans/159-source-actor-foot-visibility.md)); qualified revised RED ten causal failures/two controls then GREEN12; source3 SCOPED_PASS, eleven focused gates/full3929/76/replay677/native-before-Go26+1. Pending observer, async/config/runtime and broad3.8/4.1/4.2 OPEN.
 
 - [x] 3.7l3psv Capture per-session publication subscriptions at the source mid-tick phase and publish registered Pending terrain ([private plan](plans/160-source-publication-subscriptions.md)); actual consumer RED/GREEN, private bounds and independent scoped closing gates. Pending entity families and broad3.8/4.1/4.2 remain OPEN.
+
+- [x] 3.7l3peo Publish four entity families for registered Pending observers from their captured per-session foot snapshots ([private plan](plans/161-source-pending-observer-entities.md)); actual tick/FIFO, Closed/prefix and unchanged Active guard controls. Broader runtime and3.8/4.1/4.2 remain OPEN.

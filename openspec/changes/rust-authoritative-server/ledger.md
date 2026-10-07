@@ -3866,3 +3866,48 @@ SixGREEN72446b9bd5aa6d6f33f3d42081ff2d6360fbdf82a73ad98111f59ad033538281, unchan
 Architecture skill: no change. Existing scoped server guide now owns the capture phase; the project skill already forbids equating global readiness and per-session publication and adding this local phase history would duplicate owner-specific guidance. AOCI unavailable/no usable complete index; no fabricated receipt or maintenance. Root sole writer/integrator/rollback; no new directories or public versions. Docs/immutable exactnine-path commit/durable local handoff remain closing obligations; all-task ACTIVE and broad3.8/4.1/4.2OPEN.
 
 160 closing audits4 PASS log293f0a116e74acb93d6f5f5469b194fb4b1b8650f6d0a6e70c94a0bd26b37771; strict128 PASS logfa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67. Twenty-one final gate receipts bind accepted parent and frozen source5. Protected dev9/archive2/frozen5/emptyindex PASS; expanded Go79 unique source baseline hashes protected. Scoped implementation only; exactnine-path local commit/independent docs+immutable review/durable handoff pending. All-task ACTIVE, broad3.8/4.1/4.2OPEN. Durable target /Users/chen/Documents/Codex/2026-10-04/task-12/runtime/source-publication-subscriptions-20261007.
+
+
+## Node161 root readiness and routing
+
+Accepted1607c5356c2cb32313cbe191bf1e19378334978461d clean and99external originals byte-identical durable plus localhandoff/COORD ACTIVE. Root uses brainstorming/writing-plans/project checklist for private consumer successor; exact accepted SourceInputs APIs unchanged. Go four-family visibility has no observer Ready guard, remote/drop/owner do. Readonly census found actual Pending-only projectile tick removes projectile before publication because scopes require Active player; root fixes test design before READY with actual restored Active peer and separated target coordinates. Root alone resolves exact seven oracles/native causes/source3/docs4/error/queue/rollback/derived Cargo gates, self-review checks coverage/types/acyclicacceptedcontract and bounded private cuts. READY on160SHA; currentcode stillbaseline. Direct implementation under useralltask/noLoom; existing isolated readonly review due actual fresh-threadcap, no implementation delegates. No new directory/publicversion/cloneworktree/pushdeploy/foregroundgame. Protect dev9/archive2/Go79; AOCI absent/no fabricated cognition. Sourcepacking/crosspeer/trustedobserver/native-creation/TCPterrain/configruntime/broad3.8/4.1/4.2 OPEN/alltask ACTIVE.
+
+161 initial compiler-only failure log9b32919ff7fc8a34128f64f4b823f1d9548199bba955b497d3a71456497e5de8: new assertion classifier misspelled two existing singular Event variants as plural. Root corrects only spelling after tracing existing emitters/compiler diagnostics; no product changes or tests ran in that log. Retain/exclude it before qualified causal baseline RED.
+
+161 first compiler-clean causal RED7 logf7c724c809724b89caba0df4f6d63cb8461b8e11a1e9115e18f8c8352ca693a7 gives six missing Pending spawn failures and one remote/drop/owner guard control PASS. Root pre-product self-review strengthens membership assertions from cardinality alone to exact literal target ID sets as already specified in packet, then reruns accepted160 baseline RED before product and final test freeze. Native targets survive first tick, including projectile under actual Active peer scope.
+
+161 exact-ID qualified RED log8ebfdb0f8d772c302bfbfe857aa0aa32792f0c2a1a655ebc89eb08bf8d328a0e: six causal missing Pending spawn failures/oneguardcontrolPASS, no fixture or compiler errors on exact160product. Qualified test tail and complete state saved before product. Only visibility guard split plus explanatory scoped guide changes; source capture/entity/native/queuedmetadata contracts remain unchanged.
+
+161 root correction: full raw failure inspection shows earlier f7c724/8ebfdb logs were FIVE causal missing-spawn failures, ONE passive fixture error (combat actor runtime), ONE guard control PASS; previous six-causal classification is invalid. Initial GREEN194486e6f6e93bf99bc1a152f8ab31741ab6c00feb6963c8591aa84c4b1f07a8 gives sixPASS/one same fixture error. Systematic tracing finds combat builds passive actor lanes BEFORE passive admit_residents runs; Actor-only direct projection fixture is insufficient for this actual tick. Root updates packet before changing new test: prepare complete zeroed passive ActorRuntime with Passive home/flee/graze/fresh defaults, matching existing passive lifecycle runtime initialization. Other fixtures unchanged. Save product/guide externally and restore exact160Gitbytes before revised baselineRED; this qualified runtime cause accepts no ordinary restore/bootstrap producer. Preserve original tests/logs and append correction rather than rewriting evidence history.
+
+161 revised qualified RED4038207a3a46548a0eea12429258f791ef764a5c26bcf68ba1dd79b2d22b4fc0 on exactly restored160guide/projector now SIX causal missing-spawn failures/ONE guard controlPASS, no compiler/fixture error; full raw failure bodies inspected. Passive complete prepared runtime enters precombat; all target phases survive. Revised seven test tail/state saved before restoring already-root-written exact private guard split; unchanged through subsequentGREEN/final. Earlier tests/failures and erroneous causal classification remain historical excluded evidence.
+
+161 gate-name qualification: actual cargo substring owner_record_admission_ matches the entire current owner_record_admission_tests module, not only five original owner cases. Actual same-frozen-source gate exits0 with108PASS/0failedignored; runner expected-count assertion stopped the sequence, not Rust. Root revises packet/metadata to actual108, retains raw successful108 receipt and resumes remaining gates without repeating passed checks. No source/test changes or gate bypass.
+
+
+## Node161 scoped execution verification
+
+Revised qualified GREEN7 a190633d55b91d902a3f304a1f19d528090f9f1eb7d91010e6b7c3160d5554bc, unchanged revised test tail. Independent /root/passive_queue_census source3 SCOPED_PASS identity8ead3e2bb2b06a028a979f4046d80e7150a3b4866c25195588dae92bff93c7c9. Eighteen final receipts bind exact frozen source3 and accepted160parent. Full3942/76/70nonempty6empty/replay677/0failedignoredwarnings/fmtClippy PASS; native rebuild before full nested world oracle and all Go. Go race/count1 actor controls26top8sub plus actual Host MemoryTCP business1. Owner substring gate qualified108actualPASS; wrapper count stop retained, no passing gate repeated. Current RED4038207a gives six causal failures/one guard control; earlier compiler/passive fixture histories and erroneous six-causal classifications remain explicitly excluded.
+
+- pending-final: PASS 7; logSHA256 ef4aa2c17d4c07d77672f64a553933bb061870bb54916e508061fe9132e9227d.
+- subscription-final: PASS 6; logSHA256 d105206d4da2ec15518c1a15b22f7f35d643c594188aaea18c74dc18e3413a2a.
+- actor-foot-final: PASS 12; logSHA256 4291e41996baac3d59c1b76b4f3299e14dee766d28c28fb7187a395f62d81ce1.
+- companion-final: PASS 7; logSHA256 e9be205d2263dd631c1511120fd089e299ca5006a7584538839d5c5040a76163.
+- hostile-final: PASS 8; logSHA256 fb8b3b91b57e7678f924c62db8f7594d6512108971818bcef356873a4c1afa36.
+- passive-final: PASS 9; logSHA256 0fd5884c9c81211ac85d40d75d083ef5604ae418dfd1843404d9cebbdb83e8cf.
+- projectile-final: PASS 9; logSHA256 158f6d301954577d5bf7f7e2f28c56bbc739558a88be2066bb00a780d9a71650.
+- remote-final: PASS 7; logSHA256 27d1ae16496ac10342223742ad58a5414a4c315dd9482bcc0e52517eeb5a4ed9.
+- drop-final: PASS 11; logSHA256 07dc7129136637447045a54a96f6ea34632a7d8b289baca43f9331ba66209692.
+- owner-final: PASS 108; logSHA256 9d89e37782cc644da4d2c49993a4db5e3a47ae2d44261f2333bf41f3593548e7.
+- snapshot-selection-final: PASS 8; logSHA256 5c3254433ec5b3dfeb9ff1c3444ad7cd00e7a48dfafad14f2284cc96573dff73.
+- snapshot-admission-final: PASS 6; logSHA256 44bb0e111bad9415d5e68a7ea85a16a3911a0cd5ef6c531459e9548747c1f15d.
+- projection-final: PASS 192; logSHA256 f95ffe487fe99a0175463ca2933aaf6b8696e1a6863bace7a97b0e75fc630e79.
+- prepared-contract-final: PASS 8; logSHA256 9fc66adc2c877572aa88592d77cac0ae9983632888c9cab0a430f56f0da8042c.
+- native-build: PASS; logSHA256 e280eda9a39f0fc74d99dde3cf1a4d6a134b4dec91e2634785fd172d0d1dd8a3.
+- full-rust: PASS 3942; logSHA256 64e4e6585465cbd27a8f4a70b09a0821d03e01f31ea917530fbcdec2b0adcee6.
+- source-actor-controls: PASS 26; logSHA256 db98139d119f71eefd792df7743ac900028d3ec773d2947ba4bdf76d0b408bd7.
+- source-memory-tcp-control: PASS 1; logSHA256 17f32ab1e0d698fdb35627d1a4a854bcba312233c5d721f6652ff46a34fd1cde.
+
+Architecture skill: no change. Existing project rules already separate per-session foot receipt and actor lifecycle; scoped guide owns these family-specific guards. AOCI tools absent after compaction/no usable complete index; no fabricated cognition or maintenance. Root serial author/integrator/rollback; exact source3/docs4 only, dev9/archive2/Go79 protection and independent docs/immutable/durable closing pending. All-task ACTIVE; broad3.8/4.1/4.2 OPEN.
+
+161 closing audits4 PASS logf2a52f7b3e2642203d07e61ea75ea618d4ef06bf37328018989e70e28c9d01d4; strict128 PASS logfa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67. Twenty final receipts source3-bound; protected dev9/archive2/frozen3/emptyindex and Go79unique (50selected+35additional−6overlap) current/HEAD/parent PASS. Exact source3/docs4 seven paths; independent final docs/immutable commit/durable localhandoff closing pending. Durable target /Users/chen/Documents/Codex/2026-10-04/task-12/runtime/source-pending-observer-entities-20261007. All-task ACTIVE, broad3.8/4.1/4.2 OPEN.

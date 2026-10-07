@@ -17329,6 +17329,486 @@ mod source_player_restore_tests {
         assert!(a.session_views[&session].chunks[&keys[2]].snapshot_sent);
         subscription_fifo(&mut a, &next, session);
     }
+
+    #[derive(Clone, Copy)]
+    enum PendingEntity {
+        Companion,
+        Hostile,
+        Passive,
+        Projectile,
+    }
+
+    fn pending_limits(a: &mut AuthorityState, outbox: usize, snapshots: usize) {
+        // Immutable prepared limits qualify publication budgets, not configuration loading.
+        a.limits = ServerLimits::try_new(8, 4096, outbox, 64, snapshots, 1_048_576)
+            .unwrap()
+            .with_view_radius(1);
+    }
+
+    fn pending_fixture(kind: PendingEntity) -> (AuthorityState, SessionKey, SessionKey) {
+        let (mut a, observer) = fixture();
+        pending_limits(&mut a, 512, 0);
+        let mut peer_save = saved(2);
+        peer_save.current.position = [42.5, 65., 14.5];
+        peer_save.safe = None;
+        peer_save.respawn_present = false;
+        let peer = register(&mut a, 2, Some(peer_save));
+        match kind {
+            PendingEntity::Companion => {
+                let mut bytes = [0; 16];
+                bytes[0] = 10;
+                bytes[6] = 64;
+                bytes[8] = 128;
+                let id = CompanionId::try_from_bytes(bytes).unwrap();
+                a.register_source_companion(
+                    id,
+                    ChunkPos::new(2, 0),
+                    Some(mornlea_storage::CompanionBody {
+                        id: mornlea_storage::PlayerId::from_bytes(bytes),
+                        dimension: 0,
+                        position: [34.5, 65., 2.5],
+                        yaw: 0.,
+                        pitch: 0.,
+                        inventory: Default::default(),
+                    }),
+                )
+                .unwrap();
+            }
+            PendingEntity::Hostile | PendingEntity::Passive => {
+                // Checked prepared targets enter actual native movement before publication.
+                let position = if matches!(kind, PendingEntity::Hostile) {
+                    [39.5, 65., 8.5]
+                } else {
+                    [44.5, 65., 8.5]
+                };
+                let (key, body) = if matches!(kind, PendingEntity::Hostile) {
+                    (
+                        ActorKey::Hostile(HostileId::try_new(1).unwrap()),
+                        ActorBody::Hostile(mornlea_storage::HostileMob {
+                            id: 1,
+                            dimension: 0,
+                            position,
+                            velocity: [0.; 3],
+                            on_ground: true,
+                            yaw: 0.,
+                            health: 20,
+                            attack_cooldown: 0,
+                            hurt_cooldown: 0,
+                            burn_cooldown: 20,
+                            has_target: false,
+                            player_id: mornlea_storage::PlayerId::from_bytes([0; 16]),
+                            next_repath_ticks: 0,
+                            distant_ticks: 0,
+                            kind: 0,
+                        }),
+                    )
+                } else {
+                    (
+                        ActorKey::Passive(PassiveId::try_new(1).unwrap()),
+                        ActorBody::Passive(mornlea_storage::PassiveMob {
+                            id: 1,
+                            dimension: 0,
+                            position,
+                            velocity: [0.; 3],
+                            on_ground: true,
+                            yaw: 0.,
+                            health: 20,
+                        }),
+                    )
+                };
+                let survival =
+                    mornlea_domain::SurvivalState::try_new(mornlea_domain::SurvivalStateParts {
+                        health: 20,
+                        oxygen: 300,
+                        hunger: 20,
+                        saturation_zero: true,
+                        armor_points: 0,
+                    })
+                    .unwrap();
+                let actor = ActorRecord::try_new(
+                    key,
+                    ActorLifecycle::Active,
+                    Dimension::OVERWORLD,
+                    MotionState::new(mornlea_domain::MotionStateParts {
+                        position: FiniteVec3::try_new(position).unwrap(),
+                        velocity: FiniteVec3::try_new([0.; 3]).unwrap(),
+                        on_ground: true,
+                    }),
+                    LookAngles::try_new(0., 0.).unwrap(),
+                    survival,
+                    body,
+                )
+                .unwrap();
+                let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+                context.stage(RuleEffect::Actor(actor)).unwrap();
+                if matches!(kind, PendingEntity::Passive) {
+                    // Combat precedes passive admission, so a prepared resident owns both lanes.
+                    context
+                        .stage(RuleEffect::Runtime(ActorRuntime {
+                            key: ActorKey::Passive(PassiveId::try_new(1).unwrap()),
+                            controls: None,
+                            has_view: false,
+                            reset: false,
+                            attack_cooldown: 0,
+                            hurt_cooldown: 0,
+                            burn_cooldown: 0,
+                            oxygen: 0,
+                            peak_y: 0.,
+                            exhaustion_milli: 0,
+                            saturation_milli: 0,
+                            since_damage_ticks: 0,
+                            drown_ticks: 0,
+                            starvation_ticks: 0,
+                            eating: None,
+                            bow: None,
+                            path: None,
+                            aux: ActorAux::Passive {
+                                home: BlockPos::new(44, 65, 8),
+                                flee_ticks: 0,
+                                flee_from: None,
+                                graze_ticks: 0,
+                                graze_at: None,
+                                fresh: false,
+                            },
+                        }))
+                        .unwrap();
+                }
+                context.commit_carried();
+            }
+            PendingEntity::Projectile => {
+                // The real restored peer supplies flight scope; the prepared shot avoids actors.
+                let record = ProjectileRecord {
+                    id: mornlea_domain::ProjectileId::try_new(1).unwrap(),
+                    owner: ActorKey::Player(peer),
+                    dimension: Dimension::OVERWORLD,
+                    position: FiniteVec3::try_new([34.5, 70., 12.5]).unwrap(),
+                    velocity: FiniteVec3::try_new([0.25, 0., 0.]).unwrap(),
+                    kind: mornlea_domain::ProjectileKind::Arrow,
+                    damage: 3,
+                    age: 0,
+                };
+                let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+                context
+                    .stage(RuleEffect::Projectile {
+                        before: None,
+                        after: Some(record),
+                    })
+                    .unwrap();
+                context.commit_carried();
+            }
+        }
+        offer(&mut a, key(Dimension::OVERWORLD, 2, 0), 0);
+        (a, observer, peer)
+    }
+
+    fn pending_members(a: &AuthorityState, observer: SessionKey, kind: PendingEntity) -> usize {
+        let view = &a.session_views[&observer];
+        let count = match kind {
+            PendingEntity::Companion => view.visible_companions.len(),
+            PendingEntity::Hostile => view.visible_hostiles.len(),
+            PendingEntity::Passive => view.visible_passives.len(),
+            PendingEntity::Projectile => view.visible_projectiles.len(),
+        };
+        if count != 0 {
+            match kind {
+                PendingEntity::Companion => {
+                    let mut bytes = [0; 16];
+                    bytes[0] = 10;
+                    bytes[6] = 64;
+                    bytes[8] = 128;
+                    assert_eq!(
+                        view.visible_companions,
+                        [CompanionId::try_from_bytes(bytes).unwrap()]
+                            .into_iter()
+                            .collect()
+                    );
+                }
+                PendingEntity::Hostile => assert_eq!(
+                    view.visible_hostiles,
+                    [HostileId::try_new(1).unwrap()].into_iter().collect()
+                ),
+                PendingEntity::Passive => assert_eq!(
+                    view.visible_passives,
+                    [PassiveId::try_new(1).unwrap()].into_iter().collect()
+                ),
+                PendingEntity::Projectile => assert_eq!(
+                    view.visible_projectiles,
+                    [mornlea_domain::ProjectileId::try_new(1).unwrap()]
+                        .into_iter()
+                        .collect()
+                ),
+            }
+        }
+        count
+    }
+
+    fn pending_order(
+        p: &TickPublication,
+        observer: SessionKey,
+        kind: PendingEntity,
+    ) -> Vec<&'static str> {
+        use mornlea_domain::Event;
+        p.events
+            .iter()
+            .filter(|event| event.recipient() == EventRecipient::Session(observer.get()))
+            .filter_map(|event| match (kind, event.event()) {
+                (_, Event::ChunkSnapshot(snapshot)) if snapshot.chunk() == ChunkPos::new(2, 0) => {
+                    Some("snapshot")
+                }
+                (PendingEntity::Companion, Event::CompanionSpawn(_))
+                | (PendingEntity::Hostile, Event::HostileSpawn(_))
+                | (PendingEntity::Passive, Event::PassiveSpawn(_))
+                | (PendingEntity::Projectile, Event::ProjectileSpawn(_)) => Some("spawn"),
+                (PendingEntity::Companion, Event::CompanionStates(_))
+                | (PendingEntity::Hostile, Event::HostileState(_))
+                | (PendingEntity::Passive, Event::PassiveState(_))
+                | (PendingEntity::Projectile, Event::ProjectileState(_)) => Some("state"),
+                (PendingEntity::Companion, Event::CompanionDespawn(_))
+                | (PendingEntity::Hostile, Event::HostileDespawn(_))
+                | (PendingEntity::Passive, Event::PassiveDespawn(_))
+                | (PendingEntity::Projectile, Event::ProjectileDespawn(_)) => Some("despawn"),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pending_guards(a: &AuthorityState, p: &TickPublication, observer: SessionKey) {
+        use mornlea_domain::Event;
+        assert_eq!(player(a, observer).lifecycle, ActorLifecycle::Pending);
+        assert!(!p.events.iter().any(|event| event.recipient()
+            == EventRecipient::Session(observer.get())
+            && matches!(
+                event.event(),
+                Event::RemotePlayerSpawn(_)
+                    | Event::RemotePlayerStates(_)
+                    | Event::RemotePlayerDespawn(_)
+                    | Event::ItemDropUpserts(_)
+                    | Event::ItemDropRemoves(_)
+                    | Event::InventoryState(_)
+                    | Event::CraftingState(_)
+            )));
+        let view = &a.session_views[&observer];
+        assert!(view.visible_remotes.is_empty());
+        assert!(view.visible_drops.is_empty());
+        assert_eq!(view.last_inventory, None);
+        assert_eq!(view.last_crafting, None);
+    }
+
+    fn pending_first(
+        a: &mut AuthorityState,
+        observer: SessionKey,
+        peer: SessionKey,
+        kind: PendingEntity,
+    ) -> TickPublication {
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(player(a, observer).lifecycle, ActorLifecycle::Pending);
+        assert_eq!(player(a, peer).lifecycle, ActorLifecycle::Active);
+        assert!(
+            a.residents
+                .ready
+                .contains_key(&key(Dimension::OVERWORLD, 2, 0))
+        );
+        assert!(pending_order(&p, observer, kind).is_empty());
+        assert_eq!(pending_members(a, observer, kind), 0);
+        match kind {
+            PendingEntity::Projectile => assert_eq!(a.residents.projectiles.len(), 1),
+            _ => assert!(a.residents.actors.iter().any(|actor| {
+                actor.lifecycle == ActorLifecycle::Active
+                    && match kind {
+                        PendingEntity::Companion => matches!(actor.key, ActorKey::Companion(_)),
+                        PendingEntity::Hostile => matches!(actor.key, ActorKey::Hostile(_)),
+                        PendingEntity::Passive => matches!(actor.key, ActorKey::Passive(_)),
+                        PendingEntity::Projectile => false,
+                    }
+            })),
+        }
+        pending_guards(a, &p, observer);
+        subscription_fifo(a, &p, observer);
+        subscription_fifo(a, &p, peer);
+        p
+    }
+
+    fn pending_after_snapshot(kind: PendingEntity) {
+        let (mut a, observer, peer) = pending_fixture(kind);
+        pending_first(&mut a, observer, peer, kind);
+        pending_limits(&mut a, 512, 1);
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(pending_order(&p, observer, kind), vec!["snapshot", "spawn"]);
+        assert_eq!(pending_members(&a, observer, kind), 1);
+        assert!(a.session_views[&observer].chunks[&key(Dimension::OVERWORLD, 2, 0)].snapshot_sent);
+        pending_guards(&a, &p, observer);
+        subscription_fifo(&mut a, &p, observer);
+        subscription_fifo(&mut a, &p, peer);
+        let next = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(pending_order(&next, observer, kind), vec!["state"]);
+        assert_eq!(pending_members(&a, observer, kind), 1);
+        pending_guards(&a, &next, observer);
+        subscription_fifo(&mut a, &next, observer);
+        subscription_fifo(&mut a, &next, peer);
+    }
+
+    #[test]
+    fn pending_entities_companion_after_snapshot() {
+        pending_after_snapshot(PendingEntity::Companion);
+    }
+    #[test]
+    fn pending_entities_hostile_after_snapshot() {
+        pending_after_snapshot(PendingEntity::Hostile);
+    }
+    #[test]
+    fn pending_entities_passive_after_snapshot() {
+        pending_after_snapshot(PendingEntity::Passive);
+    }
+    #[test]
+    fn pending_entities_projectile_after_snapshot() {
+        pending_after_snapshot(PendingEntity::Projectile);
+    }
+
+    #[test]
+    fn pending_entities_closed_receiver_retry() {
+        let kind = PendingEntity::Companion;
+        let (mut a, observer, peer) = pending_fixture(kind);
+        pending_first(&mut a, observer, peer, kind);
+        pending_limits(&mut a, 512, 1);
+        a.close_outbox(observer, CloseReason::PeerGone);
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(pending_order(&p, observer, kind), vec!["snapshot", "spawn"]);
+        assert!(a.take_outbox(observer, 512, 1_048_576).unwrap().is_empty());
+        assert_eq!(pending_members(&a, observer, kind), 0);
+        assert!(!a.session_views[&observer].chunks[&key(Dimension::OVERWORLD, 2, 0)].snapshot_sent);
+        assert_eq!(a.session(observer).unwrap().phase, SessionPhase::Active);
+        assert_eq!(pending_order(&p, peer, kind), vec!["snapshot", "spawn"]);
+        assert_eq!(pending_members(&a, peer, kind), 1);
+        subscription_fifo(&mut a, &p, peer);
+        // Reopening is a prepared queue-consumer cause, not transport recovery.
+        a.sessions.get_mut(&observer).unwrap().outbox_closed = false;
+        let retry = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(
+            pending_order(&retry, observer, kind),
+            vec!["snapshot", "spawn"]
+        );
+        assert_eq!(pending_members(&a, observer, kind), 1);
+        pending_guards(&a, &retry, observer);
+        subscription_fifo(&mut a, &retry, observer);
+        subscription_fifo(&mut a, &retry, peer);
+    }
+
+    #[test]
+    fn pending_entities_saturated_snapshot_prefix_peer() {
+        let kind = PendingEntity::Companion;
+        let (mut a, observer, peer) = pending_fixture(kind);
+        let first = pending_first(&mut a, observer, peer, kind);
+        pending_limits(&mut a, 16, 1);
+        let marker = first
+            .events
+            .iter()
+            .find(|event| {
+                event.recipient() == EventRecipient::Session(observer.get())
+                    && matches!(event.event(), mornlea_domain::Event::PlayerState(_))
+            })
+            .unwrap()
+            .clone();
+        let encode = |event: &RoutedEvent| {
+            PreparedFrame::encode(
+                &mut ProtocolCodec::new().unwrap(),
+                &ServerPacket::try_from(event.event().clone()).unwrap(),
+            )
+            .unwrap()
+            .as_bytes()
+            .to_vec()
+        };
+        a.publish(TickPublication {
+            tick: first.tick,
+            events: vec![marker.clone(); 15],
+            control: vec![],
+            counters: Default::default(),
+        })
+        .unwrap();
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(pending_order(&p, observer, kind), vec!["snapshot", "spawn"]);
+        let snapshot = p
+            .events
+            .iter()
+            .find(|event| {
+                event.recipient() == EventRecipient::Session(observer.get())
+                    && matches!(event.event(), mornlea_domain::Event::ChunkSnapshot(_))
+            })
+            .unwrap();
+        let mut expected = vec![encode(&marker); 15];
+        expected.push(encode(snapshot));
+        assert_eq!(a.take_outbox(observer, 512, 1_048_576).unwrap(), expected);
+        assert_eq!(a.session(observer).unwrap().phase, SessionPhase::Retired);
+        assert!(!a.session_views.contains_key(&observer));
+        assert_eq!(pending_order(&p, peer, kind), vec!["snapshot", "spawn"]);
+        assert_eq!(pending_members(&a, peer, kind), 1);
+        subscription_fifo(&mut a, &p, peer);
+        let next = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(pending_order(&next, peer, kind), vec!["state"]);
+        subscription_fifo(&mut a, &next, peer);
+    }
+
+    #[test]
+    fn pending_entities_keep_remote_drop_owner_active_gates() {
+        let kind = PendingEntity::Companion;
+        let (mut a, observer, peer) = pending_fixture(kind);
+        pending_limits(&mut a, 512, 1);
+        let first = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(
+            subscription_snapshots(&first, observer),
+            vec![key(Dimension::OVERWORLD, 2, 0)]
+        );
+        pending_guards(&a, &first, observer);
+        subscription_fifo(&mut a, &first, observer);
+        subscription_fifo(&mut a, &first, peer);
+        let id = mornlea_domain::DropId::try_new(0, ChunkPos::new(2, 0), 0, 1).unwrap();
+        {
+            // Prepared physical state qualifies the actual drop publication Active guard.
+            let mut context = TickContext::for_tick(&mut a, TickBudget::full());
+            context.preload_drop(DropRecord {
+                id,
+                position: FiniteVec3::try_new([39.5, 64.5, 0.5]).unwrap(),
+                stack: mornlea_storage::ItemStack {
+                    item: 1,
+                    count: 3,
+                    durability: 0,
+                },
+                pickup_delay: 200,
+                age: 0,
+            });
+            context.commit_carried();
+        }
+        let p = a.advance_tick(TickBudget::full()).unwrap();
+        let values: Vec<_> = p
+            .events
+            .iter()
+            .filter(|event| event.recipient() == EventRecipient::Session(peer.get()))
+            .filter_map(|event| {
+                if let mornlea_domain::Event::ItemDropUpserts(batch) = event.event() {
+                    Some(batch.drops())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .copied()
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                mornlea_domain::ItemDrop::try_new(mornlea_domain::ItemDropParts {
+                    id,
+                    block_index: 32775,
+                    stack: mornlea_domain::ItemStack::try_new(1, 3, 0).unwrap(),
+                })
+                .unwrap()
+            ]
+        );
+        pending_guards(&a, &p, observer);
+        assert!(a.session_views[&observer].chunks[&key(Dimension::OVERWORLD, 2, 0)].snapshot_sent);
+        assert_eq!(a.session_views[&peer].visible_drops.len(), 1);
+        subscription_fifo(&mut a, &p, observer);
+        subscription_fifo(&mut a, &p, peer);
+    }
 }
 
 #[cfg(test)]

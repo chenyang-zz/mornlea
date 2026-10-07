@@ -687,28 +687,28 @@ fn visibility_of(
         projectiles: BTreeSet::new(),
         drops: BTreeSet::new(),
     };
-    if !observer.has_actor {
-        return visibility;
-    }
-    for &index in &entities.players {
-        let actor = &actors[index];
-        let ActorKey::Player(target) = actor.key else {
-            continue;
-        };
-        if target == observer.session {
-            continue;
-        }
-        if actor.dimension == observer_dimension(actors, observer)
-            && actor_foot_visible(
-                observer,
-                view,
-                actor.dimension,
-                actor.motion.position().get(),
-                snapshots,
-            )
-            && let Some(speaker) = speakers.iter().find(|speaker| speaker.session == target)
-        {
-            visibility.remotes.insert(speaker.player_id, target);
+    // Remote player state remains an Active-observer contract.
+    if observer.has_actor {
+        for &index in &entities.players {
+            let actor = &actors[index];
+            let ActorKey::Player(target) = actor.key else {
+                continue;
+            };
+            if target == observer.session {
+                continue;
+            }
+            if actor.dimension == observer_dimension(actors, observer)
+                && actor_foot_visible(
+                    observer,
+                    view,
+                    actor.dimension,
+                    actor.motion.position().get(),
+                    snapshots,
+                )
+                && let Some(speaker) = speakers.iter().find(|speaker| speaker.session == target)
+            {
+                visibility.remotes.insert(speaker.player_id, target);
+            }
         }
     }
     for (id, index) in &entities.companions {
@@ -754,6 +754,11 @@ fn visibility_of(
         ) {
             visibility.projectiles.insert(record.id);
         }
+    }
+    // Four entity families consume subscription history while the player is Pending.
+    // Physical drops retain their separate Active-observer interest contract.
+    if !observer.has_actor {
+        return visibility;
     }
     // Drops use physical radius two even when snapshot interest is narrower or wider.
     let drop_wanted = entities
