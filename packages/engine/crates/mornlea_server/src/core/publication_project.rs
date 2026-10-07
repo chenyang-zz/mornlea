@@ -37,8 +37,8 @@ use crate::core::session_view::SessionView;
 use crate::state::{AuthorityState, Speaker};
 
 /// Wire record caps the outbound protocol conversion enforces per packet.
-/// The projection pre-splits every batch at these bounds so a publication can
-/// never fail at encode time.
+/// Visibility families split at these bounds; chunk deltas validate as one
+/// whole revision transition before any snapshot can be admitted.
 const REMOTE_STATES_CAP: usize = 7;
 const COMPANION_STATES_CAP: usize = 4;
 const MOB_BATCH_CAP: usize = 64;
@@ -69,6 +69,13 @@ pub(crate) struct TickOutcome {
     /// context: sessions whose accepted crafting commands marked their private
     /// grid dirty this tick, beside the plain record diff.
     pub(crate) crafting_dirty: BTreeSet<SessionKey>,
+}
+
+/// Recipient-local refusal is ordered before snapshots without changing wire DTOs.
+pub(crate) struct SourceProjection {
+    pub(crate) events: Vec<RoutedEvent>,
+    pub(crate) refused_sessions: Vec<SessionKey>,
+    pub(crate) before_snapshots: usize,
 }
 
 /// The shared read-only world facts the per-family emitters consume.
@@ -162,15 +169,19 @@ impl AuthorityState {
     /// stays out of the session's visible set, so the next tick retries its
     /// spawn instead of failing the tick. With no active sessions the
     /// projection publishes nothing.
-    pub(crate) fn project_tick_publication(
+    pub(crate) fn project_source_publication(
         &mut self,
         tick: u64,
         outcome: &TickOutcome,
-    ) -> Vec<RoutedEvent> {
+    ) -> SourceProjection {
         let invalidated_containers = self.invalidate_container_views();
         let speakers = self.active_speakers();
         if speakers.is_empty() {
-            return Vec::new();
+            return SourceProjection {
+                events: Vec::new(),
+                refused_sessions: Vec::new(),
+                before_snapshots: 0,
+            };
         }
         let actors = self.resident_actors().to_vec();
         let entities = classify_entities(&actors);
@@ -226,15 +237,11 @@ impl AuthorityState {
         let mut events = Vec::new();
         emit_despawns(&mut view_list, &observers, &visibilities, &mut events);
         emit_forgets(&mut view_list, &observers, &mut events);
+        let before_snapshots = events.len();
+        let (deltas, refused_sessions) =
+            classify_block_batches(&mut view_list, &observers, outcome);
         let snapshots = emit_snapshots(&mut view_list, &observers, self, &mut events);
-        emit_block_batches(
-            &mut view_list,
-            &observers,
-            self,
-            outcome,
-            &snapshots,
-            &mut events,
-        );
+        emit_block_batches(&observers, deltas, &snapshots, &mut events);
         let configured_names = self.configured_chat_names();
         emit_companions(
             &mut view_list,
@@ -300,7 +307,25 @@ impl AuthorityState {
             views.insert(observer.session, view);
         }
         self.restore_session_views(views);
-        events
+        SourceProjection {
+            events,
+            refused_sessions,
+            before_snapshots,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn project_tick_publication(
+        &mut self,
+        tick: u64,
+        outcome: &TickOutcome,
+    ) -> Vec<RoutedEvent> {
+        let projection = self.project_source_publication(tick, outcome);
+        assert!(
+            projection.refused_sessions.is_empty(),
+            "normal fixtures must not discard source refusals"
+        );
+        projection.events
     }
 
     /// Chat: drains the decided chat facts and emits one chat event per fact.
@@ -837,55 +862,73 @@ fn emit_snapshots(
     emitted
 }
 
-/// Per-session contiguous block deltas in ascending chunk order. A
-/// revision gap re-sends the full snapshot at the new revision instead of a
-/// delta the mirror cannot apply.
-fn emit_block_batches(
+/// Validate eligible whole revisions before snapshots. One invalid batch
+/// discards all classified deltas for its recipient, preserving earlier families.
+fn classify_block_batches(
     view_list: &mut [SessionView],
     observers: &[Observer],
-    state: &AuthorityState,
     outcome: &TickOutcome,
-    snapshots: &BTreeSet<(SessionKey, ChunkKey)>,
-    events: &mut Vec<RoutedEvent>,
-) {
+) -> (Vec<Vec<BlockChanges>>, Vec<SessionKey>) {
+    let mut classified = Vec::with_capacity(observers.len());
+    let mut refused = Vec::new();
     for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
+        let mut deltas = Vec::new();
         for (key, base, new, changes) in &outcome.block_batches {
-            // A settled full capture already covers this pass's changes. The
-            // lookahead prevents duplicate DTOs without claiming FIFO admission.
-            if !observer.wanted.contains(key) || snapshots.contains(&(observer.session, *key)) {
+            if !observer.wanted.contains(key) {
                 continue;
             }
             let Some(entry) = view.chunks.get_mut(key) else {
                 continue;
             };
-            if !entry.snapshot_sent || entry.last_revision == *new {
+            if !entry.snapshot_sent {
                 continue;
             }
-            if entry.last_revision == *base {
-                for group in changes
-                    .chunks(BLOCK_CHANGES_CAP)
-                    .chain(changes.is_empty().then_some(&[][..]))
-                {
-                    if let Ok(batch) = BlockChanges::try_new(BlockChangesParts {
-                        dimension: key.dimension,
-                        chunk: key.pos,
-                        base_revision: *base,
-                        new_revision: *new,
-                        changes: group.to_vec().into_boxed_slice(),
-                    }) {
-                        events.push(RoutedEvent::new(
-                            EventRecipient::Session(observer.session.get()),
-                            Event::BlockChanges(batch),
-                        ));
-                    }
-                }
-            } else if let Some(snapshot) = state.chunk_snapshot_event(*key) {
-                // Keep the desired resync after this transient outcome disappears;
-                // only the admitted full frame may certify the new mirror revision.
+            if entry.last_revision == *new && entry.last_revision != *base {
+                continue;
+            }
+            if entry.resync_queued || entry.last_revision != *base {
                 entry.resync_queued = true;
+                continue;
+            }
+            // Count-first refusal bounds the allocation and never splits one revision.
+            let batch = (changes.len() <= BLOCK_CHANGES_CAP).then(|| {
+                BlockChanges::try_new(BlockChangesParts {
+                    dimension: key.dimension,
+                    chunk: key.pos,
+                    base_revision: *base,
+                    new_revision: *new,
+                    changes: changes.clone().into_boxed_slice(),
+                })
+            });
+            let Some(Ok(batch)) = batch else {
+                deltas.clear();
+                refused.push(observer.session);
+                break;
+            };
+            deltas.push(batch);
+        }
+        classified.push(deltas);
+    }
+    (classified, refused)
+}
+
+/// A same-pass settled full capture covers every classified delta for that key.
+fn emit_block_batches(
+    observers: &[Observer],
+    classified: Vec<Vec<BlockChanges>>,
+    snapshots: &BTreeSet<(SessionKey, ChunkKey)>,
+    events: &mut Vec<RoutedEvent>,
+) {
+    for (observer, deltas) in observers.iter().zip(classified) {
+        for batch in deltas {
+            let key = ChunkKey {
+                dimension: batch.dimension(),
+                pos: batch.chunk(),
+            };
+            if !snapshots.contains(&(observer.session, key)) {
                 events.push(RoutedEvent::new(
                     EventRecipient::Session(observer.session.get()),
-                    Event::ChunkSnapshot(snapshot),
+                    Event::BlockChanges(batch),
                 ));
             }
         }

@@ -2293,10 +2293,40 @@ impl AuthorityState {
     }
 
     pub fn publish(&mut self, publication: TickPublication) -> Result<(), ServerError> {
+        self.publish_source(publication, 0, Vec::new())
+    }
+
+    /// Scalar refusals share whole-publication preflight and the exact source family boundary.
+    pub(crate) fn publish_source(
+        &mut self,
+        publication: TickPublication,
+        before: usize,
+        refusals: Vec<SessionKey>,
+    ) -> Result<(), ServerError> {
+        if before > publication.events.len()
+            || refusals.len() > 8
+            || refusals.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(ServerError::InvalidInput {
+                field: "source_publication",
+            });
+        }
+        for session in &refusals {
+            if !self.sessions.contains_key(session) {
+                return Err(ServerError::StaleSession { session: *session });
+            }
+        }
         let mut codec =
             ProtocolCodec::new().map_err(|_| ServerError::InvalidInput { field: "packet" })?;
         let mut pending = Vec::new();
-        for event in &publication.events {
+        for (index, event) in publication.events.iter().enumerate() {
+            if index == before {
+                pending.extend(
+                    refusals
+                        .iter()
+                        .map(|session| PendingFrame::Refuse { session: *session }),
+                );
+            }
             let packet = ServerPacket::try_from(event.event().clone())
                 .map_err(|_| ServerError::InvalidInput { field: "packet" })?;
             let frame = PreparedFrame::encode(&mut codec, &packet)?;
@@ -2316,6 +2346,13 @@ impl AuthorityState {
                 EventRecipient::Broadcast => pending.push(PendingFrame::Broadcast { frame }),
             }
         }
+        if before == publication.events.len() {
+            pending.extend(
+                refusals
+                    .into_iter()
+                    .map(|session| PendingFrame::Refuse { session }),
+            );
+        }
         for reply in &publication.control {
             if !self.sessions.contains_key(&reply.session) {
                 return Err(ServerError::StaleSession {
@@ -2332,6 +2369,13 @@ impl AuthorityState {
         let mut slow = Vec::new();
         for item in pending {
             match item {
+                PendingFrame::Refuse { session } => {
+                    // Saturation retains its existing deferred retirement owner.
+                    // Successful source refusal closes only this recipient, preserving its prefix.
+                    if self.session_active(session) && !slow.contains(&session) {
+                        self.retire(session, CloseReason::InvalidPlay)?;
+                    }
+                }
                 PendingFrame::One {
                     session,
                     frame,
@@ -3280,6 +3324,9 @@ impl QueuedPublicationMirror {
 }
 
 enum PendingFrame {
+    Refuse {
+        session: SessionKey,
+    },
     One {
         session: SessionKey,
         frame: PreparedFrame,
@@ -18380,6 +18427,350 @@ mod owner_record_admission_tests {
         assert!(state.take_outbox(owner, 8, 1_048_576).unwrap().is_empty());
         assert_eq!(chunk_mirror(&state, owner).last_revision, 9);
         assert_eq!(delta_project(&mut state, &outcome), original);
+    }
+
+    fn source_validation_publish(
+        state: &mut AuthorityState,
+        outcome: &TickOutcome,
+        mut prefix: Vec<RoutedEvent>,
+    ) {
+        let projection = state.project_source_publication(0, outcome);
+        let before = prefix.len() + projection.before_snapshots;
+        prefix.extend(projection.events);
+        state
+            .publish_source(publication(prefix), before, projection.refused_sessions)
+            .unwrap();
+    }
+
+    fn overflow_changes() -> Vec<BlockChange> {
+        (0..4097)
+            .map(|i| {
+                BlockChange::try_new(BlockPos::new(i % 16, -64 + i / 256, (i / 16) % 16), 1)
+                    .unwrap()
+            })
+            .collect()
+    }
+
+    fn aggregate_write(state: &mut AuthorityState) -> TickOutcome {
+        // Two real bounded transactions share one tick-local aggregate capture.
+        let mut context = TickContext::for_tick(state, TickBudget::full());
+        for range in [0..4096, 4096..4097] {
+            let writes = range
+                .map(|i| {
+                    let observed = context
+                        .read()
+                        .observation(
+                            Dimension::OVERWORLD,
+                            BlockPos::new(i % 16, -64 + i / 256, (i / 16) % 16),
+                        )
+                        .unwrap();
+                    BlockWrite::try_new(observed, 1).unwrap()
+                })
+                .collect();
+            context
+                .transaction()
+                .try_system(SystemRule::Support, writes)
+                .unwrap();
+        }
+        let outcome = context.capture_publication_outcome();
+        context.commit_carried();
+        drop(context);
+        assert_eq!(outcome.block_batches.len(), 1);
+        assert_eq!(
+            (
+                outcome.block_batches[0].1,
+                outcome.block_batches[0].2,
+                outcome.block_batches[0].3.len()
+            ),
+            (9, 10, 4097)
+        );
+        let snapshot = state.chunk_snapshot_event(snapshot_key()).unwrap();
+        assert_eq!(snapshot.revision(), 10);
+        assert_eq!(snapshot.sections()[0].block_at(4095), Some(1));
+        assert_eq!(snapshot.sections()[1].block_at(0), Some(1));
+        assert_eq!(snapshot.sections()[1].block_at(1), Some(0));
+        outcome
+    }
+
+    fn validation_retired(state: &AuthorityState, owner: SessionKey, remaining: usize) {
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert_eq!(state.phase(), ServerPhase::Running);
+        assert!(!state.session_views.contains_key(&owner));
+        assert!(!state.current_sessions.contains(&owner));
+        assert!(!state.residents.player_slots.contains_key(&owner));
+        assert_eq!(state.occupied, remaining);
+    }
+
+    fn invalid_delta(outcome: TickOutcome) {
+        let (mut state, sessions) = delta_fixture(512, 1);
+        let owner = sessions[0];
+        source_validation_publish(&mut state, &outcome, vec![]);
+        validation_retired(&state, owner, 0);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+    }
+
+    #[test]
+    fn source_delta_validation_aggregate() {
+        let (mut state, sessions) = delta_fixture(512, 1);
+        let outcome = aggregate_write(&mut state);
+        source_validation_publish(&mut state, &outcome, vec![]);
+        validation_retired(&state, sessions[0], 0);
+        assert!(
+            state
+                .take_outbox(sessions[0], 512, 2_097_152)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn source_delta_validation_equal_revision() {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches[0].2 = 9;
+        invalid_delta(outcome);
+    }
+
+    #[test]
+    fn source_delta_validation_jumped_revision() {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches[0].2 = 11;
+        invalid_delta(outcome);
+    }
+
+    #[test]
+    fn source_delta_validation_zero_revision() {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches[0].2 = 0;
+        invalid_delta(outcome);
+    }
+
+    #[test]
+    fn source_delta_validation_duplicate() {
+        let change = BlockChange::try_new(BlockPos::new(0, 64, 1), 1).unwrap();
+        invalid_delta(prepared_delta(vec![change, change]));
+    }
+
+    #[test]
+    fn source_delta_validation_descending() {
+        invalid_delta(prepared_delta(vec![
+            BlockChange::try_new(BlockPos::new(1, 64, 1), 1).unwrap(),
+            BlockChange::try_new(BlockPos::new(0, 64, 1), 1).unwrap(),
+        ]));
+    }
+
+    #[test]
+    fn source_delta_validation_outside_chunk() {
+        invalid_delta(prepared_delta(vec![
+            BlockChange::try_new(BlockPos::new(16, 64, 1), 1).unwrap(),
+        ]));
+    }
+
+    #[test]
+    fn source_delta_validation_outside_height() {
+        invalid_delta(prepared_delta(vec![
+            BlockChange::try_new(BlockPos::new(0, 320, 1), 1).unwrap(),
+        ]));
+    }
+
+    #[test]
+    fn source_delta_validation_classified_prefix() {
+        let (mut state, sessions) = delta_fixture(512, 1);
+        let owner = sessions[0];
+        // Prepared old visibility qualifies the actual early despawn/Forget emitters.
+        let mut bytes = [0u8; 16];
+        bytes[0] = 99;
+        bytes[6] = 64;
+        bytes[8] = 128;
+        let ghost = PlayerId::try_from_bytes(bytes).unwrap();
+        let view = state.session_views.get_mut(&owner).unwrap();
+        view.visible_remotes
+            .insert(ghost, SessionKey::from_raw(999).unwrap());
+        view.wanted.insert(ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(20, 20),
+        });
+        let mut outcome = prepared_delta(vec![]);
+        outcome
+            .block_batches
+            .push((snapshot_key(), 9, 10, overflow_changes()));
+        let rejection = RoutedEvent::new(
+            EventRecipient::Session(owner.get()),
+            Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                17,
+                RejectReason::InvalidInput,
+            )),
+        );
+        source_validation_publish(&mut state, &outcome, vec![rejection.clone()]);
+        validation_retired(&state, owner, 0);
+        let frames = state.take_outbox(owner, 512, 2_097_152).unwrap();
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0], frame(rejection.event()));
+        assert_eq!(
+            frames[1],
+            frame(&Event::RemotePlayerDespawn(
+                mornlea_domain::RemotePlayerDespawn::new(ghost)
+            ))
+        );
+        assert_eq!(
+            frames[2],
+            frame(&Event::ForgetChunks(
+                mornlea_domain::ForgetChunks::try_new(mornlea_domain::ForgetChunksParts {
+                    dimension: Dimension::OVERWORLD,
+                    chunks: vec![ChunkPos::new(20, 20)].into_boxed_slice(),
+                })
+                .unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn source_delta_validation_unsent_peer() {
+        let (mut state, sessions) = snapshot_fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let initial: Vec<_> = snapshot_project(&mut state, None, false)
+            .into_iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(owner.get()))
+            .collect();
+        state.publish(publication(initial)).unwrap();
+        state.take_outbox(owner, 512, 2_097_152).unwrap();
+        let outcome = aggregate_write(&mut state);
+        let expected = frame(&Event::ChunkSnapshot(
+            state.chunk_snapshot_event(snapshot_key()).unwrap(),
+        ));
+        source_validation_publish(&mut state, &outcome, vec![]);
+        validation_retired(&state, owner, 1);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        let frames = state.take_outbox(peer, 512, 2_097_152).unwrap();
+        assert_eq!(frames.iter().filter(|f| **f == expected).count(), 1);
+        assert_eq!(chunk_mirror(&state, peer).last_revision, 10);
+        assert_eq!(state.session(peer).unwrap().phase, SessionPhase::Active);
+    }
+
+    fn validation_snapshot_bypass(resync: bool) {
+        let (mut state, sessions) = delta_fixture(512, 1);
+        let owner = sessions[0];
+        let mut outcome = prepared_delta(overflow_changes());
+        if resync {
+            outcome
+                .resyncs
+                .push((owner, Dimension::OVERWORLD, ChunkPos::new(0, 0)));
+        } else {
+            state
+                .session_views
+                .get_mut(&owner)
+                .unwrap()
+                .chunks
+                .get_mut(&snapshot_key())
+                .unwrap()
+                .last_revision = 7;
+        }
+        let expected = frame(&Event::ChunkSnapshot(
+            state.chunk_snapshot_event(snapshot_key()).unwrap(),
+        ));
+        source_validation_publish(&mut state, &outcome, vec![]);
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Active);
+        let frames = state.take_outbox(owner, 512, 2_097_152).unwrap();
+        assert_eq!(frames.iter().filter(|f| **f == expected).count(), 1);
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 9);
+        assert!(!chunk_mirror(&state, owner).resync_queued);
+    }
+
+    #[test]
+    fn source_delta_validation_resync_bypass() {
+        validation_snapshot_bypass(true);
+    }
+
+    #[test]
+    fn source_delta_validation_gap_bypass() {
+        validation_snapshot_bypass(false);
+    }
+
+    #[test]
+    fn source_delta_validation_unwanted_bypass() {
+        let (mut state, sessions) = delta_fixture(512, 1);
+        let mut outcome = prepared_delta(overflow_changes());
+        outcome.block_batches[0].0.pos = ChunkPos::new(20, 20);
+        let before = delta_project(&mut state, &outcome);
+        assert!(before.is_empty());
+        source_validation_publish(&mut state, &outcome, vec![]);
+        assert_eq!(
+            state.session(sessions[0]).unwrap().phase,
+            SessionPhase::Active
+        );
+        assert_eq!(chunk_mirror(&state, sessions[0]).last_revision, 9);
+    }
+
+    fn marker_rejection(session: SessionKey, sequence: u64) -> RoutedEvent {
+        RoutedEvent::new(
+            EventRecipient::Session(session.get()),
+            Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                sequence,
+                RejectReason::InvalidInput,
+            )),
+        )
+    }
+
+    fn marker_control(session: SessionKey) -> ControlReply {
+        ControlReply {
+            session,
+            packet: ServerPacket::try_from(marker_rejection(session, 21).event().clone()).unwrap(),
+        }
+    }
+
+    #[test]
+    fn source_marker_end_boundary_before_controls() {
+        let (mut state, sessions) = delta_fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let prefix = marker_rejection(owner, 20);
+        let mut output = publication(vec![prefix.clone()]);
+        output.control = vec![marker_control(owner), marker_control(peer)];
+        state.publish_source(output, 1, vec![owner]).unwrap();
+        validation_retired(&state, owner, 1);
+        assert_eq!(
+            state.take_outbox(owner, 512, 2_097_152).unwrap(),
+            vec![frame(prefix.event())]
+        );
+        assert_eq!(
+            state.take_outbox(peer, 512, 2_097_152).unwrap(),
+            vec![frame(marker_rejection(peer, 21).event())]
+        );
+    }
+
+    #[test]
+    fn source_marker_late_preflight_is_atomic() {
+        let (mut state, sessions) = delta_fixture(512, 1);
+        let owner = sessions[0];
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        let output = publication(vec![
+            marker_rejection(owner, 20),
+            marker_rejection(unknown, 21),
+        ]);
+        assert_eq!(
+            state.publish_source(output, 1, vec![owner]),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Active);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        sent(&state, owner);
+    }
+
+    #[test]
+    fn source_marker_saturated_prefix_keeps_retirement_owner() {
+        let (mut state, sessions) = delta_fixture(1, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let prefix = marker_rejection(owner, 20);
+        let mut output = publication(vec![prefix.clone(), marker_rejection(owner, 22)]);
+        output.control = vec![marker_control(peer)];
+        state.publish_source(output, 2, vec![owner]).unwrap();
+        validation_retired(&state, owner, 1);
+        assert_eq!(
+            state.take_outbox(owner, 512, 2_097_152).unwrap(),
+            vec![frame(prefix.event())]
+        );
+        assert_eq!(
+            state.take_outbox(peer, 512, 2_097_152).unwrap(),
+            vec![frame(marker_rejection(peer, 21).event())]
+        );
     }
 
     fn delta_count_boundary(changes: Vec<BlockChange>) {

@@ -34,7 +34,6 @@ use super::contracts::{
     InteractionKind, PhaseReport, RuleCall, RulePhase, ServerError, ServerPhase, SessionKey,
     SessionPhase, TickBudget, TickCounters, TickPublication,
 };
-use super::publication;
 use super::source_acquisition::SourceGoals;
 use super::source_companion_restore::{self, SourceCompanionBook};
 use super::source_player_restore::{self, SourcePlayerBook};
@@ -326,7 +325,10 @@ fn reduce_tick_inner(
     state.commit_viewers(overlay);
     // The publication families precede the private player observation and the
     // combat confirmations that close the tick.
-    events.extend(state.project_tick_publication(tick, &outcome));
+    let provider_prefix = events.len();
+    let projected = state.project_source_publication(tick, &outcome);
+    let before_snapshots = provider_prefix + projected.before_snapshots;
+    events.extend(projected.events);
     events.extend(state.project_player_updates(tick));
     events.extend(hits);
     // Registered Active companions consume their reset marker before delivery
@@ -341,7 +343,11 @@ fn reduce_tick_inner(
         counters,
     };
     if publish {
-        publication::publish_tick(state, publication.clone())?;
+        state.publish_source(
+            publication.clone(),
+            before_snapshots,
+            projected.refused_sessions,
+        )?;
     }
     // The final small-input capture stays inside the same trusted-error
     // fence: a late refusal or panic keeps the counter unbumped through the
