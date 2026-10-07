@@ -2442,6 +2442,12 @@ impl AuthorityState {
             return;
         };
         match mirror {
+            QueuedPublicationMirror::CompanionSpawn(id) => {
+                view.visible_companions.insert(id);
+            }
+            QueuedPublicationMirror::CompanionDespawn(id) => {
+                view.visible_companions.remove(&id);
+            }
             QueuedPublicationMirror::RemoteSpawn {
                 player,
                 incarnation,
@@ -3297,6 +3303,8 @@ enum AppendOutcome {
 /// Other publication mirrors retain their separate migration ownership.
 #[derive(Clone, Copy)]
 enum QueuedPublicationMirror {
+    CompanionSpawn(CompanionId),
+    CompanionDespawn(CompanionId),
     RemoteSpawn {
         player: PlayerId,
         incarnation: SessionKey,
@@ -3318,6 +3326,12 @@ enum QueuedPublicationMirror {
 impl QueuedPublicationMirror {
     fn from_event(event: &mornlea_domain::Event, state: &AuthorityState) -> Option<Self> {
         match event {
+            // Companion wire identity is its own checked UUID namespace; source
+            // registration and reset consumption remain separate authority owners.
+            mornlea_domain::Event::CompanionSpawn(value) => Some(Self::CompanionSpawn(value.id())),
+            mornlea_domain::Event::CompanionDespawn(value) => {
+                Some(Self::CompanionDespawn(value.id()))
+            }
             mornlea_domain::Event::RemotePlayerSpawn(value) => {
                 // Wire UUIDs omit the authority incarnation. Resolve only bounded
                 // current keys, never retained history or a fabricated session key.
@@ -19236,5 +19250,327 @@ mod owner_record_admission_tests {
             vec![frame(&old)]
         );
         assert_eq!(chunk_mirror(&state, owner).last_revision, 10);
+    }
+
+    fn companion_lifecycle(state: &mut AuthorityState, id: CompanionId, lifecycle: ActorLifecycle) {
+        // Prepared lifecycle input preserves the real registration's body and runtime owners.
+        let mut actor = state
+            .residents
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Companion(id))
+            .unwrap()
+            .clone();
+        actor.lifecycle = lifecycle;
+        let mut context = TickContext::for_tick(state, TickBudget::full());
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+        context.commit_carried();
+    }
+
+    fn companion_fixture(
+        outbox: usize,
+        companions: u8,
+    ) -> (AuthorityState, Vec<SessionKey>, Vec<CompanionId>) {
+        let (mut state, sessions) = remote_fixture(outbox);
+        let mut ids = Vec::new();
+        for tag in 10..10 + companions {
+            let mut bytes = [0u8; 16];
+            bytes[0] = tag;
+            bytes[6] = 64;
+            bytes[8] = 128;
+            let id = CompanionId::try_from_bytes(bytes).unwrap();
+            state
+                .register_source_companion(
+                    id,
+                    ChunkPos::new(0, 0),
+                    Some(mornlea_storage::CompanionBody {
+                        id: mornlea_storage::PlayerId::from_bytes(bytes),
+                        dimension: 0,
+                        position: [0.5, 65.0, 0.5],
+                        yaw: 0.0,
+                        pitch: 0.0,
+                        inventory: mornlea_storage::Inventory::default(),
+                    }),
+                )
+                .unwrap();
+            ids.push(id);
+        }
+        companion_lifecycle(&mut state, ids[0], ActorLifecycle::Active);
+        (state, sessions, ids)
+    }
+
+    fn companion_project(state: &mut AuthorityState) -> Vec<RoutedEvent> {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches.clear();
+        state
+            .project_tick_publication(0, &outcome)
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event.event(),
+                    Event::CompanionSpawn(_)
+                        | Event::CompanionDespawn(_)
+                        | Event::CompanionStates(_)
+                )
+            })
+            .collect()
+    }
+
+    fn companion_members(state: &AuthorityState, session: SessionKey, ids: &[CompanionId]) {
+        assert_eq!(
+            state.session_views[&session].visible_companions,
+            ids.iter().copied().collect::<BTreeSet<_>>(),
+            "companion membership must reflect exact FIFO admission"
+        );
+    }
+
+    fn companion_frames(events: &[RoutedEvent], session: SessionKey) -> Vec<Vec<u8>> {
+        events
+            .iter()
+            .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+            .map(|event| frame(event.event()))
+            .collect()
+    }
+
+    fn companion_initial(state: &mut AuthorityState, sessions: &[SessionKey], id: CompanionId) {
+        let events = companion_project(state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(
+            |event| matches!(event.event(), Event::CompanionSpawn(value) if value.id() == id)
+        ));
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            companion_members(state, *session, &[id]);
+        }
+    }
+
+    #[test]
+    fn companion_admission_projection_then_queued() {
+        let (mut state, sessions, ids) = companion_fixture(512, 1);
+        let events = companion_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event.event(), Event::CompanionSpawn(_)))
+        );
+        for session in &sessions {
+            companion_members(&state, *session, &[]);
+        }
+        assert_eq!(companion_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            companion_members(&state, *session, &ids);
+        }
+        let next = companion_project(&mut state);
+        assert_eq!(next.len(), 2);
+        assert!(
+            next.iter()
+                .all(|event| matches!(event.event(), Event::CompanionStates(_)))
+        );
+    }
+
+    #[test]
+    fn companion_admission_closed_owner_and_peer() {
+        let (mut state, sessions, ids) = companion_fixture(512, 1);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let events = companion_project(&mut state);
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        companion_members(&state, owner, &[]);
+        companion_members(&state, peer, &ids);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        let next = companion_project(&mut state);
+        assert!(next.iter().any(
+            |event| event.recipient() == EventRecipient::Session(owner.get())
+                && matches!(event.event(), Event::CompanionSpawn(_))
+        ));
+        assert!(next.iter().any(
+            |event| event.recipient() == EventRecipient::Session(peer.get())
+                && matches!(event.event(), Event::CompanionStates(_))
+        ));
+    }
+
+    #[test]
+    fn companion_admission_late_preflight_atomic() {
+        let (mut state, sessions, ids) = companion_fixture(512, 1);
+        let events = companion_project(&mut state);
+        let mut refused = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+            companion_members(&state, *session, &[]);
+        }
+        assert_eq!(companion_project(&mut state), events);
+        state.publish(publication(events)).unwrap();
+        for session in &sessions {
+            companion_members(&state, *session, &ids);
+        }
+    }
+
+    #[test]
+    fn companion_admission_despawn_preflight_retry() {
+        let (mut state, sessions, ids) = companion_fixture(512, 1);
+        companion_initial(&mut state, &sessions, ids[0]);
+        companion_lifecycle(&mut state, ids[0], ActorLifecycle::Dead);
+        let events = companion_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(
+            |event| matches!(event.event(), Event::CompanionDespawn(value) if value.id() == ids[0])
+        ));
+        let mut refused = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            companion_members(&state, *session, &ids);
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(companion_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            companion_members(&state, *session, &[]);
+        }
+    }
+
+    #[test]
+    fn companion_admission_departure_and_arrival() {
+        let (mut state, sessions, ids) = companion_fixture(512, 2);
+        companion_initial(&mut state, &sessions, ids[0]);
+        companion_lifecycle(&mut state, ids[0], ActorLifecycle::Dead);
+        companion_lifecycle(&mut state, ids[1], ActorLifecycle::Active);
+        let events = companion_project(&mut state);
+        assert_eq!(events.len(), 4);
+        for session in &sessions {
+            let owned: Vec<_> = events
+                .iter()
+                .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+                .map(|event| event.event())
+                .collect();
+            assert!(
+                matches!(owned.as_slice(), [Event::CompanionDespawn(old), Event::CompanionSpawn(new)] if old.id() == ids[0] && new.id() == ids[1])
+            );
+            companion_members(&state, *session, &ids[..1]);
+        }
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            companion_members(&state, *session, &ids[1..]);
+        }
+        assert!(
+            companion_project(&mut state)
+                .iter()
+                .all(|event| matches!(event.event(), Event::CompanionStates(_)))
+        );
+    }
+
+    #[test]
+    fn companion_admission_saturated_prefix_peer() {
+        let (mut state, sessions, ids) = companion_fixture(1, 1);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let prefix = marker_rejection(owner, 1);
+        state.publish(publication(vec![prefix.clone()])).unwrap();
+        let events = companion_project(&mut state);
+        for session in &sessions {
+            companion_members(&state, *session, &[]);
+        }
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(
+            state.take_outbox(owner, 512, 2_097_152).unwrap(),
+            vec![frame(prefix.event())]
+        );
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        companion_members(&state, peer, &ids);
+    }
+
+    #[test]
+    fn companion_admission_targeted_and_broadcast_ownership() {
+        let (mut state, sessions, ids) = companion_fixture(512, 1);
+        // A checked manual DTO isolates targeted versus Broadcast receipt ownership.
+        let spawn = Event::CompanionSpawn(
+            mornlea_domain::CompanionSpawn::try_new(mornlea_domain::CompanionSpawnParts {
+                id: ids[0],
+                name: mornlea_domain::CompanionName::try_from_canonical("Companion".into())
+                    .unwrap(),
+                server_tick: 0,
+                dimension: Dimension::OVERWORLD,
+                position: FiniteVec3::try_new([0.5, 65.0, 0.5]).unwrap(),
+                look: LookAngles::try_new(0.0, 0.0).unwrap(),
+            })
+            .unwrap(),
+        );
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Broadcast,
+                spawn.clone(),
+            )]))
+            .unwrap();
+        for session in &sessions {
+            assert_eq!(
+                state.take_outbox(*session, 512, 2_097_152).unwrap(),
+                vec![frame(&spawn)]
+            );
+            companion_members(&state, *session, &[]);
+        }
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(sessions[0].get()),
+                spawn.clone(),
+            )]))
+            .unwrap();
+        assert_eq!(
+            state.take_outbox(sessions[0], 512, 2_097_152).unwrap(),
+            vec![frame(&spawn)]
+        );
+        companion_members(&state, sessions[0], &ids);
+        companion_members(&state, sessions[1], &[]);
+        assert!(
+            state
+                .take_outbox(sessions[1], 512, 2_097_152)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

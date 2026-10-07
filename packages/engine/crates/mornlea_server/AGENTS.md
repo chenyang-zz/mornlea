@@ -1341,6 +1341,13 @@ Closed, failed-preflight or dropped frames retain the earlier admitted map.
 Foot snapshot eligibility and cross-peer retirement timing remain separate
 migration boundaries.
 
+Companion membership also records only FIFO-admitted spawn/despawn frames.
+Its checked UUID metadata stays separate from remote session incarnations;
+registration and source reset consumption never move into observer mirrors.
+Closed, failed-preflight and dropped companion frames remain retryable without
+an eager desired-set replacement. Other actor/drop families retain their
+separate migration boundaries.
+
 Full snapshot mirrors advance only after the exact encoded frame enters the recipient FIFO. Projection records desired resyncs and uses a same-pass emitted-key set to suppress duplicate first/resync snapshots and covered deltas; this set is not an admission receipt. Closed or failed-preflight snapshots retain retryable unsent/current-revision state; revision-gap desired resync survives the transient tick outcome until an admitted full frame clears it. Unready desired requests and Forget cleanup retain source ownership. Actor visibility/mirrors and automatic off-tick encoding remain separate migration boundaries. Snapshot metadata contains only chunk key/revision alongside the existing boxed record metadata, never a cloned chunk body.
 
 Contiguous block delta mirrors advance only after their exact frame enters the FIFO, and only for an already-sent full snapshot at the checked base revision. Frame-paired scalar metadata carries key/base/new revision; stale or duplicate manual frames cannot create history or roll it backward. Projection and preflight alone leave the revision unchanged, including empty barriers. Same-pass full-snapshot coverage remains the projection lookahead owner. Eligible chunk deltas are validated as a whole before snapshot admission. Invalid count or relations discard all classified deltas for that recipient and order existing retirement after provider/despawn/Forget prefixes; no remainder frames or Disconnect are synthesized. First-send, resync, gap and unwanted inputs bypass delta validation. Actual bounded trusted transactions can aggregate beyond the per-operation cap; ordinary gameplay reachability, actor visibility/queue ownership, transport retirement and off-tick publication remain separate boundaries.

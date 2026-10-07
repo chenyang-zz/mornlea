@@ -741,7 +741,7 @@ fn apply_resync_requests(
 
 /// Remote-player and companion despawn diffs. A remote authority incarnation
 /// change despawns the old identity even when interest remains unchanged;
-/// companions retain their interest-exit boundary. Remote membership advances
+/// companions retain their interest-exit boundary. Both memberships advance
 /// only after queue admission, so refused departures remain retryable. Other
 /// visibility families retain their projection-owned migration state.
 fn emit_despawns(
@@ -948,7 +948,6 @@ fn emit_companions(
     for ((observer, view), visibility) in
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
-        let mut published = visibility.companions.clone();
         for id in visibility.companions.difference(&view.visible_companions) {
             let Some((_, index)) = inputs
                 .entities
@@ -956,7 +955,6 @@ fn emit_companions(
                 .iter()
                 .find(|(candidate, _)| candidate == id)
             else {
-                published.remove(id);
                 continue;
             };
             let actor = &inputs.actors[*index];
@@ -967,10 +965,9 @@ fn emit_companions(
                 .cloned()
                 .or_else(|| companion_display_name(*id))
             else {
-                published.remove(id);
                 continue;
             };
-            match CompanionSpawn::try_new(CompanionSpawnParts {
+            if let Ok(spawn) = CompanionSpawn::try_new(CompanionSpawnParts {
                 id: *id,
                 name,
                 server_tick: inputs.tick,
@@ -978,15 +975,10 @@ fn emit_companions(
                 position: actor.motion.position(),
                 look: actor.look,
             }) {
-                Ok(spawn) => {
-                    events.push(RoutedEvent::new(
-                        EventRecipient::Session(observer.session.get()),
-                        Event::CompanionSpawn(spawn),
-                    ));
-                }
-                Err(_) => {
-                    published.remove(id);
-                }
+                events.push(RoutedEvent::new(
+                    EventRecipient::Session(observer.session.get()),
+                    Event::CompanionSpawn(spawn),
+                ));
             }
         }
         let mut states = Vec::new();
@@ -1029,7 +1021,6 @@ fn emit_companions(
                 ));
             }
         }
-        view.visible_companions = published;
     }
 }
 
