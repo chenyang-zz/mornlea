@@ -1999,16 +1999,27 @@ impl AuthorityState {
     /// the authoritative body. The sections equal the committed blocks; a
     /// column that cannot cross the checked network boundary yields no event
     /// so a publication never fails at encode time.
+    #[cfg(test)]
     pub(crate) fn chunk_snapshot_event(
         &self,
         key: ChunkKey,
     ) -> Option<mornlea_domain::ChunkSnapshot> {
+        self.chunk_snapshot_publication(key)
+            .map(|(snapshot, _)| snapshot)
+    }
+
+    /// Retains the exact section-only charge for bounded source selection.
+    /// Capture failure keeps the existing unavailable publication policy.
+    pub(crate) fn chunk_snapshot_publication(
+        &self,
+        key: ChunkKey,
+    ) -> Option<(mornlea_domain::ChunkSnapshot, usize)> {
         let chunk = self.residents.ready.get(&key)?;
         let view = chunk.capture(
             self.residents.drops.get(&key),
             self.residents.container_chunks.get(&key),
         );
-        view.network_snapshot().ok().map(|(snapshot, _)| snapshot)
+        view.network_snapshot().ok()
     }
 
     pub fn freeze_eligible(&mut self, tick: u64) -> Vec<CommandEnvelope> {
@@ -21850,5 +21861,352 @@ mod owner_record_admission_tests {
     #[test]
     fn drop_physical_index_far_xz() {
         far_drop_projection(ChunkPos::new(1_048_576, 1_048_576), 128 * 256 + 17);
+    }
+    fn selection_key(x: i32, z: i32) -> ChunkKey {
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(x, z),
+        }
+    }
+
+    fn selection_limits(state: &mut AuthorityState, chunks: usize, bytes: usize) {
+        // Prepared limits qualify the selection consumer, not a configuration loader.
+        let previous = state.limits;
+        state.limits = ServerLimits::try_new(
+            previous.max_players(),
+            previous.queued_commands(),
+            previous.session_outbox(),
+            previous.ready_chunk_results(),
+            chunks,
+            bytes,
+        )
+        .unwrap()
+        .with_view_radius(previous.view_radius());
+    }
+
+    fn selection_ready(state: &mut AuthorityState, keys: &[ChunkKey], large: Option<ChunkKey>) {
+        let (_, _, _, body) = state
+            .residents
+            .ready_snapshot()
+            .into_iter()
+            .find(|record| record.0 == snapshot_key())
+            .unwrap();
+        let mut context = TickContext::for_tick(state, TickBudget::full());
+        for key in keys {
+            let mut prepared = body.clone();
+            if Some(*key) == large {
+                // An unchanged loaded indexed section has a hand-counted payload charge.
+                let mut words = vec![0; 256];
+                words[0] = 1;
+                prepared.sections[0] = mornlea_storage::ContainerSnapshot {
+                    kind: mornlea_storage::StorageKind::Indexed,
+                    bits: 4,
+                    single: 0,
+                    palette: vec![0, 1],
+                    packed: words,
+                };
+            }
+            context.preload_ready_chunk(ReadyChunk::try_new(*key, 1, 9, prepared).unwrap());
+        }
+        context.commit_carried();
+    }
+
+    fn selection_project(
+        state: &mut AuthorityState,
+        resyncs: &[(SessionKey, ChunkKey)],
+    ) -> Vec<RoutedEvent> {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches.clear();
+        outcome.resyncs = resyncs
+            .iter()
+            .map(|(session, key)| (*session, key.dimension, key.pos))
+            .collect();
+        state
+            .project_tick_publication(0, &outcome)
+            .into_iter()
+            .filter(|event| matches!(event.event(), Event::ChunkSnapshot(_)))
+            .collect()
+    }
+
+    fn selection_keys(events: &[RoutedEvent], session: SessionKey) -> Vec<ChunkKey> {
+        events
+            .iter()
+            .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+            .map(|event| {
+                let Event::ChunkSnapshot(snapshot) = event.event() else {
+                    panic!("snapshot event")
+                };
+                assert_eq!(snapshot.revision(), 9);
+                ChunkKey {
+                    dimension: snapshot.dimension(),
+                    pos: snapshot.chunk(),
+                }
+            })
+            .collect()
+    }
+
+    fn selection_unsent(state: &AuthorityState, session: SessionKey, keys: &[ChunkKey]) {
+        for key in keys {
+            let entry = state.session_views[&session].chunks[key];
+            assert!(
+                !entry.snapshot_sent,
+                "selection must not certify queued history"
+            );
+            assert_eq!(entry.last_revision, 0);
+        }
+    }
+
+    fn selection_queue(
+        state: &mut AuthorityState,
+        events: Vec<RoutedEvent>,
+        sessions: &[SessionKey],
+    ) {
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| {
+                (
+                    *session,
+                    companion_frames(&events, *session),
+                    selection_keys(&events, *session),
+                )
+            })
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames, keys) in expected {
+            assert_eq!(state.take_outbox(session, 512, 2_097_152).unwrap(), frames);
+            for key in keys {
+                let entry = state.session_views[&session].chunks[&key];
+                assert!(entry.snapshot_sent);
+                assert_eq!(entry.last_revision, 9);
+                assert!(!entry.resync_queued);
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_selection_count_distance_and_queued_continuation() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let keys = [
+            selection_key(0, 0),
+            selection_key(-1, 0),
+            selection_key(1, 0),
+            selection_key(2, 0),
+        ];
+        selection_ready(&mut state, &keys[1..], None);
+        selection_limits(&mut state, 1, 1_048_576);
+        for (index, key) in keys.iter().enumerate() {
+            let events = selection_project(&mut state, &[]);
+            assert_eq!(
+                selection_keys(&events, owner),
+                [*key],
+                "count and distance select one pending column"
+            );
+            selection_unsent(&state, owner, &keys[index..]);
+            assert_eq!(selection_project(&mut state, &[]), events);
+            selection_queue(&mut state, events, &sessions);
+        }
+        assert!(selection_project(&mut state, &[]).is_empty());
+    }
+
+    #[test]
+    fn snapshot_selection_resync_priority_and_distance() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let (far, near, ordinary) = (
+            selection_key(-2, 0),
+            selection_key(1, 0),
+            selection_key(0, 1),
+        );
+        selection_ready(&mut state, &[far, near], None);
+        let initial = selection_project(&mut state, &[]);
+        selection_queue(&mut state, initial, &sessions);
+        selection_ready(&mut state, &[ordinary], None);
+        selection_limits(&mut state, 2, 1_048_576);
+        let events = selection_project(&mut state, &[(owner, far), (owner, near)]);
+        assert_eq!(
+            selection_keys(&events, owner),
+            [near, far],
+            "resync priority precedes nearer ordinary work"
+        );
+        selection_unsent(&state, owner, &[ordinary]);
+        for key in [near, far] {
+            assert!(state.session_views[&owner].chunks[&key].resync_queued);
+        }
+        assert_eq!(selection_project(&mut state, &[]), events);
+        selection_queue(&mut state, events, &sessions);
+        let next = selection_project(&mut state, &[]);
+        assert_eq!(selection_keys(&next, owner), [ordinary]);
+        selection_queue(&mut state, next, &sessions);
+        assert!(selection_project(&mut state, &[]).is_empty());
+    }
+
+    #[test]
+    fn snapshot_selection_section_bytes_exact_boundary() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let keys = [
+            selection_key(0, 0),
+            selection_key(1, 0),
+            selection_key(2, 0),
+        ];
+        selection_ready(&mut state, &keys[1..], None);
+        for key in keys {
+            assert_eq!(
+                state.residents.ready[&key]
+                    .capture(None, None)
+                    .network_snapshot()
+                    .unwrap()
+                    .1,
+                48
+            );
+        }
+        selection_limits(&mut state, 64, 96);
+        let events = selection_project(&mut state, &[]);
+        assert_eq!(
+            selection_keys(&events, owner),
+            keys[..2],
+            "two section payloads exactly fill the byte budget"
+        );
+        assert!(events.iter().all(|event| frame(event.event()).len() > 48));
+        selection_unsent(&state, owner, &keys);
+        selection_queue(&mut state, events, &sessions);
+        let next = selection_project(&mut state, &[]);
+        assert_eq!(selection_keys(&next, owner), keys[2..]);
+        selection_queue(&mut state, next, &sessions);
+        assert!(selection_project(&mut state, &[]).is_empty());
+    }
+
+    #[test]
+    fn snapshot_selection_oversized_first_progress() {
+        for bytes in [0, 1] {
+            let (mut state, sessions) = snapshot_fixture(512, 1);
+            let owner = sessions[0];
+            let keys = [
+                selection_key(0, 0),
+                selection_key(1, 0),
+                selection_key(2, 0),
+            ];
+            selection_ready(&mut state, &keys[1..], None);
+            selection_limits(&mut state, 64, bytes);
+            for (index, key) in keys.iter().enumerate() {
+                let events = selection_project(&mut state, &[]);
+                assert_eq!(
+                    selection_keys(&events, owner),
+                    [*key],
+                    "one oversized first snapshot makes progress"
+                );
+                selection_unsent(&state, owner, &keys[index..]);
+                selection_queue(&mut state, events, &sessions);
+            }
+            assert!(selection_project(&mut state, &[]).is_empty());
+        }
+    }
+
+    #[test]
+    fn snapshot_selection_later_oversize_stops_without_skipping() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let keys = [
+            selection_key(0, 0),
+            selection_key(1, 0),
+            selection_key(2, 0),
+        ];
+        selection_ready(&mut state, &keys[1..], Some(keys[1]));
+        assert_eq!(
+            state.residents.ready[&keys[1]]
+                .capture(None, None)
+                .network_snapshot()
+                .unwrap()
+                .1,
+            2098
+        );
+        selection_limits(&mut state, 64, 96);
+        for (index, key) in keys.iter().enumerate() {
+            let events = selection_project(&mut state, &[]);
+            assert_eq!(
+                selection_keys(&events, owner),
+                [*key],
+                "the next oversized candidate stops the ordered pass"
+            );
+            selection_unsent(&state, owner, &keys[index..]);
+            selection_queue(&mut state, events, &sessions);
+        }
+        assert!(selection_project(&mut state, &[]).is_empty());
+    }
+
+    #[test]
+    fn snapshot_selection_unavailable_costs_nothing() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let missing = selection_key(-1, 0);
+        let keys = [selection_key(0, 0), selection_key(1, 0)];
+        selection_ready(&mut state, &keys[1..], None);
+        // A retained desired flag qualifies unavailable capture cleanup without a producer claim.
+        state
+            .session_views
+            .entry(owner)
+            .or_default()
+            .chunks
+            .entry(missing)
+            .or_default()
+            .resync_queued = true;
+        selection_limits(&mut state, 1, 1_048_576);
+        let events = selection_project(&mut state, &[]);
+        assert_eq!(selection_keys(&events, owner), keys[..1]);
+        assert!(!state.session_views[&owner].chunks[&missing].resync_queued);
+        selection_unsent(&state, owner, &keys);
+        selection_queue(&mut state, events, &sessions);
+        let next = selection_project(&mut state, &[]);
+        assert_eq!(selection_keys(&next, owner), keys[1..]);
+    }
+
+    #[test]
+    fn snapshot_selection_zero_chunk_limit_retains_desire() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let keys = [selection_key(0, 0), selection_key(1, 0)];
+        selection_ready(&mut state, &keys[1..], None);
+        selection_limits(&mut state, 0, 1_048_576);
+        let events = selection_project(&mut state, &[(owner, keys[0])]);
+        assert!(events.is_empty(), "zero chunk budget selects no frames");
+        selection_unsent(&state, owner, &keys);
+        assert!(state.session_views[&owner].chunks[&keys[0]].resync_queued);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        selection_limits(&mut state, 1, 1_048_576);
+        let next = selection_project(&mut state, &[]);
+        assert_eq!(selection_keys(&next, owner), keys[..1]);
+        selection_queue(&mut state, next, &sessions);
+        selection_unsent(&state, owner, &keys[1..]);
+    }
+
+    #[test]
+    fn snapshot_selection_closed_receiver_keeps_peer_budget() {
+        let (mut state, sessions) = snapshot_fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let keys = [selection_key(0, 0), selection_key(1, 0)];
+        selection_ready(&mut state, &keys[1..], None);
+        selection_limits(&mut state, 1, 1_048_576);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let events = selection_project(&mut state, &[]);
+        for session in &sessions {
+            assert_eq!(selection_keys(&events, *session), keys[..1]);
+            selection_unsent(&state, *session, &keys);
+        }
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        selection_unsent(&state, owner, &keys);
+        assert!(state.session_views[&peer].chunks[&keys[0]].snapshot_sent);
+        selection_unsent(&state, peer, &keys[1..]);
+        let retry = selection_project(&mut state, &[]);
+        assert_eq!(selection_keys(&retry, owner), keys[..1]);
+        assert_eq!(selection_keys(&retry, peer), keys[1..]);
+        let expected = companion_frames(&retry, peer);
+        state.publish(publication(retry)).unwrap();
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        assert!(state.session_views[&peer].chunks[&keys[1]].snapshot_sent);
+        selection_unsent(&state, owner, &keys);
     }
 }

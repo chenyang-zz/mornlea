@@ -3922,11 +3922,11 @@ fn projection_despawn_families_emit_once() {
     );
 }
 
-/// projection::first_send_snapshots_ascend_across_ticks — the first-send
-/// pass is one sorted union: a smaller newly-wanted column publishes before
-/// an older unsent column that is still pending from a previous tick.
+/// Retained and newly wanted first sends share one distance-ordered pass.
+/// Prepared actor movement changes the center without claiming an ordinary
+/// movement producer; the standing column precedes farther pending columns.
 #[test]
-fn projection_first_send_snapshots_ascend_across_ticks() {
+fn projection_first_send_snapshots_use_distance_across_ticks() {
     let mut state = authority();
     // One Ready ground column east of the spawn area; the player's own
     // column stays unready, so nothing else can publish on the first tick.
@@ -3948,7 +3948,7 @@ fn projection_first_send_snapshots_ascend_across_ticks() {
         })
         .collect();
     assert_eq!(sent, [ChunkPos::new(3, 0)]);
-    // The player walks one column west, so the interest both keeps an older
+    // Prepared movement shifts the actor one column west, retaining an older
     // unsent column ((2, -2), wanted since tick A but only now ready) and
     // gains a smaller new one ((-1, 0)), beside the new standing column.
     stage(&mut state, |context| {
@@ -3978,11 +3978,11 @@ fn projection_first_send_snapshots_ascend_across_ticks() {
     assert_eq!(
         sent,
         [
-            ChunkPos::new(-1, 0),
             ChunkPos::new(1, 0),
+            ChunkPos::new(-1, 0),
             ChunkPos::new(2, -2)
         ],
-        "retained and newly wanted first sends ascend together"
+        "retained and newly wanted first sends share distance priority"
     );
 }
 

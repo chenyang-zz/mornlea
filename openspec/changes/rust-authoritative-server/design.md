@@ -922,3 +922,13 @@ Use a private allocation-free AuthorityReadView iterator to copy checked ItemDro
 ## Physical integer drop source verification
 
 Three prepared far physical-slot consumer cases now publish exact stored integer indices through actual projector/codec/FIFO, preserving numerical records/centers, timers and slots. All eleven focused gates/full3909/native-before-six-Go controls qualify the private source owner, with independent source SCOPED_PASS. No ordinary far producer or configured runtime acceptance is inferred. Public numerical APIs and accepted queue-value admission stay unchanged; pending observer family/foot and snapshot budget/async gaps remain separate open decisions.
+
+
+## Per-session snapshot selection decision
+
+Reuse exact checked Ready network snapshot and section-payload charge privately. Sort unified wanted resync/unsent candidates by resync, captured Active observer center distance, dimension/x/z. Each recipient gets existing snapshot chunk/byte limits independently; unavailable costs nothing, first oversized permitted, later oversized stops selection without skipping. Count0 selectsnone; byte0 retains first-frame progress under existing library constructor, not config acceptance. Existing queue-only history, same-pass delta coverage, whole-delta refusal order and physical acquisition owner remain unchanged. Public capture/limit APIs and actor lifecycle visibility are excluded. Reject frame/disk size estimates, eager mirrors or an encoder integration shortcut. Source caller packing remainsOPEN. Eight actual consumer cases and revised legacy ascending replay expectation are frozen in plans/158-source-snapshot-selection.md before product; source4/docs4 exact8paths rootserialownership.
+
+
+## Bounded snapshot selection verified execution
+
+Eight causal selection tests plus one revised legacy distance-order replay pass without assertion changes after product. Private charged capture and unified ordering preserve queue-only history and whole-delta refusal precedence. Count/section bytes are independently budgeted per recipient; exact boundary48+48, unchanged indexed2098 oversized barrier, zero-library and closed-peer retry cases consume actual projector/codec/FIFO and existing books. Prepared immutable-limit/Ready/actor inputs qualify these consumers, not config bootstrap, ordinary movement or encoder assembly. Independent frozen source4 SCOPED_PASS and fresh8/1/6/13/3/192/capture10/full3917/native-before-Go7+1 gates pass. Darwin capture10 includes actual Go eight-stage representation/charge comparison; Linux-only descendant-retirement harness is not counted. Pending four-family observer/foot cuts and source off-tick packing/runtime/broad acceptance remain OPEN.

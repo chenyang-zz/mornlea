@@ -1392,3 +1392,6 @@ own owner. The source capture keeps its bounded radius-two Ready union and one
 aggregate value buffer; no per-key allocation or public numerical contract change
 is needed. Far-X/Z/XZ prepared physical inputs qualify actual projector/codec/FIFO
 raw-index fidelity while asserting centers, counters and slots remain unchanged.
+
+
+Source snapshot selection uses each recipient's chunk-count and exact section-payload byte limits independently. Unified resync/unsent candidates sort by resync priority, captured observer-center distance and dimension/x/z. Unavailable captures cost nothing; the first selected snapshot may exceed its byte limit, while a later oversized candidate stops the pass without skipping priority. Existing library count zero selects none and byte zero retains first-frame progress; this is not configuration-loader qualification. Projection coverage suppresses same-pass deltas but never certifies queue history. Snapshot capture/packing still needs separate off-tick encoder integration, and actor foot/lifecycle visibility retains its own owner.

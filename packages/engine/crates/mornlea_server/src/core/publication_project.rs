@@ -240,7 +240,7 @@ impl AuthorityState {
         let before_snapshots = events.len();
         let (deltas, refused_sessions) =
             classify_block_batches(&mut view_list, &observers, outcome);
-        let snapshots = emit_snapshots(&mut view_list, &observers, self, &mut events);
+        let snapshots = emit_snapshots(&mut view_list, &observers, self, &actors, &mut events);
         emit_block_batches(&observers, deltas, &snapshots, &mut events);
         let configured_names = self.configured_chat_names();
         emit_companions(
@@ -802,60 +802,73 @@ fn emit_forgets(
     }
 }
 
-/// This session's resync-flagged snapshots first, then its first sends,
-/// both ascending by chunk key. Columns that are not Ready stay unsent.
+/// Selects each recipient's resyncs before first sends, by center distance
+/// then chunk key. Exact section-payload budgets allow one oversized first
+/// column; later oversized work stops the pass without bypassing priority.
+/// Selection is delta coverage only; actual queue admission owns history.
 fn emit_snapshots(
     view_list: &mut [SessionView],
     observers: &[Observer],
     state: &AuthorityState,
+    actors: &[ActorRecord],
     events: &mut Vec<RoutedEvent>,
 ) -> BTreeSet<(SessionKey, ChunkKey)> {
     let mut emitted = BTreeSet::new();
+    let limits = state.limits();
     for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
-        let flagged: Vec<ChunkKey> = view
-            .chunks
+        let center = actors
             .iter()
-            .filter(|(key, entry)| entry.resync_queued && observer.wanted.contains(key))
-            .map(|(key, _)| *key)
-            .collect();
-        for key in flagged {
-            if let Some(entry) = view.chunks.get_mut(&key) {
-                if let Some(snapshot) = state.chunk_snapshot_event(key) {
-                    emitted.insert((observer.session, key));
-                    events.push(RoutedEvent::new(
-                        EventRecipient::Session(observer.session.get()),
-                        Event::ChunkSnapshot(snapshot),
-                    ));
-                } else {
-                    // An unavailable desired request is discarded as in the source owner.
-                    entry.resync_queued = false;
-                }
-            }
-        }
-        // One ascending pass over the wanted columns whose entry is missing
-        // or still unsent, so retained pending columns and newly wanted ones
-        // publish together in chunk-key order.
-        let pending: Vec<ChunkKey> = observer
+            .find(|actor| actor.key == ActorKey::Player(observer.session))
+            .map(|actor| position_chunk(actor.dimension, actor.motion.position().get()));
+        let mut candidates: Vec<ChunkKey> = observer
             .wanted
             .iter()
             .copied()
             .filter(|key| {
-                !emitted.contains(&(observer.session, *key))
-                    && !view
-                        .chunks
-                        .get(key)
-                        .is_some_and(|entry| entry.snapshot_sent)
+                view.chunks
+                    .get(key)
+                    .is_none_or(|entry| entry.resync_queued || !entry.snapshot_sent)
             })
             .collect();
-        for key in pending {
-            let Some(snapshot) = state.chunk_snapshot_event(key) else {
+        candidates.sort_unstable_by_key(|key| {
+            let resync = view
+                .chunks
+                .get(key)
+                .is_some_and(|entry| entry.resync_queued);
+            let distance = center
+                .filter(|center| center.dimension == key.dimension)
+                .map_or(i64::MAX, |center| {
+                    // Wanted keys share the checked bounded square, so differences cannot overflow.
+                    let dx = i64::from(key.pos.x()) - i64::from(center.pos.x());
+                    let dz = i64::from(key.pos.z()) - i64::from(center.pos.z());
+                    dx * dx + dz * dz
+                });
+            (!resync, distance, *key)
+        });
+        let mut selected_chunks = 0;
+        let mut selected_bytes = 0;
+        for key in candidates {
+            if selected_chunks >= limits.snapshot_chunks() {
+                break;
+            }
+            let Some((snapshot, charge)) = state.chunk_snapshot_publication(key) else {
+                // Unavailable desired requests consume no budget and discard their resync flag.
+                if let Some(entry) = view.chunks.get_mut(&key) {
+                    entry.resync_queued = false;
+                }
                 continue;
             };
+            // Checked columns have twenty-four bounded sections, so totals fit usize.
+            if selected_chunks > 0 && selected_bytes + charge > limits.snapshot_bytes() {
+                break;
+            }
             emitted.insert((observer.session, key));
             events.push(RoutedEvent::new(
                 EventRecipient::Session(observer.session.get()),
                 Event::ChunkSnapshot(snapshot),
             ));
+            selected_chunks += 1;
+            selected_bytes += charge;
         }
     }
     emitted
