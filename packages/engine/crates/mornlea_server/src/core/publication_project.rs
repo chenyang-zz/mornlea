@@ -862,7 +862,6 @@ fn emit_block_batches(
                 continue;
             }
             if entry.last_revision == *base {
-                entry.last_revision = *new;
                 for group in changes
                     .chunks(BLOCK_CHANGES_CAP)
                     .chain(changes.is_empty().then_some(&[][..]))

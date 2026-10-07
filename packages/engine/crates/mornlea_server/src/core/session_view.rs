@@ -20,16 +20,16 @@ use crate::contracts::{ChunkKey, SessionKey};
 pub(crate) struct ChunkPublication {
     /// Whether the FIFO accepted a full snapshot for this column.
     pub(crate) snapshot_sent: bool,
-    /// The admitted snapshot revision; contiguous deltas still advance during projection.
+    /// The revision of the admitted full snapshot or matching-base delta.
     pub(crate) last_revision: u64,
     /// A desired resync waits for its full snapshot to enter the FIFO.
     pub(crate) resync_queued: bool,
 }
 
 /// The previous tick's derived interest and published snapshots of one
-/// session. All fields are owned copies. Inventory, crafting and full snapshots
-/// advance only after their exact frames enter the FIFO. Other families retain
-/// their current projection-owned migration behavior.
+/// session. All fields are owned copies. Inventory, crafting, full snapshots and
+/// contiguous deltas advance only after their exact frames enter the FIFO. Other
+/// families retain their current projection-owned migration behavior.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SessionView {
     /// This session's chunk interest as derived from its player actor.

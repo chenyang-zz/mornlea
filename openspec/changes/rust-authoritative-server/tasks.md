@@ -286,6 +286,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3qsa Advance full snapshot mirrors only after actual queue admission ([packet](plans/148-source-snapshot-admission.md)). Delta/actor/encoding/runtime and broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3qda Advance contiguous delta mirrors only after matching-base frame queue admission ([packet](plans/149-source-delta-admission.md)). Wholebatch overflow/actor/encoding/runtime and broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 

@@ -2403,6 +2403,19 @@ impl AuthorityState {
                 entry.last_revision = revision;
                 entry.resync_queued = false;
             }
+            QueuedPublicationMirror::ChunkDelta {
+                key,
+                base_revision,
+                new_revision,
+            } => {
+                // A delta cannot create history or roll an admitted mirror backward.
+                if let Some(entry) = view.chunks.get_mut(&key)
+                    && entry.snapshot_sent
+                    && entry.last_revision == base_revision
+                {
+                    entry.last_revision = new_revision;
+                }
+            }
             QueuedPublicationMirror::Inventory(inventory) => view.last_inventory = Some(inventory),
             QueuedPublicationMirror::Crafting(crafting) => {
                 let slots = std::array::from_fn(|index| {
@@ -3228,7 +3241,15 @@ enum AppendOutcome {
 /// Other publication mirrors retain their separate migration ownership.
 #[derive(Clone, Copy)]
 enum QueuedPublicationMirror {
-    ChunkSnapshot { key: ChunkKey, revision: u64 },
+    ChunkSnapshot {
+        key: ChunkKey,
+        revision: u64,
+    },
+    ChunkDelta {
+        key: ChunkKey,
+        base_revision: u64,
+        new_revision: u64,
+    },
     Inventory(mornlea_domain::InventoryState),
     Crafting(mornlea_domain::CraftingState),
 }
@@ -3242,6 +3263,14 @@ impl QueuedPublicationMirror {
                     pos: value.chunk(),
                 },
                 revision: value.revision(),
+            }),
+            mornlea_domain::Event::BlockChanges(value) => Some(Self::ChunkDelta {
+                key: ChunkKey {
+                    dimension: value.dimension(),
+                    pos: value.chunk(),
+                },
+                base_revision: value.base_revision(),
+                new_revision: value.new_revision(),
             }),
             mornlea_domain::Event::InventoryState(value) => Some(Self::Inventory(*value)),
             mornlea_domain::Event::CraftingState(value) => Some(Self::Crafting(*value)),
@@ -18195,5 +18224,284 @@ mod owner_record_admission_tests {
         );
         assert_eq!(state.take_outbox(peer, 8, 1_048_576).unwrap(), peer_frames);
         sent(&state, peer);
+    }
+
+    fn delta_fixture(outbox: usize, players: u8) -> (AuthorityState, Vec<SessionKey>) {
+        let (mut state, sessions) = snapshot_fixture(outbox, players);
+        let initial = snapshot_project(&mut state, None, false);
+        state.publish(publication(initial)).unwrap();
+        for session in &sessions {
+            state.take_outbox(*session, 8, 1_048_576).unwrap();
+            sent(&state, *session);
+        }
+        (state, sessions)
+    }
+
+    fn delta_project(state: &mut AuthorityState, outcome: &TickOutcome) -> Vec<RoutedEvent> {
+        state
+            .project_tick_publication(0, outcome)
+            .into_iter()
+            .filter(|e| matches!(e.event(), Event::ChunkSnapshot(_) | Event::BlockChanges(_)))
+            .collect()
+    }
+
+    fn delta_write(state: &mut AuthorityState, block: u16) -> TickOutcome {
+        // The trusted system transaction is real; staged geometry is its fixture input.
+        let mut context = TickContext::for_tick(state, TickBudget::full());
+        let observed = context
+            .read()
+            .observation(Dimension::OVERWORLD, BlockPos::new(0, 64, 1))
+            .unwrap();
+        context
+            .transaction()
+            .try_system(
+                SystemRule::Support,
+                vec![BlockWrite::try_new(observed, block).unwrap()],
+            )
+            .unwrap();
+        let outcome = context.capture_publication_outcome();
+        context.commit_carried();
+        drop(context);
+        assert_eq!(outcome.block_batches.len(), 1);
+        assert_eq!(outcome.block_batches[0].3.len(), 1);
+        outcome
+    }
+
+    fn prepared_delta(changes: Vec<BlockChange>) -> TickOutcome {
+        // Synthetic barrier/count inputs qualify consumers, not aggregate tick reachability.
+        TickOutcome {
+            block_batches: vec![(snapshot_key(), 9, 10, changes)],
+            resyncs: vec![],
+            quiet_passive_removals: BTreeSet::new(),
+            inventory_dirty: BTreeSet::new(),
+            crafting_dirty: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    fn delta_admission_projection_then_queued() {
+        let (mut state, sessions) = delta_fixture(512, 1);
+        let owner = sessions[0];
+        let outcome = delta_write(&mut state, 1);
+        assert_eq!(
+            (outcome.block_batches[0].1, outcome.block_batches[0].2),
+            (9, 10)
+        );
+        let events = delta_project(&mut state, &outcome);
+        assert_eq!(events.len(), 1);
+        let Event::BlockChanges(batch) = events[0].event() else {
+            panic!("delta")
+        };
+        assert_eq!(
+            (
+                batch.base_revision(),
+                batch.new_revision(),
+                batch.changes().len()
+            ),
+            (9, 10, 1)
+        );
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 9);
+        assert_eq!(delta_project(&mut state, &outcome), events);
+        let expected = vec![frame(events[0].event())];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 8, 1_048_576).unwrap(), expected);
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 10);
+        assert!(delta_project(&mut state, &outcome).is_empty());
+        let next = delta_write(&mut state, 3);
+        assert_eq!((next.block_batches[0].1, next.block_batches[0].2), (10, 11));
+        let next_events = delta_project(&mut state, &next);
+        assert_eq!(next_events.len(), 1);
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 10);
+        let expected = vec![frame(next_events[0].event())];
+        state.publish(publication(next_events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 8, 1_048_576).unwrap(), expected);
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 11);
+    }
+
+    #[test]
+    fn delta_admission_closed_owner_and_peer() {
+        let (mut state, sessions) = delta_fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let outcome = delta_write(&mut state, 1);
+        let events = delta_project(&mut state, &outcome);
+        assert_eq!(events.len(), 2);
+        let peer_frames: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(peer.get()))
+            .map(|e| frame(e.event()))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        assert!(state.take_outbox(owner, 8, 1_048_576).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 8, 1_048_576).unwrap(), peer_frames);
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 9);
+        assert_eq!(chunk_mirror(&state, peer).last_revision, 10);
+        let retry = delta_project(&mut state, &outcome);
+        assert_eq!(retry.len(), 1);
+        assert_eq!(retry[0].recipient(), EventRecipient::Session(owner.get()));
+        let next = delta_write(&mut state, 3);
+        let recovered = delta_project(&mut state, &next);
+        assert_eq!(recovered.len(), 2);
+        assert!(matches!(recovered[0].event(), Event::ChunkSnapshot(_)));
+        assert_eq!(
+            recovered[0].recipient(),
+            EventRecipient::Session(owner.get())
+        );
+        assert!(matches!(recovered[1].event(), Event::BlockChanges(_)));
+        assert_eq!(
+            recovered[1].recipient(),
+            EventRecipient::Session(peer.get())
+        );
+        state.publish(publication(recovered)).unwrap();
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 9);
+        assert!(chunk_mirror(&state, owner).resync_queued);
+        assert_eq!(chunk_mirror(&state, peer).last_revision, 11);
+    }
+
+    #[test]
+    fn delta_admission_preflight_recipient_failure() {
+        let (mut state, sessions) = delta_fixture(512, 1);
+        let owner = sessions[0];
+        let outcome = delta_write(&mut state, 1);
+        let mut events = delta_project(&mut state, &outcome);
+        let original = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        events.push(RoutedEvent::new(
+            EventRecipient::Session(unknown.get()),
+            Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                0,
+                RejectReason::InvalidInput,
+            )),
+        ));
+        assert_eq!(
+            state.publish(publication(events)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        assert!(state.take_outbox(owner, 8, 1_048_576).unwrap().is_empty());
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 9);
+        assert_eq!(delta_project(&mut state, &outcome), original);
+    }
+
+    fn delta_count_boundary(changes: Vec<BlockChange>) {
+        let (mut state, sessions) = delta_fixture(512, 1);
+        let owner = sessions[0];
+        let outcome = prepared_delta(changes.clone());
+        let events = delta_project(&mut state, &outcome);
+        assert_eq!(events.len(), 1);
+        let Event::BlockChanges(batch) = events[0].event() else {
+            panic!("delta")
+        };
+        assert_eq!(batch.changes(), changes);
+        assert_eq!((batch.base_revision(), batch.new_revision()), (9, 10));
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 9);
+        let expected = vec![frame(events[0].event())];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 8, 1_048_576).unwrap(), expected);
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 10);
+        assert!(delta_project(&mut state, &outcome).is_empty());
+    }
+
+    #[test]
+    fn delta_admission_empty_revision_barrier() {
+        delta_count_boundary(vec![]);
+    }
+
+    #[test]
+    fn delta_admission_maximum_single_frame() {
+        let changes = (0..4096)
+            .map(|i| {
+                BlockChange::try_new(BlockPos::new(i % 16, -64 + i / 256, (i / 16) % 16), 1)
+                    .unwrap()
+            })
+            .collect();
+        delta_count_boundary(changes);
+    }
+
+    #[test]
+    fn delta_admission_saturated_prefix_isolates_peer() {
+        let (mut state, sessions) = delta_fixture(1, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let rejection = Event::CommandRejected(mornlea_domain::CommandRejection::new(
+            11,
+            RejectReason::InvalidInput,
+        ));
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(owner.get()),
+                rejection.clone(),
+            )]))
+            .unwrap();
+        let outcome = delta_write(&mut state, 1);
+        let events = delta_project(&mut state, &outcome);
+        let peer_frames: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(peer.get()))
+            .map(|e| frame(e.event()))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(
+            state.take_outbox(owner, 8, 1_048_576).unwrap(),
+            vec![frame(&rejection)]
+        );
+        assert_eq!(state.take_outbox(peer, 8, 1_048_576).unwrap(), peer_frames);
+        assert_eq!(chunk_mirror(&state, peer).last_revision, 10);
+    }
+
+    #[test]
+    fn delta_admission_stale_or_unsent_frame_cannot_seed_history() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let initial = snapshot_project(&mut state, None, false);
+        // Direct manual frames qualify the receipt guard outside the normal emitter.
+        let delta = Event::BlockChanges(
+            mornlea_domain::BlockChanges::try_new(mornlea_domain::BlockChangesParts {
+                dimension: Dimension::OVERWORLD,
+                chunk: ChunkPos::new(0, 0),
+                base_revision: 9,
+                new_revision: 10,
+                changes: vec![].into_boxed_slice(),
+            })
+            .unwrap(),
+        );
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(owner.get()),
+                delta.clone(),
+            )]))
+            .unwrap();
+        assert_eq!(
+            state.take_outbox(owner, 8, 1_048_576).unwrap(),
+            vec![frame(&delta)]
+        );
+        unsent(&state, owner);
+        state.publish(publication(initial)).unwrap();
+        state.take_outbox(owner, 8, 1_048_576).unwrap();
+        let outcome = delta_write(&mut state, 1);
+        let events = delta_project(&mut state, &outcome);
+        state.publish(publication(events)).unwrap();
+        state.take_outbox(owner, 8, 1_048_576).unwrap();
+        let old = Event::BlockChanges(
+            mornlea_domain::BlockChanges::try_new(mornlea_domain::BlockChangesParts {
+                dimension: Dimension::OVERWORLD,
+                chunk: ChunkPos::new(0, 0),
+                base_revision: 8,
+                new_revision: 9,
+                changes: vec![].into_boxed_slice(),
+            })
+            .unwrap(),
+        );
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(owner.get()),
+                old.clone(),
+            )]))
+            .unwrap();
+        assert_eq!(
+            state.take_outbox(owner, 8, 1_048_576).unwrap(),
+            vec![frame(&old)]
+        );
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 10);
     }
 }
