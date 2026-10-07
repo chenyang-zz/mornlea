@@ -48,7 +48,7 @@ pub(crate) struct SessionView {
     pub(crate) visible_passives: BTreeSet<PassiveId>,
     /// Complete projectile identity batches admitted to this session's FIFO.
     pub(crate) visible_projectiles: BTreeSet<ProjectileId>,
-    /// Last emitted dropped-stack wire values. Authority-only age and pickup
+    /// Complete FIFO-admitted dropped-stack wire values. Authority-only age and pickup
     /// timers never participate in this diff.
     pub(crate) visible_drops: BTreeMap<DropId, ItemDrop>,
     /// Last queue-admitted inventory wire value; grid and armor have separate intent.

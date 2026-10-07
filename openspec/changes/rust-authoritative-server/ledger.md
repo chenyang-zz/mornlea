@@ -3676,3 +3676,54 @@ Final runtime receipts:
 155 closing gates: audits4 PASS loge41c989bc138837d953b8eb87938435c8d6b1add51e0f414f61a7310e1fa68e6; strict128 PASS logfa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67. Protected dev9/archive2/frozen4/empty index PASS. Eighteen final receipts bind accepted parent and exact frozen source bytes. Independent final docs/exact8commit/immutable/durable local handoff pending; all-taskACTIVE/broadOPEN. Durable target /Users/chen/Documents/Codex/2026-10-04/task-12/runtime/source-projectile-queue-admission-20261007.
 
 155 root source self-review tightens transcript attribution: projectile fields are complete except ServerTick, while hostile fields are only ID/kind/position/health. Initial document identity retained; final four-document manifest rebound before review acceptance. Source4/all18gates unchanged.
+
+
+## 156 readiness and direct execution ruling
+
+Baseline accepted155 eaaae76a621840e7dd48ece90f8062a86fdb1615, clean after independent immutable SCOPED_PASS and verified60-original durable local handoff; all-task ACTIVE. Orphan check: sole status tasks.md, frontier ledger and untracked/mtimes inspected; no competing implementation owner. Root used brainstorming/writing-plans and project worker-planning checklist; all exact interfaces, eleven test oracles, source4/docs4 ownership, domain4096/wire32/physical32 bounds, failure precedence and rollback resolved before product. Pre-flight: no new shared parallel interface; one private frame carrier/consumer owner, all other source/runtime files read-only. Cargo derived consumers and raw evidence refresh belong to root, comment/language/full Rust gates close the same scope.
+
+Ruling: user selected full autonomous direct Codex work without Loom; continue serially in canonical checkout, no Claude/push/deploy/new worktree or redundant skill approval/state store. Evidence/review isolation remains read-only; reuse existing isolated agents because actual thread limit prevented fresh threads in prior round. Drop source census supplies checked physical/codec facts only; root authors decisions/tests/product. Prepared whole-value physical edits use DropState::new and preserve dirty; DropPatch/preload cannot change active durability. Certification copies actual encoded full value, not speculative desired state. Far physical block-index float reconstruction is a separate source-census/arithmetic finding, not an executed publication test or acceptance claim. READY only, no RED/GREEN/result yet. Architecture skill:no change; AOCI tools absent, no fabricated cognition/maintenance. Broad3.8/4.1/4.2 OPEN.
+
+156 Ruling before product: initial RED attempt log77daccbb5defcd58c812792071284406461f24458353db97f07037c50694f05a has one ChunkPos private-field compiler error, not causal evidence. Correct fixture to existing x() getter and rerun qualified RED; all assertions and product remain unchanged.
+
+156 qualified RED11 before product: log5161cb0dd6790a50daf8d1a4102d9585a68365f67b27b6922aeff258fce519b0,0passed/11failed/0ignored, all complete-value admission assertions, no compiler/fixture error. Exact test-bearing state sha07b304f5505291d9986080dafab46c02b3f2e77433665531e25069fa5aff4316 retained externally. Nine source causes plus saturated32+1 and manual target ownership all expose eager certification/missing receipt. Implement only resolved complete values/IDs post-encode and Queued consumer, removing eager map replacement; qualified tests unchanged.
+
+156 Ruling: full-rust stopped at Clippy collapsible_if, no test suite ran; cause is removal of eager insertion leaving nested constructor/diff guards. Exact equivalent let-chain merges those predicates, no new suppression/exemption. Systematic-debugging traced original diff/working let-chain pattern; original failure log665df195b3858d04a4930555d0df928a71b92d20f1875dde5a4df34f65306dd8 retained. Keep causal tests unchanged; source4 identity/review and all fifteen focused gates renewed, no reuse across changed source hashes.
+
+
+## 156 verified scoped implementation and final runtime gates
+
+QualifiedRED11/GREEN11 assertions and complete new test block remain byte-identical. First compiler-only x-field attempt and first full-stage Clippy failure are retained/excluded, with before-clippy source/review/fifteen-focused manifests preserved. Root's equivalent constructor/diff let-chain changes only projector source hash; fresh fifteen qualified gates and actual independent /root/passive_queue_census continued SCOPED_PASS bind final source4 RAW a2c9254482da634e678ba88bba8a8938c333545b7b48509ebf96cedf4638971e. Old GREEN binds unchanged state/guide/view only, not final projector. Actual drop-final-qualified11 supplies the new complete-source qualification.
+
+Final focused counts: drop11/projectile9/passive9/hostile8/companion7/remote7/publication192/prepared8(three actual factories/five doubles)/domain7/protocol15/native26/wire3/worldboundaries6/dropstore14/actualadapter1. Native drop rules use prepared worlds; real Memory/TCP adapters compare exact staged upsert, real walk pickup and prepared-aged expiry, not configured runtime composition. Full-rust-qualified PASS: formatting/Clippy and3906passed/76summaries(70nonempty6empty)/0failed0ignored/replay677,155.957s.
+
+Fresh native ABI build16.078s precedes all six Go race/count-one gates. Full-value durability helper1 is pure conversion/diff; physical publication5 are prepared consumers, leaving-interest case clears a physical slot rather than moving. Actual Host mining/flood/TCPselecteddrop restart3 pass: mining drop digest includes complete ID/BlockIndex/item/count but omits durability; flood compares BlockIndex/item/count and omits ID/generation/durability; selected command verifies debit, full normalized presentation and exact disk-reopen revision, excluding UpsertTick. General Host business1 is not full drop transcript. Protocol2/codec4 pass, including five-byte tool durability. All original Go50 plus additional25 source/fixture hashes unchanged. No native durability producer, far block-index fidelity, ordinary prepared population creation or configured Rust runtime is inferred.
+
+Root exclusively writes/integrates/owns inverse rollback; source census/review are readonly, reuse under actual thread limit recorded. No new directory/interface landing or version/ABI change. Scoped implementation verified; closing audits/strict/protection and independent final docs/immutable eight-path commit/durable handoff still pending. All-task ACTIVE, broad3.8/4.1/4.2 OPEN. Next independently qualify physical raw block-index publication through actual projector/codec/FIFO; actor foot-snapshot cuts, snapshotcount/bytes/distance and off-tickencoding, crosspeer timing/nonOverworld/config bootstrap-Agent/combineddurableshutdown/config/runtime/executable remain OPEN. Architecture skill:no change; queue ownership/domain-wire separation canonical. AOCI tools absent, no fabricated cognition/maintenance.
+
+Final runtime receipts (accepted parent plus frozen source bytes, not clean new-SHA rerun):
+- drop-final-qualified: PASS; logSHA256 dd6bc9d7989c7d25d05e8d4588c3835098aff3e2daa5b9c79d1d46e162655f24.
+- projectile-final-qualified: PASS; logSHA256 c2a2eb5df923f756b03989d1c475b379075dd571f3707ca34eeac0fff9cc65a2.
+- passive-final-qualified: PASS; logSHA256 46a9cadfb046f66709f4f70d2dbba9e2db7b5622cf01fbd8b9658bfd6f6f277a.
+- hostile-final-qualified: PASS; logSHA256 8c06aa2e64eaea8f2163d8fd1ebbe8713e5ca82560e1728e57f007e1ccbdd5de.
+- companion-final-qualified: PASS; logSHA256 66b682f53d49d303146a725fe951bb1e6425eef006ba3b1dddf7476ddc34a9f3.
+- remote-final-qualified: PASS; logSHA256 c254ed52286459c3b18922e834bca3b8d25ac2a1daea3e711bee3ae8d34838b8.
+- projection-final-qualified: PASS; logSHA256 f1a0820704d15428c7b506f277e61e00906a0d5527f829fe966b77bf446c64e3.
+- prepared-final-qualified: PASS; logSHA256 11f159007563c649c30370318718382209868d0715379d6f13249a9d8018500f.
+- domain-drop-final-qualified: PASS; logSHA256 bbb7ee511e735ee31bf0ecc43522a97d49de3b964a08026b9afd57b1aa59ffea.
+- protocol-drop-final-qualified: PASS; logSHA256 0ccf0dd4e132208e75fcb66242f715b4a73d7e1a1ffb348fde8ab9ad32a0e184.
+- native-drop-final-qualified: PASS; logSHA256 b2fea6ae56c5302005c2564ba2453783b02fc4e770c7de7098b5392debdb2e11.
+- wire-drop-final-qualified: PASS; logSHA256 9594510f68ebda42d96b55fa7d075e7525f79411bde9a0f90de7a984f24a23be.
+- world-boundaries-final-qualified: PASS; logSHA256 901f20c3431e0c75e3f4308341446da7ce0b4efae25220fb25ae106fcdb2c89d.
+- drop-store-final-qualified: PASS; logSHA256 868459c4636893378f7e31fe646cb0e45efce871119e6a8e5ee04972470575a5.
+- adapter-drop-final-qualified: PASS; logSHA256 1f0dcb1738c23604362c2adfabb7754008464617e849147959965f2f68a89d27.
+- full-rust-qualified: PASS; logSHA256 06d036ef826c3f73c226c291b99973c3b71e6772b7b23fd5ec316aedae1242fd.
+- native-build: PASS; logSHA256 fdc3f0b6c070c4ff7163daaaeeb3746f264c02c057a2458d9297baaef191d82b.
+- source-drop-value-control: PASS; logSHA256 9995e9905deac6c6bcfa6a78eb383fcfa7a5dc6dd4a6d87765a29b2e92d188cb.
+- source-drop-controls: PASS; logSHA256 dd96fc37c101008d51e8aa06c47362495f52f3bc091963ca012d7aaa3fdbb9fa.
+- source-drop-memory-tcp-restart-controls: PASS; logSHA256 b5a10618e6fc34cc9ca5eabe7220d25cd38844a7162a6d96136d8958640eca0c.
+- source-memory-tcp-control: PASS; logSHA256 553e53377c1f110a686a738cbd154bd445650042b281d855b2ac6e374e436f1b.
+- source-drop-protocol-controls: PASS; logSHA256 552f8ba2f4c01bb412899b680a9dc65991a9470b077960cd764932d1b18763c5.
+- source-drop-codec-controls: PASS; logSHA256 dc4e0474b9a46a40ebac6f90a2feaeb7fa13a6b66bc68797ccbdd89b9fb780d8.
+
+156 closing audits4 PASS logedd1679233fcf157ba0cfd747d303885d444c557c9ba6488808b168c81ddef7a; strict128 PASS logfa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67. Protecteddev9/archive2/frozen4/emptyindex PASS. All25 final receipts bind final source4; first compiler attempt and first Clippy full failure plus superseded15 focused are not acceptance gates. Independent final docs/immutable exact8paths/scoped commit/durable localhandoff pending; ACTIVE/whole3.8/4.1/4.2 OPEN.

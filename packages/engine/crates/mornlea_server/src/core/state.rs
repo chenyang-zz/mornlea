@@ -2442,6 +2442,16 @@ impl AuthorityState {
             return;
         };
         match mirror {
+            QueuedPublicationMirror::ItemDropUpserts(batch) => {
+                for value in batch.values.into_iter().take(usize::from(batch.count)) {
+                    view.visible_drops.insert(value.id(), value);
+                }
+            }
+            QueuedPublicationMirror::ItemDropRemoves(batch) => {
+                for id in batch.ids.into_iter().take(usize::from(batch.count)) {
+                    view.visible_drops.remove(&id);
+                }
+            }
             QueuedPublicationMirror::ProjectileSpawn(batch) => {
                 for id in batch.ids.into_iter().take(usize::from(batch.count)) {
                     view.visible_projectiles.insert(id);
@@ -3407,10 +3417,64 @@ impl<const N: usize> QueuedProjectileIds<N> {
     }
 }
 
+/// Full drop values certify the exact encoded stack, including durability.
+/// Unused checked tail copies never participate in the admission prefix.
+#[derive(Clone, Copy)]
+struct QueuedDropValues<const N: usize> {
+    values: [mornlea_domain::ItemDrop; N],
+    count: u8,
+}
+
+impl<const N: usize> QueuedDropValues<N> {
+    fn from_values(mut values: impl Iterator<Item = mornlea_domain::ItemDrop>) -> Option<Self> {
+        if N == 0 {
+            return None;
+        }
+        let first = values.next()?;
+        let mut copied = Self {
+            values: [first; N],
+            count: 1,
+        };
+        for value in values {
+            *copied.values.get_mut(usize::from(copied.count))? = value;
+            copied.count = copied.count.checked_add(1)?;
+        }
+        Some(copied)
+    }
+}
+
+/// Removal receipts retain physical slot identity without lifecycle ownership.
+/// The complete checked prefix uses the narrower packet cap.
+#[derive(Clone, Copy)]
+struct QueuedDropIds<const N: usize> {
+    ids: [mornlea_domain::DropId; N],
+    count: u8,
+}
+
+impl<const N: usize> QueuedDropIds<N> {
+    fn from_ids(mut ids: impl Iterator<Item = mornlea_domain::DropId>) -> Option<Self> {
+        if N == 0 {
+            return None;
+        }
+        let first = ids.next()?;
+        let mut copied = Self {
+            ids: [first; N],
+            count: 1,
+        };
+        for id in ids {
+            *copied.ids.get_mut(usize::from(copied.count))? = id;
+            copied.count = copied.count.checked_add(1)?;
+        }
+        Some(copied)
+    }
+}
+
 /// Checked mirror metadata stays paired with its immutable encoded frame.
 /// Other publication mirrors retain their separate migration ownership.
 #[derive(Clone, Copy)]
 enum QueuedPublicationMirror {
+    ItemDropUpserts(QueuedDropValues<{ mornlea_protocol::MAX_ITEM_DROP_BATCH as usize }>),
+    ItemDropRemoves(QueuedDropIds<{ mornlea_protocol::MAX_ITEM_DROP_BATCH as usize }>),
     ProjectileSpawn(QueuedProjectileIds<{ mornlea_protocol::MAX_PROJECTILE_RECORDS as usize }>),
     ProjectileDespawn(QueuedProjectileIds<{ mornlea_protocol::MAX_PROJECTILE_RECORDS as usize }>),
     PassiveSpawn(QueuedPassiveIds<{ mornlea_protocol::MAX_PASSIVE_SPAWN_RECORDS as usize }>),
@@ -3440,6 +3504,14 @@ enum QueuedPublicationMirror {
 impl QueuedPublicationMirror {
     fn from_event(event: &mornlea_domain::Event, state: &AuthorityState) -> Option<Self> {
         match event {
+            // Conversion and encoding certify the complete wire batch; copy its
+            // values without borrowing physical slots or authority counters.
+            mornlea_domain::Event::ItemDropUpserts(value) => Some(Self::ItemDropUpserts(
+                QueuedDropValues::from_values(value.drops().iter().copied())?,
+            )),
+            mornlea_domain::Event::ItemDropRemoves(value) => Some(Self::ItemDropRemoves(
+                QueuedDropIds::from_ids(value.ids().iter().copied())?,
+            )),
             // Encoding already certifies the narrower wire cap. Copy the complete
             // checked prefix without body allocation or source-liveness policy.
             mornlea_domain::Event::HostileSpawn(value) => Some(Self::HostileSpawn(
@@ -21069,5 +21141,549 @@ mod owner_record_admission_tests {
                 .iter()
                 .all(|event| matches!(event.event(), Event::ProjectileState(_)))
         );
+    }
+
+    fn drop_key(id: mornlea_domain::DropId) -> ChunkKey {
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: id.chunk(),
+        }
+    }
+
+    fn drop_id(ordinal: usize) -> mornlea_domain::DropId {
+        mornlea_domain::DropId::try_new(
+            0,
+            ChunkPos::new((ordinal / 32) as i32, 0),
+            (ordinal % 32) as u8,
+            1,
+        )
+        .unwrap()
+    }
+
+    fn drop_value(id: mornlea_domain::DropId, durability: u16) -> mornlea_domain::ItemDrop {
+        mornlea_domain::ItemDrop::try_new(mornlea_domain::ItemDropParts {
+            id,
+            block_index: 32_775,
+            stack: mornlea_domain::ItemStack::try_new(
+                mornlea_protocol::ITEM_STONE_PICKAXE,
+                1,
+                durability,
+            )
+            .unwrap(),
+        })
+        .unwrap()
+    }
+
+    fn drop_seed(state: &mut AuthorityState, id: mornlea_domain::DropId) {
+        let mut context = TickContext::for_tick(state, TickBudget::full());
+        context.preload_drop(DropRecord {
+            id,
+            position: FiniteVec3::try_new([id.chunk().x() as f32 * 16.0 + 7.5, 64.5, 0.5]).unwrap(),
+            stack: mornlea_storage::ItemStack {
+                item: mornlea_protocol::ITEM_STONE_PICKAXE,
+                count: 1,
+                durability: 73,
+            },
+            pickup_delay: 200,
+            age: 0,
+        });
+        context.commit_carried();
+    }
+
+    fn drop_fixture(
+        outbox: usize,
+        count: usize,
+    ) -> (
+        AuthorityState,
+        Vec<SessionKey>,
+        Vec<mornlea_domain::ItemDrop>,
+    ) {
+        let (mut state, sessions) = remote_fixture(outbox);
+        if count > 32 {
+            let (_, _, _, mut chunk) = state
+                .residents
+                .ready_snapshot()
+                .into_iter()
+                .find(|record| record.0 == snapshot_key())
+                .unwrap();
+            chunk.drops.fill(Default::default());
+            let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+            context.preload_ready_chunk(
+                ReadyChunk::try_new(drop_key(drop_id(32)), 1, 9, chunk).unwrap(),
+            );
+            context.commit_carried();
+        }
+        let values: Vec<_> = (0..count)
+            .map(|ordinal| drop_value(drop_id(ordinal), 73))
+            .collect();
+        for value in &values {
+            drop_seed(&mut state, value.id());
+        }
+        (state, sessions, values)
+    }
+
+    fn drop_edit(
+        state: &mut AuthorityState,
+        id: mornlea_domain::DropId,
+        edit: impl FnOnce(&mut mornlea_storage::DropSlot),
+    ) {
+        // Prepared physical inputs preserve the canonical refresh and existing dirty owner.
+        let key = drop_key(id);
+        let previous = &state.residents.drops[&key];
+        let mut slots = previous.slots;
+        let dirty = previous.dirty;
+        edit(&mut slots[usize::from(id.slot())]);
+        let mut replacement = DropState::new(key, slots);
+        replacement.dirty = dirty;
+        state.residents.drops.insert(key, replacement);
+    }
+
+    fn drop_remove(state: &mut AuthorityState, id: mornlea_domain::DropId) {
+        drop_edit(state, id, |slot| {
+            *slot = mornlea_storage::DropSlot {
+                generation: slot.generation,
+                ..Default::default()
+            }
+        });
+        assert_eq!(
+            state.residents.drops[&drop_key(id)].slots[usize::from(id.slot())].generation,
+            id.generation()
+        );
+    }
+
+    fn drop_project(state: &mut AuthorityState) -> Vec<RoutedEvent> {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches.clear();
+        state
+            .project_tick_publication(0, &outcome)
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event.event(),
+                    Event::ItemDropUpserts(_) | Event::ItemDropRemoves(_)
+                )
+            })
+            .collect()
+    }
+
+    fn drop_book(state: &AuthorityState, session: SessionKey, values: &[mornlea_domain::ItemDrop]) {
+        assert_eq!(
+            state.session_views[&session].visible_drops,
+            values
+                .iter()
+                .map(|value| (value.id(), *value))
+                .collect::<BTreeMap<_, _>>(),
+            "complete drop values must reflect actual FIFO admission"
+        );
+    }
+
+    fn drop_upserts(values: &[mornlea_domain::ItemDrop]) -> Event {
+        Event::ItemDropUpserts(
+            mornlea_domain::ItemDropUpserts::try_new(mornlea_domain::ItemDropUpsertsParts {
+                server_tick: 0,
+                drops: values.to_vec().into_boxed_slice(),
+            })
+            .unwrap(),
+        )
+    }
+
+    fn drop_removes(values: &[mornlea_domain::ItemDrop]) -> Event {
+        Event::ItemDropRemoves(
+            mornlea_domain::ItemDropRemoves::try_new(mornlea_domain::ItemDropRemovesParts {
+                server_tick: 0,
+                ids: values
+                    .iter()
+                    .map(|value| value.id())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            })
+            .unwrap(),
+        )
+    }
+
+    fn drop_queue(
+        state: &mut AuthorityState,
+        sessions: &[SessionKey],
+        events: Vec<RoutedEvent>,
+        values: &[mornlea_domain::ItemDrop],
+    ) {
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            drop_book(state, *session, values);
+        }
+    }
+
+    fn drop_initial(
+        state: &mut AuthorityState,
+        sessions: &[SessionKey],
+        values: &[mornlea_domain::ItemDrop],
+    ) {
+        let events = drop_project(state);
+        assert_eq!(events.len(), sessions.len());
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event() == &drop_upserts(values))
+        );
+        drop_queue(state, sessions, events, values);
+        assert!(drop_project(state).is_empty());
+    }
+
+    #[test]
+    fn drop_admission_projection_then_queued() {
+        let (mut state, sessions, values) = drop_fixture(512, 2);
+        let events = drop_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event() == &drop_upserts(&values))
+        );
+        for session in &sessions {
+            drop_book(&state, *session, &[]);
+        }
+        assert_eq!(drop_project(&mut state), events);
+        drop_queue(&mut state, &sessions, events, &values);
+        assert!(drop_project(&mut state).is_empty());
+    }
+
+    #[test]
+    fn drop_admission_closed_owner_and_peer() {
+        let (mut state, sessions, values) = drop_fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let events = drop_project(&mut state);
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        drop_book(&state, owner, &[]);
+        drop_book(&state, peer, &values);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        let next = drop_project(&mut state);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].recipient(), EventRecipient::Session(owner.get()));
+        assert_eq!(next[0].event(), &drop_upserts(&values));
+    }
+
+    #[test]
+    fn drop_admission_durability_change_and_counter_quiet() {
+        let (mut state, sessions, values) = drop_fixture(512, 1);
+        drop_initial(&mut state, &sessions, &values);
+        drop_edit(&mut state, values[0].id(), |slot| {
+            slot.age_ticks = 1;
+            slot.pickup_delay_ticks = 199;
+        });
+        assert!(drop_project(&mut state).is_empty());
+        drop_edit(&mut state, values[0].id(), |slot| {
+            slot.stack.durability = 72
+        });
+        let changed = [drop_value(values[0].id(), 72)];
+        let events = drop_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event() == &drop_upserts(&changed))
+        );
+        for session in &sessions {
+            drop_book(&state, *session, &values);
+        }
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        let mut refused = events.clone();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            drop_book(&state, *session, &values);
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(drop_project(&mut state), events);
+        drop_queue(&mut state, &sessions, events, &changed);
+        assert!(drop_project(&mut state).is_empty());
+    }
+
+    #[test]
+    fn drop_admission_late_preflight_atomic() {
+        let (mut state, sessions, values) = drop_fixture(512, 2);
+        let events = drop_project(&mut state);
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        let mut refused = events.clone();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            drop_book(&state, *session, &[]);
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(drop_project(&mut state), events);
+        drop_queue(&mut state, &sessions, events, &values);
+    }
+
+    #[test]
+    fn drop_admission_removal_preflight_retry() {
+        let (mut state, sessions, values) = drop_fixture(512, 2);
+        drop_initial(&mut state, &sessions, &values);
+        for value in &values {
+            drop_remove(&mut state, value.id());
+        }
+        let events = drop_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event() == &drop_removes(&values))
+        );
+        for session in &sessions {
+            drop_book(&state, *session, &values);
+        }
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        let mut refused = events.clone();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        assert_eq!(drop_project(&mut state), events);
+        drop_queue(&mut state, &sessions, events, &[]);
+        assert!(drop_project(&mut state).is_empty());
+    }
+
+    fn drop_replacement(
+        state: &mut AuthorityState,
+        old: mornlea_domain::ItemDrop,
+    ) -> mornlea_domain::ItemDrop {
+        drop_remove(state, old.id());
+        let next = drop_value(drop_id(1), 73);
+        drop_seed(state, next.id());
+        next
+    }
+
+    #[test]
+    fn drop_admission_removes_before_new_upserts() {
+        let (mut state, sessions, values) = drop_fixture(512, 1);
+        drop_initial(&mut state, &sessions, &values);
+        let next = drop_replacement(&mut state, values[0]);
+        let events = drop_project(&mut state);
+        assert_eq!(events.len(), 4);
+        for session in &sessions {
+            let owned: Vec<_> = events
+                .iter()
+                .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+                .map(|event| event.event())
+                .collect();
+            assert_eq!(owned, vec![&drop_removes(&values), &drop_upserts(&[next])]);
+            drop_book(&state, *session, &values);
+        }
+        drop_queue(&mut state, &sessions, events, &[next]);
+        assert!(drop_project(&mut state).is_empty());
+    }
+
+    #[test]
+    fn drop_admission_saturated_prefix_peer() {
+        let (mut state, sessions, values) = drop_fixture(1, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let prefix = marker_rejection(owner, 1);
+        state.publish(publication(vec![prefix.clone()])).unwrap();
+        let events = drop_project(&mut state);
+        for session in &sessions {
+            drop_book(&state, *session, &[]);
+        }
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(
+            state.take_outbox(owner, 512, 2_097_152).unwrap(),
+            vec![frame(prefix.event())]
+        );
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        drop_book(&state, peer, &values);
+        assert!(drop_project(&mut state).is_empty());
+    }
+
+    #[test]
+    fn drop_admission_saturated_removal_prefix_peer() {
+        let (mut state, sessions, values) = drop_fixture(2, 1);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        drop_initial(&mut state, &sessions, &values);
+        let next = drop_replacement(&mut state, values[0]);
+        let prefix = marker_rejection(owner, 1);
+        state.publish(publication(vec![prefix.clone()])).unwrap();
+        let events = drop_project(&mut state);
+        assert_eq!(events.len(), 4);
+        for session in &sessions {
+            drop_book(&state, *session, &values);
+        }
+        let expected = companion_frames(&events, peer);
+        let departure = events
+            .iter()
+            .find(|event| {
+                event.recipient() == EventRecipient::Session(owner.get())
+                    && matches!(event.event(), Event::ItemDropRemoves(_))
+            })
+            .unwrap();
+        let retained = vec![frame(prefix.event()), frame(departure.event())];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(state.take_outbox(owner, 512, 2_097_152).unwrap(), retained);
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        drop_book(&state, peer, &[next]);
+        assert!(drop_project(&mut state).is_empty());
+    }
+
+    #[test]
+    fn drop_admission_maximum_batch_and_packet_preflight() {
+        let (mut state, sessions, values) = drop_fixture(512, 32);
+        let events = drop_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event() == &drop_upserts(&values))
+        );
+        for session in &sessions {
+            drop_book(&state, *session, &[]);
+        }
+        let mut oversized = values.clone();
+        oversized.push(drop_value(drop_id(32), 73));
+        for invalid in [drop_upserts(&oversized), drop_removes(&oversized)] {
+            let mut refused = events.clone();
+            refused.push(RoutedEvent::new(
+                EventRecipient::Session(sessions[0].get()),
+                invalid,
+            ));
+            assert_eq!(
+                state.publish(publication(refused)),
+                Err(ServerError::InvalidInput { field: "packet" })
+            );
+            for session in &sessions {
+                drop_book(&state, *session, &[]);
+                assert!(
+                    state
+                        .take_outbox(*session, 512, 2_097_152)
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+        }
+        assert_eq!(drop_project(&mut state), events);
+        drop_queue(&mut state, &sessions, events, &values);
+        for value in &values {
+            drop_remove(&mut state, value.id());
+        }
+        let events = drop_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event() == &drop_removes(&values))
+        );
+        for session in &sessions {
+            drop_book(&state, *session, &values);
+        }
+        drop_queue(&mut state, &sessions, events, &[]);
+        assert!(drop_project(&mut state).is_empty());
+    }
+
+    #[test]
+    fn drop_admission_targeted_and_broadcast_ownership() {
+        let (mut state, sessions, values) = drop_fixture(512, 2);
+        // Manual frames qualify receipt ownership separately from physical production.
+        let event = drop_upserts(&values);
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Broadcast,
+                event.clone(),
+            )]))
+            .unwrap();
+        for session in &sessions {
+            drop_book(&state, *session, &[]);
+            assert_eq!(
+                state.take_outbox(*session, 512, 2_097_152).unwrap(),
+                vec![frame(&event)]
+            );
+        }
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(sessions[0].get()),
+                event.clone(),
+            )]))
+            .unwrap();
+        drop_book(&state, sessions[0], &values);
+        drop_book(&state, sessions[1], &[]);
+        assert_eq!(
+            state.take_outbox(sessions[0], 512, 2_097_152).unwrap(),
+            vec![frame(&event)]
+        );
+        assert!(
+            state
+                .take_outbox(sessions[1], 512, 2_097_152)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn drop_admission_two_batches_saturated_prefix_peer() {
+        let (mut state, sessions, values) = drop_fixture(2, 33);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let second = drop_key(drop_id(32));
+        for session in &sessions {
+            assert!(
+                !state.session_views[session]
+                    .chunks
+                    .get(&second)
+                    .is_some_and(|entry| entry.snapshot_sent)
+            );
+        }
+        let prefix = marker_rejection(owner, 1);
+        state.publish(publication(vec![prefix.clone()])).unwrap();
+        let events = drop_project(&mut state);
+        assert_eq!(events.len(), 4);
+        for session in &sessions {
+            let owned: Vec<_> = events
+                .iter()
+                .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+                .map(|event| event.event())
+                .collect();
+            assert_eq!(
+                owned,
+                vec![&drop_upserts(&values[..32]), &drop_upserts(&values[32..])]
+            );
+            drop_book(&state, *session, &[]);
+        }
+        let expected = companion_frames(&events, peer);
+        let first = events
+            .iter()
+            .find(|event| event.recipient() == EventRecipient::Session(owner.get()))
+            .unwrap();
+        let retained = vec![frame(prefix.event()), frame(first.event())];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(state.take_outbox(owner, 512, 2_097_152).unwrap(), retained);
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        drop_book(&state, peer, &values);
+        assert!(drop_project(&mut state).is_empty());
     }
 }

@@ -298,6 +298,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.7l3qps Implement complete passive spawn/despawn queue membership with unchanged Died/Vanished source reasons; follow [private plan](plans/154-source-passive-queue-admission.md), RED9/GREEN9, provider and scoped closing gates.
 - [x] 3.7l3qpj Implement complete projectile queue membership under exported128 wire cap; follow [private plan](plans/155-source-projectile-queue-admission.md), RED9/GREEN9, native/source controls and scoped closing gates.
 
+- [x] 3.7l3qdp Implement complete drop wire-value/removal queue admission under exported32 frame cap; follow [private plan](plans/156-source-drop-queue-admission.md), RED11/GREEN11 and real-provider/scoped closing evidence.
+
 ## 4. Closeout
 
 

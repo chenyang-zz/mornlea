@@ -1400,7 +1400,6 @@ fn emit_drops(
     for ((observer, view), visibility) in
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
-        let mut published = BTreeMap::new();
         let mut upserts = Vec::new();
         for record in drops {
             if !visibility.drops.contains(&record.id) {
@@ -1416,11 +1415,9 @@ fn emit_drops(
                 id: record.id,
                 block_index: mornlea_domain::chunk_block_index(cell),
                 stack: domain_stack(record.stack),
-            }) {
-                if view.visible_drops.get(&record.id) != Some(&drop) {
-                    upserts.push(drop);
-                }
-                published.insert(record.id, drop);
+            }) && view.visible_drops.get(&record.id) != Some(&drop)
+            {
+                upserts.push(drop);
             }
         }
         upserts.sort_by_key(|drop| drop.id());
@@ -1452,7 +1449,6 @@ fn emit_drops(
                 ));
             }
         }
-        view.visible_drops = published;
     }
 }
 
