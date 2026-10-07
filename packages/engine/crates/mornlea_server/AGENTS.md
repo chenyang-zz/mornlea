@@ -1336,3 +1336,5 @@ session key. A same-identity session replacement despawns the old incarnation
 before spawning the new one; survivor states require both values to match and
 exclude the replacement on its spawn tick. This private map retains the current
 projection ownership pending separate queue-admission acceptance.
+
+Full snapshot mirrors advance only after the exact encoded frame enters the recipient FIFO. Projection records desired resyncs and uses a same-pass emitted-key set to suppress duplicate first/resync snapshots and covered deltas; this set is not an admission receipt. Closed or failed-preflight snapshots retain retryable unsent/current-revision state; revision-gap desired resync survives the transient tick outcome until an admitted full frame clears it. Unready desired requests and Forget cleanup retain source ownership. Contiguous delta mirrors, actor visibility/mirrors and automatic off-tick encoding remain separate migration boundaries. Snapshot metadata contains only chunk key/revision alongside the existing boxed record metadata, never a cloned chunk body.

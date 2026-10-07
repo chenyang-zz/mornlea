@@ -284,6 +284,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3rri Distinguish same-UUID remote session replacement and preserve despawn/spawn/survivor ordering ([packet](plans/147-source-remote-reconnect-identity.md)). Other actor/queue/runtime work and broad3.8/4.1/4.2 OPEN.
 
+- [x] 3.7l3qsa Advance full snapshot mirrors only after actual queue admission ([packet](plans/148-source-snapshot-admission.md)). Delta/actor/encoding/runtime and broad3.8/4.1/4.2 OPEN.
+
 ## 4. Closeout
 
 

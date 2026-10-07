@@ -226,8 +226,15 @@ impl AuthorityState {
         let mut events = Vec::new();
         emit_despawns(&mut view_list, &observers, &visibilities, &mut events);
         emit_forgets(&mut view_list, &observers, &mut events);
-        emit_snapshots(&mut view_list, &observers, self, &mut events);
-        emit_block_batches(&mut view_list, &observers, self, outcome, &mut events);
+        let snapshots = emit_snapshots(&mut view_list, &observers, self, &mut events);
+        emit_block_batches(
+            &mut view_list,
+            &observers,
+            self,
+            outcome,
+            &snapshots,
+            &mut events,
+        );
         let configured_names = self.configured_chat_names();
         emit_companions(
             &mut view_list,
@@ -778,7 +785,8 @@ fn emit_snapshots(
     observers: &[Observer],
     state: &AuthorityState,
     events: &mut Vec<RoutedEvent>,
-) {
+) -> BTreeSet<(SessionKey, ChunkKey)> {
+    let mut emitted = BTreeSet::new();
     for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
         let flagged: Vec<ChunkKey> = view
             .chunks
@@ -788,14 +796,15 @@ fn emit_snapshots(
             .collect();
         for key in flagged {
             if let Some(entry) = view.chunks.get_mut(&key) {
-                entry.resync_queued = false;
                 if let Some(snapshot) = state.chunk_snapshot_event(key) {
-                    entry.snapshot_sent = true;
-                    entry.last_revision = snapshot.revision();
+                    emitted.insert((observer.session, key));
                     events.push(RoutedEvent::new(
                         EventRecipient::Session(observer.session.get()),
                         Event::ChunkSnapshot(snapshot),
                     ));
+                } else {
+                    // An unavailable desired request is discarded as in the source owner.
+                    entry.resync_queued = false;
                 }
             }
         }
@@ -807,25 +816,25 @@ fn emit_snapshots(
             .iter()
             .copied()
             .filter(|key| {
-                !view
-                    .chunks
-                    .get(key)
-                    .is_some_and(|entry| entry.snapshot_sent)
+                !emitted.contains(&(observer.session, *key))
+                    && !view
+                        .chunks
+                        .get(key)
+                        .is_some_and(|entry| entry.snapshot_sent)
             })
             .collect();
         for key in pending {
             let Some(snapshot) = state.chunk_snapshot_event(key) else {
                 continue;
             };
-            let entry = view.chunks.entry(key).or_default();
-            entry.snapshot_sent = true;
-            entry.last_revision = snapshot.revision();
+            emitted.insert((observer.session, key));
             events.push(RoutedEvent::new(
                 EventRecipient::Session(observer.session.get()),
                 Event::ChunkSnapshot(snapshot),
             ));
         }
     }
+    emitted
 }
 
 /// Per-session contiguous block deltas in ascending chunk order. A
@@ -836,11 +845,14 @@ fn emit_block_batches(
     observers: &[Observer],
     state: &AuthorityState,
     outcome: &TickOutcome,
+    snapshots: &BTreeSet<(SessionKey, ChunkKey)>,
     events: &mut Vec<RoutedEvent>,
 ) {
     for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
         for (key, base, new, changes) in &outcome.block_batches {
-            if !observer.wanted.contains(key) {
+            // A settled full capture already covers this pass's changes. The
+            // lookahead prevents duplicate DTOs without claiming FIFO admission.
+            if !observer.wanted.contains(key) || snapshots.contains(&(observer.session, *key)) {
                 continue;
             }
             let Some(entry) = view.chunks.get_mut(key) else {
@@ -869,7 +881,9 @@ fn emit_block_batches(
                     }
                 }
             } else if let Some(snapshot) = state.chunk_snapshot_event(*key) {
-                entry.last_revision = snapshot.revision();
+                // Keep the desired resync after this transient outcome disappears;
+                // only the admitted full frame may certify the new mirror revision.
+                entry.resync_queued = true;
                 events.push(RoutedEvent::new(
                     EventRecipient::Session(observer.session.get()),
                     Event::ChunkSnapshot(snapshot),

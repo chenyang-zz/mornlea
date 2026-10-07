@@ -18,18 +18,18 @@ use crate::contracts::{ChunkKey, SessionKey};
 /// One chunk column's publication state on a single session's mirror.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ChunkPublication {
-    /// Whether the session ever received a full snapshot for this column.
+    /// Whether the FIFO accepted a full snapshot for this column.
     pub(crate) snapshot_sent: bool,
-    /// The revision the session's mirror holds for this column.
+    /// The admitted snapshot revision; contiguous deltas still advance during projection.
     pub(crate) last_revision: u64,
-    /// A provider resync is waiting to re-send the full snapshot this tick.
+    /// A desired resync waits for its full snapshot to enter the FIFO.
     pub(crate) resync_queued: bool,
 }
 
 /// The previous tick's derived interest and published snapshots of one
-/// session. All fields are owned copies. Inventory and crafting mirrors advance
-/// only after the actual frame enters the FIFO; other families retain their
-/// current projection-owned migration behavior.
+/// session. All fields are owned copies. Inventory, crafting and full snapshots
+/// advance only after their exact frames enter the FIFO. Other families retain
+/// their current projection-owned migration behavior.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SessionView {
     /// This session's chunk interest as derived from its player actor.

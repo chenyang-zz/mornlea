@@ -2310,7 +2310,7 @@ impl AuthorityState {
                     pending.push(PendingFrame::One {
                         session,
                         frame,
-                        record: QueuedRecordMirror::from_event(event.event()).map(Box::new),
+                        mirror: QueuedPublicationMirror::from_event(event.event()).map(Box::new),
                     });
                 }
                 EventRecipient::Broadcast => pending.push(PendingFrame::Broadcast { frame }),
@@ -2326,7 +2326,7 @@ impl AuthorityState {
             pending.push(PendingFrame::One {
                 session: reply.session,
                 frame,
-                record: None,
+                mirror: None,
             });
         }
         let mut slow = Vec::new();
@@ -2335,11 +2335,11 @@ impl AuthorityState {
                 PendingFrame::One {
                     session,
                     frame,
-                    record,
+                    mirror,
                 } => match self.append_frame(session, frame) {
                     AppendOutcome::Queued => {
-                        if let Some(record) = record {
-                            self.accept_record_mirror(session, *record);
+                        if let Some(mirror) = mirror {
+                            self.accept_publication_mirror(session, *mirror);
                         }
                     }
                     AppendOutcome::Saturated => slow.push(session),
@@ -2389,16 +2389,22 @@ impl AuthorityState {
 
     /// The checked record belongs to the exact frame that the FIFO just accepted.
     /// Projection and byte preparation alone never certify a client observation.
-    fn accept_record_mirror(&mut self, session: SessionKey, record: QueuedRecordMirror) {
+    fn accept_publication_mirror(&mut self, session: SessionKey, mirror: QueuedPublicationMirror) {
         if !self.session_active(session) {
             return;
         }
         let Some(view) = self.session_views.get_mut(&session) else {
             return;
         };
-        match record {
-            QueuedRecordMirror::Inventory(inventory) => view.last_inventory = Some(inventory),
-            QueuedRecordMirror::Crafting(crafting) => {
+        match mirror {
+            QueuedPublicationMirror::ChunkSnapshot { key, revision } => {
+                let entry = view.chunks.entry(key).or_default();
+                entry.snapshot_sent = true;
+                entry.last_revision = revision;
+                entry.resync_queued = false;
+            }
+            QueuedPublicationMirror::Inventory(inventory) => view.last_inventory = Some(inventory),
+            QueuedPublicationMirror::Crafting(crafting) => {
                 let slots = std::array::from_fn(|index| {
                     let stack = crafting.slots()[index];
                     mornlea_storage::ItemStack {
@@ -3218,17 +3224,25 @@ enum AppendOutcome {
     Saturated,
 }
 
-/// Checked owner-record metadata stays paired with its immutable encoded frame.
+/// Checked scalar mirror metadata stays paired with its immutable encoded frame.
 /// Other publication mirrors retain their separate migration ownership.
 #[derive(Clone, Copy)]
-enum QueuedRecordMirror {
+enum QueuedPublicationMirror {
+    ChunkSnapshot { key: ChunkKey, revision: u64 },
     Inventory(mornlea_domain::InventoryState),
     Crafting(mornlea_domain::CraftingState),
 }
 
-impl QueuedRecordMirror {
+impl QueuedPublicationMirror {
     fn from_event(event: &mornlea_domain::Event) -> Option<Self> {
         match event {
+            mornlea_domain::Event::ChunkSnapshot(value) => Some(Self::ChunkSnapshot {
+                key: ChunkKey {
+                    dimension: value.dimension(),
+                    pos: value.chunk(),
+                },
+                revision: value.revision(),
+            }),
             mornlea_domain::Event::InventoryState(value) => Some(Self::Inventory(*value)),
             mornlea_domain::Event::CraftingState(value) => Some(Self::Crafting(*value)),
             _ => None,
@@ -3240,7 +3254,7 @@ enum PendingFrame {
     One {
         session: SessionKey,
         frame: PreparedFrame,
-        record: Option<Box<QueuedRecordMirror>>,
+        mirror: Option<Box<QueuedPublicationMirror>>,
     },
     Broadcast {
         frame: PreparedFrame,
@@ -17961,5 +17975,225 @@ mod owner_record_admission_tests {
         assert_eq!(state.take_outbox(owner, 8, 4096).unwrap(), expected);
         assert_eq!(state.take_outbox(peer, 8, 4096).unwrap().len(), 2);
         mirrors_match(&state, peer, inventory, crafting);
+    }
+
+    fn snapshot_key() -> ChunkKey {
+        ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(0, 0),
+        }
+    }
+
+    fn snapshot_fixture(outbox: usize, players: u8) -> (AuthorityState, Vec<SessionKey>) {
+        let (mut state, sessions) = fixture(outbox, players);
+        // Prepared Ready geometry isolates the real projection and FIFO consumers.
+        let chunk = Chunk {
+            sections: vec![
+                mornlea_storage::ContainerSnapshot {
+                    kind: mornlea_storage::StorageKind::Single,
+                    bits: 0,
+                    single: 0,
+                    palette: vec![],
+                    packed: vec![],
+                };
+                24
+            ],
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        };
+        let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+        context.preload_ready_chunk(ReadyChunk::try_new(snapshot_key(), 1, 9, chunk).unwrap());
+        context.commit_carried();
+        drop(context);
+        (state, sessions)
+    }
+
+    fn snapshot_project(
+        state: &mut AuthorityState,
+        resync: Option<SessionKey>,
+        gap: bool,
+    ) -> Vec<RoutedEvent> {
+        state
+            .project_tick_publication(
+                0,
+                &TickOutcome {
+                    block_batches: if gap {
+                        vec![(snapshot_key(), 8, 9, vec![])]
+                    } else {
+                        vec![]
+                    },
+                    resyncs: resync
+                        .map(|s| (s, Dimension::OVERWORLD, ChunkPos::new(0, 0)))
+                        .into_iter()
+                        .collect(),
+                    quiet_passive_removals: BTreeSet::new(),
+                    inventory_dirty: BTreeSet::new(),
+                    crafting_dirty: BTreeSet::new(),
+                },
+            )
+            .into_iter()
+            .filter(|e| matches!(e.event(), Event::ChunkSnapshot(_) | Event::BlockChanges(_)))
+            .collect()
+    }
+
+    fn chunk_mirror(
+        state: &AuthorityState,
+        session: SessionKey,
+    ) -> super::super::session_view::ChunkPublication {
+        state.session_views[&session].chunks[&snapshot_key()]
+    }
+
+    fn unsent(state: &AuthorityState, session: SessionKey) {
+        let entry = chunk_mirror(state, session);
+        assert!(
+            !entry.snapshot_sent,
+            "projection must not certify FIFO admission"
+        );
+        assert_eq!(entry.last_revision, 0);
+    }
+
+    fn sent(state: &AuthorityState, session: SessionKey) {
+        let entry = chunk_mirror(state, session);
+        assert!(entry.snapshot_sent);
+        assert_eq!(entry.last_revision, 9);
+        assert!(!entry.resync_queued);
+    }
+
+    #[test]
+    fn snapshot_admission_projection_then_queued() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let events = snapshot_project(&mut state, None, false);
+        assert_eq!(events.len(), 1);
+        unsent(&state, owner);
+        assert_eq!(snapshot_project(&mut state, None, false), events);
+        let expected = vec![frame(events[0].event())];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 8, 1_048_576).unwrap(), expected);
+        sent(&state, owner);
+        assert!(snapshot_project(&mut state, None, false).is_empty());
+    }
+
+    #[test]
+    fn snapshot_admission_closed_owner_and_peer() {
+        let (mut state, sessions) = snapshot_fixture(512, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let events = snapshot_project(&mut state, None, false);
+        assert_eq!(events.len(), 2);
+        let peer_frames: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(peer.get()))
+            .map(|e| frame(e.event()))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        assert!(state.take_outbox(owner, 8, 1_048_576).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 8, 1_048_576).unwrap(), peer_frames);
+        unsent(&state, owner);
+        sent(&state, peer);
+        let retry = snapshot_project(&mut state, None, false);
+        assert_eq!(retry.len(), 1);
+        assert_eq!(retry[0].recipient(), EventRecipient::Session(owner.get()));
+    }
+
+    #[test]
+    fn snapshot_admission_preflight_recipient_failure() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let mut events = snapshot_project(&mut state, None, false);
+        let original = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        events.push(RoutedEvent::new(
+            EventRecipient::Session(unknown.get()),
+            Event::CommandRejected(mornlea_domain::CommandRejection::new(
+                0,
+                RejectReason::InvalidInput,
+            )),
+        ));
+        assert_eq!(
+            state.publish(publication(events)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        assert!(state.take_outbox(owner, 8, 1_048_576).unwrap().is_empty());
+        unsent(&state, owner);
+        assert_eq!(snapshot_project(&mut state, None, false), original);
+    }
+
+    #[test]
+    fn snapshot_admission_resync_first_send_covers_same_tick_delta() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let events = snapshot_project(&mut state, Some(owner), true);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event(), Event::ChunkSnapshot(_)));
+        unsent(&state, owner);
+        assert!(chunk_mirror(&state, owner).resync_queued);
+        assert_eq!(snapshot_project(&mut state, None, true), events);
+        let expected = vec![frame(events[0].event())];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 8, 1_048_576).unwrap(), expected);
+        sent(&state, owner);
+        assert!(snapshot_project(&mut state, None, true).is_empty());
+    }
+
+    #[test]
+    fn snapshot_admission_gap_retains_resync_until_queued() {
+        let (mut state, sessions) = snapshot_fixture(512, 1);
+        let owner = sessions[0];
+        let initial = snapshot_project(&mut state, None, false);
+        state.publish(publication(initial)).unwrap();
+        state.take_outbox(owner, 8, 1_048_576).unwrap();
+        // A prepared stale mirror tests the gap consumer without inventing a producer.
+        state
+            .session_views
+            .get_mut(&owner)
+            .unwrap()
+            .chunks
+            .get_mut(&snapshot_key())
+            .unwrap()
+            .last_revision = 7;
+        let events = snapshot_project(&mut state, None, true);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event(), Event::ChunkSnapshot(_)));
+        assert_eq!(chunk_mirror(&state, owner).last_revision, 7);
+        assert!(chunk_mirror(&state, owner).resync_queued);
+        assert_eq!(snapshot_project(&mut state, None, false), events);
+        let expected = vec![frame(events[0].event())];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.take_outbox(owner, 8, 1_048_576).unwrap(), expected);
+        sent(&state, owner);
+        assert!(snapshot_project(&mut state, None, false).is_empty());
+    }
+
+    #[test]
+    fn snapshot_admission_saturated_prefix_isolates_peer() {
+        let (mut state, sessions) = snapshot_fixture(1, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let rejection = Event::CommandRejected(mornlea_domain::CommandRejection::new(
+            11,
+            RejectReason::InvalidInput,
+        ));
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(owner.get()),
+                rejection.clone(),
+            )]))
+            .unwrap();
+        let events = snapshot_project(&mut state, None, false);
+        let peer_frames: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(peer.get()))
+            .map(|e| frame(e.event()))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(
+            state.take_outbox(owner, 8, 1_048_576).unwrap(),
+            vec![frame(&rejection)]
+        );
+        assert_eq!(state.take_outbox(peer, 8, 1_048_576).unwrap(), peer_frames);
+        sent(&state, peer);
     }
 }
