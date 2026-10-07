@@ -29,6 +29,7 @@ use mornlea_domain::{
     RemotePlayerStatesParts, RoutedEvent,
 };
 
+use super::source_acquisition::SourceInputs;
 use crate::contracts::{
     ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, ChunkKey, ContainerSlots,
     InventoryRecord, ProjectileRecord, ServerError, SessionKey,
@@ -54,6 +55,8 @@ const FORGET_CHUNKS_CAP: usize = 4_096;
 /// the changes ordered by strictly increasing chunk block index; only chunks
 /// whose revision advances this tick enter the list.
 pub(crate) struct TickOutcome {
+    /// Mid-tick registered source subscriptions; raw phase fixtures have no capture.
+    pub(crate) source_inputs: Option<SourceInputs>,
     pub(crate) block_batches: Vec<(ChunkKey, u64, u64, Vec<BlockChange>)>,
     pub(crate) resyncs: Vec<(SessionKey, Dimension, ChunkPos)>,
     /// Tick-local quiet passive removals drained from the tick context:
@@ -105,9 +108,10 @@ struct VisibilityInputs<'a> {
 /// One observer's derived projection inputs for this tick.
 struct Observer {
     session: SessionKey,
-    /// Per-session wanted around the actor's foot chunk, empty without an
-    /// Active player actor or without an admitted session radius.
+    /// Captured registered subscription, or the legacy raw Active actor square.
     wanted: BTreeSet<ChunkKey>,
+    /// The same captured center orders snapshots even after a late death reset.
+    center: Option<ChunkKey>,
     /// Whether the session has an Active player actor this tick.
     has_actor: bool,
 }
@@ -182,29 +186,39 @@ impl AuthorityState {
         &mut self,
         tick: u64,
         outcome: &TickOutcome,
-    ) -> SourceProjection {
-        let invalidated_containers = self.invalidate_container_views();
+    ) -> Result<SourceProjection, ServerError> {
         let speakers = self.active_speakers();
         if speakers.is_empty() {
-            return SourceProjection {
+            return Ok(SourceProjection {
                 events: Vec::new(),
                 refused_sessions: Vec::new(),
                 before_snapshots: 0,
-            };
+            });
         }
         let actors = self.resident_actors().to_vec();
         let entities = classify_entities(&actors);
         let inventories = self.resident_inventories().clone();
         let projectiles = self.resident_projectiles().to_vec();
         let drops = source_drop_values(self, &actors, &entities, &speakers);
+        // Resolve hard subscription failures before transferring any recipient books.
+        let observers: Vec<Observer> = speakers
+            .iter()
+            .map(|speaker| {
+                observer_of(
+                    &actors,
+                    speaker,
+                    &entities,
+                    self.session_view_radius(speaker.session),
+                    outcome.source_inputs.as_ref(),
+                )
+            })
+            .collect::<Result<_, _>>()?;
+        let invalidated_containers = self.invalidate_container_views();
         let mut views = self.take_session_views();
-        let mut observers = Vec::with_capacity(speakers.len());
-        let mut view_list: Vec<SessionView> = Vec::with_capacity(speakers.len());
-        for speaker in &speakers {
-            let radius = self.session_view_radius(speaker.session);
-            observers.push(observer_of(&actors, speaker, &entities, radius));
-            view_list.push(views.remove(&speaker.session).unwrap_or_default());
-        }
+        let mut view_list: Vec<SessionView> = speakers
+            .iter()
+            .map(|speaker| views.remove(&speaker.session).unwrap_or_default())
+            .collect();
         let visibility_inputs = VisibilityInputs {
             actors: &actors,
             entities: &entities,
@@ -248,7 +262,7 @@ impl AuthorityState {
         let before_snapshots = events.len();
         let (deltas, refused_sessions) =
             classify_block_batches(&mut view_list, &observers, outcome);
-        let snapshots = emit_snapshots(&mut view_list, &observers, self, &actors, &mut events);
+        let snapshots = emit_snapshots(&mut view_list, &observers, self, &mut events);
         emit_block_batches(&observers, deltas, &snapshots, &mut events);
         // Selected snapshots precede every late actor frame for that recipient.
         // Only actual FIFO admission may turn this lookahead into observer history.
@@ -326,11 +340,11 @@ impl AuthorityState {
             views.insert(observer.session, view);
         }
         self.restore_session_views(views);
-        SourceProjection {
+        Ok(SourceProjection {
             events,
             refused_sessions,
             before_snapshots,
-        }
+        })
     }
 
     #[cfg(test)]
@@ -339,7 +353,9 @@ impl AuthorityState {
         tick: u64,
         outcome: &TickOutcome,
     ) -> Vec<RoutedEvent> {
-        let projection = self.project_source_publication(tick, outcome);
+        let projection = self
+            .project_source_publication(tick, outcome)
+            .expect("valid fixture subscription");
         assert!(
             projection.refused_sessions.is_empty(),
             "normal fixtures must not discard source refusals"
@@ -464,27 +480,38 @@ fn observer_of(
     speaker: &Speaker,
     entities: &Entities,
     radius: Option<u8>,
-) -> Observer {
-    let has_actor = entities.players.iter().any(|&index| {
+    captured: Option<&SourceInputs>,
+) -> Result<Observer, ServerError> {
+    let active = entities.players.iter().copied().find(|&index| {
         actors[index].key == ActorKey::Player(speaker.session)
             && actors[index].lifecycle == ActorLifecycle::Active
     });
-    let wanted = radius
-        .and_then(|radius| {
-            entities
-                .players
-                .iter()
-                .copied()
-                .find(|&index| actors[index].key == ActorKey::Player(speaker.session))
-                .filter(|&index| actors[index].lifecycle == ActorLifecycle::Active)
-                .map(|index| wanted_columns(&actors[index], radius))
-        })
-        .unwrap_or_default();
-    Observer {
+    let subscription = captured
+        .map(|inputs| inputs.player_subscription(speaker.session))
+        .transpose()?
+        .flatten();
+    let (center, wanted) = if let Some((center, wanted)) = subscription {
+        (Some(center), wanted)
+    } else {
+        // Unregistered raw fixtures retain their established Active actor basis.
+        let center = active.map(|index| {
+            position_chunk(
+                actors[index].dimension,
+                actors[index].motion.position().get(),
+            )
+        });
+        let wanted = active
+            .zip(radius)
+            .map(|(index, radius)| wanted_columns(&actors[index], radius))
+            .unwrap_or_default();
+        (center, wanted)
+    };
+    Ok(Observer {
         session: speaker.session,
         wanted,
-        has_actor,
-    }
+        center,
+        has_actor: active.is_some(),
+    })
 }
 
 /// Copies only physical Ready drop slots in the Active players' source interest.
@@ -864,16 +891,12 @@ fn emit_snapshots(
     view_list: &mut [SessionView],
     observers: &[Observer],
     state: &AuthorityState,
-    actors: &[ActorRecord],
     events: &mut Vec<RoutedEvent>,
 ) -> BTreeSet<(SessionKey, ChunkKey)> {
     let mut emitted = BTreeSet::new();
     let limits = state.limits();
     for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
-        let center = actors
-            .iter()
-            .find(|actor| actor.key == ActorKey::Player(observer.session))
-            .map(|actor| position_chunk(actor.dimension, actor.motion.position().get()));
+        let center = observer.center;
         let mut candidates: Vec<ChunkKey> = observer
             .wanted
             .iter()

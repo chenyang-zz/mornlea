@@ -326,7 +326,7 @@ fn reduce_tick_inner(
     // The publication families precede the private player observation and the
     // combat confirmations that close the tick.
     let provider_prefix = events.len();
-    let projected = state.project_source_publication(tick, &outcome);
+    let projected = state.project_source_publication(tick, &outcome)?;
     let before_snapshots = provider_prefix + projected.before_snapshots;
     events.extend(projected.events);
     events.extend(state.project_player_updates(tick));
@@ -523,9 +523,13 @@ fn dispatch_rows(
         source_player_restore::checkpoint_safe(source_players, context, session)?;
     }
     companions::run(context, batch_call(RulePhase::CompanionMotion))?;
-    if let Some(goals) = goals.as_deref_mut() {
-        goals.reconcile(context, source_players, source_companions)?;
-    }
+    // Keep refreshed subscriptions through late death; the next tick owns the new anchor.
+    let inputs = if let Some(goals) = goals.as_deref_mut() {
+        goals.reconcile(context, source_players, source_companions)?
+    } else {
+        context.source_inputs(source_players, source_companions)?
+    };
+    context.retain_publication_inputs(inputs);
     let plan = hostile_actions::plan(context)?;
     let melee = plan.melee_batch().clone();
     hostile_actions::apply(context, plan)?;

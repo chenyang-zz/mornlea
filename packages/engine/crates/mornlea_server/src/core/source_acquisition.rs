@@ -427,6 +427,37 @@ impl SourceInputs {
         Ok(Self { owners })
     }
 
+    /// One registered player's captured subscription, independent of other owners.
+    /// Geometry and count failures remain hard errors; no partial wanted set escapes.
+    pub(crate) fn player_subscription(
+        &self,
+        session: SessionKey,
+    ) -> Result<Option<(ChunkKey, BTreeSet<ChunkKey>)>, ServerError> {
+        let Some(owner) = self
+            .owners
+            .iter()
+            .find(|owner| owner.player && owner.actor == ActorKey::Player(session))
+        else {
+            return Ok(None);
+        };
+        let mut wanted = wanted_square(owner.dimension, owner.center, owner.radius)?;
+        wanted.extend(owner.pending.keys().copied());
+        if wanted.len() > MAX_SOURCE_KEYS {
+            return Err(ServerError::Capacity {
+                resource: Resource::ChunkWants,
+                limit: MAX_SOURCE_KEYS,
+                observed: wanted.len(),
+            });
+        }
+        Ok(Some((
+            ChunkKey {
+                dimension: owner.dimension,
+                pos: owner.center,
+            },
+            wanted,
+        )))
+    }
+
     /// The full whole-want union: every player or active owner contributes
     /// its own-dimension checked square, and every owner contributes its
     /// retained pending keys. One aggregate ceiling refuses overflow.
@@ -598,7 +629,7 @@ impl SourceGoals {
         context: &mut TickContext<'_>,
         players: &SourcePlayerBook,
         companions: &SourceCompanionBook,
-    ) -> Result<(), ServerError> {
+    ) -> Result<SourceInputs, ServerError> {
         let inputs = context.source_inputs(players, companions)?;
         let mut dirty = self.force || self.last_inputs.as_ref() != Some(&inputs);
         if !dirty {
@@ -657,7 +688,7 @@ impl SourceGoals {
                     _ => (),
                 }
             }
-            self.last_inputs = Some(inputs);
+            self.last_inputs = Some(inputs.clone());
             self.force = false;
         }
         for key in std::mem::take(&mut self.fresh_missing) {
@@ -677,7 +708,7 @@ impl SourceGoals {
                 self.enqueue(key);
             }
         }
-        Ok(())
+        Ok(inputs)
     }
 
     /// After the full reducer and publication: capture the final small
@@ -861,6 +892,128 @@ mod goals_tests {
             radius,
             pending: pending.iter().copied().collect(),
         }
+    }
+
+    #[test]
+    fn publication_subscription_scopes_one_player() {
+        let first = SessionKey::from_raw(1).unwrap();
+        let second = SessionKey::from_raw(2).unwrap();
+        let cross = key(Dimension::DEPTHS, 3, 0);
+        let mut other = player_owner(true, true, Dimension::OVERWORLD, (20, 0), 0, &[]);
+        other.actor = ActorKey::Player(second);
+        let mut companion = player_owner(false, true, Dimension::OVERWORLD, (30, 0), 1, &[]);
+        let mut bytes = [0; 16];
+        bytes[0] = 3;
+        bytes[6] = 64;
+        bytes[8] = 128;
+        companion.actor =
+            ActorKey::Companion(mornlea_domain::CompanionId::try_from_bytes(bytes).unwrap());
+        let inputs = SourceInputs {
+            owners: vec![
+                player_owner(true, false, Dimension::OVERWORLD, (2, 0), 1, &[(cross, 1)]),
+                other,
+                companion,
+            ],
+        };
+        let (center, wanted) = inputs.player_subscription(first).unwrap().unwrap();
+        assert_eq!(center, key(Dimension::OVERWORLD, 2, 0));
+        let expected: BTreeSet<_> = [
+            key(Dimension::OVERWORLD, 1, -1),
+            key(Dimension::OVERWORLD, 1, 0),
+            key(Dimension::OVERWORLD, 1, 1),
+            key(Dimension::OVERWORLD, 2, -1),
+            key(Dimension::OVERWORLD, 2, 0),
+            key(Dimension::OVERWORLD, 2, 1),
+            key(Dimension::OVERWORLD, 3, -1),
+            key(Dimension::OVERWORLD, 3, 0),
+            key(Dimension::OVERWORLD, 3, 1),
+            cross,
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(wanted, expected);
+        assert_eq!(
+            inputs.player_subscription(second).unwrap(),
+            Some((
+                key(Dimension::OVERWORLD, 20, 0),
+                [key(Dimension::OVERWORLD, 20, 0)].into_iter().collect()
+            ))
+        );
+        assert_eq!(
+            inputs
+                .player_subscription(SessionKey::from_raw(3).unwrap())
+                .unwrap(),
+            None
+        );
+        assert_eq!(inputs.wanted().unwrap().len(), 20);
+    }
+
+    #[test]
+    fn publication_subscription_checks_count_bound() {
+        let session = SessionKey::from_raw(1).unwrap();
+        let pending: Vec<_> = (0..89)
+            .map(|x| (key(Dimension::DEPTHS, x, 0), i64::from(x) * i64::from(x)))
+            .collect();
+        let bounded = SourceInputs {
+            owners: vec![player_owner(
+                true,
+                false,
+                Dimension::OVERWORLD,
+                (0, 0),
+                95,
+                &pending,
+            )],
+        };
+        let (center, wanted) = bounded.player_subscription(session).unwrap().unwrap();
+        assert_eq!(center, key(Dimension::OVERWORLD, 0, 0));
+        assert_eq!(wanted.len(), 36570);
+        assert!(wanted.contains(&key(Dimension::OVERWORLD, -95, -95)));
+        assert!(wanted.contains(&key(Dimension::OVERWORLD, 95, 95)));
+        assert!(wanted.contains(&key(Dimension::DEPTHS, 88, 0)));
+        let excessive = SourceInputs {
+            owners: vec![player_owner(
+                true,
+                true,
+                Dimension::OVERWORLD,
+                (0, 0),
+                96,
+                &[],
+            )],
+        };
+        assert_eq!(
+            excessive.player_subscription(session),
+            Err(ServerError::Capacity {
+                resource: Resource::ChunkWants,
+                limit: 36660,
+                observed: 37249,
+            })
+        );
+    }
+
+    #[test]
+    fn publication_subscription_checked_geometry() {
+        let inputs = SourceInputs {
+            owners: vec![player_owner(
+                true,
+                false,
+                Dimension::OVERWORLD,
+                (i32::MAX, 0),
+                1,
+                &[],
+            )],
+        };
+        assert_eq!(
+            inputs.player_subscription(SessionKey::from_raw(1).unwrap()),
+            Err(ServerError::InvalidInput {
+                field: "source_acquisition_geometry"
+            })
+        );
+        assert_eq!(
+            inputs
+                .player_subscription(SessionKey::from_raw(2).unwrap())
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

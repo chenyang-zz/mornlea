@@ -1406,3 +1406,5 @@ Membership remains queue-owned throughout. Saturation closes the FIFO before
 later frames, preserving the selected-snapshot prefix. Physical drops retain
 their independent radius-two Ready rule. Pending four-family observer
 subscriptions, native recovery and off-tick packing remain separate boundaries.
+
+Source publication retains bounded registered per-session subscription inputs immediately after player and companion motion, before late death/reset. Automatic acquisition supplies exactly its reconcile facts; ordinary/final reduction captures at the same phase without becoming a global goal writer. Pending terrain uses its own anchor square and retained cross-dimension keys; a late death keeps the earlier center until the next tick. Fallible geometry/count checks precede recipient view transfer. Raw Active fixtures keep their established fallback, and actor/drop/owner Active guards remain separate migration boundaries. Snapshot queue admission alone still advances sent history.

@@ -4259,6 +4259,8 @@ pub struct TickContext<'a> {
     /// Provider resync requests recorded during dispatch, drained by the
     /// tick-outcome capture before the carried commit.
     resync_lane: Vec<(SessionKey, Dimension, mornlea_domain::ChunkPos)>,
+    /// Subscription facts captured after motion, before late death can change the pose.
+    source_publication_inputs: Option<SourceInputs>,
     /// Tick-local quiet passive removals: identities the passive movement
     /// rule terminated below the world floor (or with a non-finite pose)
     /// this tick. Death settlement never marks this lane; the outcome capture
@@ -4861,6 +4863,7 @@ impl<'a> TickContext<'a> {
             damage_intents: Vec::new(),
             deferred: DeferredCommands::default(),
             resync_lane: Vec::new(),
+            source_publication_inputs: None,
             quiet_passive_removals: BTreeSet::new(),
             passive_snow_owned: [None; PASSIVE_SNOW_OWNED_SLOTS],
             charges: Vec::new(),
@@ -4985,12 +4988,18 @@ impl<'a> TickContext<'a> {
             block_batches.push((key, base, new, changes));
         }
         TickOutcome {
+            source_inputs: self.source_publication_inputs.take(),
             block_batches,
             resyncs: std::mem::take(&mut self.resync_lane),
             quiet_passive_removals: std::mem::take(&mut self.quiet_passive_removals),
             inventory_dirty: std::mem::take(&mut self.inventory_publication_dirty),
             crafting_dirty: std::mem::take(&mut self.crafting_publication_dirty),
         }
+    }
+
+    /// The serial reducer supplies one mid-tick capture, never settled replacement facts.
+    pub(crate) fn retain_publication_inputs(&mut self, inputs: SourceInputs) {
+        self.source_publication_inputs = Some(inputs);
     }
 
     /// Records accepted inventory intent only after successful owner settlement.
@@ -17180,6 +17189,146 @@ mod source_player_restore_tests {
             scans
         );
     }
+
+    fn subscription_snapshots(p: &TickPublication, session: SessionKey) -> Vec<ChunkKey> {
+        p.events
+            .iter()
+            .filter_map(|event| {
+                if event.recipient() != EventRecipient::Session(session.get()) {
+                    return None;
+                }
+                match event.event() {
+                    mornlea_domain::Event::ChunkSnapshot(snapshot) => Some(ChunkKey {
+                        dimension: snapshot.dimension(),
+                        pos: snapshot.chunk(),
+                    }),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    fn subscription_fifo(a: &mut AuthorityState, p: &TickPublication, session: SessionKey) {
+        let expected: Vec<_> = p
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(event.recipient(), EventRecipient::Broadcast)
+                    || event.recipient() == EventRecipient::Session(session.get())
+            })
+            .map(|event| {
+                PreparedFrame::encode(
+                    &mut ProtocolCodec::new().unwrap(),
+                    &ServerPacket::try_from(event.event().clone()).unwrap(),
+                )
+                .unwrap()
+                .as_bytes()
+                .to_vec()
+            })
+            .collect();
+        assert_eq!(a.take_outbox(session, 512, 1_048_576).unwrap(), expected);
+    }
+
+    #[test]
+    fn publication_subscription_pending_anchor_snapshots_before_activation() {
+        let (mut a, session) = fixture();
+        a.limits = a.limits.with_view_radius(1);
+        let anchor = key(Dimension::OVERWORLD, 2, 0);
+        offer(&mut a, anchor, 0);
+        let publication = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(player(&a, session).lifecycle, ActorLifecycle::Pending);
+        assert!(!local(&publication).ready());
+        assert_eq!(subscription_snapshots(&publication, session), vec![anchor]);
+        assert!(a.session_views[&session].chunks[&anchor].snapshot_sent);
+        assert!(a.session_views[&session].wanted.contains(&anchor));
+        assert_eq!(a.session_views[&session].last_inventory, None);
+        assert_eq!(a.session_views[&session].last_crafting, None);
+        subscription_fifo(&mut a, &publication, session);
+        let next = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(player(&a, session).lifecycle, ActorLifecycle::Pending);
+        assert!(subscription_snapshots(&next, session).is_empty());
+        subscription_fifo(&mut a, &next, session);
+    }
+
+    #[test]
+    fn publication_subscription_two_pending_sessions_keep_separate_views() {
+        let (mut a, first) = fixture();
+        a.limits = a.limits.with_view_radius(1);
+        a.metadata.spawn_anchor = mornlea_storage::MetadataChunkPos { x: 20, z: 0 };
+        let second = register(&mut a, 2, Some(saved(2)));
+        let keys = [
+            key(Dimension::OVERWORLD, 2, 0),
+            key(Dimension::OVERWORLD, 20, 0),
+        ];
+        for key in keys {
+            offer(&mut a, key, 0);
+        }
+        let mut wanted: BTreeSet<_> = a
+            .source_players
+            .entries
+            .values()
+            .flat_map(|entry| entry.restore.pending_keys())
+            .collect();
+        wanted.extend(keys);
+        a.replace_chunk_wants(wanted).unwrap();
+        let publication = a.advance_tick(TickBudget::full()).unwrap();
+        for (session, own, foreign) in [(first, keys[0], keys[1]), (second, keys[1], keys[0])] {
+            assert_eq!(player(&a, session).lifecycle, ActorLifecycle::Pending);
+            assert_eq!(subscription_snapshots(&publication, session), vec![own]);
+            let view = &a.session_views[&session];
+            assert!(view.chunks[&own].snapshot_sent);
+            assert!(!view.wanted.contains(&foreign));
+            assert!(!view.chunks.contains_key(&foreign));
+            subscription_fifo(&mut a, &publication, session);
+        }
+    }
+
+    #[test]
+    fn publication_subscription_late_death_keeps_mid_tick_center() {
+        let mut a = fresh();
+        a.limits = a.limits.with_view_radius(1);
+        a.metadata.spawn_anchor = mornlea_storage::MetadataChunkPos { x: 2, z: 0 };
+        a.enable_source_player_restoration(1).unwrap();
+        a.enable_live_chunks().unwrap();
+        let mut save = saved(1);
+        save.safe = None;
+        save.respawn_present = false;
+        let session = register(&mut a, 1, Some(save));
+        let keys = [
+            key(Dimension::OVERWORLD, 0, 0),
+            key(Dimension::OVERWORLD, 1, 0),
+            key(Dimension::OVERWORLD, 2, 0),
+        ];
+        offer(&mut a, keys[0], 0);
+        let initial = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(player(&a, session).lifecycle, ActorLifecycle::Active);
+        assert_eq!(subscription_snapshots(&initial, session), vec![keys[0]]);
+        subscription_fifo(&mut a, &initial, session);
+        offer(&mut a, keys[1], 0);
+        offer(&mut a, keys[2], 0);
+        a.replace_chunk_wants(keys.into_iter().collect()).unwrap();
+        // The checked survival cause enters the actual late source death reducer.
+        ctx_death_zero(&mut a, session);
+        let death = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(player(&a, session).lifecycle, ActorLifecycle::Pending);
+        assert!(!local(&death).ready());
+        assert!(!local(&death).reset());
+        assert_eq!(
+            player(&a, session).motion.position().get(),
+            [32.5, 321., 0.5]
+        );
+        assert_eq!(subscription_snapshots(&death, session), vec![keys[1]]);
+        assert!(a.session_views[&session].wanted.contains(&keys[0]));
+        assert!(!a.session_views[&session].wanted.contains(&keys[2]));
+        assert!(a.session_views[&session].chunks[&keys[0]].snapshot_sent);
+        subscription_fifo(&mut a, &death, session);
+        let next = a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(player(&a, session).lifecycle, ActorLifecycle::Pending);
+        assert_eq!(subscription_snapshots(&next, session), vec![keys[2]]);
+        assert!(!a.session_views[&session].wanted.contains(&keys[0]));
+        assert!(a.session_views[&session].chunks[&keys[2]].snapshot_sent);
+        subscription_fifo(&mut a, &next, session);
+    }
 }
 
 #[cfg(test)]
@@ -18029,6 +18178,7 @@ mod companion_chat_boundary_tests {
             ))
             .unwrap();
         let outcome = super::super::publication_project::TickOutcome {
+            source_inputs: None,
             block_batches: Vec::new(),
             resyncs: Vec::new(),
             quiet_passive_removals: BTreeSet::new(),
@@ -18151,6 +18301,7 @@ mod owner_record_admission_tests {
             .project_tick_publication(
                 0,
                 &TickOutcome {
+                    source_inputs: None,
                     block_batches: vec![],
                     resyncs: vec![],
                     quiet_passive_removals: BTreeSet::new(),
@@ -18399,6 +18550,7 @@ mod owner_record_admission_tests {
             .project_tick_publication(
                 0,
                 &TickOutcome {
+                    source_inputs: None,
                     block_batches: if gap {
                         vec![(snapshot_key(), 8, 9, vec![])]
                     } else {
@@ -18622,6 +18774,7 @@ mod owner_record_admission_tests {
     fn prepared_delta(changes: Vec<BlockChange>) -> TickOutcome {
         // Synthetic barrier/count inputs qualify consumers, not aggregate tick reachability.
         TickOutcome {
+            source_inputs: None,
             block_batches: vec![(snapshot_key(), 9, 10, changes)],
             resyncs: vec![],
             quiet_passive_removals: BTreeSet::new(),
@@ -18739,7 +18892,7 @@ mod owner_record_admission_tests {
         outcome: &TickOutcome,
         mut prefix: Vec<RoutedEvent>,
     ) {
-        let projection = state.project_source_publication(0, outcome);
+        let projection = state.project_source_publication(0, outcome).unwrap();
         let before = prefix.len() + projection.before_snapshots;
         prefix.extend(projection.events);
         state
