@@ -3727,3 +3727,46 @@ Final runtime receipts (accepted parent plus frozen source bytes, not clean new-
 - source-drop-codec-controls: PASS; logSHA256 dc4e0474b9a46a40ebac6f90a2feaeb7fa13a6b66bc68797ccbdd89b9fb780d8.
 
 156 closing audits4 PASS logedd1679233fcf157ba0cfd747d303885d444c557c9ba6488808b168c81ddef7a; strict128 PASS logfa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67. Protecteddev9/archive2/frozen4/emptyindex PASS. All25 final receipts bind final source4; first compiler attempt and first Clippy full failure plus superseded15 focused are not acceptance gates. Independent final docs/immutable exact8paths/scoped commit/durable localhandoff pending; ACTIVE/whole3.8/4.1/4.2 OPEN.
+
+
+## 157 readiness and source fidelity ruling
+
+Baseline accepted156 e8399bdc517f2c718ac210c649050fe914e56b8a, actual clean checkout; independent immutable SCOPED_PASS plus112-original byte-identical local handoff/COORD ACTIVE verified. Orphan check tasks/ledger/status/mtimes: no competing in-flight implementation. Root applied brainstorming/writing-plans/project readiness checklist; exact private iterator/source ItemDrop consumers/three causal tests/failure policies/bounds/files/rollback resolved before product. Pre-flight: no new shared task interface; existing public numerical reads and queue consumers remain read-only. Root owns all Cargo derived inputs/raw identities and gates. Read-only census found rawphysical-index versus float-center seam; source save fixture equality alone was not publication acceptance.
+
+Ruling: preserve DropState numerical centers/native semantics and existing public DropRecord; copy raw integer index privately for serialization, with bounded fixed32 iteration and unchanged checked constructor/stack fallback. Cost if wrong: source payload mismatch or native numerical drift, each pinned by independent exact event/FIFO and existing provider/center/save controls. User direct/full/noLoom/local-only authorization persists; no new checkout/Claude/external publication. Root all writes; isolated readonly evidence/review reused under actual thread limit. READY only, no RED/GREEN result yet. Architecture skill:no change: existing domain/storage integer-cell contracts are more authoritative; no new cross-task placement/lifecycle decision. AOCI tools absent, no fabricated cognition/maintenance; all-task ACTIVE and broad3.8/4.1/4.2 OPEN.
+
+157 qualified RED3: log8e666437e8c06f106f14a56b914f3d8b8f4b40ce2ddd525c6cdc74080db1bcb4,0passed/3failed/0ignored, all exact source event index assertions observe32768 instead of32769/32784/32785. No compiler/fixture failure; prepared center-loss guard passed. Test-bearing state sha726f067417b2db06827fa90d9d3de4c77cccd29d72b8ec4aedf734e655b477d5 retained before product; keep exact tests through GREEN. Static producer enumeration confirms BlockPos is also unused after removing the float reconstruction; remove that import with the two planned unused imports, no boundary change.
+
+
+## 157 verified physical-index publication
+
+Qualified RED3/GREEN3 preserve the identical test block. Three legal prepared far-X/Z/XZ physical slots lose their local cell in the old numerical-center reconstruction, while the accepted private iterator copies raw indices32769/32784/32785 into complete ItemDrop events. Actual projector/codec/FIFO and two receiver books match exact values; next projection is quiet. Numerical centers/records, counters and physical slots remain unchanged. These tests use actual Memory admissions with prepared far geometry and loaded slots, not ordinary far movement or native drop creation.
+
+Independent /root/projectile_queue_census155 SCOPED_PASS binds final source3 RAW 6ac524c7fd32b4be013270e196e13684ac28df5971e1ff27717c4395327dd4a3 and reconstructs qualified RED state from accepted parent plus unchanged tests. Final eleven focused gates pass3/11/192/26/3/6/14/8/7/15/1, including actual native rules with prepared worlds and actual adapter consumer qualification. Full Rust formatting/Clippy passes3909/76summaries(70nonempty6empty)/0failed0ignored/replay677,218.918s. Fresh native ABI build23.621s precedes six Go race/count-one controls1/5/3/1/2/4. Mining/flood transcript subsets and full normalized selected-drop disk restart retain the qualifications in the packet; no far source runtime producer is inferred. Go50 plus additional25 hashes unchanged.
+
+Root alone writes/integrates/owns inverse seven-path rollback; independent evidence/review reused under actual thread limit. Existing public numerical reads, native/storage/domain/protocol and accepted156 value-admission owner unchanged. Architecture skill:no change; existing more-authoritative integer-cell and numerical-center contracts apply. AOCI tools unavailable, no fabricated cognition/maintenance. Closing audits/strict/protection and independent docs/exact7commit/immutable/durable local handoff pending. All-taskACTIVE; broad3.8/4.1/4.2 OPEN.
+
+Future census correction, not acceptance: current Go companion/hostile/projectile/passive outer publishers and helpers do not require observer PlayerUpdate.Ready; only remote candidates require observer/target Ready. Ready is lifecycle Active, not a fresh foot-geometry check. Same-tick native unknown-footprint recovery can enter Pending while acquisition subscriptions retain anchor-square/pending wants; Rust physical acquisition retains that separate owner, but publication observer_of currently requires Active for all families. Four-family Pending visibility remains a source gap requiring independent root design and native producer/transcript qualification. Prior broad Ready-guard summaries must not be used as evidence. Foot Wanted/SnapshotSent early/late cuts, snapshot count/bytes/distance and off-tick packing, crosspeer timing/nonOverworld/config bootstrap-Agent/combined durable shutdown/config/runtime/executable remain open; accepted acquisition Wanted/resync is not reopened.
+
+Final runtime receipts bind accepted parent plus frozen source bytes, not a clean new-SHA rerun:
+- far-index-final: PASS; logSHA256 fa8399e2f14f1db1496590ebb76075358ebb7a020417e8f55221b7df6e4a5eb5.
+- drop-final: PASS; logSHA256 de7d7f105628e42696840cc74f71a6d6184c1bb9cb1c85838a991dcbca823be5.
+- projection-final: PASS; logSHA256 a7dfc2bce79594817a695f571ccecd49b99a3f3aba1f1128f1ab1a830d0e52dd.
+- native-drop-final: PASS; logSHA256 de985f650da8f8cd9b20dbf732c4552e4cd11f16d64f567464ae821042d9e369.
+- wire-drop-final: PASS; logSHA256 9594510f68ebda42d96b55fa7d075e7525f79411bde9a0f90de7a984f24a23be.
+- world-boundaries-final: PASS; logSHA256 8b7d1a6af3c18fd29ebe431da290757ece39b9527c5f2843885fcd8fc6f64476.
+- drop-store-final: PASS; logSHA256 660b5d0656f95adfa1a88bc25cbb69fe7abe34bafa415ab95ef628ddaa4c20a6.
+- prepared-final: PASS; logSHA256 8ebcccc61cfa0fdcc1547033eb1ee14bc7d4d5a3b613c97a7b1a040eb2932f1c.
+- domain-drop-final: PASS; logSHA256 acffa8b448999c62ac17b958a9fd74a46484fd46772fa95103b0bbe69d4c8569.
+- protocol-drop-final: PASS; logSHA256 3c95f245af75d2e5f6656d53569fdcdd2f2dbdf237efb7ee20a0ad4840836225.
+- adapter-drop-final: PASS; logSHA256 2e9fc343330175d2ba517b02ed5cb4f031f782dd0cb235c3b2967aa34a9506b1.
+- full-rust: PASS; logSHA256 294e4ebbd4486b9b578a94665f9fcf3af208d8398d4f6556835fdde5a5c55097.
+- native-build: PASS; logSHA256 27c2927ef6b3572c69ebd851c87702d912efb33e13d9c1fe33360746140aa0c4.
+- source-drop-value-control: PASS; logSHA256 cdfcbf7d7d8a7dd12ff696dbf96513b0ae15ee4fefd912ea541bbbe651debcd6.
+- source-drop-controls: PASS; logSHA256 d668a59efd209bc283da37bf3598496d2a43a5d994773a69e81a0c594bddfb48.
+- source-drop-memory-tcp-restart-controls: PASS; logSHA256 631afa52f7317b32323972c2ed6ebe21e4afcb7c163730cb644d0cceb1fe2b49.
+- source-memory-tcp-control: PASS; logSHA256 ea63062976febedb66d4e186b9b9e15cb124c3327b579af8d4c60e828c051acb.
+- source-drop-protocol-controls: PASS; logSHA256 eb0d4165e38e05bbb48f77c5b04e7c6ec1845cd21873b9e7e4aacebbc6056de9.
+- source-drop-codec-controls: PASS; logSHA256 9932cfd8f3483b4b93f1a530eedeb3a6e8278895ca3297fd3154c7181f05a9c3.
+
+157 closing audits4 PASS log8399eb2299e35cc3007922f7edb8c2db9e8ef76250d85da94b10ba6870ddbcd5; strict128 PASS logfa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67. All21 final receipts bind frozen source3; qualifiedRED3/GREEN3 retained. Independent final docs/immutable exact7pathcommit/durable localhandoff closing pending; ACTIVE/broad3.8/4.1/4.2OPEN.

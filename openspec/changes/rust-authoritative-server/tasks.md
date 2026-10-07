@@ -300,6 +300,8 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 
 - [x] 3.7l3qdp Implement complete drop wire-value/removal queue admission under exported32 frame cap; follow [private plan](plans/156-source-drop-queue-admission.md), RED11/GREEN11 and real-provider/scoped closing evidence.
 
+- [x] 3.7l3dfi Preserve physical integer drop block indices in source publication without changing numerical centers; follow [private plan](plans/157-source-drop-physical-index.md), qualified RED3/GREEN3, eleven final focused gates/full3909/native-before-six-Go controls and independent scoped review. Prepared far consumer fidelity only; actor/snapshot/runtime and broad3.8/4.1/4.2 remain OPEN.
+
 ## 4. Closeout
 
 

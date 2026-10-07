@@ -1382,3 +1382,13 @@ from Wanted and snapshot admission. Prepared physical-slot consumer fixtures
 qualify durability-only admission without native durability production. The
 separate far-coordinate block-index fidelity seam and whole runtime composition
 remain pending.
+
+
+Source drop publication copies complete checked wire values from physical fixed
+slots through the private read iterator. The stored integer block index remains
+authoritative even when a far float center loses local-cell precision. Numerical
+DropRecord reads, wrapping/rounding centers and pickup/lifecycle rules retain their
+own owner. The source capture keeps its bounded radius-two Ready union and one
+aggregate value buffer; no per-key allocation or public numerical contract change
+is needed. Far-X/Z/XZ prepared physical inputs qualify actual projector/codec/FIFO
+raw-index fidelity while asserting centers, counters and slots remain unchanged.

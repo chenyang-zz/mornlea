@@ -11,16 +11,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mornlea_domain::{
-    self, BlockChange, BlockChanges, BlockChangesParts, BlockPos, ChatEvent, ChatEventParts,
-    ChunkPos, CompanionDespawn, CompanionId, CompanionName, CompanionSpawn, CompanionSpawnParts,
+    self, BlockChange, BlockChanges, BlockChangesParts, ChatEvent, ChatEventParts, ChunkPos,
+    CompanionDespawn, CompanionId, CompanionName, CompanionSpawn, CompanionSpawnParts,
     CompanionState, CompanionStateParts, CompanionStates, CompanionStatesParts, ContainerClosed,
     ContainerRef, CraftingState, CraftingStateParts, Dimension, Event, EventRecipient,
     ForgetChunks, ForgetChunksParts, HostileDespawn, HostileDespawnParts, HostileId, HostileKind,
     HostileSpawn, HostileSpawnParts, HostileSpawnRecord, HostileSpawnRecordParts, HostileState,
-    HostileStateParts, HostileStateRecord, HostileStateRecordParts, ItemDrop, ItemDropParts,
-    ItemDropRemoves, ItemDropRemovesParts, ItemDropUpserts, ItemDropUpsertsParts, ItemStack,
-    PassiveDespawn, PassiveDespawnParts, PassiveDespawnReason, PassiveDespawnRecord, PassiveId,
-    PassiveSpawn, PassiveSpawnParts, PassiveSpawnRecord, PassiveSpawnRecordParts, PassiveState,
+    HostileStateParts, HostileStateRecord, HostileStateRecordParts, ItemDrop, ItemDropRemoves,
+    ItemDropRemovesParts, ItemDropUpserts, ItemDropUpsertsParts, ItemStack, PassiveDespawn,
+    PassiveDespawnParts, PassiveDespawnReason, PassiveDespawnRecord, PassiveId, PassiveSpawn,
+    PassiveSpawnParts, PassiveSpawnRecord, PassiveSpawnRecordParts, PassiveState,
     PassiveStateParts, PassiveStateRecord, PassiveStateRecordParts, PlayerId, ProjectileDespawn,
     ProjectileDespawnParts, ProjectileId, ProjectileSpawn, ProjectileSpawnParts,
     ProjectileSpawnRecord, ProjectileSpawnRecordParts, ProjectileState, ProjectileStateParts,
@@ -31,7 +31,7 @@ use mornlea_domain::{
 
 use crate::contracts::{
     ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, ChunkKey, ContainerSlots,
-    DropRecord, InventoryRecord, ProjectileRecord, ServerError, SessionKey,
+    InventoryRecord, ProjectileRecord, ServerError, SessionKey,
 };
 use crate::core::session_view::SessionView;
 use crate::state::{AuthorityState, Speaker};
@@ -187,7 +187,7 @@ impl AuthorityState {
         let entities = classify_entities(&actors);
         let inventories = self.resident_inventories().clone();
         let projectiles = self.resident_projectiles().to_vec();
-        let drops = source_drop_records(self, &actors, &entities, &speakers);
+        let drops = source_drop_values(self, &actors, &entities, &speakers);
         let mut views = self.take_session_views();
         let mut observers = Vec::with_capacity(speakers.len());
         let mut view_list: Vec<SessionView> = Vec::with_capacity(speakers.len());
@@ -470,12 +470,12 @@ fn observer_of(
 
 /// Copies only physical Ready drop slots in the Active players' source interest.
 /// Eight players contribute at most two hundred keys and thirty-two slots per key.
-fn source_drop_records(
+fn source_drop_values(
     state: &AuthorityState,
     actors: &[ActorRecord],
     entities: &Entities,
     speakers: &[Speaker],
-) -> Vec<DropRecord> {
+) -> Vec<ItemDrop> {
     let mut keys = BTreeSet::new();
     for speaker in speakers {
         if let Some(&index) = entities
@@ -491,7 +491,7 @@ fn source_drop_records(
     let mut records = Vec::new();
     for key in keys {
         if view.ready_chunk(key) {
-            records.extend_from_slice(view.drops(key));
+            records.extend(view.drop_publication_values(key));
         }
     }
     records
@@ -611,7 +611,7 @@ fn visibility_of(
     entities: &Entities,
     speakers: &[Speaker],
     projectiles: &[ProjectileRecord],
-    drops: &[DropRecord],
+    drops: &[ItemDrop],
 ) -> Visibility {
     let mut visibility = Visibility {
         remotes: BTreeMap::new(),
@@ -683,15 +683,15 @@ fn visibility_of(
         .map(|index| wanted_columns(&actors[index], 2))
         .unwrap_or_default();
     for record in drops {
-        if let Some(dimension) = u8::try_from(record.id.dimension())
+        if let Some(dimension) = u8::try_from(record.id().dimension())
             .ok()
             .and_then(|raw| Dimension::new(raw).ok())
             && drop_wanted.contains(&ChunkKey {
                 dimension,
-                pos: record.id.chunk(),
+                pos: record.id().chunk(),
             })
         {
-            visibility.drops.insert(record.id);
+            visibility.drops.insert(record.id());
         }
     }
     visibility
@@ -1393,7 +1393,7 @@ fn emit_drops(
     view_list: &mut [SessionView],
     observers: &[Observer],
     visibilities: &[Visibility],
-    drops: &[DropRecord],
+    drops: &[ItemDrop],
     tick: u64,
     events: &mut Vec<RoutedEvent>,
 ) {
@@ -1401,23 +1401,11 @@ fn emit_drops(
         observers.iter().zip(view_list.iter_mut()).zip(visibilities)
     {
         let mut upserts = Vec::new();
-        for record in drops {
-            if !visibility.drops.contains(&record.id) {
-                continue;
-            }
-            let position = record.position.get();
-            let cell = BlockPos::new(
-                position[0].floor() as i32,
-                position[1].floor() as i32,
-                position[2].floor() as i32,
-            );
-            if let Ok(drop) = ItemDrop::try_new(ItemDropParts {
-                id: record.id,
-                block_index: mornlea_domain::chunk_block_index(cell),
-                stack: domain_stack(record.stack),
-            }) && view.visible_drops.get(&record.id) != Some(&drop)
+        for drop in drops {
+            if visibility.drops.contains(&drop.id())
+                && view.visible_drops.get(&drop.id()) != Some(drop)
             {
-                upserts.push(drop);
+                upserts.push(*drop);
             }
         }
         upserts.sort_by_key(|drop| drop.id());

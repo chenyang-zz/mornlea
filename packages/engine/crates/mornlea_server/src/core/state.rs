@@ -4106,6 +4106,42 @@ impl<'a> AuthorityReadView<'a> {
         }
         self.drops.get(&key).map(DropState::records).unwrap_or(&[])
     }
+    /// Serialization copies the physical integer cell, never its lossy numerical center.
+    /// Fixed-slot iteration preserves the numerical read and allocates no per-key buffer.
+    pub(crate) fn drop_publication_values(
+        &self,
+        key: ChunkKey,
+    ) -> impl Iterator<Item = mornlea_domain::ItemDrop> + '_ {
+        self.drops
+            .get(&key)
+            .filter(|_| self.available(key))
+            .into_iter()
+            .flat_map(|owner| owner.slots.iter().enumerate())
+            .filter_map(move |(index, slot)| {
+                if !slot.active {
+                    return None;
+                }
+                let id = mornlea_domain::DropId::try_new(
+                    i32::from(key.dimension.get()),
+                    key.pos,
+                    index as u8,
+                    slot.generation,
+                )
+                .ok()?;
+                let stack = mornlea_domain::ItemStack::try_new(
+                    slot.stack.item,
+                    slot.stack.count,
+                    slot.stack.durability,
+                )
+                .unwrap_or(mornlea_domain::ItemStack::EMPTY);
+                mornlea_domain::ItemDrop::try_new(mornlea_domain::ItemDropParts {
+                    id,
+                    block_index: slot.block_index,
+                    stack,
+                })
+                .ok()
+            })
+    }
     /// Cumulative preview borrows the base and retains only successful chunk copies.
     pub(crate) fn drop_rehearsal(&self) -> DropRehearsal<'a> {
         DropRehearsal {
@@ -21685,5 +21721,134 @@ mod owner_record_admission_tests {
         assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
         drop_book(&state, peer, &values);
         assert!(drop_project(&mut state).is_empty());
+    }
+
+    fn far_drop_projection(chunk: ChunkPos, block_index: u32) {
+        let (mut state, sessions) = remote_fixture(512);
+        let key = ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: chunk,
+        };
+        let (_, _, _, mut body) = state
+            .residents
+            .ready_snapshot()
+            .into_iter()
+            .find(|record| record.0 == snapshot_key())
+            .unwrap();
+        body.drops[0] = mornlea_storage::DropSlot {
+            generation: 1,
+            active: true,
+            stack: mornlea_storage::ItemStack {
+                item: mornlea_protocol::ITEM_STONE_PICKAXE,
+                count: 1,
+                durability: 73,
+            },
+            block_index,
+            age_ticks: 9,
+            pickup_delay_ticks: 191,
+        };
+        let actors: Vec<_> = sessions
+            .iter()
+            .map(|session| {
+                let mut actor = state
+                    .residents
+                    .actors
+                    .iter()
+                    .find(|actor| actor.key == ActorKey::Player(*session))
+                    .unwrap()
+                    .clone();
+                // Prepared far geometry qualifies physical publication without a movement producer.
+                actor.motion = MotionState::new(mornlea_domain::MotionStateParts {
+                    position: FiniteVec3::try_new([
+                        chunk.x() as f32 * 16.0,
+                        65.0,
+                        chunk.z() as f32 * 16.0,
+                    ])
+                    .unwrap(),
+                    velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                    on_ground: true,
+                });
+                actor
+            })
+            .collect();
+        let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+        context.preload_ready_chunk(ReadyChunk::try_new(key, 1, 9, body).unwrap());
+        for actor in actors {
+            context.stage(RuleEffect::Actor(actor)).unwrap();
+        }
+        context.commit_carried();
+        drop(context);
+        let records = state.residents.drop_records();
+        assert_eq!(records.len(), 1);
+        let center = records[0].position.get();
+        let rounded = mornlea_domain::chunk_block_index(BlockPos::new(
+            center[0].floor() as i32,
+            center[1].floor() as i32,
+            center[2].floor() as i32,
+        ));
+        assert_ne!(
+            rounded, block_index,
+            "fixture must expose the lossy center round trip"
+        );
+        let before = state
+            .residents
+            .ready_snapshot()
+            .into_iter()
+            .find(|record| record.0 == key)
+            .unwrap()
+            .3
+            .drops;
+        let expected = mornlea_domain::ItemDrop::try_new(mornlea_domain::ItemDropParts {
+            id: mornlea_domain::DropId::try_new(0, chunk, 0, 1).unwrap(),
+            block_index,
+            stack: mornlea_domain::ItemStack::try_new(mornlea_protocol::ITEM_STONE_PICKAXE, 1, 73)
+                .unwrap(),
+        })
+        .unwrap();
+        let events = drop_project(&mut state);
+        assert_eq!(events.len(), 2);
+        for event in &events {
+            assert_eq!(
+                event.event(),
+                &drop_upserts(&[expected]),
+                "publication must copy the authoritative integer cell"
+            );
+        }
+        for session in &sessions {
+            drop_book(&state, *session, &[]);
+        }
+        drop_queue(&mut state, &sessions, events, &[expected]);
+        assert!(drop_project(&mut state).is_empty());
+        assert_eq!(
+            state.residents.drop_records(),
+            records,
+            "publication must not alter numerical centers or lifecycle counters"
+        );
+        assert_eq!(
+            state
+                .residents
+                .ready_snapshot()
+                .into_iter()
+                .find(|record| record.0 == key)
+                .unwrap()
+                .3
+                .drops,
+            before
+        );
+    }
+
+    #[test]
+    fn drop_physical_index_far_x() {
+        far_drop_projection(ChunkPos::new(1_048_576, 0), 128 * 256 + 1);
+    }
+
+    #[test]
+    fn drop_physical_index_far_z() {
+        far_drop_projection(ChunkPos::new(0, 1_048_576), 128 * 256 + 16);
+    }
+
+    #[test]
+    fn drop_physical_index_far_xz() {
+        far_drop_projection(ChunkPos::new(1_048_576, 1_048_576), 128 * 256 + 17);
     }
 }
