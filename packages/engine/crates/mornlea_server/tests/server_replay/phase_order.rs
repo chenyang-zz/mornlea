@@ -151,10 +151,9 @@ fn marker_count(code: &str, marker: &str) -> usize {
     code.match_indices(marker).count()
 }
 
-/// The endpoint wrapper order: mailbox drain, companion feed, environment
-/// freeze, the row dispatch, then the viewer commit and the single
-/// publication. The closing commit and publication follow the climate close
-/// because both need the authority borrow the dispatch context holds.
+/// The preparation order: mailbox drain, companion feed, environment freeze,
+/// row dispatch and viewer commit. The separate tail guard below preserves
+/// projection and delivery after this exclusive context has returned its owners.
 const WRAPPER_CHAIN: &[&str] = &[
     "drain_mailbox",
     "drain_companions",
@@ -162,7 +161,6 @@ const WRAPPER_CHAIN: &[&str] = &[
     "push_companion_action",
     "dispatch_rows",
     "commit_viewers",
-    "publish_prepared_source",
 ];
 
 /// The mailbox composition: eligible freeze then the domain sort. The
@@ -253,7 +251,32 @@ const DISPATCH_CHAIN: &[&str] = &[
 #[test]
 fn dispatch_chain_runs_in_frozen_order() {
     let code = step_source();
-    chain_positions(fn_body(&code, "fn reduce_tick_inner"), WRAPPER_CHAIN);
+    chain_positions(fn_body(&code, "fn reduce_tick_to_commit"), WRAPPER_CHAIN);
+    chain_positions(
+        fn_body(&code, "fn reduce_tick_inner"),
+        &["reduce_tick_to_commit", "finish_reduced_tick"],
+    );
+    chain_positions(
+        fn_body(&code, "fn prepare_source_tick"),
+        &["tick_fence", "reduce_tick_to_commit"],
+    );
+    chain_positions(
+        fn_body(&code, "fn finish_source_tick"),
+        &["tick_fence", "finish_reduced_tick"],
+    );
+    chain_positions(
+        fn_body(&code, "fn finish_reduced_tick"),
+        &[
+            "project_source_publication",
+            "project_player_updates",
+            "finish_source_companion_resets",
+            "publish_prepared_source",
+            "goals.finish_tick",
+            "capture_companion_saves",
+            "capture_mob_saves",
+            "capture_player_saves",
+        ],
+    );
     chain_positions(fn_body(&code, "fn drain_mailbox"), MAILBOX_CHAIN);
     chain_positions(fn_body(&code, "fn admit_command"), ADMIT_CHAIN);
     chain_positions(fn_body(&code, "fn route_interaction"), GATE_CHAIN);

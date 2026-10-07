@@ -163,18 +163,6 @@ pub fn reduce_tick(
     reduce_tick_mode(state, budget, true, None)
 }
 
-/// The automatic source tick: the same engine with the private goal book
-/// threaded through dispatch; the final small-input capture runs inside the
-/// reducer's ordinary failure fence after publication and book restoration.
-/// `AuthorityState::advance_source_tick` owns the successful counter bump.
-pub(crate) fn reduce_tick_source(
-    state: &mut AuthorityState,
-    budget: TickBudget,
-    goals: &mut SourceGoals,
-) -> Result<TickPublication, ServerError> {
-    reduce_tick_mode(state, budget, true, Some(goals))
-}
-
 /// Runs the actual full phase engine once without appending publication frames.
 /// `AuthorityState::run_final` owns the successful endpoint counter and consumption.
 pub struct AuthoritativeFinalReducer;
@@ -207,16 +195,53 @@ fn reduce_tick_mode(
         budget.farmland_checks(),
         budget.farmland_block_reads(),
     )?;
-    // Trusted Rust provider unwinds stop the owner; native aborts and UB are outside this boundary.
-    match catch_unwind(AssertUnwindSafe(|| {
+    tick_fence(state, |state| {
         reduce_tick_inner(state, budget, publish, goals)
-    })) {
-        Ok(Ok(publication)) => Ok(publication),
+    })
+}
+
+/// Trusted errors and unwinds retain the same authority failure across both halves.
+fn tick_fence<T>(
+    state: &mut AuthorityState,
+    action: impl FnOnce(&mut AuthorityState) -> Result<T, ServerError>,
+) -> Result<T, ServerError> {
+    // Native aborts and undefined behavior remain outside the Rust unwind boundary.
+    match catch_unwind(AssertUnwindSafe(|| action(state))) {
+        Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(state.fail_tick(error)),
         Err(_) => Err(state.fail_tick(ServerError::Internal {
             invariant: "authoritative tick panic",
         })),
     }
+}
+
+/// Original settled reducer output, before projection, delivery and save observation.
+pub(crate) struct ReducedTick {
+    pub(crate) tick: u64,
+    hits: Vec<mornlea_domain::RoutedEvent>,
+    events: Vec<mornlea_domain::RoutedEvent>,
+    counters: TickCounters,
+    outcome: super::publication_project::TickOutcome,
+}
+
+pub(crate) fn prepare_source_tick(
+    state: &mut AuthorityState,
+    budget: TickBudget,
+    goals: &mut SourceGoals,
+) -> Result<ReducedTick, ServerError> {
+    tick_fence(state, |state| {
+        reduce_tick_to_commit(state, budget, Some(goals))
+    })
+}
+
+pub(crate) fn finish_source_tick(
+    state: &mut AuthorityState,
+    reduced: ReducedTick,
+    goals: &mut SourceGoals,
+) -> Result<TickPublication, ServerError> {
+    tick_fence(state, |state| {
+        finish_reduced_tick(state, reduced, true, Some(goals))
+    })
 }
 
 fn reduce_tick_inner(
@@ -225,6 +250,15 @@ fn reduce_tick_inner(
     publish: bool,
     mut goals: Option<&mut SourceGoals>,
 ) -> Result<TickPublication, ServerError> {
+    let reduced = reduce_tick_to_commit(state, budget, goals.as_deref_mut())?;
+    finish_reduced_tick(state, reduced, publish, goals)
+}
+
+fn reduce_tick_to_commit(
+    state: &mut AuthorityState,
+    budget: TickBudget,
+    mut goals: Option<&mut SourceGoals>,
+) -> Result<ReducedTick, ServerError> {
     state.preflight_mob_persistence()?;
     state.preflight_companion_persistence()?;
     let tick = state.next_tick();
@@ -315,7 +349,7 @@ fn reduce_tick_inner(
     *state.source_companions_mut() = source_companions;
     *state.passive_snow_mut() = passive_snow;
     state.prune_source_players();
-    let (mut overlay, hits, mut events, counters, outcome) = match result {
+    let (mut overlay, hits, events, counters, outcome) = match result {
         Ok(result) => result?,
         Err(panic) => std::panic::resume_unwind(panic),
     };
@@ -323,6 +357,28 @@ fn reduce_tick_inner(
         |key, _| matches!(state.session(*key), Some(facts) if facts.phase == SessionPhase::Active),
     );
     state.commit_viewers(overlay);
+    Ok(ReducedTick {
+        tick,
+        hits,
+        events,
+        counters,
+        outcome,
+    })
+}
+
+fn finish_reduced_tick(
+    state: &mut AuthorityState,
+    reduced: ReducedTick,
+    publish: bool,
+    goals: Option<&mut SourceGoals>,
+) -> Result<TickPublication, ServerError> {
+    let ReducedTick {
+        tick,
+        hits,
+        mut events,
+        counters,
+        outcome,
+    } = reduced;
     // The publication families precede the private player observation and the
     // combat confirmations that close the tick.
     let provider_prefix = events.len();

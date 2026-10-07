@@ -1439,3 +1439,15 @@ and capture share the same physical slot revision; counter-only slot changes
 retain distinct tokens with equal revisions. Actual CPU and disk/native
 generation consumers qualify this producer separately from asynchronous
 selection, pending publication and executable lifecycle composition.
+
+Source tick continuations privately retain the exclusive mutable authority and
+goal borrows after carried/viewer commit and before projection. Current
+automatic source advance immediately completes the same reduction. Completion
+keeps reset consumption, delivery, goal capture and actor saves in their
+established order, then advances the successful endpoint once. Explicit abort
+and normal incomplete Drop permanently fence committed state without claiming
+rollback or a successful final flush. A held private continuation prevents
+external authority writers; intentional forgetting is outside this consumer
+contract. Future asynchronous callers must separately qualify deadline, CPU
+selection and retained shutdown ownership. Ordinary and unpublished final
+endpoints reuse the same split phase engine.

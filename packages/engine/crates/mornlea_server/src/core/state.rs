@@ -70,6 +70,8 @@ mod mob_persistence;
 mod player_persistence;
 #[path = "state_source_snapshot.rs"]
 mod source_snapshot;
+#[path = "state_source_tick.rs"]
+mod source_tick;
 
 const COMPANION_INBOX: usize = 4;
 /// Freshly missing keys one Acquire row may stage for the source generation
@@ -727,10 +729,7 @@ impl AuthorityState {
         work: TickBudget,
         goals: &mut SourceGoals,
     ) -> Result<TickPublication, ServerError> {
-        self.check_source_tick(work)?;
-        let publication = super::step::reduce_tick_source(self, work, goals)?;
-        self.next_tick = self.next_tick.saturating_add(1);
-        Ok(publication)
+        self.begin_source_tick(work, goals)?.complete()
     }
 
     pub fn close_session(
