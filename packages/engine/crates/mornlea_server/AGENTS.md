@@ -1416,3 +1416,15 @@ Companion, hostile, passive and projectile visibility consumes per-session captu
 `EncodedChunkSnapshot` retains a checked semantic column and canonical frame from the same exact capture. Extraction, the compatibility clone for owned packet conversion, and framing stay on the CPU factory. `snapshot` borrows that cached value; `into_source_parts` moves capture, semantic allocations, section-only charge and frame without additional work. The bounded pool retains at most eight results/requests across its existing one or two owners; the extra fixed twenty-four-section column does not change section-charge units. `into_frame` remains compatible and drops unused semantic ownership. Source selection, freshness/cancellation and whole-publication assembly remain explicit consumer responsibilities; result ownership alone does not establish asynchronous runtime integration.
 
 `PreparedSourcePublication` pairs append-only immutable semantic snapshot events with their original CPU frames. Exact capture-token refusal precedes its separate eight-frame held-publication cap; failures leave the batch unchanged. The authority preflights every ordinary event, control and source refusal before any append, taking paired frames without snapshot cloning or encoding. Only Queued updates mirrors, Closed retains history, and source saturation retains its deferred retirement owner and FIFO prefix. Successful publication returns the original semantic output, and ordinary reduction moves that owner through delivery. Legacy semantic publication retains its checked framing behavior. Automatic source selection must still qualify freshness, cancellation and routing of every selected snapshot through the builder before claiming asynchronous runtime integration.
+
+`core/source_encoding.rs` owns up to eight original source-session request
+records over its actual independently owned codec CPU pool. A bounded caller
+scalar predicate cancels obsolete routing before any provider drive; cancelled
+started requests remain charged until actual completion collection. Whole
+success/failure results retain the original session, request and capture token,
+and success moves the existing semantic/frame owners into prepared publication.
+Wait retains results. Close cancels outstanding results; refusal retains the
+same shutdown owner for close retry, without promising result recovery.
+Actual pool/factory/builder tests qualify this ownership boundary; current
+Wanted/world-version selection and configured runtime composition remain
+separate consumers. No authority borrow or synchronous fallback lives here.

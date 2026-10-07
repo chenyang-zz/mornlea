@@ -321,3 +321,5 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.7l3ecp Retain and move complete semantic snapshot/frame publication owners from actual CPU results ([private plan](plans/163-encoded-snapshot-publication-parts.md)); declaration/causal RED, actual factory/pool and independent scoped gates before consumer integration.
 
 - [x] 3.7l3esp Publish paired CPU snapshot frames through whole-publication preflight and move semantic output through the reducer ([private plan](plans/164-prepared-source-publication.md)); actual CPU/Memory ownership and atomic/Closed/prefix controls before source selector integration.
+
+- [x] 3.7l3seo Own bounded actual CPU source snapshot requests, exact whole results and cancellation/shutdown bookkeeping ([private plan](plans/165-source-snapshot-encoding-owner.md)); source selector/current-version truth and broad3.8/4.1/4.2 remain OPEN.
