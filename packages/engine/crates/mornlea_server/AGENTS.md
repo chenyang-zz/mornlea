@@ -1415,7 +1415,7 @@ Companion, hostile, passive and projectile visibility consumes per-session captu
 
 `EncodedChunkSnapshot` retains a checked semantic column and canonical frame from the same exact capture. Extraction, the compatibility clone for owned packet conversion, and framing stay on the CPU factory. `snapshot` borrows that cached value; `into_source_parts` moves capture, semantic allocations, section-only charge and frame without additional work. The bounded pool retains at most eight results/requests across its existing one or two owners; the extra fixed twenty-four-section column does not change section-charge units. `into_frame` remains compatible and drops unused semantic ownership. Source selection, freshness/cancellation and whole-publication assembly remain explicit consumer responsibilities; result ownership alone does not establish asynchronous runtime integration.
 
-`PreparedSourcePublication` pairs append-only immutable semantic snapshot events with their original CPU frames. Exact capture-token refusal precedes its separate eight-frame held-publication cap; failures leave the batch unchanged. The authority preflights every ordinary event, control and source refusal before any append, taking paired frames without snapshot cloning or encoding. Only Queued updates mirrors, Closed retains history, and source saturation retains its deferred retirement owner and FIFO prefix. Successful publication returns the original semantic output, and ordinary reduction moves that owner through delivery. Legacy semantic publication retains its checked framing behavior. Automatic source selection must still qualify freshness, cancellation and routing of every selected snapshot through the builder before claiming asynchronous runtime integration.
+`PreparedSourcePublication` pairs append-only immutable semantic snapshot events with their original CPU frames. Exact capture-token refusal precedes its immutable held-publication cap (legacy eight frames, or the source pass bound from checked player/snapshot limits); failures leave the batch unchanged. The authority preflights every ordinary event, control and source refusal before any append, taking paired frames without snapshot cloning or encoding. Only Queued updates mirrors, Closed retains history, and source saturation retains its deferred retirement owner and FIFO prefix. Successful publication returns the original semantic output, and ordinary reduction moves that owner through delivery. Legacy semantic publication retains its checked framing behavior. Automatic source selection must still qualify freshness, cancellation and routing of every selected snapshot through the builder before claiming asynchronous runtime integration.
 
 `core/source_encoding.rs` owns up to eight original source-session request
 records over its actual independently owned codec CPU pool. A bounded caller
@@ -1451,3 +1451,12 @@ external authority writers; intentional forgetting is outside this consumer
 contract. Future asynchronous callers must separately qualify deadline, CPU
 selection and retained shutdown ownership. Ordinary and unpublished final
 endpoints reuse the same split phase engine.
+
+Whole-source prepared publication uses `for_source_tick` with checked
+`ServerLimits`: paired ownership is bounded by max players times per-recipient
+snapshot count, at most five hundred twelve and allowing zero. Ordinary events
+do not charge paired slots. Legacy `new` retains eight pairs. This independent
+held-output bound does not change the eight-request actual CPU owner or certify
+Wanted, freshness, byte selection, FIFO admission or asynchronous runtime.
+Actual codec cohorts and original semantic/frame transfers qualify this
+constructor; integrated source selection retains a separate owner.

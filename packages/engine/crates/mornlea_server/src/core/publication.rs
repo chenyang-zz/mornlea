@@ -61,11 +61,12 @@ pub fn close_receiver(state: &mut AuthorityState, session: SessionKey, reason: C
     state.close_outbox(session, reason)
 }
 
-/// Owns immutable semantic output paired with up to eight CPU snapshot frames.
+/// Owns immutable semantic output paired with a bounded set of CPU snapshot frames.
 /// Private fields and append-only construction prevent event/frame replacement.
 pub struct PreparedSourcePublication {
     publication: TickPublication,
     snapshots: Vec<(usize, PreparedFrame)>,
+    snapshot_limit: usize,
 }
 
 impl PreparedSourcePublication {
@@ -73,6 +74,21 @@ impl PreparedSourcePublication {
         Self {
             publication,
             snapshots: Vec::new(),
+            snapshot_limit: 8,
+        }
+    }
+
+    /// Bounds a whole pass by checked recipient and per-recipient counts.
+    /// Selection bytes and actual CPU admission retain their separate owners.
+    pub fn for_source_tick(
+        publication: TickPublication,
+        limits: super::contracts::ServerLimits,
+    ) -> Self {
+        // Checked limits cap this product at eight recipients times sixty-four snapshots.
+        Self {
+            publication,
+            snapshots: Vec::new(),
+            snapshot_limit: usize::from(limits.max_players()) * limits.snapshot_chunks(),
         }
     }
 
@@ -97,11 +113,11 @@ impl PreparedSourcePublication {
                 field: "chunk_encode_capture",
             });
         }
-        if self.snapshots.len() >= 8 {
+        if self.snapshots.len() >= self.snapshot_limit {
             return Err(ServerError::Capacity {
                 resource: super::contracts::Resource::Snapshots,
-                limit: 8,
-                observed: 9,
+                limit: self.snapshot_limit,
+                observed: self.snapshots.len() + 1,
             });
         }
         let index = self.publication.events.len();
@@ -260,3 +276,7 @@ mod prepared_frame_tests {
         assert_eq!(retained.packet_key(), key);
     }
 }
+
+#[cfg(test)]
+#[path = "publication_source_budget.rs"]
+mod source_budget_tests;
