@@ -3807,3 +3807,44 @@ Final runtime receipts bind accepted parent plus frozen source4, not clean newSH
 - full-rust: PASS; logSHA256 685f6486cbf3477ce9b4b77fdbd14682e10a63327585b1f92be3e795bdb20914.
 
 158 closing audits4 PASS log44568e1b494c20584108c511697c2a1c0a44486e1cbd6fb334955f62c7d29b78; strict128 PASS logfa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67. All13 distinct final receipts bind finalsource4, first warning-bearing GREEN/source identity retained excluded; source consumer/native/Go qualifications above. Final docs/immutable exact8pathcommit/durable handoff pending, alltaskACTIVE/broadOPEN.
+
+
+## 159 readiness and root ruling
+
+Accepted158 45e7bb2da6e724daddc84619a5797a4113bc0935 clean/immutable SCOPED_PASS and57-original durable handoff verified. Four-point orphan audit tasks/ledger/clean status/current artifacts found no competing owner. Brainstorming/writing-plans and worker-planning checklist resolved private contracts, early/late selected-foot and planned-departure semantics, bounds/error/queue policies and twelve tests before READY. Root writes/integrates/rollback/derived Cargo identities; reused isolated read-only census/review agents under actual thread limit, no new clone/worktree. Census found seventeen replay consumers already Ready/admitted/selected; no fixture/oracle correction warranted. Reduce tentative source4 to exact source3/docs4 seven paths; preserve all existing C-before-R/projectile-before-passive/full wire ordering. No shared parallel interface. User direct/full/noLoom/local-only supersedes redundant approvals/store/Claude.
+
+Ruling: target foot needs current Wanted and admitted or same-recipient selected snapshot; early R/C uses admitted only, late has selected lookahead and excludes early departures from survivor sets. No globalReady/lifecycle inference or mirror mutation. Cost if wrong: invalid actor history after despawn or before terrain. Physical drops remain snapshot-independent; Pending four-family observer parity requires separately qualified registered per-session subscription owner. Twelve tests include ten causal regressions and two intentionally preserved controls; prepared motion/Ready/limits qualify consumer only, full vectors/FIFO required. READY only, no results yet. Architecture skill:no change existing rule28 already distinguishes Ready from per-session publication. AOCItoolsabsent after compaction, no cognition receipt fabricated.
+
+159 qualified RED12 log852594939bb1487d6e577059a3f90cb9ad2a5429ab8251ef5cca0a6968b95934: ten causal failures exactly forbidden unsent arrival or missing departure/respawn, two preserved controls pass; no compiler/fixture error. Qualified entire state and exact new test tail retained before product. Assertions remain frozen through GREEN.
+
+159 product compile correction: initial GREEN attempt log64581ffec02ddb5351fc89d07fc9fef5bc8be3c133d9afe21b02431723735a3a fails E0277 in two existing emit_projectiles loops. Root broad iterator replacement accidentally affected slice parameters outside new borrowed VisibilityInputs destructuring. Systematic-debugging compares four sites: only visibility_of has double reference; restore the two unchanged emitter loops to iteration over their borrowed slice. No assertion/policy change; retain before-correction source identity, failed compiler receipt excluded from acceptance.
+
+159 Ruling before revised test qualification: corrected product GREEN attempt85da57610afdbae798273debf7466445ce19809c8a1e28baf62ed68a953136ba runs10PASS/2FAIL. The two remote reappearance cases already meet intended actor ordering, but whole cross-peer reprojection equality falsely assumes desired Wanted/Forget is queue history. Existing emit_forgets and end projection consume peer interest after prepared target motion, so only first pass has that peer Forget. Preserve that owner, all actor ordering/count/membership/FIFO assertions and full-vector publication; replace only early helper retry comparison with exact observing owner full encoded frame comparison (not family-filtered publication). Cost if ignored: accepting a false whole-Forget retry contract or changing unrelated desired-interest owner. Temporarily save root-owned product/guide, restore their exact accepted158 bytes, revise packet/test and independently rerun qualified RED12 before product restoration. Old RED and failed GREEN retained; new qualified source tail will be frozen. No existing/user file overwritten.
+
+159 revised qualified RED12 on exact accepted158 projector/guide log3ad73951a37718f55002e20544dfa5e58cc08aa70283df22bf5b4e5b5f16ec63 reproduces ten intended causal failures/two controls, no compiler/fixture errors. Both earlier raw attempts and initial qualified sources retained. Revised test tail frozen before restoring saved root product, no actor oracle weakened; source3 final identity regenerated.
+
+
+## 159 verified scoped implementation and runtime gates
+
+Final source3 RAWda458e0aaf6b8c868ac43361ea522b7e3f711c215be60c7206724ebda68f601d independently reviewed /root/passive_queue_census SCOPED_PASS. Qualified revised test tail and entire state equal saved source. Initial compiler-only GREEN failure/iterator correction and false cross-peer retry assumption retained with root rulings, excluded from acceptance; revised RED restored exact accepted158 projector/guide before product return,10causalFAIL/2controls. Final GREEN12 and eleven fresh gates12/7/7/8/9/9/11/8/6/192/8 bind finalsource3. All selected-foot cases publish full vectors, exact encodedFIFO/book checks; early R/C planned departures produce despawn->snapshot->spawn and never survivor state on that pass. Pending/native motion/TCP/bootstrap/offtick/crosspeer/broad not accepted.
+
+Fresh native ABI18.945s BEFORE Go26top/8sub prepared publication consumers and actual Host MemoryTCP business1, plus nested full Rust Go world representation oracle. Explicit Go50+25 unchanged before/after. Full Rust formatting/Clippy3929PASS/76summaries70nonempty6empty/0failed0ignored/replay677,172.473s/no warnings. Existing immutable Wanted/Forget desired cleanup retained, no new lifetime/ACK/versions/public interfaces. Exact source3/docs4 seven paths, root sole writer/integrator/inverse rollback; reused isolated readonly agents under thread limit. Architecture skill:no change existing per-session publication rule covers predicate, no new cross-task owner. AOCItoolsabsent/no fabricated cognition/maintenance. Closing audits/strict/docs/protection/immutable/durable local handoff pending; alltaskACTIVE/broad3.8/4.1/4.2OPEN.
+
+Final runtime receipts bind accepted158 parent plus finalsource3, not a clean newSHA rerun:
+- actor-foot-final: PASS; logSHA256 c2c451c2005742437c35c805787bb081890f7f52d51b95d9f770e570a60851a4.
+- remote-final: PASS; logSHA256 d895d3ba4ac5ab9afca34a571bec19335467d2d023dadae510587e27a1917bda.
+- companion-final: PASS; logSHA256 56db30f35338071cd0ccab900c9da8472df0b400d2abb6868a6d87ef8d9e2f91.
+- hostile-final: PASS; logSHA256 da0d67e22259aa7c0b5ac3c93be0ed2cb9316f9cd4dd9173b8abf8bf9448c714.
+- passive-final: PASS; logSHA256 63823189582eb36c1dd8311a0b8254ef428d57febcc168bb1afcf5d5afd0f203.
+- projectile-final: PASS; logSHA256 080ecbd455f62a6d4f482882e6047649f7c700239ea696f5ce28dc570c4fe54e.
+- drop-final: PASS; logSHA256 51e04f0e3cc07dfc58e81ff64cb8aa2734bd0882cdfe18aedde7705fcd62afe2.
+- snapshot-selection-final: PASS; logSHA256 b63e08a64e48a2b1586bd9b7b719a10193c823dcb2fd4e4881d1479b30bc6ff2.
+- snapshot-admission-final: PASS; logSHA256 69ffaf6cda1de330d0cdaf3b7a497030b6ffbf65b18e8189d9cb8f31ec3aad63.
+- projection-final: PASS; logSHA256 a7b5feb46e7111263d1364d1782342de43a13f04bcc49d9d0b5dfb17c6de813e.
+- prepared-contract-final: PASS; logSHA256 439549b951088ae8980a32488853dfd8bde6d683aaa9c457cf16e7d7c6dac505.
+- source-actor-controls: PASS; logSHA256 8732d5f2ee6ca67606ad32b056305f3c515258527c394801d3c1440af0798af1.
+- source-memory-tcp-control: PASS; logSHA256 f35f1d98909f5bb4a9c4cf0ba154a45da4eea9bb6044aa64390e2f01a01f0267.
+- full-rust: PASS; logSHA256 e20980aa43b3a88555b85777ccbd8b4c517187f41945ad8984e0afd6a1ebf47a.
+- native-build: PASS; logSHA256 c1cac8e8558296fc2777764f671dd7519671bff0067f82eb56b6debe9f9140f3.
+
+159 closing audits4 PASS logaf093fc6d2904c39c403eab28c897edc12d0451f8e8ef5333db60ebb4e0a25a9; strict128 PASS logfa8f335ac9d9186c728097c895a4f7cc08103eee9eb44e4b9e681650edb6af67; original dev9/archive2/frozen3/emptyindex protection PASS. Seventeen distinct final gates/source3 binding verified; failed intermediate compiler and qualified history retained separately. Final docs/immutable exact7pathcommit/durable handoff pending, alltaskACTIVE.

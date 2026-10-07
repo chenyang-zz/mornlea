@@ -22209,4 +22209,369 @@ mod owner_record_admission_tests {
         assert!(state.session_views[&peer].chunks[&keys[1]].snapshot_sent);
         selection_unsent(&state, owner, &keys);
     }
+
+    #[derive(Clone, Copy, Debug)]
+    enum FootFamily {
+        Remote,
+        Companion,
+        Hostile,
+        Passive,
+        Projectile,
+    }
+
+    fn foot_fixture(family: FootFamily) -> (AuthorityState, Vec<SessionKey>, Option<ActorKey>) {
+        match family {
+            FootFamily::Remote => {
+                let (state, sessions) = remote_fixture(512);
+                let key = ActorKey::Player(sessions[1]);
+                (state, sessions, Some(key))
+            }
+            FootFamily::Companion => {
+                let (state, sessions, ids) = companion_fixture(512, 1);
+                (state, sessions, Some(ActorKey::Companion(ids[0])))
+            }
+            FootFamily::Hostile => {
+                let (state, sessions, ids) = hostile_fixture(512, 1);
+                (state, sessions, Some(ActorKey::Hostile(ids[0])))
+            }
+            FootFamily::Passive => {
+                let (state, sessions, ids) = passive_fixture(512, 1);
+                (state, sessions, Some(ActorKey::Passive(ids[0])))
+            }
+            FootFamily::Projectile => {
+                let (state, sessions, _) = projectile_fixture(512, 1);
+                (state, sessions, None)
+            }
+        }
+    }
+
+    fn foot_move(state: &mut AuthorityState, key: Option<ActorKey>) {
+        // Prepared motion qualifies the publication consumer independently of native movement.
+        let position = FiniteVec3::try_new([16.5, 65.0, 0.5]).unwrap();
+        let effect = if let Some(key) = key {
+            let mut actor = state
+                .residents
+                .actors
+                .iter()
+                .find(|actor| actor.key == key)
+                .unwrap()
+                .clone();
+            actor.motion = MotionState::new(mornlea_domain::MotionStateParts {
+                position,
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            });
+            RuleEffect::Actor(actor)
+        } else {
+            let before = state.residents.projectiles[0].clone();
+            let mut after = before.clone();
+            after.position = position;
+            RuleEffect::Projectile {
+                before: Some(before),
+                after: Some(after),
+            }
+        };
+        let mut context = TickContext::for_tick(state, TickBudget::full());
+        context.stage(effect).unwrap();
+        context.commit_carried();
+    }
+
+    fn foot_project(state: &mut AuthorityState) -> Vec<RoutedEvent> {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches.clear();
+        state.project_tick_publication(0, &outcome)
+    }
+
+    fn foot_queue(state: &mut AuthorityState, sessions: &[SessionKey], events: Vec<RoutedEvent>) {
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+        }
+    }
+
+    fn foot_members(state: &AuthorityState, session: SessionKey, family: FootFamily) -> usize {
+        let view = &state.session_views[&session];
+        match family {
+            FootFamily::Remote => view.visible_remotes.len(),
+            FootFamily::Companion => view.visible_companions.len(),
+            FootFamily::Hostile => view.visible_hostiles.len(),
+            FootFamily::Passive => view.visible_passives.len(),
+            FootFamily::Projectile => view.visible_projectiles.len(),
+        }
+    }
+
+    fn foot_order(
+        events: &[RoutedEvent],
+        session: SessionKey,
+        family: FootFamily,
+    ) -> Vec<&'static str> {
+        // Only assertion classification is filtered; publication always receives the whole vector.
+        events
+            .iter()
+            .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+            .filter_map(|event| match (family, event.event()) {
+                (_, Event::ChunkSnapshot(snapshot)) if snapshot.chunk() == ChunkPos::new(1, 0) => {
+                    Some("snapshot")
+                }
+                (FootFamily::Remote, Event::RemotePlayerSpawn(_))
+                | (FootFamily::Companion, Event::CompanionSpawn(_))
+                | (FootFamily::Hostile, Event::HostileSpawn(_))
+                | (FootFamily::Passive, Event::PassiveSpawn(_))
+                | (FootFamily::Projectile, Event::ProjectileSpawn(_)) => Some("spawn"),
+                (FootFamily::Remote, Event::RemotePlayerDespawn(_))
+                | (FootFamily::Companion, Event::CompanionDespawn(_))
+                | (FootFamily::Hostile, Event::HostileDespawn(_))
+                | (FootFamily::Passive, Event::PassiveDespawn(_))
+                | (FootFamily::Projectile, Event::ProjectileDespawn(_)) => Some("despawn"),
+                (FootFamily::Remote, Event::RemotePlayerStates(_))
+                | (FootFamily::Companion, Event::CompanionStates(_))
+                | (FootFamily::Hostile, Event::HostileState(_))
+                | (FootFamily::Passive, Event::PassiveState(_))
+                | (FootFamily::Projectile, Event::ProjectileState(_)) => Some("state"),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn foot_waits(family: FootFamily) {
+        let (mut state, sessions, key) = foot_fixture(family);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let target = selection_key(1, 0);
+        selection_ready(&mut state, &[target], None);
+        foot_move(&mut state, key);
+        selection_limits(&mut state, 0, 1_048_576);
+        let events = foot_project(&mut state);
+        assert_eq!(
+            foot_order(&events, owner, family),
+            Vec::<&str>::new(),
+            "Ready alone must not reveal an unsent foot"
+        );
+        foot_queue(&mut state, &sessions, events);
+        assert_eq!(foot_members(&state, owner, family), 0);
+        selection_unsent(&state, owner, &[target]);
+        selection_limits(&mut state, 1, 1_048_576);
+        let events = foot_project(&mut state);
+        assert_eq!(foot_order(&events, owner, family), ["snapshot", "spawn"]);
+        assert_eq!(foot_members(&state, owner, family), 0);
+        selection_unsent(&state, owner, &[target]);
+        let mut invalid = events.clone();
+        invalid.push(marker_rejection(
+            SessionKey::from_raw(u64::MAX).unwrap(),
+            21,
+        ));
+        assert!(matches!(
+            state.publish(publication(invalid)),
+            Err(ServerError::StaleSession { .. })
+        ));
+        for session in &sessions {
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(foot_members(&state, owner, family), 0);
+        selection_unsent(&state, owner, &[target]);
+        assert_eq!(foot_project(&mut state), events);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events.clone())).unwrap();
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        assert!(state.session_views[&peer].chunks[&target].snapshot_sent);
+        assert_eq!(foot_members(&state, owner, family), 0);
+        selection_unsent(&state, owner, &[target]);
+        assert_eq!(
+            foot_order(&foot_project(&mut state), owner, family),
+            ["snapshot", "spawn"]
+        );
+        if !matches!(family, FootFamily::Remote) {
+            assert_eq!(foot_members(&state, peer, family), 1);
+        }
+    }
+
+    #[test]
+    fn actor_foot_remote_waits_for_snapshot() {
+        foot_waits(FootFamily::Remote);
+    }
+    #[test]
+    fn actor_foot_companion_waits_for_snapshot() {
+        foot_waits(FootFamily::Companion);
+    }
+    #[test]
+    fn actor_foot_hostile_waits_for_snapshot() {
+        foot_waits(FootFamily::Hostile);
+    }
+    #[test]
+    fn actor_foot_passive_waits_for_snapshot() {
+        foot_waits(FootFamily::Passive);
+    }
+    #[test]
+    fn actor_foot_projectile_waits_for_snapshot() {
+        foot_waits(FootFamily::Projectile);
+    }
+
+    fn foot_reappears(family: FootFamily, delayed: bool) {
+        let (mut state, sessions, key) = foot_fixture(family);
+        let owner = sessions[0];
+        let initial = foot_project(&mut state);
+        foot_queue(&mut state, &sessions, initial);
+        assert_eq!(foot_members(&state, owner, family), 1);
+        selection_ready(&mut state, &[selection_key(1, 0)], None);
+        foot_move(&mut state, key);
+        selection_limits(&mut state, usize::from(!delayed), 1_048_576);
+        let events = foot_project(&mut state);
+        let want = if delayed {
+            vec!["despawn"]
+        } else {
+            vec!["despawn", "snapshot", "spawn"]
+        };
+        assert_eq!(foot_order(&events, owner, family), want);
+        assert_eq!(
+            foot_members(&state, owner, family),
+            1,
+            "projection cannot remove admitted membership"
+        );
+        let retry = foot_project(&mut state);
+        assert_eq!(
+            companion_frames(&retry, owner),
+            companion_frames(&events, owner)
+        );
+        foot_queue(&mut state, &sessions, events);
+        assert_eq!(foot_members(&state, owner, family), usize::from(!delayed));
+        if delayed {
+            selection_limits(&mut state, 1, 1_048_576);
+            let events = foot_project(&mut state);
+            assert_eq!(foot_order(&events, owner, family), ["snapshot", "spawn"]);
+            foot_queue(&mut state, &sessions, events);
+            assert_eq!(foot_members(&state, owner, family), 1);
+        }
+        assert_eq!(
+            foot_order(&foot_project(&mut state), owner, family),
+            ["state"]
+        );
+    }
+
+    #[test]
+    fn actor_foot_remote_reappears_after_snapshot() {
+        foot_reappears(FootFamily::Remote, false);
+    }
+    #[test]
+    fn actor_foot_companion_reappears_after_snapshot() {
+        foot_reappears(FootFamily::Companion, false);
+    }
+    #[test]
+    fn actor_foot_remote_departure_waits_for_later_snapshot() {
+        foot_reappears(FootFamily::Remote, true);
+    }
+    #[test]
+    fn actor_foot_companion_departure_waits_for_later_snapshot() {
+        foot_reappears(FootFamily::Companion, true);
+    }
+
+    #[test]
+    fn actor_foot_saturated_departure_prefix_peer() {
+        let family = FootFamily::Companion;
+        let (mut state, sessions, key) = foot_fixture(family);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let initial = foot_project(&mut state);
+        foot_queue(&mut state, &sessions, initial);
+        selection_ready(&mut state, &[selection_key(1, 0)], None);
+        foot_move(&mut state, key);
+        selection_limits(&mut state, 1, 1_048_576);
+        let previous = state.limits;
+        // Prepared legal capacity isolates FIFO prefix failure from transport scheduling.
+        state.limits = ServerLimits::try_new(
+            previous.max_players(),
+            previous.queued_commands(),
+            16,
+            previous.ready_chunk_results(),
+            previous.snapshot_chunks(),
+            previous.snapshot_bytes(),
+        )
+        .unwrap()
+        .with_view_radius(previous.view_radius());
+        let markers: Vec<_> = (1..=15).map(|seq| marker_rejection(owner, seq)).collect();
+        let mut retained: Vec<_> = markers.iter().map(|event| frame(event.event())).collect();
+        state.publish(publication(markers)).unwrap();
+        let events = foot_project(&mut state);
+        for session in &sessions {
+            assert_eq!(
+                foot_order(&events, *session, family),
+                ["despawn", "snapshot", "spawn"]
+            );
+        }
+        retained.push(frame(
+            events
+                .iter()
+                .find(|event| event.recipient() == EventRecipient::Session(owner.get()))
+                .unwrap()
+                .event(),
+        ));
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(state.take_outbox(owner, 512, 2_097_152).unwrap(), retained);
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        assert!(state.session_views[&peer].chunks[&selection_key(1, 0)].snapshot_sent);
+        assert_eq!(foot_members(&state, peer, family), 1);
+        assert_eq!(
+            foot_order(&foot_project(&mut state), peer, family),
+            ["state"]
+        );
+    }
+
+    #[test]
+    fn actor_foot_admitted_does_not_require_global_ready() {
+        let (mut state, sessions, _) = foot_fixture(FootFamily::Remote);
+        let initial = foot_project(&mut state);
+        foot_queue(&mut state, &sessions, initial);
+        // Prepared Active geometry removal does not model the native recovery producer.
+        assert!(state.residents.ready.remove(&snapshot_key()).is_some());
+        selection_limits(&mut state, 0, 1_048_576);
+        let events = foot_project(&mut state);
+        assert_eq!(
+            foot_order(&events, sessions[0], FootFamily::Remote),
+            ["state"]
+        );
+        foot_queue(&mut state, &sessions, events);
+        remote_member(&state, sessions[0], sessions[1]);
+    }
+
+    #[test]
+    fn actor_foot_drops_keep_physical_policy() {
+        let (mut state, sessions, values) = drop_fixture(512, 33);
+        selection_limits(&mut state, 0, 1_048_576);
+        let events = foot_project(&mut state);
+        for session in &sessions {
+            assert!(!events.iter().any(|event| event.recipient()
+                == EventRecipient::Session(session.get())
+                && matches!(event.event(), Event::ChunkSnapshot(_))));
+            let drops: Vec<_> = events
+                .iter()
+                .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+                .filter_map(|event| {
+                    if let Event::ItemDropUpserts(batch) = event.event() {
+                        Some(batch.drops())
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
+                .copied()
+                .collect();
+            assert_eq!(drops, values);
+        }
+        foot_queue(&mut state, &sessions, events);
+        for session in &sessions {
+            drop_book(&state, *session, &values);
+            selection_unsent(&state, *session, &[selection_key(1, 0)]);
+        }
+    }
 }

@@ -1395,3 +1395,14 @@ raw-index fidelity while asserting centers, counters and slots remain unchanged.
 
 
 Source snapshot selection uses each recipient's chunk-count and exact section-payload byte limits independently. Unified resync/unsent candidates sort by resync priority, captured observer-center distance and dimension/x/z. Unavailable captures cost nothing; the first selected snapshot may exceed its byte limit, while a later oversized candidate stops the pass without skipping priority. Existing library count zero selects none and byte zero retains first-frame progress; this is not configuration-loader qualification. Projection coverage suppresses same-pass deltas but never certifies queue history. Snapshot capture/packing still needs separate off-tick encoder integration, and actor foot/lifecycle visibility retains its own owner.
+
+
+Active observer actor visibility requires current wanted foot interest and that
+recipient's admitted full snapshot, or a snapshot selected earlier in the same
+publication. Global Ready does not certify client terrain history. Early remote
+and companion departures use admitted history only; late arrivals use selected
+lookahead and a planned departure requires spawn instead of survivor state.
+Membership remains queue-owned throughout. Saturation closes the FIFO before
+later frames, preserving the selected-snapshot prefix. Physical drops retain
+their independent radius-two Ready rule. Pending four-family observer
+subscriptions, native recovery and off-tick packing remain separate boundaries.

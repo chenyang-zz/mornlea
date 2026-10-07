@@ -93,6 +93,15 @@ struct WorldInputs<'a> {
     passive_deaths: &'a BTreeSet<PassiveId>,
 }
 
+/// Captured facts shared by early admitted-foot and late selected-foot cuts.
+struct VisibilityInputs<'a> {
+    actors: &'a [ActorRecord],
+    entities: &'a Entities,
+    speakers: &'a [Speaker],
+    projectiles: &'a [ProjectileRecord],
+    drops: &'a [ItemDrop],
+}
+
 /// One observer's derived projection inputs for this tick.
 struct Observer {
     session: SessionKey,
@@ -196,18 +205,17 @@ impl AuthorityState {
             observers.push(observer_of(&actors, speaker, &entities, radius));
             view_list.push(views.remove(&speaker.session).unwrap_or_default());
         }
-        let visibilities: Vec<Visibility> = observers
+        let visibility_inputs = VisibilityInputs {
+            actors: &actors,
+            entities: &entities,
+            speakers: &speakers,
+            projectiles: &projectiles,
+            drops: &drops,
+        };
+        let early_visibilities: Vec<Visibility> = observers
             .iter()
-            .map(|observer| {
-                visibility_of(
-                    observer,
-                    &actors,
-                    &entities,
-                    &speakers,
-                    &projectiles,
-                    &drops,
-                )
-            })
+            .zip(&view_list)
+            .map(|(observer, view)| visibility_of(observer, view, &visibility_inputs, None))
             .collect();
         apply_resync_requests(&mut view_list, &observers, self, outcome);
         // Resident Dead passive identities once per tick, minus the quiet
@@ -235,18 +243,28 @@ impl AuthorityState {
             passive_deaths: &passive_deaths,
         };
         let mut events = Vec::new();
-        emit_despawns(&mut view_list, &observers, &visibilities, &mut events);
+        emit_despawns(&mut view_list, &observers, &early_visibilities, &mut events);
         emit_forgets(&mut view_list, &observers, &mut events);
         let before_snapshots = events.len();
         let (deltas, refused_sessions) =
             classify_block_batches(&mut view_list, &observers, outcome);
         let snapshots = emit_snapshots(&mut view_list, &observers, self, &actors, &mut events);
         emit_block_batches(&observers, deltas, &snapshots, &mut events);
+        // Selected snapshots precede every late actor frame for that recipient.
+        // Only actual FIFO admission may turn this lookahead into observer history.
+        let visibilities: Vec<Visibility> = observers
+            .iter()
+            .zip(&view_list)
+            .map(|(observer, view)| {
+                visibility_of(observer, view, &visibility_inputs, Some(&snapshots))
+            })
+            .collect();
         let configured_names = self.configured_chat_names();
         emit_companions(
             &mut view_list,
             &observers,
             &visibilities,
+            &early_visibilities,
             &inputs,
             &configured_names,
             &mut events,
@@ -255,6 +273,7 @@ impl AuthorityState {
             &mut view_list,
             &observers,
             &visibilities,
+            &early_visibilities,
             &inputs,
             &mut events,
         );
@@ -602,17 +621,37 @@ fn hostile_kind_of(kind: u8) -> Option<HostileKind> {
     }
 }
 
-/// One observer's new visible sets: every entity whose foot column is inside
-/// the observer's interest, and every projectile or drop inside it.
-#[allow(clippy::too_many_arguments)]
+/// A foot snapshot belongs to this observer, independently of global Ready state.
+fn actor_foot_visible(
+    observer: &Observer,
+    view: &SessionView,
+    dimension: Dimension,
+    position: [f32; 3],
+    snapshots: Option<&BTreeSet<(SessionKey, ChunkKey)>>,
+) -> bool {
+    let key = position_chunk(dimension, position);
+    observer.wanted.contains(&key)
+        && (view
+            .chunks
+            .get(&key)
+            .is_some_and(|entry| entry.snapshot_sent)
+            || snapshots.is_some_and(|selected| selected.contains(&(observer.session, key))))
+}
+
+/// Actor cuts use admitted or preceding selected foot snapshots; drops keep physical interest.
 fn visibility_of(
     observer: &Observer,
-    actors: &[ActorRecord],
-    entities: &Entities,
-    speakers: &[Speaker],
-    projectiles: &[ProjectileRecord],
-    drops: &[ItemDrop],
+    view: &SessionView,
+    inputs: &VisibilityInputs<'_>,
+    snapshots: Option<&BTreeSet<(SessionKey, ChunkKey)>>,
 ) -> Visibility {
+    let VisibilityInputs {
+        actors,
+        entities,
+        speakers,
+        projectiles,
+        drops,
+    } = inputs;
     let mut visibility = Visibility {
         remotes: BTreeMap::new(),
         companions: BTreeSet::new(),
@@ -633,44 +672,59 @@ fn visibility_of(
             continue;
         }
         if actor.dimension == observer_dimension(actors, observer)
-            && observer.wanted.contains(&position_chunk(
+            && actor_foot_visible(
+                observer,
+                view,
                 actor.dimension,
                 actor.motion.position().get(),
-            ))
+                snapshots,
+            )
             && let Some(speaker) = speakers.iter().find(|speaker| speaker.session == target)
         {
             visibility.remotes.insert(speaker.player_id, target);
         }
     }
     for (id, index) in &entities.companions {
-        if observer.wanted.contains(&position_chunk(
+        if actor_foot_visible(
+            observer,
+            view,
             actors[*index].dimension,
             actors[*index].motion.position().get(),
-        )) {
+            snapshots,
+        ) {
             visibility.companions.insert(*id);
         }
     }
     for (id, _, index) in &entities.hostiles {
-        if observer.wanted.contains(&position_chunk(
+        if actor_foot_visible(
+            observer,
+            view,
             actors[*index].dimension,
             actors[*index].motion.position().get(),
-        )) {
+            snapshots,
+        ) {
             visibility.hostiles.insert(*id);
         }
     }
     for (id, index) in &entities.passives {
-        if observer.wanted.contains(&position_chunk(
+        if actor_foot_visible(
+            observer,
+            view,
             actors[*index].dimension,
             actors[*index].motion.position().get(),
-        )) {
+            snapshots,
+        ) {
             visibility.passives.insert(*id);
         }
     }
-    for record in projectiles {
-        if observer
-            .wanted
-            .contains(&position_chunk(record.dimension, record.position.get()))
-        {
+    for record in *projectiles {
+        if actor_foot_visible(
+            observer,
+            view,
+            record.dimension,
+            record.position.get(),
+            snapshots,
+        ) {
             visibility.projectiles.insert(record.id);
         }
     }
@@ -682,7 +736,7 @@ fn visibility_of(
         .find(|&index| actors[index].key == ActorKey::Player(observer.session))
         .map(|index| wanted_columns(&actors[index], 2))
         .unwrap_or_default();
-    for record in drops {
+    for record in *drops {
         if let Some(dimension) = u8::try_from(record.id().dimension())
             .ok()
             .and_then(|raw| Dimension::new(raw).ok())
@@ -954,14 +1008,23 @@ fn emit_companions(
     view_list: &mut [SessionView],
     observers: &[Observer],
     visibilities: &[Visibility],
+    early_visibilities: &[Visibility],
     inputs: &WorldInputs<'_>,
     configured: &BTreeMap<CompanionId, CompanionName>,
     events: &mut Vec<RoutedEvent>,
 ) {
-    for ((observer, view), visibility) in
-        observers.iter().zip(view_list.iter_mut()).zip(visibilities)
+    for (((observer, view), visibility), early) in observers
+        .iter()
+        .zip(view_list.iter_mut())
+        .zip(visibilities)
+        .zip(early_visibilities)
     {
-        for id in visibility.companions.difference(&view.visible_companions) {
+        // A planned early departure requires a fresh arrival after the foot snapshot.
+        for id in visibility
+            .companions
+            .iter()
+            .filter(|id| !view.visible_companions.contains(*id) || !early.companions.contains(*id))
+        {
             let Some((_, index)) = inputs
                 .entities
                 .companions
@@ -998,6 +1061,7 @@ fn emit_companions(
         for id in visibility
             .companions
             .intersection(&view.visible_companions)
+            .filter(|id| early.companions.contains(*id))
             .copied()
             .collect::<Vec<_>>()
         {
@@ -1043,14 +1107,21 @@ fn emit_remotes(
     view_list: &mut [SessionView],
     observers: &[Observer],
     visibilities: &[Visibility],
+    early_visibilities: &[Visibility],
     inputs: &WorldInputs<'_>,
     events: &mut Vec<RoutedEvent>,
 ) {
-    for ((observer, view), visibility) in
-        observers.iter().zip(view_list.iter_mut()).zip(visibilities)
+    for (((observer, view), visibility), early) in observers
+        .iter()
+        .zip(view_list.iter_mut())
+        .zip(visibilities)
+        .zip(early_visibilities)
     {
         for (id, session) in &visibility.remotes {
-            if view.visible_remotes.get(id) == Some(session) {
+            // The early cut is lookahead only; admitted books still own delivery history.
+            if view.visible_remotes.get(id) == Some(session)
+                && early.remotes.get(id) == Some(session)
+            {
                 continue;
             }
             let Some(speaker) = inputs
@@ -1084,7 +1155,9 @@ fn emit_remotes(
         }
         let mut states = Vec::new();
         for (&id, &session) in &visibility.remotes {
-            if view.visible_remotes.get(&id) != Some(&session) {
+            if view.visible_remotes.get(&id) != Some(&session)
+                || early.remotes.get(&id) != Some(&session)
+            {
                 continue;
             }
             let Some(speaker) = inputs

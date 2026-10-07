@@ -309,3 +309,5 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [ ] 4.2 Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA.
 
 - [x] 3.7l3ssb Bound per-session source snapshot selection by count/section bytes and resync/distance/key order ([private plan](plans/158-source-snapshot-selection.md)); causal RED8+replayRED1, final8/1/6/13/3/192/capture10/full3917/native-before-Go7+1 and independent source SCOPED_PASS. Prepared consumer and actual Go representation qualifications; separate actor/async/runtime and broad3.8/4.1/4.2 OPEN.
+
+- [x] 3.7l3afv Gate Active observer actor foot visibility on per-session snapshot history and preserve early departure/late arrival order ([private plan](plans/159-source-actor-foot-visibility.md)); qualified revised RED ten causal failures/two controls then GREEN12; source3 SCOPED_PASS, eleven focused gates/full3929/76/replay677/native-before-Go26+1. Pending observer, async/config/runtime and broad3.8/4.1/4.2 OPEN.
