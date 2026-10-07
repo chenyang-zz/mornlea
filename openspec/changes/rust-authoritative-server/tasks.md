@@ -295,6 +295,7 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.7l3qcp Advance companion membership only after exact frame queue admission ([packet](plans/152-source-companion-queue-admission.md)). Foot gating/other actor mirrors/runtime and broad3.8/4.1/4.2 OPEN.
 
 - [x] 3.7l3qhs Advance complete hostile packet memberships only after queue admission ([packet](plans/153-source-hostile-queue-admission.md)). Foot cuts/other mirrors/cross-peer timing/runtime and broad3.8/4.1/4.2 OPEN.
+- [x] 3.7l3qps Implement complete passive spawn/despawn queue membership with unchanged Died/Vanished source reasons; follow [private plan](plans/154-source-passive-queue-admission.md), RED9/GREEN9, provider and scoped closing gates.
 
 ## 4. Closeout
 

@@ -1242,24 +1242,20 @@ fn emit_passives(
                 ));
             }
         }
-        let mut published = visibility.passives.clone();
         let mut spawns = Vec::new();
         for (id, index) in &inputs.entities.passives {
             if !visibility.passives.contains(id) || view.visible_passives.contains(id) {
                 continue;
             }
             let actor = &inputs.actors[*index];
-            match PassiveSpawnRecord::try_new(PassiveSpawnRecordParts {
+            if let Ok(record) = PassiveSpawnRecord::try_new(PassiveSpawnRecordParts {
                 id: *id,
                 dimension: actor.dimension,
                 position: actor.motion.position(),
                 yaw: actor.look.yaw(),
                 health: actor.survival.health(),
             }) {
-                Ok(record) => spawns.push(record),
-                Err(_) => {
-                    published.remove(id);
-                }
+                spawns.push(record);
             }
         }
         for group in spawns.chunks(MOB_BATCH_CAP) {
@@ -1301,7 +1297,6 @@ fn emit_passives(
                 ));
             }
         }
-        view.visible_passives = published;
     }
 }
 

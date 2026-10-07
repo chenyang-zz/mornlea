@@ -2442,6 +2442,16 @@ impl AuthorityState {
             return;
         };
         match mirror {
+            QueuedPublicationMirror::PassiveSpawn(batch) => {
+                for id in batch.ids.into_iter().take(usize::from(batch.count)) {
+                    view.visible_passives.insert(id);
+                }
+            }
+            QueuedPublicationMirror::PassiveDespawn(batch) => {
+                for id in batch.ids.into_iter().take(usize::from(batch.count)) {
+                    view.visible_passives.remove(&id);
+                }
+            }
             QueuedPublicationMirror::HostileSpawn(batch) => {
                 for id in batch.ids.into_iter().take(usize::from(batch.count)) {
                     view.visible_hostiles.insert(id);
@@ -3335,10 +3345,38 @@ impl<const N: usize> QueuedHostileIds<N> {
     }
 }
 
+/// Passive membership has its own checked namespace; reasons stay in the encoded frame.
+/// Only the complete populated prefix participates in FIFO admission.
+#[derive(Clone, Copy)]
+struct QueuedPassiveIds<const N: usize> {
+    ids: [PassiveId; N],
+    count: u8,
+}
+
+impl<const N: usize> QueuedPassiveIds<N> {
+    fn from_ids(mut ids: impl Iterator<Item = PassiveId>) -> Option<Self> {
+        if N == 0 {
+            return None;
+        }
+        let first = ids.next()?;
+        let mut copied = Self {
+            ids: [first; N],
+            count: 1,
+        };
+        for id in ids {
+            *copied.ids.get_mut(usize::from(copied.count))? = id;
+            copied.count = copied.count.checked_add(1)?;
+        }
+        Some(copied)
+    }
+}
+
 /// Checked mirror metadata stays paired with its immutable encoded frame.
 /// Other publication mirrors retain their separate migration ownership.
 #[derive(Clone, Copy)]
 enum QueuedPublicationMirror {
+    PassiveSpawn(QueuedPassiveIds<{ mornlea_protocol::MAX_PASSIVE_SPAWN_RECORDS as usize }>),
+    PassiveDespawn(QueuedPassiveIds<{ mornlea_protocol::MAX_PASSIVE_RECORDS as usize }>),
     HostileSpawn(QueuedHostileIds<{ mornlea_protocol::HOSTILE_SPAWN_MAX_RECORDS as usize }>),
     HostileDespawn(QueuedHostileIds<{ mornlea_protocol::MAX_HOSTILE_RECORDS as usize }>),
     CompanionSpawn(CompanionId),
@@ -3371,6 +3409,14 @@ impl QueuedPublicationMirror {
             )),
             mornlea_domain::Event::HostileDespawn(value) => Some(Self::HostileDespawn(
                 QueuedHostileIds::from_ids(value.ids().iter().copied())?,
+            )),
+            // Passive despawn reasons belong to the immutable wire record, while
+            // membership needs only its complete checked ID prefix after encoding.
+            mornlea_domain::Event::PassiveSpawn(value) => Some(Self::PassiveSpawn(
+                QueuedPassiveIds::from_ids(value.spawns().iter().map(|record| record.id()))?,
+            )),
+            mornlea_domain::Event::PassiveDespawn(value) => Some(Self::PassiveDespawn(
+                QueuedPassiveIds::from_ids(value.despawns().iter().map(|record| record.id()))?,
             )),
             // Companion wire identity is its own checked UUID namespace; source
             // registration and reset consumption remain separate authority owners.
@@ -20027,6 +20073,485 @@ mod owner_record_admission_tests {
         );
         hostile_members(&state, sessions[0], &ids);
         hostile_members(&state, sessions[1], &[]);
+        assert!(
+            state
+                .take_outbox(sessions[1], 512, 2_097_152)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    fn passive_fixture(
+        outbox: usize,
+        count: u64,
+    ) -> (AuthorityState, Vec<SessionKey>, Vec<PassiveId>) {
+        let (mut state, sessions) = remote_fixture(outbox);
+        let survival = state.residents.actors[0].survival;
+        let ids: Vec<_> = (1..=count)
+            .map(|id| PassiveId::try_new(id).unwrap())
+            .collect();
+        // Prepared bodies isolate the real publication consumer without native mob creation.
+        for id in &ids {
+            let position = [0.5, 65.0, 0.5];
+            let actor = ActorRecord::try_new(
+                ActorKey::Passive(*id),
+                ActorLifecycle::Active,
+                Dimension::OVERWORLD,
+                MotionState::new(mornlea_domain::MotionStateParts {
+                    position: FiniteVec3::try_new(position).unwrap(),
+                    velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                    on_ground: true,
+                }),
+                LookAngles::try_new(0.0, 0.0).unwrap(),
+                survival,
+                ActorBody::Passive(mornlea_storage::PassiveMob {
+                    id: id.get(),
+                    dimension: 0,
+                    position,
+                    velocity: [0.0; 3],
+                    on_ground: true,
+                    yaw: 0.0,
+                    health: 20,
+                }),
+            )
+            .unwrap();
+            let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+            context.stage(RuleEffect::Actor(actor)).unwrap();
+            context.commit_carried();
+        }
+        (state, sessions, ids)
+    }
+
+    fn passive_lifecycle(state: &mut AuthorityState, id: PassiveId, lifecycle: ActorLifecycle) {
+        // Prepared disappearance or arrival preserves the canonical identity and body fields.
+        let mut actor = state
+            .residents
+            .actors
+            .iter()
+            .find(|actor| actor.key == ActorKey::Passive(id))
+            .unwrap()
+            .clone();
+        actor.lifecycle = lifecycle;
+        let mut context = TickContext::for_tick(state, TickBudget::full());
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+        context.commit_carried();
+    }
+
+    fn passive_project(state: &mut AuthorityState) -> Vec<RoutedEvent> {
+        passive_project_with_quiet(state, &[])
+    }
+
+    fn passive_project_with_quiet(
+        state: &mut AuthorityState,
+        quiet: &[PassiveId],
+    ) -> Vec<RoutedEvent> {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.quiet_passive_removals.extend(quiet.iter().copied());
+        outcome.block_batches.clear();
+        state
+            .project_tick_publication(0, &outcome)
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event.event(),
+                    Event::PassiveSpawn(_) | Event::PassiveDespawn(_) | Event::PassiveState(_)
+                )
+            })
+            .collect()
+    }
+
+    fn passive_members(state: &AuthorityState, session: SessionKey, ids: &[PassiveId]) {
+        assert_eq!(
+            state.session_views[&session].visible_passives,
+            ids.iter().copied().collect::<BTreeSet<_>>(),
+            "passive membership must reflect complete FIFO-admitted batches"
+        );
+    }
+
+    fn passive_spawn_event(ids: &[PassiveId]) -> Event {
+        Event::PassiveSpawn(
+            mornlea_domain::PassiveSpawn::try_new(mornlea_domain::PassiveSpawnParts {
+                server_tick: 0,
+                spawns: ids
+                    .iter()
+                    .map(|id| {
+                        mornlea_domain::PassiveSpawnRecord::try_new(
+                            mornlea_domain::PassiveSpawnRecordParts {
+                                id: *id,
+                                dimension: Dimension::OVERWORLD,
+                                position: FiniteVec3::try_new([0.5, 65.0, 0.5]).unwrap(),
+                                yaw: 0.0,
+                                health: 20,
+                            },
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            })
+            .unwrap(),
+        )
+    }
+
+    fn passive_departure_matches(
+        batch: &mornlea_domain::PassiveDespawn,
+        ids: &[PassiveId],
+        reason: mornlea_domain::PassiveDespawnReason,
+    ) -> bool {
+        batch
+            .despawns()
+            .iter()
+            .map(|record| record.id())
+            .collect::<Vec<_>>()
+            == ids
+            && batch
+                .despawns()
+                .iter()
+                .all(|record| record.reason() == reason)
+    }
+
+    fn passive_initial(state: &mut AuthorityState, sessions: &[SessionKey], ids: &[PassiveId]) {
+        let events = passive_project(state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(event.event(), Event::PassiveSpawn(value) if value.spawns().iter().map(|record| record.id()).collect::<Vec<_>>() == ids)));
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            passive_members(state, *session, ids);
+        }
+    }
+
+    #[test]
+    fn passive_admission_projection_then_queued() {
+        let (mut state, sessions, ids) = passive_fixture(512, 1);
+        let events = passive_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event.event(), Event::PassiveSpawn(_)))
+        );
+        for session in &sessions {
+            passive_members(&state, *session, &[]);
+        }
+        assert_eq!(passive_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            passive_members(&state, *session, &ids);
+        }
+        let next = passive_project(&mut state);
+        assert_eq!(next.len(), 2);
+        assert!(
+            next.iter()
+                .all(|event| matches!(event.event(), Event::PassiveState(_)))
+        );
+    }
+
+    #[test]
+    fn passive_admission_closed_owner_and_peer() {
+        let (mut state, sessions, ids) = passive_fixture(512, 1);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let events = passive_project(&mut state);
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        passive_members(&state, owner, &[]);
+        passive_members(&state, peer, &ids);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        let next = passive_project(&mut state);
+        assert!(next.iter().any(
+            |event| event.recipient() == EventRecipient::Session(owner.get())
+                && matches!(event.event(), Event::PassiveSpawn(_))
+        ));
+        assert!(next.iter().any(
+            |event| event.recipient() == EventRecipient::Session(peer.get())
+                && matches!(event.event(), Event::PassiveState(_))
+        ));
+    }
+
+    #[test]
+    fn passive_admission_late_preflight_atomic() {
+        let (mut state, sessions, ids) = passive_fixture(512, 1);
+        let events = passive_project(&mut state);
+        let mut refused = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+            passive_members(&state, *session, &[]);
+        }
+        assert_eq!(passive_project(&mut state), events);
+        state.publish(publication(events)).unwrap();
+        for session in &sessions {
+            passive_members(&state, *session, &ids);
+        }
+    }
+
+    #[test]
+    fn passive_admission_despawn_died_preflight_retry() {
+        let (mut state, sessions, ids) = passive_fixture(512, 1);
+        passive_initial(&mut state, &sessions, &ids);
+        passive_lifecycle(&mut state, ids[0], ActorLifecycle::Dead);
+        let events = passive_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(
+            |event| matches!(event.event(), Event::PassiveDespawn(value) if passive_departure_matches(value, &ids, mornlea_domain::PassiveDespawnReason::Died))
+        ));
+        let mut refused = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            passive_members(&state, *session, &ids);
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(passive_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            passive_members(&state, *session, &[]);
+        }
+    }
+
+    #[test]
+    fn passive_admission_despawn_quiet_vanished_preflight_retry() {
+        let (mut state, sessions, ids) = passive_fixture(512, 1);
+        passive_initial(&mut state, &sessions, &ids);
+        // The same prepared quiet outcome is reused; no ordinary next-tick retry is asserted.
+        passive_lifecycle(&mut state, ids[0], ActorLifecycle::Dead);
+        let events = passive_project_with_quiet(&mut state, &ids);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(
+            |event| matches!(event.event(), Event::PassiveDespawn(value) if passive_departure_matches(value, &ids, mornlea_domain::PassiveDespawnReason::Vanished))
+        ));
+        let mut refused = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            passive_members(&state, *session, &ids);
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(passive_project_with_quiet(&mut state, &ids), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            passive_members(&state, *session, &[]);
+        }
+    }
+
+    #[test]
+    fn passive_admission_departure_and_arrival() {
+        let (mut state, sessions, ids) = passive_fixture(512, 2);
+        passive_lifecycle(&mut state, ids[1], ActorLifecycle::Pending);
+        passive_initial(&mut state, &sessions, &ids[..1]);
+        passive_lifecycle(&mut state, ids[0], ActorLifecycle::Dead);
+        passive_lifecycle(&mut state, ids[1], ActorLifecycle::Active);
+        let events = passive_project(&mut state);
+        assert_eq!(events.len(), 4);
+        for session in &sessions {
+            let owned: Vec<_> = events
+                .iter()
+                .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+                .map(|event| event.event())
+                .collect();
+            assert!(
+                matches!(owned.as_slice(), [Event::PassiveDespawn(old), Event::PassiveSpawn(new)] if passive_departure_matches(old, &ids[..1], mornlea_domain::PassiveDespawnReason::Died) && new.spawns().len() == 1 && new.spawns()[0].id() == ids[1])
+            );
+            passive_members(&state, *session, &ids[..1]);
+        }
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            passive_members(&state, *session, &ids[1..]);
+        }
+        assert!(
+            passive_project(&mut state)
+                .iter()
+                .all(|event| matches!(event.event(), Event::PassiveState(_)))
+        );
+    }
+
+    #[test]
+    fn passive_admission_saturated_prefix_peer() {
+        let (mut state, sessions, ids) = passive_fixture(1, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let prefix = marker_rejection(owner, 1);
+        state.publish(publication(vec![prefix.clone()])).unwrap();
+        let events = passive_project(&mut state);
+        for session in &sessions {
+            passive_members(&state, *session, &[]);
+        }
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(
+            state.take_outbox(owner, 512, 2_097_152).unwrap(),
+            vec![frame(prefix.event())]
+        );
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        passive_members(&state, peer, &ids);
+    }
+
+    #[test]
+    fn passive_admission_maximum_batch_and_packet_preflight() {
+        // This prepared population qualifies the wire cap, not the native population cap.
+        let (mut state, sessions, ids) = passive_fixture(512, 64);
+        let events = passive_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(event.event(), Event::PassiveSpawn(value) if value.spawns().len() == 64 && value.spawns()[0].id() == ids[0] && value.spawns()[63].id() == ids[63])));
+        for session in &sessions {
+            passive_members(&state, *session, &[]);
+        }
+        // Domain acceptance permits this complete batch; wire preflight must refuse it atomically.
+        let too_many: Vec<_> = (1..=65).map(|id| PassiveId::try_new(id).unwrap()).collect();
+        let bad_spawn = passive_spawn_event(&too_many);
+        let bad_despawn = Event::PassiveDespawn(
+            mornlea_domain::PassiveDespawn::try_new(mornlea_domain::PassiveDespawnParts {
+                server_tick: 0,
+                despawns: too_many
+                    .into_iter()
+                    .map(|id| {
+                        mornlea_domain::PassiveDespawnRecord::new(
+                            id,
+                            mornlea_domain::PassiveDespawnReason::Died,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            })
+            .unwrap(),
+        );
+        for bad in [bad_spawn, bad_despawn] {
+            let mut refused = events.clone();
+            refused.push(RoutedEvent::new(
+                EventRecipient::Session(sessions[0].get()),
+                bad,
+            ));
+            assert_eq!(
+                state.publish(publication(refused)),
+                Err(ServerError::InvalidInput { field: "packet" })
+            );
+            for session in &sessions {
+                assert!(
+                    state
+                        .take_outbox(*session, 512, 2_097_152)
+                        .unwrap()
+                        .is_empty()
+                );
+                passive_members(&state, *session, &[]);
+            }
+        }
+        assert_eq!(passive_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            passive_members(&state, *session, &ids);
+        }
+        for id in &ids {
+            passive_lifecycle(&mut state, *id, ActorLifecycle::Dead);
+        }
+        let departures = passive_project(&mut state);
+        assert_eq!(departures.len(), 2);
+        assert!(departures.iter().all(
+            |event| matches!(event.event(), Event::PassiveDespawn(value) if passive_departure_matches(value, &ids, mornlea_domain::PassiveDespawnReason::Died))
+        ));
+        for session in &sessions {
+            passive_members(&state, *session, &ids);
+        }
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&departures, *session))
+            .collect();
+        state.publish(publication(departures)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            passive_members(&state, *session, &[]);
+        }
+        assert!(passive_project(&mut state).is_empty());
+    }
+
+    #[test]
+    fn passive_admission_targeted_and_broadcast_ownership() {
+        let (mut state, sessions, ids) = passive_fixture(512, 2);
+        // Manual frames qualify receipt ownership independently of source actor production.
+        let spawn = passive_spawn_event(&ids);
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Broadcast,
+                spawn.clone(),
+            )]))
+            .unwrap();
+        for session in &sessions {
+            assert_eq!(
+                state.take_outbox(*session, 512, 2_097_152).unwrap(),
+                vec![frame(&spawn)]
+            );
+            passive_members(&state, *session, &[]);
+        }
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(sessions[0].get()),
+                spawn.clone(),
+            )]))
+            .unwrap();
+        assert_eq!(
+            state.take_outbox(sessions[0], 512, 2_097_152).unwrap(),
+            vec![frame(&spawn)]
+        );
+        passive_members(&state, sessions[0], &ids);
+        passive_members(&state, sessions[1], &[]);
         assert!(
             state
                 .take_outbox(sessions[1], 512, 2_097_152)
