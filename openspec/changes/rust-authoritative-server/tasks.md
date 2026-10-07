@@ -317,3 +317,5 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.7l3peo Publish four entity families for registered Pending observers from their captured per-session foot snapshots ([private plan](plans/161-source-pending-observer-entities.md)); actual tick/FIFO, Closed/prefix and unchanged Active guard controls. Broader runtime and3.8/4.1/4.2 remain OPEN.
 
 - [x] 3.7l3esa Admit exactly correlated off-tick encoded snapshots into the authority FIFO with Queued-only snapshot mirrors ([private plan](plans/162-encoded-snapshot-admission.md)); actual CPU/full Memory ownership and context/error/Closed/saturation controls. Source async selection/runtime and broad3.8/4.1/4.2 remain OPEN.
+
+- [x] 3.7l3ecp Retain and move complete semantic snapshot/frame publication owners from actual CPU results ([private plan](plans/163-encoded-snapshot-publication-parts.md)); declaration/causal RED, actual factory/pool and independent scoped gates before consumer integration.
