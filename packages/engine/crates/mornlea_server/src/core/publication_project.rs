@@ -1380,9 +1380,8 @@ fn emit_projectiles(
                 ));
             }
         }
-        // The projectile spawn record is total, so this tick's visible set
-        // stores as-is: a departure publishes exactly once.
-        view.visible_projectiles.clone_from(&visibility.projectiles);
+        // The earlier admitted set survives projection; exact frame admission
+        // owns each departure and arrival independently of this desired set.
     }
 }
 

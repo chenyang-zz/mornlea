@@ -26,11 +26,11 @@ pub(crate) struct ChunkPublication {
     pub(crate) resync_queued: bool,
 }
 
-/// The previous tick's derived interest and published snapshots of one
-/// session. All fields are owned copies. Inventory, crafting, full snapshots and
-/// contiguous deltas, remote/companion membership and hostile/passive batch
-/// membership advance only after their exact frames enter the FIFO. Other families retain
-/// their current projection-owned migration behavior.
+/// The previous tick's derived interest and published snapshots of one session.
+/// All fields are owned copies. Inventory, crafting, chunk publications and
+/// remote, companion, hostile, passive and projectile membership advance only
+/// after their exact frames enter the FIFO. Other families retain their current
+/// projection-owned migration behavior.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SessionView {
     /// This session's chunk interest as derived from its player actor.
@@ -46,7 +46,7 @@ pub(crate) struct SessionView {
     pub(crate) visible_hostiles: BTreeSet<HostileId>,
     /// Complete passive identity batches admitted to this session's FIFO.
     pub(crate) visible_passives: BTreeSet<PassiveId>,
-    /// Last tick's visible projectile identities.
+    /// Complete projectile identity batches admitted to this session's FIFO.
     pub(crate) visible_projectiles: BTreeSet<ProjectileId>,
     /// Last emitted dropped-stack wire values. Authority-only age and pickup
     /// timers never participate in this diff.

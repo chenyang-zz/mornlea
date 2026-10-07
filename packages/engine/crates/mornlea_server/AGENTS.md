@@ -1361,6 +1361,12 @@ terminal capture retains its existing owner, so this mirror adds no death ACK
 or cross-tick reason cache. Prepared retries preserve the same quiet outcome;
 actual native death and quiet retirement remain separately tested providers.
 
+Projectile membership also advances by complete FIFO-admitted checked ID
+prefixes under its exported wire cap. Metadata contains no source owner, flight
+body, runtime or despawn reason. Total spawn construction and desired visibility
+do not certify admission; a queued departure survives a later dropped arrival.
+Native creation, flight retirement and actor snapshot cuts keep their owners.
+
 Full snapshot mirrors advance only after the exact encoded frame enters the recipient FIFO. Projection records desired resyncs and uses a same-pass emitted-key set to suppress duplicate first/resync snapshots and covered deltas; this set is not an admission receipt. Closed or failed-preflight snapshots retain retryable unsent/current-revision state; revision-gap desired resync survives the transient tick outcome until an admitted full frame clears it. Unready desired requests and Forget cleanup retain source ownership. Actor visibility/mirrors and automatic off-tick encoding remain separate migration boundaries. Snapshot metadata contains only chunk key/revision alongside the existing boxed record metadata, never a cloned chunk body.
 
 Contiguous block delta mirrors advance only after their exact frame enters the FIFO, and only for an already-sent full snapshot at the checked base revision. Frame-paired scalar metadata carries key/base/new revision; stale or duplicate manual frames cannot create history or roll it backward. Projection and preflight alone leave the revision unchanged, including empty barriers. Same-pass full-snapshot coverage remains the projection lookahead owner. Eligible chunk deltas are validated as a whole before snapshot admission. Invalid count or relations discard all classified deltas for that recipient and order existing retirement after provider/despawn/Forget prefixes; no remainder frames or Disconnect are synthesized. First-send, resync, gap and unwanted inputs bypass delta validation. Actual bounded trusted transactions can aggregate beyond the per-operation cap; ordinary gameplay reachability, actor visibility/queue ownership, transport retirement and off-tick publication remain separate boundaries.

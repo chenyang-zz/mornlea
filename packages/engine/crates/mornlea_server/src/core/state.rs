@@ -2442,6 +2442,16 @@ impl AuthorityState {
             return;
         };
         match mirror {
+            QueuedPublicationMirror::ProjectileSpawn(batch) => {
+                for id in batch.ids.into_iter().take(usize::from(batch.count)) {
+                    view.visible_projectiles.insert(id);
+                }
+            }
+            QueuedPublicationMirror::ProjectileDespawn(batch) => {
+                for id in batch.ids.into_iter().take(usize::from(batch.count)) {
+                    view.visible_projectiles.remove(&id);
+                }
+            }
             QueuedPublicationMirror::PassiveSpawn(batch) => {
                 for id in batch.ids.into_iter().take(usize::from(batch.count)) {
                     view.visible_passives.insert(id);
@@ -3371,10 +3381,38 @@ impl<const N: usize> QueuedPassiveIds<N> {
     }
 }
 
+/// Projectile identity receipts carry no source owner, flight body or runtime.
+/// The complete wire-bounded prefix excludes every unused checked tail copy.
+#[derive(Clone, Copy)]
+struct QueuedProjectileIds<const N: usize> {
+    ids: [mornlea_domain::ProjectileId; N],
+    count: u8,
+}
+
+impl<const N: usize> QueuedProjectileIds<N> {
+    fn from_ids(mut ids: impl Iterator<Item = mornlea_domain::ProjectileId>) -> Option<Self> {
+        if N == 0 {
+            return None;
+        }
+        let first = ids.next()?;
+        let mut copied = Self {
+            ids: [first; N],
+            count: 1,
+        };
+        for id in ids {
+            *copied.ids.get_mut(usize::from(copied.count))? = id;
+            copied.count = copied.count.checked_add(1)?;
+        }
+        Some(copied)
+    }
+}
+
 /// Checked mirror metadata stays paired with its immutable encoded frame.
 /// Other publication mirrors retain their separate migration ownership.
 #[derive(Clone, Copy)]
 enum QueuedPublicationMirror {
+    ProjectileSpawn(QueuedProjectileIds<{ mornlea_protocol::MAX_PROJECTILE_RECORDS as usize }>),
+    ProjectileDespawn(QueuedProjectileIds<{ mornlea_protocol::MAX_PROJECTILE_RECORDS as usize }>),
     PassiveSpawn(QueuedPassiveIds<{ mornlea_protocol::MAX_PASSIVE_SPAWN_RECORDS as usize }>),
     PassiveDespawn(QueuedPassiveIds<{ mornlea_protocol::MAX_PASSIVE_RECORDS as usize }>),
     HostileSpawn(QueuedHostileIds<{ mornlea_protocol::HOSTILE_SPAWN_MAX_RECORDS as usize }>),
@@ -3409,6 +3447,14 @@ impl QueuedPublicationMirror {
             )),
             mornlea_domain::Event::HostileDespawn(value) => Some(Self::HostileDespawn(
                 QueuedHostileIds::from_ids(value.ids().iter().copied())?,
+            )),
+            // Conversion and encoding already certify the complete projectile wire cap;
+            // observer membership never revalidates its source owner or flight policy.
+            mornlea_domain::Event::ProjectileSpawn(value) => Some(Self::ProjectileSpawn(
+                QueuedProjectileIds::from_ids(value.spawns().iter().map(|record| record.id()))?,
+            )),
+            mornlea_domain::Event::ProjectileDespawn(value) => Some(Self::ProjectileDespawn(
+                QueuedProjectileIds::from_ids(value.ids().iter().copied())?,
             )),
             // Passive despawn reasons belong to the immutable wire record, while
             // membership needs only its complete checked ID prefix after encoding.
@@ -20557,6 +20603,471 @@ mod owner_record_admission_tests {
                 .take_outbox(sessions[1], 512, 2_097_152)
                 .unwrap()
                 .is_empty()
+        );
+    }
+    fn projectile_record(id: mornlea_domain::ProjectileId, owner: SessionKey) -> ProjectileRecord {
+        ProjectileRecord {
+            id,
+            owner: ActorKey::Player(owner),
+            dimension: Dimension::OVERWORLD,
+            position: FiniteVec3::try_new([0.5, 65.0, 0.5]).unwrap(),
+            velocity: FiniteVec3::try_new([0.25, 0.0, 0.0]).unwrap(),
+            kind: mornlea_domain::ProjectileKind::Arrow,
+            damage: 3,
+            age: 0,
+        }
+    }
+
+    fn projectile_presence(
+        state: &mut AuthorityState,
+        id: mornlea_domain::ProjectileId,
+        present: bool,
+    ) {
+        // Exact prepared edits exercise publication without bow or ranged-action production.
+        let (before, after) = if present {
+            (
+                None,
+                Some(projectile_record(
+                    id,
+                    *state.current_sessions.first().unwrap(),
+                )),
+            )
+        } else {
+            (
+                Some(
+                    state
+                        .residents
+                        .projectiles
+                        .iter()
+                        .find(|record| record.id == id)
+                        .unwrap()
+                        .clone(),
+                ),
+                None,
+            )
+        };
+        let mut context = TickContext::for_tick(state, TickBudget::full());
+        context
+            .stage(RuleEffect::Projectile { before, after })
+            .unwrap();
+        context.commit_carried();
+    }
+
+    fn projectile_fixture(
+        outbox: usize,
+        count: u64,
+    ) -> (
+        AuthorityState,
+        Vec<SessionKey>,
+        Vec<mornlea_domain::ProjectileId>,
+    ) {
+        let (mut state, sessions) = remote_fixture(outbox);
+        let ids: Vec<_> = (1..=count)
+            .map(|id| mornlea_domain::ProjectileId::try_new(id).unwrap())
+            .collect();
+        for id in &ids {
+            projectile_presence(&mut state, *id, true);
+        }
+        (state, sessions, ids)
+    }
+
+    fn projectile_project(state: &mut AuthorityState) -> Vec<RoutedEvent> {
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches.clear();
+        state
+            .project_tick_publication(0, &outcome)
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event.event(),
+                    Event::ProjectileSpawn(_)
+                        | Event::ProjectileDespawn(_)
+                        | Event::ProjectileState(_)
+                )
+            })
+            .collect()
+    }
+
+    fn projectile_members(
+        state: &AuthorityState,
+        session: SessionKey,
+        ids: &[mornlea_domain::ProjectileId],
+    ) {
+        assert_eq!(
+            state.session_views[&session].visible_projectiles,
+            ids.iter().copied().collect::<BTreeSet<_>>(),
+            "projectile membership must reflect complete FIFO-admitted batches"
+        );
+    }
+
+    fn projectile_spawn_event(ids: &[mornlea_domain::ProjectileId]) -> Event {
+        Event::ProjectileSpawn(
+            mornlea_domain::ProjectileSpawn::try_new(mornlea_domain::ProjectileSpawnParts {
+                server_tick: 0,
+                spawns: ids
+                    .iter()
+                    .map(|id| {
+                        mornlea_domain::ProjectileSpawnRecord::new(
+                            mornlea_domain::ProjectileSpawnRecordParts {
+                                id: *id,
+                                kind: mornlea_domain::ProjectileKind::Arrow,
+                                dimension: Dimension::OVERWORLD,
+                                position: FiniteVec3::try_new([0.5, 65.0, 0.5]).unwrap(),
+                                velocity: FiniteVec3::try_new([0.25, 0.0, 0.0]).unwrap(),
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            })
+            .unwrap(),
+        )
+    }
+
+    fn projectile_initial(
+        state: &mut AuthorityState,
+        sessions: &[SessionKey],
+        ids: &[mornlea_domain::ProjectileId],
+    ) {
+        let events = projectile_project(state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(event.event(), Event::ProjectileSpawn(value) if value.spawns().iter().map(|record| record.id()).collect::<Vec<_>>() == ids)));
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            projectile_members(state, *session, ids);
+        }
+    }
+
+    #[test]
+    fn projectile_admission_projection_then_queued() {
+        let (mut state, sessions, ids) = projectile_fixture(512, 1);
+        let events = projectile_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event.event(), Event::ProjectileSpawn(_)))
+        );
+        for session in &sessions {
+            projectile_members(&state, *session, &[]);
+        }
+        assert_eq!(projectile_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            projectile_members(&state, *session, &ids);
+        }
+        let next = projectile_project(&mut state);
+        assert_eq!(next.len(), 2);
+        assert!(
+            next.iter()
+                .all(|event| matches!(event.event(), Event::ProjectileState(_)))
+        );
+    }
+
+    #[test]
+    fn projectile_admission_closed_owner_and_peer() {
+        let (mut state, sessions, ids) = projectile_fixture(512, 1);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        state.close_outbox(owner, CloseReason::PeerGone);
+        let events = projectile_project(&mut state);
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        projectile_members(&state, owner, &[]);
+        projectile_members(&state, peer, &ids);
+        assert!(state.take_outbox(owner, 512, 2_097_152).unwrap().is_empty());
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        let next = projectile_project(&mut state);
+        assert!(next.iter().any(
+            |event| event.recipient() == EventRecipient::Session(owner.get())
+                && matches!(event.event(), Event::ProjectileSpawn(_))
+        ));
+        assert!(next.iter().any(
+            |event| event.recipient() == EventRecipient::Session(peer.get())
+                && matches!(event.event(), Event::ProjectileState(_))
+        ));
+    }
+
+    #[test]
+    fn projectile_admission_late_preflight_atomic() {
+        let (mut state, sessions, ids) = projectile_fixture(512, 1);
+        let events = projectile_project(&mut state);
+        let mut refused = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+            projectile_members(&state, *session, &[]);
+        }
+        assert_eq!(projectile_project(&mut state), events);
+        state.publish(publication(events)).unwrap();
+        for session in &sessions {
+            projectile_members(&state, *session, &ids);
+        }
+    }
+
+    #[test]
+    fn projectile_admission_despawn_preflight_retry() {
+        let (mut state, sessions, ids) = projectile_fixture(512, 1);
+        projectile_initial(&mut state, &sessions, &ids);
+        projectile_presence(&mut state, ids[0], false);
+        let events = projectile_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(
+            |event| matches!(event.event(), Event::ProjectileDespawn(value) if value.ids() == ids)
+        ));
+        let mut refused = events.clone();
+        let unknown = SessionKey::from_raw(u64::MAX).unwrap();
+        refused.push(marker_rejection(unknown, 1));
+        assert_eq!(
+            state.publish(publication(refused)),
+            Err(ServerError::StaleSession { session: unknown })
+        );
+        for session in &sessions {
+            projectile_members(&state, *session, &ids);
+            assert!(
+                state
+                    .take_outbox(*session, 512, 2_097_152)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(projectile_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            projectile_members(&state, *session, &[]);
+        }
+    }
+
+    #[test]
+    fn projectile_admission_departure_and_arrival() {
+        let (mut state, sessions, ids) = projectile_fixture(512, 2);
+        projectile_presence(&mut state, ids[1], false);
+        projectile_initial(&mut state, &sessions, &ids[..1]);
+        projectile_presence(&mut state, ids[0], false);
+        projectile_presence(&mut state, ids[1], true);
+        let events = projectile_project(&mut state);
+        assert_eq!(events.len(), 4);
+        for session in &sessions {
+            let owned: Vec<_> = events
+                .iter()
+                .filter(|event| event.recipient() == EventRecipient::Session(session.get()))
+                .map(|event| event.event())
+                .collect();
+            assert!(
+                matches!(owned.as_slice(), [Event::ProjectileDespawn(old), Event::ProjectileSpawn(new)] if old.ids() == &ids[..1] && new.spawns().len() == 1 && new.spawns()[0].id() == ids[1])
+            );
+            projectile_members(&state, *session, &ids[..1]);
+        }
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            projectile_members(&state, *session, &ids[1..]);
+        }
+        assert!(
+            projectile_project(&mut state)
+                .iter()
+                .all(|event| matches!(event.event(), Event::ProjectileState(_)))
+        );
+    }
+
+    #[test]
+    fn projectile_admission_saturated_prefix_peer() {
+        let (mut state, sessions, ids) = projectile_fixture(1, 2);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        let prefix = marker_rejection(owner, 1);
+        state.publish(publication(vec![prefix.clone()])).unwrap();
+        let events = projectile_project(&mut state);
+        for session in &sessions {
+            projectile_members(&state, *session, &[]);
+        }
+        let expected = companion_frames(&events, peer);
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(
+            state.take_outbox(owner, 512, 2_097_152).unwrap(),
+            vec![frame(prefix.event())]
+        );
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        projectile_members(&state, peer, &ids);
+    }
+
+    #[test]
+    fn projectile_admission_maximum_batch_and_packet_preflight() {
+        let (mut state, sessions, ids) = projectile_fixture(512, 128);
+        let events = projectile_project(&mut state);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(event.event(), Event::ProjectileSpawn(value) if value.spawns().len() == 128 && value.spawns()[0].id() == ids[0] && value.spawns()[127].id() == ids[127])));
+        for session in &sessions {
+            projectile_members(&state, *session, &[]);
+        }
+        // Domain acceptance permits this complete batch; wire preflight must refuse it atomically.
+        let too_many: Vec<_> = (1..=129)
+            .map(|id| mornlea_domain::ProjectileId::try_new(id).unwrap())
+            .collect();
+        let bad_spawn = projectile_spawn_event(&too_many);
+        let bad_despawn = Event::ProjectileDespawn(
+            mornlea_domain::ProjectileDespawn::try_new(mornlea_domain::ProjectileDespawnParts {
+                server_tick: 0,
+                ids: too_many.into_boxed_slice(),
+            })
+            .unwrap(),
+        );
+        for bad in [bad_spawn, bad_despawn] {
+            let mut refused = events.clone();
+            refused.push(RoutedEvent::new(
+                EventRecipient::Session(sessions[0].get()),
+                bad,
+            ));
+            assert_eq!(
+                state.publish(publication(refused)),
+                Err(ServerError::InvalidInput { field: "packet" })
+            );
+            for session in &sessions {
+                assert!(
+                    state
+                        .take_outbox(*session, 512, 2_097_152)
+                        .unwrap()
+                        .is_empty()
+                );
+                projectile_members(&state, *session, &[]);
+            }
+        }
+        assert_eq!(projectile_project(&mut state), events);
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&events, *session))
+            .collect();
+        state.publish(publication(events)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            projectile_members(&state, *session, &ids);
+        }
+        for id in &ids {
+            projectile_presence(&mut state, *id, false);
+        }
+        let departures = projectile_project(&mut state);
+        assert_eq!(departures.len(), 2);
+        assert!(departures.iter().all(
+            |event| matches!(event.event(), Event::ProjectileDespawn(value) if value.ids() == ids)
+        ));
+        for session in &sessions {
+            projectile_members(&state, *session, &ids);
+        }
+        let expected: Vec<_> = sessions
+            .iter()
+            .map(|session| companion_frames(&departures, *session))
+            .collect();
+        state.publish(publication(departures)).unwrap();
+        for (session, frames) in sessions.iter().zip(expected) {
+            assert_eq!(state.take_outbox(*session, 512, 2_097_152).unwrap(), frames);
+            projectile_members(&state, *session, &[]);
+        }
+        assert!(projectile_project(&mut state).is_empty());
+    }
+
+    #[test]
+    fn projectile_admission_targeted_and_broadcast_ownership() {
+        let (mut state, sessions, ids) = projectile_fixture(512, 2);
+        // Manual frames qualify receipt ownership independently of source actor production.
+        let spawn = projectile_spawn_event(&ids);
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Broadcast,
+                spawn.clone(),
+            )]))
+            .unwrap();
+        for session in &sessions {
+            assert_eq!(
+                state.take_outbox(*session, 512, 2_097_152).unwrap(),
+                vec![frame(&spawn)]
+            );
+            projectile_members(&state, *session, &[]);
+        }
+        state
+            .publish(publication(vec![RoutedEvent::new(
+                EventRecipient::Session(sessions[0].get()),
+                spawn.clone(),
+            )]))
+            .unwrap();
+        assert_eq!(
+            state.take_outbox(sessions[0], 512, 2_097_152).unwrap(),
+            vec![frame(&spawn)]
+        );
+        projectile_members(&state, sessions[0], &ids);
+        projectile_members(&state, sessions[1], &[]);
+        assert!(
+            state
+                .take_outbox(sessions[1], 512, 2_097_152)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn projectile_admission_saturated_departure_prefix_peer() {
+        let (mut state, sessions, ids) = projectile_fixture(2, 1);
+        let (owner, peer) = (sessions[0], sessions[1]);
+        projectile_initial(&mut state, &sessions, &ids);
+        projectile_presence(&mut state, ids[0], false);
+        let next = mornlea_domain::ProjectileId::try_new(2).unwrap();
+        projectile_presence(&mut state, next, true);
+        let prefix = marker_rejection(owner, 1);
+        state.publish(publication(vec![prefix.clone()])).unwrap();
+        let events = projectile_project(&mut state);
+        assert_eq!(events.len(), 4);
+        for session in &sessions {
+            projectile_members(&state, *session, &ids);
+        }
+        let expected = companion_frames(&events, peer);
+        let departure = events
+            .iter()
+            .find(|event| {
+                event.recipient() == EventRecipient::Session(owner.get())
+                    && matches!(event.event(), Event::ProjectileDespawn(_))
+            })
+            .unwrap();
+        let retained = vec![frame(prefix.event()), frame(departure.event())];
+        state.publish(publication(events)).unwrap();
+        assert_eq!(state.session(owner).unwrap().phase, SessionPhase::Retired);
+        assert!(!state.session_views.contains_key(&owner));
+        assert_eq!(state.take_outbox(owner, 512, 2_097_152).unwrap(), retained);
+        assert_eq!(state.take_outbox(peer, 512, 2_097_152).unwrap(), expected);
+        projectile_members(&state, peer, &[next]);
+        let survivors = projectile_project(&mut state);
+        assert_eq!(survivors.len(), 1);
+        assert!(
+            survivors
+                .iter()
+                .all(|event| matches!(event.event(), Event::ProjectileState(_)))
         );
     }
 }
