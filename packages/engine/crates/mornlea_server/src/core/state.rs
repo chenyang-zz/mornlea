@@ -64,6 +64,8 @@ use crate::rules::passives::PassiveSnowBook;
 mod actor_saves;
 #[path = "state_companion_persistence.rs"]
 mod companion_persistence;
+#[path = "companion_planning.rs"]
+pub(crate) mod companion_planning;
 #[path = "state_mob_persistence.rs"]
 mod mob_persistence;
 #[path = "state_player_persistence.rs"]

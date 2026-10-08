@@ -239,6 +239,11 @@ impl CompanionChatBook {
         self.configured.contains_key(&id)
     }
 
+    /// Current task of one companion, if any.
+    pub(crate) fn current_task(&self, id: CompanionId) -> Option<&CompanionChatTask> {
+        self.slots.get(&id)?.current.as_ref()
+    }
+
     /// Bounded queue view for one companion.
     pub(crate) fn queue_view(&self, id: CompanionId) -> Option<CompanionChatQueueView> {
         let slot = self.slots.get(&id)?;

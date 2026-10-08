@@ -1309,6 +1309,10 @@ impl SnapshotLease {
 }
 
 #[cfg(test)]
+#[path = "snapshot_planning_tests.rs"]
+mod planning_tests;
+
+#[cfg(test)]
 mod close_tests {
     use super::*;
     use crate::agent::mcp::McpService;
