@@ -1,0 +1,21 @@
+# command: bash scripts/rust-server-opt-in.sh --self-test
+# source_commit: 123ba12fecf02339101004115cda50f10f87e944
+# started_utc: 2026-10-08T14:03:13Z
+# env: MORNLEA_RUST_SERVER_BIN=/workspace/ethan/target-38/release/mornlea-server
+# env: MORNLEA_PREVIOUS_SERVER_BIN=/tmp/ethan-c38-prev/previous-server
+# env: MORNLEA_PREVIOUS_PACKAGE=/tmp/ethan-c38-prev/previous-runtime.json
+# env: TMPDIR=/tmp/e38
+SELFTEST prepared world seed=42 tree=fe39697e0890e9df4c0cd08ca73a3c5a4124827efebe4fb659b689e497e66779
+OK active manifest=/tmp/e38/os-hztgxjxv/run/activation-manifest.json phase=RustRunning pid=1616141
+SELFTEST activate holds the lock with the manifest nonce
+OK previous pid=1616270 listen=127.0.0.1:37547 seed=42
+OK rollback manifest=/tmp/e38/os-hztgxjxv/run/activation-manifest.json phase=PreviousRunning policy=compatible
+SELFTEST compatible rollback preserves seed=42 under sole lock
+OK previous pid=1616336 listen=127.0.0.1:34197 seed=42
+OK rollback manifest=/tmp/e38/os-hztgxjxv/run/activation-manifest.json phase=PreviousRunning policy=restore-backup
+SELFTEST restore rollback reinstalls seed=42
+SELFTEST dry-run inspects without qualifying
+SELFTEST default startup unchanged and no foreground client referenced
+SELFTEST all disposable workflows passed
+# exit: 0
+# finished_utc: 2026-10-08T14:03:16Z

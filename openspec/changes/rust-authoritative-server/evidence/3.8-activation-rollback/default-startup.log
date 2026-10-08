@@ -1,0 +1,12 @@
+# command: cargo test -p mornlea_server --locked --test persistence_failure -- activation::default_startup_paths_untouched --exact --nocapture
+# source_commit: 123ba12fecf02339101004115cda50f10f87e944
+# started_utc: 2026-10-08T14:03:32Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/persistence_failure.rs (/workspace/ethan/target-38/debug/deps/persistence_failure-86119ae95d23f11c)
+
+running 1 test
+test activation::default_startup_paths_untouched ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 416 filtered out; finished in 0.01s
+
+# exit: 0
