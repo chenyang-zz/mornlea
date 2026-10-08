@@ -13,7 +13,7 @@
 2. `docs/notes/agent-runs.md` —— 上轮边界；**不存在即首轮**（「新评论」指全部评论，遗留清单横扫范围为全部归档）。
 3. `docs/notes/progress.md` 与 `AGENTS.md` —— 已交付能力基线、协议/存档/ABI/scenario 版本。
 4. GitHub Discussion #71（Mornlea 功能缺口拆解与任务认领池）—— 新增评论里的 MC 缺口请求与讨论结论；owner/name 以 `git remote get-url origin` 实际仓库为准。
-5. `git log origin/main -20`、`git branch -a`、`git worktree list` 及 A 组在途 worktree 的 `git status --short` —— 最近合入、在途分支头与脏状态。
+5. `git log origin/dev -20`、`git branch -a`、`git worktree list` 及 A 组在途 worktree 的 `git status --short` —— 最近合入、在途分支头与脏状态。
 6. 各归档 change 的 `design.md`「遗留与简化清单」、`proposal.md`「延期与放弃 / 非目标」与批次设计「非目标 / 已知简化与升级条件」—— 缺口候选的权威出处；非首轮只横扫上轮之后新归档的部分。
 7. 来源在库校验：backlog 引用的文档用 `git ls-files` 确认已提交；未入库引用记入运行记录留给用户，不代交。
 
@@ -25,7 +25,7 @@
 - 每条请求的结论只有：落行 / 待澄清 / 丢弃（写明理由）。
 
 ### 2. 校对现状
-- 已合入 `main` 的能力（以 `git log origin/main` 与 `openspec/changes/archive/` 新增目录为准）：对应行 → `已完成`（认领人保留履历），并同步讨论。
+- 已合入集成分支 `dev` 的能力（以 `git log origin/dev` 与 `openspec/changes/archive/` 新增目录为准）：对应行 → `已完成`（认领人保留履历），并同步讨论。
 - A 组在途行：每轮核对实际分支头 SHA 与 worktree 脏状态，滞后时更新备注（分支名 + 头 SHA）；只可更新状态与备注，不得改动实现契约。
 - 规划表状态与分支实际状态不一致（如功能分支已实现但仍标为 `已认领`）→ 以 git 分支/`AGENTS.md` 为准修正并注明依据。
 - 过时条目：来源已经失效或已被明确放弃 → 状态改为 `已取消` 并在备注注明理由，不静默删除。
@@ -39,7 +39,7 @@
 - 只有前序已完成、版本槽空闲且 worktree 证据一致时，才能把串行队首从 `排队` 晋升为 `就绪`；不得同时晋升两个会推进稳定编号、协议/schema、ABI 或 golden 的核心玩法行。
 
 ### 4. 同步（遵守「当前规范」）
-- 只提交本轮产出文件（backlog 与运行记录），不携带用户工作区其他改动；两段式：`docs: plan <新增行 ID 列表>` 提交 backlog → `docs: record planner run <日期>` 提交运行记录（时间、读取输入、变更行、提交 SHA、讨论同步方式、遗留问题）→ 一并**快进**推送 `origin/main`（失败则 fetch 重放或终止并记录，绝不强推）。
+- 只提交本轮产出文件（backlog 与运行记录），不携带用户工作区其他改动；两段式：`docs: plan <新增行 ID 列表>` 提交 backlog → `docs: record planner run <日期>` 提交运行记录（时间、读取输入、变更行、提交 SHA、讨论同步方式、遗留问题）→ 两笔一并推送到新的 `planner/<日期>` 分支，并开 PR 到 `dev`（不直推 `dev` 或 `main`；推送失败则终止并记录，绝不强推；PR 由评审者审过后合并，规划者不自行合并）。
 - 正文刷新：**运行 `scripts/agents/refresh-discussion.py --update`**（解析仓库表自动生成八组状态列表并推送），不得手工粘贴长表；只有 `就绪` 是绿色可领取组。
 - 状态变化评论：**结构化单条评论**，一段一式：`【状态变更】ID 功能名 → 状态` + 时间/认领人/关键证据(PR/commit)/备注 +「以仓库文件为准」；无变化的轮次不发评论。
 
@@ -53,7 +53,7 @@
 6. **来源必填且入库**：每行来源可回溯到已提交文档（design 遗留清单 §/proposal 非目标/批次设计章节）；未入库引用只记录不代交。
 7. **评论样式**：状态变化一律单条结构化评论；正文刷新 = 八组状态的脚本镜像，只有 `就绪` 是绿色可领取组；评论 = 变更记录；不重复堆叠旧状态。
 8. **不排时间**：不写日期/估时/排期；依赖用行 ID 表达。
-9. **只改规划**：不改代码、根 `AGENTS.md` 版本矩阵、局部 `AGENTS.md`、`CLAUDE.md` 薄导入、`docs/agents/` 或 `docs/development-process.md`；docs-only 快进推送 main。
+9. **只改规划**：不改代码、根 `AGENTS.md` 版本矩阵、局部 `AGENTS.md`、`CLAUDE.md` 薄导入、`docs/agents/` 或 `docs/development-process.md`；docs-only 提交只推 `planner/*` 分支并开 PR 到 `dev`。
 
 ## 产出规范
 
@@ -64,7 +64,7 @@
 
 ## 约束（红线）
 
-- 不认领任务、不写功能代码、不运行构建/测试验证（docs-only 轮次无需）、不合并任何功能分支；推送仅限对 `main` 的 docs-only 快进推送。
+- 不认领任务、不写功能代码、不运行构建/测试验证（docs-only 轮次无需）、不合并任何功能分支；推送仅限把 docs-only 提交推到 `planner/*` 分支并开 PR 到 `dev`；不直推 `dev` 或 `main`，也不合并该 PR。
 - 不改根 `AGENTS.md` 版本矩阵或局部 `AGENTS.md`（由对应实现行按相关作用域更新），也不改只作薄导入的 `CLAUDE.md`、`docs/agents/`（含本卡与提示词）或 `docs/development-process.md`。
 - 不把「讨论里的想法」直接写成已确认规划：没有来源出处的行必须先标记 `待澄清` 并挂到 Discussion 相应评论，确认后再落行。
 - 不携带、不代交用户工作区改动与未跟踪文件；未入库引用只记录不补交。
