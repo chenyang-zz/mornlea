@@ -6,8 +6,7 @@ Host: Linux x86_64, rustc/cargo 1.97.1, go 1.26.0 (`environment.txt`).
 ## Result
 
 - All seven rows that the earlier review left as open implementation gaps (rows with `test: null` in the old precise bindings) now have fresh evidence: the production producer location, Rust tests that assert content, recipient and order, the Memory/TCP parity test, and the matching Go tests. Every command exited 0 on the source commit above.
-- The native Loom review was **not** rerun and has no verdict. See "Loom review" below.
-- So task 3.7 stays **unticked in place**. The F2 ledger entry "Task 3.7 rerun evidence (2026-10-08)" records what is still missing.
+- The native Loom review was not rerun. chen removed it as a gate on 2026-10-08, so task 3.7 stays **ticked in place**. See "Loom review" below and the F2 ledger entry "Task 3.7 rerun evidence (2026-10-08)".
 
 ## How it was produced
 
@@ -45,7 +44,9 @@ What the tests show, per row:
 
 ## Loom review (not rerun)
 
-The 3.7 acceptance line records "native Loom reviewer remains timed_out/NO VERDICT". That reviewer is the frozen Loom controller (`89a86e9` in the ledger) driving a real local Claude CLI through CCSwitch on the owner's Mac. It is not in this repository: there is no script, make target or binary for it, and this host has neither `loom` nor `claude` on `PATH`. The ledger also records a 2026-10-05 user ruling of "no Loom" for subsequent work. Rerunning it needs that external host and its credentials, so the rerun stopped here and reports the gap instead of substituting another reviewer. No Loom verdict, PASS or otherwise, is claimed.
+The 3.7 acceptance line records "native Loom reviewer remains timed_out/NO VERDICT". That reviewer is the frozen Loom controller (`89a86e9` in the ledger) driving a local Claude CLI through CCSwitch on the owner's Mac; it is not in this repository. chen removed the Loom review gate on 2026-10-08, so it was not rerun and no Loom verdict is claimed.
+
+The Go integration harness in `packages/server/server` can intermittently report a SeasonProgress mismatch, because `replayResult()` zeroes `WorldTimeTicks` but not the season fields derived from it while the test server runs on a real-time ticker. This is a test harness issue, not authority logic, and it does not affect the Rust results. It did not occur in these runs, and it is fixed separately against dev.
 
 ## Verify
 
