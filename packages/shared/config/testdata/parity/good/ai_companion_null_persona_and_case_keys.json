@@ -1,0 +1,16 @@
+{
+  "ai": {
+    "AgentService": {
+      "Endpoint": "http://127.0.0.1:9",
+      "APIKEYENV": "MORNLEA_CONFIG_PARITY_API_KEY"
+    },
+    "Companions": [
+      {
+        "ID": "3f2b8c1e-4a5d-4e6f-8a7b-9c0d1e2f3a4b",
+        "Name": "Mira",
+        "persona": null
+      }
+    ],
+    "TaskTimeoutMinutes": 60
+  }
+}
