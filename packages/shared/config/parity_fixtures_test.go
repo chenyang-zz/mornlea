@@ -41,6 +41,17 @@ var parityGroups = []string{
 	"audioVolume", "windowSize", "fluidEnabled", "cameraMode", "physics", "sim", "render",
 }
 
+// parityKnownDifferences lists the known_difference/ fixtures; it must match
+// the design's known-differences list and the Rust test's pinned errors.
+var parityKnownDifferences = []string{
+	"ambiguous_case_only_keys",
+	"nesting_at_go_limit",
+	"nesting_over_serde_limit",
+	"unknown_key_huge_number",
+	"unknown_key_invalid_utf8_bytes",
+	"unknown_key_lone_surrogate_escape",
+}
+
 func parityFixtures(t *testing.T, kind string) []string {
 	t.Helper()
 	paths, err := filepath.Glob(filepath.Join(parityFixtureDir, kind, "*.json"))
@@ -99,13 +110,18 @@ func TestDecodeConfigParityFixtures(t *testing.T) {
 			checkParityExpectation(t, name, cfg, update)
 		})
 	}
+	var knownNames []string
 	for _, path := range parityFixtures(t, "known_difference") {
 		name := strings.TrimSuffix(filepath.Base(path), ".json")
+		knownNames = append(knownNames, name)
 		t.Run("known_difference/"+name, func(t *testing.T) {
 			if _, err := decodeParityFixture(t, path); err != nil {
 				t.Fatalf("decodeConfig rejected %s (%v); a documented difference needs Go acceptance", path, err)
 			}
 		})
+	}
+	if !reflect.DeepEqual(knownNames, parityKnownDifferences) {
+		t.Errorf("known_difference fixtures = %v, want the documented %v", knownNames, parityKnownDifferences)
 	}
 }
 

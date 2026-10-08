@@ -9,8 +9,11 @@
 //!
 //! Parsing still goes through serde_json, so its stricter input rules (invalid
 //! UTF-8, lone surrogate escapes, 128 or more nested containers, float
-//! literals that overflow `f64`, `-0` as an integer) reject files Go accepts. Those are documented known
-//! differences, not parity bugs.
+//! literals that overflow `f64`) reject files Go accepts. Those are documented
+//! known differences, not parity bugs. serde_json reports the integer literal
+//! `-0` as the float `-0.0`, indistinguishable from `-0.0` or `-0e0`; `parse`
+//! restores it from the source text, because Go reads `-0` into an `int` as 0
+//! and refuses the other two.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -20,12 +23,15 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 /// A number as serde_json reported it. Integer literals that fit `u64`/`i64`
 /// arrive as integers; every other literal (fraction, exponent, or an integer
 /// too large for 64 bits) arrives as `F64`, which Go's `strconv.ParseInt` also
-/// refuses. The one integer literal serde_json reports as a float is `-0`.
+/// refuses. The one integer literal serde_json reports as a float is `-0`;
+/// `parse` turns it back into `NegativeZero`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum JsonNumber {
     U64(u64),
     I64(i64),
     F64(f64),
+    /// The integer literal `-0`: 0 as a Go `int`, negative zero as a float.
+    NegativeZero,
 }
 
 impl JsonNumber {
@@ -34,6 +40,7 @@ impl JsonNumber {
         match self {
             Self::U64(value) => i64::try_from(value).ok(),
             Self::I64(value) => Some(value),
+            Self::NegativeZero => Some(0),
             Self::F64(_) => None,
         }
     }
@@ -45,6 +52,7 @@ impl JsonNumber {
             Self::U64(value) => value as f64,
             Self::I64(value) => value as f64,
             Self::F64(value) => value,
+            Self::NegativeZero => -0.0,
         }
     }
 
@@ -56,6 +64,7 @@ impl JsonNumber {
             Self::U64(value) => value as f32,
             Self::I64(value) => value as f32,
             Self::F64(value) => value as f32,
+            Self::NegativeZero => -0.0,
         };
         value.is_finite().then_some(value)
     }
@@ -153,7 +162,68 @@ pub(crate) fn go_to_lower(text: &str) -> String {
 }
 
 pub(crate) fn parse(bytes: &[u8]) -> Result<JsonValue, serde_json::Error> {
-    serde_json::from_slice(bytes)
+    let mut value: JsonValue = serde_json::from_slice(bytes)?;
+    let literals = number_literals(bytes);
+    let mut next = literals.iter().copied();
+    restore_negative_zero(&mut value, &mut next);
+    debug_assert!(next.next().is_none(), "number literal count mismatch");
+    Ok(value)
+}
+
+/// One flag per number literal in source order: whether it is exactly `-0`.
+/// Only called on bytes serde_json accepted, so literals are well formed and
+/// every `"` outside a string opens one.
+fn number_literals(bytes: &[u8]) -> Vec<bool> {
+    let mut flags = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                index += 1;
+                while index < bytes.len() && bytes[index] != b'"' {
+                    index += if bytes[index] == b'\\' { 2 } else { 1 };
+                }
+                index += 1;
+            }
+            b'-' | b'0'..=b'9' => {
+                let start = index;
+                while index < bytes.len()
+                    && matches!(bytes[index], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+                {
+                    index += 1;
+                }
+                flags.push(&bytes[start..index] == b"-0");
+            }
+            _ => index += 1,
+        }
+    }
+    flags
+}
+
+/// Walks numbers in source order (object entries keep source order and
+/// duplicates) and marks the ones written as `-0`.
+fn restore_negative_zero(value: &mut JsonValue, literals: &mut impl Iterator<Item = bool>) {
+    match value {
+        JsonValue::Number(number) => {
+            if literals.next() == Some(true) {
+                debug_assert!(
+                    matches!(*number, JsonNumber::F64(f) if f == 0.0 && f.is_sign_negative())
+                );
+                *number = JsonNumber::NegativeZero;
+            }
+        }
+        JsonValue::Array(items) => {
+            for item in items {
+                restore_negative_zero(item, literals);
+            }
+        }
+        JsonValue::Object(object) => {
+            for (_, item) in &mut object.entries {
+                restore_negative_zero(item, literals);
+            }
+        }
+        JsonValue::Null | JsonValue::Bool(_) | JsonValue::String(_) => {}
+    }
 }
 
 impl<'de> Deserialize<'de> for JsonValue {
@@ -246,14 +316,62 @@ mod tests {
             other => panic!("{other:?}"),
         };
         assert_eq!(int("1"), Some(1));
-        // serde_json reports `-0` as a float, so Rust refuses an integer
-        // literal Go accepts (documented known difference).
-        assert_eq!(int("-0"), None);
+        // Go `strconv.ParseInt` accepts `-0` as 0 but refuses every zero
+        // written with a fraction or exponent.
+        assert_eq!(int("-0"), Some(0));
+        assert_eq!(int("0"), Some(0));
+        for text in ["-0.0", "-0e0", "-0E0", "-0.0e0", "-0e-0", "0.0", "0e0"] {
+            assert_eq!(int(text), None, "{text}");
+        }
         assert_eq!(int("1.0"), None);
         assert_eq!(int("1e0"), None);
         assert_eq!(int("9223372036854775807"), Some(i64::MAX));
         assert_eq!(int("9223372036854775808"), None);
         assert_eq!(int("-9223372036854775809"), None);
+    }
+
+    #[test]
+    fn negative_zero_literal_is_tracked_in_document_order() {
+        let JsonValue::Object(object) =
+            parse(br#"{"s":"-0","a":[-0.0,-0,{"-0":-0e0}],"b":-0,"b":-0E0,"c":-0 }"#).unwrap()
+        else {
+            panic!("object");
+        };
+        let ints: Vec<Option<i64>> = numbers(&JsonValue::Object(object))
+            .into_iter()
+            .map(JsonNumber::as_go_int)
+            .collect();
+        assert_eq!(
+            ints,
+            [None, Some(0), None, Some(0), None, Some(0)],
+            "only the bare `-0` literals are integers"
+        );
+    }
+
+    #[test]
+    fn negative_zero_literal_keeps_go_float_sign() {
+        let number = |text: &str| match parse(text.as_bytes()).unwrap() {
+            JsonValue::Number(number) => number,
+            other => panic!("{other:?}"),
+        };
+        // Go `strconv.ParseFloat("-0")` is negative zero.
+        let f = number("-0").as_go_f64();
+        assert!(f == 0.0 && f.is_sign_negative());
+        let f = number("-0").as_go_f32().unwrap();
+        assert!(f == 0.0 && f.is_sign_negative());
+        assert!(number("0").as_go_f64().is_sign_positive());
+    }
+
+    fn numbers(value: &JsonValue) -> Vec<JsonNumber> {
+        match value {
+            JsonValue::Number(number) => vec![*number],
+            JsonValue::Array(items) => items.iter().flat_map(numbers).collect(),
+            JsonValue::Object(object) => object
+                .all_entries()
+                .flat_map(|(_, value)| numbers(value))
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     #[test]

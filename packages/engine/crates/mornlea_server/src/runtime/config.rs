@@ -1021,6 +1021,46 @@ mod tests {
     }
 
     #[test]
+    fn negative_zero_integer_literal_decodes_as_zero_in_every_int_field() {
+        // cameraMode: Go reads 0, a valid mode, with no warning.
+        let cfg = RuntimeConfig::decode(br#"{"cameraMode":-0}"#).expect("cameraMode -0");
+        assert!(cfg.warnings().is_empty());
+        // version: Go reads 0 and refuses it as an unsupported version.
+        assert!(matches!(
+            RuntimeConfig::decode(br#"{"version":-0}"#),
+            Err(ConfigError::UnsupportedVersion { found: 0 })
+        ));
+        // ai.taskTimeoutMinutes: Go reads 0 and refuses it by range.
+        let ai = |minutes: &str| {
+            format!(
+                r#"{{"ai":{{"agentService":{{"endpoint":"http://127.0.0.1:8765","apiKeyEnv":"K"}},"companions":[{{"id":"3f2b8c1e-4a5d-4e6f-8a7b-9c0d1e2f3a4b","name":"Mira"}}],"taskTimeoutMinutes":{minutes}}}}}"#
+            )
+        };
+        let err = RuntimeConfig::decode_with_env(ai("-0").as_bytes(), &|name| name == "K")
+            .expect_err("taskTimeoutMinutes -0");
+        assert!(
+            matches!(err, ConfigError::InvalidField { ref field, ref detail }
+                if field == "ai.taskTimeoutMinutes" && detail.contains("outside 1..60")),
+            "{err}"
+        );
+        // Zeros with a fraction or exponent stay type errors, as in Go.
+        for (body, field) in [
+            (r#"{"cameraMode":-0.0}"#.to_owned(), "cameraMode"),
+            (r#"{"cameraMode":-0e0}"#.to_owned(), "cameraMode"),
+            (r#"{"version":-0e0}"#.to_owned(), "version"),
+            (ai("-0.0"), "ai.taskTimeoutMinutes"),
+        ] {
+            let err = RuntimeConfig::decode_with_env(body.as_bytes(), &|name| name == "K")
+                .expect_err(&body);
+            assert!(
+                matches!(err, ConfigError::InvalidField { field: ref got, ref detail }
+                    if got == field && detail.contains("integer literal")),
+                "{body}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn nulls_go_treats_as_absent_are_accepted() {
         for body in [
             "null",

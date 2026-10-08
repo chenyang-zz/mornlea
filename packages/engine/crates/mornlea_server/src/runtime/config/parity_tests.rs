@@ -118,15 +118,12 @@ fn known_differences_are_rejected_by_rust() {
             | "unknown_key_huge_number"
             | "nesting_at_go_limit"
             | "nesting_over_serde_limit" => matches!(err, ConfigError::Parse(_)),
-            "negative_zero_integer_literal" => {
-                matches!(err, ConfigError::InvalidField { ref field, .. } if field == "cameraMode")
-            }
             other => panic!("undocumented known difference fixture {other}"),
         };
         assert!(ok, "{fixture}: unexpected error {err}");
         seen.push(fixture);
     }
-    assert_eq!(seen.len(), 7, "every documented difference keeps a fixture");
+    assert_eq!(seen.len(), 6, "every documented difference keeps a fixture");
 }
 
 /// The Go test's `parityValues`: server-owned values as float64, keyed by Go
