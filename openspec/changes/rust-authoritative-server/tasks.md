@@ -143,7 +143,7 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 
 - [x] 3.7l3qor Advance owner inventory/crafting mirrors only after actual queue admission ([packet](plans/145-source-owner-record-admission.md)). Other mirrors/background encoding/runtime and broad3.8/4.1/4.2 OPEN.
 
-- [x] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)); evidence in [`evidence/3.8-activation-rollback/`](evidence/3.8-activation-rollback/) ([PR #22](https://github.com/chenyang-zz/mornlea/pull/22)).
+- [x] 3.8 Qualify explicit opt-in activation and rollback without changing default startup ([packet](plans/04-refined-nodes.md)); evidence in [`evidence/3.8-activation-rollback/REPORT.md`](evidence/3.8-activation-rollback/REPORT.md) ([PR #22](https://github.com/chenyang-zz/mornlea/pull/22)).
 - [x] 3.8r0 Retain the exclusive world lease throughout actual backup restoration ([packet](plans/65-restore-world-lease.md)).
 - [x] 3.8v0 Qualify the actual previous Go read-only save verifier ([packet](plans/54-previous-runtime-verifier.md)).
 - [x] 3.8v1 Rebuild and bind the sealed previous runtime package ([packet](plans/57-prepare-previous-package.md)).
