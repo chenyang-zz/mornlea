@@ -57,7 +57,7 @@ func TestCurrentDocumentationVersionGuardIgnoresExplicitHistory(t *testing.T) {
 
 func TestDocumentationLinks(t *testing.T) {
 	root := repositoryRoot(t)
-	for _, relative := range currentCompletedDocumentationPairs(t, root) {
+	for _, relative := range documentationLinkScope(t, root) {
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
 		if err != nil {
 			t.Fatal(err)
@@ -65,6 +65,42 @@ func TestDocumentationLinks(t *testing.T) {
 		for _, problem := range documentationLinkProblems(root, relative, string(data)) {
 			t.Error(problem)
 		}
+	}
+}
+
+// TestDocumentationLinkScopeCoversActiveChangesButNotArchive pins the link
+// gate's scope: in-progress OpenSpec changes are current planning inputs and
+// must keep resolvable links, while archived changes are frozen records whose
+// historical links are never rewritten.
+func TestDocumentationLinkScopeCoversActiveChangesButNotArchive(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		documentationManifestPath:                                 `{"schema_version":1,"documents":[]}`,
+		"openspec/changes/sample-change/proposal.md":              "[gone](missing.md)\n",
+		"openspec/changes/sample-change/plans/01-plan.md":         "[ok](../proposal.md)\n",
+		"openspec/changes/archive/2026-01-01-old/proposal.md":     "[gone](missing.md)\n",
+		"openspec/changes/archive/2026-01-01-old/plans/01-old.md": "[gone](missing.md)\n",
+	}
+	for relative, content := range files {
+		path := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scope := documentationLinkScope(t, root)
+	want := []string{"openspec/changes/sample-change/plans/01-plan.md", "openspec/changes/sample-change/proposal.md"}
+	if !slices.Equal(scope, want) {
+		t.Fatalf("documentation link scope = %v, want %v", scope, want)
+	}
+	var problems []string
+	for _, relative := range scope {
+		problems = append(problems, documentationLinkProblems(root, relative, files[relative])...)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "openspec/changes/sample-change/proposal.md") {
+		t.Fatalf("active change link problems = %v, want exactly the broken active proposal link", problems)
 	}
 }
 
@@ -235,6 +271,17 @@ func currentNormativeDocumentation(t *testing.T, root string) []string {
 			}
 		}
 	}
+	slices.Sort(paths)
+	return slices.Compact(paths)
+}
+
+// documentationLinkScope lists the Markdown files whose local links must
+// resolve: completed bilingual documentation pairs plus every in-progress
+// OpenSpec change artifact. `activeOpenSpecMarkdown` skips
+// openspec/changes/archive/ because archived changes are frozen evidence.
+func documentationLinkScope(t *testing.T, root string) []string {
+	t.Helper()
+	paths := append(currentCompletedDocumentationPairs(t, root), activeOpenSpecMarkdown(t, root)...)
 	slices.Sort(paths)
 	return slices.Compact(paths)
 }
