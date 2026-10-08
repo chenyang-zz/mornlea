@@ -737,7 +737,9 @@ fn go_bool(raw: &JsonValue, field: &str) -> Result<Option<bool>, ConfigError> {
 pub(crate) fn go_f64(raw: &JsonValue, field: &str) -> Result<f64, ConfigError> {
     match raw {
         JsonValue::Null => Ok(0.0),
-        JsonValue::Number(number) => Ok(number.as_go_f64()),
+        JsonValue::Number(number) => number
+            .as_go_f64()
+            .ok_or_else(|| invalid(field, "must be a number within float64")),
         other => Err(invalid(
             field,
             format!("must be a number, got {}", other.kind()),
@@ -1018,6 +1020,17 @@ mod tests {
                 "{body}"
             );
         }
+    }
+
+    #[test]
+    fn audio_volume_rounds_the_literal_once_like_go() {
+        // Go reads 1.0000001 (one float32 rounding) and refuses it as above 1.
+        assert!(matches!(
+            RuntimeConfig::decode(br#"{"audioVolume":1.00000005960464477539062500000000001}"#),
+            Err(ConfigError::InvalidField { ref field, .. }) if field == "audioVolume"
+        ));
+        RuntimeConfig::decode(br#"{"audioVolume":1.000000059604644775390625}"#)
+            .expect("exact midpoint ties to 1.0 in Go");
     }
 
     #[test]
