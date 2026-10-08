@@ -1,0 +1,17 @@
+$ git grep -n -E 'project_source_publication\(|emit_despawns\(|emit_forgets\(|emit_companions\(|emit_remotes\(|emit_chat\(' -- packages/engine/crates/mornlea_server/src/core/step.rs packages/engine/crates/mornlea_server/src/core/publication_project.rs
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:04:50Z
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:267:        emit_despawns(&mut view_list, &observers, &early_visibilities, &mut events);
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:268:        emit_forgets(&mut view_list, &observers, &mut events);
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:344:        emit_companions(
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:353:        emit_remotes(
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:372:        state.emit_chat(entities, events);
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:421:    pub(crate) fn project_source_publication(
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:453:            .project_source_publication(tick, outcome)
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:471:    fn emit_chat(&mut self, _entities: &Entities, events: &mut Vec<RoutedEvent>) {
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:929:fn emit_despawns(
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:958:fn emit_forgets(
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:1150:fn emit_companions(
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:1249:fn emit_remotes(
+packages/engine/crates/mornlea_server/src/core/step.rs:410:        let projected = state.project_source_publication(tick, &outcome)?;
+# exit: 0
