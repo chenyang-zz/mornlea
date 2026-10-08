@@ -1,6 +1,10 @@
 //! Configured companion startup against the actual Python Agent gateway: the
 //! runtime's own lease controller acquires the namespace lease on its control
 //! worker while the authority already holds both configured companions.
+//! Spellings follow Go's real request: an uppercase scheme with trailing
+//! slashes sends the canonical request and acquires; a leading-zero port is
+//! sent verbatim in `Host`, as Go does, so the gateway refuses it and startup
+//! stays on the lease-failure path.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,6 +40,14 @@ fn options() -> DiskOptions {
     }
 }
 
+/// Rewrites the helper endpoint `http://127.0.0.1:<port>` into another
+/// Go-accepted spelling.
+fn respelled(endpoint: &str, scheme: &str, port_prefix: &str, suffix: &str) -> String {
+    let rest = endpoint.strip_prefix("http://").expect("helper endpoint");
+    let (host, port) = rest.rsplit_once(':').expect("helper port");
+    format!("{scheme}://{host}:{port_prefix}{port}{suffix}")
+}
+
 #[test]
 fn configured_startup_acquires_real_namespace_lease() {
     let _serial = HELPER_SERIAL
@@ -43,7 +55,25 @@ fn configured_startup_acquires_real_namespace_lease() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let token = "startup-child-token";
     let mut child = spawn_helper("startup", token);
-    let world = TempDir::new("startup-world");
+    let canonical = child.endpoint();
+    let cases = [
+        (canonical.clone(), true),
+        (respelled(&canonical, "HTTP", "", "//"), true),
+        (respelled(&canonical, "http", "0", ""), false),
+    ];
+    for (index, (endpoint, acquires)) in cases.iter().enumerate() {
+        start_and_acquire(
+            &format!("startup-world-{index}"),
+            endpoint,
+            token,
+            *acquires,
+        );
+    }
+    child.shutdown("startup");
+}
+
+fn start_and_acquire(name: &str, endpoint: &str, token: &str, acquires: bool) {
+    let world = TempDir::new(name);
     let root = world.join("world");
     std::fs::create_dir(&root).expect("world dir");
     let mut disk = DiskStore::open(&root, options()).expect("disk store");
@@ -60,15 +90,14 @@ fn configured_startup_acquires_real_namespace_lease() {
     // lookup supplies the helper token instead of the variable's value.
     let config = RuntimeConfig::decode(
         format!(
-            r#"{{"ai":{{"agentService":{{"endpoint":"{}","apiKeyEnv":"PATH"}},"companions":[{{"id":"3f2b8c1e-4a5d-4e6f-8a7b-9c0d1e2f3a4b","name":"Mira"}},{{"id":"7d9e1f20-3b4c-4d5e-9f60-718293a4b5c6","name":"Tove"}}]}}}}"#,
-            child.endpoint()
+            r#"{{"ai":{{"agentService":{{"endpoint":"{endpoint}","apiKeyEnv":"PATH"}},"companions":[{{"id":"3f2b8c1e-4a5d-4e6f-8a7b-9c0d1e2f3a4b","name":"Mira"}},{{"id":"7d9e1f20-3b4c-4d5e-9f60-718293a4b5c6","name":"Tove"}}]}}}}"#
         )
         .as_bytes(),
     )
     .expect("config decodes");
     let credential = |_: &str| Some(token.to_owned());
     let mut identity = || -> Result<[u8; 16], ServerError> { system_identity() };
-    let warn = |warning: &CompanionStartWarning| panic!("unexpected warning {warning}");
+    let warn = |warning: &CompanionStartWarning| panic!("{endpoint}: unexpected warning {warning}");
     let mut runtime = start_companions(
         config.ai(),
         &mut disk,
@@ -86,16 +115,25 @@ fn configured_startup_acquires_real_namespace_lease() {
     assert_eq!(state.residents().actors.len(), 2);
     assert_eq!(runtime.task_timeout_minutes(), 10);
 
-    let until = Instant::now() + Duration::from_secs(15);
-    while runtime.agent().current_lease().is_none() {
-        assert!(
-            Instant::now() < until,
-            "control worker never acquired the namespace lease: phase={:?}",
-            runtime.agent().lease_phase()
-        );
-        std::thread::sleep(Duration::from_millis(10));
+    if acquires {
+        let until = Instant::now() + Duration::from_secs(15);
+        while runtime.agent().current_lease().is_none() {
+            assert!(
+                Instant::now() < until,
+                "{endpoint}: control worker never acquired the namespace lease: phase={:?}",
+                runtime.agent().lease_phase()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(runtime.agent().lease_phase(), ControlPhase::Active);
+    } else {
+        // The canonical spelling acquires within milliseconds; this one
+        // keeps retrying without a lease while startup stays complete.
+        std::thread::sleep(Duration::from_secs(2));
+        assert_eq!(runtime.agent().current_lease(), None, "{endpoint}");
+        assert_eq!(runtime.agent().lease_phase(), ControlPhase::Absent);
+        assert!(state.companion_persistence_enabled());
     }
-    assert_eq!(runtime.agent().lease_phase(), ControlPhase::Active);
     assert!(runtime.agent().lease_worker_running());
 
     runtime
@@ -104,5 +142,4 @@ fn configured_startup_acquires_real_namespace_lease() {
         .expect("agent services close");
     assert_eq!(runtime.agent().lease_phase(), ControlPhase::Closed);
     disk.close().expect("disk closes");
-    child.shutdown("startup");
 }

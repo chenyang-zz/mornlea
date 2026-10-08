@@ -11,10 +11,11 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -824,28 +825,168 @@ fn refused_lease_acquire_never_blocks_startup_or_ticks() {
     store.close(deadline()).unwrap();
 }
 
-/// An endpoint Go's config accepts but the loopback wire cannot dial refuses
-/// startup typed, before any companion save I/O or authority handoff.
+/// Loopback Agent stand-in that answers every request `404` without a JSON
+/// body and records each request target, like an Agent that has no route
+/// for a misdirected request.
+struct NotFoundAgent {
+    port: u16,
+    targets: Arc<Mutex<Vec<String>>>,
+    stop: Arc<AtomicBool>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl NotFoundAgent {
+    fn serve() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let targets = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let join = {
+            let targets = targets.clone();
+            let stop = stop.clone();
+            thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        thread::sleep(Duration::from_millis(2));
+                        continue;
+                    };
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut head = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !head.ends_with(b"\r\n\r\n") && head.len() < 16_384 {
+                        match stream.read(&mut byte) {
+                            Ok(1) => head.push(byte[0]),
+                            _ => break,
+                        }
+                    }
+                    let line = String::from_utf8_lossy(&head)
+                        .split("\r\n")
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
+                    targets.lock().unwrap().push(line);
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+            })
+        };
+        Self {
+            port,
+            targets,
+            stop,
+            join: Some(join),
+        }
+    }
+
+    fn targets(&self) -> Vec<String> {
+        self.targets.lock().unwrap().clone()
+    }
+}
+
+impl Drop for NotFoundAgent {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+/// Go-accepted endpoints that can never serve the Agent contract start
+/// normally and take the lease-failure path: Go moves the route into the
+/// query (`?`) or drops it with the fragment (`#`), so the Agent sees the
+/// same wrong target and refuses; `x[::1]` dials `[::1]` like Go, where
+/// nothing listens. Ticks keep running, both companions activate, a player
+/// joins, and the worker keeps retrying without a lease.
 #[test]
-fn undialable_endpoint_refuses_before_authority_handoff() {
-    let root = Root::new();
-    let mut disk = open_world(&root);
-    let mut state = authority(&disk);
-    let mut ids = Identities::new();
-    let error = start(
-        &config(&[(1, "Mira")], "http://x[::1]:80"),
-        &mut disk,
-        &mut state,
-        &mut ids,
-    )
-    .err()
-    .expect("undialable endpoint refuses");
-    assert!(matches!(error, CompanionStartError::Agent(_)), "{error}");
-    assert!(!root.companions_file().exists());
-    assert_eq!(ids.calls, 0);
-    assert!(!state.companion_persistence_enabled());
-    assert!(companion_lifecycles(&state).is_empty());
-    disk.close().unwrap();
+fn unusable_go_endpoints_take_the_lease_failure_path() {
+    let agent = NotFoundAgent::serve();
+    let dead = TcpListener::bind(("::1", 0)).unwrap();
+    let dead_port = dead.local_addr().unwrap().port();
+    drop(dead);
+    let cases = [
+        (
+            format!("http://127.0.0.1:{}/agent/v1?", agent.port),
+            Some("POST /agent/v1?/v1/namespaces/acquire HTTP/1.1"),
+        ),
+        (
+            format!("http://127.0.0.1:{}/#", agent.port),
+            Some("POST / HTTP/1.1"),
+        ),
+        (format!("http://x[::1]:{dead_port}"), None),
+    ];
+    for (endpoint, misrouted) in cases {
+        let root = Root::new();
+        let mut disk = open_world(&root);
+        let mut state = authority(&disk);
+        let mut ids = Identities::new();
+        let runtime = start(
+            &config(&[(1, "Mira"), (2, "Tove")], &endpoint),
+            &mut disk,
+            &mut state,
+            &mut ids,
+        )
+        .unwrap_or_else(|error| panic!("{endpoint}: startup must not stop: {error}"))
+        .expect("configured runtime");
+        assert!(state.companion_persistence_enabled(), "{endpoint}");
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            let attempted = match misrouted {
+                Some(line) => agent.targets().iter().any(|seen| seen == line),
+                None => true,
+            };
+            if attempted
+                && runtime.agent().lease_phase() == ControlPhase::Absent
+                && runtime.agent().lease_worker_running()
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "{endpoint}: first acquire never settled"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let mut store = first_tick(&mut state, disk);
+        let player = join_player(&mut state);
+        for _ in 0..3 {
+            state.advance_tick(TickBudget::full()).unwrap();
+        }
+        assert_eq!(
+            companion_lifecycles(&state),
+            vec![
+                (ActorKey::Companion(companion(1)), ActorLifecycle::Active),
+                (ActorKey::Companion(companion(2)), ActorLifecycle::Active),
+            ],
+            "{endpoint}"
+        );
+        assert!(
+            state
+                .residents()
+                .actors
+                .iter()
+                .any(|actor| actor.key == ActorKey::Player(player)
+                    && actor.lifecycle == ActorLifecycle::Active),
+            "{endpoint}"
+        );
+        assert_eq!(runtime.agent().current_lease(), None, "{endpoint}");
+        assert!(runtime.agent().lease_worker_running(), "{endpoint}");
+        close(runtime);
+        store.close(deadline()).unwrap();
+    }
+    assert!(
+        agent.targets().iter().all(
+            |line| line == "POST /agent/v1?/v1/namespaces/acquire HTTP/1.1"
+                || line == "POST / HTTP/1.1"
+        ),
+        "only Go's misdirected targets reach the Agent: {:?}",
+        agent.targets()
+    );
 }
 
 /// Go places configured companions at the metadata spawn dimension; core

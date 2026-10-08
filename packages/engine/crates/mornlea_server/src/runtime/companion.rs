@@ -13,7 +13,9 @@
 //!
 //! Configured bodies take the world spawn dimension, as in Go. Core has no
 //! non-Overworld companion yet, so a non-Overworld spawn leaves the stored
-//! aggregate untouched, spawns nothing, and reports a typed warning.
+//! aggregate untouched, spawns nothing, and reports a typed warning. Every
+//! endpoint the config accepts starts; an Agent that cannot be reached or
+//! cannot serve the request target fails on the lease worker instead.
 //!
 //! The per-tick plan loop (planning snapshot, outcome install, task runner,
 //! task timeout) is not assembled here.
@@ -277,7 +279,9 @@ pub fn start_companions(
         return Ok(None);
     };
     // The static Agent boundary precedes any companion save read, so a bad
-    // credential or an undialable endpoint never triggers I/O.
+    // credential never triggers I/O. Every endpoint the config accepted
+    // constructs the wire; one the Agent cannot serve fails per request on
+    // the lease worker, never here.
     let credential = credential(ai.api_key_env())
         .filter(|value| !value.is_empty())
         .ok_or(CompanionStartError::MissingCredential)?;

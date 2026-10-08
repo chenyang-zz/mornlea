@@ -9,9 +9,10 @@
 //! about it and only the dialogue path consumes it.
 
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use mornlea_domain::{CompanionId, CompanionName};
+
+use crate::agent::http::AgentEndpoint;
 
 use super::json::{JsonObject, JsonValue, go_equal_fold, go_to_lower};
 use super::{AiConfig, ConfigError, ConfigWarning, go_f64, invalid, lookup, warn_clamp};
@@ -568,101 +569,11 @@ fn valid_companion_name(name: &str) -> bool {
     CompanionName::try_from_canonical(name.to_owned()).is_ok()
 }
 
-/// Go `AgentServiceSettings.Validate` endpoint rules over Go 1.26 `url.Parse`
-/// (strict colons): scheme `http` in any case, no userinfo, empty query and
-/// fragment, valid path escapes, optional port in 1..65535, and a loopback IP
-/// literal host (IPv4-mapped loopback included, zones excluded).
+/// Go `AgentServiceSettings.Validate` endpoint rules. The Agent wire owns
+/// the one parser, so every endpoint this file accepts also constructs the
+/// wire with Go's dial address, `Host` header, and request target.
 pub(super) fn valid_agent_endpoint(endpoint: &str) -> bool {
-    if endpoint.is_empty() {
-        return false;
-    }
-    let (url, fragment) = endpoint.split_once('#').unwrap_or((endpoint, ""));
-    if !fragment.is_empty() || url.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
-        return false;
-    }
-    let Some((scheme, mut rest)) = url.split_once(':') else {
-        return false;
-    };
-    if !scheme.eq_ignore_ascii_case("http") {
-        return false;
-    }
-    if rest.ends_with('?') && rest.matches('?').count() == 1 {
-        rest = &rest[..rest.len() - 1];
-    } else if let Some((before, query)) = rest.split_once('?') {
-        if !query.is_empty() {
-            return false;
-        }
-        rest = before;
-    }
-    let Some(after) = rest.strip_prefix("//") else {
-        return false;
-    };
-    let (authority, path) = after.find('/').map_or((after, ""), |i| after.split_at(i));
-    if authority.contains('@') || !valid_path_escapes(path) {
-        return false;
-    }
-    let (ip, port) = if let Some(open) = authority.rfind('[') {
-        // Go keeps only the bracketed part: text before `[` is dropped.
-        let Some(close) = authority.rfind(']') else {
-            return false;
-        };
-        let colon_port = &authority[close + 1..];
-        if !valid_optional_port(colon_port) || close < open {
-            return false;
-        }
-        let inner = &authority[open + 1..close];
-        if inner.contains('%') {
-            return false;
-        }
-        let Ok(ip) = inner.parse::<Ipv6Addr>() else {
-            return false;
-        };
-        (IpAddr::V6(ip), colon_port.get(1..).unwrap_or(""))
-    } else {
-        let (host, colon_port) = authority
-            .find(':')
-            .map_or((authority, ""), |i| authority.split_at(i));
-        if !valid_optional_port(colon_port) || host.contains('%') {
-            return false;
-        }
-        let Ok(ip) = host.parse::<Ipv4Addr>() else {
-            return false;
-        };
-        (IpAddr::V4(ip), colon_port.get(1..).unwrap_or(""))
-    };
-    if !port.is_empty() && !matches!(port.parse::<u16>(), Ok(value) if value != 0) {
-        return false;
-    }
-    match ip {
-        IpAddr::V4(v4) => v4.is_loopback(),
-        IpAddr::V6(v6) => {
-            v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
-        }
-    }
-}
-
-fn valid_optional_port(colon_port: &str) -> bool {
-    colon_port.is_empty()
-        || colon_port
-            .strip_prefix(':')
-            .is_some_and(|digits| digits.bytes().all(|byte| byte.is_ascii_digit()))
-}
-
-fn valid_path_escapes(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = |offset: usize| bytes.get(index + offset).is_some_and(u8::is_ascii_hexdigit);
-            if !hex(1) || !hex(2) {
-                return false;
-            }
-            index += 3;
-        } else {
-            index += 1;
-        }
-    }
-    true
+    AgentEndpoint::parse(endpoint).is_ok()
 }
 
 #[cfg(test)]

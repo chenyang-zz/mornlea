@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use mornlea_domain::PlayerId;
 
+pub use crate::agent::endpoint::AgentEndpoint;
 use crate::agent::lease::{AgentWire, RpcCancellation};
 use crate::contracts::{
     AGENT_CONTRACT_VERSION, AgentErrorCode, AgentPlan, AgentRequest, AgentRequestId, AgentResponse,
@@ -626,37 +627,6 @@ fn split_host_port(authority: &str) -> Option<(&str, Option<u16>)> {
 // Endpoint and wire
 // ---------------------------------------------------------------------------
 
-/// A validated Agent service endpoint: an http loopback IP literal with an
-/// explicit or defaulted port. Hostnames never construct a wire, so the
-/// transport cannot resolve names, and no proxy surface exists.
-#[derive(Clone, Copy, Debug)]
-pub struct AgentEndpoint {
-    addr: SocketAddr,
-}
-
-impl AgentEndpoint {
-    pub fn parse(endpoint: &str) -> Result<Self, ServerError> {
-        // The Go settings trim trailing slashes before validation.
-        let trimmed = endpoint.trim_end_matches('/');
-        parse_http_loopback_url(trimmed, false)
-            .map(|addr| Self { addr })
-            .ok_or(ServerError::InvalidInput {
-                field: "agent_endpoint",
-            })
-    }
-
-    pub fn socket_address(&self) -> SocketAddr {
-        self.addr
-    }
-
-    fn host_header(&self) -> String {
-        match self.addr {
-            SocketAddr::V4(address) => address.to_string(),
-            SocketAddr::V6(address) => format!("[{}]:{}", address.ip(), address.port()),
-        }
-    }
-}
-
 /// The loopback HTTP client wire. One short-lived connection per RPC with
 /// `Connection: close`; failures surface as typed errors instead of a second
 /// attempt, so no business request is ever retried automatically.
@@ -691,7 +661,7 @@ impl AgentHttpWire {
     fn request_head(&self, route: &str, body_len: usize) -> Result<String, ServerError> {
         let content_length = body_len.to_string();
         let headers = [
-            ("Host", self.endpoint.host_header()),
+            ("Host", self.endpoint.host_header().to_owned()),
             ("Authorization", format!("Bearer {}", self.credential)),
             ("Content-Type", "application/json".to_owned()),
             ("Accept-Encoding", "identity".to_owned()),
@@ -706,7 +676,8 @@ impl AgentHttpWire {
         if counted > MAX_HEADER_BYTES {
             return Err(unavailable());
         }
-        let mut head = format!("POST {route} HTTP/1.1\r\n");
+        let target = self.endpoint.request_target(route);
+        let mut head = format!("POST {target} HTTP/1.1\r\n");
         for (name, value) in &headers {
             head.push_str(name);
             head.push_str(": ");
