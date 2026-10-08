@@ -110,3 +110,34 @@ fn sort_batch(batch: &mut [CommandEnvelope]) -> Result<(), ServerError> {
         })?;
     order_commands(batch, &mut scratch).map_err(|_| ServerError::InvalidInput { field: "arrival" })
 }
+
+/// Enables or disables trusted-observer attach (plain bool; config is gap 3).
+pub fn set_trusted_observer_enabled(
+    state: &mut AuthorityState,
+    enabled: bool,
+) -> Result<(), ServerError> {
+    state.set_trusted_observer_enabled(enabled)
+}
+
+/// Attaches one trusted observer between ticks. Does not take a player slot.
+pub fn attach_trusted_observer(state: &mut AuthorityState) -> Result<SessionKey, ServerError> {
+    state.attach_trusted_observer()
+}
+
+/// Detaches one trusted observer between ticks.
+pub fn detach_trusted_observer(
+    state: &mut AuthorityState,
+    session: SessionKey,
+) -> Result<(), ServerError> {
+    state.detach_trusted_observer(session)
+}
+
+/// Queues a trusted-observer center; applied at the next tick boundary.
+pub fn set_trusted_observer_center(
+    state: &mut AuthorityState,
+    session: SessionKey,
+    dimension: mornlea_domain::Dimension,
+    center: mornlea_domain::ChunkPos,
+) -> Result<(), ServerError> {
+    state.set_trusted_observer_center(session, dimension, center)
+}
