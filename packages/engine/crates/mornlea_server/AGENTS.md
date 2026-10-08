@@ -36,6 +36,21 @@ provider draining and close. This caller does not qualify whole-exe or save
 composition; focused source-acquisition tests and the scoped review qualify
 its producer boundary.
 
+The opt-in `SourceAcquisition::begin_encoded_tick` retains one committed source
+reduction and all borrowed owners in `SourceAcquisitionPending`. An expired
+poll retains that same tick without work. Live polling collects bounded actual
+CPU replies and scans at most sixteen candidates across recipients; each
+recipient owns at most one request and uses cached section charges before its
+next candidate. Original capture/frame pairs publish in recipient and candidate
+order. A malformed network snapshot closes only its recipient after its valid
+prefix; other trusted failures fence the authority. Normal abandonment restores
+held recipient books and cancels routing while started CPU charges remain with
+the dedicated owner until collected. New passes require an idle live codec.
+The shared projection tail preserves family, reset and save order. This caller
+qualifies the library integration; executable adoption is still separately owned.
+Focused validation includes `source_encoded_tick_`, actual
+`source_acquisition_encoded_` Disk/native/Memory tests, and encoded phase guards.
+
 The drop publisher retains fixed copied ItemDrop wire values by ID, compares
 surviving values, and emits sorted remove batches before changed/new upserts.
 Age and pickup timers remain authority-only and do not trigger wire publication. Physical drop publication copies only the union of Active players'

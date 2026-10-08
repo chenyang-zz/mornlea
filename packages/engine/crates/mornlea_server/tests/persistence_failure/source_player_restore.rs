@@ -5373,3 +5373,5 @@ fn source_acquisition_actual_pending_spawn_failed_retries() {
     source_acquisition_drain(&mut acquisition, &mut state, &mut fixture);
     fixture.close();
 }
+
+include!("source_player_restore_encoded_tests.rs");

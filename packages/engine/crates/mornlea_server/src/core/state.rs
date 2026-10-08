@@ -72,6 +72,7 @@ mod player_persistence;
 mod source_snapshot;
 #[path = "state_source_tick.rs"]
 mod source_tick;
+pub(crate) use source_tick::SourceTickContinuation;
 
 const COMPANION_INBOX: usize = 4;
 /// Freshly missing keys one Acquire row may stage for the source generation
@@ -23958,4 +23959,5 @@ mod owner_record_admission_tests {
     }
 
     include!("state_source_snapshot_refusal_tests.rs");
+    include!("state_source_encoded_tests.rs");
 }

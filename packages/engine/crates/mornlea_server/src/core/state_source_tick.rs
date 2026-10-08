@@ -5,12 +5,14 @@
 //! callers must retain this private owner across waits rather than replay a tick.
 
 use super::*;
+use crate::core::publication_project::EncodedSourceProjectionWork;
 use crate::core::step::ReducedTick;
 
 pub(crate) struct SourceTickContinuation<'a> {
     authority: &'a mut AuthorityState,
     goals: &'a mut SourceGoals,
     reduced: Option<ReducedTick>,
+    projection: Option<EncodedSourceProjectionWork>,
 }
 
 impl AuthorityState {
@@ -25,6 +27,7 @@ impl AuthorityState {
             authority: self,
             goals,
             reduced: Some(reduced),
+            projection: None,
         })
     }
 }
@@ -35,6 +38,59 @@ impl SourceTickContinuation<'_> {
     }
     pub(crate) fn tick(&self) -> u64 {
         self.reduced.as_ref().expect("held reduction").tick
+    }
+
+    pub(crate) fn prepare_encoding(&mut self) -> Result<(), ServerError> {
+        if self.projection.is_some() {
+            return Err(self.fail_encoding(ServerError::Internal {
+                invariant: "source projection already prepared",
+            }));
+        }
+        let reduced = self.reduced.as_ref().expect("held reduction");
+        self.projection = Some(crate::core::step::tick_fence(self.authority, |state| {
+            EncodedSourceProjectionWork::prepare(state, reduced.tick, &reduced.outcome)
+        })?);
+        Ok(())
+    }
+
+    pub(crate) fn poll_encoding(
+        &mut self,
+        encoding: &mut crate::core::source_encoding::SourceSnapshotEncoding,
+    ) -> Result<bool, ServerError> {
+        let projection = self.projection.as_mut().expect("prepared projection");
+        crate::core::step::tick_fence(self.authority, |state| projection.poll(state, encoding))
+    }
+
+    /// Retains the exclusive references after moving the original result to its caller.
+    pub(crate) fn complete_encoded_with<T>(
+        &mut self,
+        then: impl FnOnce(
+            &mut AuthorityState,
+            &mut SourceGoals,
+            TickPublication,
+        ) -> Result<T, ServerError>,
+    ) -> Result<T, ServerError> {
+        if self.state().next_tick() != self.tick() {
+            return Err(self.fail_encoding(ServerError::Internal {
+                invariant: "source tick continuation identity",
+            }));
+        }
+        let reduced = self.reduced.take().expect("held reduction");
+        let work = self.projection.take().expect("prepared projection");
+        let publication = crate::core::step::tick_fence(self.authority, |state| {
+            let projection = work.finish(state, &reduced.outcome);
+            crate::core::step::finish_encoded_source_tick(state, reduced, self.goals, projection)
+        })?;
+        self.authority.next_tick = self.authority.next_tick.saturating_add(1);
+        then(self.authority, self.goals, publication)
+    }
+
+    pub(crate) fn fail_encoding(&mut self, error: ServerError) -> ServerError {
+        if let Some(work) = self.projection.take() {
+            work.restore(self.authority);
+        }
+        self.reduced.take();
+        self.authority.fail_tick(error)
     }
 
     /// Consumes the original reduction; no second dispatch can occur.
@@ -56,13 +112,15 @@ impl SourceTickContinuation<'_> {
 
     /// A cancelled committed tick is a hard authority failure, not a rollback.
     pub(crate) fn abort(mut self, error: ServerError) -> ServerError {
-        self.reduced.take();
-        self.authority.fail_tick(error)
+        self.fail_encoding(error)
     }
 }
 
 impl Drop for SourceTickContinuation<'_> {
     fn drop(&mut self) {
+        if let Some(work) = self.projection.take() {
+            work.restore(self.authority);
+        }
         if self.reduced.is_some() {
             self.authority.fail_tick(ServerError::Internal {
                 invariant: "source tick continuation abandoned",

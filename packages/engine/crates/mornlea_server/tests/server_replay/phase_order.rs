@@ -973,3 +973,91 @@ fn source_acquisition_reconcile_phase_order() {
         "a swapped reconcile phase must break the frozen chain"
     );
 }
+
+/// Encoded completion shares the original fenced family and save tail.
+#[test]
+fn encoded_completion_uses_shared_fenced_tail() {
+    let code = step_source();
+    let body = fn_body(&code, "fn finish_encoded_source_tick");
+    chain_positions(body, &["tick_fence", "finish_reduced_tick"]);
+    let swapped = swap_markers(body, "tick_fence", "finish_reduced_tick");
+    assert!(
+        std::panic::catch_unwind(|| chain_positions(
+            &swapped,
+            &["tick_fence", "finish_reduced_tick"]
+        ))
+        .is_err()
+    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/core/state_source_tick.rs");
+    let continuation = code_without_comments(&std::fs::read_to_string(path).unwrap());
+    chain_positions(
+        fn_body(&continuation, "fn complete_encoded_with"),
+        &[
+            "reduced.take",
+            "projection.take",
+            "tick_fence",
+            "work.finish",
+            "finish_encoded_source_tick",
+            "next_tick",
+            "then(",
+        ],
+    );
+    let tail = fn_body(&code, "fn finish_reduced_tick");
+    chain_positions(
+        tail,
+        &[
+            "projected.append_to",
+            "project_source_publication",
+            "project_player_updates",
+            "finish_source_companion_resets",
+            "publish_prepared_source",
+            "goals.finish_tick",
+            "capture_companion_saves",
+            "capture_mob_saves",
+            "capture_player_saves",
+        ],
+    );
+}
+
+fn bounded_encoded_caller(code: &str) -> bool {
+    [
+        "network_snapshot(",
+        "chunk_snapshot_publication(",
+        "materialize(",
+        "start_encode(",
+        "thread::sleep(",
+        ".wait(",
+        ".advance_source_tick(",
+        ".advance(",
+    ]
+    .iter()
+    .all(|call| !code.contains(call))
+}
+
+/// A synchronous codec or simulation replay cannot hide behind the new caller.
+#[test]
+fn encoded_caller_excludes_normalizer_wait_and_replay() {
+    for file in [
+        "source_acquisition_encoded.rs",
+        "publication_project_encoded.rs",
+    ] {
+        let path = format!("{}/src/core/{file}", env!("CARGO_MANIFEST_DIR"));
+        let code = code_without_comments(&std::fs::read_to_string(path).unwrap());
+        assert!(
+            bounded_encoded_caller(&code),
+            "unbounded encoded caller: {file}"
+        );
+        for forbidden in [
+            "network_snapshot(",
+            "materialize(",
+            ".wait(",
+            ".advance_source_tick(",
+        ] {
+            let injected = format!("{code}\n{forbidden}");
+            assert!(
+                !bounded_encoded_caller(&injected),
+                "negative control: {forbidden}"
+            );
+        }
+    }
+}

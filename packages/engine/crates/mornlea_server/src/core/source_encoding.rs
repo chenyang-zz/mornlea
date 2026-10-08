@@ -54,6 +54,24 @@ impl SourceEncodeResult {
     }
 }
 impl SourceSnapshotEncoding {
+    /// A new pass requires idle, live codec ownership before any provider is driven.
+    pub(crate) fn check_source_pass(&self) -> Result<(), ServerError> {
+        if self.closed || self.stopping {
+            return Err(ServerError::InvalidState {
+                phase: if self.closed {
+                    ServerPhase::Closed
+                } else {
+                    ServerPhase::Closing
+                },
+            });
+        }
+        if self.retained_requests() != 0 || self.charged_requests() != 0 {
+            return Err(ServerError::InvalidInput {
+                field: "source_chunk_encode",
+            });
+        }
+        Ok(())
+    }
     /// Builds one or two actual codec CPU owners off the authoritative tick.
     pub fn try_new(workers: usize) -> Result<Self, ServerError> {
         Ok(Self {

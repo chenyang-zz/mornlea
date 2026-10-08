@@ -3,11 +3,11 @@
 //! [`SourceAcquisition`] exclusively owns one existing [`ChunkDriver`] plus
 //! the frozen private [`SourceGoals`] book, and borrows the background
 //! `AutosaveScheduler` and `GenerationPool` without taking, closing or
-//! cancelling those owners. Only the explicit `advance` call derives
-//! automatic goals, drives each borrowed provider once, polls the driver,
-//! runs the real source tick through `AuthorityState::advance_source_tick`
-//! and admits front FIFO provider starts; ordinary `advance_tick` semantics
-//! stay untouched.
+//! cancelling those owners. The synchronous `advance` and retained
+//! `begin_encoded_tick` callers derive the same automatic goals, drive each
+//! borrowed provider once, poll the driver and reduce the real source tick.
+//! Both admit the same strict FIFO provider starts after successful publication;
+//! the retained caller moves actual CPU snapshot frames into that publication.
 
 use super::acquisition::LiveChunkPhase;
 use super::chunk_driver::{ChunkDriver, ChunkPollReport};
@@ -24,6 +24,10 @@ use super::state::{AuthorityReadView, AuthorityState, TickContext};
 use crate::store::scheduler::AutosaveScheduler;
 use mornlea_domain::{ChunkPos, Dimension};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+#[path = "source_acquisition_encoded.rs"]
+mod encoded;
+pub use encoded::{SourceAcquisitionPending, SourceAcquisitionPoll};
 
 /// Which real provider kind one successful start used.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,90 +99,112 @@ impl SourceAcquisition {
         generations.drive();
         let poll = self.driver.poll(state, store, generations);
         let publication = state.advance_source_tick(budget, &mut self.goals)?;
-        let mut started = Vec::new();
-        let mut first_start_error = None;
-        // The backpressure latch is externally poll-driven: retain every
-        // queued job with zero starts instead of forcing providers.
-        if !store.backpressured() {
-            for _ in 0..MAX_ADMISSION_ATTEMPTS {
-                let Some(&key) = self.goals.pending.front() else {
-                    break;
-                };
-                if !self.goals.wanted.contains(&key) {
-                    self.goals.pop_front();
-                    continue;
-                }
-                let kind = match state.live_chunk_facts(key).map(|facts| facts.phase) {
-                    // Missing and Failed records load; NeedsGeneration
-                    // generates; every owned record stays with its owner.
-                    None | Some(LiveChunkPhase::Failed) => SourceChunkKind::Load,
-                    Some(LiveChunkPhase::NeedsGeneration) => SourceChunkKind::Generate,
-                    Some(_) => {
-                        self.goals.pop_front();
-                        continue;
-                    }
-                };
-                match kind {
-                    SourceChunkKind::Load => {
-                        if self.driver.pending_loads() >= MAX_DRIVER_LANES
-                            || store.source_chunk_slots()? == 0
-                        {
-                            break;
-                        }
-                    }
-                    SourceChunkKind::Generate => {
-                        if self.driver.pending_generations() >= MAX_DRIVER_LANES
-                            || generations.owned_jobs() >= MAX_DRIVER_LANES
-                        {
-                            break;
-                        }
-                    }
-                }
-                let result = match kind {
-                    SourceChunkKind::Load => self.driver.start_load(state, store, key, deadline),
-                    SourceChunkKind::Generate => {
-                        self.driver.start_generation(state, generations, key)
-                    }
-                };
-                match result {
-                    Ok(_) => {
-                        self.goals.pop_front();
-                        started.push(SourceChunkStart { key, kind });
-                    }
-                    Err(error) => {
-                        let capacity = matches!(error, ServerError::Capacity { .. });
-                        if first_start_error.is_none() {
-                            first_start_error = Some(error);
-                        }
-                        if capacity {
-                            // The provider-aborted record stays Failed: keep
-                            // the front candidate as a future load; never
-                            // forge NeedsGeneration or roll back an owner.
-                            break;
-                        }
-                        // A typed refusal consumes this job without poisoning
-                        // the healthy authority; a disk error never becomes a
-                        // generation start for the same key.
-                        self.goals.pop_front();
-                        if self.goals.companion_owned(&key) {
-                            self.goals.force = true;
-                        }
-                    }
-                }
-                // A permanent driver correlation fault halts further starts.
-                if self.driver.last_error().is_some() {
-                    break;
-                }
-            }
-        }
-        Ok(SourceAcquisitionTick {
+        admit_source_starts(
+            &mut self.driver,
+            &mut self.goals,
+            state,
+            store,
+            generations,
             publication,
             poll,
-            started,
-            queued: self.goals.pending.len(),
-            first_error: poll.first_error.or(first_start_error),
-        })
+            deadline,
+        )
     }
+}
+
+/// Both source callers retain the same strict FIFO provider admission policy.
+#[allow(clippy::too_many_arguments)]
+fn admit_source_starts<B: DiskBackend>(
+    driver: &mut ChunkDriver,
+    goals: &mut SourceGoals,
+    state: &mut AuthorityState,
+    store: &mut AutosaveScheduler<B>,
+    generations: &mut GenerationPool,
+    publication: TickPublication,
+    poll: ChunkPollReport,
+    deadline: Deadline,
+) -> Result<SourceAcquisitionTick, ServerError> {
+    let mut started = Vec::new();
+    let mut first_start_error = None;
+    // The backpressure latch is externally poll-driven: retain every
+    // queued job with zero starts instead of forcing providers.
+    if !store.backpressured() {
+        for _ in 0..MAX_ADMISSION_ATTEMPTS {
+            let Some(&key) = goals.pending.front() else {
+                break;
+            };
+            if !goals.wanted.contains(&key) {
+                goals.pop_front();
+                continue;
+            }
+            let kind = match state.live_chunk_facts(key).map(|facts| facts.phase) {
+                // Missing and Failed records load; NeedsGeneration
+                // generates; every owned record stays with its owner.
+                None | Some(LiveChunkPhase::Failed) => SourceChunkKind::Load,
+                Some(LiveChunkPhase::NeedsGeneration) => SourceChunkKind::Generate,
+                Some(_) => {
+                    goals.pop_front();
+                    continue;
+                }
+            };
+            match kind {
+                SourceChunkKind::Load => {
+                    if driver.pending_loads() >= MAX_DRIVER_LANES
+                        || store.source_chunk_slots()? == 0
+                    {
+                        break;
+                    }
+                }
+                SourceChunkKind::Generate => {
+                    if driver.pending_generations() >= MAX_DRIVER_LANES
+                        || generations.owned_jobs() >= MAX_DRIVER_LANES
+                    {
+                        break;
+                    }
+                }
+            }
+            let result = match kind {
+                SourceChunkKind::Load => driver.start_load(state, store, key, deadline),
+                SourceChunkKind::Generate => driver.start_generation(state, generations, key),
+            };
+            match result {
+                Ok(_) => {
+                    goals.pop_front();
+                    started.push(SourceChunkStart { key, kind });
+                }
+                Err(error) => {
+                    let capacity = matches!(error, ServerError::Capacity { .. });
+                    if first_start_error.is_none() {
+                        first_start_error = Some(error);
+                    }
+                    if capacity {
+                        // The provider-aborted record stays Failed: keep
+                        // the front candidate as a future load; never
+                        // forge NeedsGeneration or roll back an owner.
+                        break;
+                    }
+                    // A typed refusal consumes this job without poisoning
+                    // the healthy authority; a disk error never becomes a
+                    // generation start for the same key.
+                    goals.pop_front();
+                    if goals.companion_owned(&key) {
+                        goals.force = true;
+                    }
+                }
+            }
+            // A permanent driver correlation fault halts further starts.
+            if driver.last_error().is_some() {
+                break;
+            }
+        }
+    }
+    Ok(SourceAcquisitionTick {
+        publication,
+        poll,
+        started,
+        queued: goals.pending.len(),
+        first_error: poll.first_error.or(first_start_error),
+    })
 }
 
 /// Strict front admission attempts per advance call.
@@ -748,7 +774,18 @@ impl SourceGoals {
 }
 
 #[cfg(test)]
-mod goals_tests {
+pub(crate) mod goals_tests {
+    pub(crate) fn prepared_projection_goals(
+        wanted: std::collections::BTreeSet<super::ChunkKey>,
+    ) -> super::SourceGoals {
+        super::SourceGoals {
+            force: false,
+            last_inputs: Some(super::SourceInputs::default()),
+            wanted,
+            ..super::SourceGoals::default()
+        }
+    }
+
     use super::super::publication_project::wanted_square;
     use super::*;
 

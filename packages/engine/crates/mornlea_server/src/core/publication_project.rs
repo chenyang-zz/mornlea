@@ -160,6 +160,239 @@ pub(crate) fn companion_display_name(id: CompanionId) -> Option<CompanionName> {
     CompanionName::try_from_canonical(text).ok()
 }
 
+#[path = "publication_project_encoded.rs"]
+mod encoded;
+pub(crate) use encoded::{EncodedSourceProjection, EncodedSourceProjectionWork};
+
+/// Captured recipient books stay with the original committed projection until completion.
+struct SourceProjectionWork {
+    tick: u64,
+    actors: Vec<ActorRecord>,
+    entities: Entities,
+    inventories: BTreeMap<ActorKey, InventoryRecord>,
+    projectiles: Vec<ProjectileRecord>,
+    drops: Vec<ItemDrop>,
+    speakers: Vec<Speaker>,
+    observers: Vec<Observer>,
+    invalidated_containers: BTreeMap<SessionKey, ContainerRef>,
+    views: BTreeMap<SessionKey, SessionView>,
+    view_list: Vec<SessionView>,
+    early_visibilities: Vec<Visibility>,
+    passive_deaths: BTreeSet<PassiveId>,
+    deltas: Vec<Vec<BlockChanges>>,
+    refused_sessions: Vec<SessionKey>,
+    early: Vec<RoutedEvent>,
+}
+impl SourceProjectionWork {
+    fn prepare(
+        state: &mut AuthorityState,
+        tick: u64,
+        outcome: &TickOutcome,
+    ) -> Result<Self, ServerError> {
+        let speakers = state.active_speakers();
+        if speakers.is_empty() {
+            return Ok(Self {
+                tick,
+                actors: Vec::new(),
+                entities: classify_entities(&[]),
+                inventories: BTreeMap::new(),
+                projectiles: Vec::new(),
+                drops: Vec::new(),
+                speakers,
+                observers: Vec::new(),
+                invalidated_containers: BTreeMap::new(),
+                views: state.take_session_views(),
+                view_list: Vec::new(),
+                early_visibilities: Vec::new(),
+                passive_deaths: BTreeSet::new(),
+                deltas: Vec::new(),
+                refused_sessions: Vec::new(),
+                early: Vec::new(),
+            });
+        }
+        let actors = state.resident_actors().to_vec();
+        let entities = classify_entities(&actors);
+        let inventories = state.resident_inventories().clone();
+        let projectiles = state.resident_projectiles().to_vec();
+        let drops = source_drop_values(state, &actors, &entities, &speakers);
+        // Resolve hard subscription failures before transferring any recipient books.
+        let observers: Vec<Observer> = speakers
+            .iter()
+            .map(|speaker| {
+                observer_of(
+                    &actors,
+                    speaker,
+                    &entities,
+                    state.session_view_radius(speaker.session),
+                    outcome.source_inputs.as_ref(),
+                )
+            })
+            .collect::<Result<_, _>>()?;
+        let invalidated_containers = state.invalidate_container_views();
+        let mut views = state.take_session_views();
+        let mut view_list: Vec<SessionView> = speakers
+            .iter()
+            .map(|speaker| views.remove(&speaker.session).unwrap_or_default())
+            .collect();
+        let visibility_inputs = VisibilityInputs {
+            actors: &actors,
+            entities: &entities,
+            speakers: &speakers,
+            projectiles: &projectiles,
+            drops: &drops,
+        };
+        let early_visibilities: Vec<Visibility> = observers
+            .iter()
+            .zip(&view_list)
+            .map(|(observer, view)| visibility_of(observer, view, &visibility_inputs, None))
+            .collect();
+        apply_resync_requests(&mut view_list, &observers, state, outcome);
+        // Resident Dead passive identities once per tick, minus the quiet
+        // fall-out removals: death is observer-independent, so Died wins a
+        // simultaneous death plus interest or dimension exit, while live
+        // view exits, missing actors and quiet movement terminations stay
+        // Vanished.
+        let mut passive_deaths = BTreeSet::new();
+        for actor in &actors {
+            if actor.lifecycle != ActorLifecycle::Dead {
+                continue;
+            }
+            if let ActorKey::Passive(id) = actor.key
+                && !outcome.quiet_passive_removals.contains(&id)
+            {
+                passive_deaths.insert(id);
+            }
+        }
+        let mut events = Vec::new();
+        emit_despawns(&mut view_list, &observers, &early_visibilities, &mut events);
+        emit_forgets(&mut view_list, &observers, &mut events);
+        let (deltas, refused_sessions) =
+            classify_block_batches(&mut view_list, &observers, outcome);
+        Ok(Self {
+            tick,
+            actors,
+            entities,
+            inventories,
+            projectiles,
+            drops,
+            speakers,
+            observers,
+            invalidated_containers,
+            views,
+            view_list,
+            early_visibilities,
+            passive_deaths,
+            deltas,
+            refused_sessions,
+            early: events,
+        })
+    }
+    fn finish_tail(
+        mut self,
+        state: &mut AuthorityState,
+        outcome: &TickOutcome,
+        snapshots: &BTreeSet<(SessionKey, ChunkKey)>,
+        events: &mut Vec<RoutedEvent>,
+    ) {
+        if self.speakers.is_empty() {
+            self.restore(state);
+            return;
+        }
+        // The same late family order consumes only the successful selection lookahead.
+        let Self {
+            tick,
+            ref actors,
+            ref entities,
+            ref inventories,
+            ref projectiles,
+            ref drops,
+            ref speakers,
+            ref observers,
+            ref invalidated_containers,
+            ref mut view_list,
+            ref early_visibilities,
+            ref passive_deaths,
+            ref mut deltas,
+            ..
+        } = self;
+        let visibility_inputs = VisibilityInputs {
+            actors,
+            entities,
+            speakers,
+            projectiles,
+            drops,
+        };
+        let inputs = WorldInputs {
+            actors,
+            runtimes: state.resident_runtimes(),
+            entities,
+            speakers,
+            tick,
+            passive_deaths,
+        };
+        emit_block_batches(observers, std::mem::take(deltas), snapshots, events);
+        // Selected snapshots precede every late actor frame for that recipient.
+        // Only actual FIFO admission may turn this lookahead into observer history.
+        let visibilities: Vec<Visibility> = observers
+            .iter()
+            .zip(view_list.iter())
+            .map(|(observer, view)| {
+                visibility_of(observer, view, &visibility_inputs, Some(snapshots))
+            })
+            .collect();
+        let configured_names = state.configured_chat_names();
+        emit_companions(
+            view_list,
+            observers,
+            &visibilities,
+            early_visibilities,
+            &inputs,
+            &configured_names,
+            events,
+        );
+        emit_remotes(
+            view_list,
+            observers,
+            &visibilities,
+            early_visibilities,
+            &inputs,
+            events,
+        );
+        emit_hostiles(view_list, observers, &visibilities, &inputs, events);
+        emit_projectiles(
+            view_list,
+            observers,
+            &visibilities,
+            projectiles,
+            tick,
+            events,
+        );
+        emit_passives(view_list, observers, &visibilities, &inputs, state, events);
+        emit_drops(view_list, observers, &visibilities, drops, tick, events);
+        state.emit_chat(entities, events);
+        state.emit_records(
+            observers,
+            inventories,
+            invalidated_containers,
+            outcome,
+            view_list,
+            events,
+        );
+        self.restore(state);
+    }
+    fn restore(mut self, state: &mut AuthorityState) {
+        for (observer, mut view) in self.observers.iter().zip(self.view_list) {
+            view.wanted.clone_from(&observer.wanted);
+            view.chunks.retain(|key, _| observer.wanted.contains(key));
+            for key in &observer.wanted {
+                view.chunks.entry(*key).or_default();
+            }
+            self.views.insert(observer.session, view);
+        }
+        state.restore_session_views(self.views);
+    }
+}
+
 impl AuthorityState {
     /// Projects one tick's publication families for every admitted session.
     ///
@@ -190,166 +423,18 @@ impl AuthorityState {
         tick: u64,
         outcome: &TickOutcome,
     ) -> Result<SourceProjection, ServerError> {
-        let speakers = self.active_speakers();
-        if speakers.is_empty() {
-            return Ok(SourceProjection {
-                events: Vec::new(),
-                refused_sessions: Vec::new(),
-                before_snapshots: 0,
-                ordered_refusals: Vec::new(),
-            });
-        }
-        let actors = self.resident_actors().to_vec();
-        let entities = classify_entities(&actors);
-        let inventories = self.resident_inventories().clone();
-        let projectiles = self.resident_projectiles().to_vec();
-        let drops = source_drop_values(self, &actors, &entities, &speakers);
-        // Resolve hard subscription failures before transferring any recipient books.
-        let observers: Vec<Observer> = speakers
-            .iter()
-            .map(|speaker| {
-                observer_of(
-                    &actors,
-                    speaker,
-                    &entities,
-                    self.session_view_radius(speaker.session),
-                    outcome.source_inputs.as_ref(),
-                )
-            })
-            .collect::<Result<_, _>>()?;
-        let invalidated_containers = self.invalidate_container_views();
-        let mut views = self.take_session_views();
-        let mut view_list: Vec<SessionView> = speakers
-            .iter()
-            .map(|speaker| views.remove(&speaker.session).unwrap_or_default())
-            .collect();
-        let visibility_inputs = VisibilityInputs {
-            actors: &actors,
-            entities: &entities,
-            speakers: &speakers,
-            projectiles: &projectiles,
-            drops: &drops,
-        };
-        let early_visibilities: Vec<Visibility> = observers
-            .iter()
-            .zip(&view_list)
-            .map(|(observer, view)| visibility_of(observer, view, &visibility_inputs, None))
-            .collect();
-        apply_resync_requests(&mut view_list, &observers, self, outcome);
-        // Resident Dead passive identities once per tick, minus the quiet
-        // fall-out removals: death is observer-independent, so Died wins a
-        // simultaneous death plus interest or dimension exit, while live
-        // view exits, missing actors and quiet movement terminations stay
-        // Vanished.
-        let mut passive_deaths = BTreeSet::new();
-        for actor in &actors {
-            if actor.lifecycle != ActorLifecycle::Dead {
-                continue;
-            }
-            if let ActorKey::Passive(id) = actor.key
-                && !outcome.quiet_passive_removals.contains(&id)
-            {
-                passive_deaths.insert(id);
-            }
-        }
-        let inputs = WorldInputs {
-            actors: &actors,
-            runtimes: self.resident_runtimes(),
-            entities: &entities,
-            speakers: &speakers,
-            tick,
-            passive_deaths: &passive_deaths,
-        };
-        let mut events = Vec::new();
-        emit_despawns(&mut view_list, &observers, &early_visibilities, &mut events);
-        emit_forgets(&mut view_list, &observers, &mut events);
+        let mut work = SourceProjectionWork::prepare(self, tick, outcome)?;
+        let mut events = std::mem::take(&mut work.early);
         let before_snapshots = events.len();
-        let (deltas, refused_sessions) =
-            classify_block_batches(&mut view_list, &observers, outcome);
         let (snapshots, ordered_refusals) = emit_snapshots(
-            &mut view_list,
-            &observers,
+            &mut work.view_list,
+            &work.observers,
             self,
             &mut events,
-            &refused_sessions,
+            &work.refused_sessions,
         );
-        emit_block_batches(&observers, deltas, &snapshots, &mut events);
-        // Selected snapshots precede every late actor frame for that recipient.
-        // Only actual FIFO admission may turn this lookahead into observer history.
-        let visibilities: Vec<Visibility> = observers
-            .iter()
-            .zip(&view_list)
-            .map(|(observer, view)| {
-                visibility_of(observer, view, &visibility_inputs, Some(&snapshots))
-            })
-            .collect();
-        let configured_names = self.configured_chat_names();
-        emit_companions(
-            &mut view_list,
-            &observers,
-            &visibilities,
-            &early_visibilities,
-            &inputs,
-            &configured_names,
-            &mut events,
-        );
-        emit_remotes(
-            &mut view_list,
-            &observers,
-            &visibilities,
-            &early_visibilities,
-            &inputs,
-            &mut events,
-        );
-        emit_hostiles(
-            &mut view_list,
-            &observers,
-            &visibilities,
-            &inputs,
-            &mut events,
-        );
-        emit_projectiles(
-            &mut view_list,
-            &observers,
-            &visibilities,
-            &projectiles,
-            tick,
-            &mut events,
-        );
-        emit_passives(
-            &mut view_list,
-            &observers,
-            &visibilities,
-            &inputs,
-            self,
-            &mut events,
-        );
-        emit_drops(
-            &mut view_list,
-            &observers,
-            &visibilities,
-            &drops,
-            tick,
-            &mut events,
-        );
-        self.emit_chat(&entities, &mut events);
-        self.emit_records(
-            &observers,
-            &inventories,
-            &invalidated_containers,
-            outcome,
-            &mut view_list,
-            &mut events,
-        );
-        for (observer, mut view) in observers.iter().zip(view_list) {
-            view.wanted.clone_from(&observer.wanted);
-            view.chunks.retain(|key, _| observer.wanted.contains(key));
-            for key in &observer.wanted {
-                view.chunks.entry(*key).or_default();
-            }
-            views.insert(observer.session, view);
-        }
-        self.restore_session_views(views);
+        let refused_sessions = work.refused_sessions.clone();
+        work.finish_tail(self, outcome, &snapshots, &mut events);
         Ok(SourceProjection {
             events,
             refused_sessions,
@@ -903,6 +988,36 @@ fn emit_forgets(
 /// then chunk key. Exact section-payload budgets allow one oversized first
 /// column; later oversized work stops the pass without bypassing priority.
 /// Selection is delta coverage only; actual queue admission owns history.
+fn snapshot_candidates(observer: &Observer, view: &SessionView) -> Vec<ChunkKey> {
+    let center = observer.center;
+    let mut candidates: Vec<ChunkKey> = observer
+        .wanted
+        .iter()
+        .copied()
+        .filter(|key| {
+            view.chunks
+                .get(key)
+                .is_none_or(|entry| entry.resync_queued || !entry.snapshot_sent)
+        })
+        .collect();
+    candidates.sort_unstable_by_key(|key| {
+        let resync = view
+            .chunks
+            .get(key)
+            .is_some_and(|entry| entry.resync_queued);
+        let distance = center
+            .filter(|center| center.dimension == key.dimension)
+            .map_or(i64::MAX, |center| {
+                // Wanted keys share the checked bounded square, so differences cannot overflow.
+                let dx = i64::from(key.pos.x()) - i64::from(center.pos.x());
+                let dz = i64::from(key.pos.z()) - i64::from(center.pos.z());
+                dx * dx + dz * dz
+            });
+        (!resync, distance, *key)
+    });
+    candidates
+}
+
 fn emit_snapshots(
     view_list: &mut [SessionView],
     observers: &[Observer],
@@ -918,32 +1033,7 @@ fn emit_snapshots(
         if refused_sessions.contains(&observer.session) {
             continue;
         }
-        let center = observer.center;
-        let mut candidates: Vec<ChunkKey> = observer
-            .wanted
-            .iter()
-            .copied()
-            .filter(|key| {
-                view.chunks
-                    .get(key)
-                    .is_none_or(|entry| entry.resync_queued || !entry.snapshot_sent)
-            })
-            .collect();
-        candidates.sort_unstable_by_key(|key| {
-            let resync = view
-                .chunks
-                .get(key)
-                .is_some_and(|entry| entry.resync_queued);
-            let distance = center
-                .filter(|center| center.dimension == key.dimension)
-                .map_or(i64::MAX, |center| {
-                    // Wanted keys share the checked bounded square, so differences cannot overflow.
-                    let dx = i64::from(key.pos.x()) - i64::from(center.pos.x());
-                    let dz = i64::from(key.pos.z()) - i64::from(center.pos.z());
-                    dx * dx + dz * dz
-                });
-            (!resync, distance, *key)
-        });
+        let candidates = snapshot_candidates(observer, view);
         let mut selected_chunks = 0;
         let mut selected_bytes = 0;
         for key in candidates {

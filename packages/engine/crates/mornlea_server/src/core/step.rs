@@ -201,7 +201,7 @@ fn reduce_tick_mode(
 }
 
 /// Trusted errors and unwinds retain the same authority failure across both halves.
-fn tick_fence<T>(
+pub(crate) fn tick_fence<T>(
     state: &mut AuthorityState,
     action: impl FnOnce(&mut AuthorityState) -> Result<T, ServerError>,
 ) -> Result<T, ServerError> {
@@ -221,7 +221,7 @@ pub(crate) struct ReducedTick {
     hits: Vec<mornlea_domain::RoutedEvent>,
     events: Vec<mornlea_domain::RoutedEvent>,
     counters: TickCounters,
-    outcome: super::publication_project::TickOutcome,
+    pub(crate) outcome: super::publication_project::TickOutcome,
 }
 
 pub(crate) fn prepare_source_tick(
@@ -240,7 +240,19 @@ pub(crate) fn finish_source_tick(
     goals: &mut SourceGoals,
 ) -> Result<TickPublication, ServerError> {
     tick_fence(state, |state| {
-        finish_reduced_tick(state, reduced, true, Some(goals))
+        finish_reduced_tick(state, reduced, true, Some(goals), None)
+    })
+}
+
+/// Completes the retained projection without invoking the synchronous snapshot selector.
+pub(crate) fn finish_encoded_source_tick(
+    state: &mut AuthorityState,
+    reduced: ReducedTick,
+    goals: &mut SourceGoals,
+    projection: super::publication_project::EncodedSourceProjection,
+) -> Result<TickPublication, ServerError> {
+    tick_fence(state, |state| {
+        finish_reduced_tick(state, reduced, true, Some(goals), Some(projection))
     })
 }
 
@@ -251,7 +263,7 @@ fn reduce_tick_inner(
     mut goals: Option<&mut SourceGoals>,
 ) -> Result<TickPublication, ServerError> {
     let reduced = reduce_tick_to_commit(state, budget, goals.as_deref_mut())?;
-    finish_reduced_tick(state, reduced, publish, goals)
+    finish_reduced_tick(state, reduced, publish, goals, None)
 }
 
 fn reduce_tick_to_commit(
@@ -371,6 +383,7 @@ fn finish_reduced_tick(
     reduced: ReducedTick,
     publish: bool,
     goals: Option<&mut SourceGoals>,
+    encoded: Option<super::publication_project::EncodedSourceProjection>,
 ) -> Result<TickPublication, ServerError> {
     let ReducedTick {
         tick,
@@ -382,30 +395,40 @@ fn finish_reduced_tick(
     // The publication families precede the private player observation and the
     // combat confirmations that close the tick.
     let provider_prefix = events.len();
-    let projected = state.project_source_publication(tick, &outcome)?;
-    let before_snapshots = provider_prefix + projected.before_snapshots;
-    events.extend(projected.events);
-    events.extend(state.project_player_updates(tick));
-    events.extend(hits);
-    // Registered Active companions consume their reset marker before delivery
-    // finalizes the tick, preserving the source cadence with no observer.
-    state.finish_source_companion_resets();
-    let publication = TickPublication {
-        tick,
-        events,
-        // Control stays empty: handshake replies are transport-owned and
-        // never synthesized by the tick.
-        control: Vec::new(),
-        counters,
-    };
-    let publication = if publish {
-        let mut batch = super::publication::PreparedSourcePublication::new(publication);
+    let mut batch = super::publication::PreparedSourcePublication::for_source_tick(
+        TickPublication {
+            tick,
+            events: std::mem::take(&mut events),
+            control: Vec::new(),
+            counters,
+        },
+        state.limits(),
+    );
+    let (before_snapshots, refused_sessions) = if let Some(projected) = encoded {
+        projected.append_to(&mut batch)?
+    } else {
+        let projected = state.project_source_publication(tick, &outcome)?;
+        let before_snapshots = provider_prefix + projected.before_snapshots;
+        for event in projected.events {
+            batch.append_event(event);
+        }
         for (position, session) in projected.ordered_refusals {
             batch.refuse_at(provider_prefix + position, session)?;
         }
-        state.publish_prepared_source(batch, before_snapshots, projected.refused_sessions)?
+        (before_snapshots, projected.refused_sessions)
+    };
+    for event in state.project_player_updates(tick) {
+        batch.append_event(event);
+    }
+    for event in hits {
+        batch.append_event(event);
+    }
+    // Reset consumption precedes delivery even with no observer.
+    state.finish_source_companion_resets();
+    let publication = if publish {
+        state.publish_prepared_source(batch, before_snapshots, refused_sessions)?
     } else {
-        publication
+        batch.into_publication()
     };
     // The final small-input capture stays inside the same trusted-error
     // fence: a late refusal or panic keeps the counter unbumped through the
