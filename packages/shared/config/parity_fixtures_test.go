@@ -17,9 +17,10 @@ import (
 // must accept and reject exactly the same files:
 //
 //   - bad/: `decodeConfig` must reject every file.
-//   - good/: `decodeConfig` must accept every file. When expected/<name>.json
-//     exists, the server-owned effective values (physics, sim, fluidEnabled,
-//     logging) must equal it; the Rust test checks the same expectation.
+//   - good/: `decodeConfig` must accept every file, and the server-owned
+//     effective values (physics, sim, fluidEnabled, logging) must equal
+//     expected/<name>.json, which every good fixture must have; the Rust test
+//     checks the same expectation.
 //   - known_difference/: Go accepts and Rust deliberately rejects; the list is
 //     documented in the rust-authoritative-server design. Pinning Go acceptance
 //     here keeps each documented difference real.
@@ -171,11 +172,8 @@ func checkParityExpectation(t *testing.T, name string, cfg Config, update bool) 
 		return
 	}
 	contents, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return
-	}
 	if err != nil {
-		t.Fatalf("read expectation %s: %v", path, err)
+		t.Fatalf("read expectation %s: %v; every good fixture needs one (regenerate with %s=1)", path, err, parityUpdateEnv)
 	}
 	var want map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(contents))

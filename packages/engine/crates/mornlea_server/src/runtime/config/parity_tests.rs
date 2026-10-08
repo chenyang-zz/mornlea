@@ -3,7 +3,7 @@
 //! The same files feed Go `decodeConfig` in
 //! `packages/shared/config/parity_fixtures_test.go`; see that file for the
 //! directory contract. Here `bad/` must be refused, `good/` accepted with the
-//! effective values in `expected/`, and `known_difference/` refused with the
+//! effective values in `expected/` (required for every good fixture), and `known_difference/` refused with the
 //! specific error each documented difference produces.
 
 use std::fs;
@@ -91,8 +91,15 @@ fn good_fixtures_are_accepted_with_go_effective_values() {
                 let expected = fixture_root()
                     .join("expected")
                     .join(format!("{fixture}.json"));
-                let Ok(text) = fs::read_to_string(&expected) else {
-                    continue;
+                let text = match fs::read_to_string(&expected) {
+                    Ok(text) => text,
+                    Err(err) => {
+                        failures.push(format!(
+                            "{fixture}: every good fixture needs {}: {err}",
+                            expected.display()
+                        ));
+                        continue;
+                    }
                 };
                 let want = normalize(serde_json::from_str(&text).unwrap());
                 let got = effective_values(&config);
