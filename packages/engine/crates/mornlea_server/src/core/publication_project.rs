@@ -311,7 +311,9 @@ impl SourceProjectionWork {
         snapshots: &BTreeSet<(SessionKey, ChunkKey)>,
         events: &mut Vec<RoutedEvent>,
     ) {
-        if self.speakers.is_empty() {
+        // Same skip rule as `prepare`: a trusted observer alone is still a
+        // publication target (Go `sortedPublicationIDsLocked`).
+        if self.speakers.is_empty() && state.trusted_observer_count() == 0 {
             self.restore(state);
             return;
         }

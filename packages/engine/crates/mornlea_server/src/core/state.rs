@@ -2597,9 +2597,9 @@ impl AuthorityState {
                     AppendOutcome::Closed => {}
                 },
                 PendingFrame::Broadcast { frame } => {
-                    let mut sessions: Vec<SessionKey> =
-                        self.current_sessions.iter().copied().collect();
-                    sessions.extend(self.trusted_observers.keys().copied());
+                    // Broadcast is player chat only; trusted observers are not in
+                    // `current_sessions` (Go `publishChatDeliveries` skips them).
+                    let sessions: Vec<SessionKey> = self.current_sessions.iter().copied().collect();
                     for session in sessions {
                         #[cfg(test)]
                         CURRENT_PUBLICATION_VISITS.with(|visits| visits.set(visits.get() + 1));
@@ -20925,6 +20925,125 @@ mod owner_record_admission_tests {
         if let Some(states) = kinds.iter().position(|k| *k == "states") {
             assert!(spawn.unwrap() < states, "spawn before states: {kinds:?}");
         }
+    }
+
+    /// With no Active player, the trusted observer still receives the late
+    /// families (Go `sortedPublicationIDsLocked` always lists the observer).
+    /// Chat and drops stay player-only: Go `publishChatDeliveries` and
+    /// `publishDrops` skip the observer, so its FIFO holds only frames
+    /// addressed to its own session.
+    #[test]
+    fn observer_only_publication_reaches_late_families() {
+        let (mut state, sessions, hostiles) = hostile_fixture(512, 1);
+        let survival = state.residents.actors[0].survival;
+        let mut bytes = [0u8; 16];
+        bytes[0] = 10;
+        bytes[6] = 64;
+        bytes[8] = 128;
+        let companion = CompanionId::try_from_bytes(bytes).unwrap();
+        state
+            .register_source_companion(
+                companion,
+                ChunkPos::new(0, 0),
+                Some(mornlea_storage::CompanionBody {
+                    id: mornlea_storage::PlayerId::from_bytes(bytes),
+                    dimension: 0,
+                    position: [0.5, 65.0, 0.5],
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    inventory: mornlea_storage::Inventory::default(),
+                }),
+            )
+            .unwrap();
+        companion_lifecycle(&mut state, companion, ActorLifecycle::Active);
+        let passive = PassiveId::try_new(1).unwrap();
+        let position = [0.5, 65.0, 0.5];
+        let actor = ActorRecord::try_new(
+            ActorKey::Passive(passive),
+            ActorLifecycle::Active,
+            Dimension::OVERWORLD,
+            MotionState::new(mornlea_domain::MotionStateParts {
+                position: FiniteVec3::try_new(position).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            }),
+            LookAngles::try_new(0.0, 0.0).unwrap(),
+            survival,
+            ActorBody::Passive(mornlea_storage::PassiveMob {
+                id: passive.get(),
+                dimension: 0,
+                position,
+                velocity: [0.0; 3],
+                on_ground: true,
+                yaw: 0.0,
+                health: 20,
+            }),
+        )
+        .unwrap();
+        let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+        context.stage(RuleEffect::Actor(actor)).unwrap();
+        context.commit_carried();
+        drop(context);
+        let speaker = state.sessions[&sessions[0]].player_id;
+        for session in &sessions {
+            state.retire(*session, CloseReason::PeerGone).unwrap();
+        }
+        state.set_trusted_observer_enabled(true).unwrap();
+        let observer = state.attach_trusted_observer().unwrap();
+        state
+            .set_trusted_observer_center(observer, Dimension::OVERWORLD, ChunkPos::new(0, 0))
+            .unwrap();
+        let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+        context.commit_carried();
+        drop(context);
+        assert!(state.active_speakers().is_empty(), "observer-only fixture");
+        assert!(state.applied_trusted_observer_center(observer).is_some());
+        // A broadcast chat fact must not reach the observer.
+        state
+            .companion_chat
+            .push_decided(DecidedChatFact::broadcast(
+                speaker,
+                DisplayName::try_from_canonical("Ada".to_owned()).unwrap(),
+                ChatBody::InvalidFormat,
+            ))
+            .unwrap();
+        let mut outcome = prepared_delta(vec![]);
+        outcome.block_batches.clear();
+        let events = state.project_tick_publication(0, &outcome);
+        let kinds: Vec<&'static str> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(observer.get()))
+            .map(|e| match e.event() {
+                Event::ChunkSnapshot(_) => "snapshot",
+                Event::CompanionSpawn(_) => "companion",
+                Event::HostileSpawn(_) => "hostile",
+                Event::PassiveSpawn(_) => "passive",
+                Event::ItemDropUpserts(_) | Event::ItemDropRemoves(_) => "drop",
+                Event::InventoryState(_) | Event::CraftingState(_) => "record",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["snapshot", "companion", "hostile", "passive"],
+            "observer-only tail families"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event(), Event::HostileSpawn(value)
+                if value.spawns().iter().map(|r| r.id()).collect::<Vec<_>>() == hostiles)),
+            "hostile spawn names the resident hostile"
+        );
+        let expected = companion_frames(&events, observer);
+        state.publish(publication(events)).unwrap();
+        assert_eq!(
+            state.take_outbox(observer, 512, 2_097_152).unwrap(),
+            expected,
+            "observer FIFO holds only its own frames (no broadcast chat)"
+        );
+        assert!(state.is_trusted_observer(observer));
+        assert_eq!(state.occupied, 0);
     }
 
     fn delta_count_boundary(changes: Vec<BlockChange>) {

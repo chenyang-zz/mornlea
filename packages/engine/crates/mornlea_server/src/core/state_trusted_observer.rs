@@ -10,28 +10,19 @@ use mornlea_domain::{ChunkPos, Dimension, PlayerId};
 
 pub(crate) const TRUSTED_OBSERVER_DISABLED: &str = "trusted_observer_disabled";
 
-/// Sentinel v4 UUID for observer session records (not a playable identity).
-/// Excluded from player duplicate checks because observers skip `current_sessions`.
-fn observer_placeholder_player_id() -> PlayerId {
-    // version=4 variant=RFC4122; fixed so attach never depends on entropy.
-    let mut bytes = [0u8; 16];
-    bytes[0] = 0x7e;
-    bytes[1] = 0x52;
-    bytes[2] = 0x75;
-    bytes[3] = 0x53;
-    bytes[4] = 0x74;
-    bytes[5] = 0x45;
-    bytes[6] = 0x40; // version nibble
-    bytes[7] = 0x62;
-    bytes[8] = 0x80; // variant
-    bytes[9] = 0x73;
-    bytes[10] = 0x65;
-    bytes[11] = 0x72;
-    bytes[12] = 0x76;
-    bytes[13] = 0x65;
-    bytes[14] = 0x72;
-    bytes[15] = 0x01;
-    PlayerId::try_from_bytes(bytes).expect("observer placeholder is a valid v4 UUID")
+/// Sentinel v4 UUID bytes for observer session records (not a playable
+/// identity): version nibble 4 at byte 6, RFC 4122 variant at byte 8. Fixed so
+/// attach never depends on entropy. Excluded from player duplicate checks
+/// because observers skip `current_sessions`.
+const OBSERVER_PLACEHOLDER_BYTES: [u8; 16] = [
+    0x7e, 0x52, 0x75, 0x53, 0x74, 0x45, 0x40, 0x62, 0x80, 0x73, 0x65, 0x72, 0x76, 0x65, 0x72, 0x01,
+];
+
+/// Builds the placeholder identity; a refusal is a typed internal error.
+fn observer_placeholder_player_id() -> Result<PlayerId, ServerError> {
+    PlayerId::try_from_bytes(OBSERVER_PLACEHOLDER_BYTES).map_err(|_| ServerError::Internal {
+        invariant: "observer placeholder id",
+    })
 }
 
 /// Per-observer frozen subscription state.
@@ -76,31 +67,34 @@ impl AuthorityState {
     }
 
     /// Attach one observer. Does not increment `occupied` / take a player slot.
+    ///
+    /// Refusal order follows Go `attachTrustedObserverLocked`: lifecycle, then
+    /// the disabled flag (`ErrInvalidSession`, here the invalid `session`
+    /// input), then the occupied slot (`ErrSessionExists`, here Capacity).
     pub fn attach_trusted_observer(&mut self) -> Result<SessionKey, ServerError> {
         self.require_between_ticks()?;
-        if !self.trusted_observer_enabled {
-            return Err(ServerError::InvalidInput {
-                field: TRUSTED_OBSERVER_DISABLED,
-            });
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
         }
-        let observed = self.trusted_observers.len() + 1;
+        if !self.trusted_observer_enabled {
+            return Err(ServerError::InvalidInput { field: "session" });
+        }
         if self.trusted_observers.len() >= MAX_TRUSTED_OBSERVERS {
             return Err(ServerError::Capacity {
                 resource: Resource::TrustedObservers,
                 limit: MAX_TRUSTED_OBSERVERS,
-                observed,
+                observed: self.trusted_observers.len() + 1,
             });
         }
-        if self.phase != ServerPhase::Running {
-            return Err(ServerError::InvalidState { phase: self.phase });
-        }
+        // Session-id exhaustion refuses exactly like player admission.
         if self.ids_exhausted {
             return Err(ServerError::Capacity {
-                resource: Resource::TrustedObservers,
-                limit: MAX_TRUSTED_OBSERVERS,
-                observed,
+                resource: Resource::Players,
+                limit: usize::from(self.limits.max_players()),
+                observed: self.occupied + 1,
             });
         }
+        let placeholder = observer_placeholder_player_id()?;
         let raw = self.next_session;
         let key = SessionKey::from_raw(raw).ok_or(ServerError::Internal {
             invariant: "session id",
@@ -121,7 +115,7 @@ impl AuthorityState {
         // view_distance+1 clamps to limits.view_radius() (Go RegisterObserverSession).
         let view_distance =
             u8::try_from(self.limits.view_radius().saturating_sub(1)).unwrap_or(u8::MAX);
-        self.insert_observer_session(key, view_distance);
+        self.insert_observer_session(key, placeholder, view_distance);
         self.trusted_observers.insert(
             key,
             TrustedObserverRecord {
@@ -169,7 +163,9 @@ impl AuthorityState {
         center: ChunkPos,
     ) -> Result<(), ServerError> {
         self.require_between_ticks()?;
-        if !self.trusted_observer_enabled {
+        // Go `setTrustedObserverCenterLocked` folds a non-running server, a
+        // disabled flag and a missing observer into `ErrTrustedObserverDisabled`.
+        if self.phase != ServerPhase::Running || !self.trusted_observer_enabled {
             return Err(ServerError::InvalidInput {
                 field: TRUSTED_OBSERVER_DISABLED,
             });
@@ -223,11 +219,11 @@ impl AuthorityState {
             .collect()
     }
 
-    fn insert_observer_session(&mut self, key: SessionKey, view_distance: u8) {
+    fn insert_observer_session(&mut self, key: SessionKey, player_id: PlayerId, view_distance: u8) {
         self.sessions.insert(
             key,
             SessionRecord {
-                player_id: observer_placeholder_player_id(),
+                player_id,
                 display_name: String::new(),
                 view_distance,
                 phase: SessionPhase::Active,
@@ -269,16 +265,58 @@ mod trusted_observer_tests {
         admit_login(inbound).unwrap()
     }
 
+    /// Go `attachTrustedObserverLocked` refuses a disabled observer with
+    /// `ErrInvalidSession`; the Rust equivalent is the invalid `session` input.
     #[test]
-    fn disabled_attach_is_typed_refusal() {
+    fn disabled_attach_is_invalid_session() {
         let mut state = authority();
         let err = state.attach_trusted_observer().expect_err("disabled");
-        assert!(matches!(
+        assert_eq!(err, ServerError::InvalidInput { field: "session" });
+        assert_eq!(state.trusted_observer_count(), 0);
+    }
+
+    /// Go checks the server lifecycle before the occupied slot, so a closing
+    /// server refuses even when an observer is already attached.
+    #[test]
+    fn attach_on_closing_server_is_invalid_state_before_capacity() {
+        let mut state = authority();
+        state.set_trusted_observer_enabled(true).unwrap();
+        state.attach_trusted_observer().unwrap();
+        state.phase = ServerPhase::Closing;
+        let err = state.attach_trusted_observer().expect_err("closing");
+        assert_eq!(
             err,
-            ServerError::InvalidInput {
-                field: TRUSTED_OBSERVER_DISABLED
+            ServerError::InvalidState {
+                phase: ServerPhase::Closing
+            }
+        );
+    }
+
+    /// Session-id exhaustion uses the same refusal as player admission.
+    #[test]
+    fn attach_with_exhausted_ids_matches_player_refusal() {
+        let mut state = authority();
+        state.set_trusted_observer_enabled(true).unwrap();
+        state.ids_exhausted = true;
+        let observer_err = state.attach_trusted_observer().expect_err("exhausted");
+        let player_err = state
+            .admit(login(1, "Ada"), TransportKind::Memory)
+            .expect_err("exhausted");
+        assert_eq!(observer_err, player_err);
+        assert!(matches!(
+            observer_err,
+            ServerError::Capacity {
+                resource: Resource::Players,
+                ..
             }
         ));
+        assert_eq!(state.trusted_observer_count(), 0);
+    }
+
+    #[test]
+    fn observer_placeholder_id_constructs_without_panic() {
+        let id = observer_placeholder_player_id().expect("valid v4 placeholder");
+        assert_eq!(id.bytes(), OBSERVER_PLACEHOLDER_BYTES);
     }
 
     #[test]
@@ -395,6 +433,24 @@ mod trusted_observer_tests {
                 field: TRUSTED_OBSERVER_DISABLED
             })
         ));
+    }
+
+    /// Go `setTrustedObserverCenterLocked` folds a non-running server into
+    /// `ErrTrustedObserverDisabled`.
+    #[test]
+    fn set_center_on_closing_server_is_disabled_refusal() {
+        let mut state = authority();
+        state.set_trusted_observer_enabled(true).unwrap();
+        let observer = state.attach_trusted_observer().unwrap();
+        state.phase = ServerPhase::Closing;
+        let err =
+            state.set_trusted_observer_center(observer, Dimension::OVERWORLD, ChunkPos::new(0, 0));
+        assert_eq!(
+            err,
+            Err(ServerError::InvalidInput {
+                field: TRUSTED_OBSERVER_DISABLED
+            })
+        );
     }
 
     #[test]
