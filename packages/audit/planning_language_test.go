@@ -240,13 +240,17 @@ func containsHanRune(text string) bool {
 func activeOpenSpecMarkdown(t *testing.T, root string) []string {
 	t.Helper()
 	changesRoot := filepath.Join(root, "openspec", "changes")
+	// Only the top-level archive holds frozen changes. Directories that merely
+	// share the name, such as `archive-foo` or an `archive/` folder inside an
+	// active change, remain current planning content and stay in scope.
+	archiveRoot := filepath.Join(changesRoot, "archive")
 	var paths []string
 	err := filepath.WalkDir(changesRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() {
-			if path != changesRoot && entry.Name() == "archive" {
+			if path == archiveRoot {
 				return filepath.SkipDir
 			}
 			return nil
