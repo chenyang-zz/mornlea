@@ -139,6 +139,11 @@ impl AuthorityState {
     /// Instruction and issuer come from the task frozen at ingress; terrain,
     /// revisions, players, inventory, status and time are read from settled
     /// authority now. Work is bounded by the fixed window and player cap.
+    ///
+    /// The source tick is `next_tick`, the number of completed ticks. Go's
+    /// `PlanSnapshot` has no tick field; Go builds the snapshot in
+    /// `dispatchPlanning` before `engine.StepWithTunables`, where the authority
+    /// tick is `engine.TickCount()`, the same completed-step count.
     pub fn companion_planning_snapshot(
         &self,
         companion: CompanionId,
@@ -198,9 +203,18 @@ impl AuthorityState {
     ///
     /// Rebuilds the same projection as the planning snapshot from current
     /// authority. Every ready, world-valid window cell is present; absent
-    /// cells and chunks fail closed in plan install. An inactive companion
-    /// or an unprojectable position is an error the caller treats as a
-    /// changed world.
+    /// cells and chunks fail closed in plan install. `tick` is the same
+    /// completed-tick count as the planning snapshot's source tick.
+    ///
+    /// An `InvalidInput` refusal (inactive companion, missing or invalid
+    /// inventory, a window past the coordinate range, or an unreadable ready
+    /// cell) means only that this companion's world changed: the caller
+    /// discards the plan as world changed, like Go
+    /// `plannerOutcomeMatchesCurrentAuthority` returning false. It concerns
+    /// this companion only and is never an authority error; the caller must
+    /// not fence the tick or fail the server on it. Only the settled read
+    /// itself can return an authority state error (an already fenced or
+    /// closed authority), which this projection passes through unchanged.
     pub fn companion_current_world(
         &self,
         companion: CompanionId,
