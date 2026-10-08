@@ -2135,6 +2135,42 @@ impl AuthorityState {
         frozen
     }
 
+    /// Current length of the shared command queue. Reducers record it before
+    /// `freeze_eligible` so `requeue_frozen` can bound the put-back.
+    pub(crate) fn queued_command_len(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// Puts envelopes taken by `freeze_eligible` back on the shared queue.
+    ///
+    /// These envelopes already passed intake and reoccupy the slots they held
+    /// before the take, so this is not a new admission and never consults the
+    /// queue limit: with no intake between take and put-back, the queue cannot
+    /// end longer than `queued_before_freeze`. A longer queue means a reducer
+    /// returned envelopes it never took; that is reported as an internal error
+    /// rather than left as an over-full queue that later refuses intake with
+    /// no recorded cause. The envelopes stay queued either way, so nothing
+    /// accepted is dropped.
+    pub(crate) fn requeue_frozen(
+        &mut self,
+        frozen: Vec<CommandEnvelope>,
+        queued_before_freeze: usize,
+    ) -> Result<(), ServerError> {
+        self.commands.extend(frozen);
+        debug_assert!(
+            self.commands.len() <= queued_before_freeze,
+            "command requeue exceeded the frozen queue length: {} > {}",
+            self.commands.len(),
+            queued_before_freeze,
+        );
+        if self.commands.len() > queued_before_freeze {
+            return Err(ServerError::Internal {
+                invariant: "command requeue exceeded the frozen queue length",
+            });
+        }
+        Ok(())
+    }
+
     pub fn carry(&mut self, batch: Vec<CommandEnvelope>) -> Result<(), ServerError> {
         let observed = self.commands.len().saturating_add(batch.len());
         if observed > self.limits.queued_commands() {
@@ -24594,4 +24630,73 @@ mod owner_record_admission_tests {
 
     include!("state_source_snapshot_refusal_tests.rs");
     include!("state_source_encoded_tests.rs");
+}
+
+#[cfg(test)]
+mod command_requeue_tests {
+    use super::*;
+    use mornlea_domain::Command;
+
+    fn envelope(sequence: u64) -> CommandEnvelope {
+        CommandEnvelope::try_new(CommandEnvelopeParts {
+            tick: 0,
+            session: 1,
+            sequence,
+            arrival_index: sequence,
+            command: Command::CloseContainer,
+        })
+        .unwrap()
+    }
+
+    /// A full queue of `count` envelopes under a `cap` command limit.
+    fn queue(cap: usize, count: u64) -> AuthorityState {
+        let mut state = AuthorityState::try_new(
+            ServerLimits::try_new(8, cap, 512, 64, 64, 1_048_576).unwrap(),
+            7,
+        )
+        .unwrap();
+        for sequence in 1..=count {
+            state.commands.push(envelope(sequence));
+        }
+        state
+    }
+
+    #[test]
+    fn requeue_at_the_limit_restores_the_taken_suffix() {
+        let mut state = queue(4, 4);
+        let before = state.queued_command_len();
+        let mut frozen = state.freeze_eligible(0);
+        let suffix = frozen.split_off(1);
+        assert_eq!(state.requeue_frozen(suffix, before), Ok(()));
+        assert_eq!(
+            state
+                .commands
+                .iter()
+                .map(|envelope| envelope.sequence())
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
+    }
+
+    /// Returning more envelopes than were taken breaks the queue bound: debug
+    /// builds stop on the assertion, release builds fail with an internal
+    /// error instead of silently leaving an over-full queue.
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "command requeue exceeded the frozen queue length")
+    )]
+    fn requeue_beyond_the_taken_length_is_internal() {
+        let mut state = queue(4, 4);
+        let before = state.queued_command_len();
+        let mut frozen = state.freeze_eligible(0);
+        frozen.push(envelope(5));
+        assert_eq!(
+            state.requeue_frozen(frozen, before),
+            Err(ServerError::Internal {
+                invariant: "command requeue exceeded the frozen queue length",
+            })
+        );
+        assert_eq!(state.queued_command_len(), 5, "nothing accepted is dropped");
+    }
 }

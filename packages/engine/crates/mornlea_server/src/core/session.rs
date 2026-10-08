@@ -74,12 +74,13 @@ pub fn apply_sorted_batch(
     state: &mut AuthorityState,
     tick: u64,
 ) -> Result<Vec<CommandEnvelope>, ServerError> {
+    let queued_before_freeze = state.queued_command_len();
     let mut batch = state.freeze_eligible(tick);
     if let Err(error) = sort_batch(&mut batch) {
-        // The refusal must not drop accepted work. Carrying the drained batch
-        // back cannot exceed the command limit these same envelopes already
-        // occupied before the freeze.
-        let _ = state.carry(batch);
+        // The refusal must not drop accepted work. The drained batch goes
+        // back into the slots it held before the freeze; only a broken queue
+        // bound replaces the sort refusal with an internal error.
+        state.requeue_frozen(batch, queued_before_freeze)?;
         return Err(error);
     }
     let mut applied = Vec::new();
