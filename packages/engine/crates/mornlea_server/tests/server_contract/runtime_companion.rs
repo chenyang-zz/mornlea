@@ -441,7 +441,7 @@ fn missing_definition_keeps_metadata_and_does_not_block_startup() {
     let root = Root::new();
     let mut disk = open_world(&root);
     let stored = body(4, 20.5);
-    let aggregate = seeded(&[stored.clone()], &[]);
+    let aggregate = seeded(std::slice::from_ref(&stored), &[]);
     write(&mut disk, SaveValue::Companions(as_save(aggregate.clone())));
     let mut state = authority(&disk);
     let mut ids = Identities::new();
@@ -669,7 +669,7 @@ fn unconfigured_world_retires_active_companions_exactly_once() {
     let root = Root::new();
     let mut disk = open_world(&root);
     let stored = body(1, 4.5);
-    let aggregate = seeded(&[stored.clone()], &[]);
+    let aggregate = seeded(std::slice::from_ref(&stored), &[]);
     write(&mut disk, SaveValue::Companions(as_save(aggregate.clone())));
     let mut state = authority(&disk);
     let mut ids = Identities::new();
