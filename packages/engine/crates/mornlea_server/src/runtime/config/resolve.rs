@@ -134,28 +134,47 @@ fn validate_parent(current: &Path) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Go `validateDefaultConfigFile`.
+/// Go `validateDefaultConfigFile`. Symlink, non-regular and mode are checked
+/// one at a time so each refusal has its own pin; Go reports them together.
 fn validate_file(path: &Path, info: &fs::Metadata) -> Result<(), ConfigError> {
+    if info.file_type().is_symlink() {
+        return Err(insecure(path, "config file must not be a symlink".into()));
+    }
+    if !info.is_file() {
+        return Err(insecure(path, "config file must be a regular file".into()));
+    }
     let perm = permission_bits(info);
-    if info.file_type().is_symlink() || !info.is_file() || perm != Some(0o600) {
+    if perm != Some(0o600) {
         return Err(insecure(
             path,
-            format!("config file must be a regular 0600 file (mode {perm:?})"),
+            format!("config file must be mode 0600 (mode {perm:?})"),
         ));
     }
     Ok(())
 }
 
+/// Opens a path the way Go's injected `open` does, so tests can swap the
+/// inode after the first lstat and before the open.
+type OpenFn = Box<dyn FnOnce(&Path) -> io::Result<fs::File>>;
+
+fn default_open(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
+}
+
 /// Go `readDefaultConfigIfExistsWithOpen`: lstat, open, fstat, then lstat
 /// again, refusing any swap between the checks.
 fn read_checked(path: &Path) -> Result<Option<Vec<u8>>, ConfigError> {
+    read_checked_with_open(path, Box::new(default_open))
+}
+
+fn read_checked_with_open(path: &Path, open: OpenFn) -> Result<Option<Vec<u8>>, ConfigError> {
     let checked = match fs::symlink_metadata(path) {
         Ok(info) => info,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(path_error(path, "inspect config file", err)),
     };
     validate_file(path, &checked)?;
-    let mut file = fs::File::open(path).map_err(|err| path_error(path, "open config file", err))?;
+    let mut file = open(path).map_err(|err| path_error(path, "open config file", err))?;
     let opened = file
         .metadata()
         .map_err(|err| path_error(path, "inspect opened config file", err))?;
@@ -311,16 +330,99 @@ mod tests {
         chmod(&target, 0o600);
         fs::remove_file(&paths.current).unwrap();
         symlink(&target, &paths.current).unwrap();
-        assert!(matches!(
-            RuntimeConfig::resolve_paths(&paths),
-            Err(ConfigError::InsecurePath { .. })
-        ));
-        fs::remove_file(&paths.current).unwrap();
+        let err = RuntimeConfig::resolve_paths(&paths).expect_err("symlink");
+        assert!(
+            matches!(&err, ConfigError::InsecurePath { detail, .. } if detail.contains("symlink")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn sixty_hundred_directory_is_refused_as_not_a_regular_file() {
+        let dir = TempDir::new("dir-as-file");
+        let paths = ConfigPaths::under(&dir.0);
+        let parent = paths.current.parent().unwrap();
+        fs::create_dir_all(parent).unwrap();
+        chmod(parent, 0o700);
         fs::create_dir(&paths.current).unwrap();
-        assert!(matches!(
-            RuntimeConfig::resolve_paths(&paths),
-            Err(ConfigError::InsecurePath { .. })
-        ));
+        chmod(&paths.current, 0o600);
+        let err = RuntimeConfig::resolve_paths(&paths).expect_err("directory");
+        assert!(
+            matches!(&err, ConfigError::InsecurePath { detail, .. } if detail.contains("regular file")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn sixty_hundred_fifo_is_refused_as_not_a_regular_file() {
+        let dir = TempDir::new("fifo");
+        let paths = ConfigPaths::under(&dir.0);
+        let parent = paths.current.parent().unwrap();
+        fs::create_dir_all(parent).unwrap();
+        chmod(parent, 0o700);
+        // Permission bits are 0600 so the mode check cannot fire first and
+        // hide the non-regular refusal. The crate forbids unsafe_code, so
+        // the named pipe is created with the system mkfifo.
+        let status = std::process::Command::new("mkfifo")
+            .arg("-m")
+            .arg("600")
+            .arg(&paths.current)
+            .status()
+            .expect("spawn mkfifo");
+        assert!(status.success(), "mkfifo {status}");
+        chmod(&paths.current, 0o600);
+        let err = RuntimeConfig::resolve_paths(&paths).expect_err("fifo");
+        assert!(
+            matches!(&err, ConfigError::InsecurePath { detail, .. } if detail.contains("regular file")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn replaced_inode_before_open_is_refused() {
+        let dir = TempDir::new("swap");
+        let paths = ConfigPaths::under(&dir.0);
+        write_current(&paths, r#"{"fluidEnabled":false}"#, 0o700, 0o600);
+        let replacement = dir.0.join("replacement.json");
+        fs::write(&replacement, r#"{"fluidEnabled":true}"#).unwrap();
+        chmod(&replacement, 0o600);
+        let current = paths.current.clone();
+        let err = read_checked_with_open(
+            &current,
+            Box::new(move |path| {
+                fs::rename(&replacement, path)?;
+                fs::File::open(path)
+            }),
+        )
+        .expect_err("swap");
+        assert!(matches!(err, ConfigError::Replaced { .. }), "{err}");
+        // The replacement is still on disk at the current path; nothing was decoded.
+        assert_eq!(
+            fs::read_to_string(&paths.current).unwrap(),
+            r#"{"fluidEnabled":true}"#
+        );
+    }
+
+    #[test]
+    fn same_inode_symlink_inserted_before_open_is_refused() {
+        let dir = TempDir::new("swap-symlink");
+        let paths = ConfigPaths::under(&dir.0);
+        write_current(&paths, r#"{"fluidEnabled":false}"#, 0o700, 0o600);
+        let original = dir.0.join("original.json");
+        let current = paths.current.clone();
+        let err = read_checked_with_open(
+            &current,
+            Box::new(move |path| {
+                fs::rename(path, &original)?;
+                symlink(&original, path)?;
+                fs::File::open(path)
+            }),
+        )
+        .expect_err("symlink swap");
+        assert!(
+            matches!(&err, ConfigError::InsecurePath { detail, .. } if detail.contains("symlink")),
+            "{err}"
+        );
     }
 
     #[test]
