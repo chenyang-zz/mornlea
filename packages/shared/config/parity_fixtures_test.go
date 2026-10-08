@@ -53,6 +53,22 @@ var parityKnownDifferences = []string{
 	"unknown_key_lone_surrogate_escape",
 }
 
+// parityFixtureCounts pins the size of each shared fixture class; the Rust
+// test pins the same numbers, so a fixture cannot vanish from one side.
+var parityFixtureCounts = map[string]int{"bad": 111, "good": 35, "known_difference": 6}
+
+// parityBadReasons pins why Go refuses the -0 fixtures: the bare `-0` literal
+// decodes to 0 and fails the value check, while zeros with a fraction or
+// exponent fail the int decode. The Rust test pins the same reasons.
+var parityBadReasons = map[string]string{
+	"version_negative_zero_integer":             "不支持的配置文件版本 0",
+	"ai_task_timeout_negative_zero_integer":     "taskTimeoutMinutes 0 超出合法区间",
+	"version_negative_zero_exponent":            "cannot unmarshal number -0e0 into Go value of type int",
+	"cameraMode_negative_zero_exponent_literal": "cannot unmarshal number -0e0 into Go value of type int",
+	"cameraMode_negative_zero_fraction":         "cannot unmarshal number -0.0 into Go value of type int",
+	"ai_task_timeout_negative_zero_float":       "cannot unmarshal number -0.0 into Go value of type int",
+}
+
 func parityFixtures(t *testing.T, kind string) []string {
 	t.Helper()
 	paths, err := filepath.Glob(filepath.Join(parityFixtureDir, kind, "*.json"))
@@ -80,7 +96,14 @@ func TestDecodeConfigParityFixtures(t *testing.T) {
 	t.Setenv(parityAPIKeyEnv, "parity-key")
 	t.Setenv(parityUnsetEnv, "")
 
+	for kind, want := range parityFixtureCounts {
+		if got := len(parityFixtures(t, kind)); got != want {
+			t.Errorf("%s fixtures = %d, want %d (update the Rust test too)", kind, got, want)
+		}
+	}
+
 	covered := make(map[string]bool)
+	reasonSeen := make(map[string]bool)
 	for _, path := range parityFixtures(t, "bad") {
 		name := strings.TrimSuffix(filepath.Base(path), ".json")
 		for _, group := range parityGroups {
@@ -88,11 +111,22 @@ func TestDecodeConfigParityFixtures(t *testing.T) {
 				covered[group] = true
 			}
 		}
+		reason, pinned := parityBadReasons[name]
+		reasonSeen[name] = pinned
 		t.Run("bad/"+name, func(t *testing.T) {
-			if _, err := decodeParityFixture(t, path); err == nil {
+			_, err := decodeParityFixture(t, path)
+			if err == nil {
 				t.Fatalf("decodeConfig accepted %s; the fixture must be rejected", path)
 			}
+			if pinned && !strings.Contains(err.Error(), reason) {
+				t.Fatalf("decodeConfig refused %s with %q, want reason %q", path, err, reason)
+			}
 		})
+	}
+	for name := range parityBadReasons {
+		if !reasonSeen[name] {
+			t.Errorf("pinned bad reason names missing fixture %q", name)
+		}
 	}
 	for _, group := range parityGroups {
 		if !covered[group] {

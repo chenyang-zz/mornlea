@@ -133,6 +133,62 @@ fn known_differences_are_rejected_by_rust() {
     assert_eq!(seen.len(), 6, "every documented difference keeps a fixture");
 }
 
+#[test]
+fn fixture_counts_match_go() {
+    // Same numbers as `parityFixtureCounts` in the Go test.
+    for (kind, want) in [("bad", 111), ("good", 35), ("known_difference", 6)] {
+        assert_eq!(fixtures(kind).len(), want, "{kind} fixtures");
+    }
+}
+
+/// Go's refusal reason for each `-0` fixture, as pinned by `parityBadReasons`
+/// in the Go test.
+enum NegativeZeroReason {
+    UnsupportedVersionZero,
+    TaskTimeoutOutOfRange,
+    NotAnIntegerLiteral(&'static str),
+}
+
+#[test]
+fn negative_zero_bad_fixtures_fail_for_go_reasons() {
+    use NegativeZeroReason::*;
+    let cases = [
+        ("version_negative_zero_integer", UnsupportedVersionZero),
+        (
+            "ai_task_timeout_negative_zero_integer",
+            TaskTimeoutOutOfRange,
+        ),
+        (
+            "version_negative_zero_exponent",
+            NotAnIntegerLiteral("version"),
+        ),
+        (
+            "cameraMode_negative_zero_exponent_literal",
+            NotAnIntegerLiteral("cameraMode"),
+        ),
+        (
+            "cameraMode_negative_zero_fraction",
+            NotAnIntegerLiteral("cameraMode"),
+        ),
+        (
+            "ai_task_timeout_negative_zero_float",
+            NotAnIntegerLiteral("ai.taskTimeoutMinutes"),
+        ),
+    ];
+    for (fixture, reason) in cases {
+        let path = fixture_root().join("bad").join(format!("{fixture}.json"));
+        let err = decode(&path).expect_err(fixture);
+        let ok = match reason {
+            UnsupportedVersionZero => matches!(err, ConfigError::UnsupportedVersion { found: 0 }),
+            TaskTimeoutOutOfRange => matches!(&err, ConfigError::InvalidField { field, detail }
+                if field == "ai.taskTimeoutMinutes" && detail.contains("outside 1..60")),
+            NotAnIntegerLiteral(want) => matches!(&err, ConfigError::InvalidField { field, detail }
+                if field == want && detail.contains("integer literal")),
+        };
+        assert!(ok, "{fixture}: unexpected error {err}");
+    }
+}
+
 /// The Go test's `parityValues`: server-owned values as float64, keyed by Go
 /// field name.
 fn effective_values(config: &RuntimeConfig) -> Value {
