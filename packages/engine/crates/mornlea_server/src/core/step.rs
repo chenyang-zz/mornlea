@@ -278,7 +278,7 @@ fn reduce_tick_to_commit(
     // stop handling, and promotion decide facts once, and a successful stop
     // purges this companion's queued envelopes before they are drained.
     state.prepare_companion_chat()?;
-    let drained = drain_mailbox(state, tick, budget.commands());
+    let drained = drain_mailbox(state, tick, budget.commands())?;
     let companions = state.drain_companions(COMPANION_FEED);
     // The login scan runs before the context borrows the authority: Active
     // sessions with a save body and no player actor seed initial actors.
@@ -463,34 +463,34 @@ struct MailboxDrain {
 /// remainder carried back, per-session watermark walk) with the retired
 /// filter folded into the walk: a retired session never executes and never
 /// returns, so its commands count stale instead of riding back. A refused
-/// sort carries the whole frozen batch back and dispatches nothing.
-fn drain_mailbox(state: &mut AuthorityState, tick: u64, command_budget: usize) -> MailboxDrain {
+/// sort carries the whole frozen batch back and dispatches nothing. Carried
+/// envelopes reoccupy the slots they held before the freeze, so the
+/// put-back cannot fail on the queue limit; a broken bound is an internal
+/// error that fails the tick.
+fn drain_mailbox(
+    state: &mut AuthorityState,
+    tick: u64,
+    command_budget: usize,
+) -> Result<MailboxDrain, ServerError> {
+    let queued_before_freeze = state.queued_command_len();
     let mut batch = state.freeze_eligible(tick);
     let commands = batch.len();
-    let mut scratch = match CommandOrderScratch::try_with_capacity(batch.len()) {
-        Ok(scratch) => scratch,
-        Err(_) => {
-            let _ = state.carry(batch);
-            return MailboxDrain {
-                dispatched: Vec::new(),
-                commands,
-                carried: commands,
-                stale: 0,
-            };
-        }
+    let sorted = match CommandOrderScratch::try_with_capacity(batch.len()) {
+        Ok(mut scratch) => order_commands(&mut batch, &mut scratch).is_ok(),
+        Err(_) => false,
     };
-    if order_commands(&mut batch, &mut scratch).is_err() {
-        let _ = state.carry(batch);
-        return MailboxDrain {
+    if !sorted {
+        state.requeue_frozen(batch, queued_before_freeze)?;
+        return Ok(MailboxDrain {
             dispatched: Vec::new(),
             commands,
             carried: commands,
             stale: 0,
-        };
+        });
     }
     let suffix = batch.split_off(command_budget.min(batch.len()));
     let carried = suffix.len();
-    let _ = state.carry(suffix);
+    state.requeue_frozen(suffix, queued_before_freeze)?;
     let mut dispatched = Vec::with_capacity(batch.len());
     let mut stale = 0;
     for envelope in batch {
@@ -508,12 +508,12 @@ fn drain_mailbox(state: &mut AuthorityState, tick: u64, command_budget: usize) -
         }
         dispatched.push(envelope);
     }
-    MailboxDrain {
+    Ok(MailboxDrain {
         dispatched,
         commands,
         carried,
         stale,
-    }
+    })
 }
 
 /// Runs every dispatch row in the frozen order. The first error stops later
