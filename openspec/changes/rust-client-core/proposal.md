@@ -4,7 +4,7 @@ The Godot pilot still receives its session, mirror, prediction and presentation 
 
 ## Status and prerequisites
 
-Planning only: F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md). Blocked on completed [F1](../rust-runtime-foundation-acceptance/proposal.md) and the accepted [F2](../rust-authoritative-server/proposal.md) protocol/session contract. F3 final integration acceptance requires the F2 Rust server parity evidence. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
+Planning only: F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md). Blocked on completed [F1](../archive/2026-10-08-rust-runtime-foundation-acceptance/proposal.md) and the accepted [F2](../rust-authoritative-server/proposal.md) protocol/session contract. F3 final integration acceptance requires the F2 Rust server parity evidence. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
 
 ## What Changes
 
