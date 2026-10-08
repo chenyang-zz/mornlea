@@ -212,7 +212,7 @@ pub(crate) enum SettledFootprint {
 thread_local! {
     /// Source cells handed to settlement, appended in call order, so
     /// tick-driven tests can check the cross-lane order after the batches
-    /// drain. Tests clear it before the tick they inspect.
+    /// drain. `TickContext::for_tick` clears it, so it holds one tick only.
     pub(crate) static SETTLED_FOOTPRINTS: std::cell::RefCell<
         Vec<(SettledFootprint, crate::rules::crops::FootprintCell)>,
     > = const { std::cell::RefCell::new(Vec::new()) };
