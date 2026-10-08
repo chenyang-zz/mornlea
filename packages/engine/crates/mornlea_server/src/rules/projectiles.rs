@@ -19,14 +19,15 @@ use mornlea_storage::ItemStack;
 
 use crate::core::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, BowProgress, DamageCause, InventoryPatch,
-    PhaseReport, ProjectileRecord, Resource, RuleCall, RuleEffect, RulePhase, RuleReject,
-    ServerError, SessionKey,
+    MAX_PLAYERS, PhaseReport, ProjectileRecord, Resource, RuleCall, RuleEffect, RulePhase,
+    RuleReject, ServerError, SessionKey,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
 use crate::rules::inventory;
 
 const MAX_PROJECTILES: usize = 128;
-const MAX_SCOPES: usize = 8;
+/// One flight scope per online player.
+const MAX_SCOPES: usize = MAX_PLAYERS as usize;
 const MAX_RAY_BATCHES: usize = 8;
 const MAX_RAY_CELLS: usize = MAX_RAY_BATCHES * 64;
 const GRAVITY_STEP: f32 = 18.0 * 0.05;

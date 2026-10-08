@@ -3,7 +3,13 @@ use super::*;
 use crate::core::actor_save::ActorSaveLedger;
 
 const ACTOR_TARGETS: usize = 19;
-const COMPLETION_TARGETS: usize = ACTOR_TARGETS + 8 + 1;
+/// Chunk keys one actor-routed completion may name.
+const COMPLETION_CHUNK_KEYS: usize = 8;
+/// Player keys one completion may name: the actor ledger's retained player
+/// records, online or departed, not the online player cap. The overflow keeps
+/// the ledger's existing `Resource::Players` refusal.
+const COMPLETION_PLAYER_KEYS: usize = crate::core::actor_save::PLAYER_KEYS;
+const COMPLETION_TARGETS: usize = ACTOR_TARGETS + COMPLETION_CHUNK_KEYS + 1;
 const SAVE_IDENTITY: ServerError = ServerError::Internal {
     invariant: "save completion identity",
 };
@@ -205,17 +211,17 @@ impl AuthorityState {
                 .iter()
                 .filter(|k| matches!(k, SaveKey::Player(_)))
                 .count();
-            if chunks > 8 {
+            if chunks > COMPLETION_CHUNK_KEYS {
                 return Err(ServerError::Capacity {
                     resource: Resource::SaveChunks,
-                    limit: 8,
+                    limit: COMPLETION_CHUNK_KEYS,
                     observed: chunks,
                 });
             }
-            if players > 16 {
+            if players > COMPLETION_PLAYER_KEYS {
                 return Err(ServerError::Capacity {
                     resource: Resource::Players,
-                    limit: 16,
+                    limit: COMPLETION_PLAYER_KEYS,
                     observed: players,
                 });
             }

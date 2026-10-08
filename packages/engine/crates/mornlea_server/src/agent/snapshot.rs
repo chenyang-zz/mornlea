@@ -46,7 +46,9 @@ const BLOCK_Y_MIN: i32 = -64;
 const BLOCK_Y_MAX: i32 = 320;
 const MAX_EXPOSED_BLOCKS: usize = 256;
 const MAX_CHUNK_REVISIONS: usize = 9;
-const MAX_ONLINE_PLAYERS: usize = 8;
+/// Planning snapshots list every online player, matching the authority's
+/// snapshot constructor bound.
+const MAX_ONLINE_PLAYERS: usize = crate::core::contracts::MAX_PLAYERS as usize;
 const MAX_INSTRUCTION_BYTES: usize = 1024;
 const MAX_STATUS_BYTES: usize = 96;
 

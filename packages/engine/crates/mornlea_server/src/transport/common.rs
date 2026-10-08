@@ -961,3 +961,65 @@ fn unknown_connection() -> ConnectionProgress {
         }),
     }
 }
+
+#[cfg(test)]
+mod login_capacity_tests {
+    use super::*;
+    use crate::contracts::{ServerLimits, TransportKind};
+    use crate::core::contracts::MAX_PLAYERS;
+    use crate::state::AuthorityState;
+    use mornlea_domain::PlayerId;
+    use mornlea_protocol::{LoginStart, admit_login};
+
+    fn login(tag: u8) -> mornlea_protocol::AdmittedLogin {
+        let mut id = [0; 16];
+        id[0] = tag;
+        id[6] = 64;
+        id[8] = 128;
+        let start = LoginStart::new(PlayerId::try_from_bytes(id).unwrap(), "Ada", 8).unwrap();
+        admit_login(LoginStart::decode_inbound(&start.encode().unwrap()).unwrap()).unwrap()
+    }
+
+    /// The login after the last player slot is a typed player-plane capacity
+    /// refusal and answers the frozen server-full code, the same wire answer
+    /// the Go host gives for `errHostServerFull` (`LoginServerFull`, value 1).
+    #[test]
+    fn login_beyond_max_players_answers_server_full() {
+        let full = ServerError::Capacity {
+            resource: Resource::Players,
+            limit: usize::from(MAX_PLAYERS),
+            observed: usize::from(MAX_PLAYERS) + 1,
+        };
+        assert_eq!(
+            ServerLimits::try_new(MAX_PLAYERS + 1, 4096, 512, 64, 64, 1_048_576),
+            Err(full)
+        );
+        let mut a = AuthorityState::try_new(
+            ServerLimits::try_new(MAX_PLAYERS, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap();
+        for tag in 1..=MAX_PLAYERS {
+            a.prepare(login(tag), TransportKind::Memory).unwrap();
+        }
+        let error = a
+            .prepare(login(MAX_PLAYERS + 1), TransportKind::Memory)
+            .unwrap_err();
+        assert_eq!(error, full);
+        assert_eq!(begin_reject_code(&error), LOGIN_SERVER_FULL);
+        assert_eq!(LOGIN_SERVER_FULL, 1);
+    }
+
+    /// The cell-count trample capacity is raised only inside a tick and has
+    /// no protocol code; if it ever reached login it would answer the
+    /// existing internal-error code, never server-full.
+    #[test]
+    fn trample_cell_capacity_never_answers_server_full() {
+        let error = ServerError::Capacity {
+            resource: Resource::TrampleCells,
+            limit: 32,
+            observed: 33,
+        };
+        assert_eq!(begin_reject_code(&error), LOGIN_INTERNAL_ERROR);
+    }
+}

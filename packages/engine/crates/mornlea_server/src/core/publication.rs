@@ -11,7 +11,7 @@
 //! peer's ordered delivery. World rules, tick reduction, and transport stay
 //! outside this module.
 
-use super::contracts::{CloseReason, ServerError, SessionKey, TickPublication};
+use super::contracts::{CloseReason, MAX_PLAYERS, ServerError, SessionKey, TickPublication};
 use super::state::{AuthorityState, encode_packet};
 use mornlea_protocol::{PacketKey, ProtocolCodec, ServerPacket};
 use std::{fmt, sync::Arc};
@@ -61,8 +61,19 @@ pub fn close_receiver(state: &mut AuthorityState, session: SessionKey, reason: C
     state.close_outbox(session, reason)
 }
 
-/// Ordered delivery positions for at most eight unique source recipients.
+/// Ordered delivery positions for at most one refusal per online recipient.
 pub(crate) type SourceRefusals = Vec<(usize, SessionKey)>;
+
+/// Refusal markers are unique per recipient, so their ceiling is the player limit.
+pub(crate) const MAX_SOURCE_REFUSALS: usize = MAX_PLAYERS as usize;
+
+/// Snapshot frames the plain builder accepts. This counts encoded frames in
+/// one independent CPU batch, not players, so it is the encoding owner's
+/// request ceiling: a batch never holds more frames than requests can be
+/// queued, started or held complete at once. Whole source passes use
+/// `for_source_tick`, which multiplies the checked player and per-session
+/// snapshot limits.
+const PLAIN_SNAPSHOT_FRAMES: usize = super::chunk_encoding::MAX_CHUNK_ENCODE_REQUESTS;
 
 /// Owns immutable semantic output paired with a bounded set of CPU snapshot frames.
 /// Private fields and append-only construction prevent event/frame replacement.
@@ -78,7 +89,7 @@ impl PreparedSourcePublication {
         Self {
             publication,
             snapshots: Vec::new(),
-            snapshot_limit: 8,
+            snapshot_limit: PLAIN_SNAPSHOT_FRAMES,
             refusals: Vec::new(),
         }
     }
@@ -111,7 +122,7 @@ impl PreparedSourcePublication {
         session: SessionKey,
     ) -> Result<(), ServerError> {
         if before > self.publication.events.len()
-            || self.refusals.len() >= 8
+            || self.refusals.len() >= MAX_SOURCE_REFUSALS
             || self.refusals.iter().any(|(_, owner)| *owner == session)
             || self
                 .refusals

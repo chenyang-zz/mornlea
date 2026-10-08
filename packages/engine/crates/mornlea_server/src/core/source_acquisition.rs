@@ -12,8 +12,8 @@
 use super::acquisition::LiveChunkPhase;
 use super::chunk_driver::{ChunkDriver, ChunkPollReport};
 use super::contracts::{
-    ActorKey, ActorLifecycle, ChunkKey, Deadline, DiskBackend, Resource, ServerError, SessionKey,
-    TickBudget, TickPublication,
+    ActorKey, ActorLifecycle, ChunkKey, Deadline, DiskBackend, MAX_PLAYERS, Resource, ServerError,
+    SessionKey, TickBudget, TickPublication,
 };
 use super::generation_worker::GenerationPool;
 use super::pending_restore::PendingRestore;
@@ -235,9 +235,10 @@ pub(crate) struct SourceInputs {
     owners: Vec<SourceOwner>,
 }
 
-/// Owner bounds: eight players plus four registered companions, checked
-/// against the trusted registration ceiling instead of truncated.
-const MAX_SOURCE_PLAYERS: usize = 8;
+/// Owner bounds: one owner per online player plus four registered
+/// companions, checked against the trusted registration ceiling instead of
+/// truncated.
+const MAX_SOURCE_PLAYERS: usize = MAX_PLAYERS as usize;
 const MAX_SOURCE_COMPANIONS: usize = 4;
 const MAX_SOURCE_OWNERS: usize = MAX_SOURCE_PLAYERS + MAX_SOURCE_COMPANIONS;
 
@@ -442,9 +443,17 @@ impl SourceInputs {
             companion_owners += 1;
             owners.push(owner);
         }
-        // The books bound registration, so an exceeded trusted bound is an
-        // invariant failure rather than a silent truncation.
-        if player_owners > MAX_SOURCE_PLAYERS || companion_owners > MAX_SOURCE_COMPANIONS {
+        // The books bound registration, so an exceeded bound is refused rather
+        // than silently truncated. Player overflow is the typed player-plane
+        // capacity error; companion overflow remains an invariant failure.
+        if player_owners > MAX_SOURCE_PLAYERS {
+            return Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: MAX_SOURCE_PLAYERS,
+                observed: player_owners,
+            });
+        }
+        if companion_owners > MAX_SOURCE_COMPANIONS {
             return Err(ServerError::Internal {
                 invariant: "source owner bound",
             });

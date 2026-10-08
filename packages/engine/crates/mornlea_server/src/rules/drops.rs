@@ -6,8 +6,8 @@
 
 use crate::core::command_outcome::{CommandDisposition, CommandResult};
 use crate::core::contracts::{
-    ActorKey, ActorLifecycle, ChunkKey, DropBatch, DropSource, InventoryPatch, PhaseReport,
-    Resource, RuleCall, RuleEffect, RulePhase, RuleReject, ServerError, SessionKey,
+    ActorKey, ActorLifecycle, ChunkKey, DropBatch, DropSource, InventoryPatch, MAX_PLAYERS,
+    PhaseReport, Resource, RuleCall, RuleEffect, RulePhase, RuleReject, ServerError, SessionKey,
 };
 use crate::core::state::TickContext;
 use crate::rules::crafting::{add_stack, can_repack, grid_extent, set_view_slot, view_slot};
@@ -15,7 +15,8 @@ use mornlea_domain::{ChunkPos, Command, CommandEnvelope, Dimension, RejectReason
 use mornlea_storage::ItemStack;
 
 const MAX_ACTIVE_KEYS: usize = 200;
-const MAX_ACTIVE_PLAYERS: usize = 8;
+/// Pickup candidates are the Active players, at most one per online player.
+const MAX_ACTIVE_PLAYERS: usize = MAX_PLAYERS as usize;
 
 /// The batch call validates its shape; the reducer passes active Ready keys
 /// separately because the frozen call record has no interest-set field.
