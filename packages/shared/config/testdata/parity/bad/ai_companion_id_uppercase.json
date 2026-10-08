@@ -1,0 +1,14 @@
+{
+  "ai": {
+    "agentService": {
+      "endpoint": "http://127.0.0.1:8765",
+      "apiKeyEnv": "MORNLEA_CONFIG_PARITY_API_KEY"
+    },
+    "companions": [
+      {
+        "id": "3F2B8C1E-4A5D-4E6F-8A7B-9C0D1E2F3A4B",
+        "name": "Mira"
+      }
+    ]
+  }
+}

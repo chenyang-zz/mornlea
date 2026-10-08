@@ -6,13 +6,27 @@ OpenSpec behavior for this crate lives in
 `openspec/changes/rust-authoritative-server/`. The crate is a windowless rlib.
 Production dependencies are the F1 crates `mornlea_domain`,
 `mornlea_protocol`, and `mornlea_storage`, plus `mornlea_engine` for checked numerical kernels and
-`PhysicsTuning`; pinned `serde_json` handles the existing backup identity JSON.
+`PhysicsTuning`; pinned `serde_json` handles the existing backup identity JSON
+and, with pinned `serde`, the runtime config document model.
 Native descriptor close uses target-scoped `libc` on Unix and
 `windows-sys` on Windows; all other unsafe code remains denied. It does not own
 GPU rendering, Godot presentation, or the
 Python Agent process. Workspace membership is `packages/engine/Cargo.toml`.
-No dependency-direction test guards this crate yet; review the manifest
-against this file.
+
+## Runtime configuration ownership
+
+`src/runtime/` is the frozen process-config boundary. Only `runtime` may load
+config files; it never writes or migrates them. `RuntimeConfig::decode`
+accepts and rejects exactly what Go `decodeConfig` does, except the known
+differences listed in the rust-authoritative-server design; the shared
+fixtures in `packages/shared/config/testdata/parity/` are checked by both
+`runtime/config/parity_tests.rs` and the Go `parity_fixtures_test.go`, so a
+change to either loader must keep both green. `RuntimeConfig::resolve`
+mirrors Go `LoadDefault` path and permission checks read-only. After freeze,
+callers pass plain values (`RuleTunables`, raw fluid budgets, flags, logging)
+into `core`; `runtime` never constructs `TickBudget`. `core`, `rules`,
+`store`, `transport`, and `agent` must not reference `runtime::` —
+enforced by `runtime::config::tests::dependency_direction_forbids_runtime_imports`.
 
 ## Trusted observer
 

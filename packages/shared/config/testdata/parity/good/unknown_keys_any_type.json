@@ -1,0 +1,26 @@
+{
+  "newTopLevel": {
+    "deep": [
+      1,
+      "x",
+      null
+    ]
+  },
+  "physics": {
+    "futureKnob": "text"
+  },
+  "sim": {
+    "futureKnob": [
+      1
+    ]
+  },
+  "render": {
+    "futureKnob": {}
+  },
+  "logging": {
+    "format": 3
+  },
+  "ai": {
+    "futureKnob": 1
+  }
+}

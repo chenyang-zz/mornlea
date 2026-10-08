@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "logging": {
+    "default": "debug",
+    "modules": {
+      "net": "warn",
+      "sim": "error"
+    }
+  },
+  "physics": {
+    "eyeHeight": 1.7,
+    "walkSpeed": 5,
+    "gravity": 30,
+    "sneakSpeedMultiplier": 0.4
+  },
+  "sim": {
+    "interactionReach": 5.5,
+    "fluidUpdatesPerTick": 1024,
+    "fluidRescanCellsPerTick": 131072,
+    "spawnRadius": 8
+  },
+  "render": {
+    "viewDistance": 24,
+    "fovDegrees": 80,
+    "mouseSensitivity": 1.5,
+    "lodEnabled": false,
+    "lodFarMultiplier": 4,
+    "lodStep": 8
+  },
+  "ai": {
+    "agentService": {
+      "endpoint": "http://127.0.0.1:8765",
+      "apiKeyEnv": "MORNLEA_CONFIG_PARITY_API_KEY"
+    },
+    "companions": [
+      {
+        "id": "3f2b8c1e-4a5d-4e6f-8a7b-9c0d1e2f3a4b",
+        "name": "Mira",
+        "persona": "Calm and curious."
+      },
+      {
+        "id": "7d9e1f20-3b4c-4d5e-9f60-718293a4b5c6",
+        "name": "Tove"
+      }
+    ],
+    "taskTimeoutMinutes": 15
+  },
+  "texturePackPath": "packs/default",
+  "audioVolume": 0.25,
+  "windowSize": "960x540",
+  "fluidEnabled": false,
+  "cameraMode": 2
+}

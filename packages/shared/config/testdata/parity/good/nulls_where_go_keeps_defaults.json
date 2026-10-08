@@ -1,0 +1,20 @@
+{
+  "version": null,
+  "logging": {
+    "default": null,
+    "modules": {
+      "net": null
+    }
+  },
+  "physics": {
+    "walkSpeed": null
+  },
+  "sim": null,
+  "render": {
+    "lodStep": null,
+    "lodFarMultiplier": null
+  },
+  "ai": null,
+  "fluidEnabled": null,
+  "cameraMode": null
+}
