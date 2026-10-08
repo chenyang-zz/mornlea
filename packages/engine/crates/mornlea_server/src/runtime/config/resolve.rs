@@ -265,7 +265,9 @@ mod tests {
         assert!(user_config_dir(env(&[])).is_err());
         assert_eq!(
             ConfigPaths::under(Path::new("/c")).legacy,
-            PathBuf::from("/c").join(LEGACY_CONFIG_DIR).join("config.json")
+            PathBuf::from("/c")
+                .join(LEGACY_CONFIG_DIR)
+                .join("config.json")
         );
     }
 
