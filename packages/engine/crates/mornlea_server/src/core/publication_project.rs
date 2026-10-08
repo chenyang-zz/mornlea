@@ -117,6 +117,68 @@ struct Observer {
     center: Option<ChunkKey>,
     /// Whether the session has an Active player actor this tick.
     has_actor: bool,
+    /// Trusted observer: a center subscription without a player actor. Its
+    /// families are decided only by `TRUSTED_OBSERVER_CATEGORIES`.
+    trusted: bool,
+}
+
+/// One publication family, as routed per recipient.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PublicationCategory {
+    Snapshot,
+    Chunks,
+    Companion,
+    Hostile,
+    Projectile,
+    Passive,
+    Remote,
+    Drop,
+    PlayerRecord,
+    Chat,
+}
+
+/// The single trusted-observer routing table, mirroring Go `publishSession`
+/// (`packages/server/server/publication.go:53`). `true` rows are sent to the
+/// observer, `false` rows never are. Every publication section consults it.
+pub(crate) const TRUSTED_OBSERVER_CATEGORIES: [(PublicationCategory, bool); 10] = [
+    // Go: packages/server/server/publication.go:81 (publishSnapshots, no observer branch)
+    (PublicationCategory::Snapshot, true),
+    // Go: packages/server/server/publication.go:77,81 (publishForget, publishDeltas)
+    (PublicationCategory::Chunks, true),
+    // Go: packages/server/server/companion_publication.go:173 (SessionWantsChunk only)
+    (PublicationCategory::Companion, true),
+    // Go: packages/server/server/hostile_publication.go:126 (SessionWantsChunk only)
+    (PublicationCategory::Hostile, true),
+    // Go: packages/server/server/projectile_publication.go:129 (SessionWantsChunk only)
+    (PublicationCategory::Projectile, true),
+    // Go: packages/server/server/passive_publication.go:152 (SessionWantsChunk only)
+    (PublicationCategory::Passive, true),
+    // Go: packages/server/server/player_publication.go:123-124 (receiver must be a Ready player)
+    (PublicationCategory::Remote, false),
+    // Go: packages/server/server/drop_publication.go:15 (observer skipped)
+    (PublicationCategory::Drop, false),
+    // Go: packages/server/server/publication.go:181,192,206,223,237 (owner session filters)
+    (PublicationCategory::PlayerRecord, false),
+    // Go: packages/server/server/publication.go:112-113 (whole chat block skipped)
+    (PublicationCategory::Chat, false),
+];
+
+/// Looks up one row of `TRUSTED_OBSERVER_CATEGORIES`.
+pub(crate) const fn trusted_observer_receives(category: PublicationCategory) -> bool {
+    let mut index = 0;
+    while index < TRUSTED_OBSERVER_CATEGORIES.len() {
+        let (row, sent) = TRUSTED_OBSERVER_CATEGORIES[index];
+        if row as u8 == category as u8 {
+            return sent;
+        }
+        index += 1;
+    }
+    false
+}
+
+/// Players keep their own family rules; a trusted observer follows the table.
+fn receives(observer: &Observer, category: PublicationCategory) -> bool {
+    !observer.trusted || trusted_observer_receives(category)
 }
 
 /// The classified resident entity sets the visibility families diff against.
@@ -190,7 +252,7 @@ impl SourceProjectionWork {
         outcome: &TickOutcome,
     ) -> Result<Self, ServerError> {
         let speakers = state.active_speakers();
-        if speakers.is_empty() {
+        if speakers.is_empty() && state.trusted_observer_count() == 0 {
             return Ok(Self {
                 tick,
                 actors: Vec::new(),
@@ -216,7 +278,7 @@ impl SourceProjectionWork {
         let projectiles = state.resident_projectiles().to_vec();
         let drops = source_drop_values(state, &actors, &entities, &speakers);
         // Resolve hard subscription failures before transferring any recipient books.
-        let observers: Vec<Observer> = speakers
+        let mut observers: Vec<Observer> = speakers
             .iter()
             .map(|speaker| {
                 observer_of(
@@ -228,11 +290,26 @@ impl SourceProjectionWork {
                 )
             })
             .collect::<Result<_, _>>()?;
+        for (session, dimension, center, radius) in state.trusted_observer_view_facts() {
+            let Ok(wanted) = wanted_square(dimension, center, radius) else {
+                continue;
+            };
+            observers.push(Observer {
+                session,
+                wanted,
+                center: Some(ChunkKey {
+                    dimension,
+                    pos: center,
+                }),
+                has_actor: false,
+                trusted: true,
+            });
+        }
         let invalidated_containers = state.invalidate_container_views();
         let mut views = state.take_session_views();
-        let mut view_list: Vec<SessionView> = speakers
+        let mut view_list: Vec<SessionView> = observers
             .iter()
-            .map(|speaker| views.remove(&speaker.session).unwrap_or_default())
+            .map(|observer| views.remove(&observer.session).unwrap_or_default())
             .collect();
         let visibility_inputs = VisibilityInputs {
             actors: &actors,
@@ -294,7 +371,9 @@ impl SourceProjectionWork {
         snapshots: &BTreeSet<(SessionKey, ChunkKey)>,
         events: &mut Vec<RoutedEvent>,
     ) {
-        if self.speakers.is_empty() {
+        // Same skip rule as `prepare`: a trusted observer alone is still a
+        // publication target (Go `sortedPublicationIDsLocked`).
+        if self.speakers.is_empty() && state.trusted_observer_count() == 0 {
             self.restore(state);
             return;
         }
@@ -484,7 +563,14 @@ impl AuthorityState {
             };
             let event = Event::Chat(chat);
             let recipient = match fact.recipient {
+                // Broadcast routing consults the same table for observers.
                 None => EventRecipient::Broadcast,
+                Some(session)
+                    if self.is_trusted_observer(session)
+                        && !trusted_observer_receives(PublicationCategory::Chat) =>
+                {
+                    continue;
+                }
                 Some(session) => EventRecipient::Session(session.get()),
             };
             events.push(RoutedEvent::new(recipient, event));
@@ -513,6 +599,9 @@ impl AuthorityState {
         events: &mut Vec<RoutedEvent>,
     ) {
         for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
+            if !receives(observer, PublicationCategory::PlayerRecord) {
+                continue;
+            }
             let actor = ActorKey::Player(observer.session);
             let owner = EventRecipient::Session(observer.session.get());
             let record = inventories.get(&actor).copied();
@@ -607,6 +696,7 @@ fn observer_of(
         wanted,
         center,
         has_actor: active.is_some(),
+        trusted: false,
     })
 }
 
@@ -785,8 +875,9 @@ fn visibility_of(
         projectiles: BTreeSet::new(),
         drops: BTreeSet::new(),
     };
-    // Remote player state remains an Active-observer contract.
-    if observer.has_actor {
+    // Remote players go only to a receiver with an Active player actor
+    // (Go `visibleCandidates`); the table keeps them off a trusted observer.
+    if observer.has_actor && receives(observer, PublicationCategory::Remote) {
         for &index in &entities.players {
             let actor = &actors[index];
             let ActorKey::Player(target) = actor.key else {
@@ -810,52 +901,60 @@ fn visibility_of(
         }
     }
     for (id, index) in &entities.companions {
-        if actor_foot_visible(
-            observer,
-            view,
-            actors[*index].dimension,
-            actors[*index].motion.position().get(),
-            snapshots,
-        ) {
+        if receives(observer, PublicationCategory::Companion)
+            && actor_foot_visible(
+                observer,
+                view,
+                actors[*index].dimension,
+                actors[*index].motion.position().get(),
+                snapshots,
+            )
+        {
             visibility.companions.insert(*id);
         }
     }
     for (id, _, index) in &entities.hostiles {
-        if actor_foot_visible(
-            observer,
-            view,
-            actors[*index].dimension,
-            actors[*index].motion.position().get(),
-            snapshots,
-        ) {
+        if receives(observer, PublicationCategory::Hostile)
+            && actor_foot_visible(
+                observer,
+                view,
+                actors[*index].dimension,
+                actors[*index].motion.position().get(),
+                snapshots,
+            )
+        {
             visibility.hostiles.insert(*id);
         }
     }
     for (id, index) in &entities.passives {
-        if actor_foot_visible(
-            observer,
-            view,
-            actors[*index].dimension,
-            actors[*index].motion.position().get(),
-            snapshots,
-        ) {
+        if receives(observer, PublicationCategory::Passive)
+            && actor_foot_visible(
+                observer,
+                view,
+                actors[*index].dimension,
+                actors[*index].motion.position().get(),
+                snapshots,
+            )
+        {
             visibility.passives.insert(*id);
         }
     }
     for record in *projectiles {
-        if actor_foot_visible(
-            observer,
-            view,
-            record.dimension,
-            record.position.get(),
-            snapshots,
-        ) {
+        if receives(observer, PublicationCategory::Projectile)
+            && actor_foot_visible(
+                observer,
+                view,
+                record.dimension,
+                record.position.get(),
+                snapshots,
+            )
+        {
             visibility.projectiles.insert(record.id);
         }
     }
     // Four entity families consume subscription history while the player is Pending.
     // Physical drops retain their separate Active-observer interest contract.
-    if !observer.has_actor {
+    if !observer.has_actor || !receives(observer, PublicationCategory::Drop) {
         return visibility;
     }
     // Drops use physical radius two even when snapshot interest is narrower or wider.
@@ -963,6 +1062,9 @@ fn emit_forgets(
     events: &mut Vec<RoutedEvent>,
 ) {
     for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
+        if !receives(observer, PublicationCategory::Chunks) {
+            continue;
+        }
         let mut by_dimension: BTreeMap<Dimension, Vec<ChunkPos>> = BTreeMap::new();
         for key in &view.wanted {
             if !observer.wanted.contains(key) {
@@ -1032,7 +1134,9 @@ fn emit_snapshots(
     let limits = state.limits();
     for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
         // A pre-snapshot delta refusal has already stopped this recipient's source pass.
-        if refused_sessions.contains(&observer.session) {
+        if refused_sessions.contains(&observer.session)
+            || !receives(observer, PublicationCategory::Snapshot)
+        {
             continue;
         }
         let candidates = snapshot_candidates(observer, view);
@@ -1084,6 +1188,11 @@ fn classify_block_batches(
     let mut refused = Vec::new();
     for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
         let mut deltas = Vec::new();
+        // An empty entry keeps the per-recipient alignment for unrouted chunks.
+        if !receives(observer, PublicationCategory::Chunks) {
+            classified.push(deltas);
+            continue;
+        }
         for (key, base, new, changes) in &outcome.block_batches {
             if !observer.wanted.contains(key) {
                 continue;
