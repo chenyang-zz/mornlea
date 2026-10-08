@@ -225,6 +225,9 @@ pub struct AuthorityState {
     next_tick: u64,
     /// First hard execution failure permanently fences new reduction and save capture.
     tick_failure: Option<ServerError>,
+    /// True while a tick context holds the resident loan. Session retirement
+    /// is a between-ticks operation and refuses while this is set.
+    tick_running: bool,
     world_seed: i64,
     sessions: BTreeMap<SessionKey, SessionRecord>,
     /// Prepared and Active membership is bounded independently of retained history.
@@ -321,6 +324,7 @@ impl AuthorityState {
             ids_exhausted: false,
             next_tick: 0,
             tick_failure: None,
+            tick_running: false,
             world_seed,
             sessions: BTreeMap::new(),
             current_sessions: BTreeSet::new(),
@@ -1036,7 +1040,13 @@ impl AuthorityState {
         })
     }
 
+    /// Retires one session between ticks. A call while a tick holds the
+    /// resident loan refuses with `InvalidState` and changes nothing: the
+    /// loaned resident set would otherwise carry the retired actor back.
     pub fn retire(&mut self, key: SessionKey, _reason: CloseReason) -> Result<(), ServerError> {
+        if self.tick_running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
         // A stale transport close is an ordinary refusal, before source capture can fail hard.
         if !self
             .sessions
@@ -4866,6 +4876,7 @@ impl<'a> TickContext<'a> {
         // The exclusive authority borrow prevents observers from reading an
         // incomplete resident set while providers own and mutate these maps.
         let residents = std::mem::take(&mut context.authority.residents);
+        context.authority.tick_running = true;
         context.resident_loan = Some(residents.sleep_record.is_some());
         context.actors = residents.actors;
         context.player_slots = residents.player_slots;
@@ -5351,6 +5362,7 @@ impl<'a> TickContext<'a> {
         let Some(original_sleep) = self.resident_loan.take() else {
             return;
         };
+        self.authority.tick_running = false;
         let sleep_record = if committed || original_sleep || self.sleep_record_touched {
             Some(std::mem::replace(
                 &mut self.sleep_record,
@@ -13685,6 +13697,10 @@ mod source_player_restore_tests {
     fn moved_book_and_schedules_return_after_unwind() {
         moved_book_and_schedules(true);
     }
+    thread_local! {
+        static RETIRE_DURING: std::cell::Cell<Option<Result<(), ServerError>>> =
+            const { std::cell::Cell::new(None) };
+    }
     fn retire_during(context: &mut TickContext<'_>) -> Result<(), ServerError> {
         let s = context
             .read()
@@ -13698,18 +13714,58 @@ mod source_player_restore_tests {
                 }
             })
             .unwrap();
-        context.authority.retire(s, CloseReason::PeerGone)
+        let result = context.authority.retire(s, CloseReason::PeerGone);
+        RETIRE_DURING.with(|slot| slot.set(Some(result)));
+        Ok(())
     }
+    /// Retirement belongs between ticks. A call while a tick holds the
+    /// resident loan refuses with a typed error and changes nothing, so the
+    /// loan can never carry a retired player's actor back.
     #[test]
-    fn post_context_retirement_prunes_returned_book() {
+    fn retire_during_a_running_tick_is_rejected_without_effect() {
         let (mut a, s) = fixture();
         a.advance_tick(TickBudget::full()).unwrap();
+        let entries = a.source_players.entries.len();
+        let phase = a.sessions[&s].phase;
+        assert_ne!(phase, SessionPhase::Retired);
         set_dispatch_hook(Some(retire_during));
         a.advance_tick(TickBudget::full()).unwrap();
         set_dispatch_hook(None);
+        assert_eq!(
+            RETIRE_DURING.with(|slot| slot.take()),
+            Some(Err(ServerError::InvalidState {
+                phase: ServerPhase::Running
+            }))
+        );
+        assert_eq!(a.sessions[&s].phase, phase);
+        assert!(a.current_sessions.contains(&s));
+        assert_eq!(a.source_players.entries.len(), entries);
+        assert!(a.residents.player_slots.contains_key(&s));
+        assert!(
+            a.residents
+                .actors
+                .iter()
+                .any(|actor| actor.key == ActorKey::Player(s))
+        );
+        assert!(a.tick_failure.is_none());
+        // The same retirement succeeds at the next tick boundary.
+        a.retire(s, CloseReason::PeerGone).unwrap();
+        assert_eq!(a.sessions[&s].phase, SessionPhase::Retired);
+    }
+    #[test]
+    fn boundary_retirement_prunes_book_and_resident_actor() {
+        let (mut a, s) = fixture();
+        a.advance_tick(TickBudget::full()).unwrap();
+        a.retire(s, CloseReason::PeerGone).unwrap();
+        a.advance_tick(TickBudget::full()).unwrap();
         assert_eq!(a.sessions[&s].phase, SessionPhase::Retired);
         assert!(a.source_players.entries.is_empty());
-        assert!(player(&a, s).body == ActorBody::Player(saved(1)));
+        assert!(
+            a.residents
+                .actors
+                .iter()
+                .all(|actor| actor.key != ActorKey::Player(s))
+        );
     }
     #[test]
     fn manual_session_actual_final_restores_once_without_delivery() {
