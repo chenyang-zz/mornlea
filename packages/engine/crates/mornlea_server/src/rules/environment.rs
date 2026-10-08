@@ -239,8 +239,9 @@ fn year_index(world_time: u64, season_offset: u32) -> u64 {
 
 /// Season at an absolute time: the quarter of the year the in-year index
 /// falls in, boundaries landing on the first tick of each new season.
-/// Mirrors `core.SeasonAt`.
-fn season_at(world_time: u64, season_offset: u32) -> Season {
+/// Mirrors `core.SeasonAt`. This is the single Rust source for the season;
+/// sleep settlement and player publication call it instead of keeping copies.
+pub(crate) fn season_at(world_time: u64, season_offset: u32) -> Season {
     match year_index(world_time, season_offset) / SEASON_LENGTH_TICKS {
         0 => Season::Spring,
         1 => Season::Summer,
@@ -251,8 +252,53 @@ fn season_at(world_time: u64, season_offset: u32) -> Season {
 
 /// Quantized in-season progress 0..255: season start is 0, the last tick
 /// before the boundary is 255, and the boundary wraps back to 0. Mirrors
-/// `core.SeasonProgressAt`.
-fn season_progress_at(world_time: u64, season_offset: u32) -> u8 {
+/// `core.SeasonProgressAt`. This is the single Rust source for season
+/// progress; sleep settlement and player publication call it.
+pub(crate) fn season_progress_at(world_time: u64, season_offset: u32) -> u8 {
     let in_season = year_index(world_time, season_offset) % SEASON_LENGTH_TICKS;
     (in_season * SEASON_PROGRESS_QUANTUM / SEASON_LENGTH_TICKS) as u8
+}
+
+#[cfg(test)]
+mod season_tests {
+    use super::*;
+
+    /// `(world_time, season_offset, season, progress)` pins taken from the Go
+    /// `core.SeasonAt` / `core.SeasonProgressAt` arithmetic: the first progress
+    /// step (282 ticks), the last tick of each season, every season boundary,
+    /// the year wrap, the seed-42 offset step at tick 89, and the `u64`/`u32`
+    /// extremes that the per-term modulo keeps overflow-free.
+    const SEASON_PINS: [(u64, u32, Season, u8); 17] = [
+        (0, 0, Season::Spring, 0),
+        (281, 0, Season::Spring, 0),
+        (282, 0, Season::Spring, 1),
+        (71_999, 0, Season::Spring, 255),
+        (72_000, 0, Season::Summer, 0),
+        (143_999, 0, Season::Summer, 255),
+        (144_000, 0, Season::Autumn, 0),
+        (216_000, 0, Season::Winter, 0),
+        (287_999, 0, Season::Winter, 255),
+        (288_000, 0, Season::Spring, 0),
+        (0, 14_818, Season::Spring, 52),
+        (88, 14_818, Season::Spring, 52),
+        (89, 14_818, Season::Spring, 53),
+        (0, 287_999, Season::Winter, 255),
+        (1, 287_999, Season::Spring, 0),
+        (u64::MAX, 0, Season::Summer, 140),
+        (u64::MAX, u32::MAX, Season::Summer, 223),
+    ];
+
+    #[test]
+    fn season_derivation_matches_go_pins() {
+        for (world_time, offset, season, progress) in SEASON_PINS {
+            assert_eq!(
+                (
+                    season_at(world_time, offset),
+                    season_progress_at(world_time, offset)
+                ),
+                (season, progress),
+                "world_time={world_time} season_offset={offset}"
+            );
+        }
+    }
 }

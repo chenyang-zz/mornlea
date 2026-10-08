@@ -4,7 +4,7 @@
 //! the final projection and consumes reset only after capturing this record.
 
 use mornlea_domain::{
-    BlockPos, MiningState, MiningStateParts, PlayerState, PlayerStateParts, Season, SurvivalState,
+    BlockPos, MiningState, MiningStateParts, PlayerState, PlayerStateParts, SurvivalState,
     SurvivalStateParts, Weather, WorldState, WorldStateParts,
 };
 
@@ -13,6 +13,7 @@ use super::contracts::{
     MiningProgress, ServerError,
 };
 use super::mutation::mining_rule;
+use crate::rules::environment::{season_at, season_progress_at};
 use crate::rules::inventory::armor_points;
 
 pub(crate) fn project(
@@ -75,20 +76,12 @@ pub(crate) fn project(
     .map_err(|_| ServerError::InvalidInput {
         field: "player_publication",
     })?;
-    let year_index = (environment.world_time % 288_000
-        + u64::from(environment.season_offset) % 288_000)
-        % 288_000;
     let world = WorldState::try_new(WorldStateParts {
         day_phase_offset: environment.day_phase_offset,
         world_time_ticks: environment.world_time,
         weather: environment.weather,
-        season: match year_index / 72_000 {
-            0 => Season::Spring,
-            1 => Season::Summer,
-            2 => Season::Autumn,
-            _ => Season::Winter,
-        },
-        season_progress: ((year_index % 72_000) * 256 / 72_000) as u8,
+        season: season_at(environment.world_time, environment.season_offset),
+        season_progress: season_progress_at(environment.world_time, environment.season_offset),
         temperature: temperature(environment, actor.motion.position().get()[1]),
     })
     .map_err(|_| ServerError::InvalidInput {

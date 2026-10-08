@@ -58,6 +58,7 @@ use crate::core::contracts::{
 };
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::core::state::{AuthorityReadView, TickContext};
+use crate::rules::environment::{season_at, season_progress_at};
 
 /// First bed-foot form, south (`core.BedFootSouthID`); the eight bed forms
 /// run foot south/west/north/east then head south/west/north/east.
@@ -75,10 +76,6 @@ const DISPLAY_NIGHT_BEGIN: u16 = 13_000;
 const DISPLAY_NIGHT_END: u16 = 23_000;
 /// Four seasons per year (`core.YearTicks`).
 const YEAR_TICKS: u64 = 288_000;
-/// One season in authority ticks (`core.SeasonLengthTicks`).
-const SEASON_LENGTH_TICKS: u64 = 72_000;
-/// `core.SeasonProgressAt` quantizes in-season progress to 0..255.
-const SEASON_PROGRESS_QUANTUM: u64 = 256;
 /// Morning arc start the transition targets (`settleSleepThroughNight`
 /// passing the constant 0 morning phase).
 const MORNING_PHASE: u16 = 0;
@@ -590,24 +587,4 @@ fn effective_morning_offset(world_time: u64, day_arc: u16, morning_phase: u16) -
     }
     ((linear + DAY_LENGTH_TICKS - (world_time % u64::from(DAY_LENGTH_TICKS)) as u32)
         % DAY_LENGTH_TICKS) as u16
-}
-
-/// Season at an absolute time: the quarter of the year the in-year index
-/// falls in, boundaries landing on the first tick of each new season.
-/// Mirrors `core.SeasonAt` (`packages/shared/core/season.go`).
-fn season_at(world_time: u64, season_offset: u32) -> mornlea_domain::Season {
-    match year_index(world_time, season_offset) / SEASON_LENGTH_TICKS {
-        0 => mornlea_domain::Season::Spring,
-        1 => mornlea_domain::Season::Summer,
-        2 => mornlea_domain::Season::Autumn,
-        _ => mornlea_domain::Season::Winter,
-    }
-}
-
-/// Quantized in-season progress 0..255: season start is 0, the last tick
-/// before the boundary is 255, and the boundary wraps back to 0. Mirrors
-/// `core.SeasonProgressAt`.
-fn season_progress_at(world_time: u64, season_offset: u32) -> u8 {
-    let in_season = year_index(world_time, season_offset) % SEASON_LENGTH_TICKS;
-    (in_season * SEASON_PROGRESS_QUANTUM / SEASON_LENGTH_TICKS) as u8
 }
