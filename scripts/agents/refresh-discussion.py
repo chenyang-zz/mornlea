@@ -47,7 +47,7 @@ def build_body(rows):
     if unknown:
         raise ValueError("未知任务状态: " + ", ".join(repr(status) for status in unknown))
     out = [
-        "> **单一真相源**：仓库 [`docs/feature-backlog.md`](../../blob/main/docs/feature-backlog.md)（完整来源/依赖/版本影响都在仓库）。本讨论只维护**按状态分组的列表**，由规划者每轮刷新（`scripts/agents/refresh-discussion.py --update`）；两次刷新间的状态变化以评论为准（每条评论对应一次变更）。",
+        "> **单一真相源**：仓库 [`docs/feature-backlog.md`](../../blob/dev/docs/feature-backlog.md)（完整来源/依赖/版本影响都在仓库）。本讨论只维护**按状态分组的列表**，由规划者每轮刷新（`scripts/agents/refresh-discussion.py --update`）；两次刷新间的状态变化以评论为准（每条评论对应一次变更）。",
         "",
         "## 认领规则（简版）",
         "1. 只可选择 🟢 `就绪` 行 → 改仓库表该行状态/认领人并提交 → 从此负责到底；",
