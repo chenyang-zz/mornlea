@@ -10,3 +10,5 @@ mod finalization;
 mod integration;
 #[path = "agent_process/process.rs"]
 mod process;
+#[path = "agent_process/startup.rs"]
+mod startup;
