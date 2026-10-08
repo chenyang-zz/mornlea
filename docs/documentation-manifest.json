@@ -203,10 +203,14 @@
     },
     {
       "id": "compatibility-guide",
-      "classification": "legacy",
+      "classification": "bilingual",
       "paths": [
-        "docs/notes/compatibility.md"
-      ]
+        "docs/notes/compatibility.md",
+        "docs/notes/compatibility.zh.md"
+      ],
+      "english_path": "docs/notes/compatibility.md",
+      "chinese_path": "docs/notes/compatibility.zh.md",
+      "revision": "2026-10-08.1"
     },
     {
       "id": "configuration-guide",

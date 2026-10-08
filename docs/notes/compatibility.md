@@ -1,63 +1,103 @@
-# 兼容性与升级
+---
+doc_id: compatibility-guide
+doc_revision: 2026-10-08.1
+language: en
+counterpart: compatibility.zh.md
+---
+# Compatibility and upgrades
 
-本文承接 README「兼容性与升级」一节，给出线上协议、世界/玩家/伙伴存档的版本契约、升级前后的备份与回退纪律，以及 benchmark 报告兼容规则；全部条目以当前代码与 `openspec/specs/` 为准。
+[中文版](compatibility.zh.md). This document expands the README "compatibility and upgrades" section. It defines the version contracts for the wire protocol and for world, player, companion, and animal saves, the backup and rollback discipline around upgrades, and benchmark report compatibility rules. Every statement follows current code and `openspec/specs/`.
 
-## 线上协议
+Current version numbers are maintained only in the "Current version matrix" below; other explanatory documents link here instead of restating versions (the [LAN server guide](lan-server.md) and [player manual](gameplay.md) are legacy documents awaiting bilingual migration and switch to this link when they migrate). `TestCompatibilityMatrixMatchesSource` in `packages/audit` compares the matrix with the source constants and fails when they disagree.
 
-- 线上协议为 v34（定义在 `packages/shared/network/protocol` 的 `ProtocolVersion`，根包 `packages/shared/network` 别名再导出）；所有不匹配版本都会在握手阶段、进入 Play 前被稳定拒绝，不提供版本协商或降级解码；更早版本的逐版语义见 `packages/shared/network/protocol/packet.go` 顶部注释；
-- 近几版协议全部是既有 packet 尾部追加或新增消息，v34 起 `PassiveState` record 步长例外由 37 变为 38，其余既有长度上限不变，也不新增 `RejectReason`：
-  - v26 新增 Play S→C ID 20 `PlaceBlockSucceeded(sequence)`，只回发给放置发起会话作为成功放置确认；
-  - v27 新增 Play C→S ID 14 `BoneMeal`，与 `TillSoil` 同形（序号 + 朝向），目标格由权威射线决定；
-  - v28 在 `PlayerInput` 尾部 `Eating` 之后追加 1 字节 `Sprinting` 疾跑意图位；
-  - v29 在 `PlayerState` 尾部 `Hunger` 之后、`WorldTimeTicks` 之前追加 1 字节 `SaturationZero` 饱和度归零提示位；
-  - v30 新增 Play S→C ID 22/23/24 三类夜行者消息 `HostileSpawn`/`HostileState`/`HostileDespawn`：每类为 `ServerTick` u64 加 count u8 加至多 64 条按 ID 严格升序的记录（spawn 携带 ID/维度/位置/朝向/生命，state 携带 ID/位置/速度/朝向/生命，despawn 只携带 ID），按会话视野订阅发布；
-  - v31 在 `PlayerState` 尾部 `SaturationZero` 之后、`WorldTimeTicks` 之前追加 2 字节 `DayPhaseOffset` 显示相位偏移（u16，值域 `0..23999`，越界在校验与编解码处稳定拒绝）；显示相位按 `(WorldTimeTicks + DayPhaseOffset) % 24000` 计算，偏移只平移呈现相位、不回写绝对时间；
-- v32 在 Play S→C registry 尾部追加 ID 25 `CombatHit(ServerTick, Damage, TargetKind)`；固定 10-byte 载荷只私发给成功攻击的玩家会话，受击者、旁观者、trusted observer 与 hostile 攻击目标均不接收；
-- v33 在 Play S→C registry 尾部追加 ID 26/27/28 三类被动牛消息 `PassiveSpawn`/`PassiveState`/`PassiveDespawn`：每类为 `ServerTick` u64 加 count u8 加至多 64 条按 ID 严格升序的记录（spawn 携带 ID/维度/位置/朝向/生命，state 携带 ID/位置/速度/朝向/生命，despawn 只携带 ID），按会话视野订阅发布；
-- v34 在 `PassiveState` record 尾部 `Health` 之后追加 1 字节放牧标志 `Grazing`（u8，仅 0/1 合法，越界在校验与编解码处稳定拒绝；record 步长由 37 变为 38）；放牧态是瞬态呈现位、不入任何存档；
-- 客户端只声明按键意图，权威结算全在服务端；`SaturationZero` 是瞬态提示位、不入任何存档，饱和度与疲劳数值是纯服务端量、不占 wire 字段；`DayPhaseOffset` 只经世界 metadata v3 持久化，不进玩家存档。
+## Current version matrix
 
-## engine 与 client ABI
+| Contract | Current version | Authoritative source constant |
+|---|---|---|
+| protocol | v45 | `packages/shared/network/protocol/packet.go` `ProtocolVersion` |
+| player schema | v9 | `packages/server/storage/player/player_codec.go` `CurrentSchema`; Rust `mornlea_storage/src/player.rs` `CURRENT_SCHEMA` |
+| chunk schema | v9 | `packages/server/storage/chunk/chunk_codec.go` `currentChunkSchema`; Rust `mornlea_storage/src/chunk.rs` `CURRENT_SCHEMA` |
+| world metadata | v6 | `packages/server/storage/metadata.go` `currentMetadataVersion` |
+| `companions.ai` schema | v5 | `packages/server/storage/companion/companion_codec.go` `CurrentSchema`; Rust `mornlea_storage/src/companion.rs` `CURRENT_SCHEMA` |
+| `hostile_mobs` schema | v2 | `packages/server/storage/hostile/hostile_codec.go` `CurrentSchema`; Rust `mornlea_storage/src/hostile.rs` `CURRENT_SCHEMA` |
+| `passive_mobs` schema | v1 | `packages/server/storage/passive/passive_codec.go` `CurrentSchema`; Rust `mornlea_storage/src/passive.rs` `CURRENT_SCHEMA` |
+| engine ABI | v11 | `packages/engine/include/mornlea_engine.h` `MORNLEA_ENGINE_ABI_VERSION`; Rust `mornlea_engine/src/ffi.rs` `ABI_VERSION` |
+| client ABI | v19 | `packages/engine/include/mornlea_client.h` `MORNLEA_CLIENT_ABI_VERSION`; Rust `mornlea_client/src/ffi.rs` `CLIENT_ABI_VERSION` |
+| benchmark scenario | v23 | `packages/client/cmd/mornlea/benchmark/benchmark.go` `scenarioVersion` |
 
-- 数值引擎的 engine ABI 为 v10：同一次构建的 Go binary 与 `libmornlea_engine` 是不可跨版本混装的 release unit；v10 相对 v9 的变化是把 worldgen 请求固化为 `MGW1` layout 3 的 15 材质契约（v9 曾在 v8 mesh registry surface 上增加流体批量求值与重扫入口），`packages/shared/nativeabi`、C header 和 Rust 动态库必须同步替换，不提供旧版 fallback；
-- 图形客户端的 client ABI 为 v14：同一次构建的 `mornlea` 与 `libmornlea_client.dylib` 是不可跨版本混装的 release unit；无图形专服不链接 client 库，不受 client ABI 演进影响；
-- 无参数 identity export `mornlea_client_abi_version()` 只报告实际动态库身份 14，不接收期望版本，也不执行协商或返回 client status；
-- selected-main v13 的 28 个 versioned exports 与当前 v14 的 29 个 versioned exports 在版本不匹配时都返回 `ABI_VERSION`，并在读取语义输入或改变 window、renderer、capture、UI/cache 状态前拒绝调用；
-- v14-only 的 `mornlea_client_render_apply_world_updates` 在 selected-main v13 动态库中不存在；要求该 MRW1 symbol 的 v14 bridge 与 v13 动态库组合时必须在 link、load 或 bind 阶段硬失败，不进入 FFI body、不返回 client status，也不使用兼容入口或 fallback；
-- v13 引入 window composite capture：保留两段式容量查询、紧凑 top-down BGRA8 输出与 Go `Window.Capture` bridge；v14 原样保留该 surface 及菜单/游戏帧循环中 poll 后、render 前的 single-outstanding capture pump；
-- v12 引入进程内 WKWebView 菜单桥：`render_upload_ui_font` 出口与帧 TLV tag 9 UI 段（layout v1–v4 编解码）退役（下发即 `INVALID_ARGUMENT`），新增 `ui_push_state` JSON 状态下行出口，`render_drain_ui_events` 签名不变、字节格式改为版本化 JSON 事件信封（空队列 0 字节）；这些 surface 在 v13 与 v14 中继续保留；
-- 协议、存档 schema 与 benchmark scenario 不随两条 ABI 演进，既有世界与玩家存档在新客户端上照常读取。
+The matrix shares its source with the root `AGENTS.md` baseline sentence and the version matrix in `openspec/config.yaml`; `TestBaselineVersionsMatchCode` guards those two. `hostile_mobs.bin`, `passive_mobs.bin`, and `companions.ai` also carry an outer envelope version (currently 1 for each) in a separate constant. The matrix records the record-layout schema version; do not conflate the two.
 
-## 存档版本
+## Wire protocol
 
-- 世界 metadata 保持 v3，在 v2 载荷末尾追加 8 字节 `DayPhaseOffset`（u64，值域 `0..23999`，越界旧值读入时归一），既有段布局一字不动；v1/v2 世界读入即迁移：世界时间保持原值、偏移取 `0`（显示相位行为不变），并在下一次正常自动保存或关服时写为 v3；只认识旧版本的程序遇到未来 metadata 必须稳定拒绝且不得覆盖原文件；
-- 玩家存档保持 schema v8：在饥饿状态之后追加定长 17 字节重生点尾段（present 标志 1 字节 + 床尾格坐标 3×f32 12 字节 + 维度 u32 4 字节，无重生点时以 present=0 占满 17 字节）；受支持的 v1..v7 沿既有迁移链读取（例如 v4 一律补为满血、v6 按新玩家初值补齐三层饥饿状态、v7 一律迁移为「无重生点」，死亡重生沿用世界出生锚点语义），迁移结果在下一次正常保存时改写为当前版本；未来版本必须稳定拒绝且不得覆盖；
-- 区块存档保持 schema v9：v1..v8 沿既有迁移链读取，其中 v8→v9 是恒等迁移，不为旧区块追注水，已接受的代价是新旧区块之间出现干湿边界；未来版本必须稳定拒绝且不得覆盖；
-- 夜行者独立写入世界根目录的 `hostile_mobs.bin` schema v1：固定头加至多 64 条定长记录，CRC 与逐项合法性校验覆盖全文件，任何损坏、越界或非法记录都整份拒绝且视为无有效存档（缺失文件视为空集合，恢复失败不会以空集合覆盖旧文件）；该文件没有历史版本，未来版本必须稳定拒绝；
-- 伙伴状态独立写入世界根目录的 `companions.ai` schema v5：v1..v4 只读迁移、encoder 只写 v5，物理上限 393,904 bytes；active 与 inactive 身体记录合计最多 64 条；active 记录可持久化当前任务、FIFO 与恢复镜像，inactive 只保留停用 tombstone，名称和生效 persona 始终来自当前配置；
-- 列顶高度表、天空光和静态方块光只从权威方块镜像派生，不写入区块、玩家或伙伴存档，也不进入网络 payload；程序化天空只消费权威世界时间。
+- The current protocol version is in the matrix above (defined by `ProtocolVersion` in `packages/shared/network/protocol` and re-exported as an alias by the root package `packages/shared/network`). Every mismatched version is rejected deterministically during the handshake, before Play; there is no version negotiation or downgrade decoding.
+- Per-version semantics are owned by the header comment in `packages/shared/network/protocol/packet.go`; this document no longer restates each version.
+- Clients only declare input intent and the server performs all authoritative resolution. `SaturationZero` is a transient hint bit that is never saved; saturation and exhaustion values are server-only quantities with no wire field. `DayPhaseOffset` is persisted only through world metadata, never in player saves.
 
-## 备份与回退
+### Historical: protocol v26–v34 per-version notes (text as of protocol v34)
 
-- 升级前必须正常关服，等待玩家、伙伴与世界存储刷写完成并备份完整世界目录，再启动新版本程序；
-- 回退时必须先停服，再恢复升级前的完整备份；不承诺把 metadata v3、schema v9 区块、schema v8 玩家档、`hostile_mobs.bin` v1、`companions.ai` v5 或新物品降级写回，不能让旧程序直接打开已升级目录后继续写入；
-- 异常退出时玩家、伙伴与区块文件各自原子，但它们之间没有跨文件事务。
+- The wire protocol was v34 (defined by `ProtocolVersion` in `packages/shared/network/protocol`, re-exported by the root package `packages/shared/network`); every mismatched version was rejected during the handshake before Play, with no negotiation or downgrade decoding; earlier per-version semantics are in the header comment of `packages/shared/network/protocol/packet.go`.
+- Recent versions only appended to existing packet tails or added messages; from v34 the `PassiveState` record stride changed from 37 to 38 as the one exception, other existing length limits were unchanged, and no `RejectReason` was added:
+  - v26 added Play S→C ID 20 `PlaceBlockSucceeded(sequence)`, sent only to the placing session as a successful-placement acknowledgement;
+  - v27 added Play C→S ID 14 `BoneMeal`, shaped like `TillSoil` (sequence + facing), with the target cell chosen by the authoritative ray;
+  - v28 appended a 1-byte `Sprinting` intent bit after `Eating` at the tail of `PlayerInput`;
+  - v29 appended a 1-byte `SaturationZero` hint bit after `Hunger` and before `WorldTimeTicks` in `PlayerState`;
+  - v30 added Play S→C IDs 22/23/24 for night-walker messages `HostileSpawn`/`HostileState`/`HostileDespawn`: each is a `ServerTick` u64, a count u8, and up to 64 records in strictly ascending ID order (spawn carries ID/dimension/position/facing/health, state carries ID/position/velocity/facing/health, despawn carries only the ID), published per session view subscription;
+  - v31 appended a 2-byte `DayPhaseOffset` display phase offset after `SaturationZero` and before `WorldTimeTicks` in `PlayerState` (u16, range `0..23999`, out-of-range values rejected by validation and codecs); the display phase is `(WorldTimeTicks + DayPhaseOffset) % 24000`, and the offset only shifts presentation without rewriting absolute time;
+- v32 appended Play S→C ID 25 `CombatHit(ServerTick, Damage, TargetKind)`; the fixed 10-byte payload goes privately to the attacking player session only, never to the target, observers, trusted observers, or hostile attack targets;
+- v33 appended Play S→C IDs 26/27/28 for passive cow messages `PassiveSpawn`/`PassiveState`/`PassiveDespawn`, shaped like the hostile messages and published per session view subscription;
+- v34 appended a 1-byte `Grazing` flag after `Health` in the `PassiveState` record (u8, only 0/1 valid; stride 37 to 38); grazing is a transient presentation bit and is never saved;
+- Clients only declared intent; `SaturationZero` was transient; `DayPhaseOffset` was persisted only through world metadata v3, never in player saves.
 
-## 内嵌默认材质包
+## Engine and client ABI
 
-- 内嵌默认包为 Pastelcraft 子集（MIT，作者 XradicalD，版本 `Pastelcraft 1.21.11 [R21]`；
-  来源、改名映射与逐文件哈希见 `packages/client/assets/packs/pastelcraft/` 的
-  `ATTRIBUTION.md`/`PROVENANCE.json`），替代此前的 Pixel Perfection 子集
-  （CC BY-SA 4.0）；牛肉图标仍沿用 OpenGameArt `16x16 Food`（CC0），牛皮与牛头
-  仍是程序化像素；
-- 槽位名（`textures/<name>.png`）、`pack.json` 契约（`format=1`）、16×16/≤64KiB
-  全包拒绝语义与缺槽位程序化回退均不变，用户目录 override 按同名槽位继续生效；
-- `openspec/specs` 无需为本次换肤变更：`texture-pack-loading` 的行为契约未动，
-  变化的只是默认包内的像素内容（随所属 change 的 delta spec 生效与归档时同步）。
+- The numerical engine ABI version is in the matrix above. A Go binary and `libmornlea_engine` from the same build form one release unit that must not be mixed across versions; `packages/shared/nativeabi`, the C header, and the Rust dynamic library must be replaced together, with no legacy fallback. Per-version changes are in the comment at `ABI_VERSION` in `packages/engine/crates/mornlea_engine/src/ffi.rs`.
+- The graphical client ABI version is in the matrix above. `mornlea` and `libmornlea_client.dylib` from the same build form one release unit that must not be mixed across versions; the headless dedicated server does not link the client library and is unaffected by client ABI changes. The argument-free identity export `mornlea_client_abi_version()` reports only the actual library identity; it takes no expected version and performs no negotiation or client status return. Per-version changes are in the comment at `CLIENT_ABI_VERSION` in `packages/engine/crates/mornlea_client/src/ffi.rs`.
+- The protocol, save schemas, and benchmark scenario do not change with either ABI; existing world and player saves load normally on a new client.
 
-## benchmark 报告兼容
+### Historical: engine ABI v10 and client ABI v12–v14 notes
 
-- benchmark producer 为 scenario v22，固定输入仍是七名远端玩家、零伙伴、不注入聊天，被测世界不注水且不含农业方块（v22 起固定世界在合格草地上方确定性新增自然短草）；scenario 版本变化记录的是被测进程本身的改变（HUD 固定上传布局与保留面最坏组合、每帧实例前缀字节数、HUD 图集列数、稳定方块与 mesh registry、worldgen ABI、权威 tick 工作量等），性能数值只在同 scenario 版本内可比；
-- 旧 scenario 版本的报告仍可读取并做同版本比较；跨 scenario 比较只接受显式 `--allow-scenario-upgrade 21:22`，这是当前唯一显式迁移授权（历史的 `20:21` 随 producer 升到 scenario v22 退役，只作归档证据，不再是当前可授权迁移）；
-- 跨 transport 比较要求两侧 scenario 版本与 `git_commit` 都一致，否则拒绝；
-- 性能数值只记录，不改变退出状态；报告结构、来源身份、真实 overflow、数据丢失和 I/O 错误仍然硬失败。
+- The engine ABI was v10; v10 fixed the worldgen request to the `MGW1` layout 3 fifteen-material contract (v9 had added batched fluid evaluation and rescan entries on the v8 mesh registry surface).
+- The client ABI was v14 and the identity export reported 14; selected-main v13's 28 versioned exports and v14's 29 versioned exports returned `ABI_VERSION` on mismatch before reading semantic input or changing window, renderer, capture, or UI/cache state.
+- The v14-only `mornlea_client_render_apply_world_updates` did not exist in the selected-main v13 library; a v14 bridge requiring that MRW1 symbol had to fail at link, load, or bind time against a v13 library.
+- v13 introduced window composite capture (two-step capacity query, compact top-down BGRA8 output, and the Go `Window.Capture` bridge); v14 kept it along with the single-outstanding capture pump after poll and before render.
+- v12 introduced the in-process WKWebView menu bridge: the `render_upload_ui_font` export and frame TLV tag 9 UI segment (layout v1–v4 codecs) were retired (`INVALID_ARGUMENT` on use), `ui_push_state` was added for downstream JSON state, and `render_drain_ui_events` kept its signature with a versioned JSON event envelope (0 bytes for an empty queue); these surfaces remained in v13 and v14.
+
+## Save versions
+
+- The current world metadata version is in the matrix above. Supported older versions migrate on load and are written as the current version at the next normal autosave or shutdown; a program that only knows older versions must deterministically reject future metadata and must not overwrite the original file. Per-version layouts are documented in the comments of `packages/server/storage/metadata.go`.
+- The current player save schema is in the matrix above. Supported older versions load through the existing migration chain and are rewritten as the current version at the next normal save; future versions must be rejected deterministically and must not be overwritten. Per-version layouts are documented in the comments of `packages/server/storage/player` and `mornlea_storage/src/player.rs`.
+- Chunk saves stay at schema v9: v1..v8 load through the existing migration chain, where v8→v9 is an identity migration that does not backfill water into old chunks; the accepted cost is a wet/dry seam between old and new chunks. Future versions must be rejected deterministically and must not be overwritten.
+- Night walkers are written separately to `hostile_mobs.bin` in the world root; the current writer emits schema v2 (one trailing kind byte per record): a fixed header plus up to 64 fixed-length records, with CRC and per-field validation over the whole file; any corruption, out-of-range value, or invalid record rejects the whole file and is treated as no valid save (a missing file is an empty set, and a failed restore never overwrites the old file with an empty set). Schema v1 files are accepted read-only (kind 0, upgraded at the next normal save), and future versions must be rejected deterministically.
+- Passive animals are written separately to `passive_mobs.bin` in the world directory at schema v1: magic `PMST`, a fixed 32-byte header plus up to 32 fixed 72-byte records in strictly ascending ID order, with CRC-32C over the identity fields and payload; any length mismatch is corruption. Runtime facts such as the flee timer and birth chunk are not saved and are re-derived on restore. The file has no earlier versions, and future versions must be rejected deterministically.
+- Companion state is written separately to `companions.ai` schema v5 in the world root: v1..v4 migrate read-only and the encoder writes only v5, with a physical ceiling of 393,904 bytes; active and inactive body records total at most 64; active records may persist the current task, FIFO, and recovery mirror, inactive records keep only a deactivation tombstone, and names and the effective persona always come from the current configuration.
+- Column height maps, sky light, and static block light are derived only from the authoritative block mirror; they are not written to chunk, player, or companion saves and do not enter network payloads. The procedural sky consumes only authoritative world time.
+
+### Historical: world metadata v3, player schema v8, and `hostile_mobs` schema v1 notes
+
+- World metadata v3 appended an 8-byte `DayPhaseOffset` (u64, range `0..23999`, normalized on load) to the v2 payload; v1/v2 worlds migrated on load with offset `0` and were written as v3 at the next save.
+- Player schema v8 appended a fixed 17-byte respawn tail after hunger state (present flag, bed-foot cell 3×f32, dimension u32); v1..v7 loaded through the migration chain (v4 filled full health, v6 filled the three-layer hunger state with new-player defaults, v7 migrated to "no respawn point").
+- `hostile_mobs.bin` schema v1 had no earlier versions.
+
+## Backup and rollback
+
+- Before upgrading, shut down normally, wait for player, companion, and world storage to flush, back up the complete world directory, and only then start the new program.
+- To roll back, stop the server first and restore the complete pre-upgrade backup. There is no promise to downgrade any current matrix version of metadata, chunks, player saves, `hostile_mobs.bin`, `passive_mobs.bin`, `companions.ai`, or new items; never let an old program open an upgraded directory and keep writing.
+- After an abnormal exit, player, companion, and chunk files are each atomic, but there is no cross-file transaction between them.
+
+## Embedded default texture pack
+
+- The embedded default pack is a Pastelcraft subset (MIT, by XradicalD, version `Pastelcraft 1.21.11 [R21]`; source, rename mapping, and per-file hashes are in `ATTRIBUTION.md`/`PROVENANCE.json` under `packages/client/assets/packs/pastelcraft/`), replacing the earlier Pixel Perfection subset (CC BY-SA 4.0). The beef icon still uses OpenGameArt `16x16 Food` (CC0), and cow hide and head remain procedural pixels.
+- Slot names (`textures/<name>.png`), the `pack.json` contract (`format=1`), the 16×16/≤64KiB whole-pack rejection semantics, and procedural fallback for missing slots are unchanged; user-directory overrides still apply per slot name.
+- `openspec/specs` needed no change for the reskin: the `texture-pack-loading` behavioral contract is unchanged, and only the pixel content of the default pack changed (synchronized when the owning change's delta spec took effect and was archived).
+
+## Benchmark report compatibility
+
+- The current benchmark producer scenario version is in the matrix above. The fixed input remains seven remote players, zero companions, and no injected chat, in a test world without water or farming blocks. A scenario version change records a change to the measured process itself (HUD fixed upload layout and reserved-surface worst case, per-frame instance prefix bytes, HUD atlas columns, stable block and mesh registry, worldgen ABI, authoritative tick workload, and similar); performance numbers are comparable only within one scenario version. Per-version reasons are in the comment at `scenarioVersion` in `packages/client/cmd/mornlea/benchmark/benchmark.go` and in the [performance baseline](perf-baseline.md).
+- Reports from older scenario versions remain readable for same-version comparison. Cross-scenario comparison accepts only the single explicit migration allowed by `packages/tools/perfcheck/compare.go`, currently `--allow-scenario-upgrade 22:23`; earlier migration authorizations are retired and kept only as archive evidence.
+- Cross-transport comparison requires both sides to have the same scenario version and `git_commit`; otherwise it is rejected.
+- Performance numbers are recorded only and do not change the exit status; report structure, source identity, real overflow, data loss, and I/O errors remain hard failures.
+
+### Historical: scenario v22 notes
+
+- The benchmark producer was scenario v22 (from v22 the fixed world deterministically adds natural short grass above qualifying grass blocks).
+- Cross-scenario comparison accepted only the explicit `--allow-scenario-upgrade 21:22`; the earlier `20:21` had retired when the producer moved to scenario v22.
