@@ -1055,15 +1055,14 @@ fn route_door(
 /// Sorted active player sessions: the per-actor line, the sleep roster and
 /// every interest derivation share this single ascending source.
 fn active_players(context: &TickContext<'_>) -> Vec<SessionKey> {
-    let mut players = Vec::new();
-    for actor in context.read().actors() {
-        let ActorKey::Player(session) = actor.key else {
-            continue;
-        };
-        if actor.lifecycle == ActorLifecycle::Active {
-            players.push(session);
-        }
-    }
+    let mut players: Vec<SessionKey> = context
+        .read()
+        .online_players()
+        .filter_map(|actor| match actor.key {
+            ActorKey::Player(session) => Some(session),
+            _ => None,
+        })
+        .collect();
     players.sort_unstable();
     players
 }

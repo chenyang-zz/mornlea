@@ -1067,9 +1067,43 @@ impl AuthorityState {
             sleep.beds.retain(|(session, _, _)| *session != key);
         }
         self.residents.sleeping.remove(&key);
-        self.residents.player_slots.remove(&key);
+        self.release_player_resident(key);
         self.source_players.entries.remove(&key);
         Ok(())
+    }
+
+    /// Removes a retiring player's resident lanes in the same call, matching
+    /// the Go engine's `UnregisterSession`, which deletes the session and its
+    /// player before the next tick. The online roster read by every per-tick
+    /// consumer therefore never carries a retired session. Removal is
+    /// constant time and repairs the moved player's physical slot.
+    fn release_player_resident(&mut self, session: SessionKey) {
+        let key = ActorKey::Player(session);
+        let slot = self.residents.player_slots.remove(&session).or_else(|| {
+            self.residents
+                .actors
+                .iter()
+                .position(|actor| actor.key == key)
+        });
+        if let Some(slot) = slot
+            && self
+                .residents
+                .actors
+                .get(slot)
+                .is_some_and(|actor| actor.key == key)
+        {
+            self.residents.actors.swap_remove(slot);
+            if let Some(moved) = self.residents.actors.get(slot)
+                && let ActorKey::Player(other) = moved.key
+                && self.residents.player_slots.contains_key(&other)
+            {
+                self.residents.player_slots.insert(other, slot);
+            }
+        }
+        self.residents.inventories.remove(&key);
+        self.residents.runtimes.remove(&key);
+        self.residents.mining.remove(&key);
+        self.views.remove(&session);
     }
 
     pub fn accept(
@@ -4270,6 +4304,16 @@ impl<'a> AuthorityReadView<'a> {
     }
     pub fn actors(&self) -> &'a [ActorRecord] {
         self.actors
+    }
+    /// The single online-player roster every per-tick consumer counts: Active
+    /// player actors in the live resident set, in physical slot order.
+    /// Retirement removes the player's resident actor in the same call, so a
+    /// retired session never appears here and the roster never exceeds the
+    /// live session count.
+    pub fn online_players(&self) -> impl Iterator<Item = &'a ActorRecord> + 'a {
+        self.actors.iter().filter(|actor| {
+            matches!(actor.key, ActorKey::Player(_)) && actor.lifecycle == ActorLifecycle::Active
+        })
     }
     pub fn actor(&self, key: ActorKey) -> Option<&'a ActorRecord> {
         self.actors.iter().find(|actor| actor.key == key)
@@ -8950,9 +8994,11 @@ mod player_publication_tests {
             assert_eq!(authority.residents.player_slots.len(), 1);
             authority.retire(session, CloseReason::PeerGone).unwrap();
             assert!(authority.residents.player_slots.is_empty());
+            assert!(authority.residents.actors.is_empty());
         }
         let current = login(&mut authority, 1);
-        assert_eq!(authority.residents.actors.len(), 33);
+        // Reconnect history never accumulates resident actors.
+        assert_eq!(authority.residents.actors.len(), 1);
         assert_eq!(authority.residents.player_slots.len(), 1);
         let events = authority.project_player_updates(5);
         assert_eq!(events.len(), 1);
@@ -13450,7 +13496,7 @@ mod source_player_restore_tests {
         assert!(a.views.is_empty());
     }
     #[test]
-    fn source_book_is_live_bounded_and_retirement_preserves_durable_history() {
+    fn source_book_is_live_bounded_and_retirement_releases_resident_lanes() {
         let mut a = fresh();
         a.enable_source_player_restoration(1).unwrap();
         let sessions: Vec<_> = (1..=8).map(|tag| register(&mut a, tag, None)).collect();
@@ -13465,13 +13511,86 @@ mod source_player_restore_tests {
         assert_eq!(a.next_session, next);
         a.retire(sessions[0], CloseReason::PeerGone).unwrap();
         assert_eq!(a.source_players.entries.len(), 7);
-        assert_eq!(a.residents.actors.len(), 8);
-        assert_eq!(a.residents.runtimes.len(), 8);
+        // The retired session record stays; its resident lanes leave with it.
+        assert_eq!(a.residents.actors.len(), 7);
+        assert_eq!(a.residents.runtimes.len(), 7);
         assert_eq!(a.sessions.len(), 8);
         register(&mut a, 9, None);
         assert_eq!(a.source_players.entries.len(), 8);
-        assert_eq!(a.residents.actors.len(), 9);
+        assert_eq!(a.residents.actors.len(), 8);
         assert_eq!(a.sessions.len(), 9);
+    }
+    thread_local! {
+        static ROSTER_SEEN: std::cell::RefCell<Vec<SessionKey>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn record_online_roster(c: &mut TickContext<'_>) -> Result<(), ServerError> {
+        let roster: Vec<SessionKey> = c
+            .read()
+            .online_players()
+            .map(|actor| match actor.key {
+                ActorKey::Player(session) => session,
+                _ => unreachable!("the online roster only yields players"),
+            })
+            .collect();
+        ROSTER_SEEN.with(|seen| *seen.borrow_mut() = roster);
+        Ok(())
+    }
+    /// A full server loses one player and admits a replacement: the retired
+    /// actor leaves the online roster in the same call, so the next tick sees
+    /// exactly the eight live players and the hostile and drop providers,
+    /// which count players from that roster, do not refuse with capacity.
+    #[test]
+    fn retired_player_leaves_online_roster_before_replacement_fills_slot() {
+        let (mut a, first) = fixture();
+        let mut sessions = vec![first];
+        for tag in 2..=8 {
+            sessions.push(register(&mut a, tag, Some(saved(tag))));
+        }
+        offer(&mut a, key(Dimension::OVERWORLD, 0, 0), 0);
+        a.advance_tick(TickBudget::full()).unwrap();
+        let online = |a: &AuthorityState| {
+            a.residents
+                .actors
+                .iter()
+                .filter(|actor| {
+                    matches!(actor.key, ActorKey::Player(_))
+                        && actor.lifecycle == ActorLifecycle::Active
+                })
+                .count()
+        };
+        assert_eq!(online(&a), 8);
+        let retired = sessions[0];
+        let key = ActorKey::Player(retired);
+        a.retire(retired, CloseReason::PeerGone).unwrap();
+        assert!(a.residents.actors.iter().all(|actor| actor.key != key));
+        assert!(!a.residents.inventories.contains_key(&key));
+        assert!(!a.residents.runtimes.contains_key(&key));
+        assert!(!a.residents.mining.contains_key(&key));
+        assert_eq!(online(&a), 7);
+        for (slot, actor) in a.residents.actors.iter().enumerate() {
+            if let ActorKey::Player(session) = actor.key {
+                assert_eq!(a.residents.player_slots[&session], slot);
+            }
+        }
+        let replacement = register(&mut a, 9, Some(saved(9)));
+        for _ in 0..3 {
+            a.advance_tick(TickBudget::full()).unwrap();
+        }
+        assert_eq!(online(&a), 8);
+        assert_eq!(player(&a, replacement).lifecycle, ActorLifecycle::Active);
+        set_dispatch_hook(Some(record_online_roster));
+        a.advance_tick(TickBudget::full()).unwrap();
+        set_dispatch_hook(None);
+        // Hostile outcomes and drops count this roster; the retired session
+        // is absent, so their eight-player ceilings hold with nine sessions.
+        let mut want: Vec<_> = sessions[1..].to_vec();
+        want.push(replacement);
+        ROSTER_SEEN.with(|seen| {
+            let mut seen = seen.borrow().clone();
+            seen.sort_unstable();
+            assert_eq!(seen, want);
+        });
     }
     fn error() -> ServerError {
         ServerError::Capacity {

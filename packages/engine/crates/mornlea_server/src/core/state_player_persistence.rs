@@ -355,6 +355,12 @@ impl AuthorityState {
                 .remove(&player);
             return Ok(());
         }
+        // An active cached player must still own its indexed slot. This cache
+        // work only snapshots the body; the core lifecycle removes the
+        // resident lanes once the session is marked retired.
+        if active && !self.residents.player_slots.contains_key(&session) {
+            return Err(CACHE_IDENTITY);
+        }
         let key = ActorKey::Player(session);
         let repacked = if active {
             let inventory = self
@@ -404,24 +410,6 @@ impl AuthorityState {
                 .entries
                 .remove(&player);
         }
-        if active {
-            // Providers order by identity; only player slots retain physical vector positions.
-            let slot = *self
-                .residents
-                .player_slots
-                .get(&session)
-                .ok_or(CACHE_IDENTITY)?;
-            self.residents.actors.swap_remove(slot);
-            if let Some(moved) = self.residents.actors.get(slot)
-                && let ActorKey::Player(other) = moved.key
-            {
-                self.residents.player_slots.insert(other, slot);
-            }
-            self.residents.inventories.remove(&key);
-            self.residents.runtimes.remove(&key);
-            self.residents.mining.remove(&key);
-            self.views.remove(&session);
-        }
         Ok(())
     }
 }
@@ -445,6 +433,12 @@ mod tests {
         state
     }
     fn add(state: &mut AuthorityState, tag: u8) -> (PlayerId, SessionKey) {
+        let (player, session, cached) = connect(state, tag);
+        assert!(!cached);
+        (player, session)
+    }
+    /// Admits one player and reports whether its body was already cached.
+    fn connect(state: &mut AuthorityState, tag: u8) -> (PlayerId, SessionKey, bool) {
         let mut bytes = [0; 16];
         bytes[0] = tag;
         bytes[6] = 0x40;
@@ -458,10 +452,10 @@ mod tests {
         )
         .unwrap();
         let session = state.prepare(login, TransportKind::Memory).unwrap();
-        assert!(!state.prepare_player_cache(session).unwrap());
+        let cached = state.prepare_player_cache(session).unwrap();
         state.install(session, None).unwrap();
         state.activate(session).unwrap();
-        (player, session)
+        (player, session, cached)
     }
     fn body(state: &AuthorityState, player: PlayerId) -> &PlayerSave {
         let (_, SaveValue::Player(body)) =
@@ -512,6 +506,72 @@ mod tests {
                 .observe_actor_save(SaveValue::Player(body(&state, player).clone()), true, false)
                 .is_err()
         );
+    }
+    fn assert_slots_match(state: &AuthorityState) {
+        for (slot, actor) in state.residents.actors.iter().enumerate() {
+            if let ActorKey::Player(session) = actor.key {
+                assert_eq!(state.residents.player_slots[&session], slot);
+            }
+        }
+    }
+    /// With persistence on, retirement captures the final body first and the
+    /// core lifecycle then releases the actor, so a replacement fills the
+    /// eighth slot and the following ticks succeed.
+    #[test]
+    fn persisted_full_server_retirement_snapshots_then_frees_slot_for_replacement() {
+        let mut state = fixture();
+        let players: Vec<_> = (1..=8).map(|tag| add(&mut state, tag)).collect();
+        state.advance_tick(TickBudget::full()).unwrap();
+        let (retired_player, retired) = players[0];
+        let key = ActorKey::Player(retired);
+        state
+            .source_players
+            .entries
+            .get_mut(&retired)
+            .unwrap()
+            .ever_spawned = true;
+        state.residents.inventories.get_mut(&key).unwrap().selected =
+            mornlea_domain::HotbarSlot::new(4).unwrap();
+        state.retire(retired, CloseReason::PeerGone).unwrap();
+        assert_eq!(body(&state, retired_player).inventory.hotbar.selected, 4);
+        assert!(state.residents.actors.iter().all(|actor| actor.key != key));
+        assert!(!state.residents.inventories.contains_key(&key));
+        assert!(!state.residents.runtimes.contains_key(&key));
+        assert_eq!(state.residents.actors.len(), 7);
+        assert_slots_match(&state);
+        let (_, replacement) = add(&mut state, 9);
+        assert!(state.residents.player_slots.contains_key(&replacement));
+        for _ in 0..3 {
+            state.advance_tick(TickBudget::full()).unwrap();
+        }
+        assert_eq!(state.residents.actors.len(), 8);
+        assert_eq!(state.residents.player_slots.len(), 8);
+        assert_slots_match(&state);
+    }
+    /// Repeated connect and leave cycles below the player limit never
+    /// accumulate resident actors, with persistence on. Same-identity cached
+    /// reconnects run through the real transports in the persistence suite.
+    #[test]
+    fn persisted_reconnect_loop_below_full_keeps_one_actor_per_live_session() {
+        let mut state = fixture();
+        let (_, stayer) = add(&mut state, 1);
+        // Stay under the sixteen-body cache, which this unit test never flushes.
+        for tag in 2..=12 {
+            let (_, session, _) = connect(&mut state, tag);
+            assert_eq!(state.residents.actors.len(), 2);
+            state
+                .source_players
+                .entries
+                .get_mut(&session)
+                .unwrap()
+                .ever_spawned = true;
+            state.advance_tick(TickBudget::full()).unwrap();
+            state.retire(session, CloseReason::PeerGone).unwrap();
+            assert_eq!(state.residents.actors.len(), 1);
+            assert_eq!(state.residents.actors[0].key, ActorKey::Player(stayer));
+            assert_slots_match(&state);
+        }
+        state.advance_tick(TickBudget::full()).unwrap();
     }
     #[test]
     fn retirement_repairs_moved_player_slot_and_ordinary_capture_reads_current_owner() {

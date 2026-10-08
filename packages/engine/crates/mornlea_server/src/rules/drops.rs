@@ -62,11 +62,11 @@ pub fn advance(ctx: &mut TickContext<'_>, active: &[ChunkKey]) -> Result<PhaseRe
         let environment = view
             .environment()
             .ok_or(ServerError::InvalidInput { field: "drop_step" })?;
+        // Players come only from the shared online roster.
         let players: Vec<(SessionKey, Dimension, [f32; 3])> = view
-            .actors()
-            .iter()
-            .filter_map(|actor| match (actor.key, actor.lifecycle) {
-                (ActorKey::Player(session), ActorLifecycle::Active) => {
+            .online_players()
+            .filter_map(|actor| match actor.key {
+                ActorKey::Player(session) => {
                     Some((session, actor.dimension, actor.motion.position().get()))
                 }
                 _ => None,
