@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "total_files": 1242,
-  "total_comments": 38405,
+  "total_comments": 38403,
   "files": [
     {
       "path": "packages/audit/armor_domain_test.go",
@@ -3275,8 +3275,8 @@
     },
     {
       "path": "packages/server/server/player_integration_test.go",
-      "count": 14,
-      "digest": "5f5853cbbbfe61b23e062cd1368117a3625694a75fd8b29df8ec7268d03334db"
+      "count": 12,
+      "digest": "9624f1f5a099f3cf3dd7b9e3a427f97f534c35b32c5d5b27779ba3c26882f543"
     },
     {
       "path": "packages/server/server/player_melee_parity_test.go",
