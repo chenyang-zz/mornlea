@@ -66,11 +66,22 @@ use mornlea_domain::{BlockPos, Dimension, FiniteVec3};
 use mornlea_storage::ItemStack;
 
 use super::harvest;
+use crate::core::actor_placement::TRAMPLE_CELLS_PER_PLAYER;
+use crate::core::contracts::MAX_PLAYERS;
 use crate::core::contracts::{
     ActorKey, ActorLifecycle, BlockObservation, BlockWrite, DropBatch, DropSource, PhaseReport,
-    RuleCall, RulePhase, ServerError, SystemRule,
+    Resource, RuleCall, RulePhase, ServerError, SystemRule,
 };
 use crate::core::state::TickContext;
+
+/// One tick's captured source trample candidates: every live source player
+/// contributes at most one landing worth of support cells.
+pub(crate) const SOURCE_TRAMPLE_CAPACITY: usize = MAX_PLAYERS as usize * TRAMPLE_CELLS_PER_PLAYER;
+/// One tick's captured source Snow candidates: the per-player tracker admits
+/// at most one fresh cell per tick.
+pub(crate) const SOURCE_SNOW_CAPACITY: usize = MAX_PLAYERS as usize;
+const _: () = assert!(SOURCE_TRAMPLE_CAPACITY >= MAX_PLAYERS as usize * TRAMPLE_CELLS_PER_PLAYER);
+const _: () = assert!(SOURCE_SNOW_CAPACITY >= MAX_PLAYERS as usize);
 
 /// Air cell (`core.AirID`, `packages/shared/core/block.go`).
 const AIR: u16 = 0;
@@ -472,9 +483,11 @@ pub(crate) fn settle_captured_tramples(
             field: "environment",
         });
     }
-    if cells.len() > 32 {
-        return Err(ServerError::Internal {
-            invariant: "source player trample capacity",
+    if cells.len() > SOURCE_TRAMPLE_CAPACITY {
+        return Err(ServerError::Capacity {
+            resource: Resource::TrampleCells,
+            limit: SOURCE_TRAMPLE_CAPACITY,
+            observed: cells.len(),
         });
     }
     let mut applied = 0;
@@ -527,9 +540,11 @@ pub(crate) fn settle_captured_source_snow(
     cells: &[FootprintCell],
     ctx: &mut TickContext<'_>,
 ) -> Result<PhaseReport, ServerError> {
-    if cells.len() > 8 {
-        return Err(ServerError::Internal {
-            invariant: "source player snow capacity",
+    if cells.len() > SOURCE_SNOW_CAPACITY {
+        return Err(ServerError::Capacity {
+            resource: Resource::Players,
+            limit: SOURCE_SNOW_CAPACITY,
+            observed: cells.len(),
         });
     }
     let mut applied = 0;
@@ -839,11 +854,13 @@ mod source_trample_tests {
         assert_eq!(source_trample_snapshot(&c), before);
         c.stage(RuleEffect::Environment(env)).unwrap();
         let before = source_trample_snapshot(&c);
-        let oversized = [cells[0]; 33];
+        let oversized = [cells[0]; SOURCE_TRAMPLE_CAPACITY + 1];
         assert_eq!(
             settle_captured_tramples(&oversized, &mut c),
-            Err(ServerError::Internal {
-                invariant: "source player trample capacity"
+            Err(ServerError::Capacity {
+                resource: Resource::TrampleCells,
+                limit: SOURCE_TRAMPLE_CAPACITY,
+                observed: SOURCE_TRAMPLE_CAPACITY + 1,
             })
         );
         assert_eq!(source_trample_snapshot(&c), before);
@@ -1022,9 +1039,11 @@ mod source_snow_tests {
         assert_eq!(quiet, copy);
         assert_eq!(source_snow_snapshot(&c), before);
         assert_eq!(
-            settle_captured_source_snow(&[cells[0]; 9], &mut c),
-            Err(ServerError::Internal {
-                invariant: "source player snow capacity"
+            settle_captured_source_snow(&[cells[0]; SOURCE_SNOW_CAPACITY + 1], &mut c),
+            Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: SOURCE_SNOW_CAPACITY,
+                observed: SOURCE_SNOW_CAPACITY + 1,
             })
         );
         assert_eq!(source_snow_snapshot(&c), before);
