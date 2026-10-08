@@ -114,3 +114,48 @@ func delegationPolicyFragments() []string {
 		"concise task brief",
 	}
 }
+
+// TestCanonicalGovernanceSpecDelegationBudget keeps the canonical governance
+// specification on the same subagent ceiling as AGENTS.md, openspec/config.yaml,
+// and the orchestration skills. The specification sits above prose guidance in
+// the source-of-truth order, so an unguarded copy could silently override them.
+func TestCanonicalGovernanceSpecDelegationBudget(t *testing.T) {
+	root := repositoryRoot(t)
+	path := filepath.Join("openspec", "specs", "development-governance", "spec.md")
+	text := readBaselineDoc(t, root, path)
+	if violations := canonicalDelegationBudgetViolations(text); len(violations) > 0 {
+		t.Errorf("%s drifted from the three-subagent ceiling:\n%s", path, strings.Join(violations, "\n"))
+	}
+}
+
+func TestCanonicalGovernanceSpecDelegationBudgetGuardDetectsDrift(t *testing.T) {
+	valid := "MUST run no more than three subagents concurrently\n- **AND** MUST NOT start a fourth concurrent subagent\n"
+	if violations := canonicalDelegationBudgetViolations(valid); len(violations) != 0 {
+		t.Fatalf("valid fixture produced violations: %v", violations)
+	}
+	stale := "MUST run no more than two subagents concurrently\n- **AND** MUST NOT start a third concurrent subagent\n"
+	if violations := canonicalDelegationBudgetViolations(stale); len(violations) != 4 {
+		t.Fatalf("stale fixture violations = %v, want four", violations)
+	}
+}
+
+func canonicalDelegationBudgetViolations(text string) []string {
+	var violations []string
+	for _, required := range []string{
+		"MUST run no more than three subagents concurrently",
+		"MUST NOT start a fourth concurrent subagent",
+	} {
+		if !strings.Contains(text, required) {
+			violations = append(violations, "missing canonical ceiling fragment: "+required)
+		}
+	}
+	for _, forbidden := range []string{
+		"no more than two subagents",
+		"start a third concurrent subagent",
+	} {
+		if strings.Contains(text, forbidden) {
+			violations = append(violations, "stale canonical ceiling fragment: "+forbidden)
+		}
+	}
+	return violations
+}
