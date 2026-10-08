@@ -13553,12 +13553,15 @@ mod source_player_restore_tests {
     }
     /// Eight live players land in the same `advance_tick`. The reducer hands
     /// all thirty-two trample cells and eight Snow candidates to settlement in
-    /// Go order: ascending session (`player.go` session walk), then covered
-    /// columns X-major then Z (`trample.go`), and the tick succeeds.
+    /// Go order: every trample cell before any Snow cell (`player.go`), each
+    /// lane in ascending session order with covered columns X-major then Z
+    /// (`trample.go`), and every bare farmland support cell reverts to dirt.
     #[test]
     fn eight_players_landing_in_one_advance_tick_settle_in_go_order() {
-        use super::super::source_player_restore::SETTLED_FOOTPRINTS;
+        use super::super::source_player_restore::{SETTLED_FOOTPRINTS, SettledFootprint};
         use crate::rules::crops::{FootprintCell, SOURCE_SNOW_CAPACITY, SOURCE_TRAMPLE_CAPACITY};
+        const DRY_FARMLAND: u16 = 35;
+        const TRAMPLED_DIRT: u16 = 3;
         let players = usize::from(MAX_PLAYERS);
         let (mut a, first) = fixture();
         let mut sessions = vec![first];
@@ -13571,6 +13574,20 @@ mod source_player_restore_tests {
         a.advance_tick(TickBudget::full()).unwrap();
         // Later sessions stand at lower X, so session order differs from spatial order.
         let column = |index: usize| ((players - 1 - index) * 2) as i32;
+        // Bare farmland under every support cell, so each trample commits.
+        let floor = a
+            .residents
+            .ready
+            .get_mut(&key(Dimension::DEPTHS, 0, 0))
+            .unwrap();
+        for index in 0..players {
+            let x = column(index);
+            for cx in [x, x + 1] {
+                for cz in [8, 9] {
+                    floor.set_block(BlockPos::new(cx, 63, cz), DRY_FARMLAND);
+                }
+            }
+        }
         for (index, session) in sessions.iter().enumerate() {
             let slot = a.residents.player_slots[session];
             let actor = &mut a.residents.actors[slot];
@@ -13612,18 +13629,46 @@ mod source_player_restore_tests {
                     });
                 }
             }
+            // Feet rest on the farmland top below y=64, so the Snow cell is
+            // the farmland cell itself.
             want_snow.push(FootprintCell {
                 dimension: Dimension::DEPTHS,
-                pos: BlockPos::new(x + 1, 64, 8),
+                pos: BlockPos::new(x + 1, 63, 8),
             });
         }
         SETTLED_FOOTPRINTS.with(|seen| {
-            let (trample, snow) = &*seen.borrow();
-            assert_eq!(trample, &want_trample);
-            assert_eq!(snow, &want_snow);
+            let seen = seen.borrow();
+            // Every trample cell settles before any Snow cell (`player.go`
+            // settles tramples, then Snow), each lane in its own Go order.
+            let split = seen
+                .iter()
+                .position(|(kind, _)| *kind == SettledFootprint::Snow)
+                .unwrap_or(seen.len());
+            assert!(
+                seen[..split]
+                    .iter()
+                    .all(|(kind, _)| *kind == SettledFootprint::Trample)
+            );
+            assert!(
+                seen[split..]
+                    .iter()
+                    .all(|(kind, _)| *kind == SettledFootprint::Snow)
+            );
+            let trample: Vec<_> = seen[..split].iter().map(|(_, cell)| *cell).collect();
+            let snow: Vec<_> = seen[split..].iter().map(|(_, cell)| *cell).collect();
+            assert_eq!(trample, want_trample);
+            assert_eq!(snow, want_snow);
         });
         assert_eq!(want_trample.len(), SOURCE_TRAMPLE_CAPACITY);
         assert_eq!(want_snow.len(), SOURCE_SNOW_CAPACITY);
+        // Settlement committed every support cell, not just examined it.
+        for cell in &want_trample {
+            assert_eq!(
+                a.residents.ready[&key(Dimension::DEPTHS, 0, 0)].block(cell.pos),
+                Some(TRAMPLED_DIRT),
+                "{cell:?}"
+            );
+        }
     }
     /// The fixed source book refuses a registration beyond its structural
     /// capacity with the typed player-plane error, even if the occupancy

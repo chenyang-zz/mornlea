@@ -201,14 +201,21 @@ pub(crate) fn capture_snow(
     entry.snow = next;
     Ok(())
 }
+/// Settlement lane of a recorded source footprint cell.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SettledFootprint {
+    Trample,
+    Snow,
+}
 #[cfg(test)]
 thread_local! {
-    /// Trample then Snow cells handed to settlement by the latest tick, so
-    /// tick-driven tests can check the settled order after the batches drain.
-    pub(crate) static SETTLED_FOOTPRINTS: std::cell::RefCell<(
-        Vec<crate::rules::crops::FootprintCell>,
-        Vec<crate::rules::crops::FootprintCell>,
-    )> = const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+    /// Source cells handed to settlement, appended in call order, so
+    /// tick-driven tests can check the cross-lane order after the batches
+    /// drain. Tests clear it before the tick they inspect.
+    pub(crate) static SETTLED_FOOTPRINTS: std::cell::RefCell<
+        Vec<(SettledFootprint, crate::rules::crops::FootprintCell)>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
 }
 /// Successful fresh-cell settlement drains only the active candidate prefix.
 pub(crate) fn settle_snow(
@@ -224,7 +231,11 @@ pub(crate) fn settle_snow(
     }
     #[cfg(test)]
     SETTLED_FOOTPRINTS.with(|seen| {
-        seen.borrow_mut().1 = book.snow_pending.cells[..book.snow_pending.len].to_vec()
+        seen.borrow_mut().extend(
+            book.snow_pending.cells[..book.snow_pending.len]
+                .iter()
+                .map(|cell| (SettledFootprint::Snow, *cell)),
+        )
     });
     let report = crate::rules::crops::settle_captured_source_snow(
         &book.snow_pending.cells[..book.snow_pending.len],
@@ -497,8 +508,13 @@ pub(crate) fn settle_tramples(
         });
     }
     #[cfg(test)]
-    SETTLED_FOOTPRINTS
-        .with(|seen| seen.borrow_mut().0 = book.tramples.cells[..book.tramples.len].to_vec());
+    SETTLED_FOOTPRINTS.with(|seen| {
+        seen.borrow_mut().extend(
+            book.tramples.cells[..book.tramples.len]
+                .iter()
+                .map(|cell| (SettledFootprint::Trample, *cell)),
+        )
+    });
     let report = crate::rules::crops::settle_captured_tramples(
         &book.tramples.cells[..book.tramples.len],
         context,
