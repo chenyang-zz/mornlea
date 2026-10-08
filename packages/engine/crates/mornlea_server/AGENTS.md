@@ -19,13 +19,18 @@ against this file.
 Trusted observers attach through `AuthorityState` / `session` between ticks only
 (`require_between_ticks`). They never increment `occupied` / take a `MAX_PLAYERS`
 slot and never appear in `online_players()`. Cap is `MAX_TRUSTED_OBSERVERS` (= 1),
-matching Go's singular `trustedObserver`. Disabled attach returns
-`InvalidInput { field: "session" }` (Go `ErrInvalidSession`); a center on a
+matching Go's singular `trustedObserver`. Attach on a non-running server or
+with the flag off returns `InvalidInput { field: "session" }` (Go
+`ErrInvalidSession`), checked before the occupied slot; a center on a
 non-running server, a disabled flag or a missing observer returns
 `InvalidInput { field: "trusted_observer_disabled" }` (Go
-`ErrTrustedObserverDisabled`). Centers apply at the next tick boundary. An
-observer alone is still a publication target; chat broadcasts and item drops
-stay player-only. Publication saturation detaches only that observer.
+`ErrTrustedObserverDisabled`), checked before the dimension. Centers apply at
+the next tick boundary. An observer alone is still a publication target. Which
+families reach an observer is decided only by `TRUSTED_OBSERVER_CATEGORIES` in
+`core/publication_project.rs` (sent: snapshots, chunk forget/deltas,
+companions, hostiles, projectiles, passives; never: remote players, item drops,
+owner records, any chat); each row cites its Go source line. Publication
+saturation detaches only that observer.
 
 
 ## Automatic source acquisition

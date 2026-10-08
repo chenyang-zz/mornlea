@@ -68,15 +68,13 @@ impl AuthorityState {
 
     /// Attach one observer. Does not increment `occupied` / take a player slot.
     ///
-    /// Refusal order follows Go `attachTrustedObserverLocked`: lifecycle, then
-    /// the disabled flag (`ErrInvalidSession`, here the invalid `session`
-    /// input), then the occupied slot (`ErrSessionExists`, here Capacity).
+    /// Refusal order follows Go `attachTrustedObserverLocked`: a non-running
+    /// server or a disabled flag returns `ErrInvalidSession` (here the invalid
+    /// `session` input) before the occupied slot (`ErrSessionExists`, here
+    /// Capacity) is considered.
     pub fn attach_trusted_observer(&mut self) -> Result<SessionKey, ServerError> {
         self.require_between_ticks()?;
-        if self.phase != ServerPhase::Running {
-            return Err(ServerError::InvalidState { phase: self.phase });
-        }
-        if !self.trusted_observer_enabled {
+        if self.phase != ServerPhase::Running || !self.trusted_observer_enabled {
             return Err(ServerError::InvalidInput { field: "session" });
         }
         if self.trusted_observers.len() >= MAX_TRUSTED_OBSERVERS {
@@ -275,21 +273,49 @@ mod trusted_observer_tests {
         assert_eq!(state.trusted_observer_count(), 0);
     }
 
-    /// Go checks the server lifecycle before the occupied slot, so a closing
-    /// server refuses even when an observer is already attached.
+    /// Go `attachTrustedObserverLocked` returns `ErrInvalidSession` for a
+    /// non-running server, the same error as the disabled branch.
     #[test]
-    fn attach_on_closing_server_is_invalid_state_before_capacity() {
+    fn attach_on_closing_server_is_invalid_session() {
+        let mut state = authority();
+        state.set_trusted_observer_enabled(true).unwrap();
+        state.phase = ServerPhase::Closing;
+        let err = state.attach_trusted_observer().expect_err("closing");
+        assert_eq!(err, ServerError::InvalidInput { field: "session" });
+        assert_eq!(state.trusted_observer_count(), 0);
+    }
+
+    /// Go evaluates `lifecycle != serverRunning || !TrustedObserver` before
+    /// `trustedObserver != nil`, so the first check decides the error:
+    /// closing and disabled together, or closing with an observer already
+    /// attached, both return `ErrInvalidSession` (never `ErrSessionExists`).
+    #[test]
+    fn attach_check_order_follows_go() {
+        let mut state = authority();
+        state.phase = ServerPhase::Closing;
+        assert!(!state.trusted_observer_enabled());
+        assert_eq!(
+            state.attach_trusted_observer(),
+            Err(ServerError::InvalidInput { field: "session" }),
+            "closing and disabled"
+        );
         let mut state = authority();
         state.set_trusted_observer_enabled(true).unwrap();
         state.attach_trusted_observer().unwrap();
         state.phase = ServerPhase::Closing;
-        let err = state.attach_trusted_observer().expect_err("closing");
         assert_eq!(
-            err,
-            ServerError::InvalidState {
-                phase: ServerPhase::Closing
-            }
+            state.attach_trusted_observer(),
+            Err(ServerError::InvalidInput { field: "session" }),
+            "closing with an attached observer"
         );
+        state.phase = ServerPhase::Running;
+        assert!(matches!(
+            state.attach_trusted_observer(),
+            Err(ServerError::Capacity {
+                resource: Resource::TrustedObservers,
+                ..
+            })
+        ));
     }
 
     /// Session-id exhaustion uses the same refusal as player admission.
@@ -447,6 +473,30 @@ mod trusted_observer_tests {
             state.set_trusted_observer_center(observer, Dimension::OVERWORLD, ChunkPos::new(0, 0));
         assert_eq!(
             err,
+            Err(ServerError::InvalidInput {
+                field: TRUSTED_OBSERVER_DISABLED
+            })
+        );
+    }
+
+    /// Go `setTrustedObserverCenterLocked` checks lifecycle before the
+    /// dimension, so a closing server refuses a non-overworld center as
+    /// disabled rather than as an invalid center.
+    #[test]
+    fn set_center_check_order_follows_go() {
+        let mut state = authority();
+        state.set_trusted_observer_enabled(true).unwrap();
+        let observer = state.attach_trusted_observer().unwrap();
+        let nether = Dimension::new(1).unwrap();
+        assert_eq!(
+            state.set_trusted_observer_center(observer, nether, ChunkPos::new(0, 0)),
+            Err(ServerError::InvalidInput {
+                field: "trusted_observer_center"
+            })
+        );
+        state.phase = ServerPhase::Closing;
+        assert_eq!(
+            state.set_trusted_observer_center(observer, nether, ChunkPos::new(0, 0)),
             Err(ServerError::InvalidInput {
                 field: TRUSTED_OBSERVER_DISABLED
             })

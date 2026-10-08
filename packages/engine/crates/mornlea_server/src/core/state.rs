@@ -50,7 +50,7 @@ use super::drop_store::{self, DropState};
 use super::interaction::{look_direction, normalized_direction};
 use super::login_seed::{SeededPlayer, seed_player};
 use super::publication::{EnqueueOutcome, PreparedFrame, PreparedPublicationPort};
-use super::publication_project::TickOutcome;
+use super::publication_project::{PublicationCategory, TickOutcome, trusted_observer_receives};
 use super::session_view::SessionView;
 use super::source_acquisition::{SourceGoals, SourceInputs, effective_radius};
 use super::source_companion_restore::SourceCompanionBook;
@@ -2597,9 +2597,13 @@ impl AuthorityState {
                     AppendOutcome::Closed => {}
                 },
                 PendingFrame::Broadcast { frame } => {
-                    // Broadcast is player chat only; trusted observers are not in
-                    // `current_sessions` (Go `publishChatDeliveries` skips them).
-                    let sessions: Vec<SessionKey> = self.current_sessions.iter().copied().collect();
+                    // Broadcast carries player chat only; trusted observers join
+                    // only if the publication table routes chat to them.
+                    let mut sessions: Vec<SessionKey> =
+                        self.current_sessions.iter().copied().collect();
+                    if trusted_observer_receives(PublicationCategory::Chat) {
+                        sessions.extend(self.trusted_observers.keys().copied());
+                    }
                     for session in sessions {
                         #[cfg(test)]
                         CURRENT_PUBLICATION_VISITS.with(|visits| visits.set(visits.get() + 1));
@@ -21044,6 +21048,261 @@ mod owner_record_admission_tests {
         );
         assert!(state.is_trusted_observer(observer));
         assert_eq!(state.occupied, 0);
+    }
+
+    /// Maps one routed event onto its publication family.
+    fn event_category(
+        event: &Event,
+    ) -> Option<super::super::publication_project::PublicationCategory> {
+        use super::super::publication_project::PublicationCategory as C;
+        Some(match event {
+            Event::ChunkSnapshot(_) => C::Snapshot,
+            Event::ForgetChunks(_) | Event::BlockChanges(_) => C::Chunks,
+            Event::CompanionSpawn(_) | Event::CompanionDespawn(_) | Event::CompanionStates(_) => {
+                C::Companion
+            }
+            Event::HostileSpawn(_) | Event::HostileDespawn(_) | Event::HostileState(_) => {
+                C::Hostile
+            }
+            Event::ProjectileSpawn(_) | Event::ProjectileDespawn(_) | Event::ProjectileState(_) => {
+                C::Projectile
+            }
+            Event::PassiveSpawn(_) | Event::PassiveDespawn(_) | Event::PassiveState(_) => {
+                C::Passive
+            }
+            Event::RemotePlayerSpawn(_)
+            | Event::RemotePlayerDespawn(_)
+            | Event::RemotePlayerStates(_) => C::Remote,
+            Event::ItemDropUpserts(_) | Event::ItemDropRemoves(_) => C::Drop,
+            Event::InventoryState(_)
+            | Event::CraftingState(_)
+            | Event::FurnaceState(_)
+            | Event::ChestState(_)
+            | Event::ContainerClosed(_) => C::PlayerRecord,
+            Event::Chat(_) => C::Chat,
+            _ => return None,
+        })
+    }
+
+    /// Two publication ticks for the category table: tick one carries every
+    /// entity family, a drop, owner records and broadcast, system and
+    /// directed chat (the directed fact names the observer); tick two carries
+    /// a block delta. Returns the categories each recipient actually received
+    /// (session-addressed frames plus broadcast frames found in its FIFO).
+    fn observer_table_run(
+        with_players: bool,
+    ) -> (
+        Vec<super::super::publication_project::PublicationCategory>,
+        Vec<super::super::publication_project::PublicationCategory>,
+    ) {
+        use super::super::publication_project::PublicationCategory as C;
+        let (mut state, sessions, _) = drop_fixture(512, 1);
+        let survival = state.residents.actors[0].survival;
+        let position = [0.5, 65.0, 0.5];
+        let motion = || {
+            MotionState::new(mornlea_domain::MotionStateParts {
+                position: FiniteVec3::try_new(position).unwrap(),
+                velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
+                on_ground: true,
+            })
+        };
+        let hostile = HostileId::try_new(1).unwrap();
+        let passive = PassiveId::try_new(1).unwrap();
+        let actors = [
+            ActorRecord::try_new(
+                ActorKey::Hostile(hostile),
+                ActorLifecycle::Active,
+                Dimension::OVERWORLD,
+                motion(),
+                LookAngles::try_new(0.0, 0.0).unwrap(),
+                survival,
+                ActorBody::Hostile(mornlea_storage::HostileMob {
+                    id: hostile.get(),
+                    dimension: 0,
+                    position,
+                    velocity: [0.0; 3],
+                    on_ground: true,
+                    yaw: 0.0,
+                    health: 20,
+                    attack_cooldown: 0,
+                    hurt_cooldown: 0,
+                    burn_cooldown: 20,
+                    has_target: false,
+                    player_id: mornlea_storage::PlayerId::from_bytes([0; 16]),
+                    next_repath_ticks: 0,
+                    distant_ticks: 0,
+                    kind: 0,
+                }),
+            )
+            .unwrap(),
+            ActorRecord::try_new(
+                ActorKey::Passive(passive),
+                ActorLifecycle::Active,
+                Dimension::OVERWORLD,
+                motion(),
+                LookAngles::try_new(0.0, 0.0).unwrap(),
+                survival,
+                ActorBody::Passive(mornlea_storage::PassiveMob {
+                    id: passive.get(),
+                    dimension: 0,
+                    position,
+                    velocity: [0.0; 3],
+                    on_ground: true,
+                    yaw: 0.0,
+                    health: 20,
+                }),
+            )
+            .unwrap(),
+        ];
+        for actor in actors {
+            let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+            context.stage(RuleEffect::Actor(actor)).unwrap();
+            context.commit_carried();
+        }
+        let mut bytes = [0u8; 16];
+        bytes[0] = 10;
+        bytes[6] = 64;
+        bytes[8] = 128;
+        let companion = CompanionId::try_from_bytes(bytes).unwrap();
+        state
+            .register_source_companion(
+                companion,
+                ChunkPos::new(0, 0),
+                Some(mornlea_storage::CompanionBody {
+                    id: mornlea_storage::PlayerId::from_bytes(bytes),
+                    dimension: 0,
+                    position,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    inventory: mornlea_storage::Inventory::default(),
+                }),
+            )
+            .unwrap();
+        companion_lifecycle(&mut state, companion, ActorLifecycle::Active);
+        projectile_presence(
+            &mut state,
+            mornlea_domain::ProjectileId::try_new(1).unwrap(),
+            true,
+        );
+        let speaker = state.sessions[&sessions[0]].player_id;
+        let name = || DisplayName::try_from_canonical("Ada".to_owned()).unwrap();
+        if !with_players {
+            for session in &sessions {
+                state.retire(*session, CloseReason::PeerGone).unwrap();
+            }
+        }
+        state.set_trusted_observer_enabled(true).unwrap();
+        let observer = state.attach_trusted_observer().unwrap();
+        state
+            .set_trusted_observer_center(observer, Dimension::OVERWORLD, ChunkPos::new(0, 0))
+            .unwrap();
+        let mut context = TickContext::for_tick(&mut state, TickBudget::full());
+        context.commit_carried();
+        drop(context);
+        assert_eq!(state.active_speakers().is_empty(), !with_players);
+        let facts = [
+            DecidedChatFact::broadcast(speaker, name(), ChatBody::InvalidFormat),
+            DecidedChatFact::broadcast(
+                speaker,
+                name(),
+                ChatBody::Task {
+                    companion: CompanionSpeaker::new(
+                        companion,
+                        CompanionName::try_from_canonical("Bo".to_owned()).unwrap(),
+                    ),
+                    command: CommandText::try_from_canonical("dig".to_owned()).unwrap(),
+                    state: TaskState::Started,
+                },
+            ),
+            DecidedChatFact::sender_only(speaker, name(), observer, ChatBody::InvalidFormat),
+        ];
+        for fact in facts {
+            state.companion_chat.push_decided(fact).unwrap();
+        }
+        let recipients: Vec<SessionKey> = std::iter::once(observer)
+            .chain(with_players.then(|| sessions[0]))
+            .collect();
+        let mut received: Vec<Vec<C>> = vec![Vec::new(); recipients.len()];
+        let mut first = prepared_delta(vec![]);
+        first.block_batches.clear();
+        let second = prepared_delta(vec![
+            BlockChange::try_new(BlockPos::new(0, 64, 1), 1).unwrap(),
+        ]);
+        for outcome in [first, second] {
+            let events = state.project_tick_publication(0, &outcome);
+            let broadcast: Vec<_> = events
+                .iter()
+                .filter(|e| e.recipient() == EventRecipient::Broadcast)
+                .map(|e| (frame(e.event()), event_category(e.event())))
+                .collect();
+            let addressed: Vec<Vec<C>> = recipients
+                .iter()
+                .map(|session| {
+                    events
+                        .iter()
+                        .filter(|e| e.recipient() == EventRecipient::Session(session.get()))
+                        .filter_map(|e| event_category(e.event()))
+                        .collect()
+                })
+                .collect();
+            state.publish(publication(events)).unwrap();
+            for ((session, got), addressed) in recipients.iter().zip(&mut received).zip(addressed) {
+                let fifo = state.take_outbox(*session, 512, 2_097_152).unwrap();
+                got.extend(addressed);
+                for (bytes, category) in &broadcast {
+                    if fifo.contains(bytes)
+                        && let Some(category) = category
+                    {
+                        got.push(*category);
+                    }
+                }
+            }
+        }
+        assert!(state.is_trusted_observer(observer));
+        let player = received.get(1).cloned().unwrap_or_default();
+        (received.swap_remove(0), player)
+    }
+
+    /// The trusted-observer family table, asserted per category in both
+    /// scenarios. Sent rows must arrive; unsent rows must never arrive, even
+    /// when online players receive them in the same ticks.
+    #[test]
+    fn trusted_observer_category_table() {
+        use super::super::publication_project::{
+            PublicationCategory as C, TRUSTED_OBSERVER_CATEGORIES,
+        };
+        let expected = [
+            (C::Snapshot, true),
+            (C::Chunks, true),
+            (C::Companion, true),
+            (C::Hostile, true),
+            (C::Projectile, true),
+            (C::Passive, true),
+            (C::Remote, false),
+            (C::Drop, false),
+            (C::PlayerRecord, false),
+            (C::Chat, false),
+        ];
+        assert_eq!(TRUSTED_OBSERVER_CATEGORIES, expected);
+        for with_players in [true, false] {
+            let (observer, player) = observer_table_run(with_players);
+            for (category, sent) in expected {
+                assert_eq!(
+                    observer.contains(&category),
+                    sent,
+                    "observer {category:?} (players online: {with_players}); got {observer:?}"
+                );
+            }
+            if with_players {
+                // The unsent rows are live in this fixture: a player gets them.
+                for category in [C::Remote, C::Drop, C::PlayerRecord, C::Chat] {
+                    assert!(
+                        player.contains(&category),
+                        "player must receive {category:?}; got {player:?}"
+                    );
+                }
+            }
+        }
     }
 
     fn delta_count_boundary(changes: Vec<BlockChange>) {
