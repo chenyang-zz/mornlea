@@ -4198,4 +4198,4 @@ Task 3.7 stays ticked in place. A fresh rerun at source `faede5650b213b04eb9d160
 
 chen removed the native Loom review gate on 2026-10-08: 3.7 and the F2 archive no longer require a Loom verdict. Earlier ledger entries and evidence that mention Loom stay as historical records.
 
-Harness note: the Go integration harness in `packages/server/server` can intermittently report a SeasonProgress mismatch, because `replayResult()` zeroes `WorldTimeTicks` but not the season fields derived from it while the test server runs on a real-time ticker. This is a test harness issue, not authority logic, and it does not affect the Rust results. It did not occur in these runs, and it is fixed separately against dev.
+Harness note: the Go integration harness in `packages/server/server` can intermittently report a SeasonProgress mismatch, because `replayResult()` zeroes `WorldTimeTicks` but not the season fields derived from it while the test server runs on a real-time ticker. This is a test harness issue, not authority logic, and it does not affect the Rust results. It did not occur in these runs, and it is being fixed separately against dev in PR #18.

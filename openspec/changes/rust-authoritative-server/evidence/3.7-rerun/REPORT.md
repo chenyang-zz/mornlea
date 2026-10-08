@@ -1,6 +1,6 @@
 # Task 3.7 rerun: the seven open inventory rows
 
-Source commit: `faede5650b213b04eb9d160e9816bdead0738fbd` (fresh `cursor/rust-authoritative-server-98e6` head on 2026-10-08; it moved from `091657a0` only through docs-only archive commits, with no change under `packages/`, `scripts/` or the `Makefile`).
+Source commit: `faede5650b213b04eb9d160e9816bdead0738fbd` (fresh `cursor/rust-authoritative-server-98e6` head on 2026-10-08; it moved from `091657a0` only through docs-only archive commits, with no change under `packages/`, `scripts/` or the `Makefile`). After PR #8 (`0af287b4`) changed `packages/engine`, the row tests were re-checked at `173ec439` and still pass.
 Host: Linux x86_64, rustc/cargo 1.97.1, go 1.26.0 (`environment.txt`).
 
 ## Result
@@ -46,7 +46,7 @@ What the tests show, per row:
 
 The 3.7 acceptance line records "native Loom reviewer remains timed_out/NO VERDICT". That reviewer is the frozen Loom controller (`89a86e9` in the ledger) driving a local Claude CLI through CCSwitch on the owner's Mac; it is not in this repository. chen removed the Loom review gate on 2026-10-08, so it was not rerun and no Loom verdict is claimed.
 
-The Go integration harness in `packages/server/server` can intermittently report a SeasonProgress mismatch, because `replayResult()` zeroes `WorldTimeTicks` but not the season fields derived from it while the test server runs on a real-time ticker. This is a test harness issue, not authority logic, and it does not affect the Rust results. It did not occur in these runs, and it is fixed separately against dev.
+The Go integration harness in `packages/server/server` can intermittently report a SeasonProgress mismatch, because `replayResult()` zeroes `WorldTimeTicks` but not the season fields derived from it while the test server runs on a real-time ticker. This is a test harness issue, not authority logic, and it does not affect the Rust results. It did not occur in these runs, and it is being fixed separately against dev in PR #18.
 
 ## Verify
 
