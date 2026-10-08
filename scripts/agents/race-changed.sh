@@ -8,7 +8,7 @@
 #
 # 包集合的构造规则：
 #   1. 改动文件集 = `git diff --name-only <base>...HEAD` ∪ 暂存/未暂存改动 ∪
-#      未跟踪的 *.go（工作区当前状态全算）；base 默认 origin/main，可用 --base 覆盖。
+#      未跟踪的 *.go（工作区当前状态全算）；base 默认集成分支 origin/dev，可用 --base 覆盖。
 #   2. 文件 → 包：按 `go list` 的包目录前缀映射；不在任何包内的 .go（如 testdata）跳过。
 #   3. 反向依赖闭包：沿 `go list` 的 .Imports 传递扩散；.TestImports/.XTestImports
 #      只作一层直接依赖（测试对被测包的依赖），不沿测试边继续传递——否则触碰
@@ -25,12 +25,12 @@
 # 用法:
 #   scripts/agents/race-changed.sh            # 计算并运行 go test <集合> -race -count=1
 #   scripts/agents/race-changed.sh --diff     # 只打印包集合与依据，不运行
-#   scripts/agents/race-changed.sh --base v1  # 换比较基线（默认 origin/main）
+#   scripts/agents/race-changed.sh --base v1  # 换比较基线（默认 origin/dev）
 #
 # 退出码：包集合为空（无 Go 改动）时 0；测试失败时透传 go test 的退出码。
 set -euo pipefail
 
-BASE="origin/main"
+BASE="origin/dev"
 DIFF_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in

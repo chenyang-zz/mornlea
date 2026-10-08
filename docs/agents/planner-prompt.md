@@ -18,7 +18,7 @@
    gh api graphql -f query='query { repository(owner: "channing771", name: "mornlea") { discussion(number: 71) { number title body comments(last: 50) { nodes { createdAt author{login} body } } } } }'
    ```
 
-4. 查看近期合入与在途分支：`git fetch origin --quiet && git log origin/main --oneline -20`、`git branch -a | grep -E 'codex|first-night'`、`git worktree list`，并对 A 组在途分支的 worktree 逐一 `git -C <worktree> status --short`（分支头推进与未提交文件都是校对素材）。
+4. 查看近期合入与在途分支：`git fetch origin --quiet && git log origin/dev --oneline -20`、`git branch -a | grep -E 'codex|first-night'`、`git worktree list`，并对 A 组在途分支的 worktree 逐一 `git -C <worktree> status --short`（分支头推进与未提交文件都是校对素材）。
 5. 核对「缺口候选出处」：各归档 change 的 `design.md`「遗留与简化清单」、`openspec/changes/archive/*/proposal.md` 的「延期与放弃 / 非目标」、批次设计的「非目标 / 已知简化与升级条件」。非首轮时，横扫范围收敛为**上轮之后新归档**的 change（以 `git log --since=<上轮时间> --name-only -- openspec/changes/archive/` 找）加上轮标记为未消化的清单。
 6. 校验来源在库：backlog「来源与备注」引用的仓库内文档用 `git ls-files` 确认已提交（工作区未跟踪文件不算数）；发现未入库的引用 → 记入运行记录留给用户，不代为提交。
 
@@ -30,7 +30,7 @@
 - 每条请求的结论只有三种：落行 / 待澄清 / 丢弃（写明理由），结束输出里逐条交代。
 
 ### 2) 校对现状
-- 已合入 `main` 的能力以 `git log origin/main` 与 `openspec/changes/archive/` 新增目录为准 → 对应行改为 `已完成`（认领人保留履历），并同步讨论。
+- 已合入集成分支 `dev` 的能力以 `git log origin/dev` 与 `openspec/changes/archive/` 新增目录为准 → 对应行改为 `已完成`（认领人保留履历），并同步讨论。
 - A 组在途行：每轮核对实际分支头 SHA 与 worktree 脏状态，滞后时更新备注（写分支名 + 头 SHA）；只可更新状态与备注，不得改动其实现契约。
 - 其他行状态与 git 实际不符（例如分支已实现但表里仍为 `已认领`）→ 以 `AGENTS.md`、分支头 SHA 为准修正，并在该行备注写明依据。
 - 已被明确放弃或来源失效的条目 → 状态改为 `已取消` 并在备注注明理由，绝不静默删除。
@@ -47,7 +47,7 @@
 - 只 `git add` 本轮产出的文件（backlog 与运行记录），**绝不携带用户工作区的其他改动与未跟踪文件**。两段式提交：
   1. 提交 `docs/feature-backlog.md`（docs-only，不关联 OpenSpec change；提交信息 `docs: plan <新增行 ID 列表>`）；
   2. 把运行记录追加到 `docs/notes/agent-runs.md`（不存在则创建；字段：时间、读取的输入、变更行 ID、提交 SHA、讨论同步方式、留给下一轮的问题），以 `docs: record planner run <日期>` 单独提交；
-  3. 两笔一并推送 `origin/main`；推送必须**快进**，失败（远端已前进）→ fetch 后重放或终止并在运行记录说明，**绝不强推**；随后再向 Discussion #71 发评论（此时仓库链接已生效）。
+  3. 从最新 `origin/dev` 拉出 `planner/<日期>` 分支承载这两笔提交，推送该分支并开 PR 到 `dev`（`gh pr create --base dev`）；**不直推 `dev` 或 `main`**，推送失败 → 终止并在运行记录说明，**绝不强推**；PR 由评审者审过后合并，规划者不自行合并；随后再向 Discussion #71 发评论，关键证据写 PR 编号。
 - 同步 Discussion #71：**正文刷新一律用脚本** `python3 scripts/agents/refresh-discussion.py --update`（从仓库表自动生成八组状态列表并推送，只有 `就绪` 是绿色可领取组；不要手工粘贴长表，也不要在脚本外手改正文结构）。
 - **状态变化评论**：每条状态变化（落行 / 完成 / 放弃 / 校对结论 / 待澄清）**一律追加一条结构化评论**，样式：`【状态变更】ID 功能名 → 状态` 开头，按需附「时间 UTC / 认领人 / 关键证据（PR #n、commit）/ 备注」，结尾注明「以仓库文件为准」。**无变化的轮次不发评论**，只在运行记录写「无变化」。
 
@@ -60,7 +60,7 @@
 5. **ID 连续**（组内 +1，不跳号、不复用）；**来源必填且已入库**（可回溯到已提交文档，未入库引用只记录不代交）。
 6. **Discussion 镜像**：正文由八组状态生成，只有 `就绪` 是绿色可领取组。
 7. **不排时间**：不写日期/估时/排期；依赖用行 ID。
-8. **红线不变**：不认领/不实现/不改代码/不改根 `AGENTS.md` 版本矩阵、局部 `AGENTS.md`、`CLAUDE.md` 薄导入、`docs/agents/` 或 `docs/development-process.md`；docs-only 快进推送 main。
+8. **红线不变**：不认领/不实现/不改代码/不改根 `AGENTS.md` 版本矩阵、局部 `AGENTS.md`、`CLAUDE.md` 薄导入、`docs/agents/` 或 `docs/development-process.md`；docs-only 提交只推 `planner/*` 分支并开 PR 到 `dev`。
 
 ## 输出要求（结束时必须打印）
 
@@ -71,7 +71,7 @@
 
 ## 红线
 
-- 不认领任务、不写功能代码、不运行任何构建/测试验证（docs-only 轮次无需）、不合并/不推送功能分支；只做规划与 docs-only 提交，推送仅限对 `main` 的快进推送。
+- 不认领任务、不写功能代码、不运行任何构建/测试验证（docs-only 轮次无需）、不合并/不推送功能分支；只做规划与 docs-only 提交，推送仅限 `planner/*` 分支，并开 PR 到 `dev`；不直推 `dev` 或 `main`，不合并该 PR。
 - 不改根 `AGENTS.md` 版本矩阵或局部 `AGENTS.md`（由对应实现行按相关作用域更新），也不改只作薄导入的 `CLAUDE.md`、`docs/agents/`（含本提示词与角色卡）或 `docs/development-process.md`。
 - 无来源出处的想法不得直接落行；先标 `待澄清` 挂到 Discussion 评论。
 - 不携带、不代交用户工作区改动与未跟踪文件；发现未入库引用只记录不补交。
