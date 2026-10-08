@@ -679,9 +679,20 @@ func (h *delayedPlayerHarness) replayResult() delayedReplayResult {
 	if !ok {
 		h.t.Fatalf("replay 最终区块 %+v hash 不可用", chunk)
 	}
-	// 本 harness 由真实时钟驱动，两次运行的总 tick 数不同，
-	// 因此绝对世界时间不属于被比较的权威结果；它的推进由 sim 的世界时间测试覆盖。
+	// This harness is driven by the server's real-time ticker, so two runs of the
+	// same script complete different tick counts. Absolute world time and the
+	// values derived from it (season, in-season progress and temperature) are
+	// therefore not part of the compared authoritative result. Each run first
+	// proves those values match the production derivation for its own world
+	// time and seed, then clears them so the replay comparison only covers
+	// input-driven state. World time advancement itself is covered by the sim
+	// world-time tests. Weather stays in the comparison: it is a seeded clock
+	// whose first clear segment lasts far longer than this script.
+	h.assertWorldTimeDerivedFields(player)
 	player.WorldTimeTicks = 0
+	player.Season = 0
+	player.SeasonProgress = 0
+	player.Temperature = 0
 	return delayedReplayResult{
 		Player:     player,
 		PlayerHash: playerHash,
@@ -689,6 +700,38 @@ func (h *delayedPlayerHarness) replayResult() delayedReplayResult {
 		ChunkHash:  chunkHash,
 		Revision:   revision,
 		Rejected:   append([]network.CommandRejected(nil), h.rejections...),
+	}
+}
+
+// assertWorldTimeDerivedFields recomputes the season fields and temperature
+// from the published world time, display offset, weather, height and world
+// seed through the shared `core` derivations, so normalizing them for the
+// replay comparison cannot hide a wrong or nondeterministic derivation.
+func (h *delayedPlayerHarness) assertWorldTimeDerivedFields(player contract.PlayerUpdate) {
+	h.t.Helper()
+	seasonOffset := core.SeasonOffsetFromSeed(h.running.engine.SeedForTest())
+	worldTime := player.WorldTimeTicks
+	yearPhase := core.YearPhaseAt(worldTime, seasonOffset)
+	wantSeason := core.SeasonAt(worldTime, seasonOffset)
+	wantProgress := core.SeasonProgressAt(worldTime, seasonOffset)
+	effectivePhase := core.EffectiveDayPhaseAt(worldTime, player.DayPhaseOffset, seasonOffset)
+	// The wire temperature is rounded half away from zero and narrowed to int8;
+	// `core.TemperatureAt` already clamps it into the int8 range.
+	wantTemperature := int8(math.Round(float64(core.TemperatureAt(
+		yearPhase, effectivePhase, player.WeatherKind, player.State.Position.Y(),
+	))))
+	if player.Season != wantSeason || player.SeasonProgress != wantProgress ||
+		player.Temperature != wantTemperature {
+		h.t.Fatalf(
+			"world-time-derived fields at worldTime=%d: season=%v progress=%d temperature=%d, want season=%v progress=%d temperature=%d",
+			worldTime,
+			player.Season,
+			player.SeasonProgress,
+			player.Temperature,
+			wantSeason,
+			wantProgress,
+			wantTemperature,
+		)
 	}
 }
 
