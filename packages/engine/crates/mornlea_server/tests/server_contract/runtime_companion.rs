@@ -18,6 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use mornlea_domain::{ChunkPos, CompanionId, Dimension};
+use mornlea_protocol::{LoginStart, admit_login};
 use mornlea_server::agent::lease::ControlPhase;
 use mornlea_server::contracts::*;
 use mornlea_server::core::{chunk_driver::ChunkDriver, generation_worker::GenerationPool};
@@ -310,6 +311,21 @@ fn companion_lifecycles(state: &AuthorityState) -> Vec<(ActorKey, ActorLifecycle
         .filter(|actor| matches!(actor.key, ActorKey::Companion(_)))
         .map(|actor| (actor.key, actor.lifecycle))
         .collect()
+}
+
+/// Joins one new player through the persistent login path after startup.
+fn join_player(state: &mut AuthorityState) -> SessionKey {
+    let mut bytes = [0x31; 16];
+    bytes[6] = 0x40;
+    bytes[8] = 0x80;
+    let id = mornlea_domain::PlayerId::try_from_bytes(bytes).unwrap();
+    let start = LoginStart::new(id, "Ada", 8).unwrap().encode().unwrap();
+    let login = admit_login(LoginStart::decode_inbound(&start).unwrap()).unwrap();
+    let session = state.prepare(login, TransportKind::Memory).unwrap();
+    assert!(!state.prepare_player_cache(session).unwrap());
+    state.install(session, None).unwrap();
+    state.activate(session).unwrap();
+    session
 }
 
 /// Hands the world store to the background scheduler, loads the spawn
@@ -727,7 +743,8 @@ fn missing_credential_refuses_before_save_io() {
 
 /// A refused namespace lease acquire stays on the control worker: startup
 /// succeeds, ticks keep running, every configured companion still activates,
-/// and the worker keeps retrying without holding a lease.
+/// a player joining afterwards goes Active, and the worker keeps retrying
+/// without holding a lease.
 #[test]
 fn refused_lease_acquire_never_blocks_startup_or_ticks() {
     let root = Root::new();
@@ -750,6 +767,7 @@ fn refused_lease_acquire_never_blocks_startup_or_ticks() {
         thread::sleep(Duration::from_millis(5));
     }
     let mut store = first_tick(&mut state, disk);
+    let player = join_player(&mut state);
     for _ in 0..3 {
         state.advance_tick(TickBudget::full()).unwrap();
     }
@@ -759,6 +777,16 @@ fn refused_lease_acquire_never_blocks_startup_or_ticks() {
             (ActorKey::Companion(companion(1)), ActorLifecycle::Active),
             (ActorKey::Companion(companion(2)), ActorLifecycle::Active),
         ]
+    );
+    assert_eq!(
+        state
+            .residents()
+            .actors
+            .iter()
+            .filter(|actor| matches!(actor.key, ActorKey::Player(_)))
+            .map(|actor| (actor.key, actor.lifecycle))
+            .collect::<Vec<_>>(),
+        vec![(ActorKey::Player(player), ActorLifecycle::Active)]
     );
     assert_eq!(runtime.agent().current_lease(), None);
     assert!(runtime.agent().lease_worker_running());
