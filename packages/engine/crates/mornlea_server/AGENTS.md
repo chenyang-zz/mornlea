@@ -14,6 +14,16 @@ Python Agent process. Workspace membership is `packages/engine/Cargo.toml`.
 No dependency-direction test guards this crate yet; review the manifest
 against this file.
 
+## Trusted observer
+
+Trusted observers attach through `AuthorityState` / `session` between ticks only
+(`require_between_ticks`). They never increment `occupied` / take a `MAX_PLAYERS`
+slot and never appear in `online_players()`. Cap is `MAX_TRUSTED_OBSERVERS` (= 1),
+matching Go's singular `trustedObserver`. Disabled attach/center returns
+`InvalidInput { field: "trusted_observer_disabled" }`. Centers apply at the next
+tick boundary. Publication saturation detaches only that observer.
+
+
 ## Automatic source acquisition
 
 The producer phase of plan 109 adds one explicit `SourceAcquisition` caller:

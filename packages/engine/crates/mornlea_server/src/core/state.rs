@@ -72,6 +72,8 @@ mod player_persistence;
 mod source_snapshot;
 #[path = "state_source_tick.rs"]
 mod source_tick;
+#[path = "state_trusted_observer.rs"]
+mod trusted_observer;
 pub(crate) use source_tick::SourceTickContinuation;
 
 const COMPANION_INBOX: usize = 4;
@@ -292,6 +294,11 @@ pub struct AuthorityState {
     /// the single serial owner for configured names, task FIFOs, captured
     /// issuers, generations, phases, and decided chat facts.
     companion_chat: CompanionChatBook,
+    /// Plain trusted-observer enable flag (config wiring is gap 3).
+    trusted_observer_enabled: bool,
+    /// Attached trusted observers; capped at `MAX_TRUSTED_OBSERVERS`.
+    trusted_observers: BTreeMap<SessionKey, trusted_observer::TrustedObserverRecord>,
+    trusted_observer_generation: u64,
 }
 
 impl AuthorityState {
@@ -372,6 +379,9 @@ impl AuthorityState {
             chat_queue: VecDeque::new(),
             next_chat_event_id: 1,
             companion_chat: CompanionChatBook::new(),
+            trusted_observer_enabled: false,
+            trusted_observers: BTreeMap::new(),
+            trusted_observer_generation: 0,
         })
     }
 
@@ -1283,7 +1293,9 @@ impl AuthorityState {
     pub(crate) fn active_speakers(&self) -> Vec<Speaker> {
         self.sessions
             .iter()
-            .filter(|(_, record)| record.phase == SessionPhase::Active)
+            .filter(|(session, record)| {
+                record.phase == SessionPhase::Active && !self.is_trusted_observer(**session)
+            })
             .filter_map(|(session, record)| {
                 Some(Speaker {
                     session: *session,
@@ -2585,7 +2597,9 @@ impl AuthorityState {
                     AppendOutcome::Closed => {}
                 },
                 PendingFrame::Broadcast { frame } => {
-                    let sessions: Vec<SessionKey> = self.current_sessions.iter().copied().collect();
+                    let mut sessions: Vec<SessionKey> =
+                        self.current_sessions.iter().copied().collect();
+                    sessions.extend(self.trusted_observers.keys().copied());
                     for session in sessions {
                         #[cfg(test)]
                         CURRENT_PUBLICATION_VISITS.with(|visits| visits.set(visits.get() + 1));
@@ -2604,7 +2618,12 @@ impl AuthorityState {
         // player slot exactly like a peer-gone close; the overflowing frame
         // was dropped by the append and no Disconnect frame is appended.
         for session in slow {
-            let _ = self.retire(session, CloseReason::SlowReceiver);
+            if self.is_trusted_observer(session) {
+                // Go closePublicationSessionLocked detaches only the observer.
+                let _ = self.detach_trusted_observer_unchecked(session);
+            } else {
+                let _ = self.retire(session, CloseReason::SlowReceiver);
+            }
         }
         Ok(publication)
     }
@@ -2749,7 +2768,11 @@ impl AuthorityState {
             AppendOutcome::Queued => Ok(EnqueueOutcome::Queued),
             AppendOutcome::Closed => Ok(EnqueueOutcome::Closed),
             AppendOutcome::Saturated => {
-                self.retire(session, CloseReason::SlowReceiver)?;
+                if self.is_trusted_observer(session) {
+                    self.detach_trusted_observer_unchecked(session)?;
+                } else {
+                    self.retire(session, CloseReason::SlowReceiver)?;
+                }
                 Ok(EnqueueOutcome::Closed)
             }
         }
@@ -4966,6 +4989,8 @@ impl<'a> TickContext<'a> {
         // incomplete resident set while providers own and mutate these maps.
         let residents = std::mem::take(&mut context.authority.residents);
         context.authority.tick_running = true;
+        // Promote pending trusted-observer centers at the tick boundary (Go Step).
+        context.authority.apply_trusted_observer_centers();
         #[cfg(test)]
         crate::core::source_player_restore::SETTLED_FOOTPRINTS
             .with(|seen| seen.borrow_mut().clear());
@@ -20792,6 +20817,114 @@ mod owner_record_admission_tests {
         state.publish(publication(events)).unwrap();
         assert_eq!(state.take_outbox(owner, 512, 2_097_152).unwrap(), expected);
         remote_empty(&state, owner);
+    }
+
+    /// A retires between ticks; B's next projection sees RemotePlayerDespawn
+    /// before any spawn/state (Go publishRemoteDespawns then spawns/states).
+    #[test]
+    fn cross_peer_retire_despawns_before_spawn_or_state() {
+        let (mut state, sessions) = remote_fixture(512);
+        let (watcher, leaving) = (sessions[0], sessions[1]);
+        remote_initial(&mut state, &sessions);
+        let leaving_player = state.sessions[&leaving].player_id;
+        state.retire(leaving, CloseReason::PeerGone).unwrap();
+        let events = remote_project(&mut state);
+        let for_watcher: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(watcher.get()))
+            .collect();
+        assert!(!for_watcher.is_empty(), "watcher must learn the departure");
+        let kinds: Vec<&'static str> = for_watcher
+            .iter()
+            .map(|e| match e.event() {
+                Event::RemotePlayerDespawn(_) => "despawn",
+                Event::RemotePlayerSpawn(_) => "spawn",
+                Event::RemotePlayerStates(_) => "states",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds.first(), Some(&"despawn"));
+        assert!(
+            !kinds.iter().any(|k| *k == "spawn" || *k == "states"),
+            "despawn tick must not also spawn/state the departed peer: {kinds:?}"
+        );
+        assert!(matches!(
+            for_watcher[0].event(),
+            Event::RemotePlayerDespawn(d) if d.player_id() == leaving_player
+        ));
+        state.publish(publication(events)).unwrap();
+        let _ = state.take_outbox(watcher, 512, 2_097_152).unwrap();
+        remote_empty(&state, watcher);
+    }
+
+    /// Same between-ticks window: A retires and C joins; watcher order is
+    /// despawn then spawn (then later states), matching Go generation replacement.
+    #[test]
+    fn cross_peer_retire_and_join_orders_despawn_before_spawn() {
+        let (mut state, mut sessions) = remote_fixture(512);
+        let watcher = sessions[0];
+        let leaving = sessions[1];
+        remote_initial(&mut state, &sessions);
+        state.retire(leaving, CloseReason::PeerGone).unwrap();
+        // Admit a third player into the same interest square.
+        let joining = {
+            let mut bytes = [0u8; 16];
+            bytes[0] = 3;
+            bytes[6] = 0x40;
+            bytes[8] = 0x80;
+            let id = PlayerId::try_from_bytes(bytes).unwrap();
+            let start = mornlea_protocol::LoginStart::new(id, "Cam", 8).unwrap();
+            let inbound =
+                mornlea_protocol::LoginStart::decode_inbound(&start.encode().unwrap()).unwrap();
+            let login = mornlea_protocol::admit_login(inbound).unwrap();
+            let key = state.admit(login, TransportKind::Memory).unwrap();
+            let actor = state
+                .residents
+                .actors
+                .iter()
+                .find(|a| matches!(a.key, ActorKey::Player(s) if s == watcher))
+                .cloned()
+                .expect("watcher actor");
+            let mut joined = actor;
+            joined.key = ActorKey::Player(key);
+            let slot = state.residents.actors.len();
+            state.residents.actors.push(joined);
+            state.residents.player_slots.insert(key, slot);
+            let mut view = state
+                .session_views
+                .get(&watcher)
+                .cloned()
+                .unwrap_or_default();
+            view.visible_remotes.clear();
+            state.session_views.insert(key, view);
+            key
+        };
+        sessions.push(joining);
+        let events = remote_project(&mut state);
+        let for_watcher: Vec<_> = events
+            .iter()
+            .filter(|e| e.recipient() == EventRecipient::Session(watcher.get()))
+            .collect();
+        let kinds: Vec<&'static str> = for_watcher
+            .iter()
+            .map(|e| match e.event() {
+                Event::RemotePlayerDespawn(_) => "despawn",
+                Event::RemotePlayerSpawn(_) => "spawn",
+                Event::RemotePlayerStates(_) => "states",
+                _ => "other",
+            })
+            .collect();
+        let despawn = kinds.iter().position(|k| *k == "despawn");
+        let spawn = kinds.iter().position(|k| *k == "spawn");
+        assert!(despawn.is_some(), "expected despawn in {kinds:?}");
+        assert!(spawn.is_some(), "expected spawn in {kinds:?}");
+        assert!(
+            despawn.unwrap() < spawn.unwrap(),
+            "despawn must precede spawn: {kinds:?}"
+        );
+        if let Some(states) = kinds.iter().position(|k| *k == "states") {
+            assert!(spawn.unwrap() < states, "spawn before states: {kinds:?}");
+        }
     }
 
     fn delta_count_boundary(changes: Vec<BlockChange>) {

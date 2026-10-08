@@ -117,6 +117,8 @@ struct Observer {
     center: Option<ChunkKey>,
     /// Whether the session has an Active player actor this tick.
     has_actor: bool,
+    /// Trusted observer: center subscription without a player actor (Go hasView).
+    trusted: bool,
 }
 
 /// The classified resident entity sets the visibility families diff against.
@@ -190,7 +192,7 @@ impl SourceProjectionWork {
         outcome: &TickOutcome,
     ) -> Result<Self, ServerError> {
         let speakers = state.active_speakers();
-        if speakers.is_empty() {
+        if speakers.is_empty() && state.trusted_observer_count() == 0 {
             return Ok(Self {
                 tick,
                 actors: Vec::new(),
@@ -216,7 +218,7 @@ impl SourceProjectionWork {
         let projectiles = state.resident_projectiles().to_vec();
         let drops = source_drop_values(state, &actors, &entities, &speakers);
         // Resolve hard subscription failures before transferring any recipient books.
-        let observers: Vec<Observer> = speakers
+        let mut observers: Vec<Observer> = speakers
             .iter()
             .map(|speaker| {
                 observer_of(
@@ -228,11 +230,26 @@ impl SourceProjectionWork {
                 )
             })
             .collect::<Result<_, _>>()?;
+        for (session, dimension, center, radius) in state.trusted_observer_view_facts() {
+            let Ok(wanted) = wanted_square(dimension, center, radius) else {
+                continue;
+            };
+            observers.push(Observer {
+                session,
+                wanted,
+                center: Some(ChunkKey {
+                    dimension,
+                    pos: center,
+                }),
+                has_actor: false,
+                trusted: true,
+            });
+        }
         let invalidated_containers = state.invalidate_container_views();
         let mut views = state.take_session_views();
-        let mut view_list: Vec<SessionView> = speakers
+        let mut view_list: Vec<SessionView> = observers
             .iter()
-            .map(|speaker| views.remove(&speaker.session).unwrap_or_default())
+            .map(|observer| views.remove(&observer.session).unwrap_or_default())
             .collect();
         let visibility_inputs = VisibilityInputs {
             actors: &actors,
@@ -607,6 +624,7 @@ fn observer_of(
         wanted,
         center,
         has_actor: active.is_some(),
+        trusted: false,
     })
 }
 
@@ -785,8 +803,8 @@ fn visibility_of(
         projectiles: BTreeSet::new(),
         drops: BTreeSet::new(),
     };
-    // Remote player state remains an Active-observer contract.
-    if observer.has_actor {
+    // Active players and trusted observers (Go hasView) receive remotes.
+    if observer.has_actor || observer.trusted {
         for &index in &entities.players {
             let actor = &actors[index];
             let ActorKey::Player(target) = actor.key else {

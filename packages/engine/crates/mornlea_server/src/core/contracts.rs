@@ -25,6 +25,8 @@ use mornlea_storage::{
 /// per-tick buffer that holds one slot per online player derives from this
 /// value, so raising it resizes those buffers instead of silently truncating.
 pub(crate) const MAX_PLAYERS: u8 = 8;
+/// Go keeps a single trusted-observer slot (`server.trustedObserver`); overflow is Capacity.
+pub(crate) const MAX_TRUSTED_OBSERVERS: usize = 1;
 const MAX_QUEUED_COMMANDS: usize = 4096;
 const MAX_SESSION_OUTBOX: usize = 512;
 const MAX_READY_CHUNK_RESULTS: usize = 64;
@@ -232,6 +234,9 @@ pub enum Resource {
     /// limit and observed values count cells, not players. Server-internal:
     /// no protocol code or cross-language mapping carries this variant.
     TrampleCells,
+    /// Concurrent trusted-observer attachments. Bound is `MAX_TRUSTED_OBSERVERS`
+    /// (Go's singular slot). Server-internal; not a wire code.
+    TrustedObservers,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
