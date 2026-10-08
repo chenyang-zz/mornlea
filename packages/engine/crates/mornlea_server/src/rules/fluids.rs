@@ -314,7 +314,7 @@ pub fn run(_ctx: &mut TickContext<'_>, call: RuleCall<'_>) -> Result<PhaseReport
 }
 
 /// Boundary rescan: drops out-of-scope pending sections, then scans each
-/// pending section whole within the frozen per-dimension rescan target.
+/// pending section whole within the frozen shared rescan target.
 ///
 /// A section whose staged cells are uniformly non-fluid (unobserved cells
 /// count as sealed, never fluid) shortcuts at a cost of one cell, mirroring
@@ -333,6 +333,7 @@ pub fn rescan(
     now: u64,
     delay: u64,
 ) -> Result<PhaseReport, ServerError> {
+    // The mixed-dimension FIFO consumes one target while attributing each charge locally.
     // A scope exit drops the cursor: pending sections outside the active set
     // leave without touching the world, while everything in scope carries on.
     // This mirrors Go `dropOutOfScope`, including the head rule — dropping the

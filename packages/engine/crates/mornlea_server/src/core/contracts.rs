@@ -496,6 +496,8 @@ impl TickBudget {
     pub fn fluid_updates_per_dimension(self) -> usize {
         self.fluid_updates_per_dimension
     }
+    /// Shared target for the complete mixed-dimension rescan pass. The
+    /// existing getter spelling remains compatible with accepted callers.
     pub fn fluid_rescan_target_per_dimension(self) -> usize {
         self.fluid_rescan_target_per_dimension
     }

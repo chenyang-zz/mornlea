@@ -37,6 +37,9 @@ use mornlea_server::rules::fluids::{self as provider, FluidSchedule};
 use mornlea_server::state::{AuthorityState, TickContext};
 use mornlea_storage::{Chunk, ContainerSnapshot, ItemStack, StorageKind};
 
+#[path = "fluids_global_budget.rs"]
+mod global_budget;
+
 // Stable block numbers, mirrored from the frozen const block in
 // `packages/shared/core/block.go`.
 const AIR: u16 = 0; // `core.AirID`

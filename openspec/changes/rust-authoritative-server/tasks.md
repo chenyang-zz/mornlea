@@ -335,3 +335,5 @@ The [review repair packet](plans/29-review-repairs.md) is the execution authorit
 - [x] 3.7l3set Integrate automatic source acquisition with one retained real tick, bounded actual CPU snapshot selection and original prepared FIFO delivery ([packet](plans/170-source-encoded-tick-integration.md)); frozen private11/revised actual4, qualified RED5/control6+RED4, complete decoded Disk/native body oracles, revised source13 SCOPED_PASS and fullRust4019/76/replay679. Closing docs/immutable evidence is recorded separately. Executable, sealed previous build-target isolation and broad3.8/4.1/4.2 OPEN.
 
 - [x] 3.8btiso Isolate sealed previous-package native build artifacts from caller Cargo targets and verify actual package/previous-consumer continuity ([packet](plans/171-sealed-previous-build-target-isolation.md)); build ownership only, broad3.8/4.1/4.2 OPEN.
+
+- [x] 3.7fgb Share the section-aware fluid rescan target across the mixed-dimension FIFO while retaining per-dimension statistics and exact carry ([packet](plans/172-shared-fluid-rescan-work-budget.md)); accounting only, automatic whole-chunk/config/runtime and broad3.8/4.1/4.2 OPEN.

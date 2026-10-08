@@ -6140,7 +6140,12 @@ impl<'a> TickContext<'a> {
             WorkKind::RescanCells(dimension) => {
                 let index = dimension_index(dimension)?;
                 let target = self.budget.fluid_rescan_target_per_dimension();
-                let spent = self.spent_rescan[index];
+                // The mixed-dimension FIFO shares one quota; counters only attribute work.
+                let spent = self
+                    .spent_rescan
+                    .iter()
+                    .try_fold(0usize, |total, spent| total.checked_add(*spent))
+                    .ok_or(ServerError::InvalidInput { field: "rescan" })?;
                 if target == 0 || spent >= target || units > RESCAN_SECTION {
                     return Err(ServerError::Capacity {
                         resource: Resource::Commands,
@@ -6158,7 +6163,10 @@ impl<'a> TickContext<'a> {
                         observed: next,
                     });
                 }
-                self.spent_rescan[index] = next;
+                let dimension_next = self.spent_rescan[index]
+                    .checked_add(units)
+                    .ok_or(ServerError::InvalidInput { field: "rescan" })?;
+                self.spent_rescan[index] = dimension_next;
                 Ok(())
             }
             WorkKind::FarmlandChecks => charge_ceiling(

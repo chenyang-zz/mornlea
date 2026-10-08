@@ -742,7 +742,9 @@ separate caller responsibilities.
   `NativeFluidEval` kernel: snapshot the 7-neighborhood before writing,
   strongest-merge with sorted writes, then one transaction per target,
   requeue at now+5 under the frozen due order, 512 per sorted dimension,
-  and the section-aware 65536/4096/4095 rescan ceilings. The provider
+  and the section-aware shared 65536/4096/4095 rescan ceilings across the
+  mixed-dimension FIFO. Per-dimension rescan counters attribute work; their
+  checked sum owns the quota despite the legacy budget getter spelling. The provider
   carries work in a caller-owned `FluidSchedule`; the serial reducer owns
   tick wiring. Plant replacement atomically publishes source-compatible
   outputs; a drop-capacity refusal leaves that plant and retries its
