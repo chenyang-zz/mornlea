@@ -71,14 +71,20 @@ func TestDocumentationLinks(t *testing.T) {
 // TestDocumentationLinkScopeCoversActiveChangesButNotArchive pins the link
 // gate's scope: in-progress OpenSpec changes are current planning inputs and
 // must keep resolvable links, while archived changes are frozen records whose
-// historical links are never rewritten.
+// historical links are never rewritten. Only the top-level
+// openspec/changes/archive/ directory is frozen; a change named like
+// `archive-foo` or a nested `archive/` folder inside an active change is still
+// current planning content and must be checked by both the link gate and the
+// English-language gate, which share `activeOpenSpecMarkdown`.
 func TestDocumentationLinkScopeCoversActiveChangesButNotArchive(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
 		documentationManifestPath:                                 `{"schema_version":1,"documents":[]}`,
 		"openspec/changes/sample-change/proposal.md":              "[gone](missing.md)\n",
 		"openspec/changes/sample-change/plans/01-plan.md":         "[ok](../proposal.md)\n",
-		"openspec/changes/archive/2026-01-01-old/proposal.md":     "[gone](missing.md)\n",
+		"openspec/changes/sample-change/archive/notes.md":         "[gone](missing.md)\n\n嵌套目录中的规范文字。\n",
+		"openspec/changes/archive-foo/proposal.md":                "[gone](missing.md)\n\n名称以 archive 开头的变更。\n",
+		"openspec/changes/archive/2026-01-01-old/proposal.md":     "[gone](missing.md)\n\n已归档的历史文字。\n",
 		"openspec/changes/archive/2026-01-01-old/plans/01-old.md": "[gone](missing.md)\n",
 	}
 	for relative, content := range files {
@@ -91,16 +97,44 @@ func TestDocumentationLinkScopeCoversActiveChangesButNotArchive(t *testing.T) {
 		}
 	}
 	scope := documentationLinkScope(t, root)
-	want := []string{"openspec/changes/sample-change/plans/01-plan.md", "openspec/changes/sample-change/proposal.md"}
+	want := []string{
+		"openspec/changes/archive-foo/proposal.md",
+		"openspec/changes/sample-change/archive/notes.md",
+		"openspec/changes/sample-change/plans/01-plan.md",
+		"openspec/changes/sample-change/proposal.md",
+	}
 	if !slices.Equal(scope, want) {
 		t.Fatalf("documentation link scope = %v, want %v", scope, want)
+	}
+	if active := activeOpenSpecMarkdown(t, root); !slices.Equal(active, want) {
+		t.Fatalf("active OpenSpec scope = %v, want %v", active, want)
 	}
 	var problems []string
 	for _, relative := range scope {
 		problems = append(problems, documentationLinkProblems(root, relative, files[relative])...)
 	}
-	if len(problems) != 1 || !strings.Contains(problems[0], "openspec/changes/sample-change/proposal.md") {
-		t.Fatalf("active change link problems = %v, want exactly the broken active proposal link", problems)
+	wantBroken := []string{
+		"openspec/changes/archive-foo/proposal.md",
+		"openspec/changes/sample-change/archive/notes.md",
+		"openspec/changes/sample-change/proposal.md",
+	}
+	if len(problems) != len(wantBroken) {
+		t.Fatalf("active change link problems = %v, want one per %v", problems, wantBroken)
+	}
+	for i, relative := range wantBroken {
+		if !strings.HasPrefix(problems[i], relative+" ") {
+			t.Errorf("link problem %d = %q, want it reported for %s", i, problems[i], relative)
+		}
+	}
+	var nonEnglish []string
+	for _, relative := range activeOpenSpecMarkdown(t, root) {
+		if len(nonEnglishMarkdownProseLines(files[relative])) != 0 {
+			nonEnglish = append(nonEnglish, relative)
+		}
+	}
+	wantNonEnglish := []string{"openspec/changes/archive-foo/proposal.md", "openspec/changes/sample-change/archive/notes.md"}
+	if !slices.Equal(nonEnglish, wantNonEnglish) {
+		t.Fatalf("language gate flagged %v, want %v", nonEnglish, wantNonEnglish)
 	}
 }
 
@@ -277,7 +311,7 @@ func currentNormativeDocumentation(t *testing.T, root string) []string {
 
 // documentationLinkScope lists the Markdown files whose local links must
 // resolve: completed bilingual documentation pairs plus every in-progress
-// OpenSpec change artifact. `activeOpenSpecMarkdown` skips
+// OpenSpec change artifact. `activeOpenSpecMarkdown` skips only the top-level
 // openspec/changes/archive/ because archived changes are frozen evidence.
 func documentationLinkScope(t *testing.T, root string) []string {
 	t.Helper()
