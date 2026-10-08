@@ -56,3 +56,7 @@ The [foundation seal](../archive/2026-10-08-rust-runtime-foundation-acceptance/a
 F3 1.1 retains its additional F2:S2-accepted prerequisite: common3.2 plus BOTH actual Memory3.3a/TCP3.3b adapters on one accepted SHA. Those providers remain pending, so F1 alone does not enable client-core implementation. Full F2 acceptance still precedes F3 real integration.
 
 Controller owns the serial prerequisite metadata update. Rollback invalidates this source/corpus prerequisite and blocks dependent dispatch; numerical acceptance and historical ledgers remain intact. Architecture skill: no change.
+
+## F1 link retarget, 2026-10-08
+
+Archiving `rust-runtime-foundation-acceptance` (PR #9) moved it to `openspec/changes/archive/2026-10-08-rust-runtime-foundation-acceptance/`. In the same change, the F1 links in the 2026-09-27 entry above (the foundation seal and its expanded execution evidence) were retargeted from `../rust-runtime-foundation-acceptance/` to that archive path. Only the link targets changed; the recorded source, corpus identity, counts and conclusions are unchanged. The same retarget was applied to this change's `design.md`, `proposal.md` and `plans/03-parallel-readiness.md`. No runtime checkbox in this change is closed. Architecture skill: no change.
