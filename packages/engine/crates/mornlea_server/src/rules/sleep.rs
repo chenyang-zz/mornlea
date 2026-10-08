@@ -58,7 +58,7 @@ use crate::core::contracts::{
 };
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::core::state::{AuthorityReadView, TickContext};
-use crate::rules::environment::{season_at, season_progress_at};
+use crate::rules::environment::{season_at, season_progress_at, year_phase_at};
 
 /// First bed-foot form, south (`core.BedFootSouthID`); the eight bed forms
 /// run foot south/west/north/east then head south/west/north/east.
@@ -74,8 +74,6 @@ const HALF_DAY_TICKS: u32 = DAY_LENGTH_TICKS / 2;
 /// (`core.DisplayNightBegin`/`End`).
 const DISPLAY_NIGHT_BEGIN: u16 = 13_000;
 const DISPLAY_NIGHT_END: u16 = 23_000;
-/// Four seasons per year (`core.YearTicks`).
-const YEAR_TICKS: u64 = 288_000;
 /// Morning arc start the transition targets (`settleSleepThroughNight`
 /// passing the constant 0 morning phase).
 const MORNING_PHASE: u16 = 0;
@@ -502,18 +500,6 @@ fn bed_half_positions(target: BlockPos, block: u16) -> Option<(BlockPos, BlockPo
         target.z().checked_add(dz)?,
     );
     Some((foot, target))
-}
-
-/// Folds the in-year tick index: each side takes its modulo before the sum,
-/// so no absolute time or offset can overflow the addition. Mirrors
-/// `core.yearIndex` (`packages/shared/core/season.go`).
-fn year_index(world_time: u64, season_offset: u32) -> u64 {
-    (world_time % YEAR_TICKS + u64::from(season_offset) % YEAR_TICKS) % YEAR_TICKS
-}
-
-/// Year phase 0..1 at an absolute time (`core.YearPhaseAt`).
-fn year_phase_at(world_time: u64, season_offset: u32) -> f64 {
-    year_index(world_time, season_offset) as f64 / YEAR_TICKS as f64
 }
 
 /// Day arc in ticks at one year phase (`core.DayArcTicks`): the sinusoidal

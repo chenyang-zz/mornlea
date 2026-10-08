@@ -12,8 +12,8 @@
 use mornlea_domain::{ChunkPos, Command, Dimension, PlayerId};
 use mornlea_protocol::{LoginStart, PlayIntent, admit_login};
 use mornlea_server::contracts::{
-    ChunkKey, ChunkRequestId, ChunkResult, Resource, ServerError, ServerLimits, SubmissionReceipt,
-    TickBudget, TransportKind,
+    ChunkKey, ChunkRequestId, ChunkResult, MailboxPort, Resource, ServerError, ServerLimits,
+    SubmissionReceipt, TickBudget, TransportKind,
 };
 use mornlea_server::core::mailbox::{self, ChunkAdmission};
 use mornlea_server::state::AuthorityState;
@@ -131,7 +131,7 @@ fn zero_and_prefix_carry() {
         (9, 1, 7),
         "the carried duplicate keeps its original arrival and tick-7 identity"
     );
-    state.carry(carried).unwrap();
+    MailboxPort::carry(&mut state, carried).unwrap();
 
     // One more pass: the second 9 is walked, found at or below the
     // watermark, and stale-discarded rather than carried or returned.
@@ -242,5 +242,5 @@ fn full_global_queue_rejects_either_session_intact() {
         cap,
         "both sessions' accepted records survive the rejections intact"
     );
-    state.carry(queued).unwrap();
+    MailboxPort::carry(&mut state, queued).unwrap();
 }

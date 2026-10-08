@@ -13,7 +13,7 @@ use super::contracts::{
     MiningProgress, ServerError,
 };
 use super::mutation::mining_rule;
-use crate::rules::environment::{season_at, season_progress_at};
+use crate::rules::environment::{season_at, season_progress_at, year_phase_at};
 use crate::rules::inventory::armor_points;
 
 pub(crate) fn project(
@@ -103,9 +103,7 @@ pub(crate) fn project(
 
 /// Go's seasonal day warp and temperature narrow to f32 before wire rounding.
 fn temperature(environment: &EnvironmentState, y: f32) -> i8 {
-    let year = (environment.world_time % 288_000 + u64::from(environment.season_offset) % 288_000)
-        % 288_000;
-    let phase = year as f64 / 288_000.0;
+    let phase = year_phase_at(environment.world_time, environment.season_offset);
     let angle = 2.0 * std::f64::consts::PI * phase;
     let mut arc = ((0.5 + 0.15 * angle.sin()) * 24_000.0).round() as u32;
     if !arc.is_multiple_of(2) {

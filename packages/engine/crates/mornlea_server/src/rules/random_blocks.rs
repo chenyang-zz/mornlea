@@ -12,6 +12,7 @@ use crate::core::{
     },
     state::TickContext,
 };
+use crate::rules::environment::year_phase_at;
 use mornlea_domain::{BlockPos, Dimension, Weather};
 use mornlea_engine::native::{
     contracts::world::{TreeOp, TreeRequest},
@@ -85,9 +86,7 @@ fn roll(seed: i64, tick: u64, dim: Dimension, pos: BlockPos, salt: u64) -> u64 {
 }
 
 fn climate(env: &EnvironmentState, y: i32) -> f32 {
-    let year = ((env.world_time % 288_000 + u64::from(env.season_offset) % 288_000) % 288_000)
-        as f64
-        / 288_000.0;
+    let year = year_phase_at(env.world_time, env.season_offset);
     let mut arc = ((0.5 + 0.15 * (2.0 * PI * year).sin()) * 24_000.0).round() as u32;
     arc -= arc % 2;
     let linear = ((env.world_time % 24_000 + u64::from(env.day_phase_offset)) % 24_000) as u32;

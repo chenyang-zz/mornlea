@@ -8,7 +8,7 @@
 
 use mornlea_domain::{Command, PlayerId};
 use mornlea_protocol::{LoginStart, PlayIntent, admit_login};
-use mornlea_server::contracts::{ServerLimits, TickBudget, TransportKind};
+use mornlea_server::contracts::{MailboxPort, ServerLimits, TickBudget, TransportKind};
 use mornlea_server::core::step::reduce_tick;
 use mornlea_server::state::AuthorityState;
 
@@ -59,7 +59,7 @@ fn queued(state: &mut AuthorityState) -> Vec<(u64, u64)> {
         .iter()
         .map(|envelope| (envelope.sequence(), envelope.arrival_index()))
         .collect();
-    state.carry(batch).unwrap();
+    MailboxPort::carry(state, batch).unwrap();
     pairs
 }
 
@@ -276,6 +276,12 @@ fn actual_final_reduces_accepted_commands_once_without_publication() {
 /// limit, and later ticks drain every carried envelope exactly once.
 #[test]
 fn full_queue_partial_budget_carries_remainder_within_limit() {
+    // CAP is the configured `queued_commands` limit for this authority, not a
+    // special test-only budget. Six is enough to fill the queue, leave a
+    // remainder after a budget-2 drain, and still exercise order and the
+    // never-above-limit bound; the production default 4096 uses the same
+    // `len` versus `queued_commands()` check, so the arithmetic under test
+    // does not depend on the numeric value of the limit.
     const CAP: usize = 6;
     let mut state = authority_with_queue(CAP);
     let key = state
@@ -339,6 +345,10 @@ fn full_queue_partial_budget_carries_remainder_within_limit() {
 #[test]
 fn intake_after_partial_carry_admits_freed_space_then_refuses() {
     use mornlea_server::contracts::{Resource, ServerError, SubmissionReceipt};
+    // Same reasoning as the carry-remainder test: CAP is the configured queue
+    // limit. After a budget-2 drain of a full queue, intake must admit exactly
+    // two commands (the freed slots) and then refuse with this same limit;
+    // that relationship holds for 4096 in production and for 6 here.
     const CAP: usize = 6;
     let mut state = authority_with_queue(CAP);
     let key = state

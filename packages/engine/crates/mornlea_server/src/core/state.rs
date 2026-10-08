@@ -2171,7 +2171,11 @@ impl AuthorityState {
         Ok(())
     }
 
-    pub fn carry(&mut self, batch: Vec<CommandEnvelope>) -> Result<(), ServerError> {
+    /// Puts envelopes onto the shared command queue under the intake limit.
+    /// Enqueues before returning `Capacity`, so a refused batch is not dropped.
+    /// Production tick paths use `requeue_frozen` instead; this stays for
+    /// in-crate and trait callers that restore a previously frozen batch.
+    pub(crate) fn carry(&mut self, batch: Vec<CommandEnvelope>) -> Result<(), ServerError> {
         let observed = self.commands.len().saturating_add(batch.len());
         if observed > self.limits.queued_commands() {
             self.commands.extend(batch);
