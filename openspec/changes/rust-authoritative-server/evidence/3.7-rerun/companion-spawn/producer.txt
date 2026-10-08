@@ -1,0 +1,6 @@
+$ git grep -n -E 'Event::CompanionSpawn\(|fn emit_companions' -- packages/engine/crates/mornlea_server/src/core/publication_project.rs packages/engine/crates/mornlea_server/src/core/step.rs
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:31Z
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:1150:fn emit_companions(
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:1199:                    Event::CompanionSpawn(spawn),
+# exit: 0
