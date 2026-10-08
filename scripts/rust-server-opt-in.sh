@@ -1622,11 +1622,13 @@ try:
     if shutil.which("make") is None:
         raise OSError("make is required")
     env = os.environ.copy()
-    env["CARGO_TARGET_DIR"] = env.get("CARGO_TARGET_DIR") or os.path.join(root, "native-target")
+    # Historical native artifacts belong to this package, never the caller's cache.
+    env["CARGO_TARGET_DIR"] = os.path.join(root, "native-target")
     # The sealed Makefile accepts this provenance input instead of discovering
     # Git metadata, which is deliberately absent from the tracked export.
     env["CI_CANDIDATE_SHA"] = source
-    checked(["make", "-C", exported, "rust"], env=env)
+    # Explicit Make arguments also override propagated parent command-line assignments.
+    checked(["make", "-C", exported, "rust", "CARGO_TARGET_DIR=" + env["CARGO_TARGET_DIR"]], env=env)
     operation = "native dependency"
     extension = "dylib" if sys.platform == "darwin" else "so"
     native = os.path.join(exported, "packages/engine/target/release/libmornlea_engine." + extension)

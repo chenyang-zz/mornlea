@@ -1067,6 +1067,11 @@ and is required by the script self-test. Set an isolated `CARGO_TARGET_DIR` for
 focused work, and use an owned child supervisor on Linux when executing the
 activation suite or self-test. `activation_verifier.rs` covers real current-save,
 unloaded-family, restore/resume, immutable-package and unsafe-output consumers.
+`prepare_previous.rs` also builds the actual sealed package with an explicit
+caller target containing spaces and propagated Make flags, proves its entries and file identity stay
+unchanged, and checks real native outputs in the package-owned `native-target`.
+The disposable test scope removes its trees after assertions; external raw
+logs preserve failure evidence without changing production partial-package retention.
 
 ## Managed live chunk acquisition
 

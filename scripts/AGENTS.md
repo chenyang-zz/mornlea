@@ -22,6 +22,9 @@ Hook、gate、发布和 agent 自动化脚本改变的是仓库开发契约，�
 actual native/Go builds, streamed artifact identities, and atomic package
 record. It never starts a runtime or opens a world. Failed partial packages
 remain for inspection; activation and rollback consume packages separately.
+Its child build always uses the package-owned `native-target` directory and
+overrides inherited `CARGO_TARGET_DIR` environment and Make command-line
+assignments, preserving caller artifact ownership and unrelated Make settings.
 
 Activation requires an explicit `--previous-manifest` package record as well as
 independently checked previous binary/hash inputs. The package stays disjoint

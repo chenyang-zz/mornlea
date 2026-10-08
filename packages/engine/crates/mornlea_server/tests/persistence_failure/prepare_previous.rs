@@ -2,7 +2,8 @@
 
 use super::{Scope, hex_of, repo_root, run_script, sha256_file, tree_hash};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -32,6 +33,39 @@ fn prepare(source: &str, root: &Path) -> (i32, String) {
     ])
 }
 
+// The command-local target names a caller owner without mutating the shared test environment.
+fn prepare_with_caller_target(source: &str, root: &Path, target: &Path) -> (i32, String) {
+    let output = Command::new("bash")
+        .arg(super::optin_script())
+        .args(["prepare-previous", "--source", source, "--run-dir"])
+        .arg(root)
+        .env("CARGO_TARGET_DIR", target)
+        // Parent Make command-line assignments otherwise override child environment values.
+        .env(
+            "MAKEFLAGS",
+            format!(
+                " -- CARGO_TARGET_DIR={}",
+                target
+                    .to_str()
+                    .expect("utf8 caller target")
+                    .replace(' ', "\\ ")
+            ),
+        )
+        .output()
+        .expect("actual sealed package with caller target");
+    let code = output.status.code().unwrap_or(-1);
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    (code, text)
+}
+
+fn target_entries(root: &Path) -> BTreeSet<OsString> {
+    fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect()
+}
+
 fn identity(paths: &[PathBuf]) -> BTreeMap<PathBuf, (u32, String)> {
     paths
         .iter()
@@ -56,8 +90,43 @@ fn assert_lease_free(world: &Path) {
 fn actual_package_binds_sealed_source_native_and_offline_reader() {
     let scope = Scope::fresh("prepare");
     let root = scope.path("package");
-    let (code, output) = prepare(SOURCE, &root);
+    let caller_target = scope.path("caller native target");
+    fs::create_dir(&caller_target).unwrap();
+    let keep = caller_target.join("keep");
+    fs::write(&keep, b"caller-owned native artifacts stay unchanged").unwrap();
+    let caller_identity = identity(std::slice::from_ref(&keep));
+    let caller_entries = BTreeSet::from([OsString::from("keep")]);
+    let (code, output) = prepare_with_caller_target(SOURCE, &root, &caller_target);
     assert_eq!(code, 0, "actual new-command contract: {output}");
+    // A completed historical build may never replace or populate a caller's cache.
+    assert_eq!(
+        target_entries(&caller_target),
+        caller_entries,
+        "caller target entry ownership"
+    );
+    assert_eq!(
+        identity(std::slice::from_ref(&keep)),
+        caller_identity,
+        "caller target byte and mode ownership"
+    );
+    let native_target = root.join("native-target").join("release");
+    assert!(
+        native_target.join("libmornlea_storage.rlib").is_file(),
+        "actual sealed storage artifact has its package owner"
+    );
+    assert!(
+        native_target
+            .join(format!(
+                "libmornlea_engine.{}",
+                if cfg!(target_os = "macos") {
+                    "dylib"
+                } else {
+                    "so"
+                }
+            ))
+            .is_file(),
+        "actual sealed native artifact has its package owner"
+    );
     let manifest_path = root.join("previous-runtime.json");
     assert_eq!(
         output
