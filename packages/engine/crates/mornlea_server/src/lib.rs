@@ -10,6 +10,7 @@
 pub mod agent;
 pub mod core;
 pub mod rules;
+pub mod runtime;
 pub mod store;
 pub mod transport;
 

@@ -14,6 +14,15 @@ Python Agent process. Workspace membership is `packages/engine/Cargo.toml`.
 No dependency-direction test guards this crate yet; review the manifest
 against this file.
 
+## Runtime configuration ownership
+
+`src/runtime/` is the frozen process-config boundary. Only `runtime` may load
+config files; it never writes them. Missing files yield Go-pinned defaults;
+malformed files return a typed `ConfigError`. After freeze, callers pass plain
+values (`RuleTunables`, fluid budgets, flags) into `core`. `core`, `rules`,
+`store`, `transport`, and `agent` must not import `crate::runtime` — enforced
+by `runtime::config::tests::dependency_direction_forbids_runtime_imports`.
+
 ## Automatic source acquisition
 
 The producer phase of plan 109 adds one explicit `SourceAcquisition` caller:
