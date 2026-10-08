@@ -1006,10 +1006,19 @@ impl AuthorityState {
                 || self.residents.inventories.contains_key(&key)
                 || self.residents.runtimes.contains_key(&key)
                 || self.source_players.entries.contains_key(&session)
-                || self.source_players.entries.len() >= 8
             {
                 return Err(ServerError::Internal {
                     invariant: "source player registration",
+                });
+            }
+            // The live book is sized by the structural player ceiling; a full
+            // book is a typed player-plane refusal, not an internal fault.
+            let live = self.source_players.entries.len();
+            if live >= usize::from(MAX_PLAYERS) {
+                return Err(ServerError::Capacity {
+                    resource: Resource::Players,
+                    limit: usize::from(MAX_PLAYERS),
+                    observed: live + 1,
                 });
             }
             self.confirm_player_cache(session)?;
@@ -6375,11 +6384,13 @@ impl<'a> TickContext<'a> {
         if !matches!(actor, ActorKey::Player(_)) {
             return Err(ServerError::InvalidInput { field: "actor" });
         }
-        if !self.suppressed_mining.contains(&actor) && self.suppressed_mining.len() >= 8 {
+        // At most one suppression entry per online player.
+        let limit = usize::from(MAX_PLAYERS);
+        if !self.suppressed_mining.contains(&actor) && self.suppressed_mining.len() >= limit {
             return Err(ServerError::Capacity {
                 resource: Resource::Players,
-                limit: 8,
-                observed: 9,
+                limit,
+                observed: limit + 1,
             });
         }
         Ok(())
@@ -13449,6 +13460,127 @@ mod source_player_restore_tests {
         a.advance_tick(TickBudget::full()).unwrap();
         assert!(a.views.is_empty());
     }
+    /// Eight live players landing on one tick fill the trample batch exactly
+    /// and each leave one Snow candidate. Both batches keep the Go capture
+    /// order (ascending session, covered columns X-major then Z) and settle
+    /// without refusal.
+    #[test]
+    fn eight_players_trample_and_snow_in_one_tick_settle_in_session_order() {
+        use super::super::source_player_restore::{
+            capture_snow, capture_trample, settle_snow, settle_tramples,
+        };
+        use crate::rules::crops::{FootprintCell, SOURCE_SNOW_CAPACITY, SOURCE_TRAMPLE_CAPACITY};
+        let players = usize::from(MAX_PLAYERS);
+        let (mut a, first) = fixture();
+        let mut sessions = vec![first];
+        for tag in 2..=MAX_PLAYERS {
+            sessions.push(register(&mut a, tag, Some(saved(tag))));
+        }
+        offer(&mut a, key(Dimension::OVERWORLD, 0, 0), 0);
+        a.advance_tick(TickBudget::full()).unwrap();
+        offer(&mut a, key(Dimension::DEPTHS, 0, 0), 1);
+        a.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(sessions.len(), players);
+        assert!(sessions.windows(2).all(|pair| pair[0] < pair[1]));
+        // Later sessions stand at lower X, so session order differs from spatial order.
+        let column = |index: usize| ((players - 1 - index) * 2) as i32;
+        for (index, session) in sessions.iter().enumerate() {
+            assert!(a.source_players.entries[session].ever_spawned);
+            let slot = a.residents.player_slots[session];
+            let actor = &mut a.residents.actors[slot];
+            actor.lifecycle = ActorLifecycle::Active;
+            actor.dimension = Dimension::DEPTHS;
+            // Airborne before the step, so the grounded result is a landing edge.
+            actor.motion = ctx_trample_motion([column(index) as f32 + 1.2, 65., 15.9], false);
+            a.residents
+                .runtimes
+                .get_mut(&ActorKey::Player(*session))
+                .unwrap()
+                .reset = false;
+            a.source_players
+                .snow_test_set_state(*session, 0., BlockPos::ORIGIN, false);
+        }
+        let mut book = std::mem::take(&mut a.source_players);
+        assert_eq!(book.trample_test_snapshot().1, 0);
+        assert_eq!(book.snow_test_snapshot().1, 0);
+        let mut c = TickContext::for_tick(&mut a, TickBudget::full());
+        for (index, session) in sessions.iter().enumerate() {
+            c.actors[c.player_slots[session]].motion =
+                ctx_trample_motion([column(index) as f32 + 1.9, 64., 15.9], true);
+        }
+        // The reducer visits Active players in ascending session order.
+        for session in &sessions {
+            capture_trample(&mut book, &c, *session).unwrap();
+            capture_snow(&mut book, &c, *session).unwrap();
+        }
+        let mut want_trample = Vec::new();
+        let mut want_snow = Vec::new();
+        for index in 0..players {
+            let x = column(index) + 1;
+            for cx in [x, x + 1] {
+                for cz in [15, 16] {
+                    want_trample.push(FootprintCell {
+                        dimension: Dimension::DEPTHS,
+                        pos: BlockPos::new(cx, 63, cz),
+                    });
+                }
+            }
+            want_snow.push(FootprintCell {
+                dimension: Dimension::DEPTHS,
+                pos: BlockPos::new(x, 64, 15),
+            });
+        }
+        let (trample, trample_len) = book.trample_test_snapshot();
+        assert_eq!(trample_len, SOURCE_TRAMPLE_CAPACITY);
+        assert_eq!(trample.as_slice(), want_trample.as_slice());
+        let (snow, snow_len) = book.snow_test_snapshot();
+        assert_eq!(snow_len, SOURCE_SNOW_CAPACITY);
+        assert_eq!(snow.as_slice(), want_snow.as_slice());
+        c.ready.clear();
+        c.blocks = Default::default();
+        let r = settle_tramples(&mut book, &mut c).unwrap();
+        assert_eq!(
+            (r.examined, r.applied, r.carried, r.rejected),
+            (SOURCE_TRAMPLE_CAPACITY, 0, 0, 0)
+        );
+        let r = settle_snow(&mut book, &mut c).unwrap();
+        assert_eq!(
+            (r.examined, r.applied, r.carried, r.rejected),
+            (SOURCE_SNOW_CAPACITY, 0, 0, 0)
+        );
+        assert_eq!(book.trample_test_snapshot().1, 0);
+        assert_eq!(book.snow_test_snapshot().1, 0);
+    }
+    /// The fixed source book refuses a registration beyond its structural
+    /// capacity with the typed player-plane error, even if the occupancy
+    /// counter drifted, and leaves the prepared session untouched.
+    #[test]
+    fn source_book_registration_overflow_is_typed_capacity() {
+        let mut a = fresh();
+        a.enable_source_player_restoration(1).unwrap();
+        for tag in 1..=MAX_PLAYERS {
+            register(&mut a, tag, None);
+        }
+        assert_eq!(a.source_players.entries.len(), usize::from(MAX_PLAYERS));
+        // A drifted occupancy counter lets one more login through prepare.
+        a.occupied -= 1;
+        let s = a
+            .prepare(login(MAX_PLAYERS + 1), TransportKind::Memory)
+            .unwrap();
+        a.install(s, None).unwrap();
+        assert_eq!(
+            a.activate(s),
+            Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: usize::from(MAX_PLAYERS),
+                observed: usize::from(MAX_PLAYERS) + 1,
+            })
+        );
+        assert_eq!(a.sessions[&s].phase, SessionPhase::Prepared);
+        assert_eq!(a.source_players.entries.len(), usize::from(MAX_PLAYERS));
+        assert!(!a.residents.player_slots.contains_key(&s));
+        assert!(a.tick_failure.is_none());
+    }
     #[test]
     fn source_book_is_live_bounded_and_retirement_preserves_durable_history() {
         let mut a = fresh();
@@ -16767,8 +16899,10 @@ mod source_player_restore_tests {
         let before = ctx_death_snapshot(&c);
         assert_eq!(
             super::super::source_player_restore::capture_snow(&mut book, &c, s),
-            Err(ServerError::Internal {
-                invariant: "source player snow capacity"
+            Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: crate::rules::crops::SOURCE_SNOW_CAPACITY,
+                observed: crate::rules::crops::SOURCE_SNOW_CAPACITY + 1,
             })
         );
         assert_eq!(book.snow_test_snapshot(), prefix);

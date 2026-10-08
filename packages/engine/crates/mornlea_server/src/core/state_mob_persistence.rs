@@ -210,7 +210,7 @@ impl AuthorityState {
                 }
             }
         }
-        if players > 8 || companions > 4 || hostiles > 64 || passives > 32 {
+        if players > usize::from(MAX_PLAYERS) || companions > 4 || hostiles > 64 || passives > 32 {
             return Err(OWNERSHIP);
         }
         Ok(())

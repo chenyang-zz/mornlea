@@ -249,13 +249,31 @@ pub(crate) fn safe_location(
     Ok(space.ready && space.free && contact.complete)
 }
 
+/// Support columns one player box can cover per horizontal axis: the half
+/// width is below one block, so a box straddles at most two columns.
+const TRAMPLE_COLUMNS_PER_AXIS: i64 = 2;
+/// Upper bound of support-layer cells one landing player can trample.
+pub(crate) const TRAMPLE_CELLS_PER_PLAYER: usize =
+    (TRAMPLE_COLUMNS_PER_AXIS * TRAMPLE_COLUMNS_PER_AXIS) as usize;
+const _: () = assert!(HALF_WIDTH < 1.0);
+
 /// Copies source-f32 support-layer coverage without world reads or retained allocation.
 /// Checked endpoints refuse before narrowing, including collapsed spans at the integer limits.
-pub(crate) fn trample_cells(position: [f32; 3]) -> Result<([BlockPos; 4], usize), ServerError> {
+pub(crate) fn trample_cells(
+    position: [f32; 3],
+) -> Result<([BlockPos; TRAMPLE_CELLS_PER_PLAYER], usize), ServerError> {
     let y = checked_floor(position[1] - GROUND_PROBE)?;
-    let x = span(position[0] - HALF_WIDTH, position[0] + HALF_WIDTH, 2)?;
-    let z = span(position[2] - HALF_WIDTH, position[2] + HALF_WIDTH, 2)?;
-    let mut cells = [BlockPos::ORIGIN; 4];
+    let x = span(
+        position[0] - HALF_WIDTH,
+        position[0] + HALF_WIDTH,
+        TRAMPLE_COLUMNS_PER_AXIS,
+    )?;
+    let z = span(
+        position[2] - HALF_WIDTH,
+        position[2] + HALF_WIDTH,
+        TRAMPLE_COLUMNS_PER_AXIS,
+    )?;
+    let mut cells = [BlockPos::ORIGIN; TRAMPLE_CELLS_PER_PLAYER];
     let mut len = 0;
     for x in x.lower..=x.upper {
         for z in z.lower..=z.upper {

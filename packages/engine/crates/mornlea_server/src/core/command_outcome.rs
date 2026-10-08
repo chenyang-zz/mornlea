@@ -1,6 +1,6 @@
 //! Checked command ownership and bounded, source-ordered refusal publication.
 //! Providers own semantic reasons; hard failures never become wire refusals.
-use super::contracts::{PhaseReport, Resource, ServerError, SessionKey};
+use super::contracts::{MAX_PLAYERS, PhaseReport, Resource, ServerError, SessionKey};
 use super::state::TickContext;
 use mornlea_domain::{
     CommandEnvelope, CommandRejection, Event, EventRecipient, RejectReason, RoutedEvent,
@@ -29,7 +29,8 @@ pub enum RejectionStage {
 }
 
 const COMMAND_CEILING: usize = 4096;
-const PLAYER_CEILING: u8 = 8;
+/// The rejection log holds one held-input owner per online player.
+const PLAYER_CEILING: u8 = MAX_PLAYERS;
 
 struct OwnerRejection {
     session: SessionKey,

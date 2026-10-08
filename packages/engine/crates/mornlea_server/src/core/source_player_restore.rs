@@ -1,11 +1,12 @@
 //! Source login registration, exclusive scans, keyed Safe, retained trample/Snow capture and late action scalars.
-use super::actor_placement::RestoreCandidate;
+use super::actor_placement::{RestoreCandidate, TRAMPLE_CELLS_PER_PLAYER};
 use super::contracts::{
-    ActorAux, ActorKey, ActorLifecycle, ActorRuntime, RuleEffect, ServerError, SessionKey,
+    ActorAux, ActorKey, ActorLifecycle, ActorRuntime, Resource, RuleEffect, ServerError, SessionKey,
 };
 use super::login_seed::{SeededPlayer, seed_player};
 use super::pending_restore::{PendingRestore, RestoreKind};
 use super::state::{AuthorityReadView, TickContext};
+use crate::rules::crops::{SOURCE_SNOW_CAPACITY, SOURCE_TRAMPLE_CAPACITY};
 use mornlea_domain::{BlockPos, ChunkPos, Dimension, FiniteVec3, MotionState, MotionStateParts};
 use mornlea_storage::PlayerSave;
 use std::collections::BTreeMap;
@@ -18,9 +19,9 @@ pub(crate) struct SourcePlayerBook {
     snow_pending: SourceSnowBatch,
 }
 /// Fixed copied coordinates survive actor reset and abandoned context loans.
-/// Eight live source players contribute at most four cells each; inactive tail stays retained.
+/// Each live source player contributes at most one landing; inactive tail stays retained.
 struct SourceTrampleBatch {
-    cells: [crate::rules::crops::FootprintCell; 32],
+    cells: [crate::rules::crops::FootprintCell; SOURCE_TRAMPLE_CAPACITY],
     len: usize,
 }
 impl Default for SourceTrampleBatch {
@@ -29,25 +30,30 @@ impl Default for SourceTrampleBatch {
             cells: [crate::rules::crops::FootprintCell {
                 dimension: Dimension::OVERWORLD,
                 pos: BlockPos::ORIGIN,
-            }; 32],
+            }; SOURCE_TRAMPLE_CAPACITY],
             len: 0,
         }
     }
 }
 impl SourceTrampleBatch {
     fn append(&mut self, dimension: Dimension, positions: &[BlockPos]) -> Result<(), ServerError> {
-        if positions.len() > 4 {
+        // One landing covering more than the box footprint is a geometry fault.
+        if positions.len() > TRAMPLE_CELLS_PER_PLAYER {
             return Err(ServerError::Internal {
                 invariant: "source player trample cells",
             });
         }
-        let len = self
-            .len
-            .checked_add(positions.len())
-            .filter(|len| *len <= 32)
-            .ok_or(ServerError::Internal {
-                invariant: "source player trample capacity",
-            })?;
+        // Overflow means more landing players than the player plane admits;
+        // refuse with the typed capacity error and keep the prefix intact.
+        let observed = self.len.saturating_add(positions.len());
+        if observed > SOURCE_TRAMPLE_CAPACITY {
+            return Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: SOURCE_TRAMPLE_CAPACITY,
+                observed,
+            });
+        }
+        let len = observed;
         for (cell, pos) in self.cells[self.len..len].iter_mut().zip(positions) {
             *cell = crate::rules::crops::FootprintCell {
                 dimension,
@@ -62,7 +68,10 @@ impl SourcePlayerBook {
     #[cfg(test)]
     pub(crate) fn trample_test_snapshot(
         &self,
-    ) -> ([crate::rules::crops::FootprintCell; 32], usize) {
+    ) -> (
+        [crate::rules::crops::FootprintCell; SOURCE_TRAMPLE_CAPACITY],
+        usize,
+    ) {
         (self.tramples.cells, self.tramples.len)
     }
 }
@@ -109,7 +118,7 @@ impl SourceSnowTracker {
 }
 /// Copied candidates retain original coordinates through reset and abandoned loans.
 struct SourceSnowBatch {
-    cells: [crate::rules::crops::FootprintCell; 8],
+    cells: [crate::rules::crops::FootprintCell; SOURCE_SNOW_CAPACITY],
     len: usize,
 }
 impl Default for SourceSnowBatch {
@@ -118,16 +127,19 @@ impl Default for SourceSnowBatch {
             cells: [crate::rules::crops::FootprintCell {
                 dimension: Dimension::OVERWORLD,
                 pos: BlockPos::ORIGIN,
-            }; 8],
+            }; SOURCE_SNOW_CAPACITY],
             len: 0,
         }
     }
 }
 impl SourceSnowBatch {
     fn append(&mut self, dimension: Dimension, pos: BlockPos) -> Result<(), ServerError> {
-        if self.len >= 8 {
-            return Err(ServerError::Internal {
-                invariant: "source player snow capacity",
+        // One candidate per live player per tick; overflow is a typed refusal.
+        if self.len >= SOURCE_SNOW_CAPACITY {
+            return Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: SOURCE_SNOW_CAPACITY,
+                observed: self.len + 1,
             });
         }
         self.cells[self.len] = crate::rules::crops::FootprintCell { dimension, pos };
@@ -137,7 +149,12 @@ impl SourceSnowBatch {
 }
 impl SourcePlayerBook {
     #[cfg(test)]
-    pub(crate) fn snow_test_snapshot(&self) -> ([crate::rules::crops::FootprintCell; 8], usize) {
+    pub(crate) fn snow_test_snapshot(
+        &self,
+    ) -> (
+        [crate::rules::crops::FootprintCell; SOURCE_SNOW_CAPACITY],
+        usize,
+    ) {
         (self.snow_pending.cells, self.snow_pending.len)
     }
     #[cfg(test)]
@@ -189,9 +206,11 @@ pub(crate) fn settle_snow(
     book: &mut SourcePlayerBook,
     context: &mut TickContext<'_>,
 ) -> Result<crate::core::contracts::PhaseReport, ServerError> {
-    if book.snow_pending.len > 8 {
-        return Err(ServerError::Internal {
-            invariant: "source player snow capacity",
+    if book.snow_pending.len > SOURCE_SNOW_CAPACITY {
+        return Err(ServerError::Capacity {
+            resource: Resource::Players,
+            limit: SOURCE_SNOW_CAPACITY,
+            observed: book.snow_pending.len,
         });
     }
     let report = crate::rules::crops::settle_captured_source_snow(
@@ -457,9 +476,11 @@ pub(crate) fn settle_tramples(
     book: &mut SourcePlayerBook,
     context: &mut TickContext<'_>,
 ) -> Result<crate::core::contracts::PhaseReport, ServerError> {
-    if book.tramples.len > 32 {
-        return Err(ServerError::Internal {
-            invariant: "source player trample capacity",
+    if book.tramples.len > SOURCE_TRAMPLE_CAPACITY {
+        return Err(ServerError::Capacity {
+            resource: Resource::Players,
+            limit: SOURCE_TRAMPLE_CAPACITY,
+            observed: book.tramples.len,
         });
     }
     let report = crate::rules::crops::settle_captured_tramples(
@@ -498,6 +519,7 @@ pub(crate) fn settle_action_costs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::contracts::MAX_PLAYERS;
     #[test]
     fn bed_rounding_checks_half_away_edges_and_drops_invalid_records() {
         for (input, expected) in [
@@ -585,24 +607,41 @@ mod tests {
         assert_eq!(batch.cells[8..], SourceTrampleBatch::default().cells[8..]);
         assert!(
             std::mem::size_of::<SourceTrampleBatch>()
-                <= 32 * std::mem::size_of::<crate::rules::crops::FootprintCell>()
+                <= SOURCE_TRAMPLE_CAPACITY
+                    * std::mem::size_of::<crate::rules::crops::FootprintCell>()
                     + std::mem::size_of::<usize>()
         );
     }
     #[test]
     fn trample_batch_capacity_is_atomic() {
         let mut batch = SourceTrampleBatch::default();
-        for i in 0..8 {
+        for i in 0..i32::from(MAX_PLAYERS) {
             batch
-                .append(Dimension::DEPTHS, &[BlockPos::new(i, 3, 4); 4])
+                .append(
+                    Dimension::DEPTHS,
+                    &[BlockPos::new(i, 3, 4); TRAMPLE_CELLS_PER_PLAYER],
+                )
                 .unwrap();
         }
-        assert_eq!(batch.len, 32);
+        assert_eq!(batch.len, SOURCE_TRAMPLE_CAPACITY);
+        assert_eq!(SOURCE_TRAMPLE_CAPACITY, 32);
         let before = (batch.cells, batch.len);
+        // Overflow is a typed player-plane capacity refusal, never an internal fault.
         assert_eq!(
             batch.append(Dimension::OVERWORLD, &[BlockPos::ORIGIN]),
-            Err(ServerError::Internal {
-                invariant: "source player trample capacity"
+            Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: SOURCE_TRAMPLE_CAPACITY,
+                observed: SOURCE_TRAMPLE_CAPACITY + 1,
+            })
+        );
+        assert_eq!((batch.cells, batch.len), before);
+        assert_eq!(
+            batch.append(Dimension::OVERWORLD, &[BlockPos::ORIGIN; 3]),
+            Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: SOURCE_TRAMPLE_CAPACITY,
+                observed: SOURCE_TRAMPLE_CAPACITY + 3,
             })
         );
         assert_eq!((batch.cells, batch.len), before);
@@ -686,14 +725,17 @@ mod tests {
         assert_eq!(batch.cells.as_slice(), cells.as_slice());
         assert!(
             std::mem::size_of::<SourceSnowBatch>()
-                <= 8 * std::mem::size_of::<crate::rules::crops::FootprintCell>()
+                <= SOURCE_SNOW_CAPACITY * std::mem::size_of::<crate::rules::crops::FootprintCell>()
                     + std::mem::size_of::<usize>()
         );
         let before = (batch.cells, batch.len);
+        assert_eq!(SOURCE_SNOW_CAPACITY, usize::from(MAX_PLAYERS));
         assert_eq!(
             batch.append(Dimension::OVERWORLD, BlockPos::ORIGIN),
-            Err(ServerError::Internal {
-                invariant: "source player snow capacity"
+            Err(ServerError::Capacity {
+                resource: Resource::Players,
+                limit: SOURCE_SNOW_CAPACITY,
+                observed: SOURCE_SNOW_CAPACITY + 1,
             })
         );
         assert_eq!((batch.cells, batch.len), before);

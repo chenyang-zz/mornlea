@@ -21,7 +21,10 @@ use mornlea_storage::{
     StoredCompanions, StoredPlayer,
 };
 
-const MAX_PLAYERS: u8 = 8;
+/// Structural ceiling on concurrently online players. Every fixed-capacity
+/// per-tick buffer that holds one slot per online player derives from this
+/// value, so raising it resizes those buffers instead of silently truncating.
+pub(crate) const MAX_PLAYERS: u8 = 8;
 const MAX_QUEUED_COMMANDS: usize = 4096;
 const MAX_SESSION_OUTBOX: usize = 512;
 const MAX_READY_CHUNK_RESULTS: usize = 64;
@@ -46,7 +49,10 @@ const DEFAULT_SAVE_CHUNKS: usize = 8;
 const DEFAULT_SAVE_BYTES: usize = 4_194_304;
 const MAX_DROP_STACKS: usize = 36;
 const MAX_PROJECTILES: usize = 128;
-const MAX_SLEEP_BEDS: usize = 8;
+/// Night skip requires every online player asleep, so the sleep roster must
+/// hold one bed per concurrently online player.
+const MAX_SLEEP_BEDS: usize = MAX_PLAYERS as usize;
+const _: () = assert!(MAX_SLEEP_BEDS >= MAX_PLAYERS as usize);
 const MAX_DROP_LIFETIME: u32 = 120_000;
 const MAX_RANDOM_ATTEMPTS: u8 = 64;
 const MAX_CROP_GROWTH_PERCENT: u8 = 100;
