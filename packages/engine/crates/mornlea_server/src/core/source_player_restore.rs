@@ -43,12 +43,12 @@ impl SourceTrampleBatch {
                 invariant: "source player trample cells",
             });
         }
-        // Overflow means more landing players than the player plane admits;
-        // refuse with the typed capacity error and keep the prefix intact.
+        // Overflow counts cells beyond the fixed trample batch; refuse with the
+        // typed cell-count capacity error and keep the prefix intact.
         let observed = self.len.saturating_add(positions.len());
         if observed > SOURCE_TRAMPLE_CAPACITY {
             return Err(ServerError::Capacity {
-                resource: Resource::Players,
+                resource: Resource::TrampleCells,
                 limit: SOURCE_TRAMPLE_CAPACITY,
                 observed,
             });
@@ -201,6 +201,15 @@ pub(crate) fn capture_snow(
     entry.snow = next;
     Ok(())
 }
+#[cfg(test)]
+thread_local! {
+    /// Trample then Snow cells handed to settlement by the latest tick, so
+    /// tick-driven tests can check the settled order after the batches drain.
+    pub(crate) static SETTLED_FOOTPRINTS: std::cell::RefCell<(
+        Vec<crate::rules::crops::FootprintCell>,
+        Vec<crate::rules::crops::FootprintCell>,
+    )> = const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+}
 /// Successful fresh-cell settlement drains only the active candidate prefix.
 pub(crate) fn settle_snow(
     book: &mut SourcePlayerBook,
@@ -213,6 +222,10 @@ pub(crate) fn settle_snow(
             observed: book.snow_pending.len,
         });
     }
+    #[cfg(test)]
+    SETTLED_FOOTPRINTS.with(|seen| {
+        seen.borrow_mut().1 = book.snow_pending.cells[..book.snow_pending.len].to_vec()
+    });
     let report = crate::rules::crops::settle_captured_source_snow(
         &book.snow_pending.cells[..book.snow_pending.len],
         context,
@@ -478,11 +491,14 @@ pub(crate) fn settle_tramples(
 ) -> Result<crate::core::contracts::PhaseReport, ServerError> {
     if book.tramples.len > SOURCE_TRAMPLE_CAPACITY {
         return Err(ServerError::Capacity {
-            resource: Resource::Players,
+            resource: Resource::TrampleCells,
             limit: SOURCE_TRAMPLE_CAPACITY,
             observed: book.tramples.len,
         });
     }
+    #[cfg(test)]
+    SETTLED_FOOTPRINTS
+        .with(|seen| seen.borrow_mut().0 = book.tramples.cells[..book.tramples.len].to_vec());
     let report = crate::rules::crops::settle_captured_tramples(
         &book.tramples.cells[..book.tramples.len],
         context,
@@ -626,11 +642,11 @@ mod tests {
         assert_eq!(batch.len, SOURCE_TRAMPLE_CAPACITY);
         assert_eq!(SOURCE_TRAMPLE_CAPACITY, 32);
         let before = (batch.cells, batch.len);
-        // Overflow is a typed player-plane capacity refusal, never an internal fault.
+        // Overflow is a typed cell-count capacity refusal, never an internal fault.
         assert_eq!(
             batch.append(Dimension::OVERWORLD, &[BlockPos::ORIGIN]),
             Err(ServerError::Capacity {
-                resource: Resource::Players,
+                resource: Resource::TrampleCells,
                 limit: SOURCE_TRAMPLE_CAPACITY,
                 observed: SOURCE_TRAMPLE_CAPACITY + 1,
             })
@@ -639,7 +655,7 @@ mod tests {
         assert_eq!(
             batch.append(Dimension::OVERWORLD, &[BlockPos::ORIGIN; 3]),
             Err(ServerError::Capacity {
-                resource: Resource::Players,
+                resource: Resource::TrampleCells,
                 limit: SOURCE_TRAMPLE_CAPACITY,
                 observed: SOURCE_TRAMPLE_CAPACITY + 3,
             })

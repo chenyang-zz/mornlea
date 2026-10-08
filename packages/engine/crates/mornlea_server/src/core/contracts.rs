@@ -226,6 +226,10 @@ pub enum Resource {
     AgentRuns,
     Snapshots,
     RuleEffects,
+    /// Support-layer cells captured for one tick's trample settlement. The
+    /// limit and observed values count cells, not players. Server-internal:
+    /// no protocol code or cross-language mapping carries this variant.
+    TrampleCells,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

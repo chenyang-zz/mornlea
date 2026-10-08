@@ -25,8 +25,10 @@ shared checked `publication_project::wanted_square`; store admission comes
 from the scheduler's `source_chunk_slots` query. Only Active source sessions
 and registered Active or Pending actors produce automatic goals; dead,
 respawning and absent actors contribute nothing. Completed companion scans
-retain their Active actor's radius-one interest. An exceeded registration
-bound is a typed invariant failure rather than a silent truncation. The goal
+retain their Active actor's radius-one interest. An exceeded player
+registration bound refuses with typed `Capacity { Players }`; an exceeded
+companion registration bound stays a typed invariant failure; neither
+silently truncates. The goal
 book reconciles changed wants after companion motion, takes per-record
 completion overrides at the Acquire row, and admits a bounded strict FIFO
 prefix through the existing independent load and generation lanes. Quiet
@@ -313,7 +315,9 @@ separate caller responsibilities.
   acceptance remains separately owned.
 
 - `src/core/source_player_restore.rs` owns explicit source-mode background-login
-  registration and at most eight live initial player scans. Missing saves retain
+  registration and at most `MAX_PLAYERS` live initial player scans. A full
+  book refuses registration with typed `Capacity { Players }`; a duplicate
+  registration stays an invariant failure. Missing saves retain
   only metadata fallback; loaded Current precedes supported Safe. Pending actors
   have an explicit runtime and source-rounded checked respawn coordinates. The
   central reducer gates ordinary commands before raw input ACK and deferred roles,
@@ -345,7 +349,9 @@ separate caller responsibilities.
   One inline travel/cell tracker per entry and an eight-cell copied Snow batch
   preserve source stride and dimensionless memory across ticks. Capture follows
   trample before Safe/death; accepted resets clear only the tracker. Capacity
-  preflight preserves both tracker and accepted prefix on refusal; settlement
+  preflight preserves both tracker and accepted prefix on refusal; trample
+  overflow reports `Capacity { TrampleCells }` in cells and Snow overflow
+  reports `Capacity { Players }`; settlement
   drains length only after fresh ordered Snow transactions succeed.
   Sorted ever-spawned registrations settle late action costs after Interaction
   and Mining through scalar-only indexed context borrows. Each accepted player

@@ -485,7 +485,7 @@ pub(crate) fn settle_captured_tramples(
     }
     if cells.len() > SOURCE_TRAMPLE_CAPACITY {
         return Err(ServerError::Capacity {
-            resource: Resource::Players,
+            resource: Resource::TrampleCells,
             limit: SOURCE_TRAMPLE_CAPACITY,
             observed: cells.len(),
         });
@@ -858,7 +858,7 @@ mod source_trample_tests {
         assert_eq!(
             settle_captured_tramples(&oversized, &mut c),
             Err(ServerError::Capacity {
-                resource: Resource::Players,
+                resource: Resource::TrampleCells,
                 limit: SOURCE_TRAMPLE_CAPACITY,
                 observed: SOURCE_TRAMPLE_CAPACITY + 1,
             })

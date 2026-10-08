@@ -1009,4 +1009,17 @@ mod login_capacity_tests {
         assert_eq!(begin_reject_code(&error), LOGIN_SERVER_FULL);
         assert_eq!(LOGIN_SERVER_FULL, 1);
     }
+
+    /// The cell-count trample capacity is raised only inside a tick and has
+    /// no protocol code; if it ever reached login it would answer the
+    /// existing internal-error code, never server-full.
+    #[test]
+    fn trample_cell_capacity_never_answers_server_full() {
+        let error = ServerError::Capacity {
+            resource: Resource::TrampleCells,
+            limit: 32,
+            observed: 33,
+        };
+        assert_eq!(begin_reject_code(&error), LOGIN_INTERNAL_ERROR);
+    }
 }

@@ -249,13 +249,15 @@ pub(crate) fn safe_location(
     Ok(space.ready && space.free && contact.complete)
 }
 
-/// Support columns one player box can cover per horizontal axis: the half
-/// width is below one block, so a box straddles at most two columns.
+/// Support columns one player box can cover per horizontal axis. The box is
+/// `2 * HALF_WIDTH` wide and half-open, so a width of at most one block
+/// straddles at most two columns; `span` still refuses a wider result at
+/// runtime.
 const TRAMPLE_COLUMNS_PER_AXIS: i64 = 2;
 /// Upper bound of support-layer cells one landing player can trample.
 pub(crate) const TRAMPLE_CELLS_PER_PLAYER: usize =
     (TRAMPLE_COLUMNS_PER_AXIS * TRAMPLE_COLUMNS_PER_AXIS) as usize;
-const _: () = assert!(HALF_WIDTH < 1.0);
+const _: () = assert!(HALF_WIDTH <= 0.5);
 
 /// Copies source-f32 support-layer coverage without world reads or retained allocation.
 /// Checked endpoints refuse before narrowing, including collapsed spans at the integer limits.

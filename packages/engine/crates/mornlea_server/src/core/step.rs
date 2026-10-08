@@ -31,8 +31,8 @@ use mornlea_domain::{
 use super::command_outcome::{CommandDisposition, RejectionStage};
 use super::contracts::{
     ActorKey, ActorLifecycle, AuthorityInteraction, ChunkKey, ContainerSlots, FinalReducer,
-    InteractionKind, PhaseReport, RuleCall, RulePhase, ServerError, ServerPhase, SessionKey,
-    SessionPhase, TickBudget, TickCounters, TickPublication,
+    InteractionKind, MAX_PLAYERS, PhaseReport, Resource, RuleCall, RulePhase, ServerError,
+    ServerPhase, SessionKey, SessionPhase, TickBudget, TickCounters, TickPublication,
 };
 use super::source_acquisition::SourceGoals;
 use super::source_companion_restore::{self, SourceCompanionBook};
@@ -56,8 +56,8 @@ const ACTIVE_KEY_RADIUS: i32 = 2;
 /// while publication uses each session's declared view distance clamped to
 /// the server view bound.
 const PROJECTILE_SCOPE_RADIUS: u64 = 2;
-/// Scope ceiling mirroring the eight-player structural bound.
-const MAX_SCOPES: usize = 8;
+/// One flight scope per online player.
+const MAX_SCOPES: usize = MAX_PLAYERS as usize;
 
 /// Six face neighbors in kernel slot order, mirroring the source fluid
 /// neighbor table (`fluidNeighbors` in `packages/server/fluid/queue.go`).
@@ -617,7 +617,7 @@ fn dispatch_rows(
     hostile_actors::run(context, batch_call(RulePhase::HostileMotion))?;
     let combat = hostile_outcomes::advance(context, &melee)?;
     hostile_actors::run(context, batch_call(RulePhase::HostileBurnDistant))?;
-    let scopes = projectile_scopes(context);
+    let scopes = projectile_scopes(context)?;
     let flight = projectiles::advance(context, &scopes)?;
     hostile_outcomes::run(context, batch_call(RulePhase::HostilePlayerDeaths))?;
     // The sole source book consumer settles after all damage and defers scan advancement.
@@ -1109,10 +1109,21 @@ fn active_keys(context: &TickContext<'_>) -> Vec<ChunkKey> {
 }
 
 /// One Ready flight square per active player sharing the active-set radius.
-/// Truncated at the scope ceiling the eight-player bound never reaches.
-fn projectile_scopes(context: &TickContext<'_>) -> Vec<projectiles::ProjectileScope> {
-    let mut scopes = Vec::new();
-    for session in active_players(context) {
+/// More online players than the player limit refuse the tick with a typed
+/// capacity error instead of silently dropping scopes.
+fn projectile_scopes(
+    context: &TickContext<'_>,
+) -> Result<Vec<projectiles::ProjectileScope>, ServerError> {
+    let players = active_players(context);
+    if players.len() > MAX_SCOPES {
+        return Err(ServerError::Capacity {
+            resource: Resource::Players,
+            limit: MAX_SCOPES,
+            observed: players.len(),
+        });
+    }
+    let mut scopes = Vec::with_capacity(players.len());
+    for session in players {
         let Some(actor) = context.read().actor(ActorKey::Player(session)) else {
             continue;
         };
@@ -1126,8 +1137,7 @@ fn projectile_scopes(context: &TickContext<'_>) -> Vec<projectiles::ProjectileSc
             radius: PROJECTILE_SCOPE_RADIUS,
         });
     }
-    scopes.truncate(MAX_SCOPES);
-    scopes
+    Ok(scopes)
 }
 
 /// Container references under the active keys whose staged record is a
@@ -1167,7 +1177,7 @@ fn dimension_counters(
 
 #[cfg(test)]
 mod routing_tests {
-    use super::super::contracts::{Resource, ServerLimits};
+    use super::super::contracts::ServerLimits;
     use super::*;
     use mornlea_domain::{Command, CommandEnvelopeParts};
     use std::cell::RefCell;
@@ -1240,6 +1250,69 @@ mod routing_tests {
         })
         .unwrap();
         (a, envelope)
+    }
+    fn online(players: u8) -> AuthorityState {
+        let mut a = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            42,
+        )
+        .unwrap();
+        let mut residents = super::super::state::ResidentTickState::default();
+        for tag in 1..=players {
+            let mut bytes = [0; 16];
+            bytes[0] = tag;
+            bytes[6] = 0x40;
+            bytes[8] = 0x80;
+            let save = mornlea_storage::PlayerSave {
+                player_id: mornlea_storage::PlayerId::from_bytes(bytes),
+                revision: 1,
+                display_name: "Ada".to_owned(),
+                current: mornlea_storage::PlayerLocation {
+                    dimension: 0,
+                    position: [8.5, 65.0, 8.5],
+                },
+                yaw: 0.0,
+                pitch: 0.0,
+                safe: None,
+                inventory: mornlea_storage::Inventory::default(),
+                health: 20,
+                hunger: 20,
+                saturation_milli: 5_000,
+                exhaustion_milli: 0,
+                respawn_present: false,
+                respawn_position: [0.0; 3],
+                respawn_dimension: 0,
+                armor: [mornlea_storage::ItemStack::default(); 4],
+            };
+            let session = SessionKey::from_raw(u64::from(tag)).unwrap();
+            let seeded = super::super::login_seed::seed_player(session, &save).unwrap();
+            assert_eq!(seeded.actor.lifecycle, ActorLifecycle::Active);
+            residents.actors.push(seeded.actor);
+        }
+        a.commit_residents(residents);
+        a
+    }
+    #[test]
+    fn projectile_scopes_cover_every_online_player_up_to_the_limit() {
+        let mut a = online(MAX_PLAYERS);
+        let context = TickContext::for_tick(&mut a, TickBudget::full());
+        assert_eq!(
+            projectile_scopes(&context).unwrap().len(),
+            usize::from(MAX_PLAYERS)
+        );
+    }
+    #[test]
+    fn projectile_scopes_refuse_players_beyond_the_limit_instead_of_truncating() {
+        let mut a = online(MAX_PLAYERS + 1);
+        let context = TickContext::for_tick(&mut a, TickBudget::full());
+        assert_eq!(
+            projectile_scopes(&context).unwrap_err(),
+            ServerError::Capacity {
+                resource: Resource::Players,
+                limit: usize::from(MAX_PLAYERS),
+                observed: usize::from(MAX_PLAYERS) + 1,
+            }
+        );
     }
     #[test]
     fn invalid_input_reaches_next_gate_and_unowned_admission_defers() {
