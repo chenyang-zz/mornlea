@@ -213,7 +213,7 @@ fn all_ports_type_flow() {
     endpoint.submit(session, sequenced(5)).unwrap();
     let frozen = endpoint.authority.freeze_eligible(0);
     assert_eq!(frozen.len(), 1);
-    endpoint.authority.carry(frozen).unwrap();
+    MailboxPort::carry(&mut endpoint.authority, frozen).unwrap();
 
     let chunk = chunk_result(1);
     assert!(endpoint.authority.admit_chunk(chunk).is_ok());

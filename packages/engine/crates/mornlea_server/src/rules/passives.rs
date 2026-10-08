@@ -72,6 +72,7 @@ use crate::core::contracts::{
     ServerError, SessionKey, SystemRule,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
+use crate::rules::environment::year_phase_at;
 
 // -- Frozen numeric contract (`passive.go`, `passive_spawn.go`,
 // `passive_tempt.go`, `passive_graze.go`, `packages/server/updates/sampler.go`).
@@ -1017,7 +1018,7 @@ fn plan_spawn(
     if !phase_is_day(effective_day_phase_at(
         now,
         environment.day_phase_offset,
-        u64::from(environment.season_offset),
+        environment.season_offset,
     )) {
         return SpawnPlan::Silent;
     }
@@ -2190,15 +2191,6 @@ fn display_day_phase(world_time: u64, offset: u16) -> u16 {
     ((world_time % 24000 + u64::from(offset)) % 24000) as u16
 }
 
-/// Year phase of the absolute clock under the season offset
-/// (`YearPhaseAt`, `packages/shared/core/season.go`): both operands fold
-/// modulo the year before the sum, so no uint64 edge overflows.
-fn year_phase_at(world_time: u64, season_offset: u64) -> f64 {
-    const YEAR_TICKS: f64 = 288_000.0;
-    let index = (world_time % 288_000 + season_offset % 288_000) % 288_000;
-    index as f64 / YEAR_TICKS
-}
-
 /// Day-arc ratio of a year phase (`DayFractionAt`): 0.5 + 0.15*sin(2pi*p).
 fn day_fraction_at(year_phase: f64) -> f64 {
     0.5 + 0.15 * (2.0 * std::f64::consts::PI * year_phase).sin()
@@ -2232,7 +2224,7 @@ fn effective_day_phase(world_time: u64, offset: u16, day_arc: u16) -> u16 {
 /// The only day-phase path (`EffectiveDayPhaseAt`): season offset to year
 /// phase to day arc to the warped phase. Consumers must not assemble their own
 /// warp.
-fn effective_day_phase_at(world_time: u64, offset: u16, season_offset: u64) -> u16 {
+fn effective_day_phase_at(world_time: u64, offset: u16, season_offset: u32) -> u16 {
     effective_day_phase(
         world_time,
         offset,
