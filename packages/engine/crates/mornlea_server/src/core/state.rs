@@ -2006,21 +2006,25 @@ impl AuthorityState {
         key: ChunkKey,
     ) -> Option<mornlea_domain::ChunkSnapshot> {
         self.chunk_snapshot_publication(key)
+            .ok()
+            .flatten()
             .map(|(snapshot, _)| snapshot)
     }
 
-    /// Retains the exact section-only charge for bounded source selection.
-    /// Capture failure keeps the existing unavailable publication policy.
+    /// Keeps unavailable terrain distinct from a checked network refusal.
+    /// The source selector owns recipient-local closure after a malformed Ready capture.
     pub(crate) fn chunk_snapshot_publication(
         &self,
         key: ChunkKey,
-    ) -> Option<(mornlea_domain::ChunkSnapshot, usize)> {
-        let chunk = self.residents.ready.get(&key)?;
+    ) -> Result<Option<(mornlea_domain::ChunkSnapshot, usize)>, ServerError> {
+        let Some(chunk) = self.residents.ready.get(&key) else {
+            return Ok(None);
+        };
         let view = chunk.capture(
             self.residents.drops.get(&key),
             self.residents.container_chunks.get(&key),
         );
-        view.network_snapshot().ok()
+        view.network_snapshot().map(Some)
     }
 
     pub fn freeze_eligible(&mut self, tick: u64) -> Vec<CommandEnvelope> {
@@ -2339,7 +2343,7 @@ impl AuthorityState {
         before: usize,
         refusals: Vec<SessionKey>,
     ) -> Result<TickPublication, ServerError> {
-        let (publication, snapshots) = batch.into_parts();
+        let (publication, snapshots, mut markers) = batch.into_parts();
         let mut snapshots = snapshots.into_iter().peekable();
         if before > publication.events.len()
             || refusals.len() > 8
@@ -2349,21 +2353,35 @@ impl AuthorityState {
                 field: "source_publication",
             });
         }
-        for session in &refusals {
+        markers.extend(refusals.into_iter().map(|session| (before, session)));
+        let mut owners = BTreeSet::new();
+        if markers.len() > 8
+            || markers.iter().any(|(position, session)| {
+                *position > publication.events.len() || !owners.insert(*session)
+            })
+        {
+            return Err(ServerError::InvalidInput {
+                field: "source_publication",
+            });
+        }
+        for (_, session) in &markers {
             if !self.sessions.contains_key(session) {
                 return Err(ServerError::StaleSession { session: *session });
             }
         }
+        // Stable positions merge the legacy early boundary with later source failures.
+        markers.sort_by_key(|(position, _)| *position);
+        let mut markers = markers.into_iter().peekable();
         let mut codec =
             ProtocolCodec::new().map_err(|_| ServerError::InvalidInput { field: "packet" })?;
         let mut pending = Vec::new();
         for (index, event) in publication.events.iter().enumerate() {
-            if index == before {
-                pending.extend(
-                    refusals
-                        .iter()
-                        .map(|session| PendingFrame::Refuse { session: *session }),
-                );
+            while markers
+                .peek()
+                .is_some_and(|(position, _)| *position == index)
+            {
+                let (_, session) = markers.next().expect("matched source refusal");
+                pending.push(PendingFrame::Refuse { session });
             }
             let frame = if snapshots
                 .peek()
@@ -2394,13 +2412,8 @@ impl AuthorityState {
                 EventRecipient::Broadcast => pending.push(PendingFrame::Broadcast { frame }),
             }
         }
-        if before == publication.events.len() {
-            pending.extend(
-                refusals
-                    .into_iter()
-                    .map(|session| PendingFrame::Refuse { session }),
-            );
-        }
+        // The terminal position precedes controls and preserves all queued event prefixes.
+        pending.extend(markers.map(|(_, session)| PendingFrame::Refuse { session }));
         for reply in &publication.control {
             if !self.sessions.contains_key(&reply.session) {
                 return Err(ServerError::StaleSession {
@@ -19453,10 +19466,17 @@ mod owner_record_admission_tests {
         mut prefix: Vec<RoutedEvent>,
     ) {
         let projection = state.project_source_publication(0, outcome).unwrap();
-        let before = prefix.len() + projection.before_snapshots;
+        let provider_prefix = prefix.len();
+        let before = provider_prefix + projection.before_snapshots;
         prefix.extend(projection.events);
+        let mut batch = PreparedSourcePublication::new(publication(prefix));
+        for (position, session) in projection.ordered_refusals {
+            batch
+                .refuse_at(provider_prefix + position, session)
+                .unwrap();
+        }
         state
-            .publish_source(publication(prefix), before, projection.refused_sessions)
+            .publish_prepared_source(batch, before, projection.refused_sessions)
             .unwrap();
     }
 
@@ -23936,4 +23956,6 @@ mod owner_record_admission_tests {
                 .is_empty()
         );
     }
+
+    include!("state_source_snapshot_refusal_tests.rs");
 }

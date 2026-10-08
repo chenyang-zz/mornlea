@@ -1460,3 +1460,16 @@ held-output bound does not change the eight-request actual CPU owner or certify
 Wanted, freshness, byte selection, FIFO admission or asynchronous runtime.
 Actual codec cohorts and original semantic/frame transfers qualify this
 constructor; integrated source selection retains a separate owner.
+
+
+Prepared source publication retains up to eight unique ordered recipient refusal
+markers. Complete preflight includes marker positions, recipient identity and
+all original event/control frames before mutation. A malformed Ready network
+snapshot stops only that recipient's selection and closes its FIFO after the
+preceding valid snapshot prefix; missing terrain remains pending without charge.
+Legacy delta refusals retain their earlier boundary, and already refused observers
+cannot create a second snapshot refusal. Broadcasts consume the live registry
+at append time. Unpublished final execution discards delivery-only markers.
+The included source snapshot refusal tests inherit existing prepared Ready/session
+fixtures and actual joined CPU helpers; they do not qualify malformed native
+production, asynchronous selection or executable composition.

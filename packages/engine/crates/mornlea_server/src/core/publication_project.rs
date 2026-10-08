@@ -29,6 +29,7 @@ use mornlea_domain::{
     RemotePlayerStatesParts, RoutedEvent,
 };
 
+use super::publication::SourceRefusals;
 use super::source_acquisition::SourceInputs;
 use crate::contracts::{
     ActorBody, ActorKey, ActorLifecycle, ActorRecord, ActorRuntime, ChunkKey, ContainerSlots,
@@ -79,6 +80,8 @@ pub(crate) struct SourceProjection {
     pub(crate) events: Vec<RoutedEvent>,
     pub(crate) refused_sessions: Vec<SessionKey>,
     pub(crate) before_snapshots: usize,
+    /// Recipient-local network failures retain their preceding snapshot events.
+    pub(crate) ordered_refusals: SourceRefusals,
 }
 
 /// The shared read-only world facts the per-family emitters consume.
@@ -193,6 +196,7 @@ impl AuthorityState {
                 events: Vec::new(),
                 refused_sessions: Vec::new(),
                 before_snapshots: 0,
+                ordered_refusals: Vec::new(),
             });
         }
         let actors = self.resident_actors().to_vec();
@@ -262,7 +266,13 @@ impl AuthorityState {
         let before_snapshots = events.len();
         let (deltas, refused_sessions) =
             classify_block_batches(&mut view_list, &observers, outcome);
-        let snapshots = emit_snapshots(&mut view_list, &observers, self, &mut events);
+        let (snapshots, ordered_refusals) = emit_snapshots(
+            &mut view_list,
+            &observers,
+            self,
+            &mut events,
+            &refused_sessions,
+        );
         emit_block_batches(&observers, deltas, &snapshots, &mut events);
         // Selected snapshots precede every late actor frame for that recipient.
         // Only actual FIFO admission may turn this lookahead into observer history.
@@ -344,6 +354,7 @@ impl AuthorityState {
             events,
             refused_sessions,
             before_snapshots,
+            ordered_refusals,
         })
     }
 
@@ -357,7 +368,7 @@ impl AuthorityState {
             .project_source_publication(tick, outcome)
             .expect("valid fixture subscription");
         assert!(
-            projection.refused_sessions.is_empty(),
+            projection.refused_sessions.is_empty() && projection.ordered_refusals.is_empty(),
             "normal fixtures must not discard source refusals"
         );
         projection.events
@@ -897,10 +908,16 @@ fn emit_snapshots(
     observers: &[Observer],
     state: &AuthorityState,
     events: &mut Vec<RoutedEvent>,
-) -> BTreeSet<(SessionKey, ChunkKey)> {
+    refused_sessions: &[SessionKey],
+) -> (BTreeSet<(SessionKey, ChunkKey)>, SourceRefusals) {
     let mut emitted = BTreeSet::new();
+    let mut refusals = Vec::new();
     let limits = state.limits();
     for (observer, view) in observers.iter().zip(view_list.iter_mut()) {
+        // A pre-snapshot delta refusal has already stopped this recipient's source pass.
+        if refused_sessions.contains(&observer.session) {
+            continue;
+        }
         let center = observer.center;
         let mut candidates: Vec<ChunkKey> = observer
             .wanted
@@ -933,12 +950,20 @@ fn emit_snapshots(
             if selected_chunks >= limits.snapshot_chunks() {
                 break;
             }
-            let Some((snapshot, charge)) = state.chunk_snapshot_publication(key) else {
-                // Unavailable desired requests consume no budget and discard their resync flag.
-                if let Some(entry) = view.chunks.get_mut(&key) {
-                    entry.resync_queued = false;
+            let (snapshot, charge) = match state.chunk_snapshot_publication(key) {
+                Ok(Some(value)) => value,
+                Ok(None) => {
+                    // Unavailable desired requests cost nothing and discard their resync flag.
+                    if let Some(entry) = view.chunks.get_mut(&key) {
+                        entry.resync_queued = false;
+                    }
+                    continue;
                 }
-                continue;
+                Err(_) => {
+                    // A malformed Ready column closes only this recipient after its valid prefix.
+                    refusals.push((events.len(), observer.session));
+                    break;
+                }
             };
             // Checked columns have twenty-four bounded sections, so totals fit usize.
             if selected_chunks > 0 && selected_bytes + charge > limits.snapshot_bytes() {
@@ -953,7 +978,7 @@ fn emit_snapshots(
             selected_bytes += charge;
         }
     }
-    emitted
+    (emitted, refusals)
 }
 
 /// Validate eligible whole revisions before snapshots. One invalid batch

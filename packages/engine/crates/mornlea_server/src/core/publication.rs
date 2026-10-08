@@ -61,12 +61,16 @@ pub fn close_receiver(state: &mut AuthorityState, session: SessionKey, reason: C
     state.close_outbox(session, reason)
 }
 
+/// Ordered delivery positions for at most eight unique source recipients.
+pub(crate) type SourceRefusals = Vec<(usize, SessionKey)>;
+
 /// Owns immutable semantic output paired with a bounded set of CPU snapshot frames.
 /// Private fields and append-only construction prevent event/frame replacement.
 pub struct PreparedSourcePublication {
     publication: TickPublication,
     snapshots: Vec<(usize, PreparedFrame)>,
     snapshot_limit: usize,
+    refusals: SourceRefusals,
 }
 
 impl PreparedSourcePublication {
@@ -75,6 +79,7 @@ impl PreparedSourcePublication {
             publication,
             snapshots: Vec::new(),
             snapshot_limit: 8,
+            refusals: Vec::new(),
         }
     }
 
@@ -89,7 +94,36 @@ impl PreparedSourcePublication {
             publication,
             snapshots: Vec::new(),
             snapshot_limit: usize::from(limits.max_players()) * limits.snapshot_chunks(),
+            refusals: Vec::new(),
         }
+    }
+
+    /// Closes one source recipient after the existing immutable event prefix.
+    /// Delivery preflights this marker with every frame before any append.
+    pub fn append_source_refusal(&mut self, session: SessionKey) -> Result<(), ServerError> {
+        self.refuse_at(self.publication.events.len(), session)
+    }
+
+    /// Translates a projector position without replacing any event or CPU frame.
+    pub(crate) fn refuse_at(
+        &mut self,
+        before: usize,
+        session: SessionKey,
+    ) -> Result<(), ServerError> {
+        if before > self.publication.events.len()
+            || self.refusals.len() >= 8
+            || self.refusals.iter().any(|(_, owner)| *owner == session)
+            || self
+                .refusals
+                .last()
+                .is_some_and(|(position, _)| *position > before)
+        {
+            return Err(ServerError::InvalidInput {
+                field: "source_publication",
+            });
+        }
+        self.refusals.push((before, session));
+        Ok(())
     }
 
     pub fn publication(&self) -> &TickPublication {
@@ -132,13 +166,15 @@ impl PreparedSourcePublication {
         Ok(())
     }
 
-    /// Moves semantic output without delivering frames, including final reduction.
+    /// Moves semantic output without delivering frames or refusals, including final reduction.
     pub fn into_publication(self) -> TickPublication {
         self.publication
     }
 
-    pub(crate) fn into_parts(self) -> (TickPublication, Vec<(usize, PreparedFrame)>) {
-        (self.publication, self.snapshots)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (TickPublication, Vec<(usize, PreparedFrame)>, SourceRefusals) {
+        (self.publication, self.snapshots, self.refusals)
     }
 }
 

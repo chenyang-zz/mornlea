@@ -239,7 +239,8 @@ fn source_pass_budget_moves_original_pairs_with_interleaved_events() {
         append(&mut batch, x, e).unwrap();
         batch.append_event(ordinary());
     }
-    let (publication, frames) = batch.into_parts();
+    let (publication, frames, refusals) = batch.into_parts();
+    assert!(refusals.is_empty());
     assert_eq!(publication.events.len(), 17);
     assert_eq!(frames.len(), 8);
     for ((index, frame), (i, (semantic, bytes, full))) in

@@ -368,7 +368,8 @@ mod tests {
         batch
             .append_encoded_snapshot(session(1), &original, encoded)
             .unwrap();
-        let (publication, frames) = batch.into_parts();
+        let (publication, frames, refusals) = batch.into_parts();
+        assert!(refusals.is_empty());
         let Event::ChunkSnapshot(snapshot) = publication.events[0].event() else {
             panic!("snapshot owner");
         };

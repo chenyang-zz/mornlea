@@ -399,11 +399,11 @@ fn finish_reduced_tick(
         counters,
     };
     let publication = if publish {
-        state.publish_prepared_source(
-            super::publication::PreparedSourcePublication::new(publication),
-            before_snapshots,
-            projected.refused_sessions,
-        )?
+        let mut batch = super::publication::PreparedSourcePublication::new(publication);
+        for (position, session) in projected.ordered_refusals {
+            batch.refuse_at(provider_prefix + position, session)?;
+        }
+        state.publish_prepared_source(batch, before_snapshots, projected.refused_sessions)?
     } else {
         publication
     };
