@@ -141,6 +141,86 @@ fn fixture_counts_match_go() {
     }
 }
 
+/// The shared `ai` fixtures freeze exactly the values Go `applyAI` keeps;
+/// groups Go skips (no or empty companions) freeze nothing.
+#[test]
+fn good_ai_fixtures_freeze_go_values() {
+    let good = |fixture: &str| {
+        decode(&fixture_root().join("good").join(format!("{fixture}.json")))
+            .unwrap_or_else(|err| panic!("{fixture}: {err}"))
+    };
+    let mira = "3f2b8c1e-4a5d-4e6f-8a7b-9c0d1e2f3a4b";
+    let tove = "7d9e1f20-3b4c-4d5e-9f60-718293a4b5c6";
+    let frozen = |fixture: &str| {
+        let config = good(fixture);
+        let ai = config
+            .ai()
+            .unwrap_or_else(|| panic!("{fixture}: ai frozen"))
+            .clone();
+        let companions: Vec<(String, String)> = ai
+            .companions()
+            .iter()
+            .map(|(id, name)| (uuid_text(id.bytes()), name.as_str().to_owned()))
+            .collect();
+        (
+            companions,
+            ai.endpoint().to_owned(),
+            ai.api_key_env().to_owned(),
+            ai.task_timeout_minutes(),
+        )
+    };
+    assert_eq!(
+        frozen("ai_minimal_companion"),
+        (
+            vec![(mira.to_owned(), "Mira".to_owned())],
+            "http://127.0.0.1:8765".to_owned(),
+            API_KEY_ENV.to_owned(),
+            10,
+        )
+    );
+    assert_eq!(
+        frozen("ai_companion_null_persona_and_case_keys"),
+        (
+            vec![(mira.to_owned(), "Mira".to_owned())],
+            "http://127.0.0.1:9".to_owned(),
+            API_KEY_ENV.to_owned(),
+            60,
+        )
+    );
+    assert_eq!(
+        frozen("ai_companion_unicode_name").0,
+        vec![
+            (mira.to_owned(), "小晨".to_owned()),
+            (tove.to_owned(), "Tove".to_owned()),
+        ]
+    );
+    assert_eq!(
+        frozen("ai_endpoint_forms_go_accepts").1,
+        "HTTP://[::1]:08765/agent/v1?"
+    );
+    for skipped in [
+        "ai_empty_companions_ignores_rest",
+        "ai_null_companions_ignores_rest",
+        "ai_legacy_keys_without_companions",
+        "empty_object",
+        "null_groups",
+    ] {
+        assert!(good(skipped).ai().is_none(), "{skipped}: nothing frozen");
+    }
+}
+
+fn uuid_text(bytes: [u8; 16]) -> String {
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
 /// Go's refusal reason for each `-0` fixture, as pinned by `parityBadReasons`
 /// in the Go test.
 enum NegativeZeroReason {

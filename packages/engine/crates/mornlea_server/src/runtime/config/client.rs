@@ -4,15 +4,17 @@
 //! every group Go `decodeConfig` type-checks is checked here with the same
 //! accept/reject outcome. `logging` is kept (the host applies it later);
 //! `render`, `ai`, `texturePackPath`, `audioVolume` and `windowSize` are
-//! validated and dropped. `ai` stays validation-only until companion startup
-//! parses it, and persona files are not read here because Go only warns about
-//! them.
+//! validated and dropped. `ai` is frozen into [`AiConfig`] once companions
+//! are configured; persona text is not resolved here because Go only warns
+//! about it and only the dialogue path consumes it.
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use mornlea_domain::{CompanionId, CompanionName};
+
 use super::json::{JsonObject, JsonValue, go_equal_fold, go_to_lower};
-use super::{ConfigError, ConfigWarning, go_f64, invalid, lookup, warn_clamp};
+use super::{AiConfig, ConfigError, ConfigWarning, go_f64, invalid, lookup, warn_clamp};
 
 /// Mirrors `config.MaxTexturePackPathBytes`.
 const MAX_TEXTURE_PACK_PATH_BYTES: usize = 1024;
@@ -20,6 +22,8 @@ const MAX_TEXTURE_PACK_PATH_BYTES: usize = 1024;
 const MAX_ACTIVE_COMPANIONS: usize = 4;
 /// Mirrors the `companion.ValidateTaskTimeoutMinutes` range.
 const TASK_TIMEOUT_MINUTES: std::ops::RangeInclusive<i64> = 1..=60;
+/// Mirrors `companion.TaskTimeoutDefaultMinutes`, used when the key is absent.
+const TASK_TIMEOUT_DEFAULT_MINUTES: u32 = 10;
 /// Mirrors the `WindowSize` presets.
 const WINDOW_SIZES: [&str; 3] = ["640x360", "960x540", "1280x720"];
 /// Mirrors `knownAIFieldKeys`; anything else under `ai` only warns.
@@ -268,12 +272,13 @@ pub(super) fn validate_window_size(raw: &JsonValue) -> Result<(), ConfigError> {
 
 /// Go `applyAI`. The group is only judged in depth when `companions` is a
 /// non-empty array; otherwise everything but the object shape and key
-/// collisions is ignored, retired keys included.
+/// collisions is ignored, retired keys included, and no [`AiConfig`] is
+/// frozen. Acceptance is unchanged from validation-only decoding.
 pub(super) fn validate_ai(
     raw: &JsonValue,
     env_is_set: &dyn Fn(&str) -> bool,
     warnings: &mut Vec<ConfigWarning>,
-) -> Result<(), ConfigError> {
+) -> Result<Option<AiConfig>, ConfigError> {
     let empty = JsonObject::default();
     let fields = match raw {
         JsonValue::Null => &empty,
@@ -312,7 +317,7 @@ pub(super) fn validate_ai(
     let entries = match lookup(fields, "companions", "ai")? {
         None | Some(JsonValue::Null) => {
             warn_retired(warnings);
-            return Ok(());
+            return Ok(None);
         }
         Some(JsonValue::Array(entries)) => entries,
         Some(other) => {
@@ -324,7 +329,7 @@ pub(super) fn validate_ai(
     };
     if entries.is_empty() {
         warn_retired(warnings);
-        return Ok(());
+        return Ok(None);
     }
 
     let mut endpoint = String::new();
@@ -355,6 +360,7 @@ pub(super) fn validate_ai(
             go_string_into(raw, "ai.agentService.apiKeyEnv", &mut api_key_env)?;
         }
     }
+    let mut task_timeout_minutes = TASK_TIMEOUT_DEFAULT_MINUTES;
     if let Some(raw) = lookup(fields, "taskTimeoutMinutes", "ai")? {
         // Null leaves the zero value, which the range check then refuses.
         let minutes = super::go_int(raw, "ai.taskTimeoutMinutes")?.unwrap_or(0);
@@ -364,6 +370,8 @@ pub(super) fn validate_ai(
                 format!("{minutes} is outside 1..60"),
             ));
         }
+        task_timeout_minutes =
+            u32::try_from(minutes).map_err(|_| invalid("ai.taskTimeoutMinutes", "overflow"))?;
     }
 
     let mut definitions = Vec::with_capacity(entries.len());
@@ -436,6 +444,7 @@ pub(super) fn validate_ai(
     }
     let mut seen_ids = Vec::new();
     let mut seen_names: Vec<&str> = Vec::new();
+    let mut frozen = Vec::with_capacity(definitions.len());
     for (index, (id, name)) in definitions.iter().enumerate() {
         let Some(id) = id else {
             return Err(invalid(format!("ai.companions[{index}].id"), "invalid"));
@@ -454,6 +463,13 @@ pub(super) fn validate_ai(
         }
         seen_ids.push(*id);
         seen_names.push(name);
+        // Both constructors enforce the rules checked above, so refusal here
+        // is an internal disagreement and stays a hard error.
+        let id = CompanionId::try_from_bytes(*id)
+            .map_err(|_| invalid(format!("ai.companions[{index}].id"), "invalid"))?;
+        let name = CompanionName::try_from_canonical(name.clone())
+            .map_err(|_| invalid(format!("ai.companions[{index}].name"), "invalid"))?;
+        frozen.push((id, name));
     }
     if !retired.is_empty() {
         return Err(invalid(
@@ -479,7 +495,12 @@ pub(super) fn validate_ai(
             "names an empty environment variable",
         ));
     }
-    Ok(())
+    Ok(Some(AiConfig {
+        companions: frozen,
+        endpoint,
+        api_key_env,
+        task_timeout_minutes,
+    }))
 }
 
 /// Go `json.Unmarshal` into `string`: null keeps the previous value.
@@ -541,12 +562,10 @@ fn parse_uuid_v4(text: &str) -> Option<[u8; 16]> {
 
 /// Go `companion.ValidateName`: the name must equal its trimmed form, so with
 /// the whitespace ban it reduces to no whitespace, no control characters,
-/// 1..32 runes and at most 128 bytes.
+/// 1..32 runes and at most 128 bytes. The domain constructor owns that rule,
+/// so the frozen definition and the accepted file can never disagree.
 fn valid_companion_name(name: &str) -> bool {
-    let runes = name.chars().count();
-    (1..=32).contains(&runes)
-        && name.len() <= 128
-        && !name.chars().any(|c| c.is_whitespace() || c.is_control())
+    CompanionName::try_from_canonical(name.to_owned()).is_ok()
 }
 
 /// Go `AgentServiceSettings.Validate` endpoint rules over Go 1.26 `url.Parse`

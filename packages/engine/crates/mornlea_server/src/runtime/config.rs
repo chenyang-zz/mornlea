@@ -19,8 +19,9 @@
 //!   [`ConfigWarning`], like Go's `slog.Warn`; [`RuntimeConfig::load`] and
 //!   [`RuntimeConfig::resolve`] print them to stderr
 //!
-//! Server-owned values (`physics`, `sim`, `fluidEnabled`) and `logging` are
-//! frozen; client-only groups are validated and dropped.
+//! Server-owned values (`physics`, `sim`, `fluidEnabled`), `logging` and the
+//! configured `ai` group are frozen; client-only groups are validated and
+//! dropped.
 
 mod client;
 mod json;
@@ -33,6 +34,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use mornlea_domain::{CompanionId, CompanionName};
 use mornlea_engine::native::contracts::PhysicsTuning;
 
 use crate::core::contracts::{RuleTunables, ServerError};
@@ -180,6 +182,40 @@ impl fmt::Display for ConfigWarning {
     }
 }
 
+/// Frozen `ai` group, present only when at least one companion is configured.
+///
+/// Holds the credential environment variable name, never its value; the
+/// companion runtime reads the value at startup and keeps it out of logs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AiConfig {
+    companions: Vec<(CompanionId, CompanionName)>,
+    endpoint: String,
+    api_key_env: String,
+    task_timeout_minutes: u32,
+}
+
+impl AiConfig {
+    /// Configured companions in file order, at most four, ids and names unique.
+    pub fn companions(&self) -> &[(CompanionId, CompanionName)] {
+        &self.companions
+    }
+
+    /// Loopback Agent endpoint exactly as configured.
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    /// Name of the environment variable holding the Agent credential.
+    pub fn api_key_env(&self) -> &str {
+        &self.api_key_env
+    }
+
+    /// Effective task timeout in minutes (Go `AI.TaskTimeout`), 1..=60.
+    pub fn task_timeout_minutes(&self) -> u32 {
+        self.task_timeout_minutes
+    }
+}
+
 /// Frozen process configuration after load.
 ///
 /// Plain accessors feed `core` (`RuleTunables`, raw fluid budgets, flags).
@@ -194,6 +230,7 @@ pub struct RuntimeConfig {
     spawn_radius: i32,
     fluid_enabled: bool,
     logging: LoggingConfig,
+    ai: Option<AiConfig>,
     warnings: Vec<ConfigWarning>,
 }
 
@@ -206,6 +243,7 @@ impl RuntimeConfig {
             default_sim_parts(),
             true,
             LoggingConfig::default(),
+            None,
             Vec::new(),
         )
         .expect("Go-pinned defaults must construct")
@@ -264,9 +302,10 @@ impl RuntimeConfig {
             Some(raw) => client::decode_logging(raw, &mut warnings)?,
             None => LoggingConfig::default(),
         };
-        if let Some(raw) = lookup(obj, "ai", "")? {
-            client::validate_ai(raw, env_is_set, &mut warnings)?;
-        }
+        let ai = match lookup(obj, "ai", "")? {
+            Some(raw) => client::validate_ai(raw, env_is_set, &mut warnings)?,
+            None => None,
+        };
         if let Some(raw) = lookup(obj, "texturePackPath", "")? {
             client::validate_texture_pack_path(raw)?;
         }
@@ -317,7 +356,7 @@ impl RuntimeConfig {
             }
         }
 
-        Self::from_parts(version, physics, sim, fluid_enabled, logging, warnings)
+        Self::from_parts(version, physics, sim, fluid_enabled, logging, ai, warnings)
     }
 
     fn from_parts(
@@ -326,6 +365,7 @@ impl RuntimeConfig {
         sim: SimParts,
         fluid_enabled: bool,
         logging: LoggingConfig,
+        ai: Option<AiConfig>,
         warnings: Vec<ConfigWarning>,
     ) -> Result<Self, ConfigError> {
         let tuning = PhysicsTuning {
@@ -375,6 +415,7 @@ impl RuntimeConfig {
             spawn_radius: sim.spawn_radius,
             fluid_enabled,
             logging,
+            ai,
             warnings,
         })
     }
@@ -407,6 +448,11 @@ impl RuntimeConfig {
     /// Frozen `logging` group; the serve host applies it.
     pub fn logging(&self) -> &LoggingConfig {
         &self.logging
+    }
+
+    /// Frozen `ai` group; `None` when no companion is configured.
+    pub fn ai(&self) -> Option<&AiConfig> {
+        self.ai.as_ref()
     }
 
     /// Findings Go would `slog.Warn` while decoding.
