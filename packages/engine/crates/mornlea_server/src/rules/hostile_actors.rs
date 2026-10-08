@@ -78,6 +78,7 @@ use crate::core::contracts::{
     SessionKey,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
+use crate::rules::environment::year_phase_at;
 
 // ---------------------------------------------------------------------------
 // Frozen numeric contract (`hostile.go` const block and
@@ -2149,16 +2150,11 @@ fn hostile_candidate_hash(seed: i64, tick: u64, x: i32, y: i32, z: i32) -> u64 {
     splitmix64(hash ^ (y as u32 as u64))
 }
 
-/// Season warp chain, mirrored from the environment provider's copies of the
-/// Go rows (`core.YearPhaseAt`, `core.DayArcTicks`, `core.EffectiveDayPhase`,
-/// `core.EffectiveDayPhaseAt` in `packages/shared/core`).
-const YEAR_TICKS: u64 = 288_000;
+/// Season warp chain for day-arc and effective phase. Year phase comes from
+/// `rules::environment::year_phase_at` (the single Rust source); day-arc and
+/// effective-phase helpers stay local until those formulas are consolidated.
 const DAY_LENGTH_TICKS: u32 = 24_000;
 const HALF_DAY_TICKS: u32 = DAY_LENGTH_TICKS / 2;
-
-fn year_index(world_time: u64, season_offset: u32) -> u64 {
-    (world_time % YEAR_TICKS + u64::from(season_offset) % YEAR_TICKS) % YEAR_TICKS
-}
 
 fn day_arc_ticks(year_phase: f64) -> u16 {
     let fraction = 0.5 + 0.15 * (2.0 * std::f64::consts::PI * year_phase).sin();
@@ -2182,6 +2178,9 @@ fn effective_day_phase(world_time: u64, offset: u16, day_arc: u16) -> u16 {
 }
 
 fn effective_day_phase_at(world_time: u64, offset: u16, season_offset: u32) -> u16 {
-    let year_phase = year_index(world_time, season_offset) as f64 / YEAR_TICKS as f64;
-    effective_day_phase(world_time, offset, day_arc_ticks(year_phase))
+    effective_day_phase(
+        world_time,
+        offset,
+        day_arc_ticks(year_phase_at(world_time, season_offset)),
+    )
 }

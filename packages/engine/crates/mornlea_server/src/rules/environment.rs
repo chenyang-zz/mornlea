@@ -232,9 +232,19 @@ fn splitmix64(mut x: u64) -> u64 {
 
 /// Folds the in-year tick index: each side takes its modulo before the sum,
 /// so no absolute time or offset can overflow the addition. Mirrors
-/// `core.yearIndex`.
-fn year_index(world_time: u64, season_offset: u32) -> u64 {
+/// `core.yearIndex`. This is the single Rust source for the in-year index;
+/// sleep, hostiles, passives, player publication and random blocks call it
+/// instead of keeping copies.
+pub(crate) fn year_index(world_time: u64, season_offset: u32) -> u64 {
     (world_time % YEAR_TICKS + u64::from(season_offset) % YEAR_TICKS) % YEAR_TICKS
+}
+
+/// Year phase 0..1 at an absolute time (`core.YearPhaseAt`): the in-year
+/// index divided by `YEAR_TICKS`. This is the single Rust source for year
+/// phase; callers that need the phase go through here rather than dividing
+/// a local year-index copy.
+pub(crate) fn year_phase_at(world_time: u64, season_offset: u32) -> f64 {
+    year_index(world_time, season_offset) as f64 / YEAR_TICKS as f64
 }
 
 /// Season at an absolute time: the quarter of the year the in-year index
@@ -300,5 +310,54 @@ mod season_tests {
                 "world_time={world_time} season_offset={offset}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod year_phase_tests {
+    use super::*;
+
+    /// `(world_time, season_offset, year_index)` pins taken from the Go
+    /// `core.yearIndex` / `core.YearPhaseAt` arithmetic in
+    /// `packages/shared/core/season.go`: season-quarter anchors (0, 0.25, 0.5),
+    /// the year wrap, the seed-42 offset, and the `u64`/`u32` extremes. Year
+    /// phase is the index divided by 288000; exact float anchors 0, 0.25 and
+    /// 0.5 match `TestYearPhaseAtAnchors`.
+    const YEAR_INDEX_PINS: [(u64, u32, u64); 14] = [
+        (0, 0, 0),
+        (1, 0, 1),
+        (72_000, 0, 72_000),
+        (143_999, 0, 143_999),
+        (144_000, 0, 144_000),
+        (216_000, 0, 216_000),
+        (287_999, 0, 287_999),
+        (288_000, 0, 0),
+        (0, 14_818, 14_818),
+        (89, 14_818, 14_907),
+        (0, 287_999, 287_999),
+        (1, 287_999, 0),
+        (u64::MAX, 0, 111_615),
+        (u64::MAX, u32::MAX, 134_910),
+    ];
+
+    #[test]
+    fn year_phase_derivation_matches_go_pins() {
+        for (world_time, offset, index) in YEAR_INDEX_PINS {
+            assert_eq!(
+                year_index(world_time, offset),
+                index,
+                "year_index({world_time}, {offset})"
+            );
+            let phase = year_phase_at(world_time, offset);
+            assert_eq!(
+                phase,
+                index as f64 / YEAR_TICKS as f64,
+                "year_phase_at({world_time}, {offset})"
+            );
+        }
+        assert_eq!(year_phase_at(0, 0), 0.0);
+        assert_eq!(year_phase_at(72_000, 0), 0.25);
+        assert_eq!(year_phase_at(144_000, 0), 0.5);
+        assert_eq!(year_phase_at(288_000, 0), 0.0);
     }
 }
