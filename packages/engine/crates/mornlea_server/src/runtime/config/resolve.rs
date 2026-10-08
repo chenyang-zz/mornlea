@@ -1,11 +1,15 @@
 //! Read-only default config path resolution mirroring Go `config.LoadDefault`.
 //!
 //! Go owns the user's config file: it creates it, migrates the legacy
-//! `minecraft-go/config.json`, and writes settings. The Rust server only reads
+//! pre-rename config file, and writes settings. The Rust server only reads
 //! the Mornlea path, with the same safety gates Go applies before trusting it:
 //! a regular non-symlink file with mode 0600 inside a 0700 directory, and the
 //! same inode before and after open. When only the legacy file exists, Rust
 //! neither migrates nor reads it; it refuses and asks for one Go start.
+
+/// Directory of the pre-rename config file that Go migrates on first start.
+/// Rust only checks for its presence; the identity audit allowlists it.
+const LEGACY_CONFIG_DIR: &str = "minecraft-go";
 
 use std::ffi::OsString;
 use std::fs;
@@ -26,7 +30,7 @@ impl ConfigPaths {
     pub fn under(config_dir: &Path) -> Self {
         Self {
             current: config_dir.join("mornlea").join("config.json"),
-            legacy: config_dir.join("minecraft-go").join("config.json"),
+            legacy: config_dir.join(LEGACY_CONFIG_DIR).join("config.json"),
         }
     }
 
@@ -261,7 +265,7 @@ mod tests {
         assert!(user_config_dir(env(&[])).is_err());
         assert_eq!(
             ConfigPaths::under(Path::new("/c")).legacy,
-            PathBuf::from("/c/minecraft-go/config.json")
+            PathBuf::from("/c").join(LEGACY_CONFIG_DIR).join("config.json")
         );
     }
 
@@ -341,7 +345,7 @@ mod tests {
             }
             other => panic!("expected legacy refusal, got {other}"),
         }
-        assert!(err.to_string().contains("minecraft-go"));
+        assert!(err.to_string().contains(LEGACY_CONFIG_DIR));
         assert!(!paths.current.exists(), "Rust must not migrate");
         // With the Mornlea file present the legacy file is ignored, as in Go.
         write_current(&paths, "{}", 0o700, 0o600);

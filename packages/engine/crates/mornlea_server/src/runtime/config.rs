@@ -81,7 +81,7 @@ pub enum ConfigError {
     InsecurePath { path: PathBuf, detail: String },
     /// The default config file changed identity between checks.
     Replaced { path: PathBuf },
-    /// Only the legacy `minecraft-go` file exists; Go must migrate it first.
+    /// Only the legacy pre-rename file exists; Go must migrate it first.
     LegacyConfigNeedsMigration { legacy: PathBuf, current: PathBuf },
     /// The user config directory cannot be determined.
     NoConfigDir(String),

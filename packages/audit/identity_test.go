@@ -26,8 +26,8 @@ import (
 
 const (
 	modulePath                       = "github.com/channing771/mornlea"
-	expectedLegacyIdentityAllowances = 42
-	expectedLegacyIdentityMatches    = 46
+	expectedLegacyIdentityAllowances = 43
+	expectedLegacyIdentityMatches    = 47
 )
 
 var (
@@ -82,6 +82,8 @@ type legacyIdentityAllowance struct {
 var legacyIdentityAllowances = []legacyIdentityAllowance{
 	// The Rust store shares the existing on-disk backup identity with Go.
 	{"packages/engine/crates/mornlea_server/src/store/recovery.rs", legacyBackupIdentity, "BACKUP_IDENTITY", 1},
+	// The Rust config resolver refuses, but never reads, a legacy-only Go config.
+	{"packages/engine/crates/mornlea_server/src/runtime/config/resolve.rs", legacyDataDirectory, "LEGACY_CONFIG_DIR", 1},
 	{"packages/shared/config/config.go", legacyDataDirectory, "defaultPaths", 1},
 	{"packages/shared/config/migration_test.go", legacyDataDirectory, "TestLoadDefaultUsesMornleaCurrentAndMinecraftGoLegacy", 1},
 	{"packages/shared/config/migration_test.go", legacyDataDirectory, "TestLoadDefaultPrefersExistingMornleaConfig", 1},
