@@ -4926,6 +4926,9 @@ impl<'a> TickContext<'a> {
         // incomplete resident set while providers own and mutate these maps.
         let residents = std::mem::take(&mut context.authority.residents);
         context.authority.tick_running = true;
+        #[cfg(test)]
+        crate::core::source_player_restore::SETTLED_FOOTPRINTS
+            .with(|seen| seen.borrow_mut().clear());
         context.resident_loan = Some(residents.sleep_record.is_some());
         context.actors = residents.actors;
         context.player_slots = residents.player_slots;
@@ -13765,7 +13768,6 @@ mod source_player_restore_tests {
             a.source_players
                 .snow_test_set_state(*session, 0.6, BlockPos::ORIGIN, false);
         }
-        SETTLED_FOOTPRINTS.with(|seen| *seen.borrow_mut() = Default::default());
         a.advance_tick(TickBudget::full()).unwrap();
         let mut want_trample = Vec::new();
         let mut want_snow = Vec::new();
