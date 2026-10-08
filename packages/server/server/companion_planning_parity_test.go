@@ -3,8 +3,8 @@
 // Each case drives the production buildPlanSnapshot over a real runtime.Engine
 // whose ready chunks were installed through the ordinary acquisition path, then
 // records the inputs next to the Go projection: dense terrain planes, exposed
-// blocks, chunk revisions, online players, inventory, task status, world time
-// and the canonical terrain and snapshot digests. The Rust authority test
+// blocks, chunk revisions, online players, inventory, task status, world time,
+// the source tick and the canonical terrain and snapshot digests. The Rust authority test
 // `core::companion_planning` rebuilds the same inputs and must reproduce every
 // recorded value. Set MORNLEA_WRITE_COMPANION_PLANNING_FIXTURES=1 to rewrite
 // the files; otherwise the test fails when the committed files drift from the
@@ -36,7 +36,10 @@ type planningFixture struct {
 }
 
 type planningFixtureInput struct {
-	Dimension      core.DimensionID         `json:"dimension"`
+	Dimension core.DimensionID `json:"dimension"`
+	// Ticks is the number of completed engine steps when the snapshot is
+	// built; chunk acquisition must settle within it.
+	Ticks          uint64                   `json:"ticks"`
 	WorldTimeTicks uint64                   `json:"worldTimeTicks"`
 	Task           string                   `json:"task"`
 	Command        string                   `json:"command"`
@@ -105,8 +108,12 @@ type planningFixtureExpected struct {
 	Inventory       []planningFixtureSlot     `json:"inventory"`
 	TaskStatus      string                    `json:"taskStatus"`
 	WorldTimeTicks  uint64                    `json:"worldTimeTicks"`
-	TerrainSHA256   string                    `json:"terrainSha256"`
-	SnapshotSHA256  string                    `json:"snapshotSha256"`
+	// SourceTick is the authority tick at the planning boundary. PlanSnapshot
+	// carries no tick; dispatchPlanning runs before engine.StepWithTunables,
+	// where the authority tick is engine.TickCount(), the completed step count.
+	SourceTick     uint64 `json:"sourceTick"`
+	TerrainSHA256  string `json:"terrainSha256"`
+	SnapshotSHA256 string `json:"snapshotSha256"`
 }
 
 func TestCompanionPlanningProjectionFixtures(t *testing.T) {
@@ -172,6 +179,7 @@ func buildPlanningFixtureExpected(t *testing.T, input planningFixtureInput) plan
 		Pitch:     input.Companion.Pitch,
 		Inventory: planningFixtureInventory(t, input.Companion.Inventory),
 	}
+	sourceTick := engine.TickCount()
 	snapshot, err := manager.buildPlanSnapshot(
 		companion.Definition{ID: companionID, Name: "Nova"},
 		companion.TaskCommand(input.Command),
@@ -221,6 +229,7 @@ func buildPlanningFixtureExpected(t *testing.T, input planningFixtureInput) plan
 		Inventory:       make([]planningFixtureSlot, 0, core.InventorySlots),
 		TaskStatus:      snapshot.Companion.TaskStatus,
 		WorldTimeTicks:  snapshot.WorldTimeTicks,
+		SourceTick:      sourceTick,
 		TerrainSHA256:   hex.EncodeToString(terrainSum[:]),
 		SnapshotSHA256:  snapshotSum,
 	}
@@ -268,8 +277,11 @@ func readyPlanningFixtureEngine(t *testing.T, input planningFixtureInput) *runti
 	for _, chunk := range input.Chunks {
 		chunks[core.ChunkKey{Dimension: input.Dimension, Pos: core.ChunkPos{X: chunk.X, Z: chunk.Z}}] = chunk
 	}
-	for range 40 {
+	for engine.TickCount() < input.Ticks {
 		result := engine.Step()
+		if planningFixtureChunksReady(engine, chunks) {
+			continue
+		}
 		for _, key := range result.Acquire {
 			chunk, ok := chunks[key]
 			if !ok {
@@ -282,9 +294,9 @@ func readyPlanningFixtureEngine(t *testing.T, input planningFixtureInput) *runti
 				PersistedRevision: chunk.Revision,
 			})
 		}
-		if planningFixtureChunksReady(engine, chunks) {
-			break
-		}
+	}
+	if engine.TickCount() != input.Ticks {
+		t.Fatalf("engine completed %d steps, want %d", engine.TickCount(), input.Ticks)
 	}
 	for key, chunk := range chunks {
 		cloned, revision, ready := engine.CloneReadyChunk(key)
@@ -409,6 +421,7 @@ func companionPlanningFixtureInputs() []planningFixture {
 			Name: "running_surface_capped",
 			Input: planningFixtureInput{
 				Dimension:      core.Overworld,
+				Ticks:          12,
 				WorldTimeTicks: 30123,
 				Task:           "running",
 				Command:        "把木头砍下来",
@@ -460,6 +473,7 @@ func companionPlanningFixtureInputs() []planningFixture {
 			Name: "planning_world_bottom_sparse",
 			Input: planningFixtureInput{
 				Dimension:      core.Overworld,
+				Ticks:          25,
 				WorldTimeTicks: 7,
 				Task:           "planning",
 				Command:        "在这里挖一个坑",
@@ -502,6 +516,7 @@ func companionPlanningFixtureInputs() []planningFixture {
 			Name: "queued_negative_world_top",
 			Input: planningFixtureInput{
 				Dimension:      core.Overworld,
+				Ticks:          40,
 				WorldTimeTicks: 1<<40 + 7,
 				Task:           "queued",
 				Command:        "跟着我",

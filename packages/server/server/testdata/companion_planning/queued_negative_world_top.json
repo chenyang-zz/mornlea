@@ -2,6 +2,7 @@
   "name": "queued_negative_world_top",
   "input": {
     "dimension": 0,
+    "ticks": 40,
     "worldTimeTicks": 1099511627783,
     "task": "queued",
     "command": "跟着我",
@@ -2030,6 +2031,7 @@
     ],
     "taskStatus": "待执行",
     "worldTimeTicks": 1099511627783,
+    "sourceTick": 40,
     "terrainSha256": "11ccaf13feb8bd131080a896fd4ad46d10aa485d9b973ed22461073e80c88135",
     "snapshotSha256": "35aa70f4e80205d67ae7834b441b062546953187aac64bb436cb23b2c72af153"
   }

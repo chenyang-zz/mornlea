@@ -203,6 +203,8 @@ pub(crate) fn planning_fixture(text: &str) -> PlanningFixture {
     let mut metadata = AuthorityState::try_new(limits, 42).unwrap().metadata;
     metadata.world_time_ticks = input["worldTimeTicks"].as_u64().unwrap();
     let mut authority = AuthorityState::try_new_with_metadata(limits, metadata).unwrap();
+    // Go's engine tick counter counts completed steps, as `next_tick` does.
+    authority.next_tick = input["ticks"].as_u64().expect("fixture ticks");
     let dimension = Dimension::new(input["dimension"].as_u64().unwrap() as u8).unwrap();
 
     for chunk in items(&input["chunks"]) {
@@ -490,7 +492,7 @@ fn planning_snapshot_matches_go_fixtures() {
         );
         assert_eq!(
             snapshot.source_tick(),
-            fixture.authority.next_tick,
+            expected["sourceTick"].as_u64().expect("fixture sourceTick"),
             "{name}: source tick"
         );
     }
@@ -545,7 +547,8 @@ fn current_world_matches_go_fixtures() {
             .collect();
         assert_eq!(world.online_players, players, "{name}: current players");
         assert_eq!(
-            world.tick, fixture.authority.next_tick,
+            world.tick,
+            expected["sourceTick"].as_u64().expect("fixture sourceTick"),
             "{name}: current tick"
         );
     }

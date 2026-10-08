@@ -2,6 +2,7 @@
   "name": "running_surface_capped",
   "input": {
     "dimension": 0,
+    "ticks": 12,
     "worldTimeTicks": 30123,
     "task": "running",
     "command": "把木头砍下来",
@@ -1971,6 +1972,7 @@
     ],
     "taskStatus": "执行中",
     "worldTimeTicks": 30123,
+    "sourceTick": 12,
     "terrainSha256": "fcc99224b8d0b3996b6b8d217faa5ca40015f46b4405a9ce1f8ed8abf617d6cf",
     "snapshotSha256": "936bf055cc84f5eef8ce9e0373972a677c5f1c99dd3d14ce07e4f97757f0aa7f"
   }
