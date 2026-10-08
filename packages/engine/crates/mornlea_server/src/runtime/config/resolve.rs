@@ -371,7 +371,20 @@ mod tests {
             .expect("spawn mkfifo");
         assert!(status.success(), "mkfifo {status}");
         chmod(&paths.current, 0o600);
-        let err = RuntimeConfig::resolve_paths(&paths).expect_err("fifo");
+        // A blocking open of a FIFO waits for a writer, so the injected open
+        // uses O_NONBLOCK: if the regular-file check ever goes away the read
+        // returns an empty body at once and this test fails instead of hanging.
+        let err = read_checked_with_open(
+            &paths.current,
+            Box::new(|path| {
+                use std::os::unix::fs::OpenOptionsExt;
+                fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(path)
+            }),
+        )
+        .expect_err("fifo");
         assert!(
             matches!(&err, ConfigError::InsecurePath { detail, .. } if detail.contains("regular file")),
             "{err}"
@@ -401,6 +414,29 @@ mod tests {
             fs::read_to_string(&paths.current).unwrap(),
             r#"{"fluidEnabled":true}"#
         );
+    }
+
+    #[test]
+    fn replaced_inode_after_open_is_refused() {
+        let dir = TempDir::new("swap-after-open");
+        let paths = ConfigPaths::under(&dir.0);
+        write_current(&paths, r#"{"fluidEnabled":false}"#, 0o700, 0o600);
+        let replacement = dir.0.join("replacement.json");
+        fs::write(&replacement, r#"{"fluidEnabled":true}"#).unwrap();
+        chmod(&replacement, 0o600);
+        let current = paths.current.clone();
+        // The handle is the original inode, so the pre-open check passes and
+        // only the re-lstat after open can notice the swap.
+        let err = read_checked_with_open(
+            &current,
+            Box::new(move |path| {
+                let original = fs::File::open(path)?;
+                fs::rename(&replacement, path)?;
+                Ok(original)
+            }),
+        )
+        .expect_err("swap after open");
+        assert!(matches!(err, ConfigError::Replaced { .. }), "{err}");
     }
 
     #[test]
