@@ -66,3 +66,11 @@ scripts/agents/.npm-cache/
 /packages/engine/crates/mornlea_client/frontend/visual/item-catalog.generated.json
 # 伙伴 Agent 本机运行配置（由根 config.example.yaml 复制，不入库）
 /config.yaml
+
+# Archive new model videos and complete ZIP packages in the file library.
+/assets/models/mornlea/**/*.[mM][pP]4
+/assets/models/mornlea/**/*.[mM][oO][vV]
+/assets/models/mornlea/**/*.[wW][eE][bB][mM]
+/assets/models/mornlea/**/*.[mM][kK][vV]
+/assets/models/mornlea/**/*.[aA][vV][iI]
+/assets/models/mornlea/**/*.[zZ][iI][pP]

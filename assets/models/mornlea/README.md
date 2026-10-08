@@ -33,6 +33,14 @@ The prototypes were made before the current character rig. They are not attached
 
 ## Editing and export
 
+### Storage
+
+Keep code, configuration, JSON manifests, and checksum lists in ordinary Git. Within this package, `runtime/*.glb` and `source/*.blend` use Git LFS, including nested asset folders. Archive new videos and complete ZIP packages in the file library; the scoped ignore rules prevent their accidental addition.
+
+Before adding future model revisions, confirm Git LFS is installed and its repository hooks are configured; installation or hook changes require owner approval. Check paths with `git check-attr filter diff merge text -- <path>` and `git check-ignore --no-index -- <path>`, then review `git diff` before staging. Adding these rules does not convert existing ordinary-Git blobs or remove tracked videos. Existing files and ordinary-Git history remain intact; historical migration and archive uploads require separate authorization.
+
+代码、配置、JSON 清单和校验列表保留在普通 Git；本目录各资产子文件夹中的 `runtime/*.glb` 和 `source/*.blend` 使用 Git LFS。新视频和完整 ZIP 包归档到文件库，本目录的忽略规则防止误加入。后续添加模型修订前，先确认 LFS 和仓库 hooks；安装或修改 hooks 需本人确认。规则不会转换已跟踪文件、移除现有视频或清理普通 Git 历史；历史迁移和归档上传需另行授权。
+
 Open `source/block_farmer_animated_v06.blend` in Blender 4.3.2 for character edits. The tool source opens at `ASSET_Hoe`; select `ASSET_Axe` or `ASSET_WateringCan` for the other clean tool scenes. All materials are self-contained solid-color PBR; no external textures or linked libraries are required.
 
 For export, select only the intended model plus its rig for characters, or the intended tool hierarchy for tools. Preserve existing action names, units, rest skeleton, inverse-bind matrices, grip/effect nodes, and body masks. Export binary glTF 2.0 with skins and named animation actions enabled for dressed/base characters; export wardrobe modules and tools without animation. Re-import each exported file into a fresh Blender scene before replacing these artifacts. This package does not claim a one-command rebuild from historical scripts; the editable scenes are the authoring source of truth.

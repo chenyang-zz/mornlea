@@ -1,1 +1,5 @@
 *.rgba8 binary
+
+# Runtime exports and editable sources in the original Mornlea model package.
+assets/models/mornlea/**/runtime/*.glb filter=lfs diff=lfs merge=lfs -text
+assets/models/mornlea/**/source/*.blend filter=lfs diff=lfs merge=lfs -text
