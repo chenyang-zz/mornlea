@@ -16,7 +16,8 @@ use super::contracts::{
     ServerError, ServerPhase,
 };
 
-const PLAYER_KEYS: usize = 16;
+/// Retained player records, online or departed, the ledger may hold.
+pub(crate) const PLAYER_KEYS: usize = 16;
 const INVALID: ServerError = ServerError::InvalidInput {
     field: "actor_save",
 };

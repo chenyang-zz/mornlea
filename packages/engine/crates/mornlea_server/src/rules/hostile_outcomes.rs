@@ -14,8 +14,8 @@ use mornlea_storage::{ItemStack, PlayerLocation};
 
 use crate::core::contracts::{
     ActorAux, ActorBody, ActorKey, ActorLifecycle, ActorRecord, ChunkKey, DamageCause, DropBatch,
-    DropSource, EnvironmentState, HostileMeleeBatch, InventoryPatch, PhaseReport, Resource,
-    RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
+    DropSource, EnvironmentState, HostileMeleeBatch, InventoryPatch, MAX_PLAYERS, PhaseReport,
+    Resource, RuleCall, RuleEffect, RulePhase, ServerError, SessionKey,
 };
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::core::state::{AuthorityReadView, DropRehearsal, TickContext};
@@ -145,7 +145,7 @@ fn freeze_with_limits(
         }
     }
     for (count, ceiling, resource) in [
-        (players.len(), 8, Resource::Players),
+        (players.len(), usize::from(MAX_PLAYERS), Resource::Players),
         (hostiles.len(), 64, Resource::RuleEffects),
         (passives.len(), 32, Resource::RuleEffects),
     ] {
