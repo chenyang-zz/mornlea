@@ -34,6 +34,7 @@ mod session_view;
 pub mod shutdown;
 pub mod source_acquisition;
 mod source_companion_restore;
+pub(crate) use source_companion_restore::anchor_body;
 pub mod source_encoding;
 mod source_player_death;
 mod source_player_reset;
