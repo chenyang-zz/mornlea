@@ -20,3 +20,9 @@ Owen's review of PR #15:
 - Because the change is archived in the same pull request, the archived delta and the canonical specification were updated together and carry identical requirement text.
 
 Architecture skill: no change.
+
+## Paired pull requests across branches, 2026-10-08
+
+Owen's decision on PR #15: while the Rust port lives on a separate integration branch, the Go and Rust halves of a paired gameplay change cannot land in one pull request. The requirement body now adds, verbatim, right after the paired Go/Rust parity sentence: "While the Rust port lives on a separate integration branch, a paired change MAY land as two pull requests that link each other, one per branch, each with its side of the parity test." No branch is named. The proposal summary states the same rule. The archived delta and the canonical specification were updated together and stay identical. The end condition is unchanged: Owen confirmed it binds to the Go real-time authority retirement step.
+
+Architecture skill: no change.

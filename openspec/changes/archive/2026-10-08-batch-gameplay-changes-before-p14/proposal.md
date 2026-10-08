@@ -6,7 +6,7 @@ Source decision: chen via Vera, 2026-10-08. Exception criteria: Lena, 2026-10-08
 
 ## What Changes
 
-- Add one requirement to `development-governance`: until the Go real-time authority is retired (currently planned in P14), gameplay rule changes are grouped into a planned batch OpenSpec change. Only blocking defects (a hang, item loss, or lost progress) may be fixed in their own change. Unclear cases are decided by the gameplay owner, with the reason recorded in the fix's pull request description. Every gameplay change, batched or blocking, changes the Go authority and the Rust port together and includes Go/Rust parity tests. The rule is removed or replaced once the Go real-time authority is retired and gameplay no longer needs Go parity.
+- Add one requirement to `development-governance`: until the Go real-time authority is retired (currently planned in P14), gameplay rule changes are grouped into a planned batch OpenSpec change. Only blocking defects (a hang, item loss, or lost progress) may be fixed in their own change. Unclear cases are decided by the gameplay owner, with the reason recorded in the fix's pull request description. Every gameplay change, batched or blocking, changes the Go authority and the Rust port together and includes Go/Rust parity tests. While the Rust port lives on a separate integration branch, a paired change may land as two pull requests that link each other, one per branch, each with its side of the parity test. The rule is removed or replaced once the Go real-time authority is retired and gameplay no longer needs Go parity.
 - Add one pointer sentence to root `AGENTS.md` near the OpenSpec workflow rules.
 
 ## Capabilities

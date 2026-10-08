@@ -355,7 +355,7 @@ Until the Go real-time authority is retired and gameplay no longer needs to stay
 - item loss: items vanish or duplicate without cause, or saved state reads back inconsistently;
 - lost progress: a save rolls back, or player effort is irrecoverably discarded in a commonly reached situation.
 
-Feel issues, rule inconsistencies, and rare edge cases with a workaround are not blocking. The gameplay owner SHALL decide unclear cases, and the fix's pull request description MUST record the reason. Every gameplay change, batched or blocking, SHALL change the Go authority and the Rust port together and SHALL include Go/Rust parity tests.
+Feel issues, rule inconsistencies, and rare edge cases with a workaround are not blocking. The gameplay owner SHALL decide unclear cases, and the fix's pull request description MUST record the reason. Every gameplay change, batched or blocking, SHALL change the Go authority and the Rust port together and SHALL include Go/Rust parity tests. While the Rust port lives on a separate integration branch, a paired change MAY land as two pull requests that link each other, one per branch, each with its side of the parity test.
 
 #### Scenario: Non-blocking rule inconsistency is found
 
