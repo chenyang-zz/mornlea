@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8" alt="Go 1.26">
   <img src="https://img.shields.io/badge/Rust-1.97.1-f74c00" alt="Rust 1.97.1">
   <img src="https://img.shields.io/badge/client-macOS-9cf" alt="macOS 客户端">
-  <img src="https://img.shields.io/badge/protocol-v45-blue" alt="protocol v45">
+  <a href="docs/notes/compatibility.zh.md#当前版本矩阵"><img src="https://img.shields.io/badge/versions-compatibility%20matrix-blue" alt="版本矩阵"></a>
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
   <a href="https://github.com/chenyang-zz/mornlea/actions/workflows/ci.yml"><img src="https://github.com/chenyang-zz/mornlea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
@@ -15,7 +15,7 @@ Mornlea 是一个独立的体素生存游戏。客户端、权威服务端、世
 
 单机和局域网走同一条登录与模拟路径。世界和玩家的结果由服务端决定。客户端只保留镜像、预测和呈现。
 
-当前契约：protocol v45、player schema v9、chunk schema v9、world metadata v6、`companions.ai` schema v5、`hostile_mobs` schema v2、`passive_mobs` schema v1、engine ABI v11、client ABI v19、benchmark scenario v23。
+当前契约版本（协议、存档 schema、engine 与 client ABI、benchmark 场景）统一列在[版本矩阵](docs/notes/compatibility.zh.md#当前版本矩阵)中。
 
 ## 功能
 
