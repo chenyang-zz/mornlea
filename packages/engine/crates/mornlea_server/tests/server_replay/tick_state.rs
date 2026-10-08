@@ -474,13 +474,13 @@ fn actual_full_invalid_control_batch_preserves_clock_and_closes_saturated_receiv
         4_096
     );
     let last_input_sequence = private_player_state(&publication).last_input_sequence();
+    // The saturated receiver retires in the same tick and leaves the roster.
     assert!(
-        authority
+        !authority
             .residents()
             .actors
             .iter()
-            .any(|actor| actor.key == ActorKey::Player(session)
-                && actor.lifecycle == ActorLifecycle::Active)
+            .any(|actor| actor.key == ActorKey::Player(session))
     );
     let expected: Vec<_> = (1..=4_096)
         .map(|sequence| {
@@ -1422,10 +1422,10 @@ fn live_reset_keeps_physics_lanes_while_regen_and_actions_advance() {
     assert!(!private_player_state(&publication).reset());
 }
 
-/// Retirement releases transient participation without rewriting durable
-/// respawn anchors or any other committed resident lane.
+/// Retirement releases transient participation and the retired player's own
+/// resident lanes without rewriting any other committed resident lane.
 #[test]
-fn retirement_prunes_sleep_without_rewriting_residents() {
+fn retirement_prunes_sleep_and_releases_only_retired_lanes() {
     let mut authority = authority();
     commit_full_overlay(&mut authority);
     let mut before = authority.residents();
@@ -1457,10 +1457,19 @@ fn retirement_prunes_sleep_without_rewriting_residents() {
     let mut expected_sleepers = before.sleeping.clone();
     expected_sleepers.remove(&retired);
     assert_eq!(after.sleeping, expected_sleepers);
-    assert_eq!(after.actors, before.actors);
-    assert_eq!(after.runtimes, before.runtimes);
-    assert_eq!(after.inventories, before.inventories);
-    assert_eq!(after.mining, before.mining);
+    let retired_key = ActorKey::Player(retired);
+    let mut expected_actors = before.actors.clone();
+    expected_actors.retain(|actor| actor.key != retired_key);
+    assert_eq!(after.actors, expected_actors);
+    let mut expected_runtimes = before.runtimes.clone();
+    expected_runtimes.remove(&retired_key);
+    assert_eq!(after.runtimes, expected_runtimes);
+    let mut expected_inventories = before.inventories.clone();
+    expected_inventories.remove(&retired_key);
+    assert_eq!(after.inventories, expected_inventories);
+    let mut expected_mining = before.mining.clone();
+    expected_mining.remove(&retired_key);
+    assert_eq!(after.mining, expected_mining);
     assert_eq!(after.projectiles, before.projectiles);
     assert_eq!(after.environment, before.environment);
     assert_eq!(after.blocks, before.blocks);

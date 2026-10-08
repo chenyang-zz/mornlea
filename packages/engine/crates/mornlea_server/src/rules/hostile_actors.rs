@@ -1269,13 +1269,10 @@ pub(crate) struct PlayerFact {
 
 fn active_players(view: &AuthorityReadView<'_>) -> Result<Vec<PlayerFact>, ServerError> {
     let mut players = Vec::new();
-    for actor in view.actors() {
+    for actor in view.online_players() {
         let ActorKey::Player(session) = actor.key else {
             continue;
         };
-        if actor.lifecycle != ActorLifecycle::Active {
-            continue;
-        }
         let ActorBody::Player(body) = &actor.body else {
             return Err(ServerError::InvalidInput { field: "actor" });
         };
@@ -1358,11 +1355,8 @@ fn player_within(
     radius_sq: f32,
 ) -> bool {
     let view = ctx.read();
-    for actor in view.actors() {
-        let ActorKey::Player(_) = actor.key else {
-            continue;
-        };
-        if actor.lifecycle != ActorLifecycle::Active || actor.dimension != dimension {
+    for actor in view.online_players() {
+        if actor.dimension != dimension {
             continue;
         }
         if horizontal_distance_sq(position, actor.motion.position().get()) <= radius_sq {

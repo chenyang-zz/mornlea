@@ -130,8 +130,9 @@ fn freeze_with_limits(
         invariant: "combat environment",
     })?;
     let mut hostiles = Vec::new();
-    let mut players = Vec::new();
     let mut passives = Vec::new();
+    // Players come only from the shared online roster.
+    let mut players: Vec<&ActorRecord> = view.online_players().collect();
     for actor in view.actors() {
         match actor.key {
             ActorKey::Hostile(_) if actor.lifecycle == ActorLifecycle::Active => {
@@ -140,7 +141,6 @@ fn freeze_with_limits(
             ActorKey::Passive(_) if actor.lifecycle == ActorLifecycle::Active => {
                 passives.push(actor)
             }
-            ActorKey::Player(_) if actor.lifecycle == ActorLifecycle::Active => players.push(actor),
             _ => {}
         }
     }

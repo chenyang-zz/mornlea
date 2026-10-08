@@ -3,8 +3,10 @@ use super::*;
 use crate::core::actor_save::ActorSaveLedger;
 
 const ACTOR_TARGETS: usize = 19;
-/// Chunk keys one actor-routed completion may name.
-const COMPLETION_CHUNK_KEYS: usize = 8;
+/// Chunk keys one actor-routed completion may name. A completion reports
+/// one store job, whose chunk snapshots never exceed the store's owned-chunk
+/// ceiling.
+const COMPLETION_CHUNK_KEYS: usize = crate::core::contracts::MAX_OWNED_CHUNKS;
 /// Player keys one completion may name: the actor ledger's retained player
 /// records, online or departed, not the online player cap. The overflow keeps
 /// the ledger's existing `Resource::Players` refusal.
