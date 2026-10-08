@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8" alt="Go 1.26">
   <img src="https://img.shields.io/badge/Rust-1.97.1-f74c00" alt="Rust 1.97.1">
   <img src="https://img.shields.io/badge/client-macOS-9cf" alt="macOS client">
-  <img src="https://img.shields.io/badge/protocol-v45-blue" alt="protocol v45">
+  <a href="docs/notes/compatibility.md#current-version-matrix"><img src="https://img.shields.io/badge/versions-compatibility%20matrix-blue" alt="version matrix"></a>
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
   <a href="https://github.com/chenyang-zz/mornlea/actions/workflows/ci.yml"><img src="https://github.com/chenyang-zz/mornlea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
@@ -15,7 +15,7 @@ Mornlea is an independent voxel survival game. It has its own client, authoritat
 
 Local play and LAN play use the same login and simulation path. The server decides world and player outcomes. The client keeps mirrors, prediction, and presentation.
 
-Current contracts: protocol v45, player schema v9, chunk schema v9, world metadata v6, `companions.ai` schema v5, `hostile_mobs` schema v2, `passive_mobs` schema v1, engine ABI v11, client ABI v19, benchmark scenario v23.
+Current contract versions (protocol, save schemas, engine and client ABI, benchmark scenario) are listed in one place: the [version matrix](docs/notes/compatibility.md#current-version-matrix).
 
 ## Features
 
