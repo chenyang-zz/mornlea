@@ -1,0 +1,12 @@
+$ cd packages/engine && cargo test -p mornlea_server --locked --test server_replay -- --exact publication_projection::projection_chunk_snapshot_then_block_changes_then_forget
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:37Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/server_replay.rs (/workspace/ethan/target/debug/deps/server_replay-f1ad081c4434cf89)
+
+running 1 test
+test publication_projection::projection_chunk_snapshot_then_block_changes_then_forget ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 684 filtered out; finished in 0.01s
+
+# exit: 0

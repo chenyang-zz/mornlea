@@ -1,0 +1,12 @@
+$ cd packages/engine && cargo test -p mornlea_server --locked --lib -- --exact core::state::owner_record_admission_tests::source_delta_validation_classified_prefix
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:37Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/workspace/ethan/target/debug/deps/mornlea_server-f180461c654d3941)
+
+running 1 test
+test core::state::owner_record_admission_tests::source_delta_validation_classified_prefix ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 638 filtered out; finished in 0.01s
+
+# exit: 0

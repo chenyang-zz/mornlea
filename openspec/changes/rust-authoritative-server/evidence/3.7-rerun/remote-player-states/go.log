@@ -1,0 +1,10 @@
+$ go test ./packages/server/server -race -count=1 -v -run '^(TestRemotePlayerStatesAreSortedAndNewSpawnsSkipCurrentTick|TestRemotePlayerEightSessionsPublishSevenStatesWith296BytePayload)$'
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:45Z
+=== RUN   TestRemotePlayerStatesAreSortedAndNewSpawnsSkipCurrentTick
+--- PASS: TestRemotePlayerStatesAreSortedAndNewSpawnsSkipCurrentTick (0.00s)
+=== RUN   TestRemotePlayerEightSessionsPublishSevenStatesWith296BytePayload
+--- PASS: TestRemotePlayerEightSessionsPublishSevenStatesWith296BytePayload (0.00s)
+PASS
+ok  	github.com/channing771/mornlea/packages/server/server	1.020s
+# exit: 0
