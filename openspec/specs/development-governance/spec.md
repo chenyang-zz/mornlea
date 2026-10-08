@@ -12,7 +12,7 @@ The repository SHALL support an OpenAI-native orchestration mode and a strict SD
 
 Both modes MUST preserve the approved OpenSpec scope, test-first implementation where behavior changes, file ownership, required validation, recorded rulings, and explicit user authorization boundaries. Orchestration freedom MUST NOT be interpreted as permission to skip a required gate or expand the task.
 
-OpenAI-native mode MUST use an isolation-first execution policy and MUST run no more than two subagents concurrently. A bounded task SHOULD use a fresh isolated agent when it requires independent repository discovery, multi-file reasoning, specialized review, or a long work trace whose main-context retention cost exceeds its handoff and integration cost. Work SHOULD remain with the controller only when it is tiny, tightly coupled to the controller's current edit, or cheaper to complete than to specify and integrate. Parallel speed, independent file ownership, or an unused subagent slot alone MUST NOT justify delegation. Every delegate MUST receive a concise task brief and fresh or minimal context rather than a full conversation copy by default. The controller MUST NOT restart an already-running agent solely to change its model. An editing worker MUST have an isolated worktree or exclusive non-overlapping files.
+OpenAI-native mode MUST use an isolation-first execution policy and MUST run no more than three subagents concurrently. A bounded task SHOULD use a fresh isolated agent when it requires independent repository discovery, multi-file reasoning, specialized review, or a long work trace whose main-context retention cost exceeds its handoff and integration cost. Work SHOULD remain with the controller only when it is tiny, tightly coupled to the controller's current edit, or cheaper to complete than to specify and integrate. Parallel speed, independent file ownership, or an unused subagent slot alone MUST NOT justify delegation. Every delegate MUST receive a concise task brief and fresh or minimal context rather than a full conversation copy by default. The controller MUST NOT restart an already-running agent solely to change its model. An editing worker MUST have an isolated worktree or exclusive non-overlapping files.
 
 #### Scenario: Verified OpenAI controller selects direct implementation
 
@@ -32,10 +32,10 @@ OpenAI-native mode MUST use an isolation-first execution policy and MUST run no 
 
 #### Scenario: OpenAI controller reaches the concurrency ceiling
 
-- **GIVEN** two subagents are already running under an OpenAI-native controller
+- **GIVEN** three subagents are already running under an OpenAI-native controller
 - **WHEN** another independent task becomes available
 - **THEN** the controller MUST execute it directly, queue it, or wait for a slot
-- **AND** MUST NOT start a third concurrent subagent
+- **AND** MUST NOT start a fourth concurrent subagent
 
 #### Scenario: Small task does not justify delegation
 
@@ -346,4 +346,3 @@ Superpowers design and plan outputs SHALL remain in the active OpenSpec change, 
 - **WHEN** Superpowers is applied
 - **THEN** the Agent SHALL complete the authorized planning artifacts and report their validation
 - **AND** MUST NOT confuse planning completion with implementation acceptance or start runtime implementation merely because the plan exists
-
