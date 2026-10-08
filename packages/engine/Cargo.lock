@@ -1000,6 +1000,7 @@ dependencies = [
  "mornlea_engine",
  "mornlea_protocol",
  "mornlea_storage",
+ "serde",
  "serde_json",
  "sha2",
  "windows-sys 0.61.2",

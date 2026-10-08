@@ -7,4 +7,4 @@
 
 pub mod config;
 
-pub use config::{ConfigError, RuntimeConfig};
+pub use config::{ConfigError, ConfigPaths, ConfigWarning, LogLevel, LoggingConfig, RuntimeConfig};

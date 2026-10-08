@@ -1,46 +1,97 @@
 //! Read-only config loading mirrored from Go `packages/shared/config`.
 //!
-//! Semantics match `config.Load` / `config.Defaults` for the server-owned
-//! fields (`version`, `physics`, `sim`, `fluidEnabled`):
-//! - missing file => built-in defaults (never creates or writes a file)
-//! - JSON syntax / wrong version / wrong field type => typed [`ConfigError`]
-//! - missing keys keep defaults; out-of-range numerics clamp like Go `applyGroups`
-//! - unknown keys are ignored (Go warns; this loader stays silent)
+//! A config file must roll back and forth between the Go and Rust servers, so
+//! [`RuntimeConfig::decode`] accepts and rejects exactly what Go
+//! `decodeConfig` does, apart from the known differences listed in the
+//! rust-authoritative-server design (serde_json input strictness and
+//! case-only duplicate keys). The shared fixtures under
+//! `packages/shared/config/testdata/parity` pin that on both sides.
 //!
-//! Client-only groups (`logging`, `render`, `ai`, `audioVolume`, …) are not
-//! consumed here; later gaps extend the freeze surface.
+//! - missing file => built-in defaults (never creates or writes a file)
+//! - JSON syntax, wrong version, or a wrong type in any group Go type-checks
+//!   => typed [`ConfigError`]
+//! - JSON `null` behaves like Go: absent for objects, booleans and integers,
+//!   zero (then clamped) for tunable numbers, refused for pointer fields
+//! - keys match exactly first, then case-insensitively like Go
+//!   `lookupCaseInsensitive`; two case-only variants with no exact match are
+//!   an [`ConfigError::AmbiguousKey`] because Go picks one at random
+//! - unknown keys, clamped values and unknown log levels are accepted with a
+//!   [`ConfigWarning`], like Go's `slog.Warn`; [`RuntimeConfig::load`] and
+//!   [`RuntimeConfig::resolve`] print them to stderr
+//!
+//! Server-owned values (`physics`, `sim`, `fluidEnabled`) and `logging` are
+//! frozen; client-only groups are validated and dropped.
 
+mod client;
+mod json;
+#[cfg(test)]
+mod parity_tests;
+mod resolve;
+
+use std::fmt;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mornlea_engine::native::contracts::PhysicsTuning;
-use serde_json::{Map, Value};
 
 use crate::core::contracts::{RuleTunables, ServerError};
 
+pub use client::{LogLevel, LoggingConfig};
+use json::{JsonObject, JsonValue, go_equal_fold, go_to_lower};
+pub use resolve::{ConfigPaths, user_config_dir};
+
 /// Current config file version; mirrors `config.CurrentVersion`.
 pub const CURRENT_VERSION: i64 = 1;
+
+/// Top-level keys Go `warnUnknownTopLevel` knows (lowercase).
+const KNOWN_TOP_LEVEL: [&str; 11] = [
+    "version",
+    "logging",
+    "physics",
+    "sim",
+    "render",
+    "ai",
+    "texturepackpath",
+    "audiovolume",
+    "windowsize",
+    "fluidenabled",
+    "cameramode",
+];
 
 /// Hard error from a present but unusable config file.
 #[derive(Debug)]
 pub enum ConfigError {
     /// Filesystem failure other than "not found".
     Io(io::Error),
-    /// JSON syntax or structural failure.
+    /// Filesystem failure while resolving a specific path.
+    Path { path: PathBuf, detail: String },
+    /// JSON syntax or top-level shape failure.
     Parse(String),
     /// `version` present but not [`CURRENT_VERSION`].
     UnsupportedVersion { found: i64 },
-    /// A named field had the wrong JSON type or failed checked conversion.
-    InvalidField { field: &'static str, detail: String },
+    /// A field had the wrong JSON type or failed a Go validation rule.
+    InvalidField { field: String, detail: String },
+    /// No exact key matched and several keys differ only by case. Go picks one
+    /// nondeterministically; Rust refuses (documented known difference).
+    AmbiguousKey { field: String, keys: Vec<String> },
     /// Checked tunable construction refused the clamped values.
     Tunables(ServerError),
+    /// The default config file or directory failed Go's permission gates.
+    InsecurePath { path: PathBuf, detail: String },
+    /// The default config file changed identity between checks.
+    Replaced { path: PathBuf },
+    /// Only the legacy `minecraft-go` file exists; Go must migrate it first.
+    LegacyConfigNeedsMigration { legacy: PathBuf, current: PathBuf },
+    /// The user config directory cannot be determined.
+    NoConfigDir(String),
 }
 
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(err) => write!(f, "config io: {err}"),
+            Self::Path { path, detail } => write!(f, "config {}: {detail}", path.display()),
             Self::Parse(detail) => write!(f, "config parse: {detail}"),
             Self::UnsupportedVersion { found } => write!(
                 f,
@@ -49,7 +100,28 @@ impl std::fmt::Display for ConfigError {
             Self::InvalidField { field, detail } => {
                 write!(f, "config: invalid field {field}: {detail}")
             }
+            Self::AmbiguousKey { field, keys } => write!(
+                f,
+                "config: {field} is ambiguous: keys {keys:?} differ only by case"
+            ),
             Self::Tunables(err) => write!(f, "config: tunables refused: {err:?}"),
+            Self::InsecurePath { path, detail } => {
+                write!(f, "config: refusing {}: {detail}", path.display())
+            }
+            Self::Replaced { path } => write!(
+                f,
+                "config: {} was replaced while it was being opened",
+                path.display()
+            ),
+            Self::LegacyConfigNeedsMigration { legacy, current } => write!(
+                f,
+                "config: found legacy config {} but no {}; start Mornlea once with the Go \
+                 server or client to migrate it (the Rust server never reads or migrates \
+                 the legacy file)",
+                legacy.display(),
+                current.display()
+            ),
+            Self::NoConfigDir(detail) => write!(f, "config: no user config directory: {detail}"),
         }
     }
 }
@@ -62,10 +134,57 @@ impl From<io::Error> for ConfigError {
     }
 }
 
+/// Non-fatal finding, mirroring the `slog.Warn` calls in Go `decodeConfig`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConfigWarning {
+    /// Unknown key ignored.
+    UnknownField { field: String },
+    /// Out-of-range number clamped.
+    Clamped {
+        field: String,
+        value: f64,
+        clamped: f64,
+    },
+    /// Wrong type ignored (`render.lodEnabled`).
+    InvalidTypeIgnored { field: String, want: &'static str },
+    /// Illegal value replaced by its default (`render.lodStep`, `cameraMode`).
+    Defaulted { field: String, value: String },
+    /// Unknown log level name; the default level stays.
+    UnknownLogLevel { field: String, value: String },
+    /// Retired `ai` key ignored because no companion is configured.
+    RetiredFieldIgnored { field: String },
+}
+
+impl fmt::Display for ConfigWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownField { field } => write!(f, "unknown field {field} ignored"),
+            Self::Clamped {
+                field,
+                value,
+                clamped,
+            } => write!(f, "{field} {value} out of range, clamped to {clamped}"),
+            Self::InvalidTypeIgnored { field, want } => {
+                write!(f, "{field} is not a {want}, ignored")
+            }
+            Self::Defaulted { field, value } => {
+                write!(f, "{field} {value} is illegal, default used")
+            }
+            Self::UnknownLogLevel { field, value } => {
+                write!(f, "{field} has unknown log level {value:?}, default used")
+            }
+            Self::RetiredFieldIgnored { field } => {
+                write!(f, "retired field {field} ignored")
+            }
+        }
+    }
+}
+
 /// Frozen process configuration after load.
 ///
-/// Plain accessors feed `core` (`RuleTunables`, fluid budgets, flags). The
-/// config type itself never crosses into `core`.
+/// Plain accessors feed `core` (`RuleTunables`, raw fluid budgets, flags).
+/// The config type itself never crosses into `core`, and fluid budgets stay
+/// raw numbers here; the fluid host builds its own checked budget from them.
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
     version: i64,
@@ -74,6 +193,8 @@ pub struct RuntimeConfig {
     fluid_rescan_cells_per_tick: u32,
     spawn_radius: i32,
     fluid_enabled: bool,
+    logging: LoggingConfig,
+    warnings: Vec<ConfigWarning>,
 }
 
 impl RuntimeConfig {
@@ -84,53 +205,119 @@ impl RuntimeConfig {
             default_physics_parts(),
             default_sim_parts(),
             true,
+            LoggingConfig::default(),
+            Vec::new(),
         )
         .expect("Go-pinned defaults must construct")
     }
 
-    /// Load `path`. Missing file yields [`Self::defaults`]; never writes.
+    /// Go `config.Load`: read `path`; a missing file yields [`Self::defaults`].
+    /// Never writes. Warnings are printed to stderr.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        match fs::read(path) {
-            Ok(bytes) => Self::decode(&bytes),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Self::defaults()),
-            Err(err) => Err(ConfigError::Io(err)),
-        }
+        let config = match fs::read(path) {
+            Ok(bytes) => Self::decode(&bytes)?,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Self::defaults(),
+            Err(err) => return Err(ConfigError::Io(err)),
+        };
+        config.emit_warnings();
+        Ok(config)
     }
 
-    /// Decode JSON bytes with Go `decodeConfig` precedence for server fields.
+    /// Decode JSON bytes with Go `decodeConfig` acceptance. Pure: warnings are
+    /// returned through [`Self::warnings`], not printed.
     pub fn decode(bytes: &[u8]) -> Result<Self, ConfigError> {
-        let top: Value =
-            serde_json::from_slice(bytes).map_err(|err| ConfigError::Parse(err.to_string()))?;
-        let Some(obj) = top.as_object() else {
-            return Err(ConfigError::Parse(
-                "top-level value must be a JSON object".into(),
-            ));
+        Self::decode_with_env(bytes, &env_var_is_set)
+    }
+
+    /// [`Self::decode`] with an injectable "environment variable is non-empty"
+    /// probe, used by the `ai.agentService.apiKeyEnv` check.
+    pub(crate) fn decode_with_env(
+        bytes: &[u8],
+        env_is_set: &dyn Fn(&str) -> bool,
+    ) -> Result<Self, ConfigError> {
+        let top = json::parse(bytes).map_err(|err| ConfigError::Parse(err.to_string()))?;
+        let empty = JsonObject::default();
+        let obj = match &top {
+            JsonValue::Object(obj) => obj,
+            // Go unmarshals `null` into a nil map: every key is absent.
+            JsonValue::Null => &empty,
+            other => {
+                return Err(ConfigError::Parse(format!(
+                    "top-level value must be a JSON object, got {}",
+                    other.kind()
+                )));
+            }
         };
+        let mut warnings = Vec::new();
 
         let mut version = CURRENT_VERSION;
-        if let Some(raw) = lookup_ci(obj, "version") {
-            version = as_i64(raw, "version")?;
-            if version != CURRENT_VERSION {
-                return Err(ConfigError::UnsupportedVersion { found: version });
-            }
+        if let Some(raw) = lookup(obj, "version", "")?
+            && let Some(found) = go_int(raw, "version")?
+        {
+            version = found;
+        }
+        if version != CURRENT_VERSION {
+            return Err(ConfigError::UnsupportedVersion { found: version });
+        }
+
+        let logging = match lookup(obj, "logging", "")? {
+            Some(raw) => client::decode_logging(raw, &mut warnings)?,
+            None => LoggingConfig::default(),
+        };
+        if let Some(raw) = lookup(obj, "ai", "")? {
+            client::validate_ai(raw, env_is_set, &mut warnings)?;
+        }
+        if let Some(raw) = lookup(obj, "texturePackPath", "")? {
+            client::validate_texture_pack_path(raw)?;
+        }
+        if let Some(raw) = lookup(obj, "audioVolume", "")? {
+            client::validate_audio_volume(raw)?;
+        }
+        if let Some(raw) = lookup(obj, "windowSize", "")? {
+            client::validate_window_size(raw)?;
+        }
+        let mut fluid_enabled = true;
+        if let Some(raw) = lookup(obj, "fluidEnabled", "")?
+            && let Some(value) = go_bool(raw, "fluidEnabled")?
+        {
+            fluid_enabled = value;
+        }
+        if let Some(raw) = lookup(obj, "cameraMode", "")?
+            && let Some(mode) = go_int(raw, "cameraMode")?
+            && !(0..=2).contains(&mode)
+        {
+            warnings.push(ConfigWarning::Defaulted {
+                field: "cameraMode".into(),
+                value: mode.to_string(),
+            });
         }
 
         let mut physics = default_physics_parts();
-        if let Some(raw) = lookup_ci(obj, "physics") {
-            apply_physics(&mut physics, raw)?;
+        if let Some(fields) = group(obj, "physics")? {
+            apply_physics(&mut physics, fields, &mut warnings)?;
+            warn_unknown_group_fields(fields, "physics", &PHYSICS_FIELDS, &mut warnings);
         }
-
         let mut sim = default_sim_parts();
-        if let Some(raw) = lookup_ci(obj, "sim") {
-            apply_sim(&mut sim, raw)?;
+        if let Some(fields) = group(obj, "sim")? {
+            apply_sim(&mut sim, fields, &mut warnings)?;
+            warn_unknown_group_fields(fields, "sim", &SIM_FIELDS, &mut warnings);
+        }
+        if let Some(fields) = group(obj, "render")? {
+            client::validate_render(fields, &mut warnings)?;
+            let known: Vec<&str> = client::RENDER_FIELDS
+                .iter()
+                .map(|(name, _, _)| *name)
+                .chain(client::RENDER_LOD_FIELDS)
+                .collect();
+            warn_unknown_group_fields(fields, "render", &known, &mut warnings);
+        }
+        for (key, _) in obj.map_entries() {
+            if !KNOWN_TOP_LEVEL.contains(&go_to_lower(key).as_str()) {
+                warnings.push(ConfigWarning::UnknownField { field: key.into() });
+            }
         }
 
-        let mut fluid_enabled = true;
-        if let Some(raw) = lookup_ci(obj, "fluidEnabled") {
-            fluid_enabled = as_bool(raw, "fluidEnabled")?;
-        }
-
-        Self::from_parts(version, physics, sim, fluid_enabled)
+        Self::from_parts(version, physics, sim, fluid_enabled, logging, warnings)
     }
 
     fn from_parts(
@@ -138,6 +325,8 @@ impl RuntimeConfig {
         physics: PhysicsParts,
         sim: SimParts,
         fluid_enabled: bool,
+        logging: LoggingConfig,
+        warnings: Vec<ConfigWarning>,
     ) -> Result<Self, ConfigError> {
         let tuning = PhysicsTuning {
             fixed_delta_seconds: physics.fixed_delta_seconds,
@@ -185,6 +374,8 @@ impl RuntimeConfig {
             fluid_rescan_cells_per_tick: sim.fluid_rescan_cells_per_tick,
             spawn_radius: sim.spawn_radius,
             fluid_enabled,
+            logging,
+            warnings,
         })
     }
 
@@ -212,6 +403,30 @@ impl RuntimeConfig {
     pub fn fluid_enabled(&self) -> bool {
         self.fluid_enabled
     }
+
+    /// Frozen `logging` group; the serve host applies it.
+    pub fn logging(&self) -> &LoggingConfig {
+        &self.logging
+    }
+
+    /// Findings Go would `slog.Warn` while decoding.
+    pub fn warnings(&self) -> &[ConfigWarning] {
+        &self.warnings
+    }
+
+    fn emit_warnings(&self) {
+        for warning in &self.warnings {
+            eprintln!("config warning: {warning}");
+        }
+    }
+}
+
+/// Go `os.Getenv(name) != ""`. Names Go could never find (`=` or NUL) count
+/// as unset.
+fn env_var_is_set(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(['=', '\0'])
+        && std::env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -304,343 +519,266 @@ fn default_sim_parts() -> SimParts {
     }
 }
 
-fn apply_physics(parts: &mut PhysicsParts, raw: &Value) -> Result<(), ConfigError> {
-    let fields = as_object(raw, "physics")?;
+/// Physics keys from Go `config.Fields()` (config.go:1435+).
+const PHYSICS_FIELDS: [&str; 15] = [
+    "eyeHeight",
+    "stepHeight",
+    "walkSpeed",
+    "groundAcceleration",
+    "groundDeceleration",
+    "airAcceleration",
+    "jumpSpeed",
+    "gravity",
+    "terminalFallSpeed",
+    "fluidGravity",
+    "fluidSinkSpeed",
+    "fluidAscendSpeed",
+    "fluidHorizontalDrag",
+    "sprintSpeedMultiplier",
+    "sneakSpeedMultiplier",
+];
+
+/// Sim keys from Go `config.Fields()` (config.go:1454+).
+const SIM_FIELDS: [&str; 20] = [
+    "interactionReach",
+    "regenDelayTicks",
+    "regenIntervalTicks",
+    "drownDamageIntervalTicks",
+    "dropPickupDelayTicks",
+    "playerDropPickupDelayTicks",
+    "dropLifetimeTicks",
+    "dropPickupRange",
+    "spawnRadius",
+    "furnaceSmeltTicks",
+    "furnaceBurnTicks",
+    "fluidFlowDelayTicks",
+    "fluidUpdatesPerTick",
+    "fluidRescanCellsPerTick",
+    "randomTicksPerSection",
+    "cropGrowthChancePercent",
+    "starvationDamageIntervalTicks",
+    "exhaustionThresholdMilli",
+    "regenHungerThreshold",
+    "eatingTicks",
+];
+
+/// Go `applyGroups` for one numeric field: decode as `float64` (null is 0),
+/// clamp to the `Fields()` range with a warning, and hand back the clamped
+/// value for the caller's narrowing cast (Go `setFloat` truncates the same
+/// way). `None` means the key is absent and the default stays.
+fn group_number(
+    fields: &JsonObject,
+    group: &str,
+    name: &str,
+    min: f64,
+    max: f64,
+    warnings: &mut Vec<ConfigWarning>,
+) -> Result<Option<f64>, ConfigError> {
+    let Some(raw) = lookup(fields, name, group)? else {
+        return Ok(None);
+    };
+    let path = format!("{group}.{name}");
+    let value = go_f64(raw, &path)?;
+    Ok(Some(warn_clamp(warnings, path, value, min, max)))
+}
+
+macro_rules! set_group_fields {
+    ($fields:expr, $group:literal, $warnings:expr, $parts:expr,
+     $( $name:literal => $slot:ident : $ty:ty , $min:expr , $max:expr ; )*) => {
+        $(
+            if let Some(value) = group_number($fields, $group, $name, $min, $max, $warnings)? {
+                $parts.$slot = value as $ty;
+            }
+        )*
+    };
+}
+
+fn apply_physics(
+    parts: &mut PhysicsParts,
+    fields: &JsonObject,
+    warnings: &mut Vec<ConfigWarning>,
+) -> Result<(), ConfigError> {
     // Ranges from config.Fields() physics group (config.go:1435+).
-    set_f32(fields, "eyeHeight", 1.0, 2.2, &mut parts.eye_height)?;
-    set_f32(fields, "stepHeight", 0.0, 1.5, &mut parts.step_height)?;
-    set_f32(fields, "walkSpeed", 0.5, 20.0, &mut parts.walk_speed)?;
-    set_f32(
-        fields,
-        "groundAcceleration",
-        1.0,
-        200.0,
-        &mut parts.ground_acceleration,
-    )?;
-    set_f32(
-        fields,
-        "groundDeceleration",
-        1.0,
-        200.0,
-        &mut parts.ground_deceleration,
-    )?;
-    set_f32(
-        fields,
-        "airAcceleration",
-        1.0,
-        100.0,
-        &mut parts.air_acceleration,
-    )?;
-    set_f32(fields, "jumpSpeed", 1.0, 30.0, &mut parts.jump_speed)?;
-    set_f32(fields, "gravity", 1.0, 100.0, &mut parts.gravity)?;
-    set_f32(
-        fields,
-        "terminalFallSpeed",
-        1.0,
-        200.0,
-        &mut parts.terminal_fall_speed,
-    )?;
-    set_f32(fields, "fluidGravity", 0.0, 100.0, &mut parts.fluid_gravity)?;
-    set_f32(
-        fields,
-        "fluidSinkSpeed",
-        0.0,
-        200.0,
-        &mut parts.fluid_sink_speed,
-    )?;
-    set_f32(
-        fields,
-        "fluidAscendSpeed",
-        0.0,
-        30.0,
-        &mut parts.fluid_ascend_speed,
-    )?;
-    set_f32(
-        fields,
-        "fluidHorizontalDrag",
-        0.0,
-        1.0,
-        &mut parts.fluid_horizontal_drag,
-    )?;
-    set_f32(
-        fields,
-        "sprintSpeedMultiplier",
-        1.0,
-        3.0,
-        &mut parts.sprint_speed_multiplier,
-    )?;
-    set_f32(
-        fields,
-        "sneakSpeedMultiplier",
-        0.05,
-        1.0,
-        &mut parts.sneak_speed_multiplier,
-    )?;
+    set_group_fields!(fields, "physics", warnings, parts,
+        "eyeHeight" => eye_height: f32, 1.0, 2.2;
+        "stepHeight" => step_height: f32, 0.0, 1.5;
+        "walkSpeed" => walk_speed: f32, 0.5, 20.0;
+        "groundAcceleration" => ground_acceleration: f32, 1.0, 200.0;
+        "groundDeceleration" => ground_deceleration: f32, 1.0, 200.0;
+        "airAcceleration" => air_acceleration: f32, 1.0, 100.0;
+        "jumpSpeed" => jump_speed: f32, 1.0, 30.0;
+        "gravity" => gravity: f32, 1.0, 100.0;
+        "terminalFallSpeed" => terminal_fall_speed: f32, 1.0, 200.0;
+        "fluidGravity" => fluid_gravity: f32, 0.0, 100.0;
+        "fluidSinkSpeed" => fluid_sink_speed: f32, 0.0, 200.0;
+        "fluidAscendSpeed" => fluid_ascend_speed: f32, 0.0, 30.0;
+        "fluidHorizontalDrag" => fluid_horizontal_drag: f32, 0.0, 1.0;
+        "sprintSpeedMultiplier" => sprint_speed_multiplier: f32, 1.0, 3.0;
+        "sneakSpeedMultiplier" => sneak_speed_multiplier: f32, 0.05, 1.0;
+    );
     Ok(())
 }
 
-fn apply_sim(parts: &mut SimParts, raw: &Value) -> Result<(), ConfigError> {
-    let fields = as_object(raw, "sim")?;
+fn apply_sim(
+    parts: &mut SimParts,
+    fields: &JsonObject,
+    warnings: &mut Vec<ConfigWarning>,
+) -> Result<(), ConfigError> {
     // Ranges from config.Fields() sim group (config.go:1454+).
-    set_f32(
-        fields,
-        "interactionReach",
-        1.0,
-        32.0,
-        &mut parts.interaction_reach,
-    )?;
-    set_u32(
-        fields,
-        "regenDelayTicks",
-        0.0,
-        2000.0,
-        &mut parts.regen_delay_ticks,
-    )?;
-    set_u32(
-        fields,
-        "regenIntervalTicks",
-        1.0,
-        600.0,
-        &mut parts.regen_interval_ticks,
-    )?;
-    set_u32(
-        fields,
-        "drownDamageIntervalTicks",
-        1.0,
-        600.0,
-        &mut parts.drown_damage_interval_ticks,
-    )?;
-    set_u8(
-        fields,
-        "dropPickupDelayTicks",
-        0.0,
-        255.0,
-        &mut parts.drop_pickup_delay_ticks,
-    )?;
-    set_u8(
-        fields,
-        "playerDropPickupDelayTicks",
-        0.0,
-        255.0,
-        &mut parts.player_drop_pickup_delay_ticks,
-    )?;
-    set_u32(
-        fields,
-        "dropLifetimeTicks",
-        1.0,
-        120_000.0,
-        &mut parts.drop_lifetime_ticks,
-    )?;
-    set_f32(
-        fields,
-        "dropPickupRange",
-        0.1,
-        16.0,
-        &mut parts.drop_pickup_range,
-    )?;
-    set_i32(fields, "spawnRadius", 1.0, 64.0, &mut parts.spawn_radius)?;
-    set_u8(
-        fields,
-        "furnaceSmeltTicks",
-        1.0,
-        200.0,
-        &mut parts.furnace_smelt_ticks,
-    )?;
-    set_u16(
-        fields,
-        "furnaceBurnTicks",
-        1.0,
-        1600.0,
-        &mut parts.furnace_burn_ticks,
-    )?;
-    set_u32(
-        fields,
-        "fluidFlowDelayTicks",
-        0.0,
-        2000.0,
-        &mut parts.fluid_flow_delay_ticks,
-    )?;
-    set_u32(
-        fields,
-        "fluidUpdatesPerTick",
-        1.0,
-        65_536.0,
-        &mut parts.fluid_updates_per_tick,
-    )?;
-    set_u32(
-        fields,
-        "fluidRescanCellsPerTick",
-        1.0,
-        1_048_576.0,
-        &mut parts.fluid_rescan_cells_per_tick,
-    )?;
-    set_u8(
-        fields,
-        "randomTicksPerSection",
-        0.0,
-        64.0,
-        &mut parts.random_ticks_per_section,
-    )?;
-    set_u8(
-        fields,
-        "cropGrowthChancePercent",
-        0.0,
-        100.0,
-        &mut parts.crop_growth_chance_percent,
-    )?;
-    set_u32(
-        fields,
-        "starvationDamageIntervalTicks",
-        1.0,
-        2000.0,
-        &mut parts.starvation_damage_interval_ticks,
-    )?;
-    set_u16(
-        fields,
-        "exhaustionThresholdMilli",
-        1000.0,
-        20_000.0,
-        &mut parts.exhaustion_threshold_milli,
-    )?;
-    set_u8(
-        fields,
-        "regenHungerThreshold",
-        0.0,
-        20.0,
-        &mut parts.regen_hunger_threshold,
-    )?;
-    set_u16(fields, "eatingTicks", 1.0, 200.0, &mut parts.eating_ticks)?;
+    set_group_fields!(fields, "sim", warnings, parts,
+        "interactionReach" => interaction_reach: f32, 1.0, 32.0;
+        "regenDelayTicks" => regen_delay_ticks: u32, 0.0, 2000.0;
+        "regenIntervalTicks" => regen_interval_ticks: u32, 1.0, 600.0;
+        "drownDamageIntervalTicks" => drown_damage_interval_ticks: u32, 1.0, 600.0;
+        "dropPickupDelayTicks" => drop_pickup_delay_ticks: u8, 0.0, 255.0;
+        "playerDropPickupDelayTicks" => player_drop_pickup_delay_ticks: u8, 0.0, 255.0;
+        "dropLifetimeTicks" => drop_lifetime_ticks: u32, 1.0, 120_000.0;
+        "dropPickupRange" => drop_pickup_range: f32, 0.1, 16.0;
+        "spawnRadius" => spawn_radius: i32, 1.0, 64.0;
+        "furnaceSmeltTicks" => furnace_smelt_ticks: u8, 1.0, 200.0;
+        "furnaceBurnTicks" => furnace_burn_ticks: u16, 1.0, 1600.0;
+        "fluidFlowDelayTicks" => fluid_flow_delay_ticks: u32, 0.0, 2000.0;
+        "fluidUpdatesPerTick" => fluid_updates_per_tick: u32, 1.0, 65_536.0;
+        "fluidRescanCellsPerTick" => fluid_rescan_cells_per_tick: u32, 1.0, 1_048_576.0;
+        "randomTicksPerSection" => random_ticks_per_section: u8, 0.0, 64.0;
+        "cropGrowthChancePercent" => crop_growth_chance_percent: u8, 0.0, 100.0;
+        "starvationDamageIntervalTicks" => starvation_damage_interval_ticks: u32, 1.0, 2000.0;
+        "exhaustionThresholdMilli" => exhaustion_threshold_milli: u16, 1000.0, 20_000.0;
+        "regenHungerThreshold" => regen_hunger_threshold: u8, 0.0, 20.0;
+        "eatingTicks" => eating_ticks: u16, 1.0, 200.0;
+    );
     Ok(())
 }
 
-fn lookup_ci<'a>(obj: &'a Map<String, Value>, name: &str) -> Option<&'a Value> {
-    obj.iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value)
+pub(crate) fn invalid(field: impl Into<String>, detail: impl Into<String>) -> ConfigError {
+    ConfigError::InvalidField {
+        field: field.into(),
+        detail: detail.into(),
+    }
 }
 
-fn as_object<'a>(
-    raw: &'a Value,
-    field: &'static str,
-) -> Result<&'a Map<String, Value>, ConfigError> {
-    raw.as_object().ok_or_else(|| ConfigError::InvalidField {
-        field,
-        detail: "must be a JSON object".into(),
+/// Go `lookupCaseInsensitive` over a Go map: the exact key wins (last
+/// duplicate); otherwise one case-insensitive match. Several case-only
+/// matches are refused because Go's map iteration would pick one at random.
+pub(crate) fn lookup<'a>(
+    obj: &'a JsonObject,
+    key: &str,
+    parent: &str,
+) -> Result<Option<&'a JsonValue>, ConfigError> {
+    if let Some(value) = obj.get_exact(key) {
+        return Ok(Some(value));
+    }
+    let mut matches = obj
+        .map_entries()
+        .filter(|(candidate, _)| go_equal_fold(candidate, key));
+    let Some((first_key, first)) = matches.next() else {
+        return Ok(None);
+    };
+    let rest: Vec<String> = matches.map(|(candidate, _)| candidate.to_owned()).collect();
+    if rest.is_empty() {
+        return Ok(Some(first));
+    }
+    let mut keys = vec![first_key.to_owned()];
+    keys.extend(rest);
+    Err(ConfigError::AmbiguousKey {
+        field: if parent.is_empty() {
+            key.to_owned()
+        } else {
+            format!("{parent}.{key}")
+        },
+        keys,
     })
 }
 
-fn as_bool(raw: &Value, field: &'static str) -> Result<bool, ConfigError> {
-    raw.as_bool().ok_or_else(|| ConfigError::InvalidField {
-        field,
-        detail: "must be a boolean".into(),
-    })
+/// A `physics`/`sim`/`render` group: object, or `null` treated as present
+/// but empty (Go unmarshals it into a nil map).
+fn group<'a>(obj: &'a JsonObject, name: &str) -> Result<Option<&'a JsonObject>, ConfigError> {
+    static EMPTY: std::sync::OnceLock<JsonObject> = std::sync::OnceLock::new();
+    match lookup(obj, name, "")? {
+        None => Ok(None),
+        Some(JsonValue::Null) => Ok(Some(EMPTY.get_or_init(JsonObject::default))),
+        Some(JsonValue::Object(fields)) => Ok(Some(fields)),
+        Some(other) => Err(invalid(
+            name,
+            format!("must be an object, got {}", other.kind()),
+        )),
+    }
 }
 
-fn as_i64(raw: &Value, field: &'static str) -> Result<i64, ConfigError> {
-    raw.as_i64()
-        .or_else(|| raw.as_u64().and_then(|v| i64::try_from(v).ok()))
-        .or_else(|| {
-            raw.as_f64().and_then(|v| {
-                if v.fract() == 0.0 && v >= i64::MIN as f64 && v <= i64::MAX as f64 {
-                    Some(v as i64)
-                } else {
-                    None
-                }
-            })
-        })
-        .ok_or_else(|| ConfigError::InvalidField {
+/// Go `json.Unmarshal` into `int`: integer literal within `int64`; `null`
+/// leaves the target unchanged (`None`).
+pub(crate) fn go_int(raw: &JsonValue, field: &str) -> Result<Option<i64>, ConfigError> {
+    match raw {
+        JsonValue::Null => Ok(None),
+        JsonValue::Number(number) => number
+            .as_go_int()
+            .map(Some)
+            .ok_or_else(|| invalid(field, "must be an integer literal within int64")),
+        other => Err(invalid(
             field,
-            detail: "must be an integer".into(),
-        })
+            format!("must be an integer, got {}", other.kind()),
+        )),
+    }
 }
 
-fn as_f64(raw: &Value, field: &'static str) -> Result<f64, ConfigError> {
-    raw.as_f64()
-        .or_else(|| raw.as_i64().map(|v| v as f64))
-        .or_else(|| raw.as_u64().map(|v| v as f64))
-        .ok_or_else(|| ConfigError::InvalidField {
+/// Go `json.Unmarshal` into `bool`; `null` leaves the target unchanged.
+fn go_bool(raw: &JsonValue, field: &str) -> Result<Option<bool>, ConfigError> {
+    match raw {
+        JsonValue::Null => Ok(None),
+        JsonValue::Bool(value) => Ok(Some(*value)),
+        other => Err(invalid(
             field,
-            detail: "must be a number".into(),
-        })
+            format!("must be a boolean, got {}", other.kind()),
+        )),
+    }
 }
 
-fn clamp(value: f64, min: f64, max: f64) -> f64 {
-    value.clamp(min, max)
+/// Go `json.Unmarshal` into a zeroed `float64`: `null` yields 0.
+pub(crate) fn go_f64(raw: &JsonValue, field: &str) -> Result<f64, ConfigError> {
+    match raw {
+        JsonValue::Null => Ok(0.0),
+        JsonValue::Number(number) => Ok(number.as_go_f64()),
+        other => Err(invalid(
+            field,
+            format!("must be a number, got {}", other.kind()),
+        )),
+    }
 }
 
-fn set_f32(
-    fields: &Map<String, Value>,
-    name: &'static str,
+/// Clamp like Go `applyGroups` and record the same warning it logs.
+pub(crate) fn warn_clamp(
+    warnings: &mut Vec<ConfigWarning>,
+    field: String,
+    value: f64,
     min: f64,
     max: f64,
-    slot: &mut f32,
-) -> Result<(), ConfigError> {
-    let Some(raw) = lookup_ci(fields, name) else {
-        return Ok(());
-    };
-    let value = as_f64(raw, name)?;
-    *slot = clamp(value, min, max) as f32;
-    Ok(())
+) -> f64 {
+    let clamped = value.clamp(min, max);
+    if clamped != value {
+        warnings.push(ConfigWarning::Clamped {
+            field,
+            value,
+            clamped,
+        });
+    }
+    clamped
 }
 
-fn set_u32(
-    fields: &Map<String, Value>,
-    name: &'static str,
-    min: f64,
-    max: f64,
-    slot: &mut u32,
-) -> Result<(), ConfigError> {
-    let Some(raw) = lookup_ci(fields, name) else {
-        return Ok(());
-    };
-    let value = as_f64(raw, name)?;
-    *slot = clamp(value, min, max) as u32;
-    Ok(())
-}
-
-fn set_u16(
-    fields: &Map<String, Value>,
-    name: &'static str,
-    min: f64,
-    max: f64,
-    slot: &mut u16,
-) -> Result<(), ConfigError> {
-    let Some(raw) = lookup_ci(fields, name) else {
-        return Ok(());
-    };
-    let value = as_f64(raw, name)?;
-    *slot = clamp(value, min, max) as u16;
-    Ok(())
-}
-
-fn set_u8(
-    fields: &Map<String, Value>,
-    name: &'static str,
-    min: f64,
-    max: f64,
-    slot: &mut u8,
-) -> Result<(), ConfigError> {
-    let Some(raw) = lookup_ci(fields, name) else {
-        return Ok(());
-    };
-    let value = as_f64(raw, name)?;
-    *slot = clamp(value, min, max) as u8;
-    Ok(())
-}
-
-fn set_i32(
-    fields: &Map<String, Value>,
-    name: &'static str,
-    min: f64,
-    max: f64,
-    slot: &mut i32,
-) -> Result<(), ConfigError> {
-    let Some(raw) = lookup_ci(fields, name) else {
-        return Ok(());
-    };
-    let value = as_f64(raw, name)?;
-    *slot = clamp(value, min, max) as i32;
-    Ok(())
+/// Go warns about group keys outside `Fields()` (compared lowercase).
+fn warn_unknown_group_fields(
+    fields: &JsonObject,
+    group: &str,
+    known: &[&str],
+    warnings: &mut Vec<ConfigWarning>,
+) {
+    for (key, _) in fields.map_entries() {
+        let lower = go_to_lower(key);
+        if !known.iter().any(|name| name.to_ascii_lowercase() == lower) {
+            warnings.push(ConfigWarning::UnknownField {
+                field: format!("{group}.{key}"),
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -750,10 +888,7 @@ mod tests {
         let err = RuntimeConfig::decode(br#"{"fluidEnabled":"yes"}"#).expect_err("type");
         assert!(matches!(
             err,
-            ConfigError::InvalidField {
-                field: "fluidEnabled",
-                ..
-            }
+            ConfigError::InvalidField { ref field, .. } if field == "fluidEnabled"
         ));
     }
 
@@ -825,9 +960,7 @@ mod tests {
                     if trimmed.starts_with("//") {
                         continue;
                     }
-                    if trimmed.contains("crate::runtime")
-                        || trimmed.contains("mornlea_server::runtime")
-                    {
+                    if mentions_runtime_module(trimmed) {
                         offenders.push(format!("{}:{}: {trimmed}", entry.display(), idx + 1));
                     }
                 }
@@ -839,6 +972,299 @@ mod tests {
             forbidden,
             offenders.join("\n")
         );
+    }
+
+    /// `\bruntime::` (any path into the module, including grouped `use
+    /// crate::{runtime::..}` and `super::super::runtime::..`) or a bare
+    /// `crate::runtime` / `mornlea_server::runtime` import.
+    fn mentions_runtime_module(line: &str) -> bool {
+        let word_path = line.match_indices("runtime::").any(|(index, _)| {
+            line[..index]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        });
+        word_path || line.contains("crate::runtime") || line.contains("mornlea_server::runtime")
+    }
+
+    #[test]
+    fn runtime_import_matcher_catches_grouped_and_relative_paths() {
+        assert!(mentions_runtime_module(
+            "use crate::{core, runtime::config};"
+        ));
+        assert!(mentions_runtime_module(
+            "use super::super::runtime::RuntimeConfig;"
+        ));
+        assert!(mentions_runtime_module("use crate::runtime;"));
+        assert!(mentions_runtime_module(
+            "let c = runtime::RuntimeConfig::defaults();"
+        ));
+        assert!(!mentions_runtime_module("let tokio_runtime::x = 1;"));
+        assert!(!mentions_runtime_module("fn runtime_budget() {}"));
+    }
+
+    #[test]
+    fn version_must_be_an_integer_literal() {
+        for body in [
+            r#"{"version":1.0}"#,
+            r#"{"version":1e0}"#,
+            r#"{"version":"1"}"#,
+        ] {
+            assert!(
+                matches!(
+                    RuntimeConfig::decode(body.as_bytes()),
+                    Err(ConfigError::InvalidField { ref field, .. }) if field == "version"
+                ),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn nulls_go_treats_as_absent_are_accepted() {
+        for body in [
+            "null",
+            r#"{"version":null}"#,
+            r#"{"fluidEnabled":null}"#,
+            r#"{"physics":null,"sim":null,"render":null,"logging":null,"ai":null}"#,
+            r#"{"cameraMode":null}"#,
+        ] {
+            let cfg = RuntimeConfig::decode(body.as_bytes()).expect(body);
+            assert!(cfg.fluid_enabled(), "{body}");
+            assert_eq!(cfg.version(), CURRENT_VERSION);
+        }
+        for body in [
+            r#"{"audioVolume":null}"#,
+            r#"{"windowSize":null}"#,
+            r#"{"texturePackPath":null}"#,
+        ] {
+            assert!(RuntimeConfig::decode(body.as_bytes()).is_err(), "{body}");
+        }
+    }
+
+    #[test]
+    fn null_tunable_is_zero_then_clamped_like_go() {
+        let cfg = RuntimeConfig::decode(
+            br#"{"physics":{"walkSpeed":null,"stepHeight":null},"sim":{"spawnRadius":null,"regenDelayTicks":null}}"#,
+        )
+        .expect("null tunables");
+        let t = cfg.rule_tunables();
+        assert_eq!(t.physics().walk_speed, 0.5);
+        assert_eq!(t.physics().step_height, 0.0);
+        assert_eq!(cfg.spawn_radius(), 1);
+        assert_eq!(t.regen_delay_ticks(), 0);
+    }
+
+    #[test]
+    fn sim_bounds_match_go_fields() {
+        let cfg = RuntimeConfig::decode(
+            br#"{"sim":{"spawnRadius":0,"fluidRescanCellsPerTick":2000000,"fluidUpdatesPerTick":70000}}"#,
+        )
+        .expect("clamped");
+        assert_eq!(cfg.spawn_radius(), 1);
+        assert_eq!(cfg.fluid_rescan_cells_per_tick(), 1_048_576);
+        assert_eq!(cfg.fluid_updates_per_tick(), 65_536);
+    }
+
+    #[test]
+    fn sim_and_physics_type_errors_are_rejected() {
+        for body in [
+            r#"{"sim":{"spawnRadius":"8"}}"#,
+            r#"{"sim":{"eatingTicks":true}}"#,
+            r#"{"sim":{"fluidUpdatesPerTick":[1]}}"#,
+            r#"{"sim":[]}"#,
+            r#"{"physics":{"walkSpeed":{}}}"#,
+            r#"{"physics":"fast"}"#,
+        ] {
+            assert!(
+                matches!(
+                    RuntimeConfig::decode(body.as_bytes()),
+                    Err(ConfigError::InvalidField { .. })
+                ),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_key_wins_over_case_variants() {
+        let cfg = RuntimeConfig::decode(br#"{"Version":2,"version":1}"#).expect("exact wins");
+        assert_eq!(cfg.version(), 1);
+        assert!(RuntimeConfig::decode(br#"{"version":2,"Version":1}"#).is_err());
+        assert!(RuntimeConfig::decode(br#"{"sim":{"SpawnRadius":8,"spawnRadius":"x"}}"#).is_err());
+        let cfg = RuntimeConfig::decode(br#"{"sim":{"SpawnRadius":"x","spawnRadius":8}}"#)
+            .expect("exact wins");
+        assert_eq!(cfg.spawn_radius(), 8);
+    }
+
+    #[test]
+    fn case_only_duplicates_without_exact_key_are_ambiguous() {
+        // Go picks one of these at random, so it accepts or rejects this file
+        // nondeterministically; Rust always refuses.
+        let err = RuntimeConfig::decode(br#"{"sim":{"SpawnRadius":8,"SPAWNRADIUS":"x"}}"#)
+            .expect_err("ambiguous");
+        match err {
+            ConfigError::AmbiguousKey { field, keys } => {
+                assert_eq!(field, "sim.spawnRadius");
+                assert_eq!(keys.len(), 2);
+            }
+            other => panic!("expected AmbiguousKey, got {other}"),
+        }
+        assert!(matches!(
+            RuntimeConfig::decode(br#"{"FluidEnabled":true,"FLUIDENABLED":false}"#),
+            Err(ConfigError::AmbiguousKey { .. })
+        ));
+    }
+
+    #[test]
+    fn logging_is_parsed_and_kept() {
+        let cfg = RuntimeConfig::decode(
+            br#"{"logging":{"default":" Debug ","modules":{"net":"warning","sim":"loud"},"Modules":{"store":"error"}}}"#,
+        )
+        .expect("logging");
+        let logging = cfg.logging();
+        assert_eq!(logging.default, LogLevel::Debug);
+        assert_eq!(logging.default.slog_value(), -4);
+        // Repeated `modules` objects merge, as Go decoding into one map does.
+        assert_eq!(logging.modules.get("net"), Some(&LogLevel::Warn));
+        assert_eq!(logging.modules.get("store"), Some(&LogLevel::Error));
+        assert!(!logging.modules.contains_key("sim"));
+        assert!(cfg.warnings().contains(&ConfigWarning::UnknownLogLevel {
+            field: "logging.modules.sim".into(),
+            value: "loud".into(),
+        }));
+        let reset =
+            RuntimeConfig::decode(br#"{"logging":{"modules":{"net":"warn"},"modules":null}}"#)
+                .expect("null resets");
+        assert!(reset.logging().modules.is_empty());
+        assert!(RuntimeConfig::decode(br#"{"logging":{"default":5,"default":"info"}}"#).is_err());
+        assert_eq!(
+            RuntimeConfig::defaults().logging(),
+            &LoggingConfig::default()
+        );
+    }
+
+    #[test]
+    fn client_only_scalars_follow_go_rules() {
+        let ok = |body: &str| RuntimeConfig::decode(body.as_bytes()).is_ok();
+        assert!(ok(r#"{"audioVolume":1.00000001}"#));
+        assert!(!ok(r#"{"audioVolume":1.0000001}"#));
+        assert!(!ok(r#"{"audioVolume":"0.5"}"#));
+        assert!(ok(r#"{"windowSize":"960x540"}"#));
+        assert!(!ok(r#"{"windowSize":"800x600"}"#));
+        assert!(ok(&format!(
+            r#"{{"texturePackPath":"{}"}}"#,
+            "p".repeat(1024)
+        )));
+        assert!(!ok(&format!(
+            r#"{{"texturePackPath":"{}"}}"#,
+            "p".repeat(1025)
+        )));
+        assert!(!ok(r#"{"texturePackPath":"a\nb"}"#));
+        assert!(ok(r#"{"cameraMode":7}"#));
+        assert!(!ok(r#"{"cameraMode":1.0}"#));
+        assert!(!ok(r#"{"cameraMode":"1"}"#));
+        assert!(ok(r#"{"render":{"lodEnabled":"yes","lodStep":3}}"#));
+        assert!(!ok(r#"{"render":{"lodStep":"4"}}"#));
+        assert!(!ok(r#"{"render":{"fovDegrees":true}}"#));
+    }
+
+    #[test]
+    fn warnings_mirror_go_slog_findings() {
+        let cfg = RuntimeConfig::decode(
+            br#"{"future":1,"cameraMode":9,
+                "physics":{"walkSpeed":99,"futureKnob":1},
+                "render":{"lodEnabled":"yes","lodStep":3},
+                "ai":{"model":"m","futureKnob":1}}"#,
+        )
+        .expect("warnings only");
+        let warnings = cfg.warnings();
+        let has = |want: ConfigWarning| warnings.contains(&want);
+        assert!(has(ConfigWarning::UnknownField {
+            field: "future".into()
+        }));
+        assert!(has(ConfigWarning::UnknownField {
+            field: "physics.futureKnob".into()
+        }));
+        assert!(has(ConfigWarning::UnknownField {
+            field: "ai.futureKnob".into()
+        }));
+        assert!(has(ConfigWarning::Clamped {
+            field: "physics.walkSpeed".into(),
+            value: 99.0,
+            clamped: 20.0
+        }));
+        assert!(has(ConfigWarning::InvalidTypeIgnored {
+            field: "render.lodEnabled".into(),
+            want: "bool"
+        }));
+        assert!(has(ConfigWarning::Defaulted {
+            field: "render.lodStep".into(),
+            value: "3".into()
+        }));
+        assert!(has(ConfigWarning::Defaulted {
+            field: "cameraMode".into(),
+            value: "9".into()
+        }));
+        assert!(has(ConfigWarning::RetiredFieldIgnored {
+            field: "ai.model".into()
+        }));
+        assert!(RuntimeConfig::decode(b"{}").unwrap().warnings().is_empty());
+    }
+
+    #[test]
+    fn ai_is_judged_only_with_companions() {
+        const COMPANION: &str = r#"[{"id":"3f2b8c1e-4a5d-4e6f-8a7b-9c0d1e2f3a4b","name":"Mira"}]"#;
+        let with_env = |body: &str, set: bool| {
+            RuntimeConfig::decode_with_env(body.as_bytes(), &|name| set && name == "K").is_ok()
+        };
+        let ai = |service: &str, extra: &str| {
+            format!(r#"{{"ai":{{"agentService":{service},"companions":{COMPANION}{extra}}}}}"#)
+        };
+        let service = r#"{"endpoint":"http://127.0.0.1:8765","apiKeyEnv":"K"}"#;
+        assert!(with_env(&ai(service, ""), true));
+        assert!(
+            !with_env(&ai(service, ""), false),
+            "named env var must be non-empty"
+        );
+        assert!(!with_env(&ai(service, r#","taskTimeoutMinutes":0"#), true));
+        assert!(with_env(&ai(service, r#","taskTimeoutMinutes":60"#), true));
+        assert!(
+            !with_env(&ai(service, r#","endpoint":"x""#), true),
+            "retired key"
+        );
+        assert!(!with_env(
+            &ai(r#"{"endpoint":"http://10.0.0.1:1","apiKeyEnv":"K"}"#, ""),
+            true
+        ));
+        assert!(with_env(
+            r#"{"ai":{"companions":[],"agentService":7}}"#,
+            false
+        ));
+        assert!(!with_env(
+            r#"{"ai":{"companions":[],"COMPANIONS":[]}}"#,
+            false
+        ));
+    }
+
+    /// Fluid budgets stay raw numbers here; the fluid host owns `TickBudget`.
+    #[test]
+    fn runtime_never_constructs_tick_budget() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/runtime");
+        // Split so this test's own source does not match.
+        let needle = ["Tick", "Budget"].concat();
+        for entry in walkdir(&root) {
+            let text = fs::read_to_string(&entry).unwrap();
+            let code: String = text
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect();
+            assert!(
+                !code.contains(&needle),
+                "{} must not construct the fluid tick budget",
+                entry.display()
+            );
+        }
     }
 
     fn walkdir(root: &Path) -> Vec<PathBuf> {
