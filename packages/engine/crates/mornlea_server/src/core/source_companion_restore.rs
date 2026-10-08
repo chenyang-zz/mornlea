@@ -54,13 +54,14 @@ fn neutral_survival() -> Result<SurvivalState, ServerError> {
     .map_err(|_| BODY)
 }
 
-/// Canonical anchor capture for a companion without a saved body: Overworld,
-/// the anchor column center, one block above the world top, neutral look and
-/// an empty inventory. Startup merge and pending restore share this body.
-pub(crate) fn anchor_body(id: CompanionId, anchor: ChunkPos) -> CompanionBody {
+/// Canonical anchor capture for a companion without a saved body: the given
+/// dimension, the anchor column center, one block above the world top,
+/// neutral look and an empty inventory. Startup merge and pending restore
+/// share this body.
+pub(crate) fn anchor_body(id: CompanionId, dimension: i32, anchor: ChunkPos) -> CompanionBody {
     CompanionBody {
         id: mornlea_storage::PlayerId::from_bytes(id.bytes()),
-        dimension: 0,
+        dimension,
         position: [
             (anchor.x() as f32) * 16.0 + 0.5,
             321.0,
@@ -81,7 +82,8 @@ pub(crate) fn prepare(
     body: Option<CompanionBody>,
 ) -> Result<PreparedCompanion, ServerError> {
     let supplied = body.is_some();
-    let body = body.unwrap_or_else(|| anchor_body(id, anchor));
+    // Pending restore keeps the fixed Overworld policy checked below.
+    let body = body.unwrap_or_else(|| anchor_body(id, 0, anchor));
     // Identity belongs to the registration seam; every later shape refusal
     // keeps the source save field.
     if body.id.to_bytes() != id.bytes() {

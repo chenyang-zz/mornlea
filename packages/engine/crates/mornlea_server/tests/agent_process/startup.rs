@@ -9,7 +9,7 @@ use mornlea_server::agent::lease::ControlPhase;
 use mornlea_server::contracts::{Deadline, DiskBackend, ServerError, ServerLimits};
 use mornlea_server::runtime::RuntimeConfig;
 use mornlea_server::runtime::companion::{
-    CompanionStartupPorts, SystemClock, start_companions, system_identity,
+    CompanionStartWarning, CompanionStartupPorts, SystemClock, start_companions, system_identity,
 };
 use mornlea_server::state::AuthorityState;
 use mornlea_server::store::disk::{DiskOptions, DiskStore};
@@ -68,6 +68,7 @@ fn configured_startup_acquires_real_namespace_lease() {
     .expect("config decodes");
     let credential = |_: &str| Some(token.to_owned());
     let mut identity = || -> Result<[u8; 16], ServerError> { system_identity() };
+    let warn = |warning: &CompanionStartWarning| panic!("unexpected warning {warning}");
     let mut runtime = start_companions(
         config.ai(),
         &mut disk,
@@ -76,6 +77,7 @@ fn configured_startup_acquires_real_namespace_lease() {
             clock: Arc::new(SystemClock),
             credential: &credential,
             identity: &mut identity,
+            warn: &warn,
         },
     )
     .expect("startup succeeds")

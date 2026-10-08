@@ -11,6 +11,10 @@
 //! the complete aggregate. Every failure stops startup and retires whatever
 //! this function started; the Python Agent process is never launched here.
 //!
+//! Configured bodies take the world spawn dimension, as in Go. Core has no
+//! non-Overworld companion yet, so a non-Overworld spawn leaves the stored
+//! aggregate untouched, spawns nothing, and reports a typed warning.
+//!
 //! The per-tick plan loop (planning snapshot, outcome install, task runner,
 //! task timeout) is not assembled here.
 
@@ -19,7 +23,7 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mornlea_domain::{ChunkPos, CompanionId, CompanionName};
+use mornlea_domain::{ChunkPos, CompanionId, CompanionName, Dimension};
 use mornlea_storage::{CompanionMergeError, CompanionSave, PlayerId, StoredCompanions};
 
 use super::config::AiConfig;
@@ -39,8 +43,8 @@ use crate::state::AuthorityState;
 pub const AGENT_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Injected startup capabilities. Production passes [`SystemClock`],
-/// [`env_credential`], and [`system_identity`]; tests inject deterministic
-/// doubles.
+/// [`env_credential`], [`system_identity`], and [`stderr_warning`]; tests
+/// inject deterministic doubles.
 pub struct CompanionStartupPorts<'a> {
     /// Clock shared by the Agent wire, lease controller, and snapshot registry.
     pub clock: Arc<dyn Clock + Send + Sync>,
@@ -49,6 +53,41 @@ pub struct CompanionStartupPorts<'a> {
     /// Mints raw UUIDv4 bytes for save lifecycle identities and the Agent
     /// client instance.
     pub identity: &'a mut dyn FnMut() -> Result<[u8; 16], ServerError>,
+    /// Receives startup warnings; production passes [`stderr_warning`].
+    pub warn: &'a dyn Fn(&CompanionStartWarning),
+}
+
+/// A startup condition that continues without the affected companions.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CompanionStartWarning {
+    /// Go places configured companions at the world spawn dimension, and
+    /// core has no non-Overworld companion yet. These companions keep their
+    /// stored records and bytes unchanged and are not spawned.
+    NonOverworldSpawn {
+        dimension: i32,
+        companions: Vec<CompanionId>,
+    },
+}
+
+impl fmt::Display for CompanionStartWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonOverworldSpawn {
+                dimension,
+                companions,
+            } => write!(
+                f,
+                "companion startup: world spawn dimension {dimension} is not the Overworld; \
+                 {} configured companion(s) keep their saved records and are not spawned",
+                companions.len()
+            ),
+        }
+    }
+}
+
+/// Production warning sink: one line on standard error.
+pub fn stderr_warning(warning: &CompanionStartWarning) {
+    eprintln!("companion warning: {warning}");
 }
 
 /// Process clock: real monotonic time and wall-clock unix milliseconds.
@@ -219,7 +258,8 @@ impl CompanionRuntime {
 /// `disk` must be the world store before it moves into the save scheduler,
 /// and `state` must already own live chunks, actor saves, and player
 /// persistence with no tick run. Returns `Ok(None)` when no companion is
-/// configured.
+/// configured, or when the world spawn is outside the Overworld (reported
+/// through `warn`, with the stored aggregate untouched).
 pub fn start_companions(
     ai: Option<&AiConfig>,
     disk: &mut dyn DiskBackend,
@@ -230,6 +270,7 @@ pub fn start_companions(
         clock,
         credential,
         identity,
+        warn,
     } = ports;
     let Some(ai) = ai.filter(|ai| !ai.companions().is_empty()) else {
         retire_unconfigured(disk, identity)?;
@@ -243,12 +284,22 @@ pub fn start_companions(
     let wire = AgentHttpWire::try_new(ai.endpoint(), &credential, clock.clone())
         .map_err(CompanionStartError::Agent)?;
 
-    let loaded = load_companions(disk)?.unwrap_or_default();
-    let anchor = spawn_anchor(state)?;
+    let loaded = load_companions(disk)?;
+    let (dimension, anchor) = spawn_point(state)?;
+    if dimension != i32::from(Dimension::OVERWORLD.get()) {
+        // Like a missing definition: the stored aggregate keeps every record
+        // and its bytes, and nothing spawns or starts.
+        warn(&CompanionStartWarning::NonOverworldSpawn {
+            dimension,
+            companions: ai.companions().iter().map(|(id, _)| *id).collect(),
+        });
+        return Ok(None);
+    }
+    let loaded = loaded.unwrap_or_default();
     let active: Vec<_> = ai
         .companions()
         .iter()
-        .map(|(id, _)| anchor_body(*id, anchor))
+        .map(|(id, _)| anchor_body(*id, dimension, anchor))
         .collect();
     let durable = merge_and_save(disk, &loaded, &active, identity)?;
 
@@ -299,12 +350,13 @@ fn load_companions(
     }
 }
 
-/// World spawn anchor column from the authority's frozen metadata.
-fn spawn_anchor(state: &AuthorityState) -> Result<ChunkPos, CompanionStartError> {
+/// World spawn dimension and anchor column from the authority's frozen
+/// metadata.
+fn spawn_point(state: &AuthorityState) -> Result<(i32, ChunkPos), CompanionStartError> {
     match &state.metadata_snapshot().value {
-        SaveValue::Metadata(metadata) => Ok(ChunkPos::new(
-            metadata.spawn_anchor.x,
-            metadata.spawn_anchor.z,
+        SaveValue::Metadata(metadata) => Ok((
+            metadata.spawn_dimension,
+            ChunkPos::new(metadata.spawn_anchor.x, metadata.spawn_anchor.z),
         )),
         _ => Err(CompanionStartError::Authority(ServerError::Internal {
             invariant: "companion spawn anchor",

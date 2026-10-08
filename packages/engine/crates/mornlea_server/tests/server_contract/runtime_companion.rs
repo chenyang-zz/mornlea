@@ -8,6 +8,7 @@
 //! namespace lease runs on its own control worker, so a refused acquire never
 //! blocks startup or a tick.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs;
 use std::net::TcpListener;
@@ -24,7 +25,8 @@ use mornlea_server::contracts::*;
 use mornlea_server::core::{chunk_driver::ChunkDriver, generation_worker::GenerationPool};
 use mornlea_server::runtime::RuntimeConfig;
 use mornlea_server::runtime::companion::{
-    CompanionRuntime, CompanionStartError, CompanionStartupPorts, SystemClock, start_companions,
+    CompanionRuntime, CompanionStartError, CompanionStartWarning, CompanionStartupPorts,
+    SystemClock, start_companions,
 };
 use mornlea_server::state::AuthorityState;
 use mornlea_server::store::disk::{DiskOptions, DiskStore};
@@ -111,12 +113,16 @@ fn config(tags: &[(u8, &str)], endpoint: &str) -> RuntimeConfig {
 }
 
 fn options() -> DiskOptions {
+    options_in(0)
+}
+
+fn options_in(spawn_dimension: i32) -> DiskOptions {
     DiskOptions {
         region_handle_cap: 1,
         create: mornlea_storage::Metadata {
             format_version: mornlea_storage::METADATA_CURRENT_VERSION,
             seed: 42,
-            spawn_dimension: 0,
+            spawn_dimension,
             spawn_anchor: mornlea_storage::MetadataChunkPos { x: 0, z: 0 },
             world_time_ticks: 1000,
             day_phase_offset: 0,
@@ -172,7 +178,11 @@ fn write(disk: &mut DiskStore, value: SaveValue) {
 
 /// Opens a world whose spawn chunk is a flat stone floor.
 fn open_world(root: &Root) -> DiskStore {
-    let mut disk = DiskStore::open(&root.0, options()).unwrap();
+    open_world_in(root, 0)
+}
+
+fn open_world_in(root: &Root, spawn_dimension: i32) -> DiskStore {
+    let mut disk = DiskStore::open(&root.0, options_in(spawn_dimension)).unwrap();
     seed_floor(&mut disk);
     disk
 }
@@ -279,8 +289,25 @@ fn start(
     state: &mut AuthorityState,
     ids: &mut Identities,
 ) -> Result<Option<CompanionRuntime>, CompanionStartError> {
+    let (result, warnings) = start_logged(config, disk, state, ids);
+    assert_eq!(warnings, Vec::new(), "no startup warning expected");
+    result
+}
+
+/// Runs startup and returns every warning it reported.
+fn start_logged(
+    config: &RuntimeConfig,
+    disk: &mut DiskStore,
+    state: &mut AuthorityState,
+    ids: &mut Identities,
+) -> (
+    Result<Option<CompanionRuntime>, CompanionStartError>,
+    Vec<CompanionStartWarning>,
+) {
+    let warnings = RefCell::new(Vec::new());
+    let sink = |warning: &CompanionStartWarning| warnings.borrow_mut().push(warning.clone());
     let mut mint = || ids.mint();
-    start_companions(
+    let result = start_companions(
         config.ai(),
         disk,
         state,
@@ -288,8 +315,10 @@ fn start(
             clock: Arc::new(SystemClock),
             credential: &credential,
             identity: &mut mint,
+            warn: &sink,
         },
-    )
+    );
+    (result, warnings.into_inner())
 }
 
 fn deadline() -> Deadline {
@@ -731,6 +760,7 @@ fn missing_credential_refuses_before_save_io() {
             clock: Arc::new(SystemClock),
             credential: &|_| None,
             identity: &mut mint,
+            warn: &|warning| panic!("unexpected warning {warning}"),
         },
     )
     .err()
@@ -815,5 +845,66 @@ fn undialable_endpoint_refuses_before_authority_handoff() {
     assert_eq!(ids.calls, 0);
     assert!(!state.companion_persistence_enabled());
     assert!(companion_lifecycles(&state).is_empty());
+    disk.close().unwrap();
+}
+
+/// Go places configured companions at the metadata spawn dimension; core
+/// has no non-Overworld companion yet, so a non-Overworld spawn defers them
+/// like a missing definition: the stored aggregate keeps every record with
+/// its bytes unchanged, nothing spawns or starts, no identity is minted,
+/// the world keeps ticking, and one typed warning names the companions.
+#[test]
+fn non_overworld_spawn_keeps_saved_companions_without_spawning() {
+    let root = Root::new();
+    let mut disk = open_world_in(&root, 1);
+    let aggregate = seeded(&[body(1, 8.5), body(2, 9.5)], &[]);
+    write(&mut disk, SaveValue::Companions(as_save(aggregate)));
+    let before = fs::read(root.companions_file()).unwrap();
+    let mut state = authority(&disk);
+    let mut ids = Identities::new();
+    let (result, warnings) = start_logged(
+        &config(&[(1, "Mira"), (2, "Tove")], &dead_endpoint()),
+        &mut disk,
+        &mut state,
+        &mut ids,
+    );
+    assert!(result.expect("startup continues").is_none());
+    assert_eq!(
+        warnings,
+        vec![CompanionStartWarning::NonOverworldSpawn {
+            dimension: 1,
+            companions: vec![companion(1), companion(2)],
+        }]
+    );
+    assert_eq!(fs::read(root.companions_file()).unwrap(), before);
+    assert_eq!(ids.calls, 0);
+    assert!(!state.companion_persistence_enabled());
+    for _ in 0..3 {
+        state.advance_tick(TickBudget::full()).unwrap();
+    }
+    assert!(companion_lifecycles(&state).is_empty());
+    disk.close().unwrap();
+    assert_eq!(fs::read(root.companions_file()).unwrap(), before);
+
+    // A new world in a non-Overworld spawn writes no aggregate at all.
+    let fresh = Root::new();
+    let mut disk = open_world_in(&fresh, 1);
+    let mut state = authority(&disk);
+    let (result, warnings) = start_logged(
+        &config(&[(3, "Ivo")], &dead_endpoint()),
+        &mut disk,
+        &mut state,
+        &mut ids,
+    );
+    assert!(result.expect("startup continues").is_none());
+    assert_eq!(
+        warnings,
+        vec![CompanionStartWarning::NonOverworldSpawn {
+            dimension: 1,
+            companions: vec![companion(3)],
+        }]
+    );
+    assert!(!fresh.companions_file().exists());
+    assert_eq!(ids.calls, 0);
     disk.close().unwrap();
 }
