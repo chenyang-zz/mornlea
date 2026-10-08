@@ -147,9 +147,21 @@ from original provider tickets, and stages names until successful confirmation.
 Settled ordinary and final reducers capture only current indexed players.
 Never-spawned Pending actors preserve their loaded or missing fallback; Pending
 actors that have spawned retain post-death empty inventory. Retirement rehearses
-all nine crafting cells before capture and owner release, then repairs the moved
-player's slot after constant-time physical removal. Failed repack keeps the
+all nine crafting cells before capture and owner release. Failed repack keeps the
 session, inventory and held target and enters the existing sticky tick fence.
+Core retire releases the actor; persistence only snapshots: `AuthorityState::retire`
+removes the player's actor and per-player lanes in constant time and repairs the
+moved player's slot whether or not this cache is enabled.
+
+Online membership (`install`, `activate`, `retire`) only changes between ticks.
+The three share one guard on a flag scoped to the `TickContext` resident borrow
+(set in `for_tick`, cleared in its `Drop`, so unwind clears it too). A mid-tick
+call returns `InvalidState` directly, before any cache read, and never enters
+`fail_tick`; post-commit retirements in `finish_reduced_tick` run after the
+borrow ends and still evict. Retire verifies that an indexed slot names the
+session's actor before mutating; a mismatch is a sticky
+`Internal { "retired player slot" }`, never a silent skip. An unindexed session
+(Prepared, or a detached `commit_residents` harness snapshot) is located by key.
 
 The persistence source-player-persistence topic separates lifecycle/provider
 controls from actual background DiskStore, native acquisition, Memory/TCP login,

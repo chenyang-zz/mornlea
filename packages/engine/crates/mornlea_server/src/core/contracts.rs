@@ -42,7 +42,9 @@ const MAX_COMPANION_SNAPSHOTS: usize = 3;
 const MAX_HOSTILE_SNAPSHOTS: usize = 3;
 const MAX_PASSIVE_SNAPSHOTS: usize = 3;
 const MAX_METADATA_SNAPSHOTS: usize = 1;
-const MAX_OWNED_CHUNKS: usize = 8;
+/// Hard ceiling on chunk snapshots the store owns at once across every
+/// in-flight save job.
+pub(crate) const MAX_OWNED_CHUNKS: usize = 8;
 const MAX_OWNED_ENCODED_BYTES: usize = 4_194_304;
 const MAX_SAVE_JOBS: usize = 4;
 const DEFAULT_SAVE_CHUNKS: usize = 8;

@@ -711,6 +711,8 @@ fn classify_entities(actors: &[ActorRecord]) -> Entities {
             continue;
         }
         match actor.key {
+            // Not `online_players()`: this one pass needs actor indices for
+            // every family; its Active-player filter is the same roster.
             ActorKey::Player(_) => entities.players.push(index),
             ActorKey::Companion(id) if actor.dimension == Dimension::OVERWORLD => {
                 entities.companions.push((id, index));
