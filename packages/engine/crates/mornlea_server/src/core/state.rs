@@ -225,8 +225,10 @@ pub struct AuthorityState {
     next_tick: u64,
     /// First hard execution failure permanently fences new reduction and save capture.
     tick_failure: Option<ServerError>,
-    /// True while a tick context holds the resident loan. Session retirement
-    /// is a between-ticks operation and refuses while this is set.
+    /// True exactly while a tick context borrows the residents: set by
+    /// `TickContext::for_tick` and cleared by the context's `Drop`, so it also
+    /// clears on unwind. Online membership (install, activate, retire) only
+    /// changes between ticks and refuses while this is set.
     tick_running: bool,
     world_seed: i64,
     sessions: BTreeMap<SessionKey, SessionRecord>,
@@ -928,11 +930,22 @@ impl AuthorityState {
         self.reserve(login, SessionPhase::Prepared)
     }
 
+    /// Online membership only changes between ticks. Install, activate and
+    /// retire share this guard; a mid-tick call is a typed refusal that leaves
+    /// state unchanged and never fences the server.
+    fn require_between_ticks(&self) -> Result<(), ServerError> {
+        if self.tick_running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        Ok(())
+    }
+
     pub fn install(
         &mut self,
         session: SessionKey,
         loaded: Option<StoredPlayer>,
     ) -> Result<(), ServerError> {
+        self.require_between_ticks()?;
         if self.player_persistence.is_some() {
             return self.install_player_cache(session, loaded);
         }
@@ -970,6 +983,7 @@ impl AuthorityState {
     }
 
     pub fn activate(&mut self, session: SessionKey) -> Result<(), ServerError> {
+        self.require_between_ticks()?;
         let record = self
             .sessions
             .get(&session)
@@ -1043,10 +1057,12 @@ impl AuthorityState {
     /// Retires one session between ticks. A call while a tick holds the
     /// resident loan refuses with `InvalidState` and changes nothing: the
     /// loaned resident set would otherwise carry the retired actor back.
+    /// Core retirement releases the player's actor; persistence only
+    /// snapshots it first.
     pub fn retire(&mut self, key: SessionKey, _reason: CloseReason) -> Result<(), ServerError> {
-        if self.tick_running {
-            return Err(ServerError::InvalidState { phase: self.phase });
-        }
+        // Checked before the cache snapshot and not via `fail_tick`: during a
+        // tick the slots are loaned out, and a cache read would fence the server.
+        self.require_between_ticks()?;
         // A stale transport close is an ordinary refusal, before source capture can fail hard.
         if !self
             .sessions
@@ -1055,6 +1071,12 @@ impl AuthorityState {
         {
             return Err(ServerError::StaleSession { session: key });
         }
+        // A corrupt slot index would make the release below remove the wrong
+        // actor or none; verify it before anything mutates.
+        let slot = match self.retired_player_slot(key) {
+            Ok(slot) => slot,
+            Err(error) => return Err(self.fail_tick(error)),
+        };
         if let Err(error) = self.retire_player_cache(key) {
             return Err(self.fail_tick(error));
         }
@@ -1071,13 +1093,14 @@ impl AuthorityState {
         self.occupied = self.occupied.saturating_sub(1);
         // The publication view belongs to the live session only.
         self.session_views.remove(&key);
-        // Sleep participation belongs to the live session. Durable respawn
-        // anchors and the other resident lanes keep their persistence owner.
+        // Sleep participation belongs to the live session. The player's actor
+        // and per-player lanes are released below; durable respawn anchors
+        // stay with the snapshot persistence took above.
         if let Some(sleep) = &mut self.residents.sleep_record {
             sleep.beds.retain(|(session, _, _)| *session != key);
         }
         self.residents.sleeping.remove(&key);
-        self.release_player_resident(key);
+        self.release_player_resident(key, slot);
         self.source_players.entries.remove(&key);
         Ok(())
     }
@@ -1087,21 +1110,11 @@ impl AuthorityState {
     /// player before the next tick. The online roster read by every per-tick
     /// consumer therefore never carries a retired session. Removal is
     /// constant time and repairs the moved player's physical slot.
-    fn release_player_resident(&mut self, session: SessionKey) {
+    /// `slot` comes from `retired_player_slot`, verified before any mutation.
+    fn release_player_resident(&mut self, session: SessionKey, slot: Option<usize>) {
         let key = ActorKey::Player(session);
-        let slot = self.residents.player_slots.remove(&session).or_else(|| {
-            self.residents
-                .actors
-                .iter()
-                .position(|actor| actor.key == key)
-        });
-        if let Some(slot) = slot
-            && self
-                .residents
-                .actors
-                .get(slot)
-                .is_some_and(|actor| actor.key == key)
-        {
+        self.residents.player_slots.remove(&session);
+        if let Some(slot) = slot {
             self.residents.actors.swap_remove(slot);
             if let Some(moved) = self.residents.actors.get(slot)
                 && let ActorKey::Player(other) = moved.key
@@ -1114,6 +1127,33 @@ impl AuthorityState {
         self.residents.runtimes.remove(&key);
         self.residents.mining.remove(&key);
         self.views.remove(&session);
+    }
+
+    /// Physical slot of the retiring player's actor. An indexed slot must
+    /// name this session's actor; a mismatch is an `Internal` failure, never a
+    /// skip. An unindexed session (Prepared, or a detached harness snapshot
+    /// installed by `commit_residents`) is located by key in one bounded scan.
+    fn retired_player_slot(&self, session: SessionKey) -> Result<Option<usize>, ServerError> {
+        let key = ActorKey::Player(session);
+        match self.residents.player_slots.get(&session) {
+            Some(&slot)
+                if self
+                    .residents
+                    .actors
+                    .get(slot)
+                    .is_some_and(|actor| actor.key == key) =>
+            {
+                Ok(Some(slot))
+            }
+            Some(_) => Err(ServerError::Internal {
+                invariant: "retired player slot",
+            }),
+            None => Ok(self
+                .residents
+                .actors
+                .iter()
+                .position(|actor| actor.key == key)),
+        }
     }
 
     pub fn accept(
@@ -5362,7 +5402,6 @@ impl<'a> TickContext<'a> {
         let Some(original_sleep) = self.resident_loan.take() else {
             return;
         };
-        self.authority.tick_running = false;
         let sleep_record = if committed || original_sleep || self.sleep_record_touched {
             Some(std::mem::replace(
                 &mut self.sleep_record,
@@ -6938,6 +6977,8 @@ impl<'a> TickContext<'a> {
 impl Drop for TickContext<'_> {
     fn drop(&mut self) {
         self.return_carried(false);
+        // The resident borrow ends here, on commit, abandonment or unwind.
+        self.authority.tick_running = false;
     }
 }
 
@@ -9017,6 +9058,57 @@ mod player_publication_tests {
         assert_eq!(
             events[0].recipient(),
             EventRecipient::Session(current.get())
+        );
+    }
+
+    /// The slow-receiver retirement runs after the reduced tick returns its
+    /// resident loan, so the between-ticks guard admits it and the player's
+    /// actor leaves the roster in that same `advance_tick`.
+    #[test]
+    fn post_commit_slow_receiver_retirement_still_evicts_the_actor() {
+        let mut authority = AuthorityState::try_new(
+            ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+            0,
+        )
+        .unwrap();
+        let session = login(&mut authority, 1);
+        authority.take_outbox(session, 512, 1_048_576).unwrap();
+        let invalid = mornlea_domain::PlayerControl::new(mornlea_domain::PlayerControlParts {
+            movement: mornlea_domain::Movement {
+                move_x: 2,
+                move_z: 0,
+                jump: false,
+            },
+            look: mornlea_domain::LookAngles::try_new(0.0, 0.0).unwrap(),
+            actions: mornlea_domain::HeldActions {
+                primary: false,
+                eating: false,
+                sprinting: false,
+                sneaking: false,
+            },
+        });
+        for sequence in 1..=4_096 {
+            authority
+                .accept(
+                    session,
+                    mornlea_protocol::PlayIntent::Sequenced {
+                        sequence,
+                        command: mornlea_domain::Command::PlayerInput(invalid),
+                    },
+                )
+                .unwrap();
+        }
+        authority.advance_tick(TickBudget::full()).unwrap();
+        assert_eq!(authority.sessions[&session].phase, SessionPhase::Retired);
+        assert!(!authority.tick_running);
+        assert!(authority.tick_failure.is_none());
+        assert!(!authority.residents.player_slots.contains_key(&session));
+        assert!(
+            authority
+                .residents
+                .actors
+                .iter()
+                .all(|actor| actor.key != ActorKey::Player(session))
         );
     }
 
@@ -13751,6 +13843,110 @@ mod source_player_restore_tests {
         // The same retirement succeeds at the next tick boundary.
         a.retire(s, CloseReason::PeerGone).unwrap();
         assert_eq!(a.sessions[&s].phase, SessionPhase::Retired);
+    }
+    thread_local! {
+        static MID_TICK_SESSION: std::cell::Cell<Option<SessionKey>> =
+            const { std::cell::Cell::new(None) };
+    }
+    fn install_during(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        let s = MID_TICK_SESSION.with(|slot| slot.get()).unwrap();
+        let result = context.authority.install(s, None);
+        RETIRE_DURING.with(|slot| slot.set(Some(result)));
+        Ok(())
+    }
+    fn activate_during(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        let s = MID_TICK_SESSION.with(|slot| slot.get()).unwrap();
+        let result = context.authority.activate(s);
+        RETIRE_DURING.with(|slot| slot.set(Some(result)));
+        Ok(())
+    }
+    fn prepared(a: &mut AuthorityState, tag: u8) -> SessionKey {
+        a.prepare(login(tag), TransportKind::Memory).unwrap()
+    }
+    /// Install shares the between-ticks membership guard.
+    #[test]
+    fn install_during_a_running_tick_is_rejected_without_effect() {
+        let (mut a, _) = fixture();
+        a.advance_tick(TickBudget::full()).unwrap();
+        let s = prepared(&mut a, 2);
+        MID_TICK_SESSION.with(|slot| slot.set(Some(s)));
+        set_dispatch_hook(Some(install_during));
+        a.advance_tick(TickBudget::full()).unwrap();
+        set_dispatch_hook(None);
+        assert_eq!(
+            RETIRE_DURING.with(|slot| slot.take()),
+            Some(Err(ServerError::InvalidState {
+                phase: ServerPhase::Running
+            }))
+        );
+        assert_eq!(a.sessions[&s].phase, SessionPhase::Prepared);
+        assert!(a.sessions[&s].body.is_none());
+        assert!(a.tick_failure.is_none());
+        a.install(s, None).unwrap();
+        assert!(a.sessions[&s].body.is_some());
+    }
+    /// Activate shares the between-ticks membership guard.
+    #[test]
+    fn activate_during_a_running_tick_is_rejected_without_effect() {
+        let (mut a, _) = fixture();
+        a.advance_tick(TickBudget::full()).unwrap();
+        let s = prepared(&mut a, 2);
+        a.install(s, Some(stored(saved(2)))).unwrap();
+        let actors = a.residents.actors.len();
+        MID_TICK_SESSION.with(|slot| slot.set(Some(s)));
+        set_dispatch_hook(Some(activate_during));
+        a.advance_tick(TickBudget::full()).unwrap();
+        set_dispatch_hook(None);
+        assert_eq!(
+            RETIRE_DURING.with(|slot| slot.take()),
+            Some(Err(ServerError::InvalidState {
+                phase: ServerPhase::Running
+            }))
+        );
+        assert_eq!(a.sessions[&s].phase, SessionPhase::Prepared);
+        assert!(!a.residents.player_slots.contains_key(&s));
+        assert_eq!(a.residents.actors.len(), actors);
+        assert!(!a.source_players.entries.contains_key(&s));
+        assert!(a.tick_failure.is_none());
+        a.activate(s).unwrap();
+        assert_eq!(a.sessions[&s].phase, SessionPhase::Active);
+    }
+    /// A slot index that no longer names the retiring player's actor is a
+    /// hard invariant failure, never a silent skip.
+    #[test]
+    fn retire_refuses_a_mismatched_player_slot() {
+        let (mut a, s) = fixture();
+        let other = register(&mut a, 2, Some(saved(2)));
+        a.advance_tick(TickBudget::full()).unwrap();
+        let slot = a.residents.player_slots[&s];
+        let wrong = a.residents.player_slots[&other];
+        a.residents.player_slots.insert(s, wrong);
+        let error = ServerError::Internal {
+            invariant: "retired player slot",
+        };
+        assert_eq!(a.retire(s, CloseReason::PeerGone), Err(error));
+        assert_eq!(a.tick_failure, Some(error));
+        assert_ne!(a.sessions[&s].phase, SessionPhase::Retired);
+        assert_eq!(a.residents.actors.len(), 2);
+        assert_eq!(a.residents.actors[slot].key, ActorKey::Player(s));
+    }
+    fn panic_during(_: &mut TickContext<'_>) -> Result<(), ServerError> {
+        panic!("tick unwinds while the residents are borrowed");
+    }
+    /// The guard flag is scoped to the resident borrow, so a tick that panics
+    /// while borrowing clears it and membership changes work again after.
+    #[test]
+    fn panicking_tick_clears_the_membership_guard() {
+        let (mut a, s) = fixture();
+        a.advance_tick(TickBudget::full()).unwrap();
+        set_dispatch_hook(Some(panic_during));
+        let result = a.advance_tick(TickBudget::full());
+        set_dispatch_hook(None);
+        assert!(result.is_err());
+        assert!(!a.tick_running);
+        assert!(a.residents.player_slots.contains_key(&s));
+        a.retire(s, CloseReason::PeerGone).unwrap();
+        assert!(a.residents.actors.is_empty());
     }
     #[test]
     fn boundary_retirement_prunes_book_and_resident_actor() {

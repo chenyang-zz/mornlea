@@ -1599,10 +1599,9 @@ fn idle_target(
 /// `sortedActiveSessions`.
 fn active_players(view: &AuthorityReadView<'_>) -> Vec<(SessionKey, Dimension, [f32; 3])> {
     let mut players: Vec<(SessionKey, Dimension, [f32; 3])> = view
-        .actors()
-        .iter()
+        .online_players()
         .filter_map(|actor| match actor.key {
-            ActorKey::Player(session) if actor.lifecycle == ActorLifecycle::Active => {
+            ActorKey::Player(session) => {
                 Some((session, actor.dimension, actor.motion.position().get()))
             }
             _ => None,

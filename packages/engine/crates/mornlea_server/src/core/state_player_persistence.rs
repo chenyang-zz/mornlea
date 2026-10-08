@@ -573,6 +573,39 @@ mod tests {
         }
         state.advance_tick(TickBudget::full()).unwrap();
     }
+    thread_local! {
+        static MID_TICK: std::cell::Cell<Option<(SessionKey, Result<(), ServerError>)>> =
+            const { std::cell::Cell::new(None) };
+    }
+    fn retire_mid_tick(context: &mut TickContext<'_>) -> Result<(), ServerError> {
+        let session = MID_TICK.with(|slot| slot.get()).unwrap().0;
+        let result = context.authority.retire(session, CloseReason::PeerGone);
+        MID_TICK.with(|slot| slot.set(Some((session, result))));
+        Ok(())
+    }
+    /// With persistence on, a mid-tick retirement refuses before the cache
+    /// snapshot reads the loaned (empty) slots, so it never fences the server.
+    #[test]
+    fn persisted_mid_tick_retirement_refuses_without_failing_the_server() {
+        let mut state = fixture();
+        let (_, session) = add(&mut state, 1);
+        state.advance_tick(TickBudget::full()).unwrap();
+        MID_TICK.with(|slot| slot.set(Some((session, Ok(())))));
+        crate::core::step::set_dispatch_hook(Some(retire_mid_tick));
+        state.advance_tick(TickBudget::full()).unwrap();
+        crate::core::step::set_dispatch_hook(None);
+        assert_eq!(
+            MID_TICK.with(|slot| slot.take()).unwrap().1,
+            Err(ServerError::InvalidState {
+                phase: ServerPhase::Running
+            })
+        );
+        assert!(state.tick_failure.is_none());
+        assert!(state.residents.player_slots.contains_key(&session));
+        state.retire(session, CloseReason::PeerGone).unwrap();
+        assert!(state.residents.actors.is_empty());
+        state.advance_tick(TickBudget::full()).unwrap();
+    }
     #[test]
     fn retirement_repairs_moved_player_slot_and_ordinary_capture_reads_current_owner() {
         let mut state = fixture();
