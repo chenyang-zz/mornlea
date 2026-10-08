@@ -1,12 +1,12 @@
 ## Why
 
-Until P14 (`godot-default-client-switch`) switches the default authority to Rust, every gameplay rule change must land in both the Go authority and the Rust port with parity tests. Scattered gameplay changes multiply that paired cost and destabilize the F2 parity baseline.
+Until the Go real-time authority is retired and gameplay no longer needs to stay in parity with Go, every gameplay rule change must land in both the Go authority and the Rust port with parity tests. That retirement is currently planned in P14 (`godot-default-client-switch`); `docs/notes/godot-client-pilot-baseline.md` defines P14 as the default-client switch plus retirement of the Go real-time runtime and client ABI, so it is the same event. Scattered gameplay changes multiply that paired cost and destabilize the F2 parity baseline.
 
 Source decision: chen via Vera, 2026-10-08. Exception criteria: Lena, 2026-10-08.
 
 ## What Changes
 
-- Add one requirement to `development-governance`: before P14, gameplay rule changes are grouped into a planned batch OpenSpec change. Only blocking defects (a hang, item loss, or lost progress) may be fixed in their own change. Unclear cases are decided by the gameplay owner, with the reason recorded in the fix's pull request description. Every gameplay change, batched or blocking, changes the Go authority and the Rust port together and includes Go/Rust parity tests. The rule is removed or replaced once the Rust authoritative server is the default authority.
+- Add one requirement to `development-governance`: until the Go real-time authority is retired (currently planned in P14), gameplay rule changes are grouped into a planned batch OpenSpec change. Only blocking defects (a hang, item loss, or lost progress) may be fixed in their own change. Unclear cases are decided by the gameplay owner, with the reason recorded in the fix's pull request description. Every gameplay change, batched or blocking, changes the Go authority and the Rust port together and includes Go/Rust parity tests. The rule is removed or replaced once the Go real-time authority is retired and gameplay no longer needs Go parity.
 - Add one pointer sentence to root `AGENTS.md` near the OpenSpec workflow rules.
 
 ## Capabilities
@@ -17,7 +17,7 @@ None.
 
 ### Modified Capabilities
 
-- `development-governance`: Adds the pre-P14 gameplay batching requirement and its blocking-defect exception.
+- `development-governance`: Adds the gameplay batching requirement, in force until the Go real-time authority is retired, and its blocking-defect exception.
 
 ## Impact
 

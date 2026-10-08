@@ -72,7 +72,7 @@ When sources conflict, verify the current state in this order: code and tests ->
 
 Complex features, new modules, cross-package refactors, save changes, protocol changes, and performance-contract changes require OpenSpec. Reconcile the change artifacts before continuing whenever implementation and planning diverge. Small spelling fixes, formatting-only changes, and disposable experiments may be handled directly but still require proportionate validation.
 
-Before P14, gameplay rule changes are batched; only blocking defects (hang, item loss, lost progress) are fixed individually, always with paired Go/Rust changes and parity tests. See the `development-governance` specification.
+Until the Go real-time authority is retired (currently planned in P14), gameplay rule changes are batched; only blocking defects (hang, item loss, lost progress) are fixed individually, always with paired Go/Rust changes and parity tests. See the `development-governance` specification.
 
 For every new or materially revised multi-step implementation plan, the main Agent MUST use the installed Superpowers `brainstorming` and `writing-plans` skills. The main Agent owns the complete architectural and functional decomposition: module boundaries, shared types and exact APIs, data flow and lifecycle, state transitions, compatibility and error policy, resource bounds, algorithms, dependencies, concrete failing tests, and acceptance. Workers implement these decisions; they must not be asked to design missing behavior, choose shared ownership, or mechanically translate legacy architecture. Evidence gathering and review may be delegated, but the main Agent retains design and integration responsibility.
 
