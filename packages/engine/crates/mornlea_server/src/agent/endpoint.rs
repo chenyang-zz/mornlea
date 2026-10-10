@@ -5,7 +5,8 @@
 //! in any case, no userinfo, an empty query and fragment, valid path
 //! escapes, an optional port in 1..65535 (leading zeros allowed), and a
 //! loopback IP literal host (IPv4-mapped loopback included, zones
-//! excluded). Text before a `[` in the host is dropped, as Go does.
+//! excluded). A bracketed literal starts the host, with no prefix or nested
+//! opening bracket, matching Go validation across supported patch versions.
 //!
 //! The request matches Go's `AgentClient.post`: trailing slashes are
 //! trimmed, the route is appended, and the joined text is parsed again, so a
@@ -94,6 +95,9 @@ fn accepted(endpoint: &str) -> Option<AgentEndpoint> {
         return None;
     }
     let (host, ip, port) = if let Some(open) = authority.rfind('[') {
+        if open != 0 {
+            return None;
+        }
         let close = authority.rfind(']')?;
         let colon_port = &authority[close + 1..];
         if !valid_optional_port(colon_port) || close < open {

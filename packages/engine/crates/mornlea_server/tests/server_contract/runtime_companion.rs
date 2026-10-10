@@ -900,8 +900,8 @@ impl Drop for NotFoundAgent {
 /// Go-accepted endpoints that can never serve the Agent contract start
 /// normally and take the lease-failure path: Go moves the route into the
 /// query (`?`) or drops it with the fragment (`#`), so the Agent sees the
-/// same wrong target and refuses; `x[::1]` dials `[::1]` like Go, where
-/// nothing listens. Ticks keep running, both companions activate, a player
+/// same wrong target and refuses; the canonical IPv6 endpoint dials an
+/// unused port. Ticks keep running, both companions activate, a player
 /// joins, and the worker keeps retrying without a lease.
 #[test]
 fn unusable_go_endpoints_take_the_lease_failure_path() {
@@ -918,7 +918,7 @@ fn unusable_go_endpoints_take_the_lease_failure_path() {
             format!("http://127.0.0.1:{}/#", agent.port),
             Some("POST / HTTP/1.1"),
         ),
-        (format!("http://x[::1]:{dead_port}"), None),
+        (format!("http://[::1]:{dead_port}"), None),
     ];
     for (endpoint, misrouted) in cases {
         let root = Root::new();

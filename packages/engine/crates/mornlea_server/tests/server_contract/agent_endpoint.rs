@@ -47,8 +47,6 @@ const GO_ACCEPTED: &[&str] = &[
     "http://[::1]:{P}#",
     "http://127.0.0.1:{P}?#",
     "http://[::1]:{P}/agent/v1?#",
-    "http://x[::1]:{P}",
-    "http://abc[::1]:{P}/agent",
     "http://[0:0:0:0:0:0:0:1]:{P}",
     "http://[::ffff:127.0.0.1]:{P}",
     "http://127.0.0.1:{P}/agent%2Fv1",
@@ -66,7 +64,6 @@ const GO_ACCEPTED: &[&str] = &[
     "http://127.0.0.1",
     "http://127.9.9.9",
     "http://[::ffff:127.0.0.2]/#",
-    "http://x[::1]:80",
 ];
 
 /// Spellings Go refuses; the Rust wire refuses them too.
@@ -88,6 +85,10 @@ const GO_REFUSED: &[&str] = &[
     "http://127.0.0.01",
     "http:127.0.0.1",
     "http:/127.0.0.1",
+    "http://x[::1]:{P}",
+    "http://abc[::1]:{P}/agent",
+    "http://x[::1]:80",
+    "http://[[::1]:80",
 ];
 
 const GO_HELPER: &str = r#"package main

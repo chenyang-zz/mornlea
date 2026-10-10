@@ -587,7 +587,6 @@ mod tests {
             "HTTP://[::1]:08765/agent?",
             "http://[::ffff:127.0.0.2]/#",
             "http://127.0.0.1:/",
-            "http://x[::1]:80",
             "http://127.9.9.9",
         ] {
             assert!(valid_agent_endpoint(ok), "{ok}");
@@ -609,6 +608,9 @@ mod tests {
             "http://127.0.0.01",
             "http:127.0.0.1",
             "http:/127.0.0.1",
+            "http://x[::1]:80",
+            "http://abc[::1]:80/agent",
+            "http://[[::1]:80",
             "http://127.0.0.1\u{7f}",
         ] {
             assert!(!valid_agent_endpoint(bad), "{bad}");

@@ -55,7 +55,7 @@ var parityKnownDifferences = []string{
 
 // parityFixtureCounts pins the size of each shared fixture class; the Rust
 // test pins the same numbers, so a fixture cannot vanish from one side.
-var parityFixtureCounts = map[string]int{"bad": 111, "good": 35, "known_difference": 6}
+var parityFixtureCounts = map[string]int{"bad": 112, "good": 34, "known_difference": 6}
 
 // parityBadReasons pins why Go refuses the -0 fixtures: the bare `-0` literal
 // decodes to 0 and fails the value check, while zeros with a fraction or

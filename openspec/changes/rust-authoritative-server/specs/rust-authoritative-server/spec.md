@@ -38,6 +38,13 @@ Memory and TCP sessions SHALL use identical login, packet, validation, sequencin
 - **WHEN** the server processes its result
 - **THEN** tick progress MUST remain bounded and the candidate MUST cause no unauthorized world effect
 
+#### Scenario: Stable loopback endpoint validation
+
+- **GIVEN** an Agent endpoint contains text before its IPv6 opening bracket or a nested opening bracket
+- **WHEN** either Go or Rust validates the configuration
+- **THEN** it MUST reject that endpoint before issuing Agent requests, independent of the supported Go patch version
+- **AND** canonical IPv6 and mapped loopback literals MUST remain accepted, including valid paths containing bracket characters
+
 ### Requirement: Persistence failures preserve recoverability
 
 The Rust server SHALL preserve supported save migration, crash consistency and explicit I/O error behavior. A failed read or write MUST NOT silently reset a world, discard data, downgrade a schema or publish a successful durable result.

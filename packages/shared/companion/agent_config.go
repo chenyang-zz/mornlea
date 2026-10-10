@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // AgentServiceSettings 是独立伙伴 Agent 服务的静态连接配置。密钥只在调用方
@@ -24,6 +25,14 @@ func (s AgentServiceSettings) Validate() error {
 	parsed, err := url.Parse(s.Endpoint)
 	if err != nil {
 		return fmt.Errorf("companion: 解析 agentService endpoint: %w", err)
+	}
+	// Older Go parsers discard host text before the last opening bracket.
+	_, authority, _ := strings.Cut(s.Endpoint, "://")
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	if strings.LastIndexByte(authority, '[') > 0 {
+		return errors.New("companion: agentService endpoint has an invalid bracketed host")
 	}
 	if parsed.Scheme != "http" {
 		return errors.New("companion: agentService endpoint 必须是 http URL")

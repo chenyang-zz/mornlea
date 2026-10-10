@@ -136,7 +136,7 @@ fn known_differences_are_rejected_by_rust() {
 #[test]
 fn fixture_counts_match_go() {
     // Same numbers as `parityFixtureCounts` in the Go test.
-    for (kind, want) in [("bad", 111), ("good", 35), ("known_difference", 6)] {
+    for (kind, want) in [("bad", 112), ("good", 34), ("known_difference", 6)] {
         assert_eq!(fixtures(kind).len(), want, "{kind} fixtures");
     }
 }
