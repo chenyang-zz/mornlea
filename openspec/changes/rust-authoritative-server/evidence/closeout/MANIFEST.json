@@ -1,0 +1,168 @@
+{
+  "format_version": 1,
+  "source_sha": "e4fd8b770ff501ed8db832fa715a10c73cf27fb4",
+  "comparison_base_sha": "20ea8a71a33c42fafb8975b7705410e98f89fdf3",
+  "branch": "cursor/rust-authoritative-server-98e6",
+  "scope": "Local CI/endpoint closeout only; complete gameplay acceptance and F2 archive remain open.",
+  "product_changes_after_source": false,
+  "closing_edit_scope": "OpenSpec task/spec reconciliation, evidence and local handoff only; plan 173 is unchanged.",
+  "raw_evidence_access": "Local filesystem only; logs may expire under /tmp and have not been published or verified readable by an external recipient.",
+  "gates": [
+    {
+      "id": "rust-quality",
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server",
+      "command": "make ci-rust-quality",
+      "environment": {
+        "TMPDIR": "/private/tmp"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "Native deployment, locked real Agent, actual sealed previous package, fmt, Clippy and 76 summaries / 4142 passing / zero failed or ignored.",
+      "source_binding": "Executed on the immutable production candidate; closing edits affect only OpenSpec planning/evidence.",
+      "log": {
+        "path": "/tmp/mornlea-rust-server-closeout-final-rust-quality.log",
+        "bytes": 347545,
+        "sha256": "dedf06d3db5477424dfca37ea8378d95b1b04946c852ca6d8d39afaf6b2b8d1d",
+        "availability": "local; recipient access unverified"
+      }
+    },
+    {
+      "id": "race",
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server",
+      "command": "make test-race",
+      "environment": {
+        "TMPDIR": "/private/tmp",
+        "MORNLEA_AGENT_PYTHON": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server/packages/agent/.venv/bin/python"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "Full race suites across all six Go modules, including audit.",
+      "source_binding": "Executed on the immutable production candidate; closing edits affect only OpenSpec planning/evidence.",
+      "log": {
+        "path": "/tmp/mornlea-rust-server-closeout-final-race.log",
+        "bytes": 4819,
+        "sha256": "b3f0c81d5d68df5a017800060a2ae83de5645ce5c437cc2723342d608df9cb3f",
+        "availability": "local; recipient access unverified"
+      }
+    },
+    {
+      "id": "dev-check",
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server",
+      "command": "make dev-check",
+      "environment": {
+        "TMPDIR": "/private/tmp",
+        "PATH_prefix": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server/packages/agent/.venv/bin",
+        "MORNLEA_AGENT_PYTHON": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server/packages/agent/.venv/bin/python",
+        "MORNLEA_COMPANION_AGENT_PYTHON": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server/packages/agent/.venv/bin/python",
+        "MORNLEA_PREVIOUS_SERVER_BIN": "/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-server",
+        "MORNLEA_PREVIOUS_PACKAGE": "/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-runtime.json"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "Formatting, six-module vet/short tests and full Rust workspace.",
+      "source_binding": "Executed on the immutable production candidate; closing edits affect only OpenSpec planning/evidence.",
+      "log": {
+        "path": "/tmp/mornlea-rust-server-closeout-final-dev-check.log",
+        "bytes": 346566,
+        "sha256": "e2c08c4e027e57e13c32f913a6e7c090146f7cd8ddcaace2471c906897e6a2ff",
+        "availability": "local; recipient access unverified"
+      }
+    },
+    {
+      "id": "agent-integration",
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server",
+      "command": "make companion-agent-integration",
+      "environment": {
+        "TMPDIR": "/private/tmp"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "Locked install, Ruff, mypy (53 source files) and actual server integration (9.640s). Empty companion-only selector is excluded from provider acceptance.",
+      "source_binding": "Executed on the immutable production candidate; closing edits affect only OpenSpec planning/evidence.",
+      "log": {
+        "path": "/tmp/mornlea-rust-server-closeout-final-agent-integration.log",
+        "bytes": 874,
+        "sha256": "4154ee72c9685fcc95a25b60658a26293d332773de12e7cf078dda16cc2dd007",
+        "availability": "local; recipient access unverified"
+      }
+    },
+    {
+      "id": "openspec",
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server",
+      "command": "openspec validate --all --strict --no-interactive",
+      "environment": {},
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "128 passing, zero failed.",
+      "source_binding": "Executed with final task/spec/ledger reconciliation; production source remains unchanged.",
+      "log": {
+        "path": "/tmp/mornlea-rust-server-closeout-final-openspec.log",
+        "bytes": 4089,
+        "sha256": "896c0bc238002066c0341fc253ecb616339b0adf91f26acf385a8356d90c0d85",
+        "availability": "local; recipient access unverified"
+      }
+    },
+    {
+      "id": "endpoint-go1269",
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-authoritative-server",
+      "command": "GOTOOLCHAIN=go1.26.9 go test ./packages/shared/companion ./packages/shared/config -count=1",
+      "environment": {
+        "GOTOOLCHAIN": "go1.26.9"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "Both complete suites pass. Default Go 1.26.0 also passes.",
+      "source_binding": "Focused endpoint candidate was later committed as dc619dd7c48312f287ffbc62335b604e488dcaac; endpoint/config product bytes are unchanged through the final source SHA.",
+      "log": {
+        "path": "/tmp/mornlea-rust-server-closeout-endpoint-go1269.log",
+        "bytes": 135,
+        "sha256": "98cbc7e3cc0f25f26da1c8efac8ac37db123a18fe19d942b727fc713ab14fca6",
+        "availability": "local; recipient access unverified"
+      }
+    }
+  ],
+  "historical_support": [
+    {
+      "interpretation": "Failed historical attempt: opt-in owner invoked without bash.",
+      "path": "/tmp/mornlea-rust-server-closeout-final-rust-quality-prerequisite-failure.log",
+      "bytes": 1052,
+      "sha256": "9dc082b697219e87ca423f67010da59e97880c2b183523123f48081d5f86884d",
+      "availability": "local; recipient access unverified"
+    },
+    {
+      "interpretation": "Failed historical attempt: unqualified system Python 3.9.",
+      "path": "/tmp/mornlea-rust-server-closeout-final-rust-quality-python-failure.log",
+      "bytes": 966,
+      "sha256": "5903c9e6afdfd85e1f1104be8d06809f277bff3e32ef56cea41f2f1601ec5eed",
+      "availability": "local; recipient access unverified"
+    },
+    {
+      "interpretation": "Failed historical attempt: 104-byte Unix socket path under default macOS temporary root.",
+      "path": "/tmp/mornlea-rust-server-closeout-final-rust-quality-socket-failure.log",
+      "bytes": 248308,
+      "sha256": "96c490d97df49acfe53e1f5a46c0dd04b14ae0da6ecc9097fc6a0531805d7955",
+      "availability": "local; recipient access unverified"
+    },
+    {
+      "interpretation": "Actual OS reproduction: 103 bytes bind, 104 bytes refuse.",
+      "path": "/tmp/mornlea-rust-server-closeout-socket-path-repro.log",
+      "bytes": 103,
+      "sha256": "6c881452fa319284587ea4797a21b57a29b52de41c61aa507f4ec08723e0c106",
+      "availability": "local; recipient access unverified"
+    },
+    {
+      "interpretation": "Actual legacy-return test passes with short canonical TMPDIR.",
+      "path": "/tmp/mornlea-rust-server-closeout-legacy-return-repro.log",
+      "bytes": 425,
+      "sha256": "a37980d87df6a585d101db7aa538cbf300d6668b6ee2da69a239ffce8035681a",
+      "availability": "local; recipient access unverified"
+    },
+    {
+      "interpretation": "Read-only PR observation: remote head remains the comparison baseline.",
+      "path": "/tmp/mornlea-rust-server-closeout-pr-identity.json",
+      "bytes": 214,
+      "sha256": "543bc0d1fcc791e3eb3ad529d3fbe89dd7737c503af0b9fedd3e017f70cafdb8",
+      "availability": "local; recipient access unverified"
+    }
+  ]
+}

@@ -40,7 +40,7 @@ Memory and TCP sessions SHALL use identical login, packet, validation, sequencin
 
 #### Scenario: Stable loopback endpoint validation
 
-- **GIVEN** an Agent endpoint contains text before its IPv6 opening bracket or a nested opening bracket
+- **GIVEN** a configured companion uses an Agent endpoint containing text before its IPv6 opening bracket or a nested opening bracket
 - **WHEN** either Go or Rust validates the configuration
 - **THEN** it MUST reject that endpoint before issuing Agent requests, independent of the supported Go patch version
 - **AND** canonical IPv6 and mapped loopback literals MUST remain accepted, including valid paths containing bracket characters
