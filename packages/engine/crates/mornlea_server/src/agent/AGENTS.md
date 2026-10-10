@@ -11,10 +11,12 @@ change; the crate guide owns production dependency review.
   Go's dial address, `Host` header and request target, shared with `runtime::config`.
 - `http.rs`: closed-schema Agent HTTP, absolute request deadlines and cancellation.
 - `lease.rs`: checked remote lease identity, freeze fences and release eligibility.
-- `host.rs`: bounded task/dialogue/control requests and retained terminal cleanup.
+- `host.rs`: bounded task/dialogue/control requests and retained terminal cleanup;
+  `CurrentWorld` lives in `core/contracts.rs` and is re-exported here.
 - `memory.rs`: commit/reconcile ownership and retryable finalization;
   private `memory_authority.rs` gates outcomes against complete authoritative persistence.
-- `snapshot.rs`: immutable snapshot capabilities, expiry and shared cancellation.
+- `snapshot.rs`: immutable snapshot capabilities, expiry and shared cancellation;
+  `snapshot_planning_tests.rs` checks authority-projected snapshot digests against Go.
 - `mcp.rs`: frozen HTTP tools, bounded connection admission and actual MCP close.
 - `mod.rs`: topic registration; integration composition remains with callers.
 

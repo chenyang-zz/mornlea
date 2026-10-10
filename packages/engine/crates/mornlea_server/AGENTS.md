@@ -765,6 +765,16 @@ separate caller responsibilities.
   identity is pending-inbox-scoped; the tick boundary re-enforces it. The
   `state.rs` `submit_companion` scaffold is per-companion and must be
   replaced, not composed, when the endpoint rewire lands.
+- `src/core/companion_planning.rs` owns the read-only companion planning
+  projections on `AuthorityState`: `companion_planning_snapshot` (the Go
+  `buildPlanSnapshot` port: dense 33x17x33 window around the companion floor
+  cell, ready columns and heights, exposed blocks capped at 256, 3x3 ready
+  chunk revisions in X-major order, online players sorted by id and capped,
+  inventory, task status and world time) and `companion_current_world`, the
+  same projection rebuilt for planner outcome install as `CurrentWorld`.
+  Go-generated fixtures in `packages/server/server/testdata/companion_planning/`
+  pin both; the projections never mutate authority and are not yet called by
+  a tick-side caller.
 - `src/rules/world_acquisition.rs` owns the chunk-acquisition gate: keyed
   wants (dimension+chunk in the map key, generation+request in the want
   record) with consumed-first ordering so a drained-then-repeated completion
