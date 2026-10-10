@@ -1,0 +1,19 @@
+{
+  "physics": {
+    "eyeHeight": 3,
+    "stepHeight": -1,
+    "walkSpeed": 21,
+    "groundAcceleration": 0,
+    "groundDeceleration": 201,
+    "airAcceleration": 101,
+    "jumpSpeed": 0.5,
+    "gravity": 0,
+    "terminalFallSpeed": 201,
+    "fluidGravity": -1,
+    "fluidSinkSpeed": 201,
+    "fluidAscendSpeed": 31,
+    "fluidHorizontalDrag": 1.5,
+    "sprintSpeedMultiplier": 0.5,
+    "sneakSpeedMultiplier": 0.01
+  }
+}

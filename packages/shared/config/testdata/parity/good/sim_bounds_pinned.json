@@ -1,0 +1,22 @@
+{
+  "sim": {
+    "spawnRadius": -3,
+    "fluidRescanCellsPerTick": 5000000,
+    "fluidUpdatesPerTick": 0,
+    "dropLifetimeTicks": 120001,
+    "furnaceSmeltTicks": 255,
+    "furnaceBurnTicks": 9999,
+    "exhaustionThresholdMilli": 1,
+    "eatingTicks": 201,
+    "randomTicksPerSection": 65,
+    "cropGrowthChancePercent": 101,
+    "regenIntervalTicks": 0,
+    "drownDamageIntervalTicks": 601,
+    "starvationDamageIntervalTicks": 2001,
+    "regenDelayTicks": 2001,
+    "fluidFlowDelayTicks": -1,
+    "playerDropPickupDelayTicks": 256,
+    "dropPickupRange": 0.05,
+    "interactionReach": 33
+  }
+}

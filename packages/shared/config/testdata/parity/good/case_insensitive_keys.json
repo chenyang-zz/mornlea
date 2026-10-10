@@ -1,0 +1,16 @@
+{
+  "VERSION": 1,
+  "Physics": {
+    "WalkSpeed": 4
+  },
+  "SIM": {
+    "SpawnRadius": 4
+  },
+  "FluidEnabled": true,
+  "AudioVolume": 1,
+  "WindowSize": "640x360",
+  "Logging": {
+    "Default": "warn",
+    "MODULES": {}
+  }
+}

@@ -1,0 +1,21 @@
+# Memory timeout obligation fixture repair
+
+> Use systematic-debugging and test-driven-development. tasks.md is sole status source.
+
+**Goal:** Preserve strict actual memory shutdown/retry ownership assertions while recognizing the source-valid cancellation-join charge after the existing40ms timeout.
+
+**Evidence and scope:** Root repaired81 full gate /workspace/scratch/pending-restore-scan-integrated-repaired-server.log passes266lib/1binary, then actual agent_process4/5 fails at tests/agent_process/finalization.rs:316: report.outstanding2 versus hardcoded1. Production MemoryOwner::pending (src/agent/memory.rs:1082-1095) counts unique semantic companions PLUS pending_retirements. check_finalization_deadline (:790-794) moves the one held reconcile into retirement; immediate cancellation (:362-369) may retain its worker until actual join. One unchanged reservation plus at most one held/cancel-retirement gives1 or2. This is truthful production ownership, not a production failure, deadline exemption or permission to release early. finalize_memory source shutdown.rs:199-216 snapshots current pending at every timeout. MemoryOwner's maps change only on caller progress, so a subsequent read-only pending() equals that captured report even if a worker just exits.
+
+Root direct tightly coupled ONE editable source path packages/engine/crates/mornlea_server/tests/agent_process/finalization.rs. All production Agent/memory/lease/shutdown/authority/helper Python/other tests/protocol/source/F1/native/versions/dependencies/timeout values read-only. No source/hash scanner consumes this file; exact derived enumeration/scope/comments/seals retained. No subtask design delegation. Independent exact-delta review follows implementation; root owns cumulative original-branch integration/push.
+
+## Exact implementation and tests
+
+Add private fixture classifier fn valid_held_reconcile_outstanding(reported:usize,owned:usize)->bool returning reported==owned && matches!(reported,1|2). Its concise English comment explains one semantic reservation and optional held cancellation join. Replace ONLY the hardcoded report.outstanding==1 assertion with this classifier over failure.report.outstanding and ports.memory.pending().outstanding; assert diagnostic includes both values. Preserve phaseFinalizeMemory/ShutdownTimeout, real admitted-reconcile gate, same frozen lease fence, no flush/release/close before retry,5s retry, actual remote confirmation/mirror/reservation, once-onlyfinal/release/close, actualchildclose and repeated-shutdown idempotence.
+
+Add ONE private test table (reported,owned,expected): (0,0,false),(1,1,true),(2,2,true),(3,3,false),(usize::MAX,usize::MAX,false),(1,2,false),(2,1,false). Inert compile-ready classifier reported==1&&owned==1 MUST fail the (2,2) case; root original actual4/5 failure separately retains the real causal report2. No assertion/import setup failures substituted for RED. Green table rejects empty/extra/mismatched ownership, not arbitrary nonzero counts. Bounds1..2 follow this exact one-held-RPC fixture, not all MemoryOwner callers.
+
+Gate unchanged40ms and5s deadlines,1ms causal hold loop/cleanup guard/actual helper/HTTP/MemoryOwner/LeaseController/retry order. No change to production report/pending/cancellation/retention or retry policy, HELPER_SERIAL/default thread counts, test skips or timeout increments.
+
+## Validation and closure
+
+Explicit pinned Python /workspace/mornlea/packages/agent/.venv/bin/python; accepted native/source identities reused without rebuild because tests-only. Root current CARGO_TARGET_DIR=/workspace/mornlea/packages/engine/target/cargo; owned supervisor rawcargo argv. Run private table1, actual repaired finalization1, full agent_process6 (original5+newtable1), alltargetClippy-Dwarnings/workspacefmt/diff, currentROOTtaskID/newEnglishcomment/exact1path/source/seal audits. Then root rebuilt exact cumulative release/allserver/doc gates (countactualoutput; expect newAgent6), fresh isolated exact-delta source/table/actualfinalization/fullAgent review before ONLY3.9l7 closes. Original failure retained; no retry untilgreen substituted for repair. Logs /workspace/scratch/memory-timeout-obligation-fixture-*.log. Commit test(server): count retained memory timeout obligations. Revert only this test delta if rejected; production unaffected. Architecture skill: no change.

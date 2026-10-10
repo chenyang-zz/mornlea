@@ -1,0 +1,28 @@
+{
+ "name": "22-pytest-shutdown-case",
+ "argv": [
+  "zsh",
+  "-c",
+  "cd '/Users/chen/work/mornlea-f2-37-zcode/packages/agent' && uv run pytest -q tests/test_http_v1.py::test_shutdown_stops_accepting_cancels_runs_then_closes_model_and_sqlite"
+ ],
+ "cwd": "/Users/chen/work/mornlea-f2-37-zcode",
+ "start": "2026-10-03T07:51:56.810065+00:00",
+ "end": "2026-10-03T07:52:01.513489+00:00",
+ "elapsed_seconds": 4.703,
+ "exit": 0,
+ "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+ "worktree_status_porcelain": "?? zcode-37-evidence/",
+ "env": {
+  "MORNLEA_AGENT_PYTHON": "/Users/chen/work/mornlea/packages/agent/.venv/bin/python",
+  "PYTHONPATH": "/Users/chen/work/mornlea-f2-37-zcode/packages/agent/app/src:/Users/chen/work/mornlea-f2-37-zcode/packages/agent/harness/src:/Users/chen/work/mornlea-f2-37-zcode/packages/agent/extension-api/src",
+  "TMPDIR": "/private/tmp/f2z37",
+  "CARGO_NET_OFFLINE": "true",
+  "CARGO_BUILD_JOBS": null,
+  "GOWORK": "auto",
+  "GOFLAGS": "-mod=readonly",
+  "GOPROXY": "off",
+  "GOCACHE": "/Users/chen/work/mornlea-f2-37-zcode/zcode-37-evidence/go-cache",
+  "GOMAXPROCS": "4",
+  "PATH": "/Users/chen/.cargo/bin:/opt/homebrew/bin:/Users/chen/.gvm/pkgsets/go1.26.0/global/bin:/Users/chen/.gvm/gos/go1.26.0/bin:/Users/chen/.gvm/pkgsets/go1.26.0/global/overlay/bin:/Users/chen/.gvm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ }
+}

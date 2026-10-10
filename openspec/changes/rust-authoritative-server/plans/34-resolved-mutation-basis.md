@@ -1,0 +1,26 @@
+# Resolved mutation read-basis revalidation
+
+Node3.9m4, controller direct serial owner aftered15c575. Exact editable files below packages/engine/crates/mornlea_server: src/core/contracts.rs, state.rs, mutation.rs, src/rules/tools.rs and tests/server_contract/mutation.rs. Existing block/drop/container and compound inventory contracts remain. No wire/save versions or new parallel consumer boundary. Controller integrates/rolls back these five files together; all other providers and planning artifacts read-only during implementation.
+
+## Verified producers and private decision
+
+Every actor BlockTxn constructor is enumerated: four mutation resolvers (human place/mine, companion place/mine) and tools::settle (hoe/bone meal/collect water/place water). System BlockTxn::system remains the distinct non-actor producer. Current validation checks written cells/inventory/containers/drops but ignores captured actor pose/lifecycle, read-only ray cells and supports. Resolving a human place then independently removing its hit leaves destination/inventory unchanged and incorrectly commits; resolving then marking actor Dead likewise commits. These are deferred shared-seam defects; current providers usually resolve/commit immediately, so do not invent a current live exploit.
+
+Add private optional MutationReadBasis to BlockTxn. Actor transactions must carry it; systems must not. It captures actor key, Active lifecycle, dimension, exact MotionState and LookAngles; immutable environment seed and RuleTunables; executing tick remains BlockTxn.tick. Every observed terrain dependency is a (dimension,pos,Option<BlockObservation>) preimage, including missing partner observations. Container/inventory/drop settlement retains existing specific preflight; do not duplicate their payload in this basis.
+
+AuthorityReadView adds a crate-private optional borrowed RefCell observation collector. A short-lifetime copied view can carry that collector; ordinary reads stay untracked and pure. observation records each distinct key's actual returned value, including None. Collector owns at most512 distinct cells, refuses beyond that before further ray work and remembers overflow. This bounds even constructor-valid huge interaction reach. Final wrapper checks overflow first and returns ResourceFull(RuleEffects); no truncated basis may succeed. Tracker is local to one resolver, never shared between threads or stored in residents.
+
+Wrap each of the four real resolver bodies in a private inner function consumed through the tracked view. On successful result attach complete actor/environment/cell basis; a no-mutation Ok(None) attaches nothing. All existing ray/classifier/support helpers receive that same view so lower-door classification and all footprint/support reads are captured automatically. tools::settle creates its collector before cast_ray, uses it for all tool target/above reads, freezes basis before any mutable receipt charge/commit, and constructs an actor txn with that basis. Keep existing public resolver/commit signatures and refusal ordering for admitted reads.
+
+At Blocks validation before any effects, require txn.tick==executing tick, matching producer/basis actor, existing Active actor with equal dimension/motion/look, equal seed/tunables and every captured observation equal to current read view. Any stale/missing basis refuses StaleObservation. System producer requires no actor basis but still matching tick. Existing write CAS and ordered inventory rehearsal then run unchanged. Compound decisions validate against their atomic preimage, preserving existing mixed inventory tests; do not add a second mutation owner or rerun only the final ray hit.
+
+## Test-first evidence
+
+Use actual resolvers and commit through public MutationTxn. Add RED tests to existing real fixtures before source changes:
+
+- Human place: after resolution change only ray hit, traversed air, plant/door/bed support or actor lifecycle/pose/dimension/look/environment seed/tunables. Destination/write CAS and inventory stay valid. Commit StaleObservation and compare complete post-intervention snapshot/probe unchanged.
+- Human and companion mine: change only previously traversed air/actor after resolution; no wear, drop/credit or mining progress settles. Companion place likewise refuses stale actor with unchanged target/debit.
+- Unrelated cell, sibling actor/runtime and unchanged bases still admit exact single-debit/write outcomes. Existing first-wins write contention and ordered compound inventory remain green.
+- Private collector seam covers duplicate reads, missing-cell preimages and512/513 capacity without a copied resolver oracle; a real huge-reach ray fixture must terminate at the cap before any effects. Compile setup failures are separate from behavioral RED.
+
+Run server_contract mutation, server_replay world_mutation/mining/tools, tick_state and phase_order. Five owned rustfmt, pinned all-target clippy --locked -- -D warnings and git diff --check. Enumerate literal constructors again and source scanners/hashed consumers; no Go corpus changes. Scoped fix(server): revalidate resolved actor and terrain read bases commit with exact evidence. This accepts this opaque mutation seam only; full live reducer, lifecycle and executable remain pending.

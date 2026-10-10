@@ -564,10 +564,13 @@ impl TryFrom<ClientPacket> for PlayIntent {
             }
             ClientPacket::ChatCommand(command) => {
                 command.validate()?;
-                Ok(PlayIntent::Chat(ChatIntent::new(
-                    CommandText::try_from_canonical(command.text)
-                        .map_err(|_| ProtocolError::InvalidString)?,
-                )))
+                Ok(PlayIntent::Chat(
+                    ChatIntent::try_new(
+                        CommandText::try_from_canonical(command.text)
+                            .map_err(|_| ProtocolError::InvalidString)?,
+                    )
+                    .map_err(wire_error)?,
+                ))
             }
             ClientPacket::TillSoil(command) => {
                 command.validate()?;

@@ -1,6 +1,6 @@
 ---
 doc_id: runtime-interface-architecture
-doc_revision: 2026-09-27.3
+doc_revision: 2026-10-08.1
 language: zh-CN
 counterpart: runtime-interface-architecture.md
 status: target-not-current
@@ -44,7 +44,7 @@ mornlea_server（规划中；唯一权威与 tick 所有者）
 | D0 | `mornlea_domain`：已校验 ID、坐标、值、封闭的 `Command`、`CommandEnvelope`、`Event`、`RoutedEvent` | protocol、server、client core、回放 | 现有；扩展须经过行为变更评审。 |
 | P0 | `mornlea_protocol`：v45 报文注册、分帧、准入、语义转换 | server、client core、传输测试 | 现有；除非另行批准，线协议保持 v45。 |
 | S0 | `mornlea_storage`：带版本的记录编解码和迁移 | server 存储工作线程、离线工具 | 编解码接口现有；I/O 所有者仍是目标。 |
-| K0 | `mornlea_engine` 安全数值门面和寻路 | server、client core、准备线程 | 数值实现 `9b843bbc` 已接受；[完整 F1 封印](../openspec/changes/rust-runtime-foundation-acceptance/acceptance.json) 绑定 source `d042982d`。不得复制数值算法。 |
+| K0 | `mornlea_engine` 安全数值门面和寻路 | server、client core、准备线程 | 数值实现 `9b843bbc` 已接受；[完整 F1 封印](../openspec/changes/archive/2026-10-08-rust-runtime-foundation-acceptance/acceptance.json) 绑定 source `d042982d`。不得复制数值算法。 |
 | S1 | `mornlea_server::core`：入口、排序 tick、路由观察结果 | 传输适配器、回放、存储 | 完整 F1 后的目标接口；F2 首个共享契约。 |
 | S2 | `mornlea_server::transport`：Memory/TCP 分帧与会话准入 | 本地游玩、局域网、客户端测试 | S1 后的目标接口；共用核心路径。 |
 | S3 | `mornlea_server::persistence`：异步请求、确认与恢复 | server core、激活工具 | S1/S0 后的目标接口；世界只允许一个可写租约。 |
@@ -201,4 +201,4 @@ Python 功能宿主目前已有一套结构性试点接口：`validate_feature(f
 
 本文在实现前冻结**所有权、依赖方向、语义类别、身份和失败策略**。准确的 Rust 声明、新队列数值、二进制家族布局和数字 ID 只有在各自可编译接口落地并记录 SHA 后才成为可调用约束。这样的区别既避免把尚未构建的 API 说成已存在，也让后续任务共享一套总接口图。
 
-基础验收核验更新：安全 native 门面与寻路已在 `9b843bbc` 接受。[最终验收封印](../openspec/changes/rust-runtime-foundation-acceptance/acceptance.json) 绑定 source `d042982d`，覆盖 112 个支持点、1434 个案例，零缺口。其两条 `domain.input/45` 权威案例保留真实外部 Go 生产者；Rust 权威效果仍由 F2 实现并验收。剩余缺口：F2 server crate 与经过测量的队列/时限契约；F3 client-core crate 与 Rust 核心 Godot 生产者；目标语义家族 schema/注册表；音频/生命周期从符号名到数字名的宿主协商；完整真实集成证据。上表为每项指定了所有者。未来功能若不在表中，应先以 OpenSpec delta 明确权威、生产者/消费者、语义家族或私有接口、版本影响、上限、测试与契约落地；不得分叉现有服务器、客户端镜像或宿主桥接。
+基础验收核验更新：安全 native 门面与寻路已在 `9b843bbc` 接受。[最终验收封印](../openspec/changes/archive/2026-10-08-rust-runtime-foundation-acceptance/acceptance.json) 绑定 source `d042982d`，覆盖 112 个支持点、1434 个案例，零缺口。其两条 `domain.input/45` 权威案例保留真实外部 Go 生产者；Rust 权威效果仍由 F2 实现并验收。剩余缺口：F2 server crate 与经过测量的队列/时限契约；F3 client-core crate 与 Rust 核心 Godot 生产者；目标语义家族 schema/注册表；音频/生命周期从符号名到数字名的宿主协商；完整真实集成证据。上表为每项指定了所有者。未来功能若不在表中，应先以 OpenSpec delta 明确权威、生产者/消费者、语义家族或私有接口、版本影响、上限、测试与契约落地；不得分叉现有服务器、客户端镜像或宿主桥接。

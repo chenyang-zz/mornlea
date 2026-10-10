@@ -1,0 +1,57 @@
+# Shared fluid rescan work budget implementation plan
+
+> Root uses installed Superpowers brainstorming, writing-plans, executing-plans and test-driven-development. User explicitly authorizes direct Codex completion of all remaining work without Loom/Claude. Root owns design, serial writes/integration/inverse rollback; independent reviewers supply evidence. Project OpenSpec storage/tasks status and standing authorization override redundant skill approval and second plan stores.
+
+**Goal:** Stop the real mixed-dimension fluid rescan FIFO after one shared section-aware tick budget while preserving per-dimension accounting and carried work.
+**Architecture:** Existing TickContext owns two attribution counters; their checked sum is the global rescan consumption. Validate and calculate the whole charge before changing only the selected dimension counter. Existing FluidSchedule/provider/reducer ownership and FIFO remain intact.
+**Tech Stack:** Rust1.97.1/S1 core, real Rust fluid scanner, accepted K0 numerical kernels; read-only current Go source/oracles.
+**Spec:** ../specs/rust-authoritative-server/spec.md supported parity/bounded work; ../design.md; reconciled plans/02-core-seams.md; docs/runtime-interface-architecture.md row Time, season, weather, temperature, fluid and survival (S1 rules over K0).
+
+## Baseline, readiness and scope
+
+Node3.7fgb depends on accepted1710135c37600c2cb0c18cfbc96ee671fdbeab35633, whose sealed previous build isolation is durably accepted. Four-point orphan audit: sole tasks frontier, ledger/current clean commit and no in-flight/untracked source align; no stale invocation adopted. Read-only runtime_config_census172 established exact Go/Rust facts; root chooses this design, not that agent. Existing S1 TickBudget/TickContext/FluidSchedule contract owners are concrete and compile-ready. No parallel consumer implementation is dispatched; this serial repair itself lands the corrected contract before later whole-chunk/config consumers cite its accepted SHA.
+
+Root editable source6: packages/engine/crates/mornlea_server/src/core/contracts.rs (only budget/getter semantics comments); src/core/state.rs (only rescan charge and its ownership comment); src/rules/fluids.rs (only mixed-dimension ownership comment); tests/server_replay/fluids.rs (include-only registration); new tests/server_replay/fluids_global_budget.rs (six concrete tests); AGENTS.md (focused shared quota guidance). Docs5: design.md, ledger.md, tasks.md, plans/02-core-seams.md and this packet. Nearest server/engine/root guides govern the included test/rules/core leaves; no new important directory or guide needed. Read-only step.rs, other state code, native engine/ABI, source acquisition/encoding, config, Go82/dev9/archive2, numerical bound4096, schema/wire/version registries, installed skills and product/default entries remain unchanged. No clone/worktree/Loom/Claude/push/deploy/window.
+
+## Exact contract and algorithm
+
+Keep TickBudget::try_new(commands,fluid_updates_per_dimension,fluid_rescan_target_per_dimension,farmland_checks,farmland_block_reads) signatures/private fields/getters/full() and ceilings4096/512/65536/65536/65536 unchanged. The legacy rescan getter name is compatibility spelling; its value now governs the complete mixed-dimension pass. Update its comment and the prospective packet02 to resolve their old per-dimension declaration before product. No new interface or alias solely to rename the getter.
+
+TickContext::charge(WorkKind::RescanCells(dimension),units)->Result<(),ServerError> still validates the existing closed dimension first. Compute spent = checked sum of existing spent_rescan:[usize;2]. Reject target0, spent>=target, or units>4096 with existing Capacity{resource:Commands,limit:target.saturating_add(4095),observed:spent.saturating_add(units)} before mutation. Compute next=spent.checked_add(units), reject typed InvalidInput{field:"rescan"} on overflow, and retain next<=target+4095 check/error. Compute selected dimension's checked local next before assigning it; assign only that counter on success. Do not store the global total into a local attribution counter. spent_rescan(dimension) and reducer rescan_by_dimension continue returning only that dimension's actual consumption, whose sum is the global charge. Zero-size accepted calls below target retain existing behavior. Fluid updates stay per-dimension and all other work unchanged.
+
+Provider rescan processes the existing mixed FIFO, so any exhausted global charge breaks before the selected scan_section body or removal of the next entry. Existing uniformity preflight is unchanged; declared section charge is not an exact cell-read ceiling. Original cursor/order and dimension-specific output remain. No queue sort, new scan producer, record granularity, Ready/state/cancellation/flush policy, native call, allocation or world write changes. Reduction/final-tick error fences and moved schedule return remain accepted existing owners.
+
+Alternatives rejected: two quotas conflict with Go runFluidRescans; sorting by dimension changes pending order; a new total field duplicates bounded attribution ownership; changing only configuration or raising maxima misses this semantic bug. Check two scalar counters with checked arithmetic; constant work, no allocation, no blocking.
+
+## Six test-first cases
+
+Include child global_budget in existing replay fluids module; inherit super::* authority/stage_environment/observe/zero-report helpers, not duplicate domain fixtures. Define queue_sections(ctx:&mut TickContext,schedule:&mut FluidSchedule,rows:&[(Dimension,ChunkPos)]) -> (BTreeSet<ChunkKey>,Vec<RescanWork>,Vec<BlockPos>): each row uses source at (chunkX*16+2,4,chunkZ*16+3), observed SOURCE plus AIR immediately below; append RescanWork{key,section_y:0,next_cell:0}; preserve exact rows and pending cursors. These are prepared sparse causes with real Rust scanner consumption, not actual acquisition/whole-chunk/native producer acceptance.
+
+| Test | Inputs and exact assertions | Baseline |
+| --- | --- | --- |
+| mixed_dimensions_share_section_overshoot | target4097, FIFO overworld(0,0),depths(0,0),overworld(1,0). rescan(now0,delay5) reports examined2/applied4/carried1/rejected0; exact third row/cursor remains; attribution4096/4096, two output tickets per first dimension at due5, third source has no output. No second global overshoot. | causal third row scans |
+| exhausted_target_preserves_other_dimension | target4096, FIFO overworld then depths. examined1/applied2/carried1; exact depths row remains, counters4096/0, depth output0 and original FIFO cursor intact. | causal depths scans |
+| reverse_dimension_order_keeps_fifo | target4096, FIFO depths then overworld. examined1/applied2/carried1, exact overworld carry; counters0/4096 and outputs0/2, no dimension sort. | causal overworld scans |
+| rejected_global_charge_keeps_attribution | target4096. Oversized4097 charge refuses with no counters; charge overworld4096 succeeds; charge depths1 returns exact Capacity{Commands,8191,4097}, keeps4096/0; repeated refusal is identical/unchanged. | causal depths succeeds |
+| zero_global_target_refuses_both_dimensions | target0, each dimension charge1 returns Capacity{Commands,4095,1}, both attribution0; no world/state work. | control passes |
+| update_quota_remains_per_dimension | fluid update budget1, charge1 to each dimension succeeds, both counters1; next overworld1 rejects without changing depths. Legacy rescan getter/full ceilings unchanged. | control passes |
+
+All source comments English/no task IDs. Run exactly six tests against untouched charge implementation; expect four causal/two controls, no declaration failure. Freeze complete formatted included file before product. Preserve all old fluid7 tests; no assertion alteration. Final totals4025/76/70nonempty6empty/replay685 are expected and must be verified.
+
+## Serial implementation and validation
+
+Root reconciles design/tasks/packet02 before test/product. Enumerate every hashed/generated/embedded/source-scanned consumer of source6; classify original reset/source counter tuples and step counter readers as unchanged attribution consumers, not wholesale source rewrites. No derived artifact refresh without an actual pin. Independently critique precise plan; review does not choose missing design or accept product.
+
+1. Register/write six cases, format, discover/run actual RED6; save raw exit/count/cause and full test bytes externally.
+2. Change only global charge sum/local increment and ownership comments/guides. No extra field/queue work. GREEN6; all fluids13, contract tick7, phase_order22 and configured source tuning3 regression cases.
+3. Commands use rustup run 1.97.1 cargo test --manifest-path packages/engine/Cargo.toml --locked --offline -p mornlea_server --test server_replay fluids::global_budget:: -- --list then -- --nocapture; analogous exact nonempty filters fluids:: (13), phase_order:: (22); --test server_contract tick:: (7); --test persistence_failure source_player_restore::configured_tick_tunables_ (3). Verify discovery counts rather than assume them.
+4. env -u CARGO_TARGET_DIR make rust-check (4025/76/replay685/fmtClippy/zero failedignoredwarnings), then env -u CARGO_TARGET_DIR make rust (no cache invalidation). Focused read-only Go characterization: go test ./packages/server/sim/realm -race -count=1 -run '^TestFluidRescan(FixedPointSkipMatchesFullRescan|SpreadsAcrossTicksAndStaysComplete|DropsChunkThatLeavesScope|UsesQueueOfItsOwnDimension)$' -v (4). These controls plus inspected source supply compatibility evidence, not an invented cross-dimension Go test.
+5. Audit4 language/task IDs and openspec validate --all --strict --no-interactive (128). Freeze source6/docs5; verify Go82 current/base/dev9/archive2/empty index/exact11paths, actual SOURCE/DOCS/immutable reviews; scoped commit fix(server): share fluid rescan work budget across dimensions before another implementation node. Archive original raw receipts byte-identically and keep all-taskACTIVE.
+
+## Exclusions, integration and rollback
+
+This accepts shared accounting plus real prepared Rust scanner FIFO/attribution only. Automatic newly-active Ready production, whole24-section/five-plane continuation/scope, native batching>4096, wider config maxima/file loading/runtime, trusted cross-peer composition/Agent/combined durable shutdown/gameplay/rollback/every outcome inventory and broad3.8/4.1/4.2 stay OPEN. packet02 only changes shared rescan semantics, not accepted numeric capacities. Root owns inverse exact-file rollback and later consumer revalidation; never revert user changes or destructively clean Git. Architecture retrospective after verified implementation; AOCI unavailable/no fabricated receipt.
+
+## Root readiness review
+
+One independently testable global quota/carry repair; exact existing types/no unbound interface; constant checked sum/local counters; ordered typed failure/atomic assignment; retained FIFO/output attribution; six concrete RED/control cases and five regression filters; no version or new allocation; accepted171 -> corrected172 -> later real producer/config consumers DAG acyclic. Root owns complete design, source/docs/registry decisions/integration/rollback; reviewers read only. Requirements bounded-work/source parity are covered while complete fluid/runtime acceptance is explicitly excluded. Existing source-wide identity and protection checks remain mandatory.

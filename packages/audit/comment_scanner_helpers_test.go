@@ -613,7 +613,8 @@ func collectFirstPartyCommentSources(root string) ([]commentScanSource, error) {
 			}
 			relative = filepath.ToSlash(relative)
 			if entry.IsDir() {
-				// The ignored Py4Godot runtime is verified upstream material.
+				// The Godot project installs this ignored third-party runtime.
+				// Other addons, including same-named trees elsewhere, remain audited.
 				if relative == "apps/mornlea-godot/addons/py4godot" {
 					return fs.SkipDir
 				}

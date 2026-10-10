@@ -164,7 +164,7 @@ fn command_text(text: &str) -> mornlea_domain::CommandText {
 }
 
 fn chat_intent() -> mornlea_domain::ChatIntent {
-    mornlea_domain::ChatIntent::new(command_text("@Rook mine stone"))
+    mornlea_domain::ChatIntent::try_new(command_text("@Rook mine stone")).unwrap()
 }
 
 fn look() -> LookAngles {

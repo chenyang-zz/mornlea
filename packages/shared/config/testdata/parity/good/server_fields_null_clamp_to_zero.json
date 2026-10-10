@@ -1,0 +1,11 @@
+{
+  "physics": {
+    "stepHeight": null,
+    "walkSpeed": null
+  },
+  "sim": {
+    "regenDelayTicks": null,
+    "spawnRadius": null,
+    "fluidRescanCellsPerTick": null
+  }
+}

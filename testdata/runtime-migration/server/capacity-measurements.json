@@ -1,0 +1,4326 @@
+{
+  "ceilings": {
+    "commands": 4096,
+    "ready_chunk_results": 64,
+    "pending_chunk_saves": 8,
+    "pending_save_bytes": 4194304
+  },
+  "fits_ceilings": true,
+  "accepted_maxima": {
+    "queued_commands": 4096,
+    "ready_chunk_results": 64,
+    "pending_chunk_saves": 8,
+    "max_owned_encoded_bytes": 4194304,
+    "player_snapshots": 16,
+    "companion_snapshots": 3,
+    "hostile_snapshots": 3,
+    "passive_snapshots": 3,
+    "metadata_snapshots": 1,
+    "workers": 2
+  },
+  "runtime": {
+    "source_sha256": "sha256:1904257f2856d699b352eb67b417cc223deb938935f9f3e77b39a75c9225cc04",
+    "cases": [
+      {
+        "case_id": "runtime.commands.4096",
+        "supported": true,
+        "source_sha256": "sha256:1904257f2856d699b352eb67b417cc223deb938935f9f3e77b39a75c9225cc04",
+        "command": {
+          "applicable": true,
+          "records": 4096,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "runtime.commands.4096",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 4096,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 1,
+        "maximum": {
+          "records": 4096,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "runtime.commands.4097",
+        "supported": false,
+        "source_sha256": "sha256:1904257f2856d699b352eb67b417cc223deb938935f9f3e77b39a75c9225cc04",
+        "command": {
+          "applicable": true,
+          "records": 4097,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "runtime.commands.4097",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 4097,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 1,
+        "maximum": {
+          "records": 4097,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "runtime.ready-chunks.64",
+        "supported": true,
+        "source_sha256": "sha256:1904257f2856d699b352eb67b417cc223deb938935f9f3e77b39a75c9225cc04",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 64,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "runtime.ready-chunks.64",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 64,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 1,
+        "maximum": {
+          "records": 64,
+          "owned_bytes": 0,
+          "boundary": "Engine.generated"
+        }
+      },
+      {
+        "case_id": "runtime.ready-chunks.65",
+        "supported": false,
+        "source_sha256": "sha256:1904257f2856d699b352eb67b417cc223deb938935f9f3e77b39a75c9225cc04",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 65,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "runtime.ready-chunks.65",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 65,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 1,
+        "maximum": {
+          "records": 65,
+          "owned_bytes": 0,
+          "boundary": "Engine.generated"
+        }
+      },
+      {
+        "case_id": "command.internal.bed",
+        "supported": true,
+        "source_sha256": "sha256:f6c43609d874c313acbc236f1556af624bf59e9f6ef842d53bf596856bf83301",
+        "inventory_id": "command.internal.bed",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.internal.bed",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.internal.bed",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.internal.door",
+        "supported": true,
+        "source_sha256": "sha256:f6c43609d874c313acbc236f1556af624bf59e9f6ef842d53bf596856bf83301",
+        "inventory_id": "command.internal.door",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.internal.door",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.internal.door",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.BoneMeal",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.BoneMeal",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.BoneMeal",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.BoneMeal",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.ChatCommand",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.ChatCommand",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.ChatCommand",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.ChatCommand",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.CloseContainer",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.CloseContainer",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.CloseContainer",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.CloseContainer",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.CollectWater",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.CollectWater",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.CollectWater",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.CollectWater",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.DropSelectedItem",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.DropSelectedItem",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.DropSelectedItem",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.DropSelectedItem",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.DropStack",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.DropStack",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.DropStack",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.DropStack",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.EquipArmor",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.EquipArmor",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.EquipArmor",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.EquipArmor",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.KeepAliveReply",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.KeepAliveReply",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.KeepAliveReply",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.KeepAliveReply",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.MoveContainerStack",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.MoveContainerStack",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.MoveContainerStack",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.MoveContainerStack",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.MoveCraftingStack",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.MoveCraftingStack",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.MoveCraftingStack",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.MoveCraftingStack",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.MoveInventoryStack",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.MoveInventoryStack",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.MoveInventoryStack",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.MoveInventoryStack",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.MoveStackPartial",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.MoveStackPartial",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.MoveStackPartial",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.MoveStackPartial",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.OpenContainer",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.OpenContainer",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.OpenContainer",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.OpenContainer",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.PlaceBlock",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.PlaceBlock",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.PlaceBlock",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.PlaceBlock",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.PlaceWater",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.PlaceWater",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.PlaceWater",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.PlaceWater",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.PlayerInput",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.PlayerInput",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.PlayerInput",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.PlayerInput",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.QuickMoveStack",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.QuickMoveStack",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.QuickMoveStack",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.QuickMoveStack",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.RequestChunkResync",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.RequestChunkResync",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.RequestChunkResync",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.RequestChunkResync",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.SelectHotbar",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.SelectHotbar",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.SelectHotbar",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.SelectHotbar",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.TakeCraftingOutput",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.TakeCraftingOutput",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.TakeCraftingOutput",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.TakeCraftingOutput",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "command.protocol.client.TillSoil",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "command.protocol.client.TillSoil",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "command.protocol.client.TillSoil",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "command.protocol.client.TillSoil",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "companion.action.mine-hold",
+        "supported": true,
+        "source_sha256": "sha256:f6c43609d874c313acbc236f1556af624bf59e9f6ef842d53bf596856bf83301",
+        "inventory_id": "companion.action.mine-hold",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "companion.action.mine-hold",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "companion.action.mine-hold",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "companion.action.mine-release",
+        "supported": true,
+        "source_sha256": "sha256:f6c43609d874c313acbc236f1556af624bf59e9f6ef842d53bf596856bf83301",
+        "inventory_id": "companion.action.mine-release",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "companion.action.mine-release",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "companion.action.mine-release",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "companion.action.move",
+        "supported": true,
+        "source_sha256": "sha256:f6c43609d874c313acbc236f1556af624bf59e9f6ef842d53bf596856bf83301",
+        "inventory_id": "companion.action.move",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "companion.action.move",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "companion.action.move",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "companion.action.place",
+        "supported": true,
+        "source_sha256": "sha256:f6c43609d874c313acbc236f1556af624bf59e9f6ef842d53bf596856bf83301",
+        "inventory_id": "companion.action.place",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "companion.action.place",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "companion.action.place",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "control.protocol.client.ClientHello",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "control.protocol.client.ClientHello",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "control.protocol.client.ClientHello",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "control.protocol.client.ClientHello",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "control.protocol.client.KeepAliveReply",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "control.protocol.client.KeepAliveReply",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "control.protocol.client.KeepAliveReply",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "control.protocol.client.KeepAliveReply",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "control.protocol.client.LoginStart",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "control.protocol.client.LoginStart",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "control.protocol.client.LoginStart",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "control.protocol.client.LoginStart",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "control.protocol.server.Disconnect",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "control.protocol.server.Disconnect",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "control.protocol.server.Disconnect",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "control.protocol.server.Disconnect",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "control.protocol.server.HandshakeReject",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "control.protocol.server.HandshakeReject",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "control.protocol.server.HandshakeReject",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "control.protocol.server.HandshakeReject",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "control.protocol.server.KeepAlive",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "control.protocol.server.KeepAlive",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "control.protocol.server.KeepAlive",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "control.protocol.server.KeepAlive",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "control.protocol.server.LoginReject",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "control.protocol.server.LoginReject",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "control.protocol.server.LoginReject",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "control.protocol.server.LoginReject",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "control.protocol.server.LoginSuccess",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "control.protocol.server.LoginSuccess",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "control.protocol.server.LoginSuccess",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "control.protocol.server.LoginSuccess",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "control.protocol.server.ServerHello",
+        "supported": true,
+        "source_sha256": "sha256:5746346e853a0efad676cf0a893657986a94a4b600f0e2d7e970d32aa9e332b8",
+        "inventory_id": "control.protocol.server.ServerHello",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "control.protocol.server.ServerHello",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "control.protocol.server.ServerHello",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.block-changes",
+        "supported": true,
+        "source_sha256": "sha256:97b0f88655615a42646fe516a6eb8ce19035b93739c7fff6ef2f7a441be4fe5c",
+        "inventory_id": "event.domain.block-changes",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.block-changes",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.block-changes",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.chat",
+        "supported": true,
+        "source_sha256": "sha256:759ec1dfe98ad846300e61c674f5abeff47aa86d2a0825efb3fcb1cdb72a58dd",
+        "inventory_id": "event.domain.chat",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.chat",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.chat",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.chest-state",
+        "supported": true,
+        "source_sha256": "sha256:c82ef47ab5daec6bcb7e34a750ccc6ff6f2f4267f42326c992d398641ba266aa",
+        "inventory_id": "event.domain.chest-state",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.chest-state",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.chest-state",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.chunk-snapshot",
+        "supported": true,
+        "source_sha256": "sha256:97b0f88655615a42646fe516a6eb8ce19035b93739c7fff6ef2f7a441be4fe5c",
+        "inventory_id": "event.domain.chunk-snapshot",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.chunk-snapshot",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.chunk-snapshot",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.combat-hit",
+        "supported": true,
+        "source_sha256": "sha256:57257030a4e4247a8d18b1d442323f2c72929bb21f35d182cd2a597b69ec278a",
+        "inventory_id": "event.domain.combat-hit",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.combat-hit",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.combat-hit",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.command-rejected",
+        "supported": true,
+        "source_sha256": "sha256:57257030a4e4247a8d18b1d442323f2c72929bb21f35d182cd2a597b69ec278a",
+        "inventory_id": "event.domain.command-rejected",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.command-rejected",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.command-rejected",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.companion-despawn",
+        "supported": true,
+        "source_sha256": "sha256:c40a523cf194e87b6d714822b8aef2ea9abc756d54173c0c560483dbc5584f4e",
+        "inventory_id": "event.domain.companion-despawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.companion-despawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.companion-despawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.companion-spawn",
+        "supported": true,
+        "source_sha256": "sha256:c40a523cf194e87b6d714822b8aef2ea9abc756d54173c0c560483dbc5584f4e",
+        "inventory_id": "event.domain.companion-spawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.companion-spawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.companion-spawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.companion-states",
+        "supported": true,
+        "source_sha256": "sha256:c40a523cf194e87b6d714822b8aef2ea9abc756d54173c0c560483dbc5584f4e",
+        "inventory_id": "event.domain.companion-states",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.companion-states",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.companion-states",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.container-closed",
+        "supported": true,
+        "source_sha256": "sha256:c82ef47ab5daec6bcb7e34a750ccc6ff6f2f4267f42326c992d398641ba266aa",
+        "inventory_id": "event.domain.container-closed",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.container-closed",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.container-closed",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.crafting-state",
+        "supported": true,
+        "source_sha256": "sha256:c82ef47ab5daec6bcb7e34a750ccc6ff6f2f4267f42326c992d398641ba266aa",
+        "inventory_id": "event.domain.crafting-state",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.crafting-state",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.crafting-state",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.forget-chunks",
+        "supported": true,
+        "source_sha256": "sha256:97b0f88655615a42646fe516a6eb8ce19035b93739c7fff6ef2f7a441be4fe5c",
+        "inventory_id": "event.domain.forget-chunks",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.forget-chunks",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.forget-chunks",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.furnace-state",
+        "supported": true,
+        "source_sha256": "sha256:c82ef47ab5daec6bcb7e34a750ccc6ff6f2f4267f42326c992d398641ba266aa",
+        "inventory_id": "event.domain.furnace-state",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.furnace-state",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.furnace-state",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.hostile-despawn",
+        "supported": true,
+        "source_sha256": "sha256:652c808899805d74273cc14baeedbd56fa8dd7e706267bbff0bf180f0665e903",
+        "inventory_id": "event.domain.hostile-despawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.hostile-despawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.hostile-despawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.hostile-spawn",
+        "supported": true,
+        "source_sha256": "sha256:652c808899805d74273cc14baeedbd56fa8dd7e706267bbff0bf180f0665e903",
+        "inventory_id": "event.domain.hostile-spawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.hostile-spawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.hostile-spawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.hostile-state",
+        "supported": true,
+        "source_sha256": "sha256:652c808899805d74273cc14baeedbd56fa8dd7e706267bbff0bf180f0665e903",
+        "inventory_id": "event.domain.hostile-state",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.hostile-state",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.hostile-state",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.inventory-state",
+        "supported": true,
+        "source_sha256": "sha256:c82ef47ab5daec6bcb7e34a750ccc6ff6f2f4267f42326c992d398641ba266aa",
+        "inventory_id": "event.domain.inventory-state",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.inventory-state",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.inventory-state",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.item-drop-removes",
+        "supported": true,
+        "source_sha256": "sha256:d6d1eac5cfb75bb8febde608c8722acfd2de3571c9c1e6212a995d0b3e1b5cb8",
+        "inventory_id": "event.domain.item-drop-removes",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.item-drop-removes",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.item-drop-removes",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.item-drop-upserts",
+        "supported": true,
+        "source_sha256": "sha256:d6d1eac5cfb75bb8febde608c8722acfd2de3571c9c1e6212a995d0b3e1b5cb8",
+        "inventory_id": "event.domain.item-drop-upserts",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.item-drop-upserts",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.item-drop-upserts",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.passive-despawn",
+        "supported": true,
+        "source_sha256": "sha256:652c808899805d74273cc14baeedbd56fa8dd7e706267bbff0bf180f0665e903",
+        "inventory_id": "event.domain.passive-despawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.passive-despawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.passive-despawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.passive-spawn",
+        "supported": true,
+        "source_sha256": "sha256:652c808899805d74273cc14baeedbd56fa8dd7e706267bbff0bf180f0665e903",
+        "inventory_id": "event.domain.passive-spawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.passive-spawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.passive-spawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.passive-state",
+        "supported": true,
+        "source_sha256": "sha256:652c808899805d74273cc14baeedbd56fa8dd7e706267bbff0bf180f0665e903",
+        "inventory_id": "event.domain.passive-state",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.passive-state",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.passive-state",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.place-block-succeeded",
+        "supported": true,
+        "source_sha256": "sha256:57257030a4e4247a8d18b1d442323f2c72929bb21f35d182cd2a597b69ec278a",
+        "inventory_id": "event.domain.place-block-succeeded",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.place-block-succeeded",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.place-block-succeeded",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.player-state",
+        "supported": true,
+        "source_sha256": "sha256:57257030a4e4247a8d18b1d442323f2c72929bb21f35d182cd2a597b69ec278a",
+        "inventory_id": "event.domain.player-state",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.player-state",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.player-state",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.projectile-despawn",
+        "supported": true,
+        "source_sha256": "sha256:d6d1eac5cfb75bb8febde608c8722acfd2de3571c9c1e6212a995d0b3e1b5cb8",
+        "inventory_id": "event.domain.projectile-despawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.projectile-despawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.projectile-despawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.projectile-spawn",
+        "supported": true,
+        "source_sha256": "sha256:d6d1eac5cfb75bb8febde608c8722acfd2de3571c9c1e6212a995d0b3e1b5cb8",
+        "inventory_id": "event.domain.projectile-spawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.projectile-spawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.projectile-spawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.projectile-state",
+        "supported": true,
+        "source_sha256": "sha256:d6d1eac5cfb75bb8febde608c8722acfd2de3571c9c1e6212a995d0b3e1b5cb8",
+        "inventory_id": "event.domain.projectile-state",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.projectile-state",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.projectile-state",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.remote-player-despawn",
+        "supported": true,
+        "source_sha256": "sha256:c40a523cf194e87b6d714822b8aef2ea9abc756d54173c0c560483dbc5584f4e",
+        "inventory_id": "event.domain.remote-player-despawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.remote-player-despawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.remote-player-despawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.remote-player-spawn",
+        "supported": true,
+        "source_sha256": "sha256:c40a523cf194e87b6d714822b8aef2ea9abc756d54173c0c560483dbc5584f4e",
+        "inventory_id": "event.domain.remote-player-spawn",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.remote-player-spawn",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.remote-player-spawn",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "event.domain.remote-player-states",
+        "supported": true,
+        "source_sha256": "sha256:c40a523cf194e87b6d714822b8aef2ea9abc756d54173c0c560483dbc5584f4e",
+        "inventory_id": "event.domain.remote-player-states",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "event.domain.remote-player-states",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "event.domain.remote-player-states",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "tick.phase.01.player-commands",
+        "supported": true,
+        "source_sha256": "sha256:99a3aa88d7258fb6c50a407c01a6c2f68abaad8d180f215fcf6ed4b964124d1b",
+        "inventory_id": "tick.phase.01.player-commands",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "tick.phase.01.player-commands",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "tick.phase.01.player-commands",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "tick.phase.02.companion-actions",
+        "supported": true,
+        "source_sha256": "sha256:99a3aa88d7258fb6c50a407c01a6c2f68abaad8d180f215fcf6ed4b964124d1b",
+        "inventory_id": "tick.phase.02.companion-actions",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "tick.phase.02.companion-actions",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "tick.phase.02.companion-actions",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "tick.phase.03.physics-advance",
+        "supported": true,
+        "source_sha256": "sha256:99a3aa88d7258fb6c50a407c01a6c2f68abaad8d180f215fcf6ed4b964124d1b",
+        "inventory_id": "tick.phase.03.physics-advance",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "tick.phase.03.physics-advance",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "tick.phase.03.physics-advance",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "tick.phase.04.hostile-advance",
+        "supported": true,
+        "source_sha256": "sha256:99a3aa88d7258fb6c50a407c01a6c2f68abaad8d180f215fcf6ed4b964124d1b",
+        "inventory_id": "tick.phase.04.hostile-advance",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "tick.phase.04.hostile-advance",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "tick.phase.04.hostile-advance",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      },
+      {
+        "case_id": "tick.phase.05.block-updates",
+        "supported": true,
+        "source_sha256": "sha256:99a3aa88d7258fb6c50a407c01a6c2f68abaad8d180f215fcf6ed4b964124d1b",
+        "inventory_id": "tick.phase.05.block-updates",
+        "command": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.commands"
+        },
+        "ready_chunk_results": {
+          "applicable": true,
+          "records": 1,
+          "boundary": "Engine.generated"
+        },
+        "persistence": {
+          "applicable": false
+        },
+        "samples": [
+          {
+            "case_id": "tick.phase.05.block-updates",
+            "boundary": "Engine.commands",
+            "lane": "commands",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          },
+          {
+            "case_id": "tick.phase.05.block-updates",
+            "boundary": "Engine.generated",
+            "lane": "ready_chunk_results",
+            "records": 1,
+            "owned_bytes": 0,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 0,
+          "boundary": "Engine.commands"
+        }
+      }
+    ]
+  },
+  "persistence": {
+    "source_sha256": "sha256:cc8f7199473839e2d700152aa7a7aecd4bfadc7d614dfeb5e6899e18ec9f8a5c",
+    "cases": [
+      {
+        "case_id": "save.chunk",
+        "supported": true,
+        "source_sha256": "sha256:3659073ad23439915e6df0898939f0261a0acba0c1143e0899795f44a30be728",
+        "inventory_id": "save.chunk",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 8,
+          "owned_bytes": 1206,
+          "boundary": "World.saveJobs"
+        },
+        "samples": [
+          {
+            "case_id": "save.chunk",
+            "boundary": "saveJobs before schedulePersistenceLocked",
+            "applicable": false
+          },
+          {
+            "case_id": "save.chunk",
+            "boundary": "World.saveJobs",
+            "lane": "pending_chunk_saves",
+            "records": 8,
+            "owned_bytes": 1206,
+            "applicable": true
+          },
+          {
+            "case_id": "save.chunk",
+            "boundary": "World.dispatchPersistenceLocked",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 152,
+            "applicable": true
+          },
+          {
+            "case_id": "save.chunk",
+            "boundary": "saveCompletions on enqueue",
+            "lane": "pending_chunk_saves",
+            "records": 8,
+            "owned_bytes": 1206,
+            "applicable": true
+          },
+          {
+            "case_id": "save.chunk",
+            "boundary": "saveCompletions after consume",
+            "applicable": false
+          }
+        ],
+        "sample_count": 5,
+        "maximum": {
+          "records": 8,
+          "owned_bytes": 1206,
+          "boundary": "saveCompletions on enqueue"
+        },
+        "estimates": {
+          "snapshot_estimated_bytes": 32768,
+          "status_estimated_bytes": 65536
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": false
+          },
+          {
+            "family": "companion",
+            "applicable": false
+          },
+          {
+            "family": "hostile",
+            "applicable": false
+          },
+          {
+            "family": "passive",
+            "applicable": false
+          },
+          {
+            "family": "metadata",
+            "applicable": false
+          }
+        ],
+        "region_jobs": 1
+      },
+      {
+        "case_id": "save.region",
+        "supported": true,
+        "source_sha256": "sha256:dcb7eb0436af74b68b5d7d5bddba20869f658c9a4d10d26bbf0631715ec019e0",
+        "inventory_id": "save.region",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 8,
+          "owned_bytes": 1206,
+          "boundary": "groupSaveJobs"
+        },
+        "samples": [
+          {
+            "case_id": "save.region",
+            "boundary": "groupSaveJobs",
+            "lane": "pending_chunk_saves",
+            "records": 8,
+            "owned_bytes": 1206,
+            "applicable": true
+          }
+        ],
+        "sample_count": 1,
+        "maximum": {
+          "records": 8,
+          "owned_bytes": 1206,
+          "boundary": "groupSaveJobs"
+        },
+        "estimates": {
+          "snapshot_estimated_bytes": 32768,
+          "status_estimated_bytes": 65536
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": false
+          },
+          {
+            "family": "companion",
+            "applicable": false
+          },
+          {
+            "family": "hostile",
+            "applicable": false
+          },
+          {
+            "family": "passive",
+            "applicable": false
+          },
+          {
+            "family": "metadata",
+            "applicable": false
+          }
+        ],
+        "region_jobs": 1
+      },
+      {
+        "case_id": "world.shared-ticket",
+        "supported": true,
+        "source_sha256": "sha256:cc8f7199473839e2d700152aa7a7aecd4bfadc7d614dfeb5e6899e18ec9f8a5c",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 1,
+          "owned_bytes": 149,
+          "boundary": "deduplicated pending chunks"
+        },
+        "samples": [
+          {
+            "case_id": "world.shared-ticket",
+            "boundary": "World.saveJobs",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 149,
+            "applicable": true
+          },
+          {
+            "case_id": "world.shared-ticket",
+            "boundary": "World.retryInFlight",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 149,
+            "applicable": true
+          },
+          {
+            "case_id": "world.shared-ticket",
+            "boundary": "deduplicated pending chunks",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 149,
+            "applicable": true
+          }
+        ],
+        "sample_count": 3,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 149,
+          "boundary": "deduplicated pending chunks"
+        },
+        "lanes": {
+          "queue": {
+            "applicable": true,
+            "records": 1,
+            "owned_bytes": 149,
+            "boundary": "World.saveJobs",
+            "shared_backing": true
+          },
+          "held": {
+            "applicable": false
+          },
+          "completion": {
+            "applicable": false
+          },
+          "retry": {
+            "applicable": true,
+            "records": 1,
+            "owned_bytes": 149,
+            "boundary": "World.retryInFlight",
+            "shared_backing": true
+          },
+          "total": {
+            "applicable": true,
+            "records": 1,
+            "owned_bytes": 149,
+            "boundary": "deduplicated pending chunks",
+            "shared_backing": true
+          }
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": false
+          },
+          {
+            "family": "companion",
+            "applicable": false
+          },
+          {
+            "family": "hostile",
+            "applicable": false
+          },
+          {
+            "family": "passive",
+            "applicable": false
+          },
+          {
+            "family": "metadata",
+            "applicable": false
+          }
+        ]
+      },
+      {
+        "case_id": "world.mixed-lanes",
+        "supported": true,
+        "source_sha256": "sha256:cc8f7199473839e2d700152aa7a7aecd4bfadc7d614dfeb5e6899e18ec9f8a5c",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 4,
+          "owned_bytes": 606,
+          "boundary": "deduplicated pending chunks"
+        },
+        "samples": [
+          {
+            "case_id": "world.mixed-lanes",
+            "boundary": "World.saveJobs",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 152,
+            "applicable": true
+          },
+          {
+            "case_id": "world.mixed-lanes",
+            "boundary": "Store.SaveBatch",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 149,
+            "applicable": true
+          },
+          {
+            "case_id": "world.mixed-lanes",
+            "boundary": "saveCompletions on enqueue",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 152,
+            "applicable": true
+          },
+          {
+            "case_id": "world.mixed-lanes",
+            "boundary": "saveCompletions before drain",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 152,
+            "applicable": true
+          },
+          {
+            "case_id": "world.mixed-lanes",
+            "boundary": "saveCompletions after consume",
+            "applicable": false
+          },
+          {
+            "case_id": "world.mixed-lanes",
+            "boundary": "World.retry",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 153,
+            "applicable": true
+          },
+          {
+            "case_id": "world.mixed-lanes",
+            "boundary": "retry after transfer",
+            "lane": "pending_chunk_saves",
+            "records": 1,
+            "owned_bytes": 152,
+            "applicable": true
+          },
+          {
+            "case_id": "world.mixed-lanes",
+            "boundary": "deduplicated pending chunks",
+            "lane": "pending_chunk_saves",
+            "records": 4,
+            "owned_bytes": 606,
+            "applicable": true
+          }
+        ],
+        "sample_count": 8,
+        "maximum": {
+          "records": 4,
+          "owned_bytes": 606,
+          "boundary": "deduplicated pending chunks"
+        },
+        "lanes": {
+          "queue": {
+            "applicable": true,
+            "records": 1,
+            "owned_bytes": 152,
+            "boundary": "World.saveJobs"
+          },
+          "held": {
+            "applicable": true,
+            "records": 1,
+            "owned_bytes": 149,
+            "boundary": "Store.SaveBatch"
+          },
+          "completion": {
+            "applicable": true,
+            "records": 1,
+            "owned_bytes": 152,
+            "boundary": "World.saveCompletions"
+          },
+          "retry": {
+            "applicable": true,
+            "records": 1,
+            "owned_bytes": 153,
+            "boundary": "World.retry"
+          },
+          "total": {
+            "applicable": true,
+            "records": 4,
+            "owned_bytes": 606,
+            "boundary": "deduplicated pending chunks"
+          }
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": false
+          },
+          {
+            "family": "companion",
+            "applicable": false
+          },
+          {
+            "family": "hostile",
+            "applicable": false
+          },
+          {
+            "family": "passive",
+            "applicable": false
+          },
+          {
+            "family": "metadata",
+            "applicable": false
+          }
+        ]
+      },
+      {
+        "case_id": "world.metadata",
+        "supported": true,
+        "source_sha256": "sha256:cc8f7199473839e2d700152aa7a7aecd4bfadc7d614dfeb5e6899e18ec9f8a5c",
+        "inventory_id": "save.world-metadata",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 1,
+          "owned_bytes": 78,
+          "boundary": "World.scheduleMetadataSaveLocked"
+        },
+        "samples": [
+          {
+            "case_id": "world.metadata",
+            "boundary": "saveJobs before Observe",
+            "applicable": false
+          },
+          {
+            "case_id": "world.metadata",
+            "boundary": "World.scheduleMetadataSaveLocked",
+            "lane": "metadata",
+            "records": 1,
+            "owned_bytes": 78,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 78,
+          "boundary": "World.scheduleMetadataSaveLocked"
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": false
+          },
+          {
+            "family": "companion",
+            "applicable": false
+          },
+          {
+            "family": "hostile",
+            "applicable": false
+          },
+          {
+            "family": "passive",
+            "applicable": false
+          },
+          {
+            "family": "metadata",
+            "applicable": true,
+            "count": 1,
+            "logical_bound": 1,
+            "encoded_equivalent": 78,
+            "retained_snapshots": 1,
+            "owned_bytes": 78
+          }
+        ]
+      }
+    ]
+  },
+  "actor": {
+    "source_sha256": "sha256:30d82fb6f9d8f8a01850eefbb466de9af1a6a24accc108cf81f6630bdd2af660",
+    "cases": [
+      {
+        "case_id": "save.player",
+        "supported": true,
+        "source_sha256": "sha256:08577c08977c35877394e1bb924ef989a04a10ce5e902c8057593a16ab234d86",
+        "inventory_id": "save.player",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 16,
+          "owned_bytes": 5040,
+          "boundary": "player retained snapshots"
+        },
+        "samples": [
+          {
+            "case_id": "save.player",
+            "boundary": "Players.inFlightJob",
+            "applicable": false
+          },
+          {
+            "case_id": "save.player",
+            "boundary": "cachedPlayer.snapshot",
+            "lane": "actor_snapshots",
+            "records": 8,
+            "owned_bytes": 2520,
+            "applicable": true
+          },
+          {
+            "case_id": "save.player",
+            "boundary": "playerSaveScheduler.jobs",
+            "lane": "actor_snapshots",
+            "records": 8,
+            "owned_bytes": 2520,
+            "applicable": true
+          },
+          {
+            "case_id": "save.player",
+            "boundary": "player retained snapshots",
+            "lane": "actor_snapshots",
+            "records": 16,
+            "owned_bytes": 5040,
+            "applicable": true
+          },
+          {
+            "case_id": "save.player",
+            "boundary": "PlayerStore.SavePlayer",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 315,
+            "applicable": true
+          },
+          {
+            "case_id": "save.player",
+            "boundary": "saveCompletions on enqueue",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 315,
+            "applicable": true
+          },
+          {
+            "case_id": "save.player",
+            "boundary": "saveCompletions before drain",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 315,
+            "applicable": true
+          },
+          {
+            "case_id": "save.player",
+            "boundary": "saveCompletions after consume",
+            "applicable": false
+          },
+          {
+            "case_id": "save.player",
+            "boundary": "cachedPlayer.retry",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 315,
+            "applicable": true
+          }
+        ],
+        "sample_count": 9,
+        "maximum": {
+          "records": 16,
+          "owned_bytes": 5040,
+          "boundary": "player retained snapshots"
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": true,
+            "count": 8,
+            "logical_bound": 8,
+            "encoded_equivalent": 2520,
+            "retained_snapshots": 16,
+            "owned_bytes": 5040
+          },
+          {
+            "family": "companion",
+            "applicable": false
+          },
+          {
+            "family": "hostile",
+            "applicable": false
+          },
+          {
+            "family": "passive",
+            "applicable": false
+          },
+          {
+            "family": "metadata",
+            "applicable": false
+          }
+        ]
+      },
+      {
+        "case_id": "save.companion",
+        "supported": true,
+        "source_sha256": "sha256:f86bae1d81ba6cfb2332274de86a4789de627f85d3d0f7221fe545367957ec6d",
+        "inventory_id": "save.companion",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 3,
+          "owned_bytes": 1755,
+          "boundary": "companion retained snapshots"
+        },
+        "samples": [
+          {
+            "case_id": "save.companion",
+            "boundary": "Companions.records",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 585,
+            "applicable": true
+          },
+          {
+            "case_id": "save.companion",
+            "boundary": "Companions.jobs",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 585,
+            "applicable": true
+          },
+          {
+            "case_id": "save.companion",
+            "boundary": "Companions.inFlightJob",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 585,
+            "applicable": true
+          },
+          {
+            "case_id": "save.companion",
+            "boundary": "companion retained snapshots",
+            "lane": "actor_snapshots",
+            "records": 3,
+            "owned_bytes": 1755,
+            "applicable": true
+          },
+          {
+            "case_id": "save.companion",
+            "boundary": "CompanionStore.SaveCompanions",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 575,
+            "applicable": true
+          },
+          {
+            "case_id": "save.companion",
+            "boundary": "Companions.inFlightJob held",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 575,
+            "applicable": true
+          },
+          {
+            "case_id": "save.companion",
+            "boundary": "saveCompletions on enqueue",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 585,
+            "applicable": true
+          },
+          {
+            "case_id": "save.companion",
+            "boundary": "saveCompletions before drain",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 585,
+            "applicable": true
+          },
+          {
+            "case_id": "save.companion",
+            "boundary": "saveCompletions after consume",
+            "applicable": false
+          },
+          {
+            "case_id": "save.companion",
+            "boundary": "Companions.retry",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 585,
+            "applicable": true
+          }
+        ],
+        "sample_count": 10,
+        "maximum": {
+          "records": 3,
+          "owned_bytes": 1755,
+          "boundary": "companion retained snapshots"
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": false
+          },
+          {
+            "family": "companion",
+            "applicable": true,
+            "count": 2,
+            "logical_bound": 64,
+            "encoded_equivalent": 585,
+            "retained_snapshots": 3,
+            "owned_bytes": 1755
+          },
+          {
+            "family": "hostile",
+            "applicable": false
+          },
+          {
+            "family": "passive",
+            "applicable": false
+          },
+          {
+            "family": "metadata",
+            "applicable": false
+          }
+        ]
+      },
+      {
+        "case_id": "save.hostile",
+        "supported": true,
+        "source_sha256": "sha256:04b1f1304084cfe50460de2c76c2d089550d5d8e0275c0f35e5d094978f9b096",
+        "inventory_id": "save.hostile",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 3,
+          "owned_bytes": 315,
+          "boundary": "hostile retained snapshots"
+        },
+        "samples": [
+          {
+            "case_id": "save.hostile",
+            "boundary": "Hostiles.records",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 105,
+            "applicable": true
+          },
+          {
+            "case_id": "save.hostile",
+            "boundary": "Hostiles.jobs",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 105,
+            "applicable": true
+          },
+          {
+            "case_id": "save.hostile",
+            "boundary": "Hostiles.inFlightJob",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 105,
+            "applicable": true
+          },
+          {
+            "case_id": "save.hostile",
+            "boundary": "hostile retained snapshots",
+            "lane": "actor_snapshots",
+            "records": 3,
+            "owned_bytes": 315,
+            "applicable": true
+          },
+          {
+            "case_id": "save.hostile",
+            "boundary": "HostileMobStore.SaveHostileMobs",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 105,
+            "applicable": true
+          },
+          {
+            "case_id": "save.hostile",
+            "boundary": "Hostiles.inFlightJob held",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 105,
+            "applicable": true
+          },
+          {
+            "case_id": "save.hostile",
+            "boundary": "saveCompletions on enqueue",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 105,
+            "applicable": true
+          },
+          {
+            "case_id": "save.hostile",
+            "boundary": "saveCompletions before drain",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 105,
+            "applicable": true
+          },
+          {
+            "case_id": "save.hostile",
+            "boundary": "saveCompletions after consume",
+            "applicable": false
+          },
+          {
+            "case_id": "save.hostile",
+            "boundary": "Hostiles.retry",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 105,
+            "applicable": true
+          }
+        ],
+        "sample_count": 10,
+        "maximum": {
+          "records": 3,
+          "owned_bytes": 315,
+          "boundary": "hostile retained snapshots"
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": false
+          },
+          {
+            "family": "companion",
+            "applicable": false
+          },
+          {
+            "family": "hostile",
+            "applicable": true,
+            "count": 1,
+            "logical_bound": 64,
+            "encoded_equivalent": 105,
+            "retained_snapshots": 3,
+            "owned_bytes": 315
+          },
+          {
+            "family": "passive",
+            "applicable": false
+          },
+          {
+            "family": "metadata",
+            "applicable": false
+          }
+        ]
+      },
+      {
+        "case_id": "save.passive",
+        "supported": true,
+        "source_sha256": "sha256:f874be149f705dd78aac642bed26a9ba4b59cc394dcfac2bbd9aa2b4cb59357c",
+        "inventory_id": "save.passive",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 3,
+          "owned_bytes": 312,
+          "boundary": "passive retained snapshots"
+        },
+        "samples": [
+          {
+            "case_id": "save.passive",
+            "boundary": "Passives.records",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 104,
+            "applicable": true
+          },
+          {
+            "case_id": "save.passive",
+            "boundary": "Passives.jobs",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 104,
+            "applicable": true
+          },
+          {
+            "case_id": "save.passive",
+            "boundary": "Passives.inFlightJob",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 104,
+            "applicable": true
+          },
+          {
+            "case_id": "save.passive",
+            "boundary": "passive retained snapshots",
+            "lane": "actor_snapshots",
+            "records": 3,
+            "owned_bytes": 312,
+            "applicable": true
+          },
+          {
+            "case_id": "save.passive",
+            "boundary": "PassiveMobStore.SavePassiveMobs",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 104,
+            "applicable": true
+          },
+          {
+            "case_id": "save.passive",
+            "boundary": "Passives.inFlightJob held",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 104,
+            "applicable": true
+          },
+          {
+            "case_id": "save.passive",
+            "boundary": "saveCompletions on enqueue",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 104,
+            "applicable": true
+          },
+          {
+            "case_id": "save.passive",
+            "boundary": "saveCompletions before drain",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 104,
+            "applicable": true
+          },
+          {
+            "case_id": "save.passive",
+            "boundary": "saveCompletions after consume",
+            "applicable": false
+          },
+          {
+            "case_id": "save.passive",
+            "boundary": "Passives.retry",
+            "lane": "actor_snapshots",
+            "records": 1,
+            "owned_bytes": 104,
+            "applicable": true
+          }
+        ],
+        "sample_count": 10,
+        "maximum": {
+          "records": 3,
+          "owned_bytes": 312,
+          "boundary": "passive retained snapshots"
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": false
+          },
+          {
+            "family": "companion",
+            "applicable": false
+          },
+          {
+            "family": "hostile",
+            "applicable": false
+          },
+          {
+            "family": "passive",
+            "applicable": true,
+            "count": 1,
+            "logical_bound": 32,
+            "encoded_equivalent": 104,
+            "retained_snapshots": 3,
+            "owned_bytes": 312
+          },
+          {
+            "family": "metadata",
+            "applicable": false
+          }
+        ]
+      },
+      {
+        "case_id": "save.world-metadata",
+        "supported": true,
+        "source_sha256": "sha256:97480b9638bdc673e2307cb6479e1dfe646f451bb4a49813bf7eeea17c98023d",
+        "inventory_id": "save.world-metadata",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 1,
+          "owned_bytes": 78,
+          "boundary": "World.scheduleMetadataSaveLocked"
+        },
+        "samples": [
+          {
+            "case_id": "save.world-metadata",
+            "boundary": "Players.inFlightJob",
+            "applicable": false
+          },
+          {
+            "case_id": "save.world-metadata",
+            "boundary": "World.scheduleMetadataSaveLocked",
+            "lane": "metadata",
+            "records": 1,
+            "owned_bytes": 78,
+            "applicable": true
+          }
+        ],
+        "sample_count": 2,
+        "maximum": {
+          "records": 1,
+          "owned_bytes": 78,
+          "boundary": "World.scheduleMetadataSaveLocked"
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": false
+          },
+          {
+            "family": "companion",
+            "applicable": false
+          },
+          {
+            "family": "hostile",
+            "applicable": false
+          },
+          {
+            "family": "passive",
+            "applicable": false
+          },
+          {
+            "family": "metadata",
+            "applicable": true,
+            "count": 1,
+            "logical_bound": 1,
+            "encoded_equivalent": 78,
+            "retained_snapshots": 1,
+            "owned_bytes": 78
+          }
+        ]
+      },
+      {
+        "case_id": "actor.supported-retained",
+        "supported": true,
+        "source_sha256": "sha256:30d82fb6f9d8f8a01850eefbb466de9af1a6a24accc108cf81f6630bdd2af660",
+        "command": {
+          "applicable": false
+        },
+        "ready_chunk_results": {
+          "applicable": false
+        },
+        "persistence": {
+          "applicable": true,
+          "records": 26,
+          "owned_bytes": 7500,
+          "boundary": "actor retained snapshots"
+        },
+        "samples": [
+          {
+            "case_id": "actor.supported-retained",
+            "boundary": "actor retained snapshots",
+            "lane": "actor_snapshots",
+            "records": 26,
+            "owned_bytes": 7500,
+            "applicable": true
+          }
+        ],
+        "sample_count": 1,
+        "maximum": {
+          "records": 26,
+          "owned_bytes": 7500,
+          "boundary": "actor retained snapshots"
+        },
+        "families": [
+          {
+            "family": "player",
+            "applicable": true,
+            "count": 8,
+            "logical_bound": 8,
+            "encoded_equivalent": 2520,
+            "retained_snapshots": 16,
+            "owned_bytes": 5040
+          },
+          {
+            "family": "companion",
+            "applicable": true,
+            "count": 2,
+            "logical_bound": 64,
+            "encoded_equivalent": 585,
+            "retained_snapshots": 3,
+            "owned_bytes": 1755
+          },
+          {
+            "family": "hostile",
+            "applicable": true,
+            "count": 1,
+            "logical_bound": 64,
+            "encoded_equivalent": 105,
+            "retained_snapshots": 3,
+            "owned_bytes": 315
+          },
+          {
+            "family": "passive",
+            "applicable": true,
+            "count": 1,
+            "logical_bound": 32,
+            "encoded_equivalent": 104,
+            "retained_snapshots": 3,
+            "owned_bytes": 312
+          },
+          {
+            "family": "metadata",
+            "applicable": true,
+            "count": 1,
+            "logical_bound": 1,
+            "encoded_equivalent": 78,
+            "retained_snapshots": 1,
+            "owned_bytes": 78
+          }
+        ]
+      }
+    ]
+  }
+}

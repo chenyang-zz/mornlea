@@ -120,3 +120,13 @@ openspec 主规格 `repository-code-organization`。
 | passive codec | `go test ./packages/server/storage/passive -race -count=1` |
 | 全子树（跨域改动） | `go test ./packages/server/storage/... -race -count=1` |
 | 依赖方向 / 文档守卫 | `go test ./packages/audit -count=1` |
+
+## Offline Runtime Qualification
+
+`runtime_migration_verify_test.go` owns the test-only callable
+`TestRuntimeMigrationVerifyWorld` and its real save-codec characterization.
+It acquires an existing exclusive read-only world lease, decodes canonical durable
+files, proves the complete tree and modes unchanged, and emits a report outside
+the world. It must never repair saves, create missing world files, start a server,
+or become a production Go API. This migration oracle ends at Rust runtime
+qualification. Run `go test ./packages/server/storage -run RuntimeMigration -race -count=1`.

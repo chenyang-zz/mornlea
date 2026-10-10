@@ -1,0 +1,11 @@
+{
+  "ai": {
+    "agentService": "x",
+    "companions": [
+      {
+        "id": "3f2b8c1e-4a5d-4e6f-8a7b-9c0d1e2f3a4b",
+        "name": "Mira"
+      }
+    ]
+  }
+}

@@ -32,7 +32,7 @@ pub use chunk::{
     encode_at_schema as encode_chunk_at_schema, encode_logical as encode_chunk_logical,
 };
 pub use companion::{
-    CURRENT_SCHEMA as COMPANION_CURRENT_SCHEMA, CompanionBody, CompanionSave,
+    CURRENT_SCHEMA as COMPANION_CURRENT_SCHEMA, CompanionBody, CompanionMergeError, CompanionSave,
     ENVELOPE_VERSION as COMPANION_ENVELOPE_VERSION, MAX_FIFO_ENTRIES as COMPANION_MAX_FIFO_ENTRIES,
     MAX_FILE_LENGTH as COMPANION_MAX_FILE_LENGTH, MAX_PLAN_STEPS as COMPANION_MAX_PLAN_STEPS,
     MAX_STORED as COMPANION_MAX_STORED, MAX_SUMMARY_BYTES as COMPANION_MAX_SUMMARY_BYTES,
@@ -41,7 +41,7 @@ pub use companion::{
     SCHEMA_V3 as COMPANION_SCHEMA_V3, SCHEMA_V4 as COMPANION_SCHEMA_V4, StoredCompanionLifecycle,
     StoredCompanionQueue, StoredCompanionTask, StoredCompanions, decode as decode_companions,
     encode as encode_companions, encode_into as encode_companions_into,
-    encoded_len as companions_encoded_len,
+    encoded_len as companions_encoded_len, merge_companions_v5,
 };
 pub use companion::{
     PLAN_STEP_FOLLOW as COMPANION_PLAN_STEP_FOLLOW, PLAN_STEP_GO_TO as COMPANION_PLAN_STEP_GO_TO,

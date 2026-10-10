@@ -1,0 +1,10 @@
+{
+  "physics": {
+    "Key": 1,
+    "walkSpeed": 1,
+    "eyeHeight": 1,
+    "steſHeight": 1,
+    "stepHeight": 1,
+    "ſprintSpeedMultiplier": "x"
+  }
+}

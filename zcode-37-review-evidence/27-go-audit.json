@@ -1,0 +1,29 @@
+{
+ "name": "27-go-audit",
+ "argv": [
+  "go",
+  "test",
+  "./packages/audit",
+  "-count=1"
+ ],
+ "cwd": "/Users/chen/work/mornlea-f2-37-zcode",
+ "start": "2026-10-03T09:47:47.014330+00:00",
+ "end": "2026-10-03T09:50:44.388960+00:00",
+ "elapsed_seconds": 177.37,
+ "exit": 0,
+ "source": "5210448bc4634f3bb7840184999164b55a6aa12f",
+ "worktree_status_porcelain": "M packages/engine/crates/mornlea_server/tests/local_remote_parity/integration.rs\n M scripts/rust-server-opt-in.sh\n?? zcode-37-review-evidence/",
+ "env": {
+  "MORNLEA_AGENT_PYTHON": "/Users/chen/work/mornlea/packages/agent/.venv/bin/python",
+  "PYTHONPATH": "/Users/chen/work/mornlea-f2-37-zcode/packages/agent/app/src:/Users/chen/work/mornlea-f2-37-zcode/packages/agent/harness/src:/Users/chen/work/mornlea-f2-37-zcode/packages/agent/extension-api/src",
+  "TMPDIR": "/private/tmp/f2z37",
+  "CARGO_NET_OFFLINE": "true",
+  "CARGO_BUILD_JOBS": null,
+  "GOWORK": "auto",
+  "GOFLAGS": "-mod=readonly",
+  "GOPROXY": "off",
+  "GOCACHE": "/Users/chen/work/mornlea-f2-37-zcode/zcode-37-review-evidence/go-cache",
+  "GOMAXPROCS": "4",
+  "PATH": "/Users/chen/work/mornlea/packages/agent/.venv/bin:/Users/chen/.cargo/bin:/opt/homebrew/bin:/Users/chen/.gvm/pkgsets/go1.26.0/global/bin:/Users/chen/.gvm/gos/go1.26.0/bin:/Users/chen/.gvm/pkgsets/go1.26.0/global/overlay/bin:/Users/chen/.gvm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ }
+}

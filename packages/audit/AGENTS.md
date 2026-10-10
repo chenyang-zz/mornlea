@@ -19,6 +19,9 @@
   根模块已解散，仓库根的 `./...` 不可用且模式本就不跨嵌套模块；新单元模块
   立项必须同时登记 go.work use，否则 `TestWorkspaceUseSetMatchesUnitModules`
   与各枚举检查报红。
+- The comment collector excludes the declared third-party installation at
+  `apps/mornlea-godot/addons/py4godot`. Project-owned addons and same-named
+  directories elsewhere remain audited; ignored status alone is no exemption.
 
 ## 定点验证
 

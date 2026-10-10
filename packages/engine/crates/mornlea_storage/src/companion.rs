@@ -12,6 +12,10 @@ use crate::error::{StorageError, StorageResult, corrupt, future_version};
 use crate::identity::PlayerId;
 use crate::items::{Inventory, ItemStack};
 
+#[path = "companion_merge.rs"]
+mod configuration_merge;
+pub use configuration_merge::{CompanionMergeError, merge_companions_v5};
+
 /// Companion lifecycle operation identity. It shares the canonical UUIDv4 rule
 /// with [`PlayerId`]; the alias keeps the save contract's own vocabulary.
 pub type Identity = PlayerId;
@@ -1408,10 +1412,31 @@ fn canonical_v5_parts(
     Vec<StoredCompanionLifecycle>,
     Vec<StoredCompanionQueue>,
 )> {
-    if save.revision == 0 {
+    canonical_v5_parts_borrowed(
+        save.revision,
+        save.agent_namespace_id,
+        &save.records,
+        &save.lifecycles,
+        &save.queues,
+    )
+}
+
+// Bootstrap borrows the decoded fields so malformed task payloads never need an unchecked clone.
+fn canonical_v5_parts_borrowed(
+    revision: u64,
+    namespace: Identity,
+    body_records: &[CompanionBody],
+    lifecycles: &[StoredCompanionLifecycle],
+    queues: &[StoredCompanionQueue],
+) -> StorageResult<(
+    Vec<CompanionBody>,
+    Vec<StoredCompanionLifecycle>,
+    Vec<StoredCompanionQueue>,
+)> {
+    if revision == 0 {
         return Err(corrupt("companion revision", "zero revision"));
     }
-    if !save.agent_namespace_id.is_valid() {
+    if !namespace.is_valid() {
         return Err(corrupt(
             "companion agent namespace",
             "not a canonical UUIDv4",
@@ -1420,27 +1445,27 @@ fn canonical_v5_parts(
     // Count gates run before any clone or per-record scan. A 65-body request
     // must report the count even when the first body is also invalid, and an
     // oversized queue list must not be copied in order to discover that.
-    if save.records.len() > MAX_STORED {
+    if body_records.len() > MAX_STORED {
         return Err(corrupt(
             "companion count",
-            format!("{} exceeds limit {MAX_STORED}", save.records.len()),
+            format!("{} exceeds limit {MAX_STORED}", body_records.len()),
         ));
     }
-    if save.lifecycles.len() != save.records.len() {
+    if lifecycles.len() != body_records.len() {
         return Err(corrupt(
             "companion lifecycles",
             "set does not match records",
         ));
     }
-    if save.queues.len() > MAX_ACTIVE {
+    if queues.len() > MAX_ACTIVE {
         return Err(corrupt(
             "companion queues",
-            format!("{} exceeds limit {MAX_ACTIVE}", save.queues.len()),
+            format!("{} exceeds limit {MAX_ACTIVE}", queues.len()),
         ));
     }
     // Sort bounded references so malformed variable-length payloads are never
     // copied before the complete aggregate has passed admission.
-    let mut records: Vec<_> = save.records.iter().collect();
+    let mut records: Vec<_> = body_records.iter().collect();
     records.sort_by_key(|left| left.id.to_bytes());
     for (index, body) in records.iter().enumerate() {
         validate_body(body)
@@ -1449,7 +1474,7 @@ fn canonical_v5_parts(
             return Err(corrupt("companion records", "duplicate companion ID"));
         }
     }
-    let mut lifecycles: Vec<_> = save.lifecycles.iter().collect();
+    let mut lifecycles: Vec<_> = lifecycles.iter().collect();
     lifecycles.sort_by_key(|left| left.id.to_bytes());
     let mut active: Vec<PlayerId> = Vec::new();
     for (index, lifecycle) in lifecycles.iter().enumerate() {
@@ -1474,9 +1499,9 @@ fn canonical_v5_parts(
             format!("{} exceeds limit {MAX_ACTIVE}", active.len()),
         ));
     }
-    validate_queues(&save.queues, &save.records, CURRENT_SCHEMA)
+    validate_queues(queues, body_records, CURRENT_SCHEMA)
         .map_err(|detail| corrupt("companion queues", detail))?;
-    let mut queues: Vec<_> = save.queues.iter().collect();
+    let mut queues: Vec<_> = queues.iter().collect();
     queues.sort_by_key(|left| left.id.to_bytes());
     for queue in &queues {
         if !queue.summary.is_empty() {

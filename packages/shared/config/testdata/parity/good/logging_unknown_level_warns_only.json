@@ -1,0 +1,8 @@
+{
+  "logging": {
+    "default": "loud",
+    "modules": {
+      "net": "chatty"
+    }
+  }
+}

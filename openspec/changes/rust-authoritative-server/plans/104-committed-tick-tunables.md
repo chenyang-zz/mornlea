@@ -1,0 +1,13 @@
+# Committed tick tuning preservation
+
+Goal: preserve the checked RuleTunables already owned by committed EnvironmentState through actual advance_tick. This is one supported-outcome gap under original spec paragraphs 9–22 and the tick-start frozen-input requirement in plan04-refined-nodes.md. It does not qualify configuration-file loading or executable assembly, and does not close 4.1/4.2.
+
+Architecture: reuse the sole committed resident environment and existing exclusive TickContext loan. freeze_environment keeps metadata/default construction only when no environment exists, updates next_tick, and preserves the existing checked tuning. EnvironmentEnd already advances clock/weather and carries baseline.tunables. No new producer API, global owner, configuration parser, public contract or second validation policy.
+
+Author scope: packages/engine/crates/mornlea_server/src/core/state.rs (only freeze_environment reset/comment); tests/persistence_failure/source_player_restore.rs (append only); AGENTS.md (environment ownership guidance only). Controller owns this plan, tasks and ledger. Existing contracts, providers, Snow consumers, binary, Go and control plane remain read-only.
+
+Sequence: real local Claude first appends two actual-tick regressions plus default control, with production unchanged. Host confirms nonempty discovery and two intended assertion REDs, records tests-only checkpoint. Claude then removes only the unconditional source_defaults assignment and documents existing ownership. Host formats and verifies local GREEN, complete Rust gate, release build, directly relevant Go evidence and OpenSpec; fresh independent GPT-6.1-sol scoped review binds final SHA.
+
+Tests use existing ActionCostFixture, real disk/Memory handshake and native advance_tick. Stage a cloned environment through TickContext::restage, RuleEffect::Environment, resident_snapshot, drop and commit_residents; preserve all resident lanes. Complete checked 19-field tuple differs from defaults and survives two actual ticks, while clock advances once each tick. Actual Till test customizes only exhaustion threshold to2000: saturation500/exhaustion3999 plus source cost5 yields hunger19/saturation0/exhaustion4; default threshold4000 yields hunger20/saturation0/exhaustion4. Verify native tilled cell35, publication and decoded PlayerState via assert_cost and unchanged quiet next tick. Default control verifies source defaults for an ordinary unconfigured actual tick. Existing climate, Snow, lifecycle and mutation guards remain applicable.
+
+OpenSpec tasks.md is the sole status source. This document defines scope and acceptance, not an additional progress checklist. No implementation by Codex and no new Loom Write compatibility dependency.
