@@ -27,5 +27,7 @@ these scripts; they do not duplicate their validation policy.
 - `package-native-artifact.sh` writes deterministic manifest v1 files.
 - `verify-native-artifact.sh` validates manifest v1 files and stages verified
   dynamic libraries in the engine `deps` directory.
+- `run-rust-quality.sh` prepares the locked Agent and sealed previous runtime
+  in an owned temporary directory before the unchanged workspace Rust gate.
 - Add real-script regression coverage in `packages/audit`; run `bash -n` for
   changed shell scripts and the focused audit test before broader CI gates.

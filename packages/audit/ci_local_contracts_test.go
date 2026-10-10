@@ -17,7 +17,7 @@ func TestCIDoctorProfilesAndFailures(t *testing.T) {
 		"preflight":     {"bash", "git", "go", "gofmt", "node", "npx", "rg"},
 		"audit":         {"bash", "go", "gofmt", "rg"},
 		"frontend":      {"bash", "corepack", "git", "node"},
-		"rust":          {"bash", "cargo", "rustc", "rustup"},
+		"rust":          {"bash", "cargo", "cc", "git", "go", "gofmt", "make", "python3", "rustc", "rustup", "uv"},
 		"go":            {"bash", "go", "gofmt"},
 		"native-linux":  {"bash", "cargo", "cc", "go", "ldd", "make", "nm", "readelf", "rustc", "rustup", "shasum"},
 		"native-macos":  {"bash", "cargo", "codesign", "go", "install_name_tool", "make", "nm", "rustc", "rustup", "shasum"},
@@ -35,7 +35,7 @@ func TestCIDoctorProfilesAndFailures(t *testing.T) {
 			if got, want := output, "CI dependency profile passed: "+profile+"\n"; got != want {
 				t.Fatalf("doctor output = %q, want %q", got, want)
 			}
-			if strings.HasPrefix(profile, "godot-") || profile == "audit" {
+			if strings.HasPrefix(profile, "godot-") || profile == "audit" || profile == "rust" {
 				for _, missing := range commands {
 					if missing == "bash" {
 						continue

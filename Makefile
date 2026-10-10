@@ -198,7 +198,8 @@ ci-preflight:
 
 ci-rust-quality:
 	scripts/ci/doctor.sh rust
-	$(MAKE) rust-check
+	$(MAKE) rust
+	scripts/ci/run-rust-quality.sh
 
 ci-frontend:
 	scripts/ci/doctor.sh frontend

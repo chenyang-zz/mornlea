@@ -34,7 +34,7 @@ type requiredCIJob struct {
 var requiredCIJobs = map[string]requiredCIJob{
 	"preflight":          {"ubuntu-24.04", 10, nil, []string{ciGo, ciNode}},
 	"frontend":           {"ubuntu-24.04", 15, nil, []string{ciNode}},
-	"rust-quality":       {"ubuntu-24.04", 30, nil, nil},
+	"rust-quality":       {"ubuntu-24.04", 30, nil, []string{ciGo, ciPython, ciUV}},
 	"native-linux":       {"ubuntu-24.04", 30, nil, []string{ciGo}},
 	"native-macos":       {"macos-15", 30, nil, []string{ciGo}},
 	"linux-quality":      {"ubuntu-24.04", 20, []string{"native-linux"}, []string{ciGo}},

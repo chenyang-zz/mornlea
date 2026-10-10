@@ -13,7 +13,7 @@ case "$profile" in
 preflight) required=(bash git go gofmt node npx rg) ;;
 audit) required=(bash go gofmt rg) ;;
 frontend) required=(bash corepack git node) ;;
-rust) required=(bash cargo rustc rustup) ;;
+rust) required=(bash cargo cc git go gofmt make python3 rustc rustup uv) ;;
 go) required=(bash go gofmt) ;;
 native-linux) required=(bash cargo cc go ldd make nm readelf rustc rustup shasum) ;;
 native-macos) required=(bash cargo codesign go install_name_tool make nm rustc rustup shasum) ;;
