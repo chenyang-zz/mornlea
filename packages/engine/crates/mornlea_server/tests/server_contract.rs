@@ -61,3 +61,9 @@ mod chunk_encoding;
 
 #[path = "server_contract/command_outcome.rs"]
 mod command_outcome;
+
+#[path = "server_contract/runtime_companion.rs"]
+mod runtime_companion;
+
+#[path = "server_contract/agent_endpoint.rs"]
+mod agent_endpoint;

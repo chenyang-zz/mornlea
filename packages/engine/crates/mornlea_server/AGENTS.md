@@ -28,6 +28,50 @@ into `core`; `runtime` never constructs `TickBudget`. `core`, `rules`,
 `store`, `transport`, and `agent` must not reference `runtime::` —
 enforced by `runtime::config::tests::dependency_direction_forbids_runtime_imports`.
 
+## Configured companion startup
+
+`runtime::config` freezes the `ai` group into `AiConfig` only when at least one
+companion is configured (ids, names, endpoint, credential variable name, and
+`taskTimeoutMinutes`, default 10); acceptance is unchanged and still pinned by
+the shared parity fixtures. Persona text is not frozen. The task timeout is
+frozen but unused until the task runner lands.
+
+`runtime::companion::start_companions` mirrors the Go `NewHost` companion
+bootstrap against the world store before it moves into the scheduler and an
+unstarted authority. Without companions an existing aggregate is merged with no
+active body and saved only if that retired someone. With companions the
+credential and the Agent wire are checked before any save I/O; the aggregate is
+loaded (missing is empty, corrupt/future/I/O failures stop), merged through
+`merge_companions_v5` with anchor bodies at the metadata spawn dimension
+(`core::anchor_body`), and saved durably when changed; then the namespace
+`LeaseController` starts its control worker, the `SnapshotRegistry` and
+loopback `McpService` start, and only then does `enable_companion_persistence`
+receive the aggregate. Any failure retires what already started. A refused
+lease acquire stays on the control worker and never blocks startup or a tick.
+Python is never launched here. Planning snapshots, outcome install, the task
+runner and task timeouts are not assembled yet; persona stays with the dialogue
+work.
+
+Core has no non-Overworld companion yet (task 4.9). A non-Overworld spawn
+dimension is handled like a missing definition: the stored aggregate and its
+bytes stay unchanged, nothing spawns or starts, and a typed
+`CompanionStartWarning::NonOverworldSpawn` goes to the injected `warn` sink
+(`stderr_warning` in production).
+
+Every endpoint the config accepts starts. `agent::endpoint::AgentEndpoint` is
+the single parser for the config and the wire and reproduces Go's real request:
+dial address, verbatim `Host` header and `URL.RequestURI` target of the trimmed
+endpoint plus the route. A spelling the Agent cannot serve (route moved into
+the query by `?` or dropped by `#`, a leading-zero port the gateway's `Host`
+check refuses, nothing listening) fails per request on the lease worker, never
+at startup.
+
+`tests/server_contract/runtime_companion.rs` pins the DiskStore cases against Go
+`companion_bootstrap_test.go`; `tests/server_contract/agent_endpoint.rs` runs a
+Go helper and compares every accepted and refused spelling;
+`tests/agent_process/startup.rs` acquires a real namespace lease from the Python
+helper (`MORNLEA_AGENT_PYTHON`) through canonical and respelled endpoints.
+
 ## Trusted observer
 
 Trusted observers attach through `AuthorityState` / `session` between ticks only

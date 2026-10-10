@@ -7,6 +7,8 @@ change; the crate guide owns production dependency review.
 
 ## Directory map
 
+- `endpoint.rs`: the one Agent service endpoint parser: Go `Validate` acceptance and
+  Go's dial address, `Host` header and request target, shared with `runtime::config`.
 - `http.rs`: closed-schema Agent HTTP, absolute request deadlines and cancellation.
 - `lease.rs`: checked remote lease identity, freeze fences and release eligibility.
 - `host.rs`: bounded task/dialogue/control requests and retained terminal cleanup;
