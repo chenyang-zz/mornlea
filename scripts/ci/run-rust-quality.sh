@@ -8,6 +8,8 @@ cd "$root"
 TMPDIR=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 export TMPDIR
 (cd packages/agent && uv sync --locked)
+# Preparation and subprocess tests use the same qualified Python as the Agent.
+export PATH="$root/packages/agent/.venv/bin:$PATH"
 
 previous_source=d042982d33bb1694d768b75b01c297bd02534a08
 if ! git cat-file -e "$previous_source^{commit}"; then

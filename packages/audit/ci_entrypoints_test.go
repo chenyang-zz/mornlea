@@ -257,13 +257,14 @@ func TestCIRustQualityRealFixturePreparation(t *testing.T) {
 			root, script := ciEntrypointFixture(t, "run-rust-quality.sh")
 			bin, log := ciCommandRecorder(t)
 			writeFile(t, filepath.Join(root, "packages/agent/.venv/bin/python"), nil)
+			writeExecutable(t, filepath.Join(root, "packages/agent/.venv/bin/python3"), "#!/usr/bin/env bash\nexit 0\n")
 			writeExecutable(t, filepath.Join(bin, "uv"), "#!/usr/bin/env bash\n[[ $PWD -ef \"$CI_TEST_ROOT/packages/agent\" ]] || exit 93\ncd \"$CI_TEST_ROOT\"\n"+strings.TrimPrefix(ciRecorderSource("uv"), "#!/usr/bin/env bash\n"))
 			git := ciRecorderSource("git")
 			if mode == "missing-source" || mode == "fetch-error" {
 				git += "[[ $1 != cat-file ]] || exit 1\n"
 			}
 			writeExecutable(t, filepath.Join(bin, "git"), git)
-			writeFile(t, filepath.Join(root, "scripts/rust-server-opt-in.sh"), []byte(ciRecorderSource("prepare")+"printf '%s' \"$5\" > \"$CI_TEST_ROOT/prepared-root\"\ntouch \"$5/previous-server\" \"$5/previous-runtime.json\"\n"))
+			writeFile(t, filepath.Join(root, "scripts/rust-server-opt-in.sh"), []byte("#!/usr/bin/env bash\n[[ $(command -v python3) == \"$CI_TEST_ROOT/packages/agent/.venv/bin/python3\" ]] || exit 97\n"+strings.TrimPrefix(ciRecorderSource("prepare"), "#!/usr/bin/env bash\n")+"printf '%s' \"$5\" > \"$CI_TEST_ROOT/prepared-root\"\ntouch \"$5/previous-server\" \"$5/previous-runtime.json\"\n"))
 			writeExecutable(t, filepath.Join(bin, "make"), "#!/usr/bin/env bash\n[[ $MORNLEA_AGENT_PYTHON == \"$CI_TEST_ROOT/packages/agent/.venv/bin/python\" ]] || exit 94\n[[ $MORNLEA_PREVIOUS_SERVER_BIN == \"$(cat \"$CI_TEST_ROOT/prepared-root\")/previous-server\" ]] || exit 95\n[[ $MORNLEA_PREVIOUS_PACKAGE == \"$(cat \"$CI_TEST_ROOT/prepared-root\")/previous-runtime.json\" ]] || exit 96\n"+strings.TrimPrefix(ciRecorderSource("make"), "#!/usr/bin/env bash\n"))
 			failAt := map[string]int{"install-error": 1, "fetch-error": 3, "prepare-error": 3, "check-error": 4}[mode]
 			var args []string
