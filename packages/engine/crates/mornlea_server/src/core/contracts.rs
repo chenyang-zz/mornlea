@@ -4,6 +4,7 @@
 //! execution and seam plans. A constructor that rejects a value does so before
 //! it allocates. These types are not wire records and not save records.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
@@ -2821,6 +2822,27 @@ impl PlanningSnapshot {
     pub fn source_tick(&self) -> u64 {
         self.source_tick
     }
+}
+
+/// Current-world projection the tick side rebuilds for outcome install.
+///
+/// The Agent host never reads authority state directly; the authority builds
+/// this bounded view at the tick boundary and plan install revalidates the
+/// arriving plan against it, the way the Go authority rebuilds the plan
+/// snapshot before accepting a planner outcome.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurrentWorld {
+    /// Authority tick the view was taken at.
+    pub tick: u64,
+    /// Dense current blocks for the planned region; absence means the cell
+    /// is not ready, so lookup fails closed.
+    pub blocks: BTreeMap<BlockPos, u16>,
+    /// Current revision per planned chunk; a missing entry fails closed.
+    pub chunk_revisions: BTreeMap<ChunkPos, u64>,
+    /// Companion inventory, all 36 slots.
+    pub inventory: [ItemStack; 36],
+    /// Online players by id with their current positions.
+    pub online_players: BTreeMap<PlayerId, [f32; 3]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

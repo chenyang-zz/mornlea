@@ -18,8 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use mornlea_domain::{BlockPos, ChunkPos, CompanionId, PlayerId};
-use mornlea_storage::ItemStack;
+use mornlea_domain::{BlockPos, ChunkPos, CompanionId};
 
 use super::memory::{CommitReservation, valid_dialogue_line, valid_memory_text};
 use crate::contracts::{
@@ -30,6 +29,8 @@ use crate::contracts::{
     ServerError, SnapshotId, SnapshotPort,
 };
 use crate::core::companion_ingress::CompanionTaskGate;
+
+pub use crate::contracts::CurrentWorld;
 
 /// Shared bound for plan and dialogue workers, matching the Go companion
 /// `MaxActive` model slots.
@@ -220,27 +221,6 @@ fn terrain_lookup(
         return None;
     }
     blocks.get(((dx * 17 + dy) * 33 + dz) as usize).copied()
-}
-
-/// Current-world projection the tick side rebuilds for outcome install.
-///
-/// The host never reads authority state directly; the reducer supplies this
-/// bounded view at the tick boundary and install revalidates the arriving
-/// plan against it, the way the Go authority rebuilds the plan snapshot
-/// before accepting a planner outcome.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CurrentWorld {
-    /// Authority tick the view was taken at.
-    pub tick: u64,
-    /// Dense current blocks for the planned region; absence means the cell
-    /// is not ready, so lookup fails closed.
-    pub blocks: BTreeMap<BlockPos, u16>,
-    /// Current revision per planned chunk; a missing entry fails closed.
-    pub chunk_revisions: BTreeMap<ChunkPos, u64>,
-    /// Companion inventory, all 36 slots.
-    pub inventory: [ItemStack; 36],
-    /// Online players by id with their current positions.
-    pub online_players: BTreeMap<PlayerId, [f32; 3]>,
 }
 
 /// Plan dispatch frozen by the caller: the snapshot carries the instruction
