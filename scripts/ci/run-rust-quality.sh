@@ -16,7 +16,7 @@ fi
 quality_run=$(mktemp -d "$TMPDIR/mornlea-rust-quality.XXXXXX")
 # Failed packages remain available for inspection; success removes only our copy.
 trap 'printf "Rust quality fixture directory: %s\n" "$quality_run" >&2' ERR
-scripts/rust-server-opt-in.sh prepare-previous --source "$previous_source" --run-dir "$quality_run"
+bash scripts/rust-server-opt-in.sh prepare-previous --source "$previous_source" --run-dir "$quality_run"
 export MORNLEA_PREVIOUS_SERVER_BIN="$quality_run/previous-server"
 export MORNLEA_PREVIOUS_PACKAGE="$quality_run/previous-runtime.json"
 export MORNLEA_AGENT_PYTHON="$root/packages/agent/.venv/bin/python"

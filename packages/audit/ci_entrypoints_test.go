@@ -263,7 +263,7 @@ func TestCIRustQualityRealFixturePreparation(t *testing.T) {
 				git += "[[ $1 != cat-file ]] || exit 1\n"
 			}
 			writeExecutable(t, filepath.Join(bin, "git"), git)
-			writeExecutable(t, filepath.Join(root, "scripts/rust-server-opt-in.sh"), ciRecorderSource("prepare")+"printf '%s' \"$5\" > \"$CI_TEST_ROOT/prepared-root\"\ntouch \"$5/previous-server\" \"$5/previous-runtime.json\"\n")
+			writeFile(t, filepath.Join(root, "scripts/rust-server-opt-in.sh"), []byte(ciRecorderSource("prepare")+"printf '%s' \"$5\" > \"$CI_TEST_ROOT/prepared-root\"\ntouch \"$5/previous-server\" \"$5/previous-runtime.json\"\n"))
 			writeExecutable(t, filepath.Join(bin, "make"), "#!/usr/bin/env bash\n[[ $MORNLEA_AGENT_PYTHON == \"$CI_TEST_ROOT/packages/agent/.venv/bin/python\" ]] || exit 94\n[[ $MORNLEA_PREVIOUS_SERVER_BIN == \"$(cat \"$CI_TEST_ROOT/prepared-root\")/previous-server\" ]] || exit 95\n[[ $MORNLEA_PREVIOUS_PACKAGE == \"$(cat \"$CI_TEST_ROOT/prepared-root\")/previous-runtime.json\" ]] || exit 96\n"+strings.TrimPrefix(ciRecorderSource("make"), "#!/usr/bin/env bash\n"))
 			failAt := map[string]int{"install-error": 1, "fetch-error": 3, "prepare-error": 3, "check-error": 4}[mode]
 			var args []string
@@ -298,6 +298,9 @@ func TestCIRustQualityRealFixturePreparation(t *testing.T) {
 				}
 			}
 			if failAt > 0 {
+				if len(got) != failAt {
+					t.Fatalf("failed before intended command: %q\n%s", got, output)
+				}
 				want = want[:failAt]
 			}
 			if !slices.Equal(got, want) {
