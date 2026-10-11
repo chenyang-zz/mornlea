@@ -978,7 +978,7 @@ fn bounded_history_and_consumption() {
     let second = AcceptedObservation::try_new(
         ObservationKey::try_new(epoch, ConfirmedRevision::new(2), 1).expect("key"),
         None,
-        snapshot(Dimension::OVERWORLD, 2, 2, 1),
+        snapshot(Dimension::OVERWORLD, 0, 0, 2),
         Vec::new(),
     )
     .expect("staged");
@@ -1504,8 +1504,7 @@ fn repaired_capacity_actor_resolution_and_name_are_charged() {
     let ServerPacket::RemotePlayerSpawn(packet) = observation.packet() else {
         panic!("remote spawn");
     };
-    let dynamic = packet.display_name.capacity()
-        + std::mem::size_of_val(observation.resolved());
+    let dynamic = packet.display_name.capacity() + std::mem::size_of_val(observation.resolved());
     assert_eq!(observation.resolved().len(), 0);
     mirror
         .consume(&PublicationConsumption::try_new(1, 0, 0, 0).unwrap())
@@ -1620,4 +1619,157 @@ fn repaired_crafting_replaces_the_sole_current_attribution() {
             })
         ));
     }
+}
+
+#[test]
+fn real_mirror_retains_snapshot_blocks_delta_and_forget_at_negative_coordinates() {
+    let mut mirror = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+    let position = mornlea_domain::BlockPos::new(-1, MIN_Y, -1);
+    let packet = ServerPacket::ChunkSnapshot(
+        ChunkSnapshot::new(
+            Dimension::OVERWORLD,
+            -1,
+            -1,
+            7,
+            (0..24)
+                .map(|section| SectionData::single(section, BLOCK_STONE))
+                .collect(),
+        )
+        .unwrap(),
+    );
+    mirror.commit(&charged_observation(packet, 1)).unwrap();
+    assert_eq!(
+        mirror
+            .mirror()
+            .world()
+            .block_at(Dimension::OVERWORLD, position),
+        Some(BLOCK_STONE)
+    );
+    let prior = mirror.mirror().clone();
+    let delta = ServerPacket::BlockChanges(
+        BlockChanges::new(
+            Dimension::OVERWORLD,
+            -1,
+            -1,
+            7,
+            8,
+            vec![BlockChange {
+                x: -1,
+                y: MIN_Y,
+                z: -1,
+                block: BLOCK_AIR,
+            }],
+        )
+        .unwrap(),
+    );
+    mirror.commit(&charged_observation(delta, 2)).unwrap();
+    assert_eq!(
+        mirror
+            .mirror()
+            .world()
+            .block_at(Dimension::OVERWORLD, position),
+        Some(BLOCK_AIR)
+    );
+    assert_eq!(
+        mirror.mirror().world().block_at(
+            Dimension::OVERWORLD,
+            mornlea_domain::BlockPos::new(-2, MIN_Y, -1)
+        ),
+        Some(BLOCK_STONE)
+    );
+    assert_eq!(
+        prior.world().block_at(Dimension::OVERWORLD, position),
+        Some(BLOCK_STONE)
+    );
+    assert_eq!(mirror.mirror().revision().get(), 2);
+    assert_eq!(mirror.mirror().world().chunks().get(&(0, -1, -1)), Some(&8));
+    mirror
+        .commit(&charged_observation(
+            forget(Dimension::OVERWORLD, vec![(-1, -1)]),
+            3,
+        ))
+        .unwrap();
+    assert_eq!(
+        mirror
+            .mirror()
+            .world()
+            .block_at(Dimension::OVERWORLD, position),
+        None
+    );
+    assert_eq!(mirror.mirror().world().content_bytes(), 0);
+    assert_eq!(mirror.mirror().revision().get(), 3);
+    assert_eq!(mirror.observations().len(), 3);
+    assert!(
+        mirror
+            .observations()
+            .iter()
+            .all(|observation| observation.source_tick().is_none())
+    );
+}
+
+#[test]
+fn real_mirror_column_capacity_preserves_prior_payload_revision_and_observations() {
+    let base = ClientLimits::try_new().unwrap();
+    let limits = ClientLimits::try_new_with(
+        base.queued_input_events(),
+        1,
+        base.inbound_bytes(),
+        base.outbound_commands(),
+        base.outbound_bytes(),
+        base.prediction_journal(),
+        base.message_work(),
+        base.mesh_work(),
+        base.preparation_results(),
+        base.preparation_bytes(),
+        base.family_records(),
+        base.frame_bytes(),
+    )
+    .unwrap();
+    let mut mirror = MirrorProvider::new(SessionEpoch::try_new(1).unwrap(), limits).unwrap();
+    mirror.admit().unwrap();
+    mirror
+        .commit(&charged_observation(
+            snapshot(Dimension::OVERWORLD, -1, -1, 7),
+            1,
+        ))
+        .unwrap();
+    mirror
+        .consume(&PublicationConsumption::try_new(1, 0, 0, 0).unwrap())
+        .unwrap();
+    let prior = mirror.mirror().clone();
+    let retained = mirror.held_observation_bytes().unwrap();
+    assert_eq!(
+        mirror.commit(&charged_observation(
+            snapshot(Dimension::OVERWORLD, 0, 0, 1),
+            2
+        )),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(mirror.mirror(), &prior);
+    assert_eq!(
+        mirror.mirror().world().block_at(
+            Dimension::OVERWORLD,
+            mornlea_domain::BlockPos::new(-1, MIN_Y, -1)
+        ),
+        Some(BLOCK_AIR)
+    );
+    assert!(mirror.observations().is_empty());
+    assert_eq!(mirror.held_observation_bytes().unwrap(), retained);
+    mirror
+        .commit(&charged_observation(
+            forget(Dimension::OVERWORLD, vec![(-1, -1)]),
+            2,
+        ))
+        .unwrap();
+    mirror
+        .consume(&PublicationConsumption::try_new(1, 0, 0, 0).unwrap())
+        .unwrap();
+    mirror
+        .commit(&charged_observation(
+            snapshot(Dimension::OVERWORLD, 0, 0, 1),
+            3,
+        ))
+        .unwrap();
+    assert_eq!(mirror.mirror().world().chunk_count(), 1);
+    assert_eq!(mirror.mirror().revision().get(), 3);
 }

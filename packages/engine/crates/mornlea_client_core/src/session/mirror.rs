@@ -136,6 +136,11 @@ impl MirrorProvider {
         &self.observations
     }
 
+    /// Lends retained observations only to the exclusive serial publication transaction.
+    pub(crate) fn publication_observations_mut(&mut self) -> &mut Vec<AcceptedObservation> {
+        &mut self.observations
+    }
+
     /// Actual retained decoded storage, including spare queue backing.
     /// Consumption releases packet allocations while spare backing stays charged.
     pub fn held_observation_bytes(&self) -> Result<usize, ClientError> {
@@ -204,6 +209,7 @@ impl MirrorProvider {
         stage_event(
             &event,
             revision,
+            &self.limits,
             &mut world,
             &mut actors,
             &mut inventory,
@@ -247,6 +253,7 @@ impl MirrorProvider {
 fn stage_event(
     event: &Event,
     revision: ConfirmedRevision,
+    limits: &ClientLimits,
     world: &mut WorldConfirmed,
     actors: &mut ActorConfirmed,
     inventory: &mut InventoryConfirmed,
@@ -265,9 +272,8 @@ fn stage_event(
                 // path either.
                 return Err(ClientError::InvalidInput);
             }
-            *world = world
-                .clone()
-                .with_chunk(dimension, chunk, snapshot.revision());
+            // Content and revision enter the same confirmed owner under selected bounds.
+            world.apply_snapshot(snapshot, limits)?;
         }
         Event::BlockChanges(batch) => {
             let dimension = batch.dimension();
@@ -281,9 +287,7 @@ fn stage_event(
                 // it is not a continuation. Both reject.
                 return Err(ClientError::InvalidInput);
             }
-            *world = world
-                .clone()
-                .with_chunk(dimension, chunk, batch.new_revision());
+            world.apply_changes(batch, limits)?;
         }
         Event::ForgetChunks(forget) => {
             let mut staged = world.clone();
