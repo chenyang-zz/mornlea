@@ -632,7 +632,7 @@ struct RetainedUnit {
 }
 
 /// The freshest admitted identity of one terrain key: the epoch, generation
-/// and content revision of the newest admitted job, plus whether that exact
+/// content revision and job id of the newest admitted request, plus whether that exact
 /// identity has already been delivered.
 struct HighWaterMark {
     dimension: Dimension,
@@ -640,12 +640,13 @@ struct HighWaterMark {
     epoch: u64,
     generation: u64,
     content: u64,
+    job_id: u64,
     delivered: bool,
 }
 
 impl HighWaterMark {
-    fn identity(&self) -> (u64, u64, u64) {
-        (self.epoch, self.generation, self.content)
+    fn identity(&self) -> (u64, u64, u64, u64) {
+        (self.epoch, self.generation, self.content, self.job_id)
     }
 }
 
@@ -687,7 +688,8 @@ fn geometry_allocation(geometry: &PreparedGeometry) -> usize {
 /// its capacity and rejects one more with the typed `Capacity` class before
 /// any allocation, returning the complete job. Key, ticket and mark records
 /// are fixed-size scalars outside the allocation charge, matching the frozen
-/// payload-plus-shared-allocation convention.
+/// payload-plus-shared-allocation convention. Active marks are bounded by the
+/// held-record cap and retire with their final matching ownership.
 ///
 /// Staleness: an invalidated epoch is retired monotonically and never
 /// resurrects, so its jobs reject as `StaleEpoch` and its results release
@@ -789,6 +791,7 @@ impl PreparationQueue {
             && let Some(released) = self.retained.remove(index)
         {
             self.charge -= released.charge;
+            self.prune_high_water(&released.key);
             return Ok(released.charge as u64);
         }
         Ok(0)
@@ -807,7 +810,9 @@ impl PreparationQueue {
             let Some(unit) = self.pending.pop_front() else {
                 break;
             };
+            let key = *unit.job.key();
             self.consume_pending(unit);
+            self.prune_high_water(&key);
             consumed += 1;
         }
         u16::try_from(consumed).unwrap_or(u16::MAX)
@@ -830,7 +835,12 @@ impl PreparationQueue {
     /// than every high-water mark of its terrain key, or it is the mark
     /// itself and that mark has not delivered yet.
     fn is_stale_delivery(&self, key: &PreparedResourceKey) -> bool {
-        let identity = (key.epoch().get(), key.generation(), key.content_revision());
+        let identity = (
+            key.epoch().get(),
+            key.generation(),
+            key.content_revision(),
+            key.job_id().get(),
+        );
         self.high_water.iter().any(|mark| {
             mark.dimension == key.dimension()
                 && mark.terrain == *key.key()
@@ -840,9 +850,14 @@ impl PreparationQueue {
 
     /// Records the freshest admitted identity of one terrain key; an equal
     /// identity keeps its delivery state and an older one changes nothing, so
-    /// only a strictly newer submission moves the mark.
+    /// only a strictly newer request moves the mark. Content freshness precedes job id.
     fn bump_high_water(&mut self, key: &PreparedResourceKey) {
-        let identity = (key.epoch().get(), key.generation(), key.content_revision());
+        let identity = (
+            key.epoch().get(),
+            key.generation(),
+            key.content_revision(),
+            key.job_id().get(),
+        );
         if let Some(mark) = self
             .high_water
             .iter_mut()
@@ -852,6 +867,7 @@ impl PreparationQueue {
                 mark.epoch = identity.0;
                 mark.generation = identity.1;
                 mark.content = identity.2;
+                mark.job_id = identity.3;
                 mark.delivered = false;
             }
             return;
@@ -862,8 +878,25 @@ impl PreparationQueue {
             epoch: identity.0,
             generation: identity.1,
             content: identity.2,
+            job_id: identity.3,
             delivered: false,
         });
+    }
+
+    /// Freshness metadata lives only while matching work or geometry is owned.
+    /// Pending older work keeps the latest mark until it can no longer complete.
+    fn prune_high_water(&mut self, key: &PreparedResourceKey) {
+        let matches = |held: &PreparedResourceKey| {
+            held.dimension() == key.dimension() && held.key() == key.key()
+        };
+        if self.pending.iter().any(|unit| matches(unit.job.key()))
+            || self.completed.iter().any(|unit| matches(unit.result.key()))
+            || self.retained.iter().any(|unit| matches(&unit.key))
+        {
+            return;
+        }
+        self.high_water
+            .retain(|mark| mark.dimension != key.dimension() || mark.terrain != *key.key());
     }
 
     /// The payload-only charge of one job beside the identity and allocation
@@ -1040,6 +1073,7 @@ impl PreparationPort for PreparationQueue {
                 // A result that went stale while awaiting delivery releases
                 // its geometry exactly once and never publishes.
                 self.charge -= charge;
+                self.prune_high_water(&key);
                 continue;
             }
             let outcome = result.outcome().clone();
@@ -1059,6 +1093,7 @@ impl PreparationPort for PreparationQueue {
             {
                 mark.delivered = true;
             }
+            self.prune_high_water(&key);
             return Some(result);
         }
     }
@@ -1231,5 +1266,45 @@ mod tests {
         );
         assert_eq!(port.retained_resources(), 0, "nothing is retained");
         assert!(port.poll_ready().is_none(), "the queue drains exactly");
+    }
+    #[test]
+    fn released_terrain_does_not_accumulate_freshness_history() {
+        let mut queue = PreparationQueue::new(ClientLimits::try_new().expect("limits"));
+        let budget = ClientWorkBudget::try_new(0, 1).expect("budget");
+        for index in 1..=4097 {
+            let mut job = far_job_for(index);
+            let tile = [index as i32, 4];
+            job.key.key = TerrainKey::LodTile(TilePos::new(tile[0], tile[1]));
+            let PreparationPayload::Far(request) = &mut job.payload else {
+                unreachable!()
+            };
+            request.tile = tile;
+            let key = *job.key();
+            queue.try_submit(job).expect("admission");
+            queue.work(budget);
+            queue.poll_ready().expect("delivery");
+            queue.forget(&key).expect("retirement");
+            assert!(
+                queue.high_water.is_empty(),
+                "retired ownership must release freshness metadata"
+            );
+        }
+    }
+
+    #[test]
+    fn newer_mark_survives_forget_until_older_pending_work_releases() {
+        let mut queue = PreparationQueue::new(ClientLimits::try_new().expect("limits"));
+        let mut newer = far_job_for(2);
+        newer.key.generation = 2;
+        let key = *newer.key();
+        queue.try_submit(newer).expect("newer admission");
+        queue.try_submit(far_job_for(1)).expect("older admission");
+        queue.work(ClientWorkBudget::try_new(0, 1).expect("single work"));
+        queue.poll_ready().expect("newer delivery");
+        queue.forget(&key).expect("newer retirement");
+        assert_eq!(queue.high_water.len(), 1);
+        queue.work(ClientWorkBudget::try_new(0, 1).expect("older work"));
+        assert!(queue.poll_ready().is_none());
+        assert!(queue.high_water.is_empty());
     }
 }

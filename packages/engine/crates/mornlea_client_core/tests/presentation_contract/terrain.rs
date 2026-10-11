@@ -1414,3 +1414,23 @@ fn abandoned_replacement_preserves_old_lookup_until_retry_commit() {
     assert!(h.queue.prepared_resource(&new).is_ok());
     assert_eq!(h.queue.retained_resources(), 1);
 }
+
+#[test]
+fn same_content_resource_reenters_with_new_job_after_forget() {
+    let mut h = new_harness(1, 1, far_config(false, 2, 3, charge()), frozen_limits());
+    let tile = TilePos::new(1, 1);
+    let first = far_job(&mut h, tile, 1);
+    let key = *first.key();
+    h.queue.try_submit(first).unwrap();
+    h.queue.work(full_budget());
+    h.queue.poll_ready().expect("first completion");
+    h.queue.forget(&key).unwrap();
+    let second = far_job(&mut h, tile, 1);
+    assert_ne!(key.job_id(), second.key().job_id());
+    h.queue.try_submit(second).unwrap();
+    h.queue.work(full_budget());
+    assert!(
+        h.queue.poll_ready().is_some(),
+        "re-entered unchanged terrain with new job id must complete"
+    );
+}
