@@ -1009,3 +1009,29 @@ fn repaired_capacity_observation_overflow_is_terminal() {
         1
     );
 }
+
+#[test]
+fn already_released_known_transport_publishes_terminal_once() {
+    let (mut session, connector, _, epoch) =
+        repair_session(mornlea_client_core::ClientLimits::try_new().unwrap());
+    let ticket = mornlea_client_core::TransportTicket::try_new(
+        NonZeroU64::new(1).unwrap(),
+        NonZeroU64::new(1).unwrap(),
+    )
+    .unwrap();
+    connector.inner.close(ticket).unwrap();
+    let report = session
+        .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
+        .unwrap();
+    assert_eq!(report.terminal(), Some(&CloseReason::Internal));
+    let terminal = session.snapshot(epoch).unwrap();
+    session.close().unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &terminal,
+        &session.snapshot(epoch).unwrap()
+    ));
+    let next = session
+        .connect(memory_endpoint(), identity("repair", 17))
+        .unwrap();
+    assert_eq!(next.get(), epoch.get() + 1);
+}

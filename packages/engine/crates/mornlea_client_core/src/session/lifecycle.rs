@@ -37,7 +37,7 @@
 
 use crate::contracts::{
     ClientError, ClientLimits, CloseReason, ConfirmedRevision, Connector, FamilyOperation,
-    PreparationPort, RecordHeader, SessionEpoch, TransportTicket,
+    PreparationPort, RecordHeader, SessionEpoch, TransportPoll, TransportTicket,
 };
 use crate::input::InputAdmissionState;
 use crate::preparation::InvalidationReport;
@@ -45,6 +45,24 @@ use crate::presentation::frame::{LifecycleRecord, LifecycleTransition};
 use crate::presentation::{
     AcceptedObservation, AudioProjectionState, LifecycleProjectionState, ResourceKey,
 };
+
+/// A known generation may already be absent; confirm absence before retiring ownership.
+fn release_known_transport(
+    connector: &dyn Connector,
+    ticket: TransportTicket,
+) -> Result<(), ClientError> {
+    match connector.close(ticket) {
+        Err(ClientError::InvalidState)
+            if matches!(
+                connector.poll(ticket),
+                TransportPoll::Closed(ClientError::InvalidState)
+            ) =>
+        {
+            Ok(())
+        }
+        result => result,
+    }
+}
 
 /// The core-owned resource keys in release order: consumers before
 /// providers. The Python feature and native bridge handle owners live
@@ -342,7 +360,7 @@ impl LifecycleOwner {
         // construction and the one transport release.
         let records = reset_projection(epoch, ConfirmedRevision::new(0))?;
         if let Some(ticket) = ticket.filter(|_| !already_released) {
-            connector.close(ticket)?;
+            release_known_transport(connector, ticket)?;
         }
         if let Some(generation) = self.live.as_mut() {
             generation.released = true;
@@ -397,7 +415,7 @@ impl LifecycleOwner {
         }
         let records = close_projection(epoch, ConfirmedRevision::new(0))?;
         if let Some(ticket) = generation.ticket.filter(|_| !generation.released) {
-            connector.close(ticket)?;
+            release_known_transport(connector, ticket)?;
             generation.released = true;
         }
         generation.terminal = Some(reason);

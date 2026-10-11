@@ -44,6 +44,8 @@ Validate both requested messages/meshes against selected config before dequeue. 
 
 Red cases: repeat close/reconnect/reset on the same real endpoint; two valid ForgetChunks under count 1; 32778-byte ForgetChunks under bytes 1; messages 2 with selected cap 1; Workbench rev1 then Personal rev2 rejects old token; connector release refusal then retry. Green preserves prior phase/frame for invalid input and reports terminal overflow explicitly.
 
+Release refinement: for the exact ticket issued to the active lifecycle owner, close InvalidState is accepted as already released only when the same connector's nonblocking poll confirms Closed(InvalidState). Other errors or a still-live poll retain retry ownership. This closes the confirmed missing-transport terminal stall without swallowing arbitrary release failures or changing the transport port's stale-ticket classification.
+
 Commands: core `cargo test --test session_replay --locked` and `--test lifecycle_contract --locked`, using the workspace manifest/toolchain. Commit lifecycle, capacity and crafting as coherent nodes with measured red/green evidence.
 
 ## Projection and preparation repair: R4–R8/R10/R12
