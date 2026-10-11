@@ -608,3 +608,9 @@ Candidate `6dc06b85330e2598525289dc68381b7c9422b9a7` received three isolated sou
   library fixture and bounded smoke orchestration; the controller owns native
   scenes, shared registration, integration, rollback and status. Architecture
   skill: no change; existing ownership and qualification rules cover this fix.
+
+## 2026-10-11 actual acknowledgment repair checkpoint
+
+Actual-provider discovery exposed missing correlatable input confirmations in the live composition. The controller froze the minimal repair in packet17 and retained serial production ownership. Public endpoint tests first failed with zero confirmations, then passed for exact cumulative sequence/kind/tick, duplicate/backward acknowledgment, unconfirmed chat and duplicate placement success without invented ticks. The session retains bounded confirmation facts until whole-frame commit; publication attests actual consumed authority packets. No C1/C2/G1 schema or protocol/save version changed.
+
+Focused complete core414 cases passed (/private/tmp/mornlea-f3-confirmed-receipt-core-suite.log plus the additive attestation case in /private/tmp/mornlea-f3-confirmed-source-attestation-v2.log), and pinned all-target core Clippy passed (/private/tmp/mornlea-f3-confirmed-receipt-clippy.log). Attestation's first fixture supplied an incomplete one-family candidate and correctly failed; the corrected complete ten-family fixture passed. Accepted actual-server worker candidate c1894d083f065ea295cd84052a42abdb78c9334d was integrated as4250d368a; its root39-case target passed against this producer before stronger receipt assertions. Native and final actual-provider acceptance remain pending. The stronger integration assertions exposed repeated transcript snapshots and a timing-sensitive snow-cue fixture; these remain unresolved qualification work, not waived failures. Architecture skill: no change.

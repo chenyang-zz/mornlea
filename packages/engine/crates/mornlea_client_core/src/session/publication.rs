@@ -108,6 +108,7 @@ pub(super) fn complete(
     terrain: Vec<TerrainRecord>,
     lifecycle: Vec<LifecycleRecord>,
     emit_player: bool,
+    confirmations: &[(u64, ClientIntentKind, Option<u64>)],
 ) -> Result<BuiltFrame, ClientError> {
     let revision = view.frame_revision();
     let session = vec![SessionRecord::try_new(
@@ -144,6 +145,15 @@ pub(super) fn complete(
             // sequenced tag names the journal entry it refuses.
             ClientIntentKind::PlayerInput,
             Receipt::Rejected { class: *class },
+        )?);
+    }
+    // Correlated authority acknowledgments retain their actual tick, when supplied.
+    for (sequence, kind, tick) in confirmations {
+        input_records.push(InputRecord::try_new(
+            RecordHeader::try_new(view.frame_epoch(), revision, *tick, upsert)?,
+            Some(*sequence),
+            *kind,
+            Receipt::Confirmed { server_tick: *tick },
         )?);
     }
     families.push(FamilyFrame::try_new(

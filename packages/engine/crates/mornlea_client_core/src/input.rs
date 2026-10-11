@@ -440,6 +440,7 @@ pub(crate) struct JournalEntry {
     pub kind: ClientIntentKind,
     control: Option<PlayerControl>,
     predicted: bool,
+    confirmed: bool,
 }
 
 /// A pending local cue-source event emitted by an accepted semantic UI
@@ -610,6 +611,25 @@ impl InputAdmissionState {
 
     pub(crate) fn holds_sequence(&self, sequence: u64) -> bool {
         self.journal.iter().any(|entry| entry.sequence == sequence)
+    }
+
+    pub(crate) fn pending_acknowledgments(
+        &self,
+        sequence: u64,
+    ) -> impl Iterator<Item = (u64, ClientIntentKind)> + '_ {
+        self.journal.iter().filter_map(move |entry| {
+            (entry.sequence <= sequence && !entry.confirmed).then_some((entry.sequence, entry.kind))
+        })
+    }
+
+    pub(crate) fn confirm_placement(&mut self, sequence: u64) -> Option<ClientIntentKind> {
+        let entry = self.journal.iter_mut().find(|entry| {
+            entry.sequence == sequence
+                && entry.kind == ClientIntentKind::PlaceBlock
+                && !entry.confirmed
+        })?;
+        entry.confirmed = true;
+        Some(entry.kind)
     }
 
     /// Only the next pending movement source can be marked after successful advance.
@@ -918,6 +938,7 @@ impl InputTranslator {
                             _ => None,
                         },
                         predicted: false,
+                        confirmed: false,
                     });
                     if is_local_cue_source(&action.intent) {
                         cues.push(LocalCueSource {

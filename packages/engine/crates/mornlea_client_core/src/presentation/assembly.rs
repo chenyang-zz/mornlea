@@ -328,7 +328,35 @@ pub fn prepare_publication(
                         }
                         // A confirmed receipt's source is the acknowledgment
                         // observation, not the pending admission metadata.
-                        InputReceiptState::Confirmed { .. } => {}
+                        InputReceiptState::Confirmed { server_tick } => {
+                            let sequence =
+                                record.local_sequence().ok_or(ClientError::InvalidInput)?;
+                            if record.header().source_tick() != *server_tick
+                                || !observations.iter().any(|source| {
+                                    match (server_tick, source.packet()) {
+                                        (
+                                            Some(tick),
+                                            mornlea_protocol::ServerPacket::PlayerState(state),
+                                        ) => {
+                                            state.server_tick == *tick
+                                                && state.last_input_sequence >= sequence
+                                        }
+                                        (
+                                            None,
+                                            mornlea_protocol::ServerPacket::PlaceBlockSucceeded(
+                                                success,
+                                            ),
+                                        ) => {
+                                            record.intent_kind() == ClientIntentKind::PlaceBlock
+                                                && success.sequence == sequence
+                                        }
+                                        _ => false,
+                                    }
+                                })
+                            {
+                                return Err(ClientError::InvalidInput);
+                            }
+                        }
                     }
                 }
                 for record in records {

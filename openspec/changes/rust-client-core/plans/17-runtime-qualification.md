@@ -112,6 +112,11 @@ reach the new registry entry. Physical terminal semantics use actual server
 retirement through the test-only generation wrapper above; no production Memory
 callback or Disconnect packet is invented.
 
+The predicted-audio integration adds one test-only snow-covered ground variant
+using the current registered snow kinds and actual authoritative chunk facts.
+The accepted grass parity fixture stays unchanged; predicted provenance must
+match the real client stride source and correction, not a synthesized cue.
+
 TCP uses the existing numeric connector and actual server accept/pump/poll/
 forward/flush. Pump with bounded iterations and a 10-second test deadline, not
 sleeps as protocol semantics. Match source packet facts to C2 records and rendered
@@ -151,6 +156,14 @@ flags. The default pilot startup test stays intact. Rebuild native bridge/probe
 and the accepted fixture example; bind full source/contract, build features, native
 library, Python loader/runtime and Godot executable SHA256 to a retained report.
 
+Materialization must verify the canonical hardened Python payload before native
+imports. Runtime imports then legitimately create `__pycache__` entries. Retain
+the initial/final complete installed-tree digests and cache paths; freeze and
+recheck the entire static tree, excluding only those generated cache entries,
+plus the loader, CPython executable and shared-library identities. Noncache drift
+refuses qualification. Canonical payload verification and runtime cache creation
+are distinct recorded facts; no cache deletion or identity exemption is used.
+
 Each process runs actual open/login, submits input with queued preparation,
 retains an owned frame, resets/relogs/reconnects, rejects old epoch/token and late
 consumer work, closes twice and tears down feature references before bridge.
@@ -163,8 +176,12 @@ per-iteration logs, even on failure. Run exactly 100 separate processes.
 Keep Python ambient poisoning and empty PATH/HOME isolation. Default startup keeps
 the existing all-network deny. For the new real TCP fixture on this macOS host,
 a dedicated sandbox profile denies all network except the one owned loopback
-address/port; qualify allowed server access and denied unrelated loopback/external
-access before using it. Never remove the deny from the default gate. Other hosts
+address/port. Native SBPL rejects a numeric host in `remote tcp`; the qualified
+matcher is `remote tcp4 "localhost:PORT"`. Actual probes permit the owned numeric
+127.0.0.1 endpoint and refuse IPv6 ::1 and 127.0.0.2 at that same port, unrelated
+loopback ports and external access. Evidence for the native matcher is retained
+under `/private/tmp/mornlea-policy-qualified.k4the4sc/`; the runner repeats the
+semantic probes. Never remove the deny from the default gate. Other hosts
 must refuse this new mode until an equivalent policy is qualified.
 
 Validation: `scripts/godot/smoke.sh --iterations 100 --isolated-python --core rust
@@ -172,6 +189,61 @@ Validation: `scripts/godot/smoke.sh --iterations 100 --isolated-python --core ru
 F2/C1/C2/G1 integration. Commit: `test(godot): qualify rust session process lifecycle`.
 
 ## Inventory and stage closeout (4.1/4.2)
+
+### Integration-discovered acknowledgment repair
+
+The frozen input-family table requires correlatable authoritative acknowledgments.
+Real-provider discovery found that the live composition retired journal entries
+without publishing Confirmed receipts. Repair this in the existing serial owners,
+without a C1/C2/G1 schema change. Controller-owned files are `src/input.rs`,
+`src/session/{login,publication}.rs`, `src/presentation/assembly.rs` and
+`tests/session_replay/live.rs` in `mornlea_client_core`.
+
+Write real public-endpoint regressions before implementation: cumulative PlayerState
+acknowledgment publishes exact sequence/kind/tick once; duplicate/backward packets
+and chat never invent confirmations; actual PlaceBlockSucceeded confirms its held
+placement sequence with no invented source tick and is not repeated by later
+PlayerState. Keep a private bounded session confirmation queue, sourced from the
+existing journal before retirement. Reserve capacity before changing prediction or
+journal; cap all pending confirmations plus input metadata by `family_records`.
+Mark separately confirmed journal entries so repeated source receipts cannot emit
+again. Rebase their headers to the complete frame revision, attest each receipt
+against the consumed real acknowledgment observation, and clear only after successful
+whole-frame publication. Reset/close follows the existing epoch owner. No receipt is
+created for unissued/rejected/chat sequences. Run full core/Godot suites and real
+Memory/TCP provider tests after integration; commit this coherent fix separately.
+
+### Integration-discovered native NIL repair
+
+Actual admitted-frame fanout exposed a defect in the pinned upstream runtime:
+`Variant::construct_Nil` constructs INT zero and `construct_Nil_native_ptr` passes
+32-bit storage to the 64-bit INT constructor. None therefore becomes an integer,
+including uninitialized upper bits. This is a runtime correctness defect, not a
+facade schema exception. Preserve the failed native log and add exact Dictionary
+and Array None round-trip assertions before implementation.
+
+The two constructors must invoke actual `variant_new_nil` on their respective
+native storage. Rebuild the owning `main.dylib` from the exact verified upstream
+source and generated C++/Cython API headers; keep release wrappers only after
+generated IDs, capsule signatures and actual native marshalling prove compatibility.
+No JSON coercion, sentinel, raw-pointer Python, binary patch, symbol interposition
+or DYLD bypass is accepted. The existing loader build alone cannot repair these
+exported main-library functions.
+
+Worker owns `scripts/godot/py4godot/build-main.py`, its focused test, a third minimal
+patch and patch series. Its helper consumes verified/patched source and staged
+Python roots, writes an owned external output, generates only required C++ and
+nine API headers with offline pinned Cython 3.3.0, compiles deterministically under
+the pinned compiler/SDK with at most four jobs, and retains failures. It never
+installs. Controller owns builder integration, new Darwin derivative identity,
+actual runtime installation/verification, native tests and rollback. Calibrate
+new main/loader/full-payload digests from the reproducible candidate before
+installation; existing verification cannot be disabled to install unknown bytes.
+Other platforms require their own accepted rebuilt main identity before claiming
+this derivative. Record platform refusal honestly; no Linux runtime acceptance is
+inferred from macOS.
+
+### Stage acceptance
 
 Reconcile every existing capability-inventory row to actual nonempty provider and
 integration cases; preserve fixtures, IDs, versions and test definitions. Record

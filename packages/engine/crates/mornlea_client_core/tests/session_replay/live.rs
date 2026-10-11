@@ -255,6 +255,123 @@ fn future_acknowledgment_is_rejected_without_poisoning_the_next_frame() {
 }
 
 #[test]
+fn real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat() {
+    use mornlea_client_core::{
+        ClientIntent, ClientIntentKind, FamilyRecords, InputAction, InputBatch, InputReceiptState,
+    };
+    use mornlea_domain::{ChatIntent, CommandText, HotbarSlot};
+    let mut connection = Connection::new();
+    let movement = action(connection.epoch).actions()[0].clone();
+    let actions = vec![
+        movement,
+        InputAction {
+            intent: ClientIntent::SelectHotbar(HotbarSlot::new(2).unwrap()),
+            container: None,
+            crafting: None,
+        },
+        InputAction {
+            intent: ClientIntent::Chat(
+                ChatIntent::try_new(CommandText::try_from_canonical("hello".to_owned()).unwrap())
+                    .unwrap(),
+            ),
+            container: None,
+            crafting: None,
+        },
+    ];
+    connection
+        .core
+        .submit_input(
+            connection.epoch,
+            InputBatch::try_new(connection.epoch, actions).unwrap(),
+        )
+        .unwrap();
+    connection.step();
+    connection.feed(authority(1, 2, Dimension::OVERWORLD));
+    connection.step();
+    let frame = connection.core.snapshot(connection.epoch).unwrap();
+    let receipts: Vec<_> = frame
+        .families()
+        .iter()
+        .flat_map(|family| match family.records() {
+            FamilyRecords::Input(records) => records.as_slice(),
+            _ => &[],
+        })
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    for (record, (sequence, kind)) in receipts.iter().zip([
+        (1, ClientIntentKind::PlayerInput),
+        (2, ClientIntentKind::SelectHotbar),
+    ]) {
+        assert_eq!(record.local_sequence(), Some(sequence));
+        assert_eq!(record.intent_kind(), kind);
+        assert_eq!(
+            record.receipt(),
+            &InputReceiptState::Confirmed {
+                server_tick: Some(1)
+            }
+        );
+        assert_eq!(record.header().source_tick(), Some(1));
+        assert_eq!(record.header().revision(), frame.confirmed_revision());
+    }
+    for tick in [1, 2] {
+        connection.feed(authority(tick, 2, Dimension::OVERWORLD));
+        connection.step();
+        assert!(connection.core.snapshot(connection.epoch).unwrap().families().iter().all(|family| !matches!(family.records(), FamilyRecords::Input(records) if !records.is_empty())));
+    }
+}
+
+#[test]
+fn actual_placement_success_confirms_once_without_inventing_a_tick() {
+    use mornlea_client_core::{
+        ClientIntent, ClientIntentKind, FamilyRecords, InputAction, InputBatch, InputReceiptState,
+    };
+    use mornlea_domain::{LookAngles, PlacementIntent};
+    let mut connection = Connection::new();
+    let batch = InputBatch::try_new(
+        connection.epoch,
+        vec![InputAction {
+            intent: ClientIntent::PlaceBlock(
+                PlacementIntent::try_new(LookAngles::try_new(0.0, 0.0).unwrap(), 0).unwrap(),
+            ),
+            container: None,
+            crafting: None,
+        }],
+    )
+    .unwrap();
+    connection
+        .core
+        .submit_input(connection.epoch, batch)
+        .unwrap();
+    connection.step();
+    for _ in 0..2 {
+        connection.feed(ServerPacket::PlaceBlockSucceeded(
+            mornlea_protocol::PlaceBlockSucceeded::new(1),
+        ));
+    }
+    connection.step();
+    let frame = connection.core.snapshot(connection.epoch).unwrap();
+    let receipts: Vec<_> = frame
+        .families()
+        .iter()
+        .flat_map(|family| match family.records() {
+            FamilyRecords::Input(records) => records.as_slice(),
+            _ => &[],
+        })
+        .collect();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].local_sequence(), Some(1));
+    assert_eq!(receipts[0].intent_kind(), ClientIntentKind::PlaceBlock);
+    assert_eq!(
+        receipts[0].receipt(),
+        &InputReceiptState::Confirmed { server_tick: None }
+    );
+    assert_eq!(receipts[0].header().source_tick(), None);
+    connection.feed(authority(1, 1, Dimension::OVERWORLD));
+    connection.step();
+    assert!(connection.core.snapshot(connection.epoch).unwrap().families().iter().all(|family| !matches!(family.records(), FamilyRecords::Input(records) if !records.is_empty())));
+}
+
+#[test]
 fn duplicate_rejection_does_not_stall_the_real_session() {
     let mut connection = Connection::new();
     connection

@@ -21,7 +21,7 @@ use crate::contracts::{
     FamilyKey, FamilyOperation, InputReceipt, MonotonicClock, ObservationKey, RecordHeader,
     SessionEpoch, SessionPhase, StepReport, TransportPoll, TransportTicket,
 };
-use crate::input::{InputAdmissionState, InputBatch, InputTranslator};
+use crate::input::{ClientIntentKind, InputAdmissionState, InputBatch, InputTranslator};
 use crate::prediction::{PlayerProjectionState, PredictionReplay};
 use crate::preparation::{LodConfig, LodStep, PreparationQueue};
 use crate::preparation::{lod::LodSelection, near::NearScheduler};
@@ -82,6 +82,8 @@ struct LiveSession {
     effects_cursor: usize,
     world_seed: Option<u64>,
     admission: InputAdmissionState,
+    /// Correlated journal facts remain owned until their whole publication commits.
+    confirmations: Vec<(u64, ClientIntentKind, Option<u64>)>,
     limits: ClientLimits,
     lifecycle: LifecycleProjectionState,
     player_id: Option<PlayerId>,
@@ -149,10 +151,22 @@ impl LiveSession {
         )
     }
 
+    fn reserve_confirmations(&mut self, count: usize) -> Result<(), ClientError> {
+        let metadata = self.admission.projection();
+        let held = metadata.admitted().len() + metadata.rejected().len() + self.confirmations.len();
+        if count > self.limits.family_records().saturating_sub(held) {
+            return Err(ClientError::Capacity);
+        }
+        self.confirmations
+            .try_reserve(count)
+            .map_err(|_| ClientError::Capacity)
+    }
+
     fn advance_sources(&mut self) -> Result<(), ClientError> {
         self.prediction.begin_frame();
         while self.effects_cursor < self.mirror.observations().len() {
             let observation = &self.mirror.observations()[self.effects_cursor];
+            let observation_key = *observation.key();
             let event = Event::try_from(observation.packet().clone())
                 .map_err(|_| ClientError::InvalidInput)?;
             match event {
@@ -162,12 +176,22 @@ impl LiveSession {
                     if state.last_input_sequence() >= self.admission.next_sequence() {
                         return Err(ClientError::InvalidInput);
                     }
+                    let confirmed: Vec<_> = self
+                        .admission
+                        .pending_acknowledgments(state.last_input_sequence())
+                        .collect();
+                    self.reserve_confirmations(confirmed.len())?;
                     self.prediction.apply_world(
-                        observation.key(),
+                        &observation_key,
                         &state,
                         self.mirror.mirror().world(),
                     )?;
                     self.admission.acknowledge(state.last_input_sequence())?;
+                    self.confirmations.extend(
+                        confirmed
+                            .into_iter()
+                            .map(|(sequence, kind)| (sequence, kind, Some(state.server_tick()))),
+                    );
                     self.player_source =
                         Some((state.server_tick(), state.dimension(), state.ready()));
                 }
@@ -186,6 +210,21 @@ impl LiveSession {
                     self.admission
                         .reject(rejection.sequence(), ClientError::InvalidInput)?;
                     self.prediction = prediction;
+                }
+                Event::PlaceBlockSucceeded(success) => {
+                    let sequence = success.sequence();
+                    if self
+                        .admission
+                        .pending_acknowledgments(sequence)
+                        .any(|(held, kind)| {
+                            held == sequence && kind == ClientIntentKind::PlaceBlock
+                        })
+                    {
+                        self.reserve_confirmations(1)?;
+                        if let Some(kind) = self.admission.confirm_placement(sequence) {
+                            self.confirmations.push((sequence, kind, None));
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -312,6 +351,7 @@ impl LoginSession {
             effects_cursor: 0,
             world_seed: None,
             admission,
+            confirmations: Vec::new(),
             limits: self.limits,
             lifecycle,
             player_id: None,
@@ -416,6 +456,7 @@ impl LoginSession {
                 .map_or_else(Vec::new, |proposal| proposal.records().to_vec()),
             session.lifecycle.pending().to_vec(),
             session.player_source.is_some(),
+            &session.confirmations,
         )?;
         let consumption = PublicationConsumption::try_new(
             session.mirror.observations().len(),
@@ -443,6 +484,7 @@ impl LoginSession {
         let frame = commit_publication(&mut owners, reservation);
         session.frame_index = frame.frame_index();
         session.effects_cursor = 0;
+        session.confirmations.clear();
         if let Some(proposal) = proposal {
             session.terrain.commit(&mut session.preparation, proposal);
         }

@@ -3029,3 +3029,60 @@ fn audio_history_counts_live_cancellations_and_retires_obsolete_metadata() {
     assert_eq!(fixture.audio.committed(), &[held]);
     assert!(fixture.audio.pending_cancellations().is_empty());
 }
+
+#[test]
+fn confirmed_input_requires_a_consumed_correlated_authority_source() {
+    for (tick, kind, consume, accepted) in [
+        (Some(7), ClientIntentKind::PlayerInput, 1, true),
+        (Some(7), ClientIntentKind::PlayerInput, 0, false),
+        (Some(8), ClientIntentKind::PlayerInput, 1, false),
+        (None, ClientIntentKind::PlaceBlock, 2, true),
+        (None, ClientIntentKind::PlayerInput, 2, false),
+    ] {
+        let mut fixture = frame_fixture(EPOCH, false);
+        fixture.commit_observation(Event::PlayerState(authority(7, 1, [0.5, 0.0, 0.5], true)));
+        fixture.commit_observation(Event::PlaceBlockSucceeded(
+            mornlea_domain::PlacementSuccess::new(1),
+        ));
+        let revision = fixture.revision();
+        let mut families = empty_complete_frame(EPOCH, revision.get(), 1)
+            .families()
+            .to_vec();
+        let input = families
+            .iter_mut()
+            .find(|family| family.key().logical_name == FAMILY_INPUT)
+            .unwrap();
+        *input = FamilyFrame::try_new(
+            FamilyKey::try_new(FAMILY_INPUT).unwrap(),
+            FamilyRecords::Input(vec![
+                InputRecord::try_new(
+                    RecordHeader::try_new(fixture.epoch, revision, tick, FamilyOperation::Upsert)
+                        .unwrap(),
+                    Some(1),
+                    kind,
+                    Receipt::Confirmed { server_tick: tick },
+                )
+                .unwrap(),
+            ]),
+        )
+        .unwrap();
+        let candidate = PresentationFrame::try_new(fixture.epoch, revision, 1, families).unwrap();
+        let mut visible = bootstrap(EPOCH);
+        let bundle = owners(&mut fixture, &mut visible);
+        let result = prepare_publication(
+            &bundle,
+            candidate,
+            AudioDedupDelta::try_new(Vec::new(), Vec::new()).unwrap(),
+            PublicationConsumption::try_new(consume, 0, 0, 0).unwrap(),
+            &limits(),
+        );
+        assert_eq!(
+            result.is_ok(),
+            accepted,
+            "tick={tick:?}, kind={kind:?}, consume={consume}"
+        );
+        if !accepted {
+            assert_eq!(result.err(), Some(ClientError::InvalidInput));
+        }
+    }
+}
