@@ -660,3 +660,161 @@ fn live_prompt_uses_loaded_block_and_clears_when_forgotten() {
     let frame = connection.core.snapshot(connection.epoch).unwrap();
     assert!(frame.families().iter().any(|family| matches!(family.records(), FamilyRecords::WorldUi(records) if records.iter().any(|record| matches!(record.view(), WorldUiView::Prompt(None))))));
 }
+fn family_limits(cap: usize) -> ClientLimits {
+    let b = ClientLimits::try_new().unwrap();
+    ClientLimits::try_new_with(
+        b.queued_input_events(),
+        b.inbound_observations(),
+        b.inbound_bytes(),
+        b.outbound_commands(),
+        b.outbound_bytes(),
+        b.prediction_journal(),
+        b.message_work(),
+        b.mesh_work(),
+        b.preparation_results(),
+        b.preparation_bytes(),
+        cap,
+        b.frame_bytes(),
+    )
+    .unwrap()
+}
+fn capacity_chat(id: u64) -> ServerPacket {
+    ServerPacket::ChatEvent(
+        mornlea_protocol::ChatEvent::new(mornlea_protocol::ChatEvent {
+            event_id: id,
+            player_id: mornlea_protocol::PlayerId::try_from_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .unwrap(),
+            player_name: "live".into(),
+            companion_id: [0; 16],
+            companion_name: String::new(),
+            kind: 2,
+            reject_reason: 1,
+            command: String::new(),
+            speech: String::new(),
+        })
+        .unwrap(),
+    )
+}
+#[test]
+fn retained_confirmations_share_input_admission_capacity() {
+    use mornlea_client_core::{ClientError, InputBatch};
+    let mut c = Connection::with_limits(family_limits(3));
+    c.core.submit_input(c.epoch, action(c.epoch)).unwrap();
+    c.step();
+    c.feed(authority(1, 1, Dimension::OVERWORLD));
+    c.feed(capacity_chat(1));
+    let visible = c.core.snapshot(c.epoch).unwrap();
+    assert_eq!(
+        c.core
+            .step(c.epoch, ClientWorkBudget::try_new(8, 0).unwrap()),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(c.core.snapshot(c.epoch).unwrap(), visible);
+    let action = action(c.epoch).actions()[0].clone();
+    let result = c.core.submit_input(
+        c.epoch,
+        InputBatch::try_new(c.epoch, vec![action.clone(); 3]).unwrap(),
+    );
+    assert_eq!(result, Err(ClientError::Capacity));
+}
+#[test]
+fn rejected_backward_and_unissued_sources_never_confirm() {
+    use mornlea_client_core::{ClientError, FamilyRecords, InputBatch, InputReceiptState};
+    let mut c = Connection::new();
+    let item = action(c.epoch).actions()[0].clone();
+    c.core
+        .submit_input(
+            c.epoch,
+            InputBatch::try_new(c.epoch, vec![item; 2]).unwrap(),
+        )
+        .unwrap();
+    c.step();
+    c.feed(ServerPacket::CommandRejected(
+        mornlea_protocol::CommandRejected::new(1, 7).unwrap(),
+    ));
+    c.feed(authority(5, 2, Dimension::OVERWORLD));
+    c.step();
+    let frame = c.core.snapshot(c.epoch).unwrap();
+    let records = frame
+        .families()
+        .iter()
+        .find_map(|f| match f.records() {
+            FamilyRecords::Input(v) => Some(v),
+            _ => None,
+        })
+        .unwrap();
+    assert!(records.iter().any(|r| r.local_sequence() == Some(1)
+        && matches!(
+            r.receipt(),
+            InputReceiptState::Rejected {
+                class: ClientError::InvalidInput
+            }
+        )));
+    assert!(!records.iter().any(|r| r.local_sequence() == Some(1)
+        && matches!(r.receipt(), InputReceiptState::Confirmed { .. })));
+    assert_eq!(
+        records
+            .iter()
+            .filter(|r| matches!(
+                r.receipt(),
+                InputReceiptState::Confirmed {
+                    server_tick: Some(5)
+                }
+            ))
+            .count(),
+        1
+    );
+    for (tick, ack) in [(4, 2), (6, 1), (7, 2)] {
+        c.feed(authority(tick, ack, Dimension::OVERWORLD));
+        c.feed(ServerPacket::PlaceBlockSucceeded(
+            mornlea_protocol::PlaceBlockSucceeded::new(99),
+        ));
+        c.step();
+        assert!(
+            c.core
+                .snapshot(c.epoch)
+                .unwrap()
+                .families()
+                .iter()
+                .all(|f| !matches!(f.records(),FamilyRecords::Input(v) if !v.is_empty()))
+        );
+    }
+}
+
+#[test]
+fn confirmations_and_rejections_share_capacity_before_owner_mutation() {
+    use mornlea_client_core::{ClientError, CloseReason, InputBatch};
+    let mut c = Connection::with_limits(family_limits(3));
+    let item = action(c.epoch).actions()[0].clone();
+    for _ in 0..2 {
+        c.core
+            .submit_input(
+                c.epoch,
+                InputBatch::try_new(c.epoch, vec![item.clone(); 2]).unwrap(),
+            )
+            .unwrap();
+        c.step();
+    }
+    c.feed(authority(1, 2, Dimension::OVERWORLD));
+    for sequence in [3, 4] {
+        c.feed(ServerPacket::CommandRejected(
+            mornlea_protocol::CommandRejected::new(sequence, 7).unwrap(),
+        ));
+    }
+    let before = c.core.snapshot(c.epoch).unwrap();
+    let report = c
+        .core
+        .step(c.epoch, ClientWorkBudget::try_new(8, 0).unwrap())
+        .unwrap();
+    assert_eq!(report.terminal(), Some(&CloseReason::Capacity));
+    assert_eq!(report.frame_index(), before.frame_index() + 1);
+    let terminal = c.core.snapshot(c.epoch).unwrap();
+    assert_eq!(
+        c.core
+            .step(c.epoch, ClientWorkBudget::try_new(0, 0).unwrap()),
+        Err(ClientError::Disconnected)
+    );
+    assert_eq!(c.core.snapshot(c.epoch).unwrap(), terminal);
+}

@@ -188,7 +188,10 @@
     "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
     "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat",
     "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick",
-    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source",
+    "mornlea_client_core::session_replay::live::retained_confirmations_share_input_admission_capacity",
+    "mornlea_client_core::session_replay::live::confirmations_and_rejections_share_capacity_before_owner_mutation",
+    "mornlea_client_core::session_replay::live::rejected_backward_and_unissued_sources_never_confirm"
    ]
   },
   {
@@ -7042,7 +7045,10 @@
     "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
     "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat",
     "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick",
-    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source",
+    "mornlea_client_core::session_replay::live::retained_confirmations_share_input_admission_capacity",
+    "mornlea_client_core::session_replay::live::confirmations_and_rejections_share_capacity_before_owner_mutation",
+    "mornlea_client_core::session_replay::live::rejected_backward_and_unissued_sources_never_confirm"
    ]
   },
   {

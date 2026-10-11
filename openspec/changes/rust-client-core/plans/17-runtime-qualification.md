@@ -205,7 +205,9 @@ and chat never invent confirmations; actual PlaceBlockSucceeded confirms its hel
 placement sequence with no invented source tick and is not repeated by later
 PlayerState. Keep a private bounded session confirmation queue, sourced from the
 existing journal before retirement. Reserve capacity before changing prediction or
-journal; cap all pending confirmations plus input metadata by `family_records`.
+journal; cap all pending confirmations plus input metadata by `family_records`. Reuse
+one private combined-count check before admission, rejection facts and confirmation
+reservation; refused publication cannot let subsequent ingress overfill the family.
 Mark separately confirmed journal entries so repeated source receipts cannot emit
 again. Rebase their headers to the complete frame revision, attest each receipt
 against the consumed real acknowledgment observation, and clear only after successful

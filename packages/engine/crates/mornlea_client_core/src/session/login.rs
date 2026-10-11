@@ -151,12 +151,17 @@ impl LiveSession {
         )
     }
 
-    fn reserve_confirmations(&mut self, count: usize) -> Result<(), ClientError> {
+    fn check_input_capacity(&self, count: usize) -> Result<(), ClientError> {
         let metadata = self.admission.projection();
         let held = metadata.admitted().len() + metadata.rejected().len() + self.confirmations.len();
         if count > self.limits.family_records().saturating_sub(held) {
             return Err(ClientError::Capacity);
         }
+        Ok(())
+    }
+
+    fn reserve_confirmations(&mut self, count: usize) -> Result<(), ClientError> {
+        self.check_input_capacity(count)?;
         self.confirmations
             .try_reserve(count)
             .map_err(|_| ClientError::Capacity)
@@ -198,6 +203,7 @@ impl LiveSession {
                 Event::CommandRejected(rejection)
                     if self.admission.holds_sequence(rejection.sequence()) =>
                 {
+                    self.check_input_capacity(1)?;
                     let dimension = self
                         .player_source
                         .map_or(Dimension::OVERWORLD, |source| source.1);
@@ -532,6 +538,7 @@ impl LoginSession {
             &mut session.preparation,
         )?;
         session.outbound.clear();
+        session.confirmations.clear();
         session.phase = SessionPhase::Closing;
         session.terminal = Some(reason);
         session.pending_terminal = None;
@@ -640,6 +647,7 @@ impl ClientEndpoint for LoginSession {
         // before any sequence, queue or journal changes.
         let validated =
             InputTranslator::validate_batch(&input, session.mirror.mirror(), &session.limits)?;
+        session.check_input_capacity(usize::from(validated.sequenced_count()))?;
         let control_count = session.outbound.len();
         let control_bytes: usize = session.outbound.iter().map(Vec::len).sum();
         let receipt = InputTranslator::commit_with_reserved(
