@@ -24,6 +24,8 @@ pub mod preparation;
 pub mod presentation;
 pub mod session;
 
+pub(crate) mod runtime_data;
+
 pub use contracts::{
     ClientConfig, ClientCore, ClientEndpoint, ClientError, ClientIdentity, ClientLimits,
     ClientWorkBudget, CloseReason, ConfirmedRevision, Connector, ConnectorRegistry, Endpoint,

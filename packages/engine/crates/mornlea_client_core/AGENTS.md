@@ -30,6 +30,10 @@ wire decoder.
 - `src/presentation/` — supporting values and projection context (`mod.rs`),
   the records and frame validator (`frame.rs`), the checked drop-geometry
   helper (`geometry.rs`), and the per-family provider files.
+- `src/runtime_data.rs` — private native input constructors; generated mesh
+  and collision tables in `src/runtime_data_generated.rs` preserve the
+  compatibility registry. Callers cache registry/worldgen Arcs per session
+  outside hot numerical work.
 - `tests/` — the four registered contract targets plus `support/mod.rs`, the
   deterministic replay harness and contract doubles.
 

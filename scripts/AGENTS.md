@@ -73,3 +73,12 @@ bash -n scripts/rust-server-opt-in.sh
 Also compile Python into a disposable cache, run server all-target clippy and
 check workspace formatting. These gates preserve the inherited fixture and
 process ownership requirements.
+
+## Native client data derivation
+
+`client-native-data.go` is a build-ignored offline compatibility generator.
+Run `go run scripts/client-native-data.go` from the root to emit the complete
+Rust mesh/collision tables; `-check` verifies the tracked file without mutation.
+It uses the repository-pinned rustfmt and fails on generation or parity errors.
+Retire it when Rust owns the canonical registry with accepted replacement parity
+evidence. The runtime client consumes tracked constants and never runs Go.
