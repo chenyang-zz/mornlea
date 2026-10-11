@@ -312,14 +312,24 @@ fn publish(
         )
         .expect("session family"),
     ];
-    if !owned.is_empty() {
-        families.push(
-            FamilyFrame::try_new(
-                FamilyKey::try_new(FAMILY_LIFECYCLE).expect("lifecycle key"),
-                FamilyRecords::Lifecycle(owned),
-            )
-            .expect("lifecycle family"),
-        );
+    families.push(
+        FamilyFrame::try_new(
+            FamilyKey::try_new(FAMILY_LIFECYCLE).expect("lifecycle key"),
+            FamilyRecords::Lifecycle(owned),
+        )
+        .expect("lifecycle family"),
+    );
+    for records in [
+        FamilyRecords::Input(vec![]),
+        FamilyRecords::Terrain(vec![]),
+        FamilyRecords::Actors(vec![]),
+        FamilyRecords::PlayerView(vec![]),
+        FamilyRecords::InventoryUi(vec![]),
+        FamilyRecords::WorldUi(vec![]),
+        FamilyRecords::AudioCues(vec![]),
+        FamilyRecords::Diagnostics(vec![]),
+    ] {
+        families.push(FamilyFrame::try_new(records.key(), records).expect("empty family"));
     }
     let candidate = PresentationFrame::try_new(
         epoch(value),
