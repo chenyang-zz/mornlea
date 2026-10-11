@@ -220,6 +220,181 @@ pub fn negotiate(
     }
 }
 
+/// The producer identity of the Rust semantic client core. It scopes a
+/// separate descriptor table: the pilot IDs 1..8 above are not the meanings
+/// of the producer's numeric IDs, and the pilot path stays exactly as it is.
+pub const RUST_PRODUCER_NAME: &str = "rust-client-core";
+
+/// The per-family record limit, mirrored from the accepted client-core
+/// contract value `ClientLimits::MAX_FAMILY_RECORDS` in
+/// `mornlea_client_core/src/contracts.rs`: 4096 records per family per
+/// frame, frozen from the measurements of the prerequisite capability
+/// inventory. The Godot crate does not depend on the client-core crate, so
+/// the mirror is a literal; the registry tests pin the value so the two
+/// sides cannot drift silently.
+pub const RUST_PRODUCER_FAMILY_RECORD_LIMIT: u64 = 4096;
+
+/// One producer-scoped semantic family descriptor: the symbolic logical key
+/// consumers resolve, the numeric ID the producer assigns, the family
+/// contract version, and the bounded per-family record capacity. Unlike the
+/// pilot [`FamilyDescriptor`], the contract version is per descriptor and the
+/// consumer-facing identity is the symbolic logical name; a numeric ID is
+/// only meaningful within one producer's table. `record_bytes` stays zero
+/// because the semantic records are typed owned values whose per-record
+/// layout lands with each family's later export, matching the pilot
+/// variable-length convention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProducerFamilyDescriptor {
+    pub logical_name: &'static str,
+    pub numeric_id: u16,
+    pub major: u16,
+    pub minor: u16,
+    pub record_limit: u64,
+    pub record_bytes: u64,
+}
+
+const fn producer_descriptor(
+    logical_name: &'static str,
+    numeric_id: u16,
+) -> ProducerFamilyDescriptor {
+    ProducerFamilyDescriptor {
+        logical_name,
+        numeric_id,
+        major: 1,
+        minor: 0,
+        record_limit: RUST_PRODUCER_FAMILY_RECORD_LIMIT,
+        record_bytes: 0,
+    }
+}
+
+/// The frozen `rust-client-core` family table: ten semantic families in
+/// contract order with numeric IDs 1..10, every family at major 1 / minor 0,
+/// and the accepted per-family record limit. Consumers resolve the symbolic
+/// logical names before any feature is instantiated; the numeric IDs are
+/// producer-internal values reported by the later `family_table` facade.
+pub const RUST_PRODUCER_FAMILIES: [ProducerFamilyDescriptor; 10] = [
+    producer_descriptor("session", 1),
+    producer_descriptor("input", 2),
+    producer_descriptor("terrain", 3),
+    producer_descriptor("actors", 4),
+    producer_descriptor("player-view", 5),
+    producer_descriptor("inventory-ui", 6),
+    producer_descriptor("world-ui", 7),
+    producer_descriptor("audio-cues", 8),
+    producer_descriptor("lifecycle", 9),
+    producer_descriptor("diagnostics", 10),
+];
+
+/// Why a producer descriptor list is not a valid registry table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProducerRegistryError {
+    /// A descriptor carries a logical name outside the producer's keys.
+    UnknownFamilyKey { logical_name: &'static str },
+    /// A descriptor carries a numeric ID outside the producer's ID space.
+    UnknownFamilyId { numeric_id: u16 },
+    /// Two descriptors carry the same logical name.
+    DuplicateFamilyKey { logical_name: &'static str },
+    /// Two descriptors carry the same numeric ID within the producer.
+    DuplicateFamilyId { numeric_id: u16 },
+    /// A family required by the producer data plane is absent.
+    MissingRequiredFamily { logical_name: &'static str },
+}
+
+/// Validate a producer-reported descriptor list as a registry table: every
+/// descriptor must name a known producer key with a numeric ID inside the
+/// producer's ID space, keys and IDs must be unique, and all ten families are
+/// required. Unknown identities are rejected before presence checks so a
+/// table that both smuggles an unknown family and drops a required one
+/// reports the smuggled identity first; key checks run before ID checks.
+pub fn validate_producer_registry(
+    descriptors: &[ProducerFamilyDescriptor],
+) -> Result<(), ProducerRegistryError> {
+    let id_space = RUST_PRODUCER_FAMILIES.len() as u16;
+    for descriptor in descriptors {
+        if !RUST_PRODUCER_FAMILIES
+            .iter()
+            .any(|known| known.logical_name == descriptor.logical_name)
+        {
+            return Err(ProducerRegistryError::UnknownFamilyKey {
+                logical_name: descriptor.logical_name,
+            });
+        }
+        if descriptor.numeric_id == 0 || descriptor.numeric_id > id_space {
+            return Err(ProducerRegistryError::UnknownFamilyId {
+                numeric_id: descriptor.numeric_id,
+            });
+        }
+    }
+    for known in RUST_PRODUCER_FAMILIES {
+        let mut seen = 0;
+        for descriptor in descriptors {
+            if descriptor.logical_name == known.logical_name {
+                seen += 1;
+            }
+        }
+        if seen > 1 {
+            return Err(ProducerRegistryError::DuplicateFamilyKey {
+                logical_name: known.logical_name,
+            });
+        }
+        if seen == 0 {
+            return Err(ProducerRegistryError::MissingRequiredFamily {
+                logical_name: known.logical_name,
+            });
+        }
+    }
+    for id in 1..=id_space {
+        let mut seen = 0;
+        for descriptor in descriptors {
+            if descriptor.numeric_id == id {
+                seen += 1;
+            }
+        }
+        if seen > 1 {
+            return Err(ProducerRegistryError::DuplicateFamilyId { numeric_id: id });
+        }
+    }
+    Ok(())
+}
+
+/// Decide whether the consumer may resolve `logical_name` at the requested
+/// `(major, minor)` against a validated producer table. Symbolic resolution
+/// is the consumer-facing identity check: an unregistered logical name, a
+/// major mismatch, or a minor newer than the registered family contract
+/// version fails closed before any feature is instantiated.
+pub fn negotiate_producer(
+    descriptors: &[ProducerFamilyDescriptor],
+    logical_name: &str,
+    major: u16,
+    minor: u16,
+) -> NegotiationDecision {
+    let Some(descriptor) = descriptors
+        .iter()
+        .find(|descriptor| descriptor.logical_name == logical_name)
+    else {
+        return NegotiationDecision {
+            accepted: false,
+            reason: NegotiationReason::UnknownFamily,
+        };
+    };
+    if major != descriptor.major {
+        return NegotiationDecision {
+            accepted: false,
+            reason: NegotiationReason::MajorMismatch,
+        };
+    }
+    if minor > descriptor.minor {
+        return NegotiationDecision {
+            accepted: false,
+            reason: NegotiationReason::MinorTooNew,
+        };
+    }
+    NegotiationDecision {
+        accepted: true,
+        reason: NegotiationReason::Compatible,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{NegotiationReason, PILOT_FAMILIES, RegistryError, negotiate, validate_registry};

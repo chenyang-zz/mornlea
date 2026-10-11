@@ -79,3 +79,7 @@ P12 evidence tool schema can be developed against the F3 diagnostics contract in
 ## Refinement precedence
 
 Read [direct accepted predecessors](03-parallel-readiness.md) and [refined node decisions](04-refined-nodes.md) with this packet. Split parent IDs are retained here only as historical grouping; their child packets own execution. The dependency register controls readiness, and refined source mappings control absent fields. No worker infers a missing signature, capacity, source fact or shared-file edit.
+
+## Current code-only execution refinement
+
+The approved [code-only handoff](07-code-only-implementation-handoff.md) supplements private implementation contracts, file/test ownership and interim evidence without changing the external C1/C2/G1 method/family schemas or weakening full F3 gates. Freeze its source-order envelope, immutable projection inputs, publication transaction, and local view-validity overlay at 1.2 before dispatch. Actual Godot processes are excluded from this batch. Read 07 with 03/04; tasks.md alone carries status.

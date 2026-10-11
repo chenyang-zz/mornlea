@@ -9,3 +9,10 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 godot = { version = "=0.5.5", features = ["api-4-7"] }
+# The safe Rust client core the rust-producer facade adapts. Domain and
+# protocol enter beside it because the facade's checked boundary builds and
+# renders the exact F1/protocol values those crates own. No engine ABI
+# dependency is introduced here.
+mornlea_client_core = { path = "../mornlea_client_core" }
+mornlea_domain = { path = "../mornlea_domain" }
+mornlea_protocol = { path = "../mornlea_protocol" }

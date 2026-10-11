@@ -31,6 +31,30 @@ EXPECTED_BUDGETS = {
     "full_weather": "heavy",
 }
 ALLOWED_FAMILIES = frozenset(range(1, 9))
+# The frozen rust-client-core descriptor table, mirroring the Rust
+# `RUST_PRODUCER_FAMILIES` table in
+# packages/engine/crates/mornlea_godot/src/feature_negotiation.rs: ten logical
+# families in contract order with numeric IDs 1..10, every family at major
+# 1 / minor 0. The per-family record limit mirrors the accepted client-core
+# `ClientLimits::MAX_FAMILY_RECORDS` (4096); records are variable-length
+# semantic values, so the fixed per-record size is 0. Registry tokens encode
+# each descriptor as name@major.minor:numeric_id:record_limit:record_bytes.
+RUST_PRODUCER = "rust-client-core"
+RUST_PRODUCER_FAMILIES = (
+    ("session", 1),
+    ("input", 2),
+    ("terrain", 3),
+    ("actors", 4),
+    ("player-view", 5),
+    ("inventory-ui", 6),
+    ("world-ui", 7),
+    ("audio-cues", 8),
+    ("lifecycle", 9),
+    ("diagnostics", 10),
+)
+RUST_PRODUCER_FAMILY_RECORD_LIMIT = 4096
+RUST_PRODUCER_FAMILY_RECORD_BYTES = 0
+RUST_PRODUCER_TOKEN = re.compile(r"([a-z-]+)@([0-9]+)\.([0-9]+):([0-9]+):([0-9]+):([0-9]+)")
 METADATA = re.compile(r"^metadata/([a-z_]+)\s*=\s*(.*)$", re.MULTILINE)
 QUOTED = re.compile(r'"([^"\\]*(?:\\.[^"\\]*)*)"')
 
@@ -43,6 +67,13 @@ def strings(value: str) -> tuple[str, ...]:
     if not value.startswith("PackedStringArray(") or not value.endswith(")"):
         raise ValueError(f"expected PackedStringArray, got {value}")
     return tuple(match.group(1) for match in QUOTED.finditer(value))
+
+
+def quoted(value: str) -> str:
+    matches = QUOTED.findall(value)
+    if len(matches) != 1:
+        raise ValueError(f"expected one quoted string, got {value}")
+    return matches[0]
 
 
 def scalar(fields: dict[str, str], name: str, expected: str) -> None:
@@ -79,6 +110,49 @@ def validate_manifest(root: Path, name: str, path: Path, expected_families: tupl
             raise ValueError(f"{name}: family dependency is not a known numeric v1 family: {family}")
 
 
+def validate_rust_producer(fields: dict[str, str]) -> None:
+    """Validate the frozen rust-client-core producer table and its symbolic
+    resolution: exactly ten descriptors in contract order, unique numeric
+    IDs, and the registered family contract versions and record limits."""
+    if quoted(fields.get("rust_producer", "")) != RUST_PRODUCER:
+        raise ValueError(f"rust producer {fields.get('rust_producer')!r}, want {RUST_PRODUCER!r}")
+    tokens = strings(fields.get("rust_producer_families", ""))
+    if len(tokens) != len(RUST_PRODUCER_FAMILIES):
+        raise ValueError(
+            f"rust producer table has {len(tokens)} descriptors, want {len(RUST_PRODUCER_FAMILIES)}"
+        )
+    resolved: dict[str, int] = {}
+    for index, token in enumerate(tokens):
+        match = RUST_PRODUCER_TOKEN.fullmatch(token)
+        if match is None:
+            raise ValueError(f"rust producer descriptor {index} is not a family token: {token}")
+        name, major, minor, numeric_id, record_limit, record_bytes = match.groups()
+        expected_name, expected_id = RUST_PRODUCER_FAMILIES[index]
+        if name != expected_name or int(numeric_id) != expected_id:
+            raise ValueError(
+                f"rust producer descriptor {index} is {name}:{numeric_id}, "
+                f"want {expected_name}:{expected_id}"
+            )
+        if (int(major), int(minor)) != (1, 0):
+            raise ValueError(f"{name}: family contract version {major}.{minor}, want 1.0")
+        if int(record_limit) != RUST_PRODUCER_FAMILY_RECORD_LIMIT:
+            raise ValueError(
+                f"{name}: record limit {record_limit}, want {RUST_PRODUCER_FAMILY_RECORD_LIMIT}"
+            )
+        if int(record_bytes) != RUST_PRODUCER_FAMILY_RECORD_BYTES:
+            raise ValueError(
+                f"{name}: record bytes {record_bytes}, want {RUST_PRODUCER_FAMILY_RECORD_BYTES}"
+            )
+        resolved[name] = int(numeric_id)
+    if len(set(resolved.values())) != len(resolved):
+        raise ValueError("rust producer table contains duplicate numeric IDs")
+    # Features resolve symbolic logical names to descriptors before any
+    # feature is instantiated; these two names must resolve through the table.
+    for name in ("audio-cues", "lifecycle"):
+        if name not in resolved:
+            raise ValueError(f"rust producer table does not resolve symbolic family {name}")
+
+
 def validate(root: Path) -> None:
     registry_path = root / "catalog/capability_registry.tres"
     fields = metadata(registry_path.read_text(encoding="utf-8"))
@@ -94,6 +168,7 @@ def validate(root: Path) -> None:
             raise ValueError(f"{name}: manifest is outside the feature root")
         relative = resource_path.removeprefix("res://")
         validate_manifest(root, name, root / relative, EXPECTED[name])
+    validate_rust_producer(fields)
 
 
 def main() -> int:
@@ -107,7 +182,11 @@ def main() -> int:
     except (OSError, ValueError) as error:
         print(f"Godot capability registry check failed: {error}", file=sys.stderr)
         return 1
-    print(f"Godot capability registry check passed ({len(EXPECTED)} disabled coarse capabilities).")
+    print(
+        f"Godot capability registry check passed "
+        f"({len(EXPECTED)} disabled coarse capabilities, "
+        f"{len(RUST_PRODUCER_FAMILIES)} rust producer families)."
+    )
     return 0
 
 

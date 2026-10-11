@@ -56,3 +56,38 @@ Inputs, events, world deltas, and frame snapshots crossing between the Rust clie
 - **WHEN** the producer prepares to write the result
 - **THEN** the producer MUST return a decidable capacity failure and the required capacity or stable-limit information
 - **AND** it MUST NOT truncate the result and report apparent success
+
+
+#### Scenario: Typed unsigned values preserve their full range
+
+- **GIVEN** a valid typed boundary value contains an unsigned 64-bit value including its maximum admitted value
+- **WHEN** the Rust producer exposes its owned value to the host and validates corresponding typed input
+- **THEN** the value SHALL remain exact through the declared canonical encoding without signed narrowing or floating-point loss
+- **AND** malformed, overflowing, extra-field or unknown-tag input MUST fail before client input admission
+
+#### Scenario: A stale native token cannot access a new owner
+
+- **GIVEN** an issued native token names a slot whose generation has been invalidated by close or reset
+- **WHEN** a host call supplies that stale token
+- **THEN** the bridge MUST reject it before native-owner access
+- **AND** repeated close of the same issued token MUST NOT release an owner twice
+
+## ADDED Requirements
+
+### Requirement: A Rust-mode host tick distributes one complete semantic frame
+
+A host using the Rust client producer SHALL own session advancement and obtain one complete validated semantic publication per host tick. It MUST NOT ask individual features to advance the session or independently pull partial views. All applicable features SHALL receive the same owned validated publication in declared dependency order. A failed or incompatible pull MUST preserve the prior visible host frame and MUST NOT dispatch a partial replacement. Features MUST NOT mutate the shared publication or retain borrowed native storage.
+
+#### Scenario: Multiple features share a single host publication
+
+- **GIVEN** a Rust producer is selected and multiple features are active
+- **WHEN** the host processes one tick
+- **THEN** it SHALL perform exactly one core step and one frame pull
+- **AND** every applicable feature SHALL receive the same completely validated frame without independently driving the session
+
+#### Scenario: A new publication fails validation
+
+- **GIVEN** the host has a prior valid frame and a pull returns an error, incompatible layout, missing required family or inconsistent epoch/revision
+- **WHEN** the host validates that result
+- **THEN** it MUST dispatch no part of the replacement and retain the prior visible frame and feature resources
+- **AND** it MUST report the stable failure rather than select an implicit Go fallback

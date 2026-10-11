@@ -5,6 +5,7 @@
 Read the crate-specific `AGENTS.md` before working in
 `packages/engine/crates/mornlea_engine/`, `packages/engine/crates/mornlea_client/`,
 `packages/engine/crates/mornlea_domain/`, `packages/engine/crates/mornlea_protocol/`,
+`packages/engine/crates/mornlea_client_core/`,
 or `packages/engine/crates/mornlea_storage/`.
 
 The root provider-aware orchestration policy applies without modification. This scoped guide does not impose an additional subagent count, sequence, or review topology.
