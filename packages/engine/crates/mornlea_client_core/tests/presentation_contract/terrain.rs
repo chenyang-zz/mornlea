@@ -1316,3 +1316,101 @@ fn staged_terrain_waits_for_commit_and_retries_abandoned_proposal() {
         ClientError::InvalidInput
     );
 }
+
+#[test]
+fn rejected_admission_preserves_live_summary() {
+    let b = frozen_limits();
+    let limits = ClientLimits::try_new_with(
+        b.queued_input_events(),
+        b.inbound_observations(),
+        b.inbound_bytes(),
+        b.outbound_commands(),
+        b.outbound_bytes(),
+        b.prediction_journal(),
+        b.message_work(),
+        b.mesh_work(),
+        1,
+        b.preparation_bytes(),
+        b.family_records(),
+        b.frame_bytes(),
+    )
+    .unwrap();
+    let mut h = new_harness(1, 1, far_config(false, 2, 3, charge()), limits);
+    let chunk = ChunkPos::new(0, 0);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 1)]);
+    let first = near_job(&mut h, chunk, 0, 1, 2);
+    admit_near(&mut h, first).unwrap();
+    let rejected = near_job(&mut h, chunk, 0, 1, 3);
+    assert_eq!(
+        admit_near(&mut h, rejected).unwrap_err().error(),
+        ClientError::Capacity
+    );
+    let records = publish(&mut h, chunk, full_budget()).unwrap();
+    assert_eq!(
+        records.len(),
+        1,
+        "still-admitted near job must publish after second job was refused"
+    );
+}
+
+#[test]
+fn failed_replacement_preserves_previous_visible_geometry() {
+    let mut h = new_harness(
+        1,
+        1,
+        far_config(false, 2, 3, charge()),
+        limits_with(1, frozen_limits().frame_bytes()),
+    );
+    let chunk = ChunkPos::new(0, 0);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 1)]);
+    let first = near_job(&mut h, chunk, 0, 1, 2);
+    let old = *first.key();
+    admit_near(&mut h, first).unwrap();
+    let records = publish(&mut h, chunk, full_budget()).unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(h.queue.prepared_resource(&old).is_ok());
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 2)]);
+    let second = near_job(&mut h, chunk, 0, 2, 3);
+    admit_near(&mut h, second).unwrap();
+    assert_eq!(
+        publish(&mut h, chunk, full_budget()).unwrap_err(),
+        ClientError::Capacity
+    );
+    assert_eq!(h.publisher.published_resources(), &[old]);
+    assert!(
+        h.queue.prepared_resource(&old).is_ok(),
+        "rejected remove+replacement must preserve geometry of previous visible frame"
+    );
+}
+
+#[test]
+fn abandoned_replacement_preserves_old_lookup_until_retry_commit() {
+    let mut h = new_harness(1, 1, far_config(false, 2, 3, charge()), frozen_limits());
+    let center = ChunkPos::new(0, 0);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 1)]);
+    let first = near_job(&mut h, center, 0, 1, 2);
+    let old = *first.key();
+    admit_near(&mut h, first).expect("first admission");
+    publish(&mut h, center, full_budget()).expect("first frame");
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 2)]);
+    let second = near_job(&mut h, center, 0, 2, 3);
+    let new = *second.key();
+    admit_near(&mut h, second).expect("replacement admission");
+    let stage = prepare_publication(&mut h, center, full_budget()).expect("replacement stage");
+    assert_eq!(stage.records().len(), 2);
+    assert_eq!(h.publisher.published_resources(), &[old]);
+    assert!(h.queue.prepared_resource(&old).is_ok());
+    assert!(h.queue.prepared_resource(&new).is_ok());
+    assert_eq!(h.queue.retained_resources(), 2);
+    drop(stage);
+    let retry = prepare_publication(&mut h, center, full_budget()).expect("retry");
+    assert_eq!(retry.records().len(), 2);
+    h.publisher.commit(&mut h.queue, retry);
+    assert_eq!(h.publisher.published_resources(), &[new]);
+    assert_eq!(
+        h.queue.prepared_resource(&old).unwrap_err(),
+        ClientError::InvalidInput
+    );
+    assert!(h.queue.prepared_resource(&new).is_ok());
+    assert_eq!(h.queue.retained_resources(), 1);
+}

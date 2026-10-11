@@ -1,54 +1,12 @@
-//! The terrain family publication owner: the integration seam between the
-//! two accepted real preparation owners and the confirmed mirror.
+//! Terrain publication over the confirmed mirror and bounded preparation owners.
 //!
-//! This integrator connects the bounded `PreparationQueue` resource arena
-//! and the `LodSelection` far-tile ring with the mirror's confirmed chunk
-//! revisions, and publishes the checked `terrain@1` change vector: near
-//! `Section` upserts for freshly prepared meshes whose identity still
-//! matches the mirror's held chunk revision, far `LodTile` upserts for
-//! current-generation shell tiles the ring tracks, and ordered `Remove`
-//! records for full keys whose chunk the mirror no longer holds at the same
-//! content revision, whose tile left the far ring, or whose generation the
-//! ring left behind. A removal always precedes reuse of the same full key,
-//! every record carries its full terrain key and — for an upsert — its
-//! complete prepared-resource reference only, and no GPU handle or Python
-//! geometry exists anywhere in the vector.
-//!
-//! Integration seam: [`LodSelection::dispatch_frame`] drains the shared
-//! port itself, and a result it classifies as stale, untracked or foreign
-//! is dropped after the real arena already retained it. The private port
-//! probe below is the lossless answer to that drop channel: it is a
-//! transparent adapter over the real queue that records every drained
-//! result identity, so the family learns the exact key of each dropped
-//! geometry and releases it with `forget` instead of leaking arena
-//! ownership. Near jobs are admitted through [`TerrainPublisher::admit_near`]
-//! so the same owner can summarize each payload's material class and light
-//! channels from the real shared registry at admission — the registry
-//! fields the mesh oracles classify (fluid height, cutout transparency,
-//! block emission) — because the drained result no longer carries its
-//! input payload. The native numerical builds inside the queue and the
-//! near-ring section selection remain later seams; this family consumes
-//! both owners exactly as they landed.
-//!
-//! Bounds and failure policy: the assembled vector is checked against the
-//! frozen family-record count and against the measured frame byte bound
-//! (through the accepted frame validator's own accounting over a minimal
-//! terrain-only frame) before the reference set commits. A rejected
-//! publication preserves the previous output and the previous
-//! resource-reference set in full, per the retry-owned model: an upsert the
-//! frame rejected stays eligible for the next publication — its geometry
-//! is neither consumed nor forgotten — while every drained geometry whose
-//! key was never published releases through `forget` on every exit path,
-//! before any cap decision, so the arena never retains a geometry the
-//! prior output does not reference. The preparation owners themselves
-//! still advance their own state on a failed frame — their port semantics
-//! are non-transactional by contract — but nothing they retain is released
-//! or published by a rejected vector. The admission-summary store is
-//! bounded alongside: a slot survives only while its exact admission is
-//! live in publication, still in flight, or retry-owned through the retry
-//! list's own copy — removed sections, reset epochs, dead retries and
-//! dropped drains all release their slots in the same step that releases
-//! their geometry — and a re-admitted section records its summary again.
+//! Near admission summaries name exact accepted resource keys. Preparation may
+//! advance workers and the far ring, but keeps drained upserts retry-owned and
+//! preserves every previously published reference until whole-frame commit.
+//! The staged proposal carries ordered records, prebuilt next references and
+//! exact retirements; commit releases those keys and moves the prepared state.
+//! Rejected admission changes no summary, and rejected publication consumes no
+//! previously published resource. Never-published stale results release promptly.
 
 use std::sync::Arc;
 
@@ -145,18 +103,8 @@ fn summarize_payload(payload: &OwnedMeshView) -> SectionSummary {
     }
 }
 
-/// The terrain family publication owner.
-///
-/// It owns exactly three pieces of family state: the complete resource keys
-/// the last accepted output referenced (its release obligations toward the
-/// arena), the admission-time material/light summaries of the near jobs it
-/// admitted (one slot per terrain key; a newer identity of the same section
-/// replaces it, and every admission that leaves publication, resets across
-/// an epoch, dies as a stale retry or is dropped from a drain releases its
-/// slot), and the retry list of upserts a rejected frame did not publish
-/// (each entry carries its own summary, so a re-attempt depends on nothing
-/// else). Every world, ring and arena fact is borrowed from the real owners
-/// at publication time.
+/// Owns published references, exact admission summaries and retry-owned upserts.
+/// Mirror, ring and geometry state remain with their existing providers.
 pub struct TerrainPublisher {
     published: Vec<PreparedResourceKey>,
     summaries: Vec<(PreparedResourceKey, SectionSummary)>,
@@ -210,21 +158,29 @@ impl TerrainPublisher {
     /// recording the payload's material/light summary under its exact
     /// resource key. The queue stays the owner of storage, work and
     /// retention; a rejected admission returns the complete job unchanged
-    /// and the recorded summary is simply replaced by the next admission of
-    /// the same section. Far jobs belong to the selection's own dispatch
-    /// and carry no summary.
+    /// without changing any accepted summary. Each full key retains its own
+    /// summary until its queue, publication and retry ownership ends. Far jobs
+    /// belong to the selection's dispatch and carry no near summary.
     pub fn admit_near(
         &mut self,
         queue: &mut PreparationQueue,
         job: PreparationJob,
     ) -> Result<PreparationTicket, RejectedPreparation> {
         let key = *job.key();
-        if let PreparationPayload::Near(payload) = job.payload() {
-            let summary = summarize_payload(payload);
-            self.summaries.retain(|(held, _)| held.key() != key.key());
-            self.summaries.push((key, summary));
+        let summary = match job.payload() {
+            PreparationPayload::Near(payload) => Some(summarize_payload(payload)),
+            PreparationPayload::Far(_) => None,
+        };
+        let ticket = queue.try_submit(job)?;
+        self.prune_summaries(queue);
+        if let Some(summary) = summary {
+            if let Some((_, held)) = self.summaries.iter_mut().find(|(held, _)| held == &key) {
+                *held = summary;
+            } else {
+                self.summaries.push((key, summary));
+            }
         }
-        queue.try_submit(job)
+        Ok(ticket)
     }
 
     /// Publishes one terrain family change vector through the real owners.
@@ -286,11 +242,9 @@ impl TerrainPublisher {
         let mut removes: Vec<TerrainRecord> = Vec::new();
         let mut kept: Vec<PreparedResourceKey> = Vec::new();
         let mut retire: Vec<PreparedResourceKey> = Vec::new();
-        let mut leaving: Vec<PreparedResourceKey> = Vec::new();
         for key in &self.published {
             if key.epoch() != view.frame_epoch() {
                 retire.push(*key);
-                leaving.push(*key);
                 continue;
             }
             let current = match key.key() {
@@ -309,18 +263,8 @@ impl TerrainPublisher {
             } else {
                 removes.push(removal_record(view, *key)?);
                 retire.push(*key);
-                leaving.push(*key);
             }
         }
-        // Summary bounding: an admission slot survives only while its exact
-        // admission is live in publication, still in flight toward a drain,
-        // or retry-owned through the retry list's own copy — a key that
-        // just left publication or crossed an epoch boundary stops holding
-        // a slot, and a re-admitted section records its summary again.
-        if !leaving.is_empty() {
-            self.summaries.retain(|(held, _)| !leaving.contains(held));
-        }
-
         // The real work step, then the real selection frame over the same
         // real queue through the recording probe. The drained identities
         // are captured before any dispatch error propagates, so every exit
@@ -430,6 +374,8 @@ impl TerrainPublisher {
             self.forget_summary(&key);
         }
 
+        self.prune_summaries(queue);
+
         if let Some(error) = dispatch_error {
             // The frame failed inside the real selection dispatch after it
             // drained: the attempted upserts stay retry-owned, the dropped
@@ -487,6 +433,15 @@ impl TerrainPublisher {
         }
         self.published = publication.published;
         self.retry.clear();
+        self.prune_summaries(queue);
+    }
+
+    fn prune_summaries(&mut self, queue: &PreparationQueue) {
+        self.summaries.retain(|(key, _)| {
+            self.published.contains(key)
+                || self.retry.iter().any(|(held, _)| held == key)
+                || queue.owns_key(key)
+        });
     }
 
     fn retry_current(

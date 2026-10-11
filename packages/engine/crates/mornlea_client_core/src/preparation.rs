@@ -624,8 +624,7 @@ struct CompletedUnit {
 }
 
 /// One arena-retained geometry: the delivered result's key beside its shared
-/// immutable allocation, held until a forget, a superseding result or an
-/// invalidation releases it.
+/// immutable allocation, held until explicit forget or invalidation releases it.
 struct RetainedUnit {
     key: PreparedResourceKey,
     geometry: Arc<PreparedGeometry>,
@@ -773,10 +772,17 @@ impl PreparationQueue {
             .ok_or(ClientError::InvalidInput)
     }
 
+    /// Reports whether this exact admission still owns queue, result or arena storage.
+    pub(crate) fn owns_key(&self, key: &PreparedResourceKey) -> bool {
+        self.pending.iter().any(|unit| unit.job.key() == key)
+            || self.completed.iter().any(|unit| unit.result.key() == key)
+            || self.retained.iter().any(|unit| &unit.key == key)
+    }
+
     /// Releases the retained geometry of exactly this resource key and
     /// reports the bytes released. The publication owner calls this once no
     /// published frame references the resource any more; a late or repeated
-    /// forget after a supersede, a forget or an invalidation releases
+    /// forget after a forget or an invalidation releases
     /// nothing, so ownership is released exactly once.
     pub fn forget(&mut self, key: &PreparedResourceKey) -> Result<u64, ClientError> {
         if let Some(index) = self.retained.iter().position(|entry| entry.key == *key)
@@ -1038,15 +1044,8 @@ impl PreparationPort for PreparationQueue {
             }
             let outcome = result.outcome().clone();
             if let Ok(geometry) = outcome {
-                // Retain the delivered geometry: a superseded entry of the
-                // same terrain key releases exactly once and the fresh
-                // allocation takes its place at the same total charge.
-                if let Some(index) = self.retained.iter().position(|entry| {
-                    entry.key.dimension() == key.dimension() && *entry.key.key() == *key.key()
-                }) && let Some(superseded) = self.retained.remove(index)
-                {
-                    self.charge -= superseded.charge;
-                }
+                // A previous frame may still reference another full key for this terrain.
+                // Only explicit publication retirement releases that geometry.
                 self.retained.push_back(RetainedUnit {
                     key,
                     geometry,
