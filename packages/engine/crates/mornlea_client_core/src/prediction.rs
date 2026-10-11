@@ -109,6 +109,7 @@ pub struct PlayerProjectionState {
     confirmed_target: Option<RayTarget>,
     predicted_target: Option<RayTarget>,
     predicted_snow_cues: Vec<u64>,
+    world_dimension: Option<Dimension>,
 }
 
 impl PlayerProjectionState {
@@ -139,6 +140,7 @@ impl PlayerProjectionState {
             confirmed_target: None,
             predicted_target: None,
             predicted_snow_cues: Vec::new(),
+            world_dimension: None,
         })
     }
 
@@ -149,6 +151,16 @@ impl PlayerProjectionState {
     pub fn with_mining(mut self, mining: MiningState) -> Self {
         self.mining = mining;
         self
+    }
+
+    /// Names the confirmed world's actual dimension for derived block readers.
+    pub fn with_world_dimension(mut self, dimension: Dimension) -> Self {
+        self.world_dimension = Some(dimension);
+        self
+    }
+
+    pub fn world_dimension(&self) -> Option<Dimension> {
+        self.world_dimension
     }
 
     /// Publishes the recorded target of the confirmed pose's look ray. The
@@ -422,6 +434,7 @@ struct PendingStep {
 #[derive(Clone)]
 struct ConfirmedBase {
     revision: ConfirmedRevision,
+    dimension: Dimension,
     state: PhysicsState,
     look: LookAngles,
     mining: MiningState,
@@ -634,6 +647,7 @@ impl PredictionReplay {
         // poses so the projection input role carries it; the owner-level
         // accessor reports the same value.
         .with_mining(base.mining)
+        .with_world_dimension(base.dimension)
         // The step-time recorded ray targets ride beside their poses. The
         // re-derivation happened inside the step or replay that borrowed the
         // grid; reporting here is pure, so a repeated projection is equal.
@@ -902,6 +916,7 @@ impl PredictionReplay {
         };
         let base = ConfirmedBase {
             revision: key.confirmed_revision(),
+            dimension: state.dimension(),
             state: confirmed_state,
             look: state.look(),
             mining: state.mining(),
@@ -1561,6 +1576,21 @@ mod world_tests {
                 sneaking: false,
             },
         })
+    }
+
+    #[test]
+    fn projection_keeps_the_actual_authority_dimension() {
+        for dimension in [Dimension::OVERWORLD, Dimension::DEPTHS] {
+            let world = world(dimension, |_| 0);
+            let state = authority(1, 0, dimension, [3.5, 2.0, 5.5], [0.0; 3], true);
+            assert_eq!(
+                owner(&state, &world)
+                    .projection()
+                    .unwrap()
+                    .world_dimension(),
+                Some(dimension)
+            );
+        }
     }
 
     #[test]
