@@ -529,12 +529,10 @@ fn build_candidate(
     let upsert = FamilyOperation::Upsert;
     let mut families: Vec<FamilyFrame> = Vec::new();
 
-    if !session.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_SESSION)?,
-            FamilyRecords::Session(session),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_SESSION)?,
+        FamilyRecords::Session(session),
+    )?);
 
     // The input family: the pending input metadata in the frozen
     // admitted-first-then-rejected order, the records the publication
@@ -558,19 +556,15 @@ fn build_candidate(
             Receipt::Rejected { class: *class },
         )?);
     }
-    if !input_records.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_INPUT)?,
-            FamilyRecords::Input(input_records),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_INPUT)?,
+        FamilyRecords::Input(input_records),
+    )?);
 
-    if !terrain.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_TERRAIN)?,
-            FamilyRecords::Terrain(terrain),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_TERRAIN)?,
+        FamilyRecords::Terrain(terrain),
+    )?);
 
     let actor_parts = [
         project_remote_player(&view)?,
@@ -587,20 +581,16 @@ fn build_candidate(
         view.limits(),
         view.observations(),
     )?;
-    if !actor_records.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_ACTORS)?,
-            FamilyRecords::Actors(actor_records),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_ACTORS)?,
+        FamilyRecords::Actors(actor_records),
+    )?);
 
     let player_records = project_player_view(&view)?;
-    if !player_records.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_PLAYER_VIEW)?,
-            FamilyRecords::PlayerView(player_records),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_PLAYER_VIEW)?,
+        FamilyRecords::PlayerView(player_records),
+    )?);
 
     let inventory_records = assemble_inventory_ui(
         view.frame_epoch(),
@@ -613,12 +603,10 @@ fn build_candidate(
         ],
         view.limits(),
     )?;
-    if !inventory_records.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_INVENTORY_UI)?,
-            FamilyRecords::InventoryUi(inventory_records),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_INVENTORY_UI)?,
+        FamilyRecords::InventoryUi(inventory_records),
+    )?);
 
     let world_records = assemble_world_ui(
         view.frame_epoch(),
@@ -632,35 +620,27 @@ fn build_candidate(
         ],
         view.limits(),
     )?;
-    if !world_records.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_WORLD_UI)?,
-            FamilyRecords::WorldUi(world_records),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_WORLD_UI)?,
+        FamilyRecords::WorldUi(world_records),
+    )?);
 
     let audio = project_audio(&view)?;
-    if !audio.records().is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_AUDIO_CUES)?,
-            FamilyRecords::AudioCues(audio.records().to_vec()),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_AUDIO_CUES)?,
+        FamilyRecords::AudioCues(audio.records().to_vec()),
+    )?);
 
-    if !lifecycle.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_LIFECYCLE)?,
-            FamilyRecords::Lifecycle(lifecycle),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_LIFECYCLE)?,
+        FamilyRecords::Lifecycle(lifecycle),
+    )?);
 
     let diagnostic_records = project_diagnostics(&view)?;
-    if !diagnostic_records.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_DIAGNOSTICS)?,
-            FamilyRecords::Diagnostics(diagnostic_records),
-        )?);
-    }
+    families.push(FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_DIAGNOSTICS)?,
+        FamilyRecords::Diagnostics(diagnostic_records),
+    )?);
 
     let frame = PresentationFrame::try_new(view.frame_epoch(), revision, index, families)?;
     Ok(CandidateBuild {
@@ -1694,6 +1674,7 @@ fn caps_plus_one_preserve_the_visible_frame() {
         4_325_408,
         "the exact measured aggregate"
     );
+    let aggregate = complete_publication_frame(aggregate);
     let mut fixture = frame_fixture(21, false);
     let mut visible = bootstrap(21);
     let committed = {
@@ -1713,7 +1694,7 @@ fn caps_plus_one_preserve_the_visible_frame() {
     // One byte less configured capacity rejects whole, preserving everything.
     let starved_limits = limits_with(
         mornlea_client_core::contracts::ClientLimits::MAX_FAMILY_RECORDS,
-        4_325_407,
+        aggregate.validated_size().expect("complete size") - 1,
     );
     let mut fixture = frame_fixture(21, false);
     let mut visible = bootstrap(21);
@@ -2089,8 +2070,12 @@ fn assemble_prepares_immutable_arc_and_empty_families_publish() {
         ],
     )
     .expect("candidate frame");
-    let second_prepared =
-        assemble_frame(&visible, empty_family_frame, &limits()).expect("the empty family is legal");
+    let second_prepared = assemble_frame(
+        &visible,
+        complete_publication_frame(empty_family_frame),
+        &limits(),
+    )
+    .expect("the empty family is legal");
     {
         let mut bundle = owners(&mut fixture, &mut visible);
         let reservation = prepare_publication(
@@ -2178,6 +2163,7 @@ fn real_lifecycle_terminal_pair_publishes() {
     )
     .expect("candidate frame");
 
+    let candidate = complete_publication_frame(candidate);
     let mut fixture = frame_fixture(lifecycle_epoch.get(), false);
     let mut visible = bootstrap(lifecycle_epoch.get());
     let committed = {
@@ -2410,6 +2396,7 @@ fn complete_lifecycle_family() {
         ],
     )
     .expect("reset candidate frame");
+    let candidate = complete_publication_frame(candidate);
     let committed_reset = {
         let consume = PublicationConsumption::try_new(0, 0, 0, lifecycle_state.pending().len())
             .expect("cursors");
@@ -2537,6 +2524,7 @@ fn complete_lifecycle_family() {
         ],
     )
     .expect("close candidate frame");
+    let close_candidate = complete_publication_frame(close_candidate);
     let mut close_observations = Vec::new();
     let mut close_input =
         InputAdmissionOwner::try_new(InputProjectionState::try_new(1).expect("projection"))
@@ -2649,4 +2637,110 @@ fn aggregate_world_frame(
     size = frame.validated_size()?;
     assert_eq!(size, target, "the aggregate construction is exact");
     Ok(frame)
+}
+
+/// Adds schema-legal empty families to a successful whole-publication fixture.
+fn complete_publication_frame(frame: PresentationFrame) -> PresentationFrame {
+    let mut families = frame.families().to_vec();
+    for family in empty_complete_frame(
+        frame.session_epoch().get(),
+        frame.confirmed_revision().get(),
+        frame.frame_index(),
+    )
+    .families()
+    {
+        if !families.iter().any(|held| held.key() == family.key()) {
+            families.push(family.clone());
+        }
+    }
+    PresentationFrame::try_new(
+        frame.session_epoch(),
+        frame.confirmed_revision(),
+        frame.frame_index(),
+        families,
+    )
+    .expect("complete publication fixture")
+}
+
+fn empty_complete_frame(epoch_value: u64, revision: u64, index: u64) -> PresentationFrame {
+    let families = vec![
+        (FAMILY_SESSION, FamilyRecords::Session(vec![])),
+        (FAMILY_INPUT, FamilyRecords::Input(vec![])),
+        (FAMILY_TERRAIN, FamilyRecords::Terrain(vec![])),
+        (FAMILY_ACTORS, FamilyRecords::Actors(vec![])),
+        (FAMILY_PLAYER_VIEW, FamilyRecords::PlayerView(vec![])),
+        (FAMILY_INVENTORY_UI, FamilyRecords::InventoryUi(vec![])),
+        (FAMILY_WORLD_UI, FamilyRecords::WorldUi(vec![])),
+        (FAMILY_AUDIO_CUES, FamilyRecords::AudioCues(vec![])),
+        (FAMILY_LIFECYCLE, FamilyRecords::Lifecycle(vec![])),
+        (FAMILY_DIAGNOSTICS, FamilyRecords::Diagnostics(vec![])),
+    ]
+    .into_iter()
+    .map(|(name, records)| {
+        FamilyFrame::try_new(FamilyKey::try_new(name).expect("family key"), records)
+            .expect("family")
+    })
+    .collect();
+    PresentationFrame::try_new(
+        epoch(epoch_value),
+        ConfirmedRevision::new(revision),
+        index,
+        families,
+    )
+    .expect("frame")
+}
+
+#[test]
+fn publication_rejects_complete_foreign_epoch() {
+    let current = Arc::new(empty_complete_frame(2, 10, 8));
+    for candidate_epoch in [1, 3] {
+        assert_eq!(
+            assemble_frame(
+                &current,
+                empty_complete_frame(candidate_epoch, 10, 9),
+                &limits()
+            )
+            .unwrap_err(),
+            ClientError::StaleEpoch
+        );
+    }
+    assert_eq!(current.frame_index(), 8);
+}
+
+#[test]
+fn publication_rejects_complete_regressed_revision() {
+    let current = Arc::new(empty_complete_frame(2, 10, 8));
+    assert_eq!(
+        assemble_frame(&current, empty_complete_frame(2, 9, 9), &limits()).unwrap_err(),
+        ClientError::InvalidInput
+    );
+}
+
+#[test]
+fn publication_rejects_missing_families_without_disabling_partial_validation() {
+    let current = Arc::new(empty_complete_frame(2, 10, 8));
+    let empty = PresentationFrame::try_new(epoch(2), ConfirmedRevision::new(10), 9, vec![])
+        .expect("partial");
+    empty
+        .validate(&limits())
+        .expect("provider-only validation stays legal");
+    assert_eq!(
+        assemble_frame(&current, empty, &limits()).unwrap_err(),
+        ClientError::InvalidInput
+    );
+    let missing = PresentationFrame::try_new(
+        epoch(2),
+        ConfirmedRevision::new(10),
+        9,
+        current.families()[..9].to_vec(),
+    )
+    .expect("missing family");
+    assert_eq!(
+        assemble_frame(&current, missing, &limits()).unwrap_err(),
+        ClientError::InvalidInput
+    );
+    let repeated = assemble_frame(&current, empty_complete_frame(2, 10, 9), &limits())
+        .expect("same revision next frame");
+    assert_eq!(repeated.frame_index(), 9);
+    assert_eq!(repeated.confirmed_revision().get(), 10);
 }

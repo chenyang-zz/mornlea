@@ -34,7 +34,11 @@
 
 use std::sync::Arc;
 
-use crate::contracts::{ClientError, ClientLimits, ObservationKey};
+use crate::contracts::{
+    ClientError, ClientLimits, FAMILY_ACTORS, FAMILY_AUDIO_CUES, FAMILY_DIAGNOSTICS, FAMILY_INPUT,
+    FAMILY_INVENTORY_UI, FAMILY_LIFECYCLE, FAMILY_PLAYER_VIEW, FAMILY_SESSION, FAMILY_TERRAIN,
+    FAMILY_WORLD_UI, ObservationKey,
+};
 use crate::input::{ClientIntentKind, InputProjectionState};
 use crate::presentation::frame::{FamilyRecords, InputReceiptState, PresentationFrame};
 use crate::presentation::{
@@ -96,6 +100,36 @@ fn check_candidate(
     limits: &ClientLimits,
 ) -> Result<(), ClientError> {
     candidate.validate(limits)?;
+    // Local family proposals may be partial; only whole publication requires this closure.
+    let required = [
+        FAMILY_SESSION,
+        FAMILY_INPUT,
+        FAMILY_TERRAIN,
+        FAMILY_ACTORS,
+        FAMILY_PLAYER_VIEW,
+        FAMILY_INVENTORY_UI,
+        FAMILY_WORLD_UI,
+        FAMILY_AUDIO_CUES,
+        FAMILY_LIFECYCLE,
+        FAMILY_DIAGNOSTICS,
+    ];
+    if candidate.families().len() != required.len()
+        || required.iter().any(|name| {
+            !candidate
+                .families()
+                .iter()
+                .any(|family| family.key().logical_name == *name)
+        })
+    {
+        return Err(ClientError::InvalidInput);
+    }
+    // Lifecycle replacement alone opens a new epoch; ordinary publication cannot.
+    if candidate.session_epoch() != current.session_epoch() {
+        return Err(ClientError::StaleEpoch);
+    }
+    if candidate.confirmed_revision().get() < current.confirmed_revision().get() {
+        return Err(ClientError::InvalidInput);
+    }
     let next = current
         .frame_index()
         .checked_add(1)
