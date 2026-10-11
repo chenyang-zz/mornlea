@@ -117,9 +117,14 @@ pub struct TerrainPublication {
     records: Vec<TerrainRecord>,
     published: Vec<PreparedResourceKey>,
     retire: Vec<PreparedResourceKey>,
+    processed_meshes: u16,
 }
 
 impl TerrainPublication {
+    pub fn processed_meshes(&self) -> u16 {
+        self.processed_meshes
+    }
+
     pub fn records(&self) -> &[TerrainRecord] {
         &self.records
     }
@@ -220,6 +225,28 @@ impl TerrainPublisher {
         params: &Arc<WorldgenParams>,
         budget: ClientWorkBudget,
     ) -> Result<TerrainPublication, ClientError> {
+        self.prepare_with_dispatch_limit(
+            view,
+            queue,
+            selection,
+            center,
+            params,
+            budget,
+            budget.meshes(),
+        )
+    }
+
+    /// Near and far admissions share a step allowance while queued work keeps its full budget.
+    pub(crate) fn prepare_with_dispatch_limit(
+        &mut self,
+        view: &ProjectionView<'_>,
+        queue: &mut PreparationQueue,
+        selection: &mut LodSelection,
+        center: ChunkPos,
+        params: &Arc<WorldgenParams>,
+        budget: ClientWorkBudget,
+        far_jobs: u16,
+    ) -> Result<TerrainPublication, ClientError> {
         if selection.epoch() != view.frame_epoch() {
             // A selection of another epoch never feeds this frame; the
             // frame's terrain family must be rebased by its controller.
@@ -269,15 +296,17 @@ impl TerrainPublisher {
         // real queue through the recording probe. The drained identities
         // are captured before any dispatch error propagates, so every exit
         // path below handles them.
-        queue.work(budget);
+        let processed_meshes = queue.work(budget);
         let (drained, dispatch_error) = {
             let mut probe = PortProbe {
                 queue,
                 drained: Vec::new(),
+                remaining: far_jobs.min(budget.meshes()),
+                failure: None,
             };
             let outcome = selection.dispatch_frame(&mut probe, center_tile, params);
             let drained = probe.drained;
-            (drained, outcome.err())
+            (drained, probe.failure.or(outcome.err()))
         };
 
         // Classification shared by every exit path from here on: upserts
@@ -346,10 +375,7 @@ impl TerrainPublisher {
                     far_shell_summary()
                 }
             };
-            // A record publishes only while the real arena still retains
-            // its geometry: a later delivery of the same terrain key
-            // supersedes the retained entry out from under an earlier
-            // candidate of the same drain.
+            // Explicit retirement owns geometry release; delivery alone cannot remove it.
             if queue.prepared_resource(&key).is_err() {
                 dropped.push(key);
                 continue;
@@ -357,6 +383,39 @@ impl TerrainPublisher {
             let record = upsert_record(view, key, summary.material, summary.light)?;
             push_upsert(&mut near_upserts, &mut far_upserts, record);
             attempted.push((key, summary));
+        }
+
+        // A proposal owns only its winning full key for each semantic terrain identity.
+        let mut winners = Vec::new();
+        for (key, summary) in attempted {
+            let winning = near_upserts
+                .iter()
+                .chain(&far_upserts)
+                .any(|record| record.resource() == Some(&key));
+            if winning {
+                if !winners.iter().any(|(held, _)| *held == key) {
+                    winners.push((key, summary));
+                }
+            } else if !self.published.contains(&key) {
+                dropped.push(key);
+            }
+        }
+        let attempted = winners;
+        // Replacement retirement is staged even when only the neighbor generation changed.
+        for (key, _) in &attempted {
+            let mut index = 0;
+            while index < kept.len() {
+                if kept[index].dimension() == key.dimension()
+                    && kept[index].key() == key.key()
+                    && kept[index] != *key
+                {
+                    let old = kept.remove(index);
+                    removes.push(removal_record(view, old)?);
+                    retire.push(old);
+                } else {
+                    index += 1;
+                }
+            }
         }
 
         // Never-published releases apply on every exit path from here,
@@ -422,6 +481,7 @@ impl TerrainPublisher {
             records,
             published: kept,
             retire,
+            processed_meshes,
         })
     }
 
@@ -547,15 +607,16 @@ fn upsert_record(
     )
 }
 
-/// Routes one upsert into its class vector: the freshest delivery of one
-/// full key wins the slot, so one frame publishes at most one current
-/// record per full key.
+/// The latest full key wins the upsert slot for each dimension and terrain identity.
 fn push_upsert(near: &mut Vec<TerrainRecord>, far: &mut Vec<TerrainRecord>, record: TerrainRecord) {
     let target = match record.key() {
         TerrainKey::Section(_) => near,
         TerrainKey::LodTile(_) => far,
     };
-    if let Some(slot) = target.iter_mut().find(|held| held.key() == record.key()) {
+    if let Some(slot) = target
+        .iter_mut()
+        .find(|held| held.dimension() == record.dimension() && held.key() == record.key())
+    {
         *slot = record;
     } else {
         target.push(record);
@@ -571,10 +632,13 @@ fn push_upsert(near: &mut Vec<TerrainRecord>, far: &mut Vec<TerrainRecord>, reco
 /// shares the port — after the real `poll_ready` already retained its
 /// geometry. The probe is the only place those identities survive, which is
 /// what lets the publication owner release the dropped geometries instead
-/// of leaking them; delegation itself is byte-for-byte the real owner.
+/// of leaking them. Admission shares the remaining step allowance; errors
+/// retain their actual native class while the queue owns all storage.
 struct PortProbe<'a> {
     queue: &'a mut PreparationQueue,
     drained: Vec<(PreparedResourceKey, bool)>,
+    remaining: u16,
+    failure: Option<ClientError>,
 }
 
 impl PreparationPort for PortProbe<'_> {
@@ -582,13 +646,22 @@ impl PreparationPort for PortProbe<'_> {
         &mut self,
         job: PreparationJob,
     ) -> Result<PreparationTicket, RejectedPreparation> {
-        self.queue.try_submit(job)
+        if self.remaining == 0 {
+            return Err(RejectedPreparation::try_new(ClientError::Capacity, job)
+                .expect("bounded rejection"));
+        }
+        let ticket = self.queue.try_submit(job)?;
+        self.remaining -= 1;
+        Ok(ticket)
     }
 
     fn poll_ready(&mut self) -> Option<PreparationResult> {
         let result = self.queue.poll_ready()?;
         let key = *result.key();
         let delivered = result.outcome().is_ok();
+        if let Err(error) = result.outcome() {
+            self.failure.get_or_insert(*error);
+        }
         self.drained.push((key, delivered));
         Some(result)
     }

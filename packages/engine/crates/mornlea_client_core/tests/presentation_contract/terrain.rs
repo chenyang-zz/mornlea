@@ -817,11 +817,11 @@ fn full_range_negative_tile() {
     let corner = ChunkPos::new(i32::MIN, i32::MIN);
     let mut h = new_harness(2, 7, far_config(true, 2, 2, 24 * charge()), frozen_limits());
     publish(&mut h, corner, full_budget()).expect("corner selection frame");
-    let records = publish(&mut h, corner, full_budget()).expect("corner frame publishes");
-    assert!(
-        records.is_empty(),
-        "unrepresentable native tiles cannot publish"
+    assert_eq!(
+        publish(&mut h, corner, full_budget()).unwrap_err(),
+        ClientError::InvalidInput
     );
+    assert!(h.publisher.published_resources().is_empty());
 }
 
 /// `terrain::record_and_byte_caps_preserve_prior_output`: the family admits
@@ -1433,4 +1433,126 @@ fn same_content_resource_reenters_with_new_job_after_forget() {
         h.queue.poll_ready().is_some(),
         "re-entered unchanged terrain with new job id must complete"
     );
+}
+
+#[test]
+fn same_content_generation_replacement_retires_only_after_frame_commit() {
+    let mut h = new_harness(1, 1, far_config(false, 2, 3, charge()), frozen_limits());
+    let chunk = ChunkPos::new(0, 0);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 1)]);
+    let first = near_job(&mut h, chunk, 0, 1, 1);
+    let old = *first.key();
+    admit_near(&mut h, first).unwrap();
+    publish(&mut h, chunk, full_budget()).unwrap();
+    let replacement = near_job(&mut h, chunk, 0, 1, 2);
+    let replacement_key = PreparedResourceKey::try_new(
+        h.epoch,
+        Dimension::OVERWORLD,
+        *replacement.key().key(),
+        2,
+        1,
+        replacement.key().job_id().get(),
+    )
+    .unwrap();
+    let (_, payload) = replacement.into_parts();
+    let replacement = PreparationJob::try_new(replacement_key, payload).unwrap();
+    admit_near(&mut h, replacement).unwrap();
+    let proposal = prepare_publication(&mut h, chunk, full_budget()).unwrap();
+    assert_eq!(proposal.records().len(), 2);
+    assert_eq!(
+        proposal.records()[0].header().operation(),
+        FamilyOperation::Remove
+    );
+    assert_eq!(proposal.records()[1].resource(), Some(&replacement_key));
+    assert_eq!(h.publisher.published_resources(), &[old]);
+    assert!(h.queue.prepared_resource(&old).is_ok());
+    drop(proposal);
+    let retry =
+        prepare_publication(&mut h, chunk, ClientWorkBudget::try_new(0, 0).unwrap()).unwrap();
+    h.publisher.commit(&mut h.queue, retry);
+    assert_eq!(h.publisher.published_resources(), &[replacement_key]);
+    assert!(h.queue.prepared_resource(&old).is_err());
+}
+
+#[test]
+fn newer_attempt_releases_never_published_retry_and_its_summary_once() {
+    let mut h = new_harness(1, 1, far_config(false, 2, 3, charge()), frozen_limits());
+    let chunk = ChunkPos::new(0, 0);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 1)]);
+    let first = near_job(&mut h, chunk, 0, 1, 1);
+    let old = *first.key();
+    admit_near(&mut h, first).unwrap();
+    drop(prepare_publication(&mut h, chunk, full_budget()).unwrap());
+    let second = near_job(&mut h, chunk, 0, 1, 2);
+    let new = *second.key();
+    admit_near(&mut h, second).unwrap();
+    let proposal = prepare_publication(&mut h, chunk, full_budget()).unwrap();
+    assert_eq!(proposal.records().len(), 1);
+    assert_eq!(proposal.records()[0].resource(), Some(&new));
+    assert!(h.queue.prepared_resource(&old).is_err());
+    assert_eq!(h.publisher.retry_owned(), 1);
+    assert_eq!(h.publisher.summary_slots(), 1);
+    assert_eq!(h.queue.forget(&old).unwrap(), 0);
+    drop(proposal);
+    let retry =
+        prepare_publication(&mut h, chunk, ClientWorkBudget::try_new(0, 0).unwrap()).unwrap();
+    h.publisher.commit(&mut h.queue, retry);
+    assert_eq!(h.queue.retained_resources(), 1);
+}
+
+#[test]
+fn zero_mesh_work_drains_ready_near_without_new_far_admission() {
+    let mut h = new_harness(1, 1, far_config(true, 2, 3, 24 * charge()), frozen_limits());
+    let chunk = ChunkPos::new(0, 0);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 1)]);
+    let first = near_job(&mut h, chunk, 0, 1, 1);
+    admit_near(&mut h, first).unwrap();
+    h.queue.work(ClientWorkBudget::try_new(0, 1).unwrap());
+    let tickets = h.queue.tickets_issued();
+    let proposal =
+        prepare_publication(&mut h, chunk, ClientWorkBudget::try_new(0, 0).unwrap()).unwrap();
+    assert_eq!(proposal.records().len(), 1);
+    assert_eq!(h.queue.tickets_issued(), tickets);
+    assert_eq!(h.queue.pending_jobs(), 0);
+}
+
+#[test]
+fn actual_native_capacity_failure_preserves_previous_publication() {
+    let b = frozen_limits();
+    let limits = ClientLimits::try_new_with(
+        b.queued_input_events(),
+        b.inbound_observations(),
+        b.inbound_bytes(),
+        b.outbound_commands(),
+        b.outbound_bytes(),
+        b.prediction_journal(),
+        b.message_work(),
+        b.mesh_work(),
+        b.preparation_results(),
+        1 << 20,
+        b.family_records(),
+        b.frame_bytes(),
+    )
+    .unwrap();
+    let mut h = new_harness(1, 1, far_config(true, 2, 3, charge()), limits);
+    let chunk = ChunkPos::new(0, 0);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 1)]);
+    let first = far_job(&mut h, TilePos::new(-1, -1), 1);
+    let old = *first.key();
+    h.queue.try_submit(first).unwrap();
+    h.queue.work(ClientWorkBudget::try_new(0, 1).unwrap());
+    publish(&mut h, chunk, ClientWorkBudget::try_new(0, 0).unwrap()).unwrap();
+    assert_eq!(h.publisher.published_resources(), &[old]);
+    h.queue.work(full_budget());
+    while let Some(result) = h.queue.poll_ready() {
+        h.queue.forget(result.key()).unwrap();
+    }
+    let near = near_job(&mut h, chunk, 0, 1, 1);
+    admit_near(&mut h, near).unwrap();
+    assert_eq!(
+        publish(&mut h, chunk, ClientWorkBudget::try_new(0, 1).unwrap()).unwrap_err(),
+        ClientError::Capacity
+    );
+    assert_eq!(h.publisher.published_resources(), &[old]);
+    assert!(h.queue.prepared_resource(&old).is_ok());
 }
