@@ -24,6 +24,7 @@ use crate::contracts::{
 
 pub mod lod;
 mod native;
+pub(crate) mod near;
 
 /// The discrete accepted far-LOD step set {2, 4, 8}; the source default is 4.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
