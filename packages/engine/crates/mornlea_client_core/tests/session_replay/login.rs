@@ -645,3 +645,280 @@ fn wrong_double_login_rejected() {
     let second = test.step().expect("second step after close");
     assert!(first.terminal().is_some() && second.terminal().is_some());
 }
+
+struct ReleaseRetryConnector {
+    inner: std::sync::Arc<mornlea_client_core::session::io::MemoryConnector>,
+    refuse: std::sync::atomic::AtomicBool,
+    releases: std::sync::atomic::AtomicUsize,
+}
+
+impl Connector for ReleaseRetryConnector {
+    fn try_connect(
+        &self,
+        endpoint: &Endpoint,
+        identity: &ClientIdentity,
+    ) -> Result<mornlea_client_core::TransportTicket, ClientError> {
+        self.inner.try_connect(endpoint, identity)
+    }
+    fn poll(
+        &self,
+        ticket: mornlea_client_core::TransportTicket,
+    ) -> mornlea_client_core::TransportPoll {
+        self.inner.poll(ticket)
+    }
+    fn try_send(
+        &self,
+        ticket: mornlea_client_core::TransportTicket,
+        frame: &[u8],
+    ) -> Result<(), ClientError> {
+        self.inner.try_send(ticket, frame)
+    }
+    fn close(&self, ticket: mornlea_client_core::TransportTicket) -> Result<(), ClientError> {
+        if self.refuse.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(ClientError::Io);
+        }
+        self.inner.close(ticket)?;
+        self.releases
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+fn repair_session(
+    limits: mornlea_client_core::ClientLimits,
+) -> (
+    LoginSession,
+    std::sync::Arc<ReleaseRetryConnector>,
+    mornlea_client_core::session::io::MemoryPeer,
+    SessionEpoch,
+) {
+    use mornlea_client_core::{ClientConfig, ConnectorRegistry, StdMonotonicClock};
+    let (inner, peer) = mornlea_client_core::session::io::MemoryConnector::pair(
+        limits,
+        NonZeroU64::new(1).unwrap(),
+    );
+    let connector = std::sync::Arc::new(ReleaseRetryConnector {
+        inner,
+        refuse: std::sync::atomic::AtomicBool::new(false),
+        releases: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let mut registry = ConnectorRegistry::new();
+    registry
+        .register(NonZeroU64::new(1).unwrap(), connector.clone())
+        .unwrap();
+    let config = ClientConfig::try_new(
+        limits,
+        Duration::from_secs(5),
+        Duration::from_secs(10),
+        std::sync::Arc::new(StdMonotonicClock),
+        std::sync::Arc::new(registry),
+    )
+    .unwrap();
+    let mut session = LoginSession::new(config).unwrap();
+    let id = identity("repair", 17);
+    let epoch = session.connect(memory_endpoint(), id.clone()).unwrap();
+    peer.feed(&hello_frame()).unwrap();
+    session
+        .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
+        .unwrap();
+    peer.drain_sent();
+    peer.feed(&login_success_frame(id.login().player_id))
+        .unwrap();
+    session
+        .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
+        .unwrap();
+    (session, connector, peer, epoch)
+}
+
+#[test]
+fn repaired_lifecycle_repeated_close_and_terminal_reconnect() {
+    let (mut session, connector, _, first) =
+        repair_session(mornlea_client_core::ClientLimits::try_new().unwrap());
+    session
+        .submit_input(
+            first,
+            InputBatch::try_new(
+                first,
+                vec![InputAction {
+                    intent: ClientIntent::DropSelectedItem,
+                    container: None,
+                    crafting: None,
+                }],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    session.close().unwrap();
+    let closed = session.snapshot(first).unwrap();
+    assert_eq!(session.close(), Ok(()));
+    assert!(std::sync::Arc::ptr_eq(
+        &closed,
+        &session.snapshot(first).unwrap()
+    ));
+    assert_eq!(
+        connector.releases.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    let second = session
+        .connect(memory_endpoint(), identity("repair", 17))
+        .unwrap();
+    assert_eq!(second.get(), first.get() + 1);
+    assert_eq!(session.snapshot(first).err(), Some(ClientError::StaleEpoch));
+    assert_eq!(
+        session
+            .step(first, ClientWorkBudget::try_new(0, 0).unwrap())
+            .err(),
+        Some(ClientError::StaleEpoch)
+    );
+    assert_eq!(
+        session
+            .submit_input(first, InputBatch::try_new(first, vec![]).unwrap())
+            .err(),
+        Some(ClientError::StaleEpoch)
+    );
+    assert_eq!(closed.session_epoch(), first);
+}
+
+#[test]
+fn repaired_lifecycle_release_refusal_is_retryable() {
+    let (mut session, connector, _, epoch) =
+        repair_session(mornlea_client_core::ClientLimits::try_new().unwrap());
+    let before = session.snapshot(epoch).unwrap();
+    connector
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(session.close(), Err(ClientError::Io));
+    assert!(std::sync::Arc::ptr_eq(
+        &before,
+        &session.snapshot(epoch).unwrap()
+    ));
+    assert_eq!(session.close(), Ok(()));
+    let after = session.snapshot(epoch).unwrap();
+    let FamilyRecords::Session(records) = after.families()[0].records() else {
+        panic!("session");
+    };
+    assert_eq!(records[0].terminal(), Some(&CloseReason::LocalClose));
+    assert_eq!(
+        connector.releases.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[test]
+fn repaired_lifecycle_remote_terminal_survives_release_retry() {
+    let (mut session, connector, peer, epoch) =
+        repair_session(mornlea_client_core::ClientLimits::try_new().unwrap());
+    let before = session.snapshot(epoch).unwrap();
+    peer.feed(&frame_server_packet(&ServerPacket::Disconnect(
+        mornlea_protocol::Disconnect::new(3, "bye").unwrap(),
+    )))
+    .unwrap();
+    connector
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        session
+            .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
+            .err(),
+        Some(ClientError::Io)
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &before,
+        &session.snapshot(epoch).unwrap()
+    ));
+    let report = session
+        .step(epoch, ClientWorkBudget::try_new(0, 0).unwrap())
+        .unwrap();
+    assert!(
+        matches!(report.terminal(), Some(CloseReason::RemoteDisconnect(reason)) if reason.as_str() == "bye")
+    );
+    assert_eq!(
+        connector.releases.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[test]
+fn repaired_lifecycle_reset_refusal_and_fresh_generation() {
+    let (mut session, connector, _, first) =
+        repair_session(mornlea_client_core::ClientLimits::try_new().unwrap());
+    let before = session.snapshot(first).unwrap();
+    connector
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(session.reset(first), Err(ClientError::Io));
+    assert!(std::sync::Arc::ptr_eq(
+        &before,
+        &session.snapshot(first).unwrap()
+    ));
+    let second = session.reset(first).unwrap();
+    assert_eq!(second.get(), first.get() + 1);
+    let fresh = session.snapshot(second).unwrap();
+    let transitions: Vec<_> = fresh
+        .families()
+        .iter()
+        .flat_map(|family| match family.records() {
+            FamilyRecords::Lifecycle(records) => {
+                records.iter().map(|record| record.transition()).collect()
+            }
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(transitions, vec![LifecycleTransition::Open]);
+    assert_eq!(
+        connector.releases.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(before.session_epoch(), first);
+}
+
+#[test]
+fn repaired_lifecycle_one_hundred_real_endpoint_resets() {
+    let (mut session, connector, _, mut epoch) =
+        repair_session(mornlea_client_core::ClientLimits::try_new().unwrap());
+    for _ in 0..100 {
+        let old = session.snapshot(epoch).unwrap();
+        let next = session.reset(epoch).unwrap();
+        assert_eq!(next.get(), epoch.get() + 1);
+        assert_eq!(old.session_epoch(), epoch);
+        assert_eq!(session.snapshot(epoch).err(), Some(ClientError::StaleEpoch));
+        epoch = next;
+    }
+    session.close().unwrap();
+    session.close().unwrap();
+    assert_eq!(
+        connector.releases.load(std::sync::atomic::Ordering::SeqCst),
+        101
+    );
+}
+
+#[test]
+fn repaired_lifecycle_publication_capacity_precedes_release() {
+    let l = mornlea_client_core::ClientLimits::try_new().unwrap();
+    let limits = mornlea_client_core::ClientLimits::try_new_with(
+        l.queued_input_events(),
+        l.inbound_observations(),
+        l.inbound_bytes(),
+        l.outbound_commands(),
+        l.outbound_bytes(),
+        l.prediction_journal(),
+        l.message_work(),
+        l.mesh_work(),
+        l.preparation_results(),
+        l.preparation_bytes(),
+        1,
+        l.frame_bytes(),
+    )
+    .unwrap();
+    let (mut session, connector, _, epoch) = repair_session(limits);
+    let before = session.snapshot(epoch).unwrap();
+    assert_eq!(session.close(), Err(ClientError::Capacity));
+    assert_eq!(
+        connector.releases.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &before,
+        &session.snapshot(epoch).unwrap()
+    ));
+}

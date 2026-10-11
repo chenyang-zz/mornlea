@@ -24,9 +24,8 @@
 //! the mirror provider, so this provider publishes session and lifecycle
 //! records at revision zero and stages admitted play packets as pending
 //! accepted observations for that owner to consume; the serial frame
-//! assembler and the reset/local-close lifecycle conformance belong to their
-//! own later nodes, so `reset` here only issues a fresh pending epoch and
-//! `close` only observes terminal-once.
+//! assembler consumes those observations. Lifecycle ownership is shared with
+//! the repeatable lifecycle provider, which alone issues and retires epochs.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -45,12 +44,14 @@ use crate::contracts::{
     RecordHeader, SessionEpoch, SessionPhase, StepReport, TransportPoll, TransportTicket,
 };
 use crate::input::{InputAdmissionState, InputBatch, InputTranslator};
+use crate::preparation::PreparationQueue;
+use crate::presentation::AudioProjectionState;
 use crate::presentation::frame::{
-    FamilyFrame, FamilyRecords, LifecycleRecord, LifecycleTransition, PresentationFrame,
-    SessionRecord,
+    FamilyFrame, FamilyRecords, LifecycleRecord, PresentationFrame, SessionRecord,
 };
-use crate::presentation::{
-    AcceptedObservation, BoundedText, LifecycleProjectionState, ResourceKey, TextKind,
+use crate::presentation::{AcceptedObservation, BoundedText, LifecycleProjectionState, TextKind};
+use crate::session::lifecycle::{
+    LifecycleInvalidation, LifecycleOwner, close_projection, open_projection, reset_projection,
 };
 use crate::session::{ConfirmedMirror, ConfirmedMirrorParts};
 
@@ -66,7 +67,7 @@ pub struct LoginSession {
     login_timeout: Duration,
     clock: Arc<dyn MonotonicClock>,
     connectors: Arc<ConnectorRegistry>,
-    epoch_counter: u64,
+    owner: LifecycleOwner,
     session: Option<LiveSession>,
 }
 
@@ -95,7 +96,9 @@ struct LiveSession {
     lifecycle: LifecycleProjectionState,
     player_id: Option<PlayerId>,
     terminal: Option<CloseReason>,
-    released: bool,
+    pending_terminal: Option<CloseReason>,
+    audio: AudioProjectionState,
+    preparation: PreparationQueue,
     visible: Option<Arc<PresentationFrame>>,
     frame_index: u64,
     /// Rejected inbound frames by class source; the diagnostics projection
@@ -114,7 +117,7 @@ impl LoginSession {
             login_timeout: config.login_timeout(),
             clock: Arc::clone(config.clock()),
             connectors: Arc::clone(config.connectors()),
-            epoch_counter: 0,
+            owner: LifecycleOwner::try_new(*config.limits())?,
             session: None,
         })
     }
@@ -157,7 +160,9 @@ impl LoginSession {
             lifecycle,
             player_id: None,
             terminal: None,
-            released: false,
+            pending_terminal: None,
+            audio: AudioProjectionState::try_new()?,
+            preparation: PreparationQueue::new(self.limits),
             visible: None,
             frame_index: 0,
             rejected_inbound: 0,
@@ -168,77 +173,57 @@ impl LoginSession {
     /// session record plus every still-pending lifecycle record, which the
     /// publication consumes exactly once.
     fn publish(&mut self, next_index: u64) -> Result<(), ClientError> {
-        let limits = self.limits;
         let session = self.session.as_mut().ok_or(ClientError::InvalidState)?;
-        let revision = session.mirror.revision();
-        let header = RecordHeader::try_new(session.epoch, revision, None, FamilyOperation::Upsert)?;
-        let session_record = SessionRecord::try_new(
-            header,
+        let frame = prepare_frame(
+            session,
             session.phase,
-            session.player_id,
             session.terminal.clone(),
+            session.lifecycle.pending().to_vec(),
+            next_index,
+            &self.limits,
         )?;
-        let mut families = vec![FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_SESSION)?,
-            FamilyRecords::Session(vec![session_record]),
-        )?];
-        if !session.lifecycle.pending().is_empty() {
-            families.push(FamilyFrame::try_new(
-                FamilyKey::try_new(FAMILY_LIFECYCLE)?,
-                FamilyRecords::Lifecycle(session.lifecycle.pending().to_vec()),
-            )?);
-        }
-        let frame = PresentationFrame::try_new(session.epoch, revision, next_index, families)?;
-        frame.validate(&limits)?;
-        session.visible = Some(Arc::new(frame));
-        session.frame_index = next_index;
-        let generation = session.lifecycle.generation();
-        session.lifecycle = LifecycleProjectionState::try_new(generation)?.with_pending(Vec::new());
+        install_frame(session, frame);
         Ok(())
     }
 
-    /// Terminates the session exactly once: the phase closes, the terminal
-    /// session reason is set, the ordered terminal lifecycle pair is staged,
-    /// the transport is released once and one terminal frame is published.
-    /// A second call cannot occur through the public surface because a
-    /// terminal session rejects further stepping.
+    /// Prepares terminal output before the fallible release. A refused
+    /// release retains the reason for a later retry without freezing a live frame.
     fn terminate(&mut self, reason: CloseReason) -> Result<(), ClientError> {
-        {
-            let session = self.session.as_mut().ok_or(ClientError::InvalidState)?;
-            session.phase = SessionPhase::Closing;
-            session.terminal = Some(reason);
-            let generation = session.lifecycle.generation();
-            let revision = session.mirror.revision();
-            let header =
-                RecordHeader::try_new(session.epoch, revision, None, FamilyOperation::Upsert)?;
-            // The ordered terminal pair: `Close` ends the epoch and
-            // `Invalidate` releases the actually core-owned resources in
-            // consumer-before-provider order. No feature or bridge handle
-            // identity exists in this core, so none can be listed.
-            let close = LifecycleRecord::try_new(
-                header,
-                LifecycleTransition::Close,
-                generation,
-                Vec::new(),
-            )?;
-            let invalidate = LifecycleRecord::try_new(
-                header,
-                LifecycleTransition::Invalidate,
-                generation,
-                core_resources(),
-            )?;
-            let mut pending = session.lifecycle.pending().to_vec();
-            pending.push(close);
-            pending.push(invalidate);
-            session.lifecycle =
-                LifecycleProjectionState::try_new(generation)?.with_pending(pending);
-            if !session.released {
-                session.connector.close(session.ticket)?;
-                session.released = true;
-            }
-        }
-        let next = self.session.as_ref().expect("live session").frame_index + 1;
-        self.publish(next)
+        let session = self.session.as_mut().ok_or(ClientError::InvalidState)?;
+        session.pending_terminal = Some(reason.clone());
+        let next = session
+            .frame_index
+            .checked_add(1)
+            .ok_or(ClientError::Capacity)?;
+        let mut records = session.lifecycle.pending().to_vec();
+        records.extend(close_projection(session.epoch, session.mirror.revision())?);
+        let frame = prepare_frame(
+            session,
+            SessionPhase::Closing,
+            Some(reason.clone()),
+            records,
+            next,
+            &self.limits,
+        )?;
+        let owners = LifecycleInvalidation::try_new(
+            &mut session.pending_inbound,
+            &mut session.admission,
+            &mut session.audio,
+            &mut session.lifecycle,
+        )?;
+        self.owner.terminate(
+            session.epoch,
+            reason.clone(),
+            session.connector.as_ref(),
+            owners,
+            &mut session.preparation,
+        )?;
+        session.outbound.clear();
+        session.phase = SessionPhase::Closing;
+        session.terminal = Some(reason);
+        session.pending_terminal = None;
+        install_frame(session, frame);
+        Ok(())
     }
 }
 
@@ -248,7 +233,11 @@ impl ClientEndpoint for LoginSession {
         endpoint: Endpoint,
         identity: ClientIdentity,
     ) -> Result<SessionEpoch, ClientError> {
-        if self.session.is_some() {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.terminal.is_none())
+        {
             return Err(ClientError::InvalidState);
         }
         // Memory connector ids resolve only through the injected registry;
@@ -263,13 +252,9 @@ impl ClientEndpoint for LoginSession {
         };
         // The hello frame is encoded before the transport is acquired, so an
         // encoding refusal can never leak a ticket.
+        let epoch = self.owner.next_epoch()?;
         let hello = hello_frame_bytes()?;
         let ticket = connector.try_connect(&endpoint, &identity)?;
-        self.epoch_counter = self
-            .epoch_counter
-            .checked_add(1)
-            .ok_or(ClientError::Capacity)?;
-        let epoch = SessionEpoch::try_new(self.epoch_counter)?;
         // Everything fallible after the ticket acquisition is guarded: a
         // refused construction releases the freshly acquired transport, so an
         // error leaves no leaked ticket behind.
@@ -299,31 +284,29 @@ impl ClientEndpoint for LoginSession {
                 return Err(error);
             }
         }
-        // The pending epoch opens exactly one lifecycle record at revision
-        // zero under the checked local core generation.
-        let header = RecordHeader::try_new(
-            epoch,
-            ConfirmedRevision::new(0),
+        let frame = match prepare_frame(
+            &session,
+            session.phase,
             None,
-            FamilyOperation::Upsert,
-        )?;
-        let open = LifecycleRecord::try_new(
-            header,
-            LifecycleTransition::Open,
-            epoch.get(),
-            core_resources(),
-        )?;
-        session.lifecycle =
-            LifecycleProjectionState::try_new(epoch.get())?.with_pending(vec![open]);
-        self.session = Some(session);
-        // The pending frame publishes at index zero: revision zero carries
-        // only session and lifecycle records. A refused publication takes the
-        // half-built session back and releases its transport.
-        if let Err(error) = self.publish(0) {
-            let session = self.session.take().expect("just connected");
-            let _ = session.connector.close(session.ticket);
+            vec![open_projection(epoch)?],
+            0,
+            &self.limits,
+        ) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = connector.close(ticket);
+                return Err(error);
+            }
+        };
+        if let Err(error) = self
+            .owner
+            .open(ticket, &mut session.admission, &mut session.lifecycle)
+        {
+            let _ = connector.close(ticket);
             return Err(error);
         }
+        install_frame(&mut session, frame);
+        self.session = Some(session);
         Ok(epoch)
     }
 
@@ -368,19 +351,22 @@ impl ClientEndpoint for LoginSession {
             // Each deadline covers its own phase from the instant that phase
             // began, and an admitted session has none.
             let now = self.clock.now();
-            let mut terminal = match session.phase {
-                SessionPhase::Connecting if now >= session.hello_deadline => {
-                    Some(CloseReason::Timeout)
-                }
-                SessionPhase::Handshaking
-                    if session
-                        .login_deadline
-                        .is_some_and(|deadline| now >= deadline) =>
-                {
-                    Some(CloseReason::Timeout)
-                }
-                _ => None,
-            };
+            let mut terminal = session
+                .pending_terminal
+                .clone()
+                .or_else(|| match session.phase {
+                    SessionPhase::Connecting if now >= session.hello_deadline => {
+                        Some(CloseReason::Timeout)
+                    }
+                    SessionPhase::Handshaking
+                        if session
+                            .login_deadline
+                            .is_some_and(|deadline| now >= deadline) =>
+                    {
+                        Some(CloseReason::Timeout)
+                    }
+                    _ => None,
+                });
             let mut processed = 0u16;
             if terminal.is_none() {
                 // Retry the retained outbound head first; a still-refused
@@ -420,7 +406,13 @@ impl ClientEndpoint for LoginSession {
         match terminal {
             Some(reason) => self.terminate(reason)?,
             None => {
-                let next = self.session.as_ref().expect("live session").frame_index + 1;
+                let next = self
+                    .session
+                    .as_ref()
+                    .expect("live session")
+                    .frame_index
+                    .checked_add(1)
+                    .ok_or(ClientError::Capacity)?;
                 self.publish(next)?;
             }
         }
@@ -447,36 +439,56 @@ impl ClientEndpoint for LoginSession {
     }
 
     fn reset(&mut self, epoch: SessionEpoch) -> Result<SessionEpoch, ClientError> {
-        // Minimal fresh-epoch behavior: the old transport is released once
-        // and the same checked connect path issues the next pending epoch.
-        // Reset-time invalidation and local-close conformance belong to the
-        // later lifecycle node and are not accepted here.
-        let (endpoint, identity) = {
-            let session = self.session.as_mut().ok_or(ClientError::InvalidState)?;
-            if session.epoch != epoch {
-                return Err(ClientError::StaleEpoch);
-            }
-            if session.terminal.is_some() {
-                return Err(ClientError::Disconnected);
-            }
-            if !session.released {
-                session.connector.close(session.ticket)?;
-                session.released = true;
-            }
-            (session.endpoint, session.identity.clone())
-        };
+        let session = self.session.as_mut().ok_or(ClientError::InvalidState)?;
+        if session.epoch != epoch {
+            return Err(ClientError::StaleEpoch);
+        }
+        if session.terminal.is_some() {
+            return Err(ClientError::Disconnected);
+        }
+        self.owner.next_epoch()?;
+        let next = session
+            .frame_index
+            .checked_add(1)
+            .ok_or(ClientError::Capacity)?;
+        let mut records = session.lifecycle.pending().to_vec();
+        records.extend(reset_projection(epoch, session.mirror.revision())?);
+        // The fixed facade returns the fresh epoch; the dying publication is
+        // validated and consumed internally before a new generation opens.
+        let dying = prepare_frame(session, session.phase, None, records, next, &self.limits)?;
+        let owners = LifecycleInvalidation::try_new(
+            &mut session.pending_inbound,
+            &mut session.admission,
+            &mut session.audio,
+            &mut session.lifecycle,
+        )?;
+        self.owner.reset(
+            epoch,
+            session.connector.as_ref(),
+            owners,
+            &mut session.preparation,
+        )?;
+        session.outbound.clear();
+        install_frame(session, dying);
+        let endpoint = session.endpoint;
+        let identity = session.identity.clone();
         self.session = None;
         self.connect(endpoint, identity)
     }
 
     fn close(&mut self) -> Result<(), ClientError> {
-        {
-            let session = self.session.as_mut().ok_or(ClientError::InvalidState)?;
-            if session.terminal.is_some() {
-                return Err(ClientError::Disconnected);
-            }
+        let Some(session) = self.session.as_ref() else {
+            return Ok(());
+        };
+        if session.terminal.is_some() {
+            return Ok(());
         }
-        self.terminate(CloseReason::LocalClose)
+        self.terminate(
+            session
+                .pending_terminal
+                .clone()
+                .unwrap_or(CloseReason::LocalClose),
+        )
     }
 }
 
@@ -629,15 +641,39 @@ fn control_text(message: &str) -> Result<BoundedText, ClientError> {
     BoundedText::try_new(message.to_string(), TextKind::Control)
 }
 
-/// The resource keys the client core actually owns, in release order:
-/// consumers before providers. The Python feature and native bridge handle
-/// owners live outside this core, so their identities are never listed.
-fn core_resources() -> Vec<ResourceKey> {
-    vec![
-        ResourceKey::InputJournal,
-        ResourceKey::PreparationQueue,
-        ResourceKey::PresentationFrames,
-    ]
+/// Validates owned publication before transport release or state replacement.
+fn prepare_frame(
+    session: &LiveSession,
+    phase: SessionPhase,
+    terminal: Option<CloseReason>,
+    records: Vec<LifecycleRecord>,
+    next_index: u64,
+    limits: &ClientLimits,
+) -> Result<Arc<PresentationFrame>, ClientError> {
+    let revision = session.mirror.revision();
+    let header = RecordHeader::try_new(session.epoch, revision, None, FamilyOperation::Upsert)?;
+    let record = SessionRecord::try_new(header, phase, session.player_id, terminal)?;
+    let mut families = vec![FamilyFrame::try_new(
+        FamilyKey::try_new(FAMILY_SESSION)?,
+        FamilyRecords::Session(vec![record]),
+    )?];
+    if !records.is_empty() {
+        families.push(FamilyFrame::try_new(
+            FamilyKey::try_new(FAMILY_LIFECYCLE)?,
+            FamilyRecords::Lifecycle(records),
+        )?);
+    }
+    let frame = PresentationFrame::try_new(session.epoch, revision, next_index, families)?;
+    frame.validate(limits)?;
+    Ok(Arc::new(frame))
+}
+
+/// Installs an already-validated publication and consumes its transitions.
+fn install_frame(session: &mut LiveSession, frame: Arc<PresentationFrame>) {
+    session.frame_index = frame.frame_index();
+    session.visible = Some(frame);
+    session.lifecycle =
+        LifecycleProjectionState::try_new(session.epoch.get()).expect("checked generation");
 }
 
 /// The client's current-version hello frame through the landed encoder.

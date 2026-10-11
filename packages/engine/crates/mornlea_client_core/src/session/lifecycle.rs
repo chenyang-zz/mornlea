@@ -224,6 +224,11 @@ impl LifecycleOwner {
         })
     }
 
+    /// Checks the next epoch without acquiring or issuing ownership.
+    pub fn next_epoch(&self) -> Result<SessionEpoch, ClientError> {
+        SessionEpoch::try_new(self.counter.checked_add(1).ok_or(ClientError::Capacity)?)
+    }
+
     /// The epoch currently live, if one is.
     pub fn epoch(&self) -> Option<SessionEpoch> {
         self.live.as_ref().map(|generation| generation.epoch)
@@ -362,6 +367,25 @@ impl LifecycleOwner {
         owners: LifecycleInvalidation<'_>,
         preparation: &mut dyn PreparationPort,
     ) -> Result<Vec<LifecycleRecord>, ClientError> {
+        self.terminate(
+            epoch,
+            CloseReason::LocalClose,
+            connector,
+            owners,
+            preparation,
+        )
+    }
+
+    /// Ends one generation with its actual terminal reason. A refused
+    /// transport release leaves the generation and consumer owners retryable.
+    pub fn terminate(
+        &mut self,
+        epoch: SessionEpoch,
+        reason: CloseReason,
+        connector: &dyn Connector,
+        owners: LifecycleInvalidation<'_>,
+        preparation: &mut dyn PreparationPort,
+    ) -> Result<Vec<LifecycleRecord>, ClientError> {
         let Some(generation) = self.live.as_mut() else {
             return Ok(Vec::new());
         };
@@ -376,7 +400,7 @@ impl LifecycleOwner {
             connector.close(ticket)?;
             generation.released = true;
         }
-        generation.terminal = Some(CloseReason::LocalClose);
+        generation.terminal = Some(reason);
         self.stage_dying_records(owners, epoch, records.clone());
         let _ = preparation.invalidate(epoch);
         Ok(records)
@@ -386,9 +410,9 @@ impl LifecycleOwner {
     /// of the nonzero space is the typed capacity failure that issues
     /// nothing; the caller's state is untouched.
     fn issue(&mut self) -> Result<SessionEpoch, ClientError> {
-        let next = self.counter.checked_add(1).ok_or(ClientError::Capacity)?;
-        self.counter = next;
-        SessionEpoch::try_new(next)
+        let epoch = self.next_epoch()?;
+        self.counter = epoch.get();
+        Ok(epoch)
     }
 
     /// Clears every epoch-scoped consumer owner and stages the dying
