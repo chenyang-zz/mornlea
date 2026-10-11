@@ -1256,6 +1256,24 @@ pub mod rust_core {
             Ok(())
         }
 
+        /// Teardown visits every issued owner; refused closes keep their live tokens.
+        pub fn close_all(&mut self) -> Result<(), ClientError> {
+            let mut failure = None;
+            for index in 0..self.slots.len() {
+                if self.slots[index].is_none() {
+                    continue;
+                }
+                let token = CoreTokenValue::new(
+                    u32::try_from(index + 1).map_err(|_| ClientError::Capacity)?,
+                    self.generations[index],
+                )?;
+                if let Err(error) = self.close(token) {
+                    failure.get_or_insert(error);
+                }
+            }
+            failure.map_or(Ok(()), Err)
+        }
+
         /// Renders the frozen producer family table for one live core.
         pub fn family_table(&self, token: CoreTokenValue) -> Result<BoundaryValue, ClientError> {
             self.slot(token)?;

@@ -1,0 +1,14 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://tests/scripts/rust_bridge_lifecycle_check.py" id="1_check"]
+[ext_resource type="Script" path="res://app/host/feature_host.py" id="2_host"]
+
+[node name="RustBridgeLifecycleCheck" type="Node"]
+script = ExtResource("1_check")
+
+[node name="FeatureHost" type="Node" parent="."]
+script = ExtResource("2_host")
+
+[node name="ClientBridge" type="MornleaClientBridge" parent="."]
+
+[node name="BoundaryProbe" type="MornleaBoundaryProbe" parent="."]

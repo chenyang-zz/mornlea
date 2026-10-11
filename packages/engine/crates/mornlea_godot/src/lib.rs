@@ -10,6 +10,8 @@ mod lifecycle;
 mod mesh_worker;
 mod pull_buffers;
 mod quad_decode;
+#[cfg(feature = "runtime-qualification")]
+mod qualification;
 mod status_decode;
 mod terrain_bridge;
 mod terrain_budget;

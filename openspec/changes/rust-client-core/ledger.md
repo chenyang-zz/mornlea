@@ -571,3 +571,40 @@ Candidate `6dc06b85330e2598525289dc68381b7c9422b9a7` received three isolated sou
 - Numerical source provenance commit changes exactly twelve existing SHA256 leaves for two additive Rust source files. All 1434 frozen cases, expectations/assets, identities, source paths and source_revision remain unchanged; exact structural/hash assertions were independently verified. Protocol/save/schema/ABI versions and dependencies are unchanged.
 - Status reconciled without changing acceptance: 36 of 41 original code nodes and all nine repair nodes checked. Original 3.3b/3.3c/3.4/4.1/4.2 remain unchecked because native marshalling/release, native100, real F2 integration and dependent full-stage qualification are not run. Original seven review criteria and historical repair request remain in round 3 handoff; two full-qualification criteria are still missing. No archive/default switch/Godot process/F3-to-F2 qualification, remote push or GitHub write occurred.
 - This follow-up changes proposal status, tasks status, ledger and handoff evidence only; product source and acceptance definitions remain bound to the reviewed source. Independent evidence-only diff verification is required after committing it. No directory ownership boundary is introduced. Existing unrelated work and worker checkouts remain preserved. Architecture skill: no change; existing single-owner, immutable-publication, boundedness and qualification rules already cover the verified repairs.
+
+## 2026-10-11 native ownership repair checkpoint
+
+- Host worker candidate `a8a27b63d2547c5867d92ec9822bdeb152984771` was
+  cherry-picked as `d216d0617`: bounded actual Dictionary/Array conversion, one
+  shared owned native publication and retryable retiring ownership. Its 45 locked
+  Python cases, Ruff and strict mypy passed. The worker's local handoff is
+  `/private/tmp/mornlea-f3-native-host-handoff.md`; actual native acceptance is
+  controller-owned.
+- Controller added explicit bridge arena teardown with two red/green regressions,
+  a feature-gated test-only native probe and a headless native ownership scene.
+  The ordinary extension still exposes the unchanged G1 facade. Native open,
+  canonical-token refusal, panic-to-Internal, owned table retention, stale reused
+  token refusal, repeated close and Python consumer-before-core release passed
+  with actual Py4Godot values. Scene evidence:
+  `/private/tmp/mornlea-f3-native-host-runtime-pinned.log`.
+- Pinned Rust 1.97.1 Godot tests, all-target qualification-feature Clippy, workspace
+  formatting, locked Python boundary/static checks and the rebuilt native scene
+  passed. Logs: `/private/tmp/mornlea-f3-native-arena-pinned-suite.log`,
+  `/private/tmp/mornlea-f3-native-clippy-pinned.log`,
+  `/private/tmp/mornlea-f3-native-python-check.log` and
+  `/private/tmp/mornlea-f3-native-host-build-pinned.log`.
+- Preserved failed attempts: arena teardown red; real host baseline rejected
+  built-in containers; initial qualification panic was contained but still
+  logged through the engine panic hook, so the test-only probe now temporarily
+  installs/restores its explicit expected-panic marker. An unpinned root cargo
+  invocation selected Rust 1.98 and failed on pre-existing new Clippy lints;
+  prescribed pinned commands passed without exemptions or unrelated changes.
+- Verified release/source archives materialized the exact hardened Python
+  runtime into the external cache and project addon; loader and artifact digests
+  match the pinned inputs. No runtime source patch, version or dependency change.
+- This checkpoint does not close a formal qualification node: actual admitted
+  frame/reset/fanout acceptance, real providers, native100 and independent final
+  source review remain in progress. Separate isolated workers own the actual F2
+  library fixture and bounded smoke orchestration; the controller owns native
+  scenes, shared registration, integration, rollback and status. Architecture
+  skill: no change; existing ownership and qualification rules cover this fix.

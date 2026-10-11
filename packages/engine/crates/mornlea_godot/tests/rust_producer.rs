@@ -2436,6 +2436,29 @@ mod rust_producer {
         assert_eq!(text.kind(), &TextKind::Target);
     }
 
+    #[test]
+    fn arena_teardown_closes_each_live_endpoint_once() {
+        let (mut arena, token, _, _) = counting_admitted();
+        arena.close_all().unwrap();
+        assert_eq!(arena.releases(), 1);
+        assert_eq!(arena.family_table(token), Err(ClientError::InvalidState));
+        arena.close_all().unwrap();
+        assert_eq!(arena.releases(), 1);
+    }
+
+    #[test]
+    fn arena_teardown_keeps_a_refused_endpoint_for_retry() {
+        let (mut arena, token, counts, _) = counting_admitted();
+        counts.refuse_close.set(true);
+        assert_eq!(arena.close_all(), Err(ClientError::Io));
+        assert_eq!(arena.releases(), 0);
+        assert!(arena.family_table(token).is_ok());
+        counts.refuse_close.set(false);
+        arena.close_all().unwrap();
+        assert_eq!(arena.releases(), 1);
+        assert_eq!(arena.family_table(token), Err(ClientError::InvalidState));
+    }
+
     /// A late argument's marshalling refusal closes the whole call: the
     /// multi-argument facade dispatch admits only fully marshalled argument
     /// lists, so a hostile leaf in any position — including behind an

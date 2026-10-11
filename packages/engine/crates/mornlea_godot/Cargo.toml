@@ -7,6 +7,9 @@ publish = false
 [lib]
 crate-type = ["rlib", "cdylib"]
 
+[features]
+runtime-qualification = []
+
 [dependencies]
 godot = { version = "=0.5.5", features = ["api-4-7"] }
 # The safe Rust client core the rust-producer facade adapts. Domain and

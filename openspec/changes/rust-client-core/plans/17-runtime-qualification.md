@@ -33,6 +33,15 @@ Cargo files, native integration, smoke scripts, inventory and status; isolated
 workers own disjoint host repairs or fixture files. Discovery reports are
 `/private/tmp/mornlea-f3-{native,f2}-discovery.md`.
 
+Memory terminal ruling: F2 retires its in-process transport without encoding a
+Disconnect packet. The test-only connector wraps the actual MemoryConnector and
+associates each issued TransportTicket generation with its actual F2 ConnectionId.
+Only actual close/common terminal phase marks that generation disconnected;
+Connector::poll returns the existing Closed(Disconnected). Ordinary polls/sends
+forward unchanged. Old closes and feeds are fenced by their generation and never
+touch the new current peer. This uses the existing injected port, not a new
+production API or forged packet. Native TCP observes actual socket retirement.
+
 ## Native host conversion and release (3.3b)
 
 Editable: `apps/mornlea-godot/app/host/feature_host.py`,
@@ -99,8 +108,9 @@ real reducer, encode through real outboxes, and consume through actual
 MemoryTransport::send and delivers received controls/play frames to MemoryPeer;
 acknowledge only delivered controls and retain any undelivered suffix. Fence
 reset generations by replacing the peer/connection; late old peer data cannot
-reach the new registry entry. Physical terminal semantics use the actual server
-Disconnect packet; no production Memory callback is invented.
+reach the new registry entry. Physical terminal semantics use actual server
+retirement through the test-only generation wrapper above; no production Memory
+callback or Disconnect packet is invented.
 
 TCP uses the existing numeric connector and actual server accept/pump/poll/
 forward/flush. Pump with bounded iterations and a 10-second test deadline, not

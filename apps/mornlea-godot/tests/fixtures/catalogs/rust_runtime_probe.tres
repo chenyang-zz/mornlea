@@ -1,0 +1,7 @@
+[gd_resource type="Resource" format=3]
+
+[resource]
+resource_name = "rust-runtime-qualification"
+metadata/host_protocol_major = 1
+metadata/host_protocol_minor = 0
+metadata/manifest_paths = PackedStringArray("res://tests/fixtures/features/rust_runtime_probe/feature.tres")

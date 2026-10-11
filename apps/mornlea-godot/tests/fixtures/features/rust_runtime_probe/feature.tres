@@ -1,0 +1,14 @@
+[gd_resource type="Resource" format=3]
+
+[resource]
+resource_name = "rust_runtime_probe"
+metadata/feature_id = "rust_runtime_probe"
+metadata/host_protocol_major = 1
+metadata/host_protocol_minor = 0
+metadata/entry_scene_path = "res://tests/fixtures/features/rust_runtime_probe.tscn"
+metadata/dependencies = PackedStringArray()
+metadata/required_bridge_families = PackedStringArray("session@1.0", "input@1.0", "terrain@1.0", "actors@1.0", "player-view@1.0", "inventory-ui@1.0", "world-ui@1.0", "audio-cues@1.0", "lifecycle@1.0", "diagnostics@1.0")
+metadata/required = true
+metadata/enabled = true
+metadata/budget_class = "light"
+metadata/reset_policy = "reset"

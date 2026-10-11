@@ -504,7 +504,7 @@ fn variant_field<T: godot::meta::FromGodot>(dictionary: &VarDictionary, name: &s
 /// of panicking, so the single session is never raced.
 #[derive(GodotClass)]
 #[class(base=Node)]
-struct MornleaClientBridge {
+pub(crate) struct MornleaClientBridge {
     session: BridgeSession,
     /// The rust-producer core arena. It is disjoint from the pilot
     /// `session` above: rust mode never loads the Go producer and the pilot
@@ -536,6 +536,11 @@ impl INode for MornleaClientBridge {
         // freed every table-owned mesh and instance RID, and the rendering
         // server still exists on this (main) thread.
         self.session.close();
+        if let Err(error) = crate::abi::boundary::guard_native(Self::on_main_thread(), || {
+            self.rust_cores.close_all()
+        }) {
+            godot_error!("Rust client bridge teardown failed: {error:?}");
+        }
         if let Some(atlas) = self.terrain_atlas.take() {
             RenderingServer::singleton().free_rid(atlas);
         }
@@ -544,6 +549,28 @@ impl INode for MornleaClientBridge {
 
 #[godot_api]
 impl MornleaClientBridge {
+    #[cfg(feature = "runtime-qualification")]
+    pub(crate) fn qualification_panic_result(&mut self) -> VarDictionary {
+        // The expected probe panic must not masquerade as an uncaught engine error.
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {
+            eprintln!("[mornlea-rust-session] expected-native-panic");
+        }));
+        let result = self.rust_call(
+            || -> Result<crate::abi::boundary::BoundaryValue, _> {
+                panic!("native boundary qualification panic")
+            },
+            |arena, token| arena.family_table_routine(token),
+        );
+        std::panic::set_hook(previous);
+        result
+    }
+
+    #[cfg(feature = "runtime-qualification")]
+    pub(crate) fn qualification_releases(&self) -> usize {
+        self.rust_cores.releases()
+    }
+
     // Identity calls are deliberately allocation-free except for the Godot string
     // conversion and do not create a second path to engine or gameplay state.
     // The client-core identity comes from the header-pinned abi module, so a
