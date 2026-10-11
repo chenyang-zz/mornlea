@@ -44,7 +44,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{ErrorKind, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -438,9 +438,11 @@ impl MemoryPeer {
     }
 }
 
-/// The shared half of one TCP launch: its connection state and the wake
-/// signal the port operations use to cancel the worker's bounded park.
+/// One TCP generation shares its socket for shutdown and its bounded queues
+/// for worker I/O; the wake signal interrupts the worker's bounded park.
 struct TcpShared {
+    // Binding and retirement lock this socket reference before the state.
+    socket: Mutex<Option<Arc<TcpStream>>>,
     state: Mutex<ConnectionState>,
     wake: Condvar,
 }
@@ -449,10 +451,10 @@ struct TcpShared {
 ///
 /// `Endpoint::Tcp` carries an already-resolved `SocketAddr`, so no DNS lookup
 /// can block anywhere in this capability. Each `try_connect` issues one
-/// launch generation and one worker thread; the worker owns the socket and
-/// performs every blocking network wait (a bounded dial, then bounded
-/// read/write pacing), while the port operations touch only the bounded
-/// queues. `try_send` enqueues complete frames for the worker; a socket error
+/// launch generation and one worker thread; the worker performs every
+/// blocking network wait (a bounded dial, then bounded read/write pacing).
+/// Port operations own the bounded queues and share its socket for shutdown.
+/// `try_send` enqueues complete frames for the worker; a socket error
 /// fails the transport with the typed `Io` error and the peer's end-of-file
 /// with `Disconnected`, both sticky, with the not-yet-written head retained.
 pub struct TcpConnector {
@@ -460,8 +462,7 @@ pub struct TcpConnector {
     limits: ClientLimits,
     connect_wait: Duration,
     inner: Mutex<TcpInner>,
-    /// Cancels every worker when the capability goes away, so no parking
-    /// worker outlives its connector.
+    /// Cancels detached workers when the capability goes away.
     alive: Arc<AtomicBool>,
 }
 
@@ -525,6 +526,7 @@ impl Connector for TcpConnector {
         let mut inner = self.inner.lock().expect("tcp inner mutex");
         let generation = inner.launch.advance()?;
         let shared = Arc::new(TcpShared {
+            socket: Mutex::new(None),
             state: Mutex::new(ConnectionState::new()),
             wake: Condvar::new(),
         });
@@ -562,6 +564,9 @@ impl Connector for TcpConnector {
             return TransportPoll::Closed(ClientError::InvalidState);
         };
         let mut state = shared.state.lock().expect("tcp state mutex");
+        if state.closed {
+            return TransportPoll::Closed(ClientError::InvalidState);
+        }
         poll_state(&mut state, self.limits)
     }
 
@@ -569,6 +574,9 @@ impl Connector for TcpConnector {
         let shared = self.lookup(ticket)?;
         let reserved = {
             let mut state = shared.state.lock().expect("tcp state mutex");
+            if state.closed {
+                return Err(ClientError::InvalidState);
+            }
             if let Some(error) = state.failure {
                 return Err(error);
             }
@@ -586,45 +594,75 @@ impl Connector for TcpConnector {
     }
 
     fn close(&self, ticket: TransportTicket) -> Result<(), ClientError> {
-        let shared = self.lookup(ticket)?;
-        // Cancellation outranks queued work: the outbound queue and the
-        // partial receive state are dropped, the worker observes the release
-        // through the shared flag, and a second release is invalid state.
-        self.inner
-            .lock()
-            .expect("tcp inner mutex")
+        if ticket.connector_id() != self.connector_id {
+            return Err(ClientError::InvalidState);
+        }
+        let mut inner = self.inner.lock().expect("tcp inner mutex");
+        let shared = inner
             .connections
-            .remove(&ticket.generation().get())
+            .get(&ticket.generation().get())
             .ok_or(ClientError::InvalidState)?;
         {
+            let mut socket = shared.socket.lock().expect("tcp socket mutex");
             let mut state = shared.state.lock().expect("tcp state mutex");
+            // Retire the socket before ownership changes; a refused shutdown
+            // preserves the ticket, queues and shutdown reference for retry.
+            if let Some(stream) = socket.as_ref()
+                && let Err(error) = stream.shutdown(Shutdown::Both)
+                && error.kind() != ErrorKind::NotConnected
+            {
+                return Err(ClientError::Io);
+            }
+            *socket = None;
+            *state = ConnectionState::new();
             state.closed = true;
-            state.outbound.clear();
-            state.outbound_bytes = 0;
-            state.outbound_cursor = 0;
-            state.receive.clear();
         }
         shared.wake.notify_all();
+        inner.connections.remove(&ticket.generation().get());
         Ok(())
     }
 }
 
 impl Drop for TcpConnector {
     fn drop(&mut self) {
-        // Detached cancellation: workers observe the flag within one bounded
-        // park and exit; no join ever waits on their network I/O.
         self.alive.store(false, Ordering::Release);
         let inner = self.inner.lock().expect("tcp inner mutex");
         for shared in inner.connections.values() {
+            let mut socket = shared.socket.lock().expect("tcp socket mutex");
+            let mut state = shared.state.lock().expect("tcp state mutex");
+            // Drop has no retry caller; cancel even if shutdown fails, without
+            // joining a worker that may still be finishing its bounded dial.
+            if let Some(stream) = socket.take() {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+            *state = ConnectionState::new();
+            state.closed = true;
             shared.wake.notify_all();
         }
     }
 }
 
+/// Publishes one socket only while its generation and connector remain live.
+/// The Arc shares the same descriptor; only the worker performs blocking I/O.
+fn bind_socket(
+    shared: &TcpShared,
+    stream: TcpStream,
+    alive: &AtomicBool,
+) -> Option<Arc<TcpStream>> {
+    let mut socket = shared.socket.lock().expect("tcp socket mutex");
+    let mut state = shared.state.lock().expect("tcp state mutex");
+    if state.closed || !alive.load(Ordering::Acquire) {
+        return None;
+    }
+    let stream = Arc::new(stream);
+    *socket = Some(Arc::clone(&stream));
+    state.connected = true;
+    Some(stream)
+}
+
 /// One TCP worker: dial with the bounded wait, then pace reads, writes and
-/// cancellation under the same bounded wait. The worker is the only owner of
-/// the socket; it shares only the locked connection state, and no network
-/// I/O, decoding or callback ever runs under that lock.
+/// cancellation under the same bounded wait. Its Arc shares the socket with
+/// the shutdown owner; blocking reads and writes run outside every mutex.
 fn tcp_worker(
     address: SocketAddr,
     shared: Arc<TcpShared>,
@@ -632,7 +670,7 @@ fn tcp_worker(
     connect_wait: Duration,
     alive: Arc<AtomicBool>,
 ) {
-    let mut stream = match TcpStream::connect_timeout(&address, connect_wait) {
+    let stream = match TcpStream::connect_timeout(&address, connect_wait) {
         Ok(stream) => stream,
         // A refused or unreachable dial is the transport I/O failure; the
         // ticket's polls report it stickily.
@@ -649,15 +687,10 @@ fn tcp_worker(
         set_failure(&shared, ClientError::Io);
         return;
     }
-    {
-        let mut state = shared.state.lock().expect("tcp state mutex");
-        // The establishment is reported once through poll; a cancellation
-        // that arrived during the dial reports nothing and stops the worker.
-        if state.closed {
-            return;
-        }
-        state.connected = true;
-    }
+    let Some(stream) = bind_socket(&shared, stream, &alive) else {
+        return;
+    };
+    let mut socket = &*stream;
     let mut chunk = vec![0u8; TCP_READ_CHUNK];
     loop {
         if !alive.load(Ordering::Acquire) {
@@ -689,7 +722,7 @@ fn tcp_worker(
         // retains the complete record.
         let mut progressed = false;
         if let Some(bytes) = writable_head {
-            match stream.write(&bytes) {
+            match socket.write(&bytes) {
                 Ok(0) => {
                     set_failure(&shared, ClientError::Io);
                     return;
@@ -697,6 +730,9 @@ fn tcp_worker(
                 Ok(written) => {
                     progressed = true;
                     let mut state = shared.state.lock().expect("tcp state mutex");
+                    if state.closed {
+                        return;
+                    }
                     state.outbound_cursor += written;
                     if let Some(head) = state.outbound.front()
                         && state.outbound_cursor >= head.len()
@@ -714,7 +750,7 @@ fn tcp_worker(
             }
         }
         if read_budget > 0 {
-            match stream.read(&mut chunk[..read_budget]) {
+            match socket.read(&mut chunk[..read_budget]) {
                 // End of file: the peer closed its end; the typed error is
                 // the transport disconnect the session maps to a remote
                 // disconnect terminal.
@@ -725,6 +761,9 @@ fn tcp_worker(
                 Ok(read) => {
                     progressed = true;
                     let mut state = shared.state.lock().expect("tcp state mutex");
+                    if state.closed {
+                        return;
+                    }
                     // A framing-level failure or an at-bound queue keeps the
                     // staged bytes; both surface through poll.
                     let _ = feed_receive(&mut state, &limits, &chunk[..read]);
@@ -758,7 +797,165 @@ fn is_pacing(kind: ErrorKind) -> bool {
 /// Sets the sticky transport failure under the lock.
 fn set_failure(shared: &Arc<TcpShared>, error: ClientError) {
     let mut state = shared.state.lock().expect("tcp state mutex");
-    if state.failure.is_none() {
+    if !state.closed && state.failure.is_none() {
         state.failure = Some(error);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    fn pending_connection() -> (TcpConnector, TransportTicket, Arc<TcpShared>) {
+        let connector = TcpConnector::new(
+            NonZeroU64::new(1).unwrap(),
+            ClientLimits::try_new().unwrap(),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let mut inner = connector.inner.lock().unwrap();
+        let generation = inner.launch.advance().unwrap();
+        let shared = Arc::new(TcpShared {
+            socket: Mutex::new(None),
+            state: Mutex::new(ConnectionState::new()),
+            wake: Condvar::new(),
+        });
+        inner.connections.insert(generation.get(), shared.clone());
+        let ticket = TransportTicket::try_new(connector.connector_id, generation).unwrap();
+        drop(inner);
+        (connector, ticket, shared)
+    }
+
+    fn socket_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        (stream, peer)
+    }
+
+    #[test]
+    fn close_retires_socket_while_worker_retains_data_reference() {
+        let (connector, ticket, shared) = pending_connection();
+        let (stream, mut peer) = socket_pair();
+        let worker_stream = bind_socket(&shared, stream, &connector.alive).unwrap();
+        assert_eq!(connector.poll(ticket), TransportPoll::Connected);
+        let frame = mornlea_protocol::write_frame(1, &[7]).unwrap();
+        connector.try_send(ticket, &frame).unwrap();
+        {
+            let mut state = shared.state.lock().unwrap();
+            feed_receive(&mut state, &connector.limits, &frame).unwrap();
+        }
+
+        connector.close(ticket).unwrap();
+
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        drop(worker_stream);
+        assert!(shared.socket.lock().unwrap().is_none());
+        let state = shared.state.lock().unwrap();
+        assert!(state.closed);
+        assert!(!state.connected);
+        assert!(state.inbound.is_empty());
+        assert_eq!(state.inbound_bytes, 0);
+        assert!(state.outbound.is_empty());
+        assert_eq!(state.outbound_bytes, 0);
+        assert_eq!(state.outbound_cursor, 0);
+        assert!(state.receive.is_empty());
+        drop(state);
+        assert_eq!(
+            connector.poll(ticket),
+            TransportPoll::Closed(ClientError::InvalidState)
+        );
+        assert_eq!(
+            connector.try_send(ticket, &frame),
+            Err(ClientError::InvalidState)
+        );
+        assert_eq!(connector.close(ticket), Err(ClientError::InvalidState));
+    }
+
+    #[test]
+    fn closed_generation_refuses_late_socket_before_connected_publication() {
+        let (connector, ticket, shared) = pending_connection();
+        connector.close(ticket).unwrap();
+        let (stream, mut peer) = socket_pair();
+
+        assert!(bind_socket(&shared, stream, &connector.alive).is_none());
+
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        assert!(!shared.state.lock().unwrap().connected);
+        assert_eq!(
+            connector.poll(ticket),
+            TransportPoll::Closed(ClientError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn drop_retires_socket_and_refuses_late_binding() {
+        let (connector, _, shared) = pending_connection();
+        let (stream, mut peer) = socket_pair();
+        let worker_stream = bind_socket(&shared, stream, &connector.alive).unwrap();
+        let alive = connector.alive.clone();
+
+        drop(connector);
+
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        drop(worker_stream);
+        let (late, mut late_peer) = socket_pair();
+        assert!(bind_socket(&shared, late, &alive).is_none());
+        assert_eq!(late_peer.read(&mut [0]).unwrap(), 0);
+        assert!(!shared.state.lock().unwrap().connected);
+    }
+
+    #[test]
+    fn cancelled_connector_refuses_socket_for_unclosed_generation() {
+        let (connector, _, shared) = pending_connection();
+        let (stream, mut peer) = socket_pair();
+        connector.alive.store(false, Ordering::Release);
+
+        assert!(bind_socket(&shared, stream, &connector.alive).is_none());
+
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        assert!(!shared.state.lock().unwrap().connected);
+    }
+
+    #[test]
+    fn already_shutdown_socket_releases_ticket() {
+        let (connector, ticket, shared) = pending_connection();
+        let (stream, mut peer) = socket_pair();
+        let worker_stream = bind_socket(&shared, stream, &connector.alive).unwrap();
+        worker_stream.shutdown(Shutdown::Both).unwrap();
+
+        connector.close(ticket).unwrap();
+
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        assert_eq!(connector.close(ticket), Err(ClientError::InvalidState));
+    }
+
+    #[test]
+    fn foreign_ticket_cannot_retire_live_socket() {
+        let (connector, ticket, shared) = pending_connection();
+        let (stream, mut peer) = socket_pair();
+        let worker_stream = bind_socket(&shared, stream, &connector.alive).unwrap();
+        let foreign =
+            TransportTicket::try_new(NonZeroU64::new(2).unwrap(), ticket.generation()).unwrap();
+        let frame = mornlea_protocol::write_frame(1, &[7]).unwrap();
+
+        assert_eq!(connector.close(foreign), Err(ClientError::InvalidState));
+        assert_eq!(
+            connector.poll(foreign),
+            TransportPoll::Closed(ClientError::InvalidState)
+        );
+        assert_eq!(
+            connector.try_send(foreign, &frame),
+            Err(ClientError::InvalidState)
+        );
+        (&*worker_stream).write_all(&[42]).unwrap();
+        let mut byte = [0];
+        peer.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, [42]);
+        assert_eq!(connector.poll(ticket), TransportPoll::Connected);
+        connector.close(ticket).unwrap();
+        assert_eq!(peer.read(&mut byte).unwrap(), 0);
     }
 }
