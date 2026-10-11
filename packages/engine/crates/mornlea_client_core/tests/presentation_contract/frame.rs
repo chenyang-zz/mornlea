@@ -974,10 +974,14 @@ fn complete_frame_publishes_every_family_atomically() {
     let chat_key = fixture.commit_observation(chat(99));
     fixture.commit_observation(chest());
     fixture.commit_observation(remote_spawn(player(4), 7));
-    replay.begin_frame();
-    replay
-        .predict_step(1, forward(0.4), &environment)
-        .expect("journaled prediction step");
+    replay.observe_snow_step(Some(85)).expect("silent baseline");
+    for sequence in 1..=5 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, forward(0.4), &environment)
+            .expect("native prediction");
+        replay.observe_snow_step(Some(85)).expect("snow sample");
+    }
 
     // Real admission: one local-cue action beside one plain sequenced action.
     admit(&mut fixture, vec![collect_water(), select_hotbar()]);
@@ -1140,7 +1144,7 @@ fn complete_frame_publishes_every_family_atomically() {
     };
     let step_cue = AudioDedupKey::Predicted {
         epoch: epoch(EPOCH),
-        input_sequence: 1,
+        input_sequence: 5,
         cue: CueId::try_new(6).expect("snow step cue"),
     };
     let local_cue = AudioDedupKey::Local {
@@ -1752,8 +1756,7 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
     let mut fixture = frame_fixture(EPOCH, false);
     let mut replay = PredictionReplay::try_new(epoch(EPOCH), limits()).expect("replay owner");
 
-    // The prediction begins and one step is journaled; its publication
-    // commits the predicted cue key.
+    // A native grounded stride produces the cue fact committed by publication.
     let authority_key =
         fixture.commit_observation(Event::PlayerState(authority(1, 0, [0.5, 0.0, 0.5], true)));
     replay
@@ -1763,10 +1766,14 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
             &environment,
         )
         .expect("the authority begins prediction");
-    replay.begin_frame();
-    replay
-        .predict_step(1, forward(0.4), &environment)
-        .expect("journaled prediction step");
+    replay.observe_snow_step(Some(85)).expect("silent baseline");
+    for sequence in 1..=5 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, forward(0.4), &environment)
+            .expect("native prediction");
+        replay.observe_snow_step(Some(85)).expect("snow sample");
+    }
     let player_state = replay.projection().expect("attributable state");
     let revision = fixture.revision();
     let first = build_candidate(
@@ -1781,7 +1788,7 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
     .expect("candidate builds");
     let step_key = AudioDedupKey::Predicted {
         epoch: epoch(EPOCH),
-        input_sequence: 1,
+        input_sequence: 5,
         cue: CueId::try_new(6).expect("snow step cue"),
     };
     assert_eq!(first.audio.insertions(), &[step_key]);
@@ -1804,7 +1811,7 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
 
     // The authority refuses the input: the replay owner removes the pending
     // prediction and the wiring records the refused sequence.
-    let rejected = replay.reject(1, &environment).expect("the rejection lands");
+    let rejected = replay.reject(5, &environment).expect("the rejection lands");
     assert!(rejected.is_some(), "the refused step is attributed");
     let projection = fixture.input_owner.projection();
     let mut with_rejection =
@@ -1815,7 +1822,7 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
     for (sequence, class) in projection.rejected() {
         with_rejection.record_rejected(*sequence, *class);
     }
-    with_rejection.record_rejected(1, ClientError::InvalidInput);
+    with_rejection.record_rejected(5, ClientError::InvalidInput);
     fixture.input_owner = InputAdmissionOwner::try_new(with_rejection).expect("input owner");
 
     // An unconsumed event stays queued behind the failure row.
@@ -1913,7 +1920,7 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
     );
     assert_eq!(
         fixture.input_owner.projection().sequence_hint(),
-        2,
+        6,
         "the staged swap advanced the hint past the attested sequence"
     );
     assert_eq!(
@@ -1936,11 +1943,11 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
     // replaces the rejection correction, the derived half is silent and the
     // staged cancellation alone is still proposed.
     let next_key =
-        fixture.commit_observation(Event::PlayerState(authority(2, 1, [0.6, 0.0, 0.6], true)));
+        fixture.commit_observation(Event::PlayerState(authority(2, 5, [0.6, 0.0, 0.6], true)));
     replay
         .apply_confirmed(
             &next_key,
-            &authority(2, 1, [0.6, 0.0, 0.6], true),
+            &authority(2, 5, [0.6, 0.0, 0.6], true),
             &environment,
         )
         .expect("the fresh authority acknowledges");

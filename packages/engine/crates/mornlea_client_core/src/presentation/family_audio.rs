@@ -9,10 +9,9 @@
 //! universal event id in the source, so they attribute to their complete
 //! `ObservationKey` and nothing else — two distinct combat observations are
 //! two sounds, and no combat, projectile or attacker correlation absent from
-//! the source is ever fabricated. Predicted cues are the pending steps of
-//! the accepted prediction journal, each attributed to its input sequence
-//! through the snow-step cue, so a correction that replays the journal keeps
-//! the sequence and never replays the sound. Local cues are the native local
+//! the source is ever fabricated. Predicted cues are the accepted snow
+//! stride facts, each attributed to its still-pending input sequence, so a
+//! correction replay never creates or replays a sound. Local cues are the native local
 //! events the input projection state holds — read here without consuming
 //! them, because only a successful publication consumes that queue.
 //!
@@ -209,21 +208,18 @@ pub fn project_audio(view: &ProjectionView<'_>) -> Result<AudioProjection, Clien
         });
     }
 
-    // The predicted movement cues: every still-pending journal step is a
-    // snow-step candidate attributed to the input sequence the admission
-    // owner issued for it, so the sequence — never a pose or a replay
-    // instant — is the identity a correction replay cannot duplicate.
-    for entry in player.journal() {
+    // Only sampled snow strides carry sound facts; movement journal entries do not.
+    for sequence in player.predicted_snow_cues() {
         let cue_id = cue(CUE_SNOW_STEP)?;
         candidates.push(CueCandidate {
             cue: cue_id,
             category: AudioCueCategory::Footstep,
             provenance: CueProvenance::Predicted {
-                input_sequence: entry.sequence(),
+                input_sequence: *sequence,
             },
             key: AudioDedupKey::Predicted {
                 epoch,
-                input_sequence: entry.sequence(),
+                input_sequence: *sequence,
                 cue: cue_id,
             },
             source_tick: None,

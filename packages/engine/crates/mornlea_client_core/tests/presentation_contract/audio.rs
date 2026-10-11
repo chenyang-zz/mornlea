@@ -542,10 +542,26 @@ fn combat_and_place_without_id_dedup_by_observation_key() {
     assert!(projection.records().is_empty());
 }
 
+#[test]
+fn predicted_journal_without_snow_facts_is_silent() {
+    let cells = fixture_cells(WALK_DIMS);
+    let environment = StepEnvironment::new(walking_grid(&cells), false);
+    let mut provider = admitted_mirror(EPOCH);
+    let mut replay = PredictionReplay::try_new(epoch(EPOCH), limits()).unwrap();
+    let begin = authority(1, 0, [0.5, 0.0, 0.5], true);
+    let (_, key) = commit(&mut provider, EPOCH, Event::PlayerState(begin), 0);
+    replay.apply_confirmed(&key, &begin, &environment).unwrap();
+    replay.predict_step(1, forward(0.4), &environment).unwrap();
+    let player = replay.projection().unwrap();
+    let fixture = ViewFixture::new();
+    let projection = project_audio(&fixture.view_of(&player, &provider, EPOCH)).unwrap();
+    assert!(projection.records().is_empty());
+    assert!(projection.proposed_dedup().insertions().is_empty());
+}
+
 /// The predicted snow step is attributed to its input sequence through the
-/// real prediction journal: it emits once, a correction that replays the
-/// still-unconfirmed journal never replays the sound, and only a fresh
-/// sequence sounds again.
+/// real sampled stride: it emits once, a correction replay stays silent,
+/// and another stride with a fresh pending sequence sounds again.
 #[test]
 fn predicted_snow_step_emits_once_across_correction_replay() {
     let cells = fixture_cells(WALK_DIMS);
@@ -559,10 +575,14 @@ fn predicted_snow_step_emits_once_across_correction_replay() {
     replay
         .apply_confirmed(&key, &begin, &environment)
         .expect("the first authority begins prediction");
-    replay.begin_frame();
-    replay
-        .predict_step(1, forward(0.4), &environment)
-        .expect("journaled prediction step");
+    replay.observe_snow_step(Some(85)).expect("silent baseline");
+    for sequence in 1..=5 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, forward(0.4), &environment)
+            .expect("native prediction");
+        replay.observe_snow_step(Some(85)).expect("snow sample");
+    }
 
     let player = replay.projection().expect("attributable state");
     let fixture = ViewFixture::new();
@@ -577,12 +597,12 @@ fn predicted_snow_step_emits_once_across_correction_replay() {
     );
     assert_eq!(
         record.provenance(),
-        &CueProvenance::Predicted { input_sequence: 1 }
+        &CueProvenance::Predicted { input_sequence: 5 }
     );
     assert_eq!(record.header().source_tick(), None);
     let step_key = AudioDedupKey::Predicted {
         epoch: epoch(EPOCH),
-        input_sequence: 1,
+        input_sequence: 5,
         cue: CueId::try_new(6).expect("snow step cue"),
     };
     assert_eq!(projection.proposed_dedup().insertions(), &[step_key]);
@@ -596,13 +616,13 @@ fn predicted_snow_step_emits_once_across_correction_replay() {
 
     // A newer authority that acknowledges nothing replays the journal: the
     // replayed step keeps its sequence and its cue stays silent.
-    let corrected = authority(2, 0, [0.6, 0.0, 0.6], true);
+    let corrected = authority(2, 0, [0.5, 0.0, 0.5], true);
     let (_, second) = commit(&mut provider, EPOCH, Event::PlayerState(corrected), 1);
     let witness = replay
         .apply_confirmed(&second, &corrected, &environment)
         .expect("the correction replays the journal");
     assert_eq!(witness.acknowledged(), 0);
-    assert_eq!(witness.replayed(), 1);
+    assert_eq!(witness.replayed(), 5);
 
     let player = replay.projection().expect("attributable state");
     let view = committed.view_of(&player, &provider, EPOCH);
@@ -612,18 +632,21 @@ fn predicted_snow_step_emits_once_across_correction_replay() {
         "the correction replay never replays the sound"
     );
 
-    // Only a fresh sequence sounds again.
-    replay.begin_frame();
-    replay
-        .predict_step(2, forward(0.4), &environment)
-        .expect("fresh journaled step");
+    // Only another observed snow stride sounds again.
+    for sequence in 6..=9 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, forward(0.4), &environment)
+            .expect("native prediction");
+        replay.observe_snow_step(Some(85)).expect("snow sample");
+    }
     let player = replay.projection().expect("attributable state");
     let view = committed.view_of(&player, &provider, EPOCH);
     let projection = project_audio(&view).expect("valid projection");
     assert_eq!(projection.records().len(), 1);
     assert_eq!(
         projection.records()[0].provenance(),
-        &CueProvenance::Predicted { input_sequence: 2 }
+        &CueProvenance::Predicted { input_sequence: 9 }
     );
 }
 
@@ -644,10 +667,14 @@ fn rejected_input_cancels_its_pending_predicted_cue() {
     replay
         .apply_confirmed(&key, &begin, &environment)
         .expect("begins");
-    replay.begin_frame();
-    replay
-        .predict_step(1, forward(0.4), &environment)
-        .expect("journaled prediction step");
+    replay.observe_snow_step(Some(85)).expect("silent baseline");
+    for sequence in 1..=5 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, forward(0.4), &environment)
+            .expect("native prediction");
+        replay.observe_snow_step(Some(85)).expect("snow sample");
+    }
 
     let player = replay.projection().expect("attributable state");
     let fixture = ViewFixture::new();
@@ -655,7 +682,7 @@ fn rejected_input_cancels_its_pending_predicted_cue() {
     let projection = project_audio(&view).expect("the pending step carries its cue");
     let step_key = AudioDedupKey::Predicted {
         epoch: epoch(EPOCH),
-        input_sequence: 1,
+        input_sequence: 5,
         cue: CueId::try_new(6).expect("snow step cue"),
     };
     assert_eq!(projection.proposed_dedup().insertions(), &[step_key]);
@@ -664,12 +691,12 @@ fn rejected_input_cancels_its_pending_predicted_cue() {
     // the input: the replay owner removes the pending prediction and the
     // input projection state records the refused sequence.
     let rejected = replay
-        .reject(1, &environment)
+        .reject(5, &environment)
         .expect("the rejection removes the pending prediction");
     assert_eq!(
         rejected,
         Some(
-            mornlea_client_core::prediction::RejectedPrediction::try_new(epoch(EPOCH), 1)
+            mornlea_client_core::prediction::RejectedPrediction::try_new(epoch(EPOCH), 5)
                 .expect("attribution key")
         )
     );
@@ -683,7 +710,7 @@ fn rejected_input_cancels_its_pending_predicted_cue() {
     );
 
     let mut input = InputProjectionState::try_new(1).expect("input projection state");
-    input.record_rejected(1, ClientError::InvalidInput);
+    input.record_rejected(5, ClientError::InvalidInput);
     let committed = AudioProjectionState::try_new()
         .expect("audio state")
         .with_committed(vec![step_key]);
