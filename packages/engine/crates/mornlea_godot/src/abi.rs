@@ -1459,15 +1459,15 @@ pub mod boundary {
                 "Survival",
                 BoundaryValue::fields([
                     ("health", BoundaryValue::Int(i64::from(state.health()))),
-                    ("oxygen", BoundaryValue::Text(state.oxygen().to_string())),
-                    ("hunger", BoundaryValue::Text(state.hunger().to_string())),
+                    ("oxygen", BoundaryValue::Int(i64::from(state.oxygen()))),
+                    ("hunger", BoundaryValue::Int(i64::from(state.hunger()))),
                     (
                         "saturation_zero",
                         BoundaryValue::Bool(state.saturation_zero()),
                     ),
                     (
                         "armor_points",
-                        BoundaryValue::Text(state.armor_points().to_string()),
+                        BoundaryValue::Int(i64::from(state.armor_points())),
                     ),
                 ]),
             ),
@@ -1532,6 +1532,32 @@ pub mod boundary {
         }
     }
 
+    fn companion_speaker(companion: &mornlea_domain::CompanionSpeaker) -> BoundaryValue {
+        BoundaryValue::fields([
+            ("id", hex_text(&companion.id().bytes())),
+            (
+                "name",
+                BoundaryValue::Text(companion.name().as_str().to_string()),
+            ),
+        ])
+    }
+
+    fn observation_key(
+        observation: &mornlea_client_core::contracts::ObservationKey,
+    ) -> BoundaryValue {
+        BoundaryValue::fields([
+            ("epoch", u64_text(observation.epoch().get())),
+            (
+                "confirmed_revision",
+                u64_text(observation.confirmed_revision().get()),
+            ),
+            (
+                "ordinal",
+                BoundaryValue::Int(i64::from(observation.ordinal())),
+            ),
+        ])
+    }
+
     /// Renders the chat body union by its closed variants.
     fn chat_body(body: &ChatBody) -> BoundaryValue {
         fn speaker(
@@ -1539,7 +1565,7 @@ pub mod boundary {
             command: &CommandText,
         ) -> [(&'static str, BoundaryValue); 2] {
             [
-                ("companion_id", hex_text(&companion.id().bytes())),
+                ("companion", companion_speaker(companion)),
                 ("command", BoundaryValue::Text(command.as_str().to_string())),
             ]
         }
@@ -1551,7 +1577,7 @@ pub mod boundary {
             ChatBody::InvalidFormat => BoundaryValue::tagged("InvalidFormat", BoundaryValue::Null),
             ChatBody::UnknownCompanion { name } => BoundaryValue::tagged(
                 "UnknownCompanion",
-                BoundaryValue::Text(name.as_str().to_string()),
+                BoundaryValue::fields([("name", BoundaryValue::Text(name.as_str().to_string()))]),
             ),
             ChatBody::QueueFull { companion, command } => BoundaryValue::tagged(
                 "QueueFull",
@@ -1576,8 +1602,8 @@ pub mod boundary {
             ChatBody::Speech { companion, text } => BoundaryValue::tagged(
                 "Speech",
                 BoundaryValue::fields([
-                    ("companion_id", hex_text(&companion.id().bytes())),
-                    ("speech", BoundaryValue::Text(text.as_str().to_string())),
+                    ("companion", companion_speaker(companion)),
+                    ("text", BoundaryValue::Text(text.as_str().to_string())),
                 ]),
             ),
         }
@@ -1626,7 +1652,10 @@ pub mod boundary {
                 BoundaryValue::fields([
                     ("dimension", BoundaryValue::Int(i64::from(drop.dimension()))),
                     ("slot", BoundaryValue::Int(i64::from(drop.slot()))),
-                    ("generation", u64_text(u64::from(drop.generation()))),
+                    (
+                        "generation",
+                        BoundaryValue::Int(i64::from(drop.generation())),
+                    ),
                     (
                         "chunk",
                         BoundaryValue::fields([
@@ -1687,7 +1716,7 @@ pub mod boundary {
             } => BoundaryValue::tagged(
                 "Drop",
                 BoundaryValue::fields([
-                    ("block_index", u64_text(u64::from(*block_index))),
+                    ("block_index", BoundaryValue::Int(i64::from(*block_index))),
                     ("stack", stack(drop_stack)),
                 ]),
             ),
@@ -1755,15 +1784,7 @@ pub mod boundary {
             } => BoundaryValue::tagged(
                 "Confirmed",
                 BoundaryValue::fields([
-                    ("epoch", u64_text(observation.epoch().get())),
-                    (
-                        "confirmed_revision",
-                        u64_text(observation.confirmed_revision().get()),
-                    ),
-                    (
-                        "ordinal",
-                        BoundaryValue::Int(i64::from(observation.ordinal())),
-                    ),
+                    ("observation", observation_key(observation)),
                     ("authoritative_event_id", opt_u64(*authoritative_event_id)),
                 ]),
             ),
@@ -2184,22 +2205,23 @@ pub mod boundary {
                                 ]),
                             ),
                             ("frame_index", u64_text(record.frame_index())),
-                            // The counter owners publish no public field
-                            // accessors yet, so the exact checked values are
-                            // rendered as their owned debug text; a later
-                            // accessor export replaces these two leaves
-                            // without touching the record's other fields.
-                            (
-                                "queue_high_water",
-                                BoundaryValue::Text(format!(
-                                    "{:?}",
-                                    record.queue_high_water()
-                                )),
-                            ),
-                            (
-                                "rejected",
-                                BoundaryValue::Text(format!("{:?}", record.rejected())),
-                            ),
+                            ("queue_high_water", BoundaryValue::fields([
+                                ("input", u64_text(record.queue_high_water().input())),
+                                ("inbound_records", u64_text(record.queue_high_water().inbound_records())),
+                                ("inbound_bytes", u64_text(record.queue_high_water().inbound_bytes())),
+                                ("outbound_records", u64_text(record.queue_high_water().outbound_records())),
+                                ("outbound_bytes", u64_text(record.queue_high_water().outbound_bytes())),
+                                ("journal", u64_text(record.queue_high_water().journal())),
+                                ("preparation", u64_text(record.queue_high_water().preparation())),
+                            ])),
+                            ("rejected", BoundaryValue::fields([
+                                ("invalid", u64_text(record.rejected().invalid())),
+                                ("capacity", u64_text(record.rejected().capacity())),
+                                ("stale", u64_text(record.rejected().stale())),
+                                ("disconnected", u64_text(record.rejected().disconnected())),
+                                ("io", u64_text(record.rejected().io())),
+                                ("internal", u64_text(record.rejected().internal())),
+                            ])),
                         ])
                     })
                     .collect(),

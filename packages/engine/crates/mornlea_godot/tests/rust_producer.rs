@@ -720,6 +720,295 @@ mod rust_producer {
         .expect("candidate")
     }
 
+    fn rendered_records(name: &'static str, records: FamilyRecords) -> Vec<BoundaryValue> {
+        let source = rich_example_frame();
+        let frame = PresentationFrame::try_new(
+            source.session_epoch(),
+            source.confirmed_revision(),
+            source.frame_index(),
+            vec![
+                source.families()[0].clone(),
+                FamilyFrame::try_new(FamilyKey::try_new(name).unwrap(), records).unwrap(),
+            ],
+        )
+        .unwrap();
+        let rendered = boundary::render_frame(&frame, &ClientLimits::try_new().unwrap()).unwrap();
+        family_records(&rendered, name).to_vec()
+    }
+
+    #[test]
+    fn survival_schema_uses_bounded_integer_leaves() {
+        use mornlea_client_core::presentation::{WorldUiRecord, WorldUiView};
+        use mornlea_domain::{SurvivalState, SurvivalStateParts};
+        let state = SurvivalState::try_new(SurvivalStateParts {
+            health: 20,
+            oxygen: 300,
+            hunger: 20,
+            saturation_zero: false,
+            armor_points: 5,
+        })
+        .unwrap();
+        let records = rendered_records(
+            "world-ui",
+            FamilyRecords::WorldUi(vec![
+                WorldUiRecord::try_new(header(2, 1), WorldUiView::Survival(state)).unwrap(),
+            ]),
+        );
+        let (_, value) = records[0].field("view").unwrap().tag().unwrap();
+        value
+            .exact_fields(&[
+                "health",
+                "oxygen",
+                "hunger",
+                "saturation_zero",
+                "armor_points",
+            ])
+            .unwrap();
+        for (field, expected) in [
+            ("health", 20),
+            ("oxygen", 300),
+            ("hunger", 20),
+            ("armor_points", 5),
+        ] {
+            assert_eq!(value.field(field), Some(&BoundaryValue::Int(expected)));
+        }
+    }
+
+    #[test]
+    fn drop_schema_preserves_u32_integer_leaves() {
+        use mornlea_client_core::presentation::frame::{
+            ActorDetail, ActorDimension, ActorId, ActorKind, ActorRecord,
+        };
+        use mornlea_domain::{DropId, ItemStack};
+        let drop = DropId::try_new(0, ChunkPos::new(-3, 4), 1, u32::MAX).unwrap();
+        let records = rendered_records(
+            "actors",
+            FamilyRecords::Actors(vec![
+                ActorRecord::try_new(
+                    header(2, 1),
+                    ActorKind::Drop,
+                    ActorId::Drop(drop),
+                    ActorDimension::DropRaw(0),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(ActorDetail::Drop {
+                        block_index: u32::MAX,
+                        stack: ItemStack::EMPTY,
+                    }),
+                )
+                .unwrap(),
+            ]),
+        );
+        let (_, id) = records[0].field("id").unwrap().tag().unwrap();
+        assert_eq!(
+            id.field("generation"),
+            Some(&BoundaryValue::Int(i64::from(u32::MAX)))
+        );
+        let (_, detail) = records[0].field("detail").unwrap().tag().unwrap();
+        assert_eq!(
+            detail.field("block_index"),
+            Some(&BoundaryValue::Int(i64::from(u32::MAX)))
+        );
+    }
+
+    #[test]
+    fn chat_schema_preserves_named_companion_and_variant_fields() {
+        use mornlea_client_core::presentation::{WorldUiRecord, WorldUiView};
+        use mornlea_domain::{
+            ChatBody, ChatEvent, ChatEventParts, CommandText, CompanionId, CompanionName,
+            CompanionSpeaker, DisplayName, SpeechText, TaskState,
+        };
+        let companion = CompanionSpeaker::new(
+            CompanionId::try_from_bytes(uuid_bytes(3)).unwrap(),
+            CompanionName::try_from_canonical("Ada".into()).unwrap(),
+        );
+        let command = CommandText::try_from_canonical("work".into()).unwrap();
+        let bodies = vec![
+            ChatBody::Accepted {
+                companion: companion.clone(),
+                command: command.clone(),
+            },
+            ChatBody::QueueFull {
+                companion: companion.clone(),
+                command: command.clone(),
+            },
+            ChatBody::NotFollowing {
+                companion: companion.clone(),
+                command: command.clone(),
+            },
+            ChatBody::Task {
+                companion: companion.clone(),
+                command: command.clone(),
+                state: TaskState::Started,
+            },
+            ChatBody::Speech {
+                companion: companion.clone(),
+                text: SpeechText::try_from_canonical("hello".into()).unwrap(),
+            },
+            ChatBody::UnknownCompanion {
+                name: companion.name().clone(),
+            },
+        ];
+        let records = rendered_records(
+            "world-ui",
+            FamilyRecords::WorldUi(
+                bodies
+                    .into_iter()
+                    .map(|body| {
+                        WorldUiRecord::try_new(
+                            header(2, 1),
+                            WorldUiView::Chat(
+                                ChatEvent::try_new(ChatEventParts {
+                                    event_id: u64::MAX,
+                                    player_id: player(9),
+                                    player_name: DisplayName::try_from_canonical("Player".into())
+                                        .unwrap(),
+                                    body,
+                                })
+                                .unwrap(),
+                            ),
+                        )
+                        .unwrap()
+                    })
+                    .collect(),
+            ),
+        );
+        for record in &records {
+            let (_, event) = record.field("view").unwrap().tag().unwrap();
+            assert_eq!(event.field("event_id"), Some(&boundary::u64_text(u64::MAX)));
+            let (tag, value) = event.field("body").unwrap().tag().unwrap();
+            if tag == "UnknownCompanion" {
+                value.exact_fields(&["name"]).unwrap();
+                assert_eq!(
+                    value.field("name"),
+                    Some(&BoundaryValue::Text("Ada".into()))
+                );
+            } else {
+                value
+                    .exact_fields(match tag {
+                        "Speech" => &["companion", "text"],
+                        "Task" => &["companion", "command", "state"],
+                        _ => &["companion", "command"],
+                    })
+                    .unwrap();
+                let speaker = value.field("companion").unwrap();
+                speaker.exact_fields(&["id", "name"]).unwrap();
+                assert_eq!(
+                    speaker.field("id"),
+                    Some(&boundary::hex_text(&companion.id().bytes()))
+                );
+                assert_eq!(
+                    speaker.field("name"),
+                    Some(&BoundaryValue::Text("Ada".into()))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn confirmed_audio_schema_nests_observation() {
+        use mornlea_client_core::contracts::ObservationKey;
+        use mornlea_client_core::presentation::{
+            AudioCueCategory, AudioCueRecord, CueId, CueProvenance, FinitePositive, FiniteUnit,
+        };
+        let observation = ObservationKey::try_new(
+            SessionEpoch::try_new(2).unwrap(),
+            ConfirmedRevision::new(1),
+            3,
+        )
+        .unwrap();
+        let records = rendered_records(
+            "audio-cues",
+            FamilyRecords::AudioCues(vec![
+                AudioCueRecord::try_new(
+                    header(2, 1),
+                    CueId::try_new(1).unwrap(),
+                    CueProvenance::Confirmed {
+                        observation,
+                        authoritative_event_id: Some(u64::MAX),
+                    },
+                    AudioCueCategory::Ui,
+                    None,
+                    FiniteUnit::try_new(1.0).unwrap(),
+                    FinitePositive::try_new(1.0).unwrap(),
+                )
+                .unwrap(),
+            ]),
+        );
+        let (_, value) = records[0].field("provenance").unwrap().tag().unwrap();
+        value
+            .exact_fields(&["observation", "authoritative_event_id"])
+            .unwrap();
+        assert_eq!(
+            value.field("authoritative_event_id"),
+            Some(&boundary::u64_text(u64::MAX))
+        );
+        let key = value.field("observation").unwrap();
+        key.exact_fields(&["epoch", "confirmed_revision", "ordinal"])
+            .unwrap();
+        assert_eq!(key.field("epoch"), Some(&boundary::u64_text(2)));
+        assert_eq!(
+            key.field("confirmed_revision"),
+            Some(&boundary::u64_text(1))
+        );
+        assert_eq!(key.field("ordinal"), Some(&BoundaryValue::Int(3)));
+    }
+
+    #[test]
+    fn diagnostics_schema_preserves_named_u64_counters() {
+        let records = rendered_records(
+            "diagnostics",
+            FamilyRecords::Diagnostics(vec![
+                DiagnosticRecord::try_new(
+                    header(2, 1),
+                    ProducerIdentity::try_new([0x11; 20], [0x22; 32]).unwrap(),
+                    6,
+                    QueueCounters::try_new(1, 2, 3, 4, 5, 6, u64::MAX).unwrap(),
+                    ErrorClassCounters::try_new(1, 2, 3, 4, 5, u64::MAX).unwrap(),
+                )
+                .unwrap(),
+            ]),
+        );
+        for (name, fields) in [
+            (
+                "queue_high_water",
+                vec![
+                    "input",
+                    "inbound_records",
+                    "inbound_bytes",
+                    "outbound_records",
+                    "outbound_bytes",
+                    "journal",
+                    "preparation",
+                ],
+            ),
+            (
+                "rejected",
+                vec![
+                    "invalid",
+                    "capacity",
+                    "stale",
+                    "disconnected",
+                    "io",
+                    "internal",
+                ],
+            ),
+        ] {
+            let counters = records[0].field(name).unwrap();
+            counters.exact_fields(&fields).unwrap();
+            for (index, field) in fields.iter().enumerate() {
+                let expected = if index == fields.len() - 1 {
+                    u64::MAX
+                } else {
+                    index as u64 + 1
+                };
+                assert_eq!(counters.field(field), Some(&boundary::u64_text(expected)));
+            }
+        }
+    }
+
     /// Reads one family's records out of a rendered frame value.
     fn family_records<'a>(frame: &'a BoundaryValue, name: &str) -> &'a [BoundaryValue] {
         let families = frame

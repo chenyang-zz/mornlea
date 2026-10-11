@@ -489,6 +489,34 @@ pub struct QueueCounters {
 }
 
 impl QueueCounters {
+    pub fn input(&self) -> u64 {
+        self.input
+    }
+
+    pub fn inbound_records(&self) -> u64 {
+        self.inbound_records
+    }
+
+    pub fn inbound_bytes(&self) -> u64 {
+        self.inbound_bytes
+    }
+
+    pub fn outbound_records(&self) -> u64 {
+        self.outbound_records
+    }
+
+    pub fn outbound_bytes(&self) -> u64 {
+        self.outbound_bytes
+    }
+
+    pub fn journal(&self) -> u64 {
+        self.journal
+    }
+
+    pub fn preparation(&self) -> u64 {
+        self.preparation
+    }
+
     pub fn try_new(
         input: u64,
         inbound_records: u64,
@@ -522,6 +550,30 @@ pub struct ErrorClassCounters {
 }
 
 impl ErrorClassCounters {
+    pub fn invalid(&self) -> u64 {
+        self.invalid
+    }
+
+    pub fn capacity(&self) -> u64 {
+        self.capacity
+    }
+
+    pub fn stale(&self) -> u64 {
+        self.stale
+    }
+
+    pub fn disconnected(&self) -> u64 {
+        self.disconnected
+    }
+
+    pub fn io(&self) -> u64 {
+        self.io
+    }
+
+    pub fn internal(&self) -> u64 {
+        self.internal
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         invalid: u64,
