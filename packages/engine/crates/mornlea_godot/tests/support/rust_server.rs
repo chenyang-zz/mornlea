@@ -1340,9 +1340,10 @@ mod client {
                 ..
             } = receipt
             {
+                // One semantic step publishes its transient records; transport waiting must not consume another frame.
+                self.step();
                 let deadline = Instant::now() + DEADLINE;
                 loop {
-                    self.step();
                     self.pump();
                     let arrived = self.server.authority.session(session).unwrap().next_arrival
                         >= before + u64::from(sequenced_count);

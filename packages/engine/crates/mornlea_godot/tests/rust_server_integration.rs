@@ -635,6 +635,88 @@ fn actual_tcp_live_reset_reconnects_and_restarts_sequence() {
     live_reset(true)
 }
 
+/// Repeated pulls retain the same publication; identity, not snapshot reference count, defines one frame.
+fn published_frames(rig: &rust_server::Rig) -> impl Iterator<Item = &PresentationFrame> {
+    let mut seen = BTreeSet::new();
+    rig.transcript
+        .iter()
+        .filter(move |frame| seen.insert((frame.session_epoch().get(), frame.frame_index())))
+        .map(Arc::as_ref)
+}
+
+fn assert_confirmations(
+    rig: &rust_server::Rig,
+    expected: &[(u64, mornlea_client_core::ClientIntentKind)],
+) {
+    use mornlea_client_core::{ClientIntentKind, InputReceiptState};
+    let mut confirmed = Vec::new();
+    for frame in published_frames(rig) {
+        let input = match records(frame, "input") {
+            FamilyRecords::Input(records) => records,
+            _ => unreachable!(),
+        };
+        for record in input {
+            let InputReceiptState::Confirmed { server_tick } = record.receipt() else {
+                continue;
+            };
+            let sequence = record
+                .local_sequence()
+                .expect("only sequenced commands can be confirmed");
+            assert_ne!(
+                record.intent_kind(),
+                ClientIntentKind::Chat,
+                "chat has no authority sequence acknowledgment"
+            );
+            assert!(
+                expected.contains(&(sequence, record.intent_kind())),
+                "confirmation preserves its admitted command kind"
+            );
+            let session = rig.server.session(rust_server::player(1)).unwrap();
+            assert!(rig.server.submissions.iter().any(|(owner,intent)|{
+                *owner==session && matches!(intent,mornlea_protocol::PlayIntent::Sequenced{sequence:source,command} if *source==sequence && matches!((command,record.intent_kind()),(Command::PlayerInput(_),ClientIntentKind::PlayerInput)|(Command::PlaceBlock(_),ClientIntentKind::PlaceBlock)))
+            }),"confirmation kind matches actual authoritative ingress");
+            assert_eq!(record.header().epoch(), frame.session_epoch());
+            assert_eq!(record.header().revision(), frame.confirmed_revision());
+            assert_eq!(record.header().source_tick(), *server_tick);
+            assert!(
+                rig.wire
+                    .iter()
+                    .cloned()
+                    .filter_map(|packet| Event::try_from(packet).ok())
+                    .enumerate()
+                    .any(|(index, event)| {
+                        if index as u64 + 1 > frame.confirmed_revision().get() {
+                            return false;
+                        }
+                        match (event, server_tick) {
+                            (Event::PlayerState(state), Some(tick)) => {
+                                state.server_tick() == *tick
+                                    && state.last_input_sequence() >= sequence
+                            }
+                            (Event::PlaceBlockSucceeded(success), None) => {
+                                record.intent_kind() == ClientIntentKind::PlaceBlock
+                                    && success.sequence() == sequence
+                            }
+                            _ => false,
+                        }
+                    }),
+                "confirmation must attest an actual consumed outbox acknowledgment"
+            );
+            confirmed.push((sequence, record.intent_kind()));
+        }
+    }
+    for entry in expected {
+        assert_eq!(
+            confirmed
+                .iter()
+                .filter(|confirmed| *confirmed == entry)
+                .count(),
+            1,
+            "one authoritative acknowledgment publishes each held sequence and kind once"
+        );
+    }
+}
+
 fn correction_and_audio(tcp: bool) {
     use mornlea_client_core::{CueProvenance, InputReceipt, InputReceiptState};
     let mut rig = if tcp {
@@ -690,6 +772,7 @@ fn correction_and_audio(tcp: bool) {
     );
     let mut sounded = None;
     for sequence in 1..=64 {
+        let before = rig.frame().frame_index();
         let receipt = rig
             .submit(vec![action(ClientIntent::PlayerInput(control(1, 0, 0.0)))])
             .unwrap();
@@ -701,6 +784,11 @@ fn correction_and_audio(tcp: bool) {
             FamilyRecords::AudioCues(records) => records,
             _ => unreachable!(),
         };
+        assert_eq!(
+            frame.frame_index(),
+            before + 1,
+            "transport ingress waiting preserves the semantic publication"
+        );
         if cues.iter().any(|cue|matches!(cue.provenance(),CueProvenance::Predicted{input_sequence} if *input_sequence==sequence)) {
             let pose=match records(&frame,"player-view"){FamilyRecords::PlayerView(records)=>records[0].predicted_pose().unwrap().position(),_=>unreachable!()};
             let foot=BlockPos::new(pose[0].floor() as i32,pose[1].floor() as i32,pose[2].floor() as i32);
@@ -753,6 +841,12 @@ fn correction_and_audio(tcp: bool) {
         "later admitted movement is replayed after correction"
     );
     assert_ne!(view.predicted_pose().unwrap(), view.confirmed_pose());
+    assert!(rig.transcript.iter().any(|frame| matches!(records(frame, "input"), FamilyRecords::Input(records) if records.iter().any(|record|
+        record.local_sequence() == Some(1)
+            && record.intent_kind() == mornlea_client_core::ClientIntentKind::PlayerInput
+            && matches!(record.receipt(), InputReceiptState::Confirmed { server_tick: Some(_) })
+            && record.header().revision() == frame.confirmed_revision()
+    ))));
     assert!(rig.transcript.iter().any(|frame|matches!(records(frame,"input"),FamilyRecords::Input(records) if records.iter().any(|record|record.local_sequence()==Some(1) && matches!(record.receipt(),InputReceiptState::Queued)))));
     assert!(
         matches!(records(&frame,"audio-cues"),FamilyRecords::AudioCues(records) if !records.iter().any(|cue|matches!(cue.provenance(),CueProvenance::Predicted{input_sequence} if *input_sequence==sequence))),
@@ -783,6 +877,10 @@ fn correction_and_audio(tcp: bool) {
     rig.tick();
     assert!(rig.transcript.iter().any(|frame|matches!(records(frame,"audio-cues"),FamilyRecords::AudioCues(records) if records.iter().any(|cue|matches!(cue.provenance(),CueProvenance::Confirmed{authoritative_event_id:Some(_),..})))));
     assert_source_values(&rig);
+    let expected: Vec<_> = (1..=sequence)
+        .map(|held| (held, mornlea_client_core::ClientIntentKind::PlayerInput))
+        .collect();
+    assert_confirmations(&rig, &expected);
 }
 #[test]
 fn actual_memory_correction_replays_pending_input_and_keeps_audio_provenance() {
@@ -958,6 +1056,10 @@ fn placement_delta(tcp: bool) -> Vec<mornlea_server::contracts::TickPublication>
     ))])
     .unwrap();
     let frame = rig.tick();
+    assert_confirmations(
+        &rig,
+        &[(1, mornlea_client_core::ClientIntentKind::PlaceBlock)],
+    );
     let change = rig
         .wire
         .iter()
