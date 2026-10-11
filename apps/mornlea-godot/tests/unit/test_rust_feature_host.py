@@ -19,6 +19,7 @@ import unittest
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HOST_MODULE_PATH = PROJECT_ROOT / "app" / "host" / "feature_host.py"
@@ -47,6 +48,83 @@ PILOT_FAMILY_JSON = json.dumps(
 
 CAST_REGISTRATIONS: dict[str, Any] = {}
 RESOURCE_REGISTRY: dict[str, Any] = {}
+
+
+class NativeArray:
+    """Use the installed Array API without accepting Python containers."""
+
+    def __init__(self) -> None:
+        self.values: list[object] = []
+
+    @staticmethod
+    def new0() -> NativeArray:
+        return NativeArray()
+
+    def size(self) -> int:
+        return len(self.values)
+
+    def get(self, index: int) -> object:
+        return self.values[index]
+
+    def append(self, value: object) -> None:
+        assert_native_argument(value)
+        self.values.append(value)
+
+
+class NativeDictionary:
+    """Use the installed Dictionary API, including native keys arrays."""
+
+    def __init__(self) -> None:
+        self.values: dict[object, object] = {}
+
+    @staticmethod
+    def new0() -> NativeDictionary:
+        return NativeDictionary()
+
+    def size(self) -> int:
+        return len(self.values)
+
+    def keys(self) -> NativeArray:
+        result = NativeArray.new0()
+        for key in self.values:
+            result.append(key)
+        return result
+
+    def get(self, key: object, default: object = None) -> object:
+        return self.values.get(key, default)
+
+    def set(self, key: object, value: object) -> bool:
+        assert_native_argument(key)
+        assert_native_argument(value)
+        self.values[key] = value
+        return True
+
+
+def assert_native_argument(value: object) -> None:
+    if isinstance(value, (dict, list)):
+        raise TypeError("Object.call cannot marshal a built-in container")
+
+
+def native_value(value: object) -> object:
+    if isinstance(value, dict):
+        dictionary = NativeDictionary.new0()
+        for key, entry in value.items():
+            dictionary.set(key, native_value(entry))
+        return dictionary
+    if isinstance(value, list):
+        array = NativeArray.new0()
+        for entry in value:
+            array.append(native_value(entry))
+        return array
+    return value
+
+
+def plain_value(value: object) -> Any:
+    if isinstance(value, NativeDictionary):
+        return {key: plain_value(entry) for key, entry in value.values.items()}
+    if isinstance(value, NativeArray):
+        return [plain_value(entry) for entry in value.values]
+    return value
 
 
 class StubNodePath:
@@ -200,8 +278,12 @@ class FakeFeature(StubNode):
         if method in self._failures:
             return self._failures[method]
         if method == "apply_typed_frame":
+            if args[0] != {"pilot-frame": True}:
+                assert_native_argument(args[0])
             self.frames.append(args[0])
             return ""
+        if method == "deactivate_feature":
+            self.frames.clear()
         if method == "drive_session":
             return 0
         if method == "pull_typed_frame":
@@ -558,29 +640,34 @@ class ScriptedBridge(StubNode):
             "terminal": None,
         }
         self.frame_value: object = frame_value()
+        self.before_close: Callable[[], None] = lambda: None
 
     def has_method(self, name: str) -> bool:
         return True
 
     def call(self, method: str, *args: object) -> object:
+        for argument in args:
+            assert_native_argument(argument)
         self.calls.append((method, args))
         self._events.append(f"bridge:{method}")
-        if method in self.refused:
-            return error_envelope()
-        if method == "open_core":
-            return ok_envelope(self.open_value)
-        if method == "connect":
-            return ok_envelope(self.connect_value)
-        if method == "reset":
-            return ok_envelope(self.reset_value)
-        if method == "family_table":
-            return ok_envelope(self.table_value)
-        if method == "step":
-            return ok_envelope(self.step_value)
-        if method == "pull_typed_frame":
-            return ok_envelope(self.frame_value)
         if method == "close":
-            return ok_envelope(None)
+            self.before_close()
+        if method in self.refused:
+            return native_value(error_envelope())
+        if method == "open_core":
+            return native_value(ok_envelope(self.open_value))
+        if method == "connect":
+            return native_value(ok_envelope(self.connect_value))
+        if method == "reset":
+            return native_value(ok_envelope(self.reset_value))
+        if method == "family_table":
+            return native_value(ok_envelope(self.table_value))
+        if method == "step":
+            return native_value(ok_envelope(self.step_value))
+        if method == "pull_typed_frame":
+            return native_value(ok_envelope(self.frame_value))
+        if method == "close":
+            return native_value(ok_envelope(None))
         if method == "feature_families_json":
             return PILOT_FAMILY_JSON
         return None
@@ -601,6 +688,8 @@ def install_py4godot_stubs() -> None:
         return cls
 
     classes.__dict__["gdclass"] = gdclass
+    core_module = types.ModuleType("py4godot.classes.core")
+    core_module.__dict__.update(Dictionary=NativeDictionary, Array=NativeArray)
     node_module = types.ModuleType("py4godot.classes.Node")
     node_module.__dict__["Node"] = StubNode
     object_module = types.ModuleType("py4godot.classes.Object")
@@ -623,6 +712,7 @@ def install_py4godot_stubs() -> None:
     for name, module in {
         "py4godot": py4godot,
         "py4godot.classes": classes,
+        "py4godot.classes.core": core_module,
         "py4godot.classes.Node": node_module,
         "py4godot.classes.Object": object_module,
         "py4godot.classes.PackedScene": scene_module,
@@ -766,7 +856,8 @@ class RustFeatureHostTest(unittest.TestCase):
         self.assertEqual(len(consumer.frames), 3)
         for tick in range(3):
             self.assertIs(provider.frames[tick], consumer.frames[tick])
-        self.assertIs(provider.frames[0], self.bridge.frame_value)
+        self.assertEqual(plain_value(provider.frames[0]), self.bridge.frame_value)
+        self.assertIsNot(provider.frames[0], self.bridge.frame_value)
 
     def test_features_never_drive_or_pull_the_session(self) -> None:
         self.register_feature("alpha")
@@ -788,10 +879,10 @@ class RustFeatureHostTest(unittest.TestCase):
             arguments_list = self.bridge.arguments_of(method)
             self.assertTrue(arguments_list, method)
             for arguments in arguments_list:
-                self.assertIs(arguments[0], self.bridge.open_value)
+                self.assertEqual(plain_value(arguments[0]), self.bridge.open_value)
         step_arguments = self.bridge.arguments_of("step")[0]
         self.assertEqual(step_arguments[1], "7")
-        self.assertEqual(step_arguments[2], {"messages": 64, "meshes": 32})
+        self.assertEqual(plain_value(step_arguments[2]), {"messages": 64, "meshes": 32})
         self.assertEqual(self.host.rust_session_epoch(), "7")
         # Features never observe the token: only the bridge path and the
         # lifecycle epoch cross the feature boundary.
@@ -994,8 +1085,9 @@ class RustFeatureHostTest(unittest.TestCase):
             family["records"] = records
         self.bridge.frame_value = candidate
         self.host._process(0.01)
-        self.assertIs(self.host._rust_frame, candidate)
-        self.assertEqual(self.active_feature("consumer").frames, [candidate])
+        self.assertEqual(self.host._rust_frame, candidate)
+        self.assertIsNot(self.host._rust_frame, candidate)
+        self.assertEqual(plain_value(self.active_feature("consumer").frames[0]), candidate)
 
     def test_every_payload_field_is_required_and_extra_data_is_refused(self) -> None:
         self.register_feature("consumer")
@@ -1527,6 +1619,71 @@ class RustFeatureHostTest(unittest.TestCase):
         self.host._process(1 / 60)
         self.assertEqual(len(self.active_feature("solo").frames), 2)
 
+    def test_retained_owned_frame_survives_producer_mutation_reset_and_close(self) -> None:
+        self.register_feature("solo")
+        catalog = self.register_catalog("owned", ("solo",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.host._process(1 / 60)
+        retained = self.active_feature("solo").frames[0]
+        owned = self.host._rust_frame
+        cast(dict[str, object], self.bridge.frame_value)["frame_index"] = "2"
+        self.host._process(1 / 60)
+        self.assertEqual(plain_value(retained)["frame_index"], "1")
+        self.assertEqual(owned["frame_index"], "1")
+        self.host.reset_features(6)
+        self.host.deactivate_features()
+        self.assertEqual(plain_value(retained)["session_epoch"], "7")
+        self.assertEqual(owned["session_epoch"], "7")
+
+    def test_activation_rollback_releases_the_bridge_after_confirmed_close(self) -> None:
+        self.register_feature("solo")
+        catalog = self.register_catalog("rollback-owner", ("solo",))
+        self.bridge.refused.add("connect")
+        self.assertFalse(self.activate_rust(catalog)["ok"])
+        self.assertIsNone(self.host._bridge)
+        self.assertIsNone(self.host._rust_token)
+        self.assertFalse(self.host._rust_retiring)
+        self.host._process(1 / 60)
+        self.assertEqual(self.bridge.count("step"), 0)
+
+    def test_malformed_or_throwing_close_retains_token_for_retry(self) -> None:
+        for result in (None, {"ok": True, "value": 1, "error": None}, {"ok": True}, "torn"):
+            with self.subTest(result=result):
+                self.setUp()
+                self.register_feature("solo")
+                catalog = self.register_catalog("malformed-close", ("solo",))
+                self.assertTrue(self.activate_rust(catalog)["ok"])
+                token = self.host._rust_token
+                original = self.bridge.call
+
+                def malformed_close(
+                    method: str,
+                    *args: object,
+                    close_result: object = result,
+                    bridge_call: Callable[..., object] = original,
+                ) -> object:
+                    return (
+                        native_value(close_result)
+                        if method == "close"
+                        else bridge_call(method, *args)
+                    )
+
+                with patch.object(self.bridge, "call", side_effect=malformed_close):
+                    self.host.deactivate_features()
+                self.assertIs(self.host._rust_token, token)
+                self.host.deactivate_features()
+                self.assertIsNone(self.host._rust_token)
+        self.setUp()
+        self.register_feature("solo")
+        catalog = self.register_catalog("throwing-close", ("solo",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        token = self.host._rust_token
+        with patch.object(self.bridge, "call", side_effect=RuntimeError("native refusal")):
+            self.host.deactivate_features()
+        self.assertIs(self.host._rust_token, token)
+        self.host.deactivate_features()
+        self.assertIsNone(self.host._rust_token)
+
     def test_refused_reset_keeps_the_epoch_and_skips_feature_resets(self) -> None:
         self.register_feature("solo")
         catalog = self.register_catalog("resetfail", ("solo",))
@@ -1543,6 +1700,14 @@ class RustFeatureHostTest(unittest.TestCase):
         self.assertTrue(self.activate_rust(catalog)["ok"])
         self.host._process(1 / 60)
         provider = self.active_feature("provider")
+        consumer = self.active_feature("consumer")
+
+        def assert_released() -> None:
+            self.assertIsNone(self.host._rust_frame)
+            self.assertEqual(provider.frames, [])
+            self.assertEqual(consumer.frames, [])
+
+        self.bridge.before_close = assert_released
         self.host.deactivate_features()
         self.assertEqual(self.bridge.count("close"), 1)
         self.assertLess(
@@ -1562,29 +1727,38 @@ class RustFeatureHostTest(unittest.TestCase):
         steps = self.bridge.count("step")
         self.host._process(1 / 60)
         self.assertEqual(self.bridge.count("step"), steps)
-        self.assertEqual(len(provider.frames), 1)
+        self.assertEqual(len(provider.frames), 0)
 
-    def test_refused_close_still_drops_the_token_and_kills_late_ticks(self) -> None:
+    def test_refused_close_retains_retiring_owner_until_explicit_retry(self) -> None:
         self.register_feature("solo")
         catalog = self.register_catalog("closerefused", ("solo",))
         self.assertTrue(self.activate_rust(catalog)["ok"])
         self.host._process(1 / 60)
         steps = self.bridge.count("step")
+        token = self.host._rust_token
         self.bridge.refused.add("close")
         self.host.deactivate_features()
-        # A refused native release still ends the host's ownership: exactly
-        # one release attempt was made and the token is dropped, so a
-        # released token can never be replayed as if it were live.
         self.assertEqual(self.bridge.count("close"), 1)
-        self.assertIsNone(self.host._rust_token)
+        self.assertIs(self.host._rust_token, token)
+        self.assertIs(self.host._bridge, self.bridge)
+        self.assertIsNone(self.host._rust_frame)
         self.assertEqual(self.host.active_count(), 0)
-        # Late ticks after the refused close are stale callbacks.
         self.host._process(1 / 60)
+        self.host.reset_features(6)
         self.assertEqual(self.bridge.count("step"), steps)
-        # The dropped token means a repeated teardown makes no second
-        # release attempt.
-        self.host.deactivate_features()
+        self.assertEqual(self.bridge.count("reset"), 0)
+        self.assertFalse(self.activate_rust(catalog)["ok"])
+        pilot = json.loads(self.host.activate_catalog(catalog, "../ClientBridge", 6))
+        self.assertFalse(pilot["ok"])
+        self.assertEqual(self.bridge.count("open_core"), 1)
         self.assertEqual(self.bridge.count("close"), 1)
+        self.bridge.refused.remove("close")
+        self.host.deactivate_features()
+        self.assertEqual(self.bridge.count("close"), 2)
+        self.assertIsNone(self.host._rust_token)
+        self.assertIsNone(self.host._bridge)
+        self.host.deactivate_features()
+        self.assertEqual(self.bridge.count("close"), 2)
 
     # ------------------------------------------------------------------
     # The pilot path stays an explicit, unaliased complete path
@@ -1623,6 +1797,112 @@ class RustFeatureHostTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("missing the rust facade method", " ".join(result["errors"]))
         self.assertEqual(self.host.active_count(), 0)
+
+
+class EchoBridge(StubNode):
+    """Echo native values to exercise the actual host conversion seam."""
+
+    def __init__(self) -> None:
+        super().__init__("Echo")
+        self.calls = 0
+        self.result: object = None
+
+    def call(self, method: str, *args: object) -> object:
+        for value in args:
+            assert_native_argument(value)
+        self.calls += 1
+        return args[0] if args else self.result
+
+
+class NativeConversionTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bridge = EchoBridge()
+
+    def test_owned_copy_preserves_exact_scalar_and_union_values(self) -> None:
+        original = {
+            "null": None,
+            "bool": True,
+            "int": -17,
+            "float": -0.0,
+            "text": "é🌿",
+            "u64": "18446744073709551615",
+            "hex": "00000000000040008000000000000001",
+            "union": {"tag": "Known", "value": 0},
+            "array": [None, False, 1.5],
+        }
+        copied = HOST._call_rust(self.bridge, "echo", original)
+        self.assertEqual(copied, original)
+        self.assertIsNot(copied, original)
+        self.assertIsNot(copied["array"], original["array"])
+        for key in ("null", "bool", "int", "float", "text"):
+            self.assertIs(type(copied[key]), type(original[key]))
+        self.assertEqual(str(copied["float"]), "-0.0")
+
+    def test_depth_and_cycles_are_refused_without_dispatch(self) -> None:
+        admitted: object = None
+        for _ in range(64):
+            admitted = [admitted]
+        self.assertEqual(HOST._call_rust(self.bridge, "echo", admitted), admitted)
+        calls = self.bridge.calls
+        cycle: list[object] = []
+        cycle.append(cycle)
+        dictionary: dict[str, object] = {}
+        dictionary["cycle"] = dictionary
+        for value in ([admitted], cycle, dictionary, {1: "not-a-string"}, (1,), object()):
+            with self.subTest(kind=type(value).__name__):
+                self.assertIsNone(HOST._call_rust(self.bridge, "echo", value))
+                self.assertEqual(self.bridge.calls, calls)
+        native_cycle = NativeArray.new0()
+        native_cycle.append(native_cycle)
+        self.bridge.result = native_cycle
+        self.assertIsNone(HOST._call_rust(self.bridge, "result"))
+
+    def test_oversized_native_containers_are_refused_before_reading(self) -> None:
+        class OversizedArray(NativeArray):
+            def size(self) -> int:
+                return (8 << 20) + 1
+
+            def get(self, index: int) -> object:
+                raise AssertionError("oversized array was traversed")
+
+        class OversizedDictionary(NativeDictionary):
+            def size(self) -> int:
+                return (8 << 20) + 1
+
+            def keys(self) -> NativeArray:
+                raise AssertionError("oversized dictionary was traversed")
+
+        for value in (OversizedArray(), OversizedDictionary()):
+            self.bridge.result = value
+            self.assertIsNone(HOST._call_rust(self.bridge, "result"))
+
+    def test_node_and_utf8_totals_are_bounded_across_arguments_and_keys(self) -> None:
+        with patch.object(HOST, "_RUST_VALUE_NODES", 8):
+            self.assertEqual(HOST._call_rust(self.bridge, "echo", [None] * 7), [None] * 7)
+            self.assertIsNone(HOST._call_rust(self.bridge, "echo", [None] * 8))
+            self.assertIsNone(HOST._call_rust(self.bridge, "echo", [None] * 4, [None] * 4))
+        with patch.object(HOST, "_RUST_VALUE_TEXT_BYTES", 8):
+            self.assertEqual(HOST._call_rust(self.bridge, "echo", "é" * 4), "é" * 4)
+            self.assertIsNone(HOST._call_rust(self.bridge, "echo", "é" * 5))
+            self.assertIsNone(HOST._call_rust(self.bridge, "echo", {"abcde": "éé"}))
+            self.assertIsNone(HOST._call_rust(self.bridge, "echo", ["abcde", "fghi"]))
+            self.bridge.result = native_value(["abcde", "fghi"])
+            self.assertIsNone(HOST._call_rust(self.bridge, "result"))
+
+    def test_malformed_native_sizes_keys_and_scalars_are_refused(self) -> None:
+        class BadSizeArray(NativeArray):
+            def size(self) -> int:
+                return -1
+
+        class TornDictionary(NativeDictionary):
+            def size(self) -> int:
+                return 1
+
+        native_key = NativeDictionary.new0()
+        native_key.set(1, "invalid")
+        for value in (BadSizeArray(), TornDictionary(), native_key, float("nan")):
+            self.bridge.result = value
+            self.assertIsNone(HOST._call_rust(self.bridge, "result"))
 
 
 class PilotOnlyBridge(ScriptedBridge):

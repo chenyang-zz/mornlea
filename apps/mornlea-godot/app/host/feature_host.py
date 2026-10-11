@@ -11,10 +11,11 @@ import json
 import math
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any, Protocol, cast, runtime_checkable
 
 from py4godot.classes import gdclass
+from py4godot.classes.core import Array, Dictionary
 from py4godot.classes.Node import Node
 from py4godot.classes.Object import Object
 from py4godot.classes.PackedScene import PackedScene
@@ -806,6 +807,97 @@ def _rust_record_size(record: dict[str, Any], numeric_id: int) -> int:
     return header + 164
 
 
+_RUST_VALUE_DEPTH = 64
+_RUST_VALUE_NODES = 8 << 20
+_RUST_VALUE_TEXT_BYTES = 64 << 20
+
+
+def _rust_values(values: tuple[object, ...], native: bool) -> tuple[object, ...]:
+    """Copy bounded native/plain trees without coercing the closed facade schema."""
+    nodes = 0
+    text_bytes = 0
+    ancestors: set[int] = set()
+
+    def copy_value(value: object, depth: int) -> object:
+        nonlocal nodes, text_bytes
+        nodes += 1
+        if depth > _RUST_VALUE_DEPTH or nodes > _RUST_VALUE_NODES:
+            raise ValueError("rust value traversal exceeds its bound")
+        if value is None or type(value) in (bool, int):
+            return value
+        if type(value) is float:
+            if not math.isfinite(value):
+                raise ValueError("rust value contains a nonfinite float")
+            return value
+        if type(value) is str:
+            text = value
+            # Bounded UTF-8 chunks avoid allocating an oversized encoded string.
+            if len(text) > _RUST_VALUE_TEXT_BYTES - text_bytes:
+                raise ValueError("rust value text exceeds its bound")
+            for offset in range(0, len(text), 65536):
+                text_bytes += len(text[offset : offset + 65536].encode("utf-8"))
+                if text_bytes > _RUST_VALUE_TEXT_BYTES:
+                    raise ValueError("rust value text exceeds its bound")
+            return value
+        if not isinstance(value, (dict, Dictionary, list, Array)):
+            raise ValueError("rust value contains an unsupported type")
+        dictionary = isinstance(value, (dict, Dictionary))
+        identity = id(value)
+        if identity in ancestors:
+            raise ValueError("rust value contains a cycle")
+        size = len(value) if isinstance(value, (dict, list)) else value.size()
+        width = 2 if dictionary else 1
+        if type(size) is not int or size < 0 or size * width > _RUST_VALUE_NODES - nodes:
+            raise ValueError("rust value container exceeds its bound")
+        ancestors.add(identity)
+        try:
+            if isinstance(value, (dict, Dictionary)):
+                entries: Iterator[object]
+                if isinstance(value, Dictionary):
+                    keys = value.keys()
+                    if keys.size() != size:
+                        raise ValueError("rust value dictionary has inconsistent keys")
+                    entries = (keys.get(index) for index in range(size))
+                else:
+                    entries = iter(value)
+                result: Any = Dictionary.new0() if native else {}
+                for key in entries:
+                    if type(key) is not str:
+                        raise ValueError("rust value dictionary requires string keys")
+                    copied_key = copy_value(key, depth + 1)
+                    entry = value.get(key)
+                    copied = copy_value(entry, depth + 1)
+                    if native:
+                        if not result.set(copied_key, copied):
+                            raise ValueError("rust value dictionary rejected an entry")
+                    else:
+                        result[copied_key] = copied
+                return result
+            if not isinstance(value, (list, Array)):
+                raise ValueError("rust value requires an array")
+            result = Array.new0() if native else []
+            for index in range(size):
+                entry = value[index] if isinstance(value, list) else value.get(index)
+                copied = copy_value(entry, depth + 1)
+                result.append(copied)
+            return result
+        finally:
+            ancestors.remove(identity)
+
+    return tuple(copy_value(value, 0) for value in values)
+
+
+def _call_rust(target: Node, method: str, *arguments: object) -> object:
+    """Only native containers cross Object.call; validators see owned plain copies."""
+    try:
+        native_arguments = _rust_values(arguments, True)
+        result = target.call(method, *native_arguments)
+        return _rust_values((result,), False)[0]
+    except TypeError, ValueError, OverflowError, RuntimeError:
+        # Representation refusal cannot replace a visible frame or retire its owner.
+        return None
+
+
 def _rust_error_class(result: object) -> str:
     """The closed error class name of one facade envelope, for diagnostics."""
     if isinstance(result, dict):
@@ -833,12 +925,7 @@ def _rust_envelope_value(result: object) -> object:
 
 
 def _rust_token_from(result: object) -> dict[str, object] | None:
-    """One validated core token, passed to the bridge verbatim thereafter.
-
-    The token is an opaque owned value: the host checks only that it is the
-    facade-issued `{slot, generation}` record and then returns the same
-    object on every call, never rebuilding or mutating it.
-    """
+    """Keep the issued opaque token fields unchanged across native container copies."""
     token = _rust_envelope_value(result)
     if not isinstance(token, dict) or not _exact_fields(token, ("slot", "generation")):
         return None
@@ -882,6 +969,7 @@ class feature_host(Node):
     _last_apply_ns: int
     _last_allocation_delta: int
     _rust_mode: bool
+    _rust_retiring: bool
     _rust_token: dict[str, object] | None
     _rust_epoch: str | None
     _rust_frame: dict[str, object] | None
@@ -900,6 +988,7 @@ class feature_host(Node):
         # Rust-mode session ownership starts absent: the pilot path stays the
         # default and only an explicit rust activation arms this state.
         self._rust_mode = False
+        self._rust_retiring = False
         self._rust_token = None
         self._rust_epoch = None
         self._rust_frame = None
@@ -1433,7 +1522,11 @@ def _absolute_path_text(node: Node) -> str:
 def _activate(host: feature_host, catalog_path: str, bridge: Node, epoch: int) -> PlanResult:
     # Each activation begins from a clean host so a failed prior catalog cannot leak
     # instances or bridge state into the next session epoch.
+    if host._rust_retiring:
+        return PlanResult(False, ("the rust core is awaiting an explicit close retry",), (), ())
     _deactivate(host)
+    if host._rust_retiring:
+        return PlanResult(False, ("the rust core refused to close before activation",), (), ())
     host._trace = []
     host._bridge = bridge
     host._bridge_path = _absolute_path_text(bridge)
@@ -1528,31 +1621,36 @@ def _deactivate(host: feature_host) -> None:
         _release_instance(instance)
     host._instances.clear()
     host._active_order.clear()
-    # The host-owned rust core releases only after every feature consumer is
-    # down, and `_close_rust` still sees the bound bridge for its one call.
+    # Consumers release references first; a refused native close retains its owner.
+    host._rust_frame = None
     _close_rust(host)
-    host._bridge = None
-    host._bridge_path = ""
 
 
-def _close_rust(host: feature_host) -> None:
-    """Release the host-owned rust core token exactly once per issue.
-
-    The facade's close is idempotent for a repeated token, but the host drops
-    its copy on the first teardown so no later tick or teardown can replay a
-    stale token. The state clears even when the envelope refuses: a token the
-    host decided to release must never be reused as if it were still live.
-    """
+def _close_rust(host: feature_host) -> bool:
+    """Retain a retiring token until the facade confirms its idempotent release."""
     token = getattr(host, "_rust_token", None)
     bridge = host._bridge
-    if token is not None and bridge is not None:
-        bridge.call("close", token)
+    host._rust_frame = None
+    if token is not None:
+        host._rust_retiring = True
+        result = _call_rust(bridge, "close", token) if bridge is not None else None
+        if (
+            not isinstance(result, dict)
+            or not _exact_fields(result, ("ok", "value", "error"))
+            or result["ok"] is not True
+            or result["value"] is not None
+            or result["error"] is not None
+        ):
+            return False
     host._rust_token = None
     host._rust_epoch = None
-    host._rust_frame = None
     host._rust_families = None
     host._rust_required = ()
     host._rust_mode = False
+    host._rust_retiring = False
+    host._bridge = None
+    host._bridge_path = ""
+    return True
 
 
 def _rust_declared_descriptors() -> dict[str, tuple[int, int, int, int, int]] | None:
@@ -1580,7 +1678,7 @@ def _rust_declared_descriptors() -> dict[str, tuple[int, int, int, int, int]] | 
 
 def _rust_family_table(bridge: Node, token: dict[str, object]) -> tuple[FamilyTable | None, str]:
     """Match the entire producer table to the frozen catalog before activation."""
-    result = bridge.call("family_table", token)
+    result = _call_rust(bridge, "family_table", token)
     value = _rust_envelope_value(result)
     if value is None:
         return None, f"the rust core did not answer its family table ({_rust_error_class(result)})"
@@ -1796,24 +1894,28 @@ def _rust_dispatch(host: feature_host) -> int:
     bridge = host._bridge
     token = host._rust_token
     epoch = host._rust_epoch
-    if bridge is None or token is None or epoch is None:
+    if host._rust_retiring or bridge is None or token is None or epoch is None:
         return 0
     work = {"messages": RUST_STEP_MESSAGE_BUDGET, "meshes": RUST_STEP_MESH_BUDGET}
-    step_result = bridge.call("step", token, epoch, work)
+    step_result = _call_rust(bridge, "step", token, epoch, work)
     if _rust_step_from(step_result, epoch) is None:
         return 0
-    pull_result = bridge.call("pull_typed_frame", token, epoch)
+    pull_result = _call_rust(bridge, "pull_typed_frame", token, epoch)
     frame = _rust_frame_from(
         pull_result, epoch, host._rust_families, host._rust_required, host._rust_frame
     )
     if frame is None:
+        return 0
+    try:
+        native_frame = _rust_values((frame,), True)[0]
+    except TypeError, ValueError, OverflowError, RuntimeError:
         return 0
     host._rust_frame = frame
     apply_started = time.perf_counter_ns()
     for feature_id in host._active_order:
         instance = host._instances.get(feature_id)
         if instance is not None and instance.has_method("apply_typed_frame"):
-            instance.call("apply_typed_frame", frame)
+            instance.call("apply_typed_frame", native_frame)
     return time.perf_counter_ns() - apply_started
 
 
@@ -1830,10 +1932,14 @@ def _activate_rust(
 
     The host owns the token and epoch for the whole session: it opens the
     core, begins the connection, negotiates the producer family table, and
-    only then instantiates features against that table. Any refusal releases
-    the opened token, so no half-open session survives a failed activation.
+    only then instantiates features against that table. Activation refusal
+    closes the opened token or retains shutdown ownership for an explicit retry.
     """
+    if host._rust_retiring:
+        return PlanResult(False, ("the rust core is awaiting an explicit close retry",), (), ())
     _deactivate(host)
+    if host._rust_retiring:
+        return PlanResult(False, ("the rust core refused to close before activation",), (), ())
     host._trace = []
     host._bridge = bridge
     host._bridge_path = _absolute_path_text(bridge)
@@ -1842,7 +1948,7 @@ def _activate_rust(
         return PlanResult(
             False, (f"the bridge is missing the rust facade method {missing}",), (), ()
         )
-    open_result = bridge.call("open_core", config)
+    open_result = _call_rust(bridge, "open_core", config)
     token = _rust_token_from(open_result)
     if token is None:
         return PlanResult(
@@ -1853,7 +1959,7 @@ def _activate_rust(
         )
     host._rust_token = token
     host._rust_mode = True
-    connect_result = bridge.call("connect", token, endpoint, identity)
+    connect_result = _call_rust(bridge, "connect", token, endpoint, identity)
     epoch_text = _rust_epoch_text_from(connect_result)
     if epoch_text is None:
         return _rust_abandon(
@@ -1893,9 +1999,9 @@ def _reset_rust(host: feature_host, epoch: int) -> None:
     bridge = host._bridge
     token = host._rust_token
     session_epoch = host._rust_epoch
-    if bridge is None or token is None or session_epoch is None:
+    if host._rust_retiring or bridge is None or token is None or session_epoch is None:
         return
-    result = bridge.call("reset", token, session_epoch)
+    result = _call_rust(bridge, "reset", token, session_epoch)
     fresh = _rust_epoch_text_from(result)
     if fresh is None:
         # A refused reset keeps the live epoch and leaves feature state
