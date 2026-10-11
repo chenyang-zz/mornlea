@@ -130,3 +130,72 @@ fn success_overwrites_every_destination_cell() {
         "unwritten canary cell left in destination"
     );
 }
+
+#[test]
+fn seeded_params_matches_all_independent_go_headers() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../../testdata/runtime-migration/server/worldgen-seeding.json"
+    ))
+    .unwrap();
+    let rows = fixture["headers"].as_array().unwrap();
+    assert_eq!(rows.len(), 24);
+    for row in rows {
+        let expected = row["header_hex"].as_str().unwrap();
+        let bytes: Vec<u8> = (0..expected.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&expected[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(bytes.len(), 566);
+        let ids: Vec<u16> = bytes[24..54]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let materials = Materials {
+            air: ids[0],
+            stone: ids[1],
+            dirt: ids[2],
+            grass: ids[3],
+            bedrock: ids[4],
+            snow: ids[5],
+            sand: ids[6],
+            clay: ids[7],
+            gravel: ids[8],
+            iron_ore: ids[9],
+            coal_ore: ids[10],
+            oak_log: ids[11],
+            leaves: ids[12],
+            water: ids[13],
+            short_grass: ids[14],
+        };
+        let seed = i64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        let params = mornlea_engine::native::worldgen::seeded_params(seed, materials).unwrap();
+        let mut actual = b"MGW1".to_vec();
+        actual.extend(3u32.to_le_bytes());
+        actual.extend(params.seed().to_le_bytes());
+        actual.extend((-64i32).to_le_bytes());
+        actual.extend(320i32.to_le_bytes());
+        for id in params.materials().as_slice() {
+            actual.extend(id.to_le_bytes());
+        }
+        actual.extend(params.perm());
+        assert_eq!(actual, bytes, "seed {seed}, row {row}");
+        assert_eq!(&params.perm()[..256], &params.perm()[256..]);
+        let mut counts = [0u16; 256];
+        for byte in &params.perm()[..256] {
+            counts[usize::from(*byte)] += 1;
+        }
+        assert_eq!(counts, [1; 256]);
+    }
+}
+
+#[test]
+fn seeded_params_preserves_material_rejection_and_water_alias() {
+    let mut materials = dummy_materials();
+    materials.water = materials.air;
+    assert!(mornlea_engine::native::worldgen::seeded_params(42, materials).is_ok());
+    materials.dirt = materials.stone;
+    assert_eq!(
+        mornlea_engine::native::worldgen::seeded_params(42, materials),
+        Err(KernelError::InvalidInput)
+    );
+}

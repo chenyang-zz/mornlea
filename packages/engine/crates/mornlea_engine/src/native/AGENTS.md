@@ -5,6 +5,7 @@ This directory contains the safe, typed Rust native traits and contracts (`contr
 
 ## Submodules
 - `contracts/`: Shared request/result contracts, public operation traits, and error enums.
+- `go_random.rs`: Private licensed Go-compatible seed permutation; `worldgen::seeded_params` validates caller-owned materials without owning block IDs or dimensions.
 - Provider modules (e.g., `collision.rs`, `physics.rs`, `worldgen.rs`): Implementations of the respective engine operation traits.
 
 ## Contracts Boundary

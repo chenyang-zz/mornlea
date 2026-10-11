@@ -1,5 +1,11 @@
 use crate::native::contracts::KernelError;
-use crate::native::contracts::world::{WorldgenOp, WorldgenParams, WorldgenScratch};
+use crate::native::contracts::world::{Materials, WorldgenOp, WorldgenParams, WorldgenScratch};
+
+/// Builds owned numerical inputs with the Go-compatible seeded permutation.
+/// Material validation remains at the typed boundary; dimension policy belongs to callers.
+pub fn seeded_params(seed: i64, materials: Materials) -> Result<WorldgenParams, KernelError> {
+    WorldgenParams::try_new(seed, materials, super::go_random::permutation(seed))
+}
 
 pub struct NativeWorldgen;
 

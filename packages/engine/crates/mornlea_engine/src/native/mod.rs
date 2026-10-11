@@ -2,6 +2,8 @@
 
 pub mod contracts;
 
+mod go_random;
+
 #[allow(dead_code)]
 pub mod collision;
 pub mod fluid_eval;
