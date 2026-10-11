@@ -580,7 +580,13 @@ fn build_candidate(
         project_companion(&view)?,
         project_drop(&view)?,
     ];
-    let actor_records = assemble_actors(view.frame_epoch(), revision, actor_parts, view.limits())?;
+    let actor_records = assemble_actors(
+        view.frame_epoch(),
+        revision,
+        actor_parts,
+        view.limits(),
+        view.observations(),
+    )?;
     if !actor_records.is_empty() {
         families.push(FamilyFrame::try_new(
             FamilyKey::try_new(FAMILY_ACTORS)?,

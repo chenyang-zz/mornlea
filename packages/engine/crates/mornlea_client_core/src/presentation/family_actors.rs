@@ -14,8 +14,8 @@
 //! samples, its removal and a later reuse spawn are distinct source
 //! observations of one actor, not duplicates. Validation therefore walks the
 //! merged retained order per identity instead of rejecting repeated keys: an
-//! upsert publishes or republishes a live identity, a removal is legal only
-//! while its identity is live, and an orphan removal, a duplicated removal
+//! upsert publishes or republishes a live identity, a removal is legal when its identity is live in the batch or its accepted
+//! source proves a previously published identity, and an orphan or duplicated removal
 //! or two envelopes claiming the same retained order slot for one identity
 //! are malformed and reject the whole family.
 //!
@@ -35,8 +35,10 @@ use crate::contracts::{
     ClientError, ClientLimits, ConfirmedRevision, FAMILY_ACTORS, FamilyKey, FamilyOperation,
     SessionEpoch,
 };
+use crate::presentation::frame::{ActorDimension, ActorId};
 use crate::presentation::frame::{ActorRecord, FamilyFrame, FamilyRecords, PresentationFrame};
-use crate::presentation::{OrderedRecord, ProjectionOrder, StableRecordKey};
+use crate::presentation::{AcceptedObservation, OrderedRecord, ProjectionOrder, StableRecordKey};
+use mornlea_domain::Event;
 
 /// Assembles the six checked per-kind provider vectors into the complete
 /// actor family record vector, in retained source order.
@@ -53,6 +55,7 @@ pub fn assemble_actors(
     revision: ConfirmedRevision,
     parts: [Vec<OrderedRecord<ActorRecord>>; 6],
     limits: &ClientLimits,
+    observations: &[AcceptedObservation],
 ) -> Result<Vec<ActorRecord>, ClientError> {
     let mut merged: Vec<OrderedRecord<ActorRecord>> = parts.into_iter().flatten().collect();
 
@@ -111,21 +114,28 @@ pub fn assemble_actors(
 
     // Remove-before-reuse against the retained order: repeated upserts of a
     // live identity are legal state samples and stack replacements, a
-    // removal retires exactly a live identity, and a reuse upsert is legal
-    // only because its removal came first.
+    // removal retires a live or source-resolved identity. A prior frame may
+    // already have consumed the spawn; duplicate removals still reject.
     let mut live: Vec<StableRecordKey> = Vec::new();
+    let mut removed: Vec<StableRecordKey> = Vec::new();
     for entry in &merged {
         match entry.record().header().operation() {
             FamilyOperation::Upsert => {
+                removed.retain(|key| key != entry.stable_key());
                 if !live.contains(entry.stable_key()) {
                     live.push(*entry.stable_key());
                 }
             }
             FamilyOperation::Remove => {
-                let Some(index) = live.iter().position(|key| key == entry.stable_key()) else {
+                if removed.contains(entry.stable_key()) {
                     return Err(ClientError::InvalidInput);
-                };
-                live.remove(index);
+                }
+                if let Some(index) = live.iter().position(|key| key == entry.stable_key()) {
+                    live.remove(index);
+                } else if !accepted_removal(entry, observations)? {
+                    return Err(ClientError::InvalidInput);
+                }
+                removed.push(*entry.stable_key());
             }
         }
     }
@@ -155,4 +165,53 @@ pub fn assemble_actors(
         return Err(ClientError::Capacity);
     }
     Ok(records)
+}
+
+/// A first removal can refer to a spawn consumed by an earlier frame.
+/// Its retained observation, rather than this delta list, proves the live identity.
+fn accepted_removal(
+    entry: &OrderedRecord<ActorRecord>,
+    observations: &[AcceptedObservation],
+) -> Result<bool, ClientError> {
+    let ProjectionOrder::Confirmed {
+        observation,
+        record_ordinal,
+    } = entry.order()
+    else {
+        return Ok(false);
+    };
+    let Some(source) = observations
+        .iter()
+        .find(|source| source.key() == observation)
+    else {
+        return Ok(false);
+    };
+    let index = *record_ordinal as usize;
+    let event = Event::try_from(source.packet().clone()).map_err(|_| ClientError::InvalidInput)?;
+    let id = match event {
+        Event::RemotePlayerDespawn(event) if index == 0 => {
+            Some(ActorId::RemotePlayer(event.player_id()))
+        }
+        Event::CompanionDespawn(event) if index == 0 => Some(ActorId::Companion(event.id())),
+        Event::HostileDespawn(event) => event.ids().get(index).copied().map(ActorId::Hostile),
+        Event::PassiveDespawn(event) => event
+            .despawns()
+            .get(index)
+            .map(|record| ActorId::Passive(record.id())),
+        Event::ProjectileDespawn(event) => event.ids().get(index).copied().map(ActorId::Projectile),
+        Event::ItemDropRemoves(event) => event.ids().get(index).copied().map(ActorId::Drop),
+        _ => None,
+    };
+    let Some(id) = id.filter(|id| id == entry.record().id()) else {
+        return Ok(false);
+    };
+    if let ActorId::Drop(id) = id {
+        return Ok(*entry.record().dimension() == ActorDimension::DropRaw(id.dimension()));
+    }
+    let mut matches = source.resolved().iter().filter(|resolved| {
+        resolved.id() == &id
+            && resolved.kind() == entry.record().kind()
+            && *entry.record().dimension() == ActorDimension::Known(resolved.dimension())
+    });
+    Ok(matches.next().is_some() && matches.next().is_none())
 }

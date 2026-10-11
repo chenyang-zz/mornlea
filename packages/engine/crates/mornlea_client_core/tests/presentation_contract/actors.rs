@@ -351,7 +351,13 @@ fn assemble(
 ) -> Result<Vec<ActorRecord>, ClientError> {
     let view = fixture.view_of(provider);
     let parts = provider_parts(&view);
-    assemble_actors(view.frame_epoch(), view.frame_revision(), parts, limits)
+    assemble_actors(
+        view.frame_epoch(),
+        view.frame_revision(),
+        parts,
+        limits,
+        view.observations(),
+    )
 }
 
 /// Tightened frozen-ceiling limits: every bound at its frozen value except
@@ -488,6 +494,7 @@ fn assemble_hand_built(
         ConfirmedRevision::new(FRAME_REVISION),
         parts,
         &ClientLimits::try_new().expect("limits"),
+        &[],
     )
 }
 
@@ -541,6 +548,7 @@ fn all_six_kinds_assemble_in_observation_order_any_parts_order() {
         view.frame_revision(),
         parts.clone(),
         &limits,
+        view.observations(),
     )
     .expect("all six kinds assemble");
 
@@ -587,8 +595,14 @@ fn all_six_kinds_assemble_in_observation_order_any_parts_order() {
         parts[3].clone(),
         parts[4].clone(),
     ];
-    let rotated = assemble_actors(view.frame_epoch(), view.frame_revision(), rotated, &limits)
-        .expect("rotated parts assemble");
+    let rotated = assemble_actors(
+        view.frame_epoch(),
+        view.frame_revision(),
+        rotated,
+        &limits,
+        view.observations(),
+    )
+    .expect("rotated parts assemble");
     assert_eq!(assembled, rotated, "parts order never reorders the family");
 }
 
@@ -913,6 +927,7 @@ fn foreign_epoch_or_revision_rejects_without_partial_output() {
         view.frame_revision(),
         parts.clone(),
         &limits,
+        view.observations(),
     )
     .expect_err("a part from another epoch is stale");
     assert_eq!(stale, ClientError::StaleEpoch);
@@ -922,6 +937,7 @@ fn foreign_epoch_or_revision_rejects_without_partial_output() {
         ConfirmedRevision::new(view.frame_revision().get() + 1),
         parts,
         &limits,
+        view.observations(),
     )
     .expect_err("a part rebased onto another revision is incoherent");
     assert_eq!(incoherent, ClientError::InvalidInput);
@@ -1000,4 +1016,36 @@ fn frame_byte_cap_plus_one_retains_old_output() {
     assert_eq!(error, ClientError::Capacity);
     assert_eq!(fitted.len(), 3, "the retained previous output is unchanged");
     assert_eq!(fitted[2].id(), &ActorId::Drop(third));
+}
+
+#[test]
+fn consumed_spawn_allows_later_resolved_and_drop_removals() {
+    use mornlea_client_core::presentation::PublicationConsumption;
+    let mut mirror = admitted_mirror();
+    let fixture = view_fixture();
+    let player = player_id(12);
+    let drop = drop_id(7);
+    commit(
+        &mut mirror,
+        remote_spawn_event(player, "peer", 1, [0.0, 64.0, 0.0]),
+    );
+    commit(&mut mirror, drop_upserts_event(1, drop));
+    assert_eq!(
+        assemble(&fixture, &mirror, &fixture.limits)
+            .expect("spawn frame")
+            .len(),
+        2
+    );
+    mirror
+        .consume(&PublicationConsumption::try_new(2, 0, 0, 0).expect("consumption"))
+        .expect("consume spawn");
+    commit(&mut mirror, remote_despawn_event(player));
+    commit(&mut mirror, drop_removes_event(2, drop));
+    let records = assemble(&fixture, &mirror, &fixture.limits).expect("later removals");
+    assert_eq!(records.len(), 2);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.header().operation() == FamilyOperation::Remove)
+    );
 }
