@@ -104,6 +104,7 @@ pub struct PlayerProjectionState {
     mining: MiningState,
     confirmed_target: Option<RayTarget>,
     predicted_target: Option<RayTarget>,
+    predicted_snow_cues: Vec<u64>,
 }
 
 impl PlayerProjectionState {
@@ -133,6 +134,7 @@ impl PlayerProjectionState {
             mining: MiningState::Idle,
             confirmed_target: None,
             predicted_target: None,
+            predicted_snow_cues: Vec::new(),
         })
     }
 
@@ -159,6 +161,29 @@ impl PlayerProjectionState {
     pub fn with_predicted_target(mut self, target: Option<RayTarget>) -> Self {
         self.predicted_target = target;
         self
+    }
+
+    /// Attaches only cue facts attributed to still-pending prediction sources.
+    pub fn with_predicted_snow_cues(mut self, cues: Vec<u64>) -> Result<Self, ClientError> {
+        if cues.len() > ClientLimits::MAX_PREDICTION_JOURNAL {
+            return Err(ClientError::Capacity);
+        }
+        for (index, sequence) in cues.iter().enumerate() {
+            if *sequence == 0
+                || cues[..index].contains(sequence)
+                || !self.journal.iter().any(|entry| {
+                    entry.epoch == self.epoch && entry.sequence == *sequence && !entry.acknowledged
+                })
+            {
+                return Err(ClientError::InvalidInput);
+            }
+        }
+        self.predicted_snow_cues = cues;
+        Ok(self)
+    }
+
+    pub fn predicted_snow_cues(&self) -> &[u64] {
+        &self.predicted_snow_cues
     }
 
     pub fn epoch(&self) -> SessionEpoch {
@@ -431,6 +456,34 @@ impl RayTarget {
     }
 }
 
+/// Matches the presentation stride rule without contributing gameplay state.
+#[derive(Clone, Copy, Default)]
+struct SnowStride {
+    position: Option<[f32; 3]>,
+    travel: f32,
+}
+
+impl SnowStride {
+    fn observe(&mut self, state: PhysicsState, foot_block: Option<u16>) -> bool {
+        let previous = self.position.replace(state.position);
+        let Some(previous) = previous else {
+            return false;
+        };
+        let dx = state.position[0] - previous[0];
+        let dz = state.position[2] - previous[2];
+        let horizontal = f64::from(dx * dx + dz * dz).sqrt() as f32;
+        if horizontal > 8.0 || !state.on_ground {
+            return false;
+        }
+        self.travel += horizontal;
+        if self.travel < 0.8 {
+            return false;
+        }
+        self.travel = 0.0;
+        foot_block.is_some_and(|block| (85..=88).contains(&block))
+    }
+}
+
 /// The prediction journal and authoritative correction replay owner.
 ///
 /// The journal is this owner's replay state by epoch and sequence — the
@@ -458,6 +511,9 @@ pub struct PredictionReplay {
     frame_steps: u16,
     confirmed_target: Option<RayTarget>,
     predicted_target: Option<RayTarget>,
+    snow_stride: SnowStride,
+    snow_cues: Vec<u64>,
+    snow_sampled: bool,
 }
 
 impl PredictionReplay {
@@ -478,6 +534,9 @@ impl PredictionReplay {
             frame_steps: 0,
             confirmed_target: None,
             predicted_target: None,
+            snow_stride: SnowStride::default(),
+            snow_cues: Vec::new(),
+            snow_sampled: false,
         })
     }
 
@@ -555,7 +614,7 @@ impl PredictionReplay {
             .map(|state| state.on_ground)
             .unwrap_or(base.state.on_ground);
         let movement = MovementIntent::try_new(last_control, on_ground)?;
-        Ok(PlayerProjectionState::try_new(
+        PlayerProjectionState::try_new(
             self.epoch,
             base.revision,
             confirmed_pose,
@@ -573,7 +632,8 @@ impl PredictionReplay {
         // re-derivation happened inside the step or replay that borrowed the
         // grid; reporting here is pure, so a repeated projection is equal.
         .with_confirmed_target(self.confirmed_target)
-        .with_predicted_target(self.predicted_target))
+        .with_predicted_target(self.predicted_target)
+        .with_predicted_snow_cues(self.snow_cues.clone())
     }
 
     /// Opens the next rendered frame's step budget. The per-frame ceiling
@@ -581,6 +641,43 @@ impl PredictionReplay {
     /// the ceiling-plus-one step rejects typed until this runs.
     pub fn begin_frame(&mut self) {
         self.frame_steps = 0;
+        self.snow_sampled = false;
+    }
+
+    /// Samples snow feedback after the final physics step of a rendered frame.
+    pub fn observe_snow_step(&mut self, foot_block: Option<u16>) -> Result<(), ClientError> {
+        if self.snow_sampled {
+            return Ok(());
+        }
+        let Some(base) = self.confirmed.as_ref().filter(|base| base.ready) else {
+            self.snow_sampled = true;
+            return Ok(());
+        };
+        let mut stride = self.snow_stride;
+        let sounds = stride.observe(self.predicted.unwrap_or(base.state), foot_block);
+        let sequence = self.pending.last().map(|step| step.sequence);
+        let cue = sequence.filter(|sequence| sounds && !self.snow_cues.contains(sequence));
+        if cue.is_some()
+            && (self.snow_cues.len() >= self.limits.queued_input_events()
+                || self.snow_cues.len() >= self.limits.prediction_journal())
+        {
+            return Err(ClientError::Capacity);
+        }
+        self.snow_stride = stride;
+        self.snow_sampled = true;
+        if let Some(sequence) = cue {
+            self.snow_cues.push(sequence);
+        }
+        Ok(())
+    }
+
+    /// Consumes only an admitted FIFO prefix after successful publication.
+    pub fn consume_snow_cues(&mut self, count: usize) -> Result<(), ClientError> {
+        if count > self.snow_cues.len() {
+            return Err(ClientError::InvalidInput);
+        }
+        self.snow_cues.drain(..count);
+        Ok(())
     }
 
     /// Journals and steps one predicted fixed step under the sequence the
@@ -725,6 +822,7 @@ impl PredictionReplay {
             self.pending.clear();
             self.predicted = None;
             self.correction = None;
+            self.clear_snow();
             self.issued_high_water = last;
             self.last_acknowledged = self.last_acknowledged.max(last);
             self.refresh_ray_targets(environment)?;
@@ -748,12 +846,14 @@ impl PredictionReplay {
             // authority's own acknowledgement floor, exactly as the accepted
             // predictor's begin does.
             self.pending.clear();
+            self.clear_snow();
             self.issued_high_water = last;
             self.last_acknowledged = last;
         } else {
             self.pending.retain(|step| step.sequence > last);
             self.last_acknowledged = self.last_acknowledged.max(last);
         }
+        self.retain_snow_sources();
         self.confirmed = Some(base);
         self.replay(environment)?;
         self.correction = Some(Correction::try_new(
@@ -792,6 +892,7 @@ impl PredictionReplay {
             return Ok(None);
         }
         self.pending.retain(|step| step.sequence != sequence);
+        self.retain_snow_sources();
         self.replay(environment)?;
         self.correction = Some(Correction::try_new(
             sequence,
@@ -816,7 +917,19 @@ impl PredictionReplay {
         self.frame_steps = 0;
         self.confirmed_target = None;
         self.predicted_target = None;
+        self.clear_snow();
         Ok(())
+    }
+
+    fn clear_snow(&mut self) {
+        self.snow_stride = SnowStride::default();
+        self.snow_cues.clear();
+        self.snow_sampled = false;
+    }
+
+    fn retain_snow_sources(&mut self) {
+        self.snow_cues
+            .retain(|sequence| self.pending.iter().any(|step| step.sequence == *sequence));
     }
 
     /// Rebuilds the attributed predicted state: the frozen kernel folds the

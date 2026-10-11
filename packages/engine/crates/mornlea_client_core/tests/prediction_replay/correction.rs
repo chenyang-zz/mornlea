@@ -1766,3 +1766,448 @@ fn failed_rejection_replay_preserves_pending_input() {
         2
     );
 }
+
+#[test]
+fn snow_source_grounded_stride_retains_one_fact_per_frame() {
+    use mornlea_client_core::prediction::{PredictionReplay, StepEnvironment};
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let environment = StepEnvironment::new(walking_grid(&cells), false);
+    let mut replay = PredictionReplay::try_new(epoch(1), limits()).unwrap();
+    replay
+        .apply_confirmed(
+            &key(epoch(1), 1),
+            &authority(1, 0, [0.0; 3], [0.0; 3], true, look(0.0, 0.0)),
+            &environment,
+        )
+        .unwrap();
+    replay.observe_snow_step(Some(85)).unwrap();
+    assert!(
+        replay
+            .projection()
+            .unwrap()
+            .predicted_snow_cues()
+            .is_empty()
+    );
+    for sequence in 1..=5 {
+        replay.begin_frame();
+        let step = replay
+            .predict_step(sequence, control(0, 1, 0.0), &environment)
+            .unwrap();
+        assert!(step.on_ground(), "native walking fixture stays grounded");
+        replay.observe_snow_step(Some(85)).unwrap();
+    }
+    assert_eq!(replay.projection().unwrap().predicted_snow_cues(), &[5]);
+    replay.observe_snow_step(Some(88)).unwrap();
+    assert_eq!(replay.projection().unwrap().predicted_snow_cues(), &[5]);
+    assert_eq!(replay.consume_snow_cues(2), Err(ClientError::InvalidInput));
+    assert_eq!(replay.projection().unwrap().predicted_snow_cues(), &[5]);
+    replay.consume_snow_cues(1).unwrap();
+    assert!(
+        replay
+            .projection()
+            .unwrap()
+            .predicted_snow_cues()
+            .is_empty()
+    );
+}
+
+fn snow_replay(
+    selected: ClientLimits,
+    environment: &mornlea_client_core::prediction::StepEnvironment<'_>,
+) -> mornlea_client_core::prediction::PredictionReplay {
+    let mut replay =
+        mornlea_client_core::prediction::PredictionReplay::try_new(epoch(1), selected).unwrap();
+    replay
+        .apply_confirmed(
+            &key(epoch(1), 1),
+            &authority(1, 0, [0.0; 3], [0.0; 3], true, look(0.0, 0.0)),
+            environment,
+        )
+        .unwrap();
+    replay.observe_snow_step(Some(85)).unwrap();
+    replay
+}
+
+#[test]
+fn snow_source_stationary_dry_and_unloaded_samples_stay_silent() {
+    use mornlea_client_core::prediction::StepEnvironment;
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let environment = StepEnvironment::new(walking_grid(&cells), false);
+    for foot in [Some(1), None] {
+        let mut replay = snow_replay(limits(), &environment);
+        replay.begin_frame();
+        replay
+            .predict_step(1, control(0, 0, 0.0), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(85)).unwrap();
+        assert!(
+            replay
+                .projection()
+                .unwrap()
+                .predicted_snow_cues()
+                .is_empty()
+        );
+        for sequence in 2..=6 {
+            replay.begin_frame();
+            replay
+                .predict_step(sequence, control(0, 1, 0.0), &environment)
+                .unwrap();
+            replay.observe_snow_step(foot).unwrap();
+        }
+        assert!(
+            replay
+                .projection()
+                .unwrap()
+                .predicted_snow_cues()
+                .is_empty()
+        );
+        replay.begin_frame();
+        replay
+            .predict_step(7, control(0, 1, 0.0), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(88)).unwrap();
+        assert!(
+            replay
+                .projection()
+                .unwrap()
+                .predicted_snow_cues()
+                .is_empty(),
+            "dry and unloaded stride thresholds consume travel before material checking"
+        );
+    }
+}
+
+#[test]
+fn snow_source_airborne_displacement_stays_silent() {
+    use mornlea_client_core::prediction::StepEnvironment;
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let environment = StepEnvironment::new(walking_grid(&cells), false);
+    let mut replay = snow_replay(limits(), &environment);
+    for sequence in 1..=7 {
+        replay.begin_frame();
+        let step = replay
+            .predict_step(sequence, held_control(0, 1, sequence == 1), &environment)
+            .unwrap();
+        assert!(!step.on_ground());
+        replay.observe_snow_step(Some(85)).unwrap();
+    }
+    assert!(
+        replay
+            .projection()
+            .unwrap()
+            .predicted_snow_cues()
+            .is_empty()
+    );
+}
+
+#[test]
+fn snow_source_teleport_reanchors_without_discarding_grounded_travel() {
+    use mornlea_client_core::prediction::StepEnvironment;
+    let origin = [-4, -1, -8];
+    let dims = [17, 4, 17];
+    let cells = fixture_cells(origin, dims, false, &[]);
+    let environment =
+        StepEnvironment::new(CollisionGrid::try_new(origin, dims, &cells).unwrap(), false);
+    let mut replay = snow_replay(limits(), &environment);
+    for sequence in 1..=2 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, control(0, 1, 0.0), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(85)).unwrap();
+    }
+    replay
+        .apply_confirmed(
+            &key(epoch(1), 2),
+            &authority(2, 0, [9.0, 0.0, 0.0], [0.0; 3], true, look(0.0, 0.0)),
+            &environment,
+        )
+        .unwrap();
+    replay.begin_frame();
+    replay.observe_snow_step(Some(85)).unwrap();
+    assert!(
+        replay
+            .projection()
+            .unwrap()
+            .predicted_snow_cues()
+            .is_empty()
+    );
+    for sequence in 3..=5 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, control(0, 1, 0.0), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(85)).unwrap();
+    }
+    assert_eq!(replay.projection().unwrap().predicted_snow_cues(), &[5]);
+}
+
+#[test]
+fn snow_source_replay_prunes_facts_and_authority_reset_clears_stride() {
+    use mornlea_client_core::prediction::StepEnvironment;
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let environment = StepEnvironment::new(walking_grid(&cells), false);
+    let mut replay = snow_replay(limits(), &environment);
+    for sequence in 1..=5 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, control(0, 1, 0.0), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(85)).unwrap();
+    }
+    replay
+        .apply_confirmed(
+            &key(epoch(1), 2),
+            &authority(2, 2, [0.0; 3], [0.0; 3], true, look(0.0, 0.0)),
+            &environment,
+        )
+        .unwrap();
+    assert_eq!(
+        replay.projection().unwrap().predicted_snow_cues(),
+        &[5],
+        "replay never creates a cue"
+    );
+    replay.reject(5, &environment).unwrap();
+    assert!(
+        replay
+            .projection()
+            .unwrap()
+            .predicted_snow_cues()
+            .is_empty()
+    );
+    let state = authority(3, 2, [0.0; 3], [0.0; 3], true, look(0.0, 0.0));
+    let reset = PlayerState::new(PlayerStateParts {
+        server_tick: 3,
+        last_input_sequence: 2,
+        dimension: state.dimension(),
+        motion: state.motion(),
+        look: state.look(),
+        ready: true,
+        reset: true,
+        mining: state.mining(),
+        survival: state.survival(),
+        world: state.world(),
+    });
+    replay
+        .apply_confirmed(&key(epoch(1), 3), &reset, &environment)
+        .unwrap();
+    replay.begin_frame();
+    replay
+        .predict_step(3, control(0, 1, 0.0), &environment)
+        .unwrap();
+    replay.observe_snow_step(Some(85)).unwrap();
+    assert!(
+        replay
+            .projection()
+            .unwrap()
+            .predicted_snow_cues()
+            .is_empty(),
+        "reset's first sample is silent"
+    );
+    replay.reset_epoch(epoch(2)).unwrap();
+    assert_eq!(replay.consume_snow_cues(1), Err(ClientError::InvalidInput));
+    replay.observe_snow_step(Some(85)).unwrap();
+    assert!(
+        replay.projection().is_err(),
+        "absent authority cannot fabricate facts"
+    );
+}
+
+#[test]
+fn snow_source_capacity_refusal_preserves_stride_and_sample_for_retry() {
+    use mornlea_client_core::prediction::StepEnvironment;
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let environment = StepEnvironment::new(walking_grid(&cells), false);
+    let selected = ClientLimits::try_new_with(
+        1,
+        8192,
+        8 << 20,
+        4104,
+        8 << 20,
+        16,
+        4096,
+        4096,
+        4096,
+        64 << 20,
+        4096,
+        8 << 20,
+    )
+    .unwrap();
+    let mut replay = snow_replay(selected, &environment);
+    for sequence in 1..=8 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, control(0, 1, 0.0), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(85)).unwrap();
+    }
+    assert_eq!(replay.projection().unwrap().predicted_snow_cues(), &[5]);
+    replay.begin_frame();
+    replay
+        .predict_step(9, control(0, 1, 0.0), &environment)
+        .unwrap();
+    assert_eq!(
+        replay.observe_snow_step(Some(85)),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(replay.projection().unwrap().predicted_snow_cues(), &[5]);
+    replay.consume_snow_cues(1).unwrap();
+    replay.observe_snow_step(Some(85)).unwrap();
+    assert_eq!(replay.projection().unwrap().predicted_snow_cues(), &[9]);
+}
+
+#[test]
+fn snow_source_projection_facts_require_unique_pending_attribution() {
+    use mornlea_client_core::prediction::StepEnvironment;
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let environment = StepEnvironment::new(walking_grid(&cells), false);
+    let mut replay = snow_replay(limits(), &environment);
+    replay
+        .predict_step(1, control(0, 1, 0.0), &environment)
+        .unwrap();
+    let state = replay.projection().unwrap();
+    for cues in [vec![0], vec![2], vec![1, 1]] {
+        assert!(matches!(
+            state.clone().with_predicted_snow_cues(cues),
+            Err(ClientError::InvalidInput)
+        ));
+    }
+    assert_eq!(
+        state
+            .clone()
+            .with_predicted_snow_cues(vec![1])
+            .unwrap()
+            .predicted_snow_cues(),
+        &[1]
+    );
+    assert!(matches!(
+        state.with_predicted_snow_cues(vec![1; ClientLimits::MAX_PREDICTION_JOURNAL + 1]),
+        Err(ClientError::Capacity)
+    ));
+}
+
+#[test]
+fn snow_source_acknowledgement_and_not_ready_authority_clear_live_facts() {
+    use mornlea_client_core::prediction::StepEnvironment;
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let environment = StepEnvironment::new(walking_grid(&cells), false);
+    let mut replay = snow_replay(limits(), &environment);
+    for sequence in 1..=5 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, control(0, 1, 0.0), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(86)).unwrap();
+    }
+    replay
+        .apply_confirmed(
+            &key(epoch(1), 2),
+            &authority(2, 5, [0.0; 3], [0.0; 3], true, look(0.0, 0.0)),
+            &environment,
+        )
+        .unwrap();
+    assert!(
+        replay
+            .projection()
+            .unwrap()
+            .predicted_snow_cues()
+            .is_empty()
+    );
+    let state = authority(3, 5, [0.0; 3], [0.0; 3], true, look(0.0, 0.0));
+    let not_ready = PlayerState::new(PlayerStateParts {
+        server_tick: 3,
+        last_input_sequence: 5,
+        dimension: state.dimension(),
+        motion: state.motion(),
+        look: state.look(),
+        ready: false,
+        reset: false,
+        mining: state.mining(),
+        survival: state.survival(),
+        world: state.world(),
+    });
+    replay
+        .apply_confirmed(&key(epoch(1), 3), &not_ready, &environment)
+        .unwrap();
+    replay.observe_snow_step(Some(87)).unwrap();
+    assert!(
+        replay
+            .projection()
+            .unwrap()
+            .predicted_snow_cues()
+            .is_empty()
+    );
+    replay
+        .apply_confirmed(
+            &key(epoch(1), 4),
+            &authority(4, 5, [0.0; 3], [0.0; 3], true, look(0.0, 0.0)),
+            &environment,
+        )
+        .unwrap();
+    replay
+        .predict_step(6, control(0, 1, 0.0), &environment)
+        .unwrap();
+    replay.observe_snow_step(Some(87)).unwrap();
+    assert!(
+        replay
+            .projection()
+            .unwrap()
+            .predicted_snow_cues()
+            .is_empty()
+    );
+}
+
+#[test]
+fn snow_source_airborne_samples_preserve_grounded_travel_and_update_baseline() {
+    use mornlea_client_core::prediction::StepEnvironment;
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let environment = StepEnvironment::new(walking_grid(&cells), false);
+    let mut replay = snow_replay(limits(), &environment);
+    for sequence in 1..=2 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, control(0, 1, 0.0), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(85)).unwrap();
+    }
+    let mut landed = None;
+    for sequence in 3..=20 {
+        replay.begin_frame();
+        let step = replay
+            .predict_step(sequence, held_control(0, 1, sequence == 3), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(85)).unwrap();
+        assert!(
+            replay
+                .projection()
+                .unwrap()
+                .predicted_snow_cues()
+                .is_empty()
+        );
+        if step.on_ground() {
+            landed = Some(sequence);
+            break;
+        }
+    }
+    let landed = landed.expect("native jump lands within the fixture");
+    for sequence in landed + 1..=landed + 2 {
+        replay.begin_frame();
+        replay
+            .predict_step(sequence, control(0, 1, 0.0), &environment)
+            .unwrap();
+        replay.observe_snow_step(Some(85)).unwrap();
+        if sequence == landed + 1 {
+            assert!(
+                replay
+                    .projection()
+                    .unwrap()
+                    .predicted_snow_cues()
+                    .is_empty()
+            );
+        }
+    }
+    assert_eq!(
+        replay.projection().unwrap().predicted_snow_cues(),
+        &[landed + 2]
+    );
+}
