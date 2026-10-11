@@ -14,6 +14,7 @@ pub mod io;
 pub mod lifecycle;
 pub mod login;
 pub mod mirror;
+mod world;
 
 use std::collections::BTreeMap;
 
@@ -26,11 +27,17 @@ use crate::contracts::{ClientError, ConfirmedRevision, SessionEpoch, SessionPhas
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorldConfirmed {
     chunks: BTreeMap<(u8, i64, i64), u64>,
+    content: BTreeMap<(u8, i64, i64), std::sync::Arc<world::ChunkContent>>,
+    content_bytes: usize,
 }
 
 impl WorldConfirmed {
     pub fn try_new(chunks: BTreeMap<(u8, i64, i64), u64>) -> Result<Self, ClientError> {
-        Ok(Self { chunks })
+        Ok(Self {
+            chunks,
+            content: BTreeMap::new(),
+            content_bytes: 0,
+        })
     }
 
     pub fn chunk_count(&self) -> usize {
@@ -52,8 +59,11 @@ impl WorldConfirmed {
 
     /// The checked constructor surface for one confirmed chunk removal.
     pub fn remove_chunk(&mut self, dimension: Dimension, chunk: ChunkPos) {
-        self.chunks
-            .remove(&(dimension.get(), i64::from(chunk.x()), i64::from(chunk.z())));
+        let key = (dimension.get(), i64::from(chunk.x()), i64::from(chunk.z()));
+        self.chunks.remove(&key);
+        if let Some(content) = self.content.remove(&key) {
+            self.content_bytes -= content.bytes;
+        }
     }
 }
 

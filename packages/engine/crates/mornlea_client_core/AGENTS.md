@@ -23,7 +23,9 @@ wire decoder.
   jobs/results/tickets and their byte charge; `src/preparation/lod.rs` is the
   far-LOD provider's file.
 - `src/session/` — the confirmed mirror contract (`mod.rs`) and the login,
-  mirror, I/O and lifecycle provider files.
+  mirror, I/O and lifecycle provider files. `world.rs` holds compact immutable
+  block columns inside that same confirmed owner for prediction, preparation
+  and prompt readers; it is not an independently mutable world cache.
 - `src/presentation/` — supporting values and projection context (`mod.rs`),
   the records and frame validator (`frame.rs`), the checked drop-geometry
   helper (`geometry.rs`), and the per-family provider files.
@@ -34,6 +36,9 @@ wire decoder.
 
 - The confirmed mirror, the visible `PresentationFrame` and the preparation
   arena each have exactly one owning provider; projections are read-only.
+- Confirmed block content uses the selected inbound record/byte bounds and
+  retires with chunk forget or epoch replacement. Column replacements stage
+  exact source changes before publishing their content revision.
 - Whole-batch input admission, whole-observation mirror updates and
   whole-frame publication are atomic; validation precedes allocation and
   sequence advancement, and a rejection never publishes a partial frame.

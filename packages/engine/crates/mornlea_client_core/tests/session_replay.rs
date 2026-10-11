@@ -14,3 +14,6 @@ mod io;
 mod login;
 #[path = "session_replay/mirror.rs"]
 mod mirror;
+
+#[path = "session_replay/world.rs"]
+mod world;
