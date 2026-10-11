@@ -1285,7 +1285,12 @@ mod client {
         pub fn login(&mut self) {
             let deadline = Instant::now() + DEADLINE;
             loop {
-                self.step();
+                let report = self.step();
+                assert!(
+                    report.terminal().is_none(),
+                    "actual login terminated: {:?}",
+                    report.terminal()
+                );
                 let frame = self.frame();
                 let admitted=frame.families().iter().any(|family|matches!(family.records(),mornlea_client_core::FamilyRecords::Session(records) if records.iter().any(|record|*record.phase()==mornlea_client_core::SessionPhase::Admitted)));
                 if admitted && self.server.driver.pending() == 0 && self.server.loads.next >= 2 {
@@ -1441,7 +1446,10 @@ mod client {
             }
         }
         pub fn reset(&mut self) {
-            self.close_server();
+            // Memory needs its declared peer pairing; TCP retirement must come from client EOF.
+            if matches!(self.link, Link::Memory { .. }) {
+                self.close_server();
+            }
             self.epoch = self.arena.reset(self.token, self.epoch).unwrap();
             self.replace_connection();
         }

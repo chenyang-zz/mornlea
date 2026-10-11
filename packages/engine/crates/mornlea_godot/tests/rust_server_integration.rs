@@ -577,62 +577,76 @@ fn assert_source_values(rig: &rust_server::Rig) {
     }
 }
 
-fn live_reset(tcp: bool) {
+fn live_reset(tcp: bool, cycles: usize) {
     let mut rig = if tcp {
         rust_server::Rig::tcp()
     } else {
         rust_server::Rig::memory()
     };
     rig.login();
-    let old = rig.epoch;
-    let memory = rig.memory_connector().map(|connector| {
-        let ticket = connector.ticket();
-        (connector, ticket)
-    });
-    rig.reset();
-    assert!(
-        rig.capture.borrow().retired_resources > 0,
-        "actual terrain references retire with the epoch"
-    );
-    assert_ne!(old, rig.epoch);
-    assert_eq!(
-        rig.arena.pull_frame(rig.token, old),
-        Err(ClientError::StaleEpoch)
-    );
-    if let Some((connector, ticket)) = memory {
+    for _ in 0..cycles {
+        rig.transcript.clear();
+        let old = rig.epoch;
+        let old_session = rig.server.session(rust_server::player(1)).unwrap();
+        let retired_resources = rig.capture.borrow().retired_resources;
+        let memory = rig.memory_connector().map(|connector| {
+            let ticket = connector.ticket();
+            (connector, ticket)
+        });
+        rig.reset();
+        assert!(
+            rig.capture.borrow().retired_resources > retired_resources,
+            "actual terrain references retire with the epoch"
+        );
+        assert_ne!(old, rig.epoch);
         assert_eq!(
-            connector.feed(ticket, &[0xff]),
+            rig.arena.pull_frame(rig.token, old),
             Err(ClientError::StaleEpoch)
         );
-    }
-    rig.login();
-    rig.prove_retired_memory_close();
-    assert!(
-        rig.step().terminal().is_none(),
-        "retired generation terminal cannot close the fresh session"
-    );
-    let receipt = rig
-        .submit(vec![action(ClientIntent::SelectHotbar(
-            HotbarSlot::new(1).unwrap(),
-        ))])
-        .unwrap();
-    assert!(matches!(
-        receipt,
-        mornlea_client_core::InputReceipt::Queued {
-            first_sequence: Some(1),
-            ..
+        if let Some((connector, ticket)) = memory {
+            assert_eq!(
+                connector.feed(ticket, &[0xff]),
+                Err(ClientError::StaleEpoch)
+            );
         }
-    ));
-    rig.tick();
+        rig.login();
+        assert_ne!(
+            rig.server.session(rust_server::player(1)).unwrap(),
+            old_session,
+            "the same player receives a fresh authoritative session after client retirement"
+        );
+        rig.prove_retired_memory_close();
+        assert!(
+            rig.step().terminal().is_none(),
+            "retired generation terminal cannot close the fresh session"
+        );
+        let receipt = rig
+            .submit(vec![action(ClientIntent::SelectHotbar(
+                HotbarSlot::new(1).unwrap(),
+            ))])
+            .unwrap();
+        assert!(matches!(
+            receipt,
+            mornlea_client_core::InputReceipt::Queued {
+                first_sequence: Some(1),
+                ..
+            }
+        ));
+        rig.tick();
+    }
     rig.arena.close(rig.token).unwrap();
 }
 #[test]
 fn actual_memory_live_reset_reconnects_and_restarts_sequence() {
-    live_reset(false)
+    live_reset(false, 1)
 }
 #[test]
 fn actual_tcp_live_reset_reconnects_and_restarts_sequence() {
-    live_reset(true)
+    live_reset(true, 1)
+}
+#[test]
+fn actual_tcp_repeated_same_player_reset_requires_client_socket_retirement() {
+    live_reset(true, 32)
 }
 
 /// Repeated pulls retain the same publication; identity, not snapshot reference count, defines one frame.

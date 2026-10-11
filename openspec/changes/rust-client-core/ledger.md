@@ -711,3 +711,35 @@ the controller owns disjoint actual-provider reset tests and final integration.
 The accepted public boundary remains unchanged; the worker implements the exact
 Arc/control-lock/shutdown/error policy, not a new reconnect policy. Round-five
 scoped reviews remain historical and cannot accept the next candidate.
+
+The TCP retirement repair landed as `05e1d1025` (worker source
+`12a59096293b33dd11216ec80e119968a6657700`) after controller diff review.
+Deterministic real-socket tests reproduced three EOF failures with only the
+socket-sharing prerequisites present, then all six socket-owner cases passed
+with shutdown-before-retirement. The integrated pinned core suite passed424
+cases with no failures or ignored tests; qualification-feature core/Godot
+all-target Clippy and workspace formatting also passed. Logs are
+`/private/tmp/mornlea-tcp-retirement-behavioral-red.log`,
+`/private/tmp/mornlea-f3-tcp-core-integrated.log` and
+`/private/tmp/mornlea-f3-tcp-feature-clippy.log`.
+
+The controller removed TCP server-peer close from the reset fixture, retained
+Memory's declared peer pairing, added32 same-player reset/admission cycles and
+checked fresh authoritative session ownership, stale epochs, resource retirement
+and sequence restart. Real login terminals now fail immediately rather than
+being hidden by the fixture wait loop. An initial aggregate transcript overflow
+is preserved in `/private/tmp/mornlea-f3-tcp-provider-red.log`; per-cycle retained
+transcripts keep the existing bound. The corrected baseline32 itself passed,
+consistent with the intermittent native race; it is not claimed as behavioral
+red. Integrated actual-provider40 passed in
+`/private/tmp/mornlea-f3-tcp-provider-integrated.log` after the TCP repair.
+No production F2, contract, protocol, save, ABI or default change occurred.
+Existing crate guides apply; no directory ownership boundary was added.
+
+Round six is allocated to the next clean committed candidate containing this
+integration. The original seven review criteria and five runtime/closeout nodes
+are unchanged and remain open until final evidence. Source-bound independent
+review, native100, the derivative matrix and all complete stage gates are next.
+Round-five Rust and dev gates passed4688 cases each but are historical; they do
+not accept changed TCP source. Architecture skill: no change; existing lifecycle
+and single-owner rules already govern physical retirement and publication.
