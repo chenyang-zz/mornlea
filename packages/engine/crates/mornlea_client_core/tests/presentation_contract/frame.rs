@@ -803,9 +803,25 @@ fn terrain_fixture(
         selection: LodSelection::try_new(epoch(value), Dimension::OVERWORLD, config, 7)
             .expect("checked selection"),
         params: fixture_params(),
-        registry: MeshRegistry::try_new(&entries, &[0], 0, 5)
-            .expect("checked registry")
-            .into(),
+        registry: mornlea_engine::native::mesh::try_new_registry(
+            &[
+                MeshRegistryEntry {
+                    id: 0,
+                    opaque: false,
+                    ..entries[0]
+                },
+                entries[0],
+                MeshRegistryEntry {
+                    id: 5,
+                    ..entries[0]
+                },
+            ],
+            &[0; 3],
+            0,
+            5,
+        )
+        .expect("checked registry")
+        .into(),
         job_id: 0,
     }
 }

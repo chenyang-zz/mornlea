@@ -110,6 +110,16 @@ fn charge() -> u32 {
 fn rich_registry() -> Arc<MeshRegistry> {
     let entries = [
         MeshRegistryEntry {
+            id: 0,
+            opaque: false,
+            emission: 0,
+            material: [0; 6],
+            fluid_height: 0,
+            light_attenuation: 0,
+            block_top_raw: 0,
+            model: MeshModel::Default,
+        },
+        MeshRegistryEntry {
             id: 1,
             opaque: true,
             emission: 0,
@@ -125,7 +135,7 @@ fn rich_registry() -> Arc<MeshRegistry> {
             emission: 0,
             material: [2; 6],
             fluid_height: 8,
-            light_attenuation: 2,
+            light_attenuation: 1,
             block_top_raw: 0,
             model: MeshModel::Default,
         },
@@ -150,7 +160,18 @@ fn rich_registry() -> Arc<MeshRegistry> {
             model: MeshModel::Default,
         },
     ];
-    MeshRegistry::try_new(&entries, &[0, 0, 0, 0], 0, 5)
+    let mut entries = entries.to_vec();
+    entries.push(MeshRegistryEntry {
+        id: 5,
+        opaque: true,
+        emission: 0,
+        material: [0; 6],
+        fluid_height: 0,
+        light_attenuation: 0,
+        block_top_raw: 0,
+        model: MeshModel::Default,
+    });
+    mornlea_engine::native::mesh::try_new_registry(&entries, &[0; 6], 0, 5)
         .expect("checked registry")
         .into()
 }
@@ -791,29 +812,16 @@ fn full_range_negative_tile() {
     assert_eq!(*near.visibility(), TerrainVisibility::Near);
     assert_resources_resolve(&h, &records);
 
-    // The extreme corner: the band spans the closed distance-one ring
-    // around the floored corner tile — the tile plane keeps a wide margin
-    // inside i32, so nothing wraps — and the near-disk corner stays empty.
+    // Selection accepts the full chunk plane, but native sampling rejects
+    // tiles outside its representable block plane without publishing geometry.
     let corner = ChunkPos::new(i32::MIN, i32::MIN);
-    let corner_tile = lod::tile_from_chunk(corner);
     let mut h = new_harness(2, 7, far_config(true, 2, 2, 24 * charge()), frozen_limits());
     publish(&mut h, corner, full_budget()).expect("corner selection frame");
     let records = publish(&mut h, corner, full_budget()).expect("corner frame publishes");
-    assert_eq!(records.len(), 8, "the full corner band");
-    for record in &records {
-        let TerrainKey::LodTile(tile) = *record.key() else {
-            panic!("far records only");
-        };
-        assert!(
-            (tile.x() - corner_tile.x()).abs() <= 1 && (tile.z() - corner_tile.z()).abs() <= 1,
-            "the closed distance-one band around the corner tile"
-        );
-        assert!(
-            tile.x() < 0 && tile.z() < 0,
-            "no coordinate wraps toward the positive half-plane"
-        );
-        assert_ne!(tile, corner_tile, "the near-disk corner never publishes");
-    }
+    assert!(
+        records.is_empty(),
+        "unrepresentable native tiles cannot publish"
+    );
 }
 
 /// `terrain::record_and_byte_caps_preserve_prior_output`: the family admits

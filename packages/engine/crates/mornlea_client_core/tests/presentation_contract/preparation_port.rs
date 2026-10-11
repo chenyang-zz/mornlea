@@ -50,7 +50,7 @@ pub fn fixture_params() -> Arc<WorldgenParams> {
 
 /// One checked near-mesh registry fixture.
 pub fn fixture_registry() -> Arc<MeshRegistry> {
-    let entries = [MeshRegistryEntry {
+    let barrier = MeshRegistryEntry {
         id: 1,
         opaque: true,
         emission: 0,
@@ -59,8 +59,14 @@ pub fn fixture_registry() -> Arc<MeshRegistry> {
         light_attenuation: 0,
         block_top_raw: 0,
         model: MeshModel::Default,
-    }];
-    MeshRegistry::try_new(&entries, &[0], 0, 1)
+    };
+    let air = MeshRegistryEntry {
+        id: 0,
+        opaque: false,
+        ..barrier
+    };
+    let entries = [air, barrier];
+    mornlea_engine::native::mesh::try_new_registry(&entries, &[0, 0], 0, 1)
         .expect("checked registry")
         .into()
 }
@@ -245,7 +251,7 @@ fn rejected_job_retained() {
     let registry = fixture_registry();
     let payload_bytes = near_payload(&registry, MIN_Y).owned_bytes();
     let registry_charge =
-        std::mem::size_of::<MeshRegistryEntry>() + registry.visibility().len() * 8 + 4;
+        std::mem::size_of_val(registry.entries()) + registry.visibility().len() * 8 + 4;
     let job_charge = payload_bytes + registry_charge;
 
     // Count plus one: two results are retained, the third is returned whole

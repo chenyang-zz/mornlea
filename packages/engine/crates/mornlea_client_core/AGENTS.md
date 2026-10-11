@@ -21,7 +21,8 @@ wire decoder.
 - `src/prediction.rs` — the declared player prediction state owner.
 - `src/preparation.rs` — terrain keys, LOD configuration, owned preparation
   jobs/results/tickets and their byte charge; `src/preparation/lod.rs` is the
-  far-LOD provider's file.
+  far-LOD provider's file. `src/preparation/native.rs` uses the existing mesh
+  and LOD kernels with reusable scratch charged to the selected byte limit.
 - `src/session/` — the confirmed mirror contract (`mod.rs`) and the login,
   mirror, I/O and lifecycle provider files. `world.rs` holds compact immutable
   block columns inside that same confirmed owner for prediction, preparation

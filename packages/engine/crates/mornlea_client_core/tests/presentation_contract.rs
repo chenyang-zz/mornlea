@@ -45,6 +45,8 @@ mod lod;
 mod player_view;
 #[path = "presentation_contract/preparation.rs"]
 mod preparation;
+#[path = "presentation_contract/preparation_native.rs"]
+mod preparation_native;
 #[path = "presentation_contract/preparation_port.rs"]
 mod preparation_port;
 #[path = "presentation_contract/terrain.rs"]

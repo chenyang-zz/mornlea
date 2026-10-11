@@ -20,7 +20,8 @@ use mornlea_client_core::preparation::{
     TerrainKey, TilePos,
 };
 use mornlea_domain::{ChunkPos, Dimension};
-use mornlea_engine::native::contracts::mesh::{MeshQuad, MeshRegistryEntry};
+use mornlea_engine::native::contracts::mesh::MeshQuad;
+use mornlea_engine::native::contracts::world::LodQuad;
 use mornlea_engine::native::contracts::world::WorldgenParams;
 use mornlea_protocol::MIN_Y;
 
@@ -247,14 +248,17 @@ fn far_job(key: &PreparedResourceKey, params: &Arc<WorldgenParams>) -> Preparati
 
 /// The registry allocation charge the owner counts once per shared Arc.
 fn registry_charge(registry: &Arc<mornlea_engine::native::contracts::mesh::MeshRegistry>) -> usize {
-    std::mem::size_of::<MeshRegistryEntry>() + registry.visibility().len() * 8 + 4
+    std::mem::size_of_val(registry.entries()) + registry.visibility().len() * 8 + 4
 }
 
 /// The geometry allocation charge of one owned result: the discriminant byte
 /// plus the packed quad table the retained Arc owns.
 fn geometry_charge(result: &PreparationResult) -> usize {
     let geometry = result.outcome().as_ref().expect("geometry result");
-    1 + std::mem::size_of::<MeshQuad>() * geometry.quads()
+    1 + match geometry.as_ref() {
+        PreparedGeometry::Near(quads) => std::mem::size_of::<MeshQuad>() * quads.capacity(),
+        PreparedGeometry::Far(quads) => std::mem::size_of::<LodQuad>() * quads.capacity(),
+    }
 }
 
 // --- table rows ---
@@ -612,14 +616,16 @@ fn stale_epoch_releases_once() {
     let delivered = subject.poll().expect("delivered and retained");
     let stale_result_charge = geometry_charge(&delivered);
     let pending_charge = near_payload(&registry, MIN_Y).owned_bytes() + registry_charge(&registry);
+    let before = subject.charge();
+    assert!(before > pending_charge + 2 * stale_result_charge);
 
     let report = subject.invalidate(epoch(3));
     assert_eq!(report.jobs_cancelled(), 1, "the queued job cancels");
     assert_eq!(report.results_stale(), 1, "the completed result releases");
     assert_eq!(
         report.bytes_released(),
-        (pending_charge + 2 * stale_result_charge) as u64,
-        "queue-held payload plus worker-held and retained geometry release"
+        before as u64,
+        "payload, geometry and native scratch release"
     );
     assert_eq!(subject.charge(), 0, "every ownership of the epoch released");
     assert!(subject.poll().is_none());
@@ -673,7 +679,8 @@ fn late_forget_releases_retained_once() {
         Ok(retained_charge as u64),
         "the forget path releases the retained geometry once"
     );
-    assert_eq!(subject.charge(), 0);
+    let scratch_charge = before - retained_charge;
+    assert_eq!(subject.charge(), scratch_charge);
     assert_eq!(
         subject.forget(&key),
         Ok(0),
@@ -687,9 +694,10 @@ fn late_forget_releases_retained_once() {
     let report = subject.invalidate(epoch(1));
     assert_eq!(
         report.bytes_released(),
-        0,
-        "reset after forget releases nothing more"
+        scratch_charge as u64,
+        "reset releases the reusable scratch after geometry was forgotten"
     );
+    assert_eq!(subject.charge(), 0);
 }
 
 /// An identity completing twice publishes once and releases exactly once.
@@ -716,11 +724,13 @@ fn duplicate_completion_not_double_release() {
         subject.poll().is_none(),
         "the duplicate completion never publishes"
     );
+    let before = subject.charge();
+    assert!(before > geometry_charge(&delivered));
     let report = subject.invalidate(epoch(1));
     assert_eq!(
         report.bytes_released(),
-        geometry_charge(&delivered) as u64,
-        "exactly one retained geometry releases"
+        before as u64,
+        "one retained geometry and native scratch release"
     );
     let again = subject.invalidate(epoch(1));
     assert_eq!(again.bytes_released(), 0, "no double release");

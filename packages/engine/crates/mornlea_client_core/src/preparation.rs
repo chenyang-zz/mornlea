@@ -23,6 +23,7 @@ use crate::contracts::{
 };
 
 pub mod lod;
+mod native;
 
 /// The discrete accepted far-LOD step set {2, 4, 8}; the source default is 4.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -659,7 +660,10 @@ fn registry_allocation(registry: &MeshRegistry) -> usize {
 /// The geometry allocation charge of one owned result: the discriminant byte
 /// plus the packed quad table the shared `Arc` owns.
 fn geometry_allocation(geometry: &PreparedGeometry) -> usize {
-    1 + std::mem::size_of::<MeshQuad>() * geometry.quads()
+    1 + match geometry {
+        PreparedGeometry::Near(quads) => std::mem::size_of::<MeshQuad>() * quads.capacity(),
+        PreparedGeometry::Far(quads) => std::mem::size_of::<LodQuad>() * quads.capacity(),
+    }
 }
 
 /// The bounded near-preparation owner: the real `PreparationPort` provider
@@ -693,11 +697,10 @@ fn geometry_allocation(geometry: &PreparedGeometry) -> usize {
 /// and an equal identity cannot deliver twice, so a stale or duplicate
 /// completion never publishes.
 ///
-/// The completed geometry is the deterministic empty stage of the checked
-/// `PreparedGeometry` constructor; wiring the native numerical facade builds
-/// (near section meshing and far LOD tiles) into this owner is the terrain
-/// integration seam and does not alter any ownership rule above.
+/// Native mesh and LOD kernels use bounded reusable scratch. Scratch stays
+/// charged while the epoch owns work and is released by invalidation.
 pub struct PreparationQueue {
+    native: native::NativePreparation,
     limits: ClientLimits,
     pending: VecDeque<PendingUnit>,
     completed: VecDeque<CompletedUnit>,
@@ -713,6 +716,7 @@ pub struct PreparationQueue {
 impl PreparationQueue {
     pub fn new(limits: ClientLimits) -> Self {
         Self {
+            native: native::NativePreparation::default(),
             limits,
             pending: VecDeque::new(),
             completed: VecDeque::new(),
@@ -727,9 +731,9 @@ impl PreparationQueue {
     }
 
     /// The total owned byte charge: queue-held payloads plus worker-held and
-    /// retained geometry, measured, never invented.
+    /// retained geometry and reusable native scratch.
     pub fn charge(&self) -> usize {
-        self.charge
+        self.charge + self.native.bytes()
     }
 
     pub fn tickets_issued(&self) -> u64 {
@@ -913,21 +917,21 @@ impl PreparationQueue {
             charge,
             references,
         } = unit;
-        // The worker consumes the owned input allocation here, and it never
-        // observes or mutates any mirror, input admission owner or frame.
-        let _ = self.release_ownership(charge, &references);
         let key = *job.key();
         if self.is_retired(key.epoch()) || self.is_stale_delivery(&key) {
+            let _ = self.release_ownership(charge, &references);
             return;
         }
-        let geometry = match job.payload() {
-            PreparationPayload::Near(_) => PreparedGeometry::Near(Vec::new()),
-            PreparationPayload::Far(_) => PreparedGeometry::Far(Vec::new()),
-        };
-        let (outcome, charge) = match PreparedGeometry::try_new(geometry).map(Arc::new) {
+        // Precharge input, reusable scratch and the conservative destination together.
+        let geometry = self.native.build(
+            job.payload(),
+            self.limits.preparation_bytes().saturating_sub(self.charge),
+        );
+        let _ = self.release_ownership(charge, &references);
+        let (outcome, charge) = match geometry.map(Arc::new) {
             Ok(geometry) => {
                 let geometry_charge = geometry_allocation(&geometry);
-                match self.charge.checked_add(geometry_charge) {
+                match self.charge().checked_add(geometry_charge) {
                     Some(total) if total <= self.limits.preparation_bytes() => {
                         (Ok(geometry), geometry_charge)
                     }
@@ -984,7 +988,10 @@ impl PreparationPort for PreparationQueue {
                 RejectedPreparation::try_new(ClientError::Capacity, job).expect("rejection")
             );
         };
-        if new_charge > self.limits.preparation_bytes() {
+        if new_charge
+            .checked_add(self.native.bytes())
+            .is_none_or(|total| total > self.limits.preparation_bytes())
+        {
             return Err(
                 RejectedPreparation::try_new(ClientError::Capacity, job).expect("rejection")
             );
@@ -1109,6 +1116,10 @@ impl PreparationPort for PreparationQueue {
         // fresh epoch's first identity for the same terrain key is fresh.
         let bound = self.retired_through.expect("just set");
         self.high_water.retain(|mark| mark.epoch > bound);
+        if self.pending.is_empty() && self.completed.is_empty() && self.retained.is_empty() {
+            bytes_released += self.native.bytes() as u64;
+            self.native = native::NativePreparation::default();
+        }
         InvalidationReport::try_new(jobs_cancelled, results_stale, bytes_released)
             .expect("checked report")
     }
@@ -1189,7 +1200,7 @@ mod tests {
     }
 
     /// The completion-side overflow: when the running charge cannot own even
-    /// the one-byte empty geometry, `consume_pending`'s `checked_add` rejects
+    /// the native build peak, preparation rejects
     /// inside the worker, publishes the typed `Capacity` failure as the
     /// result, retains nothing and changes the counter by nothing.
     #[test]
