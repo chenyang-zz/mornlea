@@ -78,6 +78,17 @@ class rust_bridge_lifecycle_check(Node):
 
     def _exercise_native(self) -> None:
         bridge = self.get_node("ClientBridge")
+        indexed: Any = Dictionary.new0()
+        indexed["optional"] = None
+        assigned = Dictionary.new0()
+        assigned.set("optional", None)
+        assert indexed.get("optional") is None, "indexed Dictionary must preserve native NIL"
+        assert assigned.get("optional") is None, "Dictionary.set must preserve native NIL"
+        scalar_values = [None, False, True, 0, 7, 2.5, "native"]
+        copied_scalars = _plain(_native(scalar_values))
+        assert [(type(value), value) for value in copied_scalars] == [
+            (type(value), value) for value in scalar_values
+        ]
         probe = self.get_node("BoundaryProbe")
         token = _success(bridge.call("open_core", _native(CONFIG)))
         native_token = _native(token)

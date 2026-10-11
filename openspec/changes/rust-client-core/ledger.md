@@ -620,3 +620,46 @@ Focused complete core414 cases passed (/private/tmp/mornlea-f3-confirmed-receipt
 Independent reviewer bound to b2db369a4238f7efc16f267eaf7c46c8789ec81a reproduced two combined input-family bound failures: retained confirmations plus subsequent sequenced admission, and cumulative acknowledgment plus separate rejection facts. Report /private/tmp/mornlea-f3-final-ack-provider-review.md preserves exact probes and failed verdict. Controller added both public-endpoint regressions before implementation (two actual reds in /private/tmp/mornlea-f3-confirmation-capacity-red.log) and reused one private combined-count check at all three producer paths before owner mutation. Successful terminal retirement now drops its private confirmation queue. Focused reds became green; complete core418 and pinned all-target core Clippy passed. Logs /private/tmp/mornlea-f3-confirmation-capacity-{green,core-suite,clippy}.log. Actual-server39 cases pass on the combined source (/private/tmp/mornlea-f3-real-server-final-owner-tests.log), with input receipt source assertions from c7e80ce35. No shared schema or authority changes. Inventory adds these concrete cases while preserving historical bindings. Independent fresh repair verification remains required; Architecture skill: no change.
 
 The fixture follow-up a793858a66d226cdc15267a1747e62cdfa24c936 integrated as c7e80ce35. Actual transport-only waits now preserve the single semantic frame containing a transient predicted cue. Repeated snapshots are deduplicated by epoch/frame index for receipt-once assertions and correlated to real source ingress/outbox. Five repeated Memory/TCP pairs and fresh full39 passed at worker source; root combined source passed39. This corrects test-driving timing without changing physics, resource bounds or expected provenance.
+
+## 2026-10-11 native runtime and complete-session checkpoint
+
+The independent capacity re-review accepted exact source
+`f6aed1007f3d488f7d4d0ed6699dbf44f8c6b9c7`: fresh core418, actual-provider39,
+G1 producer42 and five disposable source/capacity/placement probes passed.
+`/private/tmp/mornlea-f3-final-capacity-review.md` preserves the verdict and the
+previous failed review. This does not substitute for final-candidate review.
+
+Actual native frames exposed upstream Py4Godot NIL construction as integer zero
+or uninitialized integer bits. The source patch must rebuild the owning main
+library, not just the loader. Two independent pinned Darwin builds produced
+main SHA256 `15558cb16f7dc65ad59a9bcdf101c142a6f4ace52d9fac0b819fa6e61388eaf6`.
+The Darwin derivative is now `4.7-alpha21-mornlea.3`, with payload SHA256
+`8da24f2f79d033a88493410930ced3d47161e1963f68b278da0ca07339c3c465`.
+Build commands disable bytecode writes so a cold native cache and a reused native
+cache produce the same runtime payload. The previously accepted Linux pilot
+retains its own two-patch series, version and identities; the new NIL main is
+not claimed qualified on Linux. The helper owns generation/compile/link logs
+outside the repository and installs nothing itself.
+
+The real native boundary now passes exact NIL, bool, integer, float and string
+round trips, panic containment, retained values, stale-token refusal and release
+ordering. Evidence: `/private/tmp/mornlea-f3-native-boundary-final-scalars.log`.
+The first complete native session passed at the checkpoint source, with the
+current qualification-only scene/probe additions: ten nonempty families, actual
+input submission and terrain resources, reset/reconnect, retained native frame
+and consumer-before-core release. Its actual F2 report records two admitted
+sessions, 753 source packets, 74 ticks, no errors and zero retained sockets.
+Evidence directory: `/private/tmp/mornlea-native-session-development.k8_x9m6n`.
+Connect's Open lifecycle record is observed through the real G1 pull before the
+host's first semantic tick; the ordinary host retains one step/pull per tick.
+This is a qualification observation, not a new production lifecycle policy.
+
+Focused final setup checks passed: locked Python boundary/static checks (57
+files), script23 and native-builder7 unit cases, and shell syntax. Preserved
+failed attempts include NIL marshalling, initial harness syntax/identity/lifecycle
+observation failures, cache-dependent payload calibration and the offline export
+template cache miss. The missing pinned template is being materialized before
+the complete derivative matrix is rerun. Formal native100, final source review
+and complete stage gates remain pending; original task status is unchanged.
+Architecture skill: no change; the established artifact qualification and
+single-owner publication/lifecycle rules cover these findings.

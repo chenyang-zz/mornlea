@@ -182,7 +182,7 @@ if printf '%s\n' "${source_entries}" | grep -Evq "^${PY4GODOT_SOURCE_ARCHIVE_ROO
   fail "source archive contains a path outside ${PY4GODOT_SOURCE_ARCHIVE_ROOT}"
 fi
 
-series_file="${fork_root}/patches/series"
+series_file="${fork_root}/patches/${PY4GODOT_PATCH_SERIES}"
 [[ -f "${series_file}" ]] || fail "patches/series is missing"
 series_digest="$({
   while IFS= read -r patch_name || [[ -n "${patch_name}" ]]; do
@@ -228,6 +228,7 @@ unzip -q "${release_archive}" \
 
 staged_addon="${work_root}/materialized/${PY4GODOT_ARCHIVE_ROOT}"
 python_root="${staged_addon}/${runtime_directory}/python"
+chmod +x "${python_root}/bin/python" "${python_root}/bin/python3" "${python_root}/bin/python3.14"
 python_stdlib="${python_root}/lib/python${PY4GODOT_CPYTHON_VERSION%.*}"
 loader_path="${python_root}/bin/pythonscript.${library_suffix}"
 [[ -f "${loader_path}" ]] || fail "upstream ${target} Python loader is missing"
@@ -257,6 +258,18 @@ built_loader="${source_root}/build/mornlea/pythonscript.${library_suffix}"
 mkdir -p -- "${source_root}/build/mornlea" "${source_root}/python_files"
 ln -s -- "${staged_addon}/${runtime_directory}" \
   "${source_root}/python_files/${runtime_directory}"
+if [[ "${target}" == "darwin-arm64" ]]; then
+  # Retain the native rebuild and logs outside disposable materialization roots.
+  main_cache="${source_dir}/native-main/${target}/${PY4GODOT_HARDENED_VERSION}"
+  built_main="${main_cache}/main.dylib"
+  if [[ ! -f "${built_main}" ]]; then
+    "${python_root}/bin/python3.14" -B -I "${fork_root}/build-main.py" \
+      --source-root "${source_root}" --python-root "${python_root}" \
+      --output "${built_main}" --jobs 4
+  fi
+  verify_file "hardened native main" "${built_main}" "${PY4GODOT_HARDENED_MAIN_SHA256}"
+  cp -- "${built_main}" "${python_root}/bin/main.dylib"
+fi
 (
   cd -- "${source_root}"
   if [[ "${target}" == "darwin-arm64" ]]; then

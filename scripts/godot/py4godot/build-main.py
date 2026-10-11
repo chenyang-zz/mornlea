@@ -80,7 +80,7 @@ def run(command, cwd, log):
 
 def main_sources(source_root, python):
     output = subprocess.check_output(
-        [str(python), str(source_root / "meson_scripts/glob_tools_cpp.py")],
+        [str(python), "-B", "-S", str(source_root / "meson_scripts/glob_tools_cpp.py")],
         cwd=source_root,
         text=True,
     )
@@ -111,6 +111,7 @@ def generate(source_root, python_root, build_root):
         run(
             [
                 str(python),
+                "-B",
                 "-S",
                 "-c",
                 "import builtins, runpy, sys; builtins.exit=sys.exit; runpy.run_path(sys.argv[1], run_name='__main__')",
@@ -149,6 +150,7 @@ def generate(source_root, python_root, build_root):
         "--python",
         str(python),
         "python",
+        "-B",
         "-I",
         "-c",
         driver,
@@ -229,6 +231,7 @@ def build(source_root, python_root, output, jobs):
     runtime = subprocess.check_output(
         [
             str(python_root / "bin/python3.14"),
+            "-B",
             "-I",
             "-c",
             "import platform; print(platform.python_version(), platform.machine())",

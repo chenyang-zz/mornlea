@@ -85,13 +85,13 @@ class MainBuildTests(unittest.TestCase):
             generators.mkdir(parents=True)
             (generators / "generate_classes_cpp.py").write_text("pass\n")
             (generators / "generate_class_ids.py").write_text(
-                "import sys; assert 'site' not in sys.modules; print('generation refused'); exit(23)\n"
+                "import sys; assert 'site' not in sys.modules; assert sys.dont_write_bytecode; print('generation refused'); exit(23)\n"
             )
             python_root = root / "python"
             interpreter = python_root / "bin/python3.14"
             interpreter.parent.mkdir(parents=True)
             interpreter.write_text(
-                '#!/bin/sh\nif [ "$1" = "-I" ]; then echo "3.14.4 arm64"; else exec /usr/bin/python3 "$@"; fi\n'
+                '#!/bin/sh\nif [ "$1" = "-B" ] && [ "$2" = "-I" ]; then echo "3.14.4 arm64"; else exec /usr/bin/python3 "$@"; fi\n'
             )
             interpreter.chmod(0o755)
             for name in ("include/python3.14/Python.h", "lib/libpython3.14.dylib"):
