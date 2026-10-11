@@ -13,8 +13,8 @@
 //! replacement and stages it on the reservation. All of that happens before
 //! any owner mutates, because the borrowed bundle is immutable here by
 //! construction. [`commit_publication`] is the final single-owner critical
-//! section: it applies the staged dedup delta, swaps the staged
-//! input-projection replacement into the owner by move, drains the published
+//! section: it swaps the staged audio and input replacements into their
+//! owners by move, drains the published
 //! observation and lifecycle prefixes and then swaps the visible Arc exactly
 //! once. No callbacks, waits, fallible operations or staging constructions
 //! exist on that path, and a failure or panic before it changes no visible
@@ -22,11 +22,10 @@
 //! cancellations and the dedup proposal stay retry-owned and a valid retry
 //! commits once.
 //!
-//! Staging surfaces owned here: the audio commit applies the proposed
-//! delta — cancelled keys leave the committed set, insertions join it — and
-//! stages the applied cancellations as the audio state's pending predicted
-//! cancellations, the suppression that outlives the consumed rejection
-//! metadata; the input commit is a pure staged swap, because the replacement
+//! Staging surfaces owned here: the audio replacement retains entire-epoch
+//! confirmed/local history and only live predicted cancellation metadata,
+//! with checked count and allocation charges; both commits are pure staged
+//! swaps, because the replacement
 //! state (surviving metadata, surviving local cues, the sequence hint
 //! advanced past the sequences the frame attests) is fully built in prepare.
 //! The pending local-cue ceiling stays the admission-owned
@@ -151,6 +150,60 @@ pub fn assemble_frame(
 ) -> Result<Arc<PresentationFrame>, ClientError> {
     check_candidate(current, &candidate, limits)?;
     Ok(Arc::new(candidate))
+}
+
+/// Builds bounded replacement history before the publication can mutate an owner.
+fn stage_audio(
+    current: &AudioProjectionState,
+    delta: &AudioDedupDelta,
+    limits: &ClientLimits,
+) -> Result<AudioProjectionState, ClientError> {
+    if delta
+        .cancellations()
+        .iter()
+        .any(|key| !matches!(key, AudioDedupKey::Predicted { .. }))
+    {
+        // Confirmed and local identities remain held for the complete epoch.
+        return Err(ClientError::InvalidInput);
+    }
+    let mut committed = Vec::new();
+    for key in current.committed().iter().chain(delta.insertions()) {
+        if !delta.retirements().contains(key)
+            && !delta.cancellations().contains(key)
+            && !super::family_audio::duplicates(key, &committed)
+        {
+            committed.push(*key);
+        }
+    }
+    let mut pending_cancellations = Vec::new();
+    for key in current
+        .pending_cancellations()
+        .iter()
+        .chain(delta.cancellations())
+    {
+        if !delta.retirements().contains(key) && !pending_cancellations.contains(key) {
+            pending_cancellations.push(*key);
+        }
+    }
+    // Normalize retained allocations so their capacity charge matches the owned replacement.
+    let committed = committed.into_boxed_slice().into_vec();
+    let pending_cancellations = pending_cancellations.into_boxed_slice().into_vec();
+    let count = committed
+        .len()
+        .checked_add(pending_cancellations.len())
+        .ok_or(ClientError::Capacity)?;
+    let bytes = committed
+        .capacity()
+        .checked_add(pending_cancellations.capacity())
+        .and_then(|count| count.checked_mul(std::mem::size_of::<AudioDedupKey>()))
+        .ok_or(ClientError::Capacity)?;
+    if count > limits.family_records() || bytes > limits.frame_bytes() {
+        return Err(ClientError::Capacity);
+    }
+    Ok(AudioProjectionState {
+        committed,
+        pending_cancellations,
+    })
 }
 
 /// Reserves one publication transaction: the complete candidate, every
@@ -321,10 +374,11 @@ pub fn prepare_publication(
     }
     staged.stage_local_cues(&projection.pending_local_cues()[consume.local_cues()..]);
 
-    // Everything checked and staged; no owner has mutated, so this point is
-    // unreachable on any failure path.
-    PublicationReservation::try_new(Arc::new(candidate), audio, consume)
-        .map(|reservation| reservation.with_staged_input(staged))
+    let staged_audio = stage_audio(owners.audio, &audio, limits)?;
+    let mut reservation = PublicationReservation::try_new(Arc::new(candidate), audio, consume)?
+        .with_staged_input(staged);
+    reservation.staged_audio = staged_audio;
+    Ok(reservation)
 }
 
 /// Commits one reserved publication: the final single-owner critical
@@ -339,20 +393,8 @@ pub fn commit_publication(
     owners: &mut PublicationOwners<'_>,
     reservation: PublicationReservation,
 ) -> Arc<PresentationFrame> {
-    // The audio state: cancelled keys leave the committed set, insertions
-    // join it, and the applied cancellations stage as the pending predicted
-    // cancellations — the suppression that outlives the rejection metadata
-    // this same commit consumes. In-place mutation of checked keys only.
-    for key in reservation.audio.cancellations() {
-        owners.audio.committed.retain(|held| held != key);
-        if !owners.audio.pending_cancellations.contains(key) {
-            owners.audio.pending_cancellations.push(*key);
-        }
-    }
-    owners
-        .audio
-        .committed
-        .extend(reservation.audio.insertions().iter().copied());
+    // Both provenance vectors arrive fully built and bounded by prepare.
+    *owners.audio = reservation.staged_audio;
 
     // The input projection: the single staged swap. The replacement was
     // fully built and checked in prepare — surviving metadata, surviving

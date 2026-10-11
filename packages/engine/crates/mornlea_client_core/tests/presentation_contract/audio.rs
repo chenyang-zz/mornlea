@@ -628,6 +628,10 @@ fn predicted_snow_step_emits_once_across_correction_replay() {
     let view = committed.view_of(&player, &provider, EPOCH);
     let projection = project_audio(&view).expect("valid projection");
     assert!(
+        projection.proposed_dedup().retirements().is_empty(),
+        "a still-pending source retains its dedup history"
+    );
+    assert!(
         projection.records().is_empty(),
         "the correction replay never replays the sound"
     );
@@ -730,6 +734,7 @@ fn rejected_input_cancels_its_pending_predicted_cue() {
         &[step_key],
         "the rejection cancels the committed cue attribution exactly once"
     );
+    assert_eq!(projection.proposed_dedup().retirements(), &[step_key]);
     assert!(
         projection.proposed_dedup().insertions().is_empty(),
         "a cancellation is never also an insertion"
@@ -1265,5 +1270,34 @@ fn failed_publication_retains_dedup() {
     assert!(
         projection.records().is_empty(),
         "the committed key suppresses the already-published cue"
+    );
+}
+
+#[test]
+fn obsolete_predicted_history_retires_but_confirmed_ids_stay_held() {
+    let provider = admitted_mirror(EPOCH);
+    let player = idle_player(EPOCH);
+    let predicted = AudioDedupKey::Predicted {
+        epoch: epoch(EPOCH),
+        input_sequence: 5,
+        cue: CueId::try_new(6).unwrap(),
+    };
+    let confirmed = AudioDedupKey::Confirmed {
+        epoch: epoch(EPOCH),
+        observation: ObservationKey::try_new(epoch(EPOCH), ConfirmedRevision::new(1), 0).unwrap(),
+        authoritative_event_id: Some(u64::MAX),
+        cue: CueId::try_new(0).unwrap(),
+    };
+    let fixture = ViewFixture::with_audio(
+        AudioProjectionState::try_new()
+            .unwrap()
+            .with_committed(vec![predicted, confirmed]),
+    );
+    let projection = project_audio(&fixture.view_of(&player, &provider, EPOCH)).unwrap();
+    assert_eq!(projection.proposed_dedup().retirements(), &[predicted]);
+    assert!(
+        AudioDedupDelta::default()
+            .with_retirements(vec![confirmed])
+            .is_err()
     );
 }

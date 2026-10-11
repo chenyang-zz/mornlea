@@ -854,6 +854,7 @@ pub enum AudioDedupKey {
 pub struct AudioDedupDelta {
     insertions: Vec<AudioDedupKey>,
     cancellations: Vec<AudioDedupKey>,
+    retirements: Vec<AudioDedupKey>,
 }
 
 impl AudioDedupDelta {
@@ -864,6 +865,7 @@ impl AudioDedupDelta {
         Ok(Self {
             insertions,
             cancellations,
+            retirements: Vec::new(),
         })
     }
 
@@ -875,9 +877,29 @@ impl AudioDedupDelta {
         &self.cancellations
     }
 
+    /// Only departed prediction sources may retire their provenance history.
+    pub fn with_retirements(
+        mut self,
+        retirements: Vec<AudioDedupKey>,
+    ) -> Result<Self, ClientError> {
+        if retirements
+            .iter()
+            .any(|key| !matches!(key, AudioDedupKey::Predicted { .. }))
+        {
+            return Err(ClientError::InvalidInput);
+        }
+        self.retirements = retirements;
+        Ok(self)
+    }
+
+    pub fn retirements(&self) -> &[AudioDedupKey] {
+        &self.retirements
+    }
+
     pub(crate) fn extend(&mut self, other: AudioDedupDelta) {
         self.insertions.extend(other.insertions);
         self.cancellations.extend(other.cancellations);
+        self.retirements.extend(other.retirements);
     }
 }
 
@@ -1194,6 +1216,7 @@ pub struct PublicationReservation {
     audio: AudioDedupDelta,
     consume: PublicationConsumption,
     staged_input: InputProjectionState,
+    staged_audio: AudioProjectionState,
 }
 
 impl PublicationReservation {
@@ -1210,6 +1233,7 @@ impl PublicationReservation {
             audio,
             consume,
             staged_input: InputProjectionState::default(),
+            staged_audio: AudioProjectionState::default(),
         })
     }
 
@@ -1219,6 +1243,10 @@ impl PublicationReservation {
     pub fn with_staged_input(mut self, staged: InputProjectionState) -> Self {
         self.staged_input = staged;
         self
+    }
+
+    pub fn staged_audio(&self) -> &AudioProjectionState {
+        &self.staged_audio
     }
 
     pub fn frame(&self) -> &Arc<PresentationFrame> {

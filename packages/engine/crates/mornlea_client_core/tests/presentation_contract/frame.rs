@@ -632,10 +632,7 @@ fn build_candidate(
     let frame = PresentationFrame::try_new(view.frame_epoch(), revision, index, families)?;
     Ok(CandidateBuild {
         frame,
-        audio: AudioDedupDelta::try_new(
-            audio.proposed_dedup().insertions().to_vec(),
-            audio.proposed_dedup().cancellations().to_vec(),
-        )?,
+        audio: audio.proposed_dedup().clone(),
     })
 }
 
@@ -1732,9 +1729,8 @@ fn caps_plus_one_preserve_the_visible_frame() {
 /// `frame::failed_publication_consumes_nothing_and_retry_commits_once`: the
 /// failed publication consumes no event, no input metadata, no local cue and
 /// no cancellation — the dedup proposal and every pending queue stay
-/// retry-owned — and the retry commits once, applying the cancellation to the
-/// committed keys and staging it as the pending predicted cancellation the
-/// next projection proposes even after the derived source is consumed.
+/// retry-owned — and the retry commits once, applying the cancellation and
+/// retiring its absent prediction source without growing later metadata.
 #[test]
 fn failed_publication_consumes_nothing_and_retry_commits_once() {
     let cells = fixture_cells(WALK_DIMS);
@@ -1920,15 +1916,13 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
         &[chat_key],
         "the refused key is cancelled and the retained event's key commits once"
     );
-    assert_eq!(
-        fixture.audio.pending_cancellations(),
-        &[step_key],
-        "the applied cancellation stages as the pending predicted cancellation"
+    assert!(
+        fixture.audio.pending_cancellations().is_empty(),
+        "obsolete cancellation metadata retires with its absent prediction source"
     );
 
-    // The staged half is drivable end to end: after a fresh authority
-    // replaces the rejection correction, the derived half is silent and the
-    // staged cancellation alone is still proposed.
+    // Fresh authority clears the consumed correction; retired cancellation
+    // metadata no longer survives into the next projection.
     let next_key =
         fixture.commit_observation(Event::PlayerState(authority(2, 5, [0.6, 0.0, 0.6], true)));
     replay
@@ -1949,10 +1943,9 @@ fn failed_publication_consumes_nothing_and_retry_commits_once() {
         projection.proposed_dedup().insertions().is_empty(),
         "nothing new is proposed"
     );
-    assert_eq!(
-        projection.proposed_dedup().cancellations(),
-        &[step_key],
-        "the staged cancellation survives the consumed derived source"
+    assert!(
+        projection.proposed_dedup().cancellations().is_empty(),
+        "retired metadata never grows a later publication"
     );
 }
 
@@ -2737,4 +2730,302 @@ fn publication_rejects_missing_families_without_disabling_partial_validation() {
         .expect("same revision next frame");
     assert_eq!(repeated.frame_index(), 9);
     assert_eq!(repeated.confirmed_revision().get(), 10);
+}
+
+fn retained_chat_key(event_id: u64) -> AudioDedupKey {
+    AudioDedupKey::Confirmed {
+        epoch: epoch(EPOCH),
+        observation: ObservationKey::try_new(epoch(EPOCH), ConfirmedRevision::new(1), 0).unwrap(),
+        authoritative_event_id: Some(event_id),
+        cue: CueId::try_new(0).unwrap(),
+    }
+}
+
+#[test]
+fn audio_history_count_plus_one_rejects_before_any_owner_changes() {
+    let mut fixture = frame_fixture(EPOCH, false);
+    fixture.audio = AudioProjectionState::try_new()
+        .unwrap()
+        .with_committed(vec![retained_chat_key(99)]);
+    fixture.commit_observation(chat(100));
+    let player = idle_player(EPOCH, fixture.revision());
+    let projection = project_audio(&fixture.view(&player, fixture.revision(), 1)).unwrap();
+    let candidate = complete_publication_frame(
+        PresentationFrame::try_new(
+            fixture.epoch,
+            fixture.revision(),
+            1,
+            vec![
+                FamilyFrame::try_new(
+                    FamilyKey::try_new(FAMILY_AUDIO_CUES).unwrap(),
+                    FamilyRecords::AudioCues(projection.records().to_vec()),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap(),
+    );
+    let selected = limits_with(1, mornlea_client_core::ClientLimits::MAX_FRAME_BYTES);
+    candidate.validate(&selected).unwrap();
+    admit(&mut fixture, vec![collect_water()]);
+    let pending = LifecycleRecord::try_new(
+        RecordHeader::try_new(
+            fixture.epoch,
+            fixture.revision(),
+            None,
+            FamilyOperation::Upsert,
+        )
+        .unwrap(),
+        LifecycleTransition::Open,
+        fixture.epoch.get(),
+        core_resource_order(),
+    )
+    .unwrap();
+    fixture.lifecycle = LifecycleProjectionState::try_new(fixture.epoch.get())
+        .unwrap()
+        .with_pending(vec![pending]);
+    let mut visible = bootstrap(EPOCH);
+    let old = Arc::clone(&visible);
+    let hint = fixture.input_owner.projection().sequence_hint();
+    let admitted = fixture.input_owner.projection().admitted().to_vec();
+    let local_cues = fixture
+        .input_owner
+        .projection()
+        .pending_local_cues()
+        .to_vec();
+    let before_key = *fixture.observations[0].key();
+    let bundle = owners(&mut fixture, &mut visible);
+    assert_eq!(
+        prepare_publication(
+            &bundle,
+            candidate,
+            projection.proposed_dedup().clone(),
+            PublicationConsumption::try_new(1, 0, 0, 0).unwrap(),
+            &selected
+        )
+        .err(),
+        Some(ClientError::Capacity)
+    );
+    assert!(Arc::ptr_eq(&old, &visible));
+    assert_eq!(fixture.audio.committed(), &[retained_chat_key(99)]);
+    assert!(fixture.audio.pending_cancellations().is_empty());
+    assert_eq!(fixture.observations.len(), 1);
+    assert_eq!(*fixture.observations[0].key(), before_key);
+    assert_eq!(fixture.input_owner.projection().sequence_hint(), hint);
+    assert_eq!(fixture.input_owner.projection().admitted(), admitted);
+    assert_eq!(
+        fixture.input_owner.projection().pending_local_cues(),
+        local_cues
+    );
+    assert_eq!(fixture.lifecycle.pending().len(), 1);
+    assert_eq!(
+        fixture.lifecycle.pending()[0].transition(),
+        LifecycleTransition::Open
+    );
+}
+
+#[test]
+fn audio_history_normalizes_allocations_and_checks_exact_owned_byte_bound() {
+    let count = 8;
+    let bytes = count * std::mem::size_of::<AudioDedupKey>();
+    let mut allocated = Vec::with_capacity(1024);
+    allocated.extend((0..count).map(|id| retained_chat_key(id as u64)));
+    let mut fixture = frame_fixture(EPOCH, false);
+    fixture.audio = AudioProjectionState::try_new()
+        .unwrap()
+        .with_committed(allocated);
+    let candidate = empty_complete_frame(EPOCH, 1, 1);
+    assert!(candidate.validated_size().unwrap() < bytes - 1);
+    let mut visible = bootstrap(EPOCH);
+    let old = Arc::clone(&visible);
+    let bundle = owners(&mut fixture, &mut visible);
+    assert_eq!(
+        prepare_publication(
+            &bundle,
+            candidate.clone(),
+            AudioDedupDelta::default(),
+            PublicationConsumption::default(),
+            &limits_with(8, bytes - 1)
+        )
+        .err(),
+        Some(ClientError::Capacity)
+    );
+    let reservation = prepare_publication(
+        &bundle,
+        candidate,
+        AudioDedupDelta::default(),
+        PublicationConsumption::default(),
+        &limits_with(8, bytes),
+    )
+    .unwrap();
+    assert_eq!(reservation.staged_audio().committed().len(), count);
+    assert!(
+        reservation
+            .staged_audio()
+            .pending_cancellations()
+            .is_empty()
+    );
+    assert!(Arc::ptr_eq(&old, &visible));
+}
+
+#[test]
+fn audio_history_rejects_cancellation_of_entire_epoch_confirmed_and_local_ids() {
+    let mut fixture = frame_fixture(EPOCH, false);
+    let keys = [
+        retained_chat_key(99),
+        AudioDedupKey::Local {
+            epoch: epoch(EPOCH),
+            local_event_sequence: 1,
+            cue: CueId::try_new(4).unwrap(),
+        },
+    ];
+    fixture.audio = AudioProjectionState::try_new()
+        .unwrap()
+        .with_committed(keys.to_vec());
+    let mut visible = bootstrap(EPOCH);
+    for key in keys {
+        assert_eq!(
+            AudioDedupDelta::default().with_retirements(vec![key]).err(),
+            Some(ClientError::InvalidInput)
+        );
+        let bundle = owners(&mut fixture, &mut visible);
+        assert_eq!(
+            prepare_publication(
+                &bundle,
+                empty_complete_frame(EPOCH, 1, 1),
+                AudioDedupDelta::try_new(vec![], vec![key]).unwrap(),
+                PublicationConsumption::default(),
+                &limits()
+            )
+            .err(),
+            Some(ClientError::InvalidInput)
+        );
+    }
+    assert_eq!(fixture.audio.committed(), keys);
+    assert_eq!(visible.frame_index(), 0);
+}
+
+#[test]
+fn audio_history_duplicate_keeps_one_key_and_unique_event_fills_exact_count() {
+    let mut fixture = frame_fixture(EPOCH, false);
+    let held = retained_chat_key(99);
+    fixture.audio = AudioProjectionState::try_new()
+        .unwrap()
+        .with_committed(vec![held]);
+    fixture.commit_observation(chat(99));
+    let player = idle_player(EPOCH, fixture.revision());
+    let projection = project_audio(&fixture.view(&player, fixture.revision(), 1)).unwrap();
+    assert!(projection.records().is_empty());
+    let mut visible = bootstrap(EPOCH);
+    {
+        let mut bundle = owners(&mut fixture, &mut visible);
+        let reservation = prepare_publication(
+            &bundle,
+            empty_complete_frame(EPOCH, 2, 1),
+            projection.proposed_dedup().clone(),
+            PublicationConsumption::try_new(1, 0, 0, 0).unwrap(),
+            &limits_with(1, mornlea_client_core::ClientLimits::MAX_FRAME_BYTES),
+        )
+        .unwrap();
+        assert_eq!(reservation.staged_audio().committed(), &[held]);
+        commit_publication(&mut bundle, reservation);
+    }
+    fixture.commit_observation(chat(100));
+    let player = idle_player(EPOCH, fixture.revision());
+    let projection = project_audio(&fixture.view(&player, fixture.revision(), 2)).unwrap();
+    let candidate = complete_publication_frame(
+        PresentationFrame::try_new(
+            fixture.epoch,
+            fixture.revision(),
+            2,
+            vec![
+                FamilyFrame::try_new(
+                    FamilyKey::try_new(FAMILY_AUDIO_CUES).unwrap(),
+                    FamilyRecords::AudioCues(projection.records().to_vec()),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap(),
+    );
+    let mut bundle = owners(&mut fixture, &mut visible);
+    let reservation = prepare_publication(
+        &bundle,
+        candidate,
+        projection.proposed_dedup().clone(),
+        PublicationConsumption::try_new(1, 0, 0, 0).unwrap(),
+        &limits_with(2, mornlea_client_core::ClientLimits::MAX_FRAME_BYTES),
+    )
+    .unwrap();
+    assert_eq!(reservation.staged_audio().committed().len(), 2);
+    commit_publication(&mut bundle, reservation);
+    assert_eq!(fixture.audio.committed().len(), 2);
+    assert_eq!(fixture.audio.committed()[0], held);
+    assert!(fixture.observations.is_empty());
+}
+
+#[test]
+fn audio_history_counts_live_cancellations_and_retires_obsolete_metadata() {
+    let mut fixture = frame_fixture(EPOCH, false);
+    let held = retained_chat_key(u64::MAX);
+    fixture.audio = AudioProjectionState::try_new()
+        .unwrap()
+        .with_committed(vec![held]);
+    let cancelled = AudioDedupKey::Predicted {
+        epoch: epoch(EPOCH),
+        input_sequence: 5,
+        cue: CueId::try_new(6).unwrap(),
+    };
+    let delta = AudioDedupDelta::try_new(vec![], vec![cancelled, cancelled]).unwrap();
+    let mut visible = bootstrap(EPOCH);
+    {
+        let mut bundle = owners(&mut fixture, &mut visible);
+        assert_eq!(
+            prepare_publication(
+                &bundle,
+                empty_complete_frame(EPOCH, 1, 1),
+                delta.clone(),
+                PublicationConsumption::default(),
+                &limits_with(1, mornlea_client_core::ClientLimits::MAX_FRAME_BYTES)
+            )
+            .err(),
+            Some(ClientError::Capacity)
+        );
+        let reservation = prepare_publication(
+            &bundle,
+            empty_complete_frame(EPOCH, 1, 1),
+            delta,
+            PublicationConsumption::default(),
+            &limits_with(2, mornlea_client_core::ClientLimits::MAX_FRAME_BYTES),
+        )
+        .unwrap();
+        assert_eq!(reservation.staged_audio().committed(), &[held]);
+        assert_eq!(
+            reservation.staged_audio().pending_cancellations(),
+            &[cancelled]
+        );
+        commit_publication(&mut bundle, reservation);
+    }
+    let player = idle_player(EPOCH, fixture.revision());
+    let projection = project_audio(&fixture.view(&player, fixture.revision(), 2)).unwrap();
+    assert_eq!(projection.proposed_dedup().retirements(), &[cancelled]);
+    let mut bundle = owners(&mut fixture, &mut visible);
+    let reservation = prepare_publication(
+        &bundle,
+        empty_complete_frame(EPOCH, 1, 2),
+        projection.proposed_dedup().clone(),
+        PublicationConsumption::default(),
+        &limits_with(1, mornlea_client_core::ClientLimits::MAX_FRAME_BYTES),
+    )
+    .unwrap();
+    assert_eq!(reservation.staged_audio().committed(), &[held]);
+    assert!(
+        reservation
+            .staged_audio()
+            .pending_cancellations()
+            .is_empty()
+    );
+    commit_publication(&mut bundle, reservation);
+    assert_eq!(fixture.audio.committed(), &[held]);
+    assert!(fixture.audio.pending_cancellations().is_empty());
 }

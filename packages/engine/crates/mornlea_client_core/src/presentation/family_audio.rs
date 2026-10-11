@@ -134,7 +134,7 @@ fn confirmed_duplicate(candidate: &AudioDedupKey, held: &AudioDedupKey) -> bool 
 /// their rule, and keys of different provenance classes never match, because
 /// an unsupported cross-class correlation is exactly what this family must
 /// not fabricate.
-fn duplicates(candidate: &AudioDedupKey, held: &[AudioDedupKey]) -> bool {
+pub(super) fn duplicates(candidate: &AudioDedupKey, held: &[AudioDedupKey]) -> bool {
     held.iter().any(|key| match (candidate, key) {
         (AudioDedupKey::Confirmed { .. }, AudioDedupKey::Confirmed { .. }) => {
             confirmed_duplicate(candidate, key)
@@ -282,6 +282,31 @@ pub fn project_audio(view: &ProjectionView<'_>) -> Result<AudioProjection, Clien
         }
     }
 
+    // Retire only prediction provenance after its pending source disappears.
+    let mut retirements = Vec::new();
+    for key in view
+        .audio()
+        .committed()
+        .iter()
+        .chain(view.audio().pending_cancellations())
+        .chain(&cancellations)
+    {
+        if let AudioDedupKey::Predicted {
+            epoch: source_epoch,
+            input_sequence,
+            ..
+        } = key
+            && !player.journal().iter().any(|entry| {
+                entry.epoch() == *source_epoch
+                    && entry.sequence() == *input_sequence
+                    && !entry.acknowledged()
+            })
+            && !retirements.contains(key)
+        {
+            retirements.push(*key);
+        }
+    }
+
     // Emission under the dedup rules: a candidate that duplicates a
     // committed key, an insertion already proposed inside this projection,
     // or a cancellation in this same delta never sounds and never commits a
@@ -333,6 +358,6 @@ pub fn project_audio(view: &ProjectionView<'_>) -> Result<AudioProjection, Clien
 
     AudioProjection::try_new(
         records,
-        AudioDedupDelta::try_new(insertions, cancellations)?,
+        AudioDedupDelta::try_new(insertions, cancellations)?.with_retirements(retirements)?,
     )
 }
