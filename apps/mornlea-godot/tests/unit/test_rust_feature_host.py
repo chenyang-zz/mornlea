@@ -712,6 +712,20 @@ class RustFeatureHostTest(unittest.TestCase):
                 self.assertEqual(self.host.active_count(), 0)
                 self.assertEqual(self.bridge.count("close"), 1)
 
+    def test_step_report_accepts_actual_retained_work_ceilings(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("full-step", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.bridge.step_value = {
+            **cast(dict[str, object], self.bridge.step_value),
+            "pending_input": 128,
+            "pending_inbound": 8192,
+            "pending_preparation": 4096,
+        }
+        self.host._process(0.01)
+        self.assertEqual(self.bridge.count("pull_typed_frame"), 1)
+        self.assertEqual(len(self.active_feature("consumer").frames), 1)
+
     def test_step_report_is_validated_before_pull(self) -> None:
         self.register_feature("consumer")
         catalog = self.register_catalog("strict-step", ("consumer",))

@@ -1140,7 +1140,7 @@ def _rust_step_from(result: object, epoch: str) -> dict[str, object] | None:
         ("processed_messages", RUST_STEP_MESSAGE_BUDGET),
         ("processed_meshes", RUST_STEP_MESH_BUDGET),
         ("pending_input", 128),
-        ("pending_inbound", 4096),
+        ("pending_inbound", 8192),
         ("pending_preparation", 4096),
     ):
         if not _bounded_integer(report[field], maximum):
