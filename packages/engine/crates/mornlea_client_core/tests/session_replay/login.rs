@@ -607,6 +607,46 @@ fn lifecycle_open_terminal() {
     );
 }
 
+#[test]
+fn valid_handshake_reject_publishes_terminal_once() {
+    let mut test = UnderTest::new();
+    let epoch = test.connect("rejected-handshake", 8);
+    test.feed(frame_server_packet(&ServerPacket::HandshakeReject(
+        mornlea_protocol::HandshakeReject::new(
+            46,
+            mornlea_protocol::HANDSHAKE_VERSION_MISMATCH,
+            "upgrade required",
+        )
+        .unwrap(),
+    )));
+    let report = test.step().unwrap();
+    assert_eq!(
+        report.terminal(),
+        Some(&CloseReason::LoginRejected(control_text(
+            "upgrade required"
+        )))
+    );
+    assert_eq!(test.session_phase(), SessionPhase::Closing);
+    assert_eq!(test.releases(), 1);
+    let terminal = test.lifecycle_records();
+    assert_eq!(terminal.len(), 2);
+    assert_eq!(terminal[0].0, LifecycleTransition::Close);
+    assert_eq!(
+        terminal[1],
+        (
+            LifecycleTransition::Invalidate,
+            epoch.get(),
+            core_resources(),
+            0
+        )
+    );
+    let retained = test.visible();
+    test.feed(login_success_frame(player(8)));
+    assert_eq!(test.step(), Err(ClientError::Disconnected));
+    assert_eq!(test.releases(), 1);
+    assert_eq!(test.visible(), retained);
+}
+
 /// The wrong-behavior artifact: the contract double's login path — the
 /// behavior the real provider replaces — cannot process the hello/login
 /// exchange at all, sends nothing, never transitions past Connecting, enforces
