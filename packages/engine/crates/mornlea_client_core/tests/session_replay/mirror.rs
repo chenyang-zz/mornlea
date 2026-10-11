@@ -1505,7 +1505,7 @@ fn repaired_capacity_actor_resolution_and_name_are_charged() {
         panic!("remote spawn");
     };
     let dynamic = packet.display_name.capacity()
-        + observation.resolved().len() * std::mem::size_of::<ResolvedActor>();
+        + std::mem::size_of_val(observation.resolved());
     assert_eq!(observation.resolved().len(), 0);
     mirror
         .consume(&PublicationConsumption::try_new(1, 0, 0, 0).unwrap())
