@@ -1681,3 +1681,88 @@ fn wrong_double_replay_wrongness_is_executable() {
         "the wrong double applies a foreign-epoch correction"
     );
 }
+
+#[test]
+fn failed_correction_preserves_owner_and_same_tick_retry_succeeds() {
+    use mornlea_client_core::prediction::{PredictionReplay, StepEnvironment};
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let env = StepEnvironment::new(walking_grid(&cells), false);
+    let mut replay = PredictionReplay::try_new(epoch(1), limits()).expect("replay");
+    let first = authority(1, 0, [0.0; 3], [0.0; 3], true, look(0.0, 0.0));
+    replay
+        .apply_confirmed(&key(epoch(1), 1), &first, &env)
+        .expect("initial authority");
+    replay
+        .predict_step(1, control(0, 1, 0.0), &env)
+        .expect("pending step");
+    let before = replay.projection().expect("projection");
+    let corrected = authority(2, 0, [1000.0, 0.0, 0.0], [0.0; 3], true, look(0.0, 0.0));
+    assert_eq!(
+        replay
+            .apply_confirmed(&key(epoch(1), 2), &corrected, &env)
+            .unwrap_err(),
+        ClientError::InvalidInput
+    );
+    let after = replay.projection().expect("retained projection");
+    assert_eq!(after.confirmed_pose(), before.confirmed_pose());
+    assert_eq!(after.predicted_pose(), before.predicted_pose());
+    assert_eq!(after.journal(), before.journal());
+    assert_eq!(after.correction(), before.correction());
+    assert_eq!(after.confirmed_target(), before.confirmed_target());
+    assert_eq!(after.predicted_target(), before.predicted_target());
+    assert_eq!(replay.last_acknowledged_sequence(), 0);
+
+    let origin = [996, -1, -8];
+    let covered = fixture_cells(origin, WALK_DIMS, false, &[]);
+    let grid = CollisionGrid::try_new(origin, WALK_DIMS, &covered).expect("covering grid");
+    let covering = StepEnvironment::new(grid, false);
+    replay
+        .apply_confirmed(&key(epoch(1), 2), &corrected, &covering)
+        .expect("same tick retry");
+    assert_eq!(
+        replay
+            .projection()
+            .expect("corrected projection")
+            .confirmed_pose()
+            .position(),
+        [1000.0, 0.0, 0.0]
+    );
+    assert_eq!(replay.projection().expect("journal").journal().len(), 1);
+}
+
+#[test]
+fn failed_rejection_replay_preserves_pending_input() {
+    use mornlea_client_core::prediction::{PredictionReplay, StepEnvironment};
+    let cells = fixture_cells(WALK_ORIGIN, WALK_DIMS, false, &[]);
+    let env = StepEnvironment::new(walking_grid(&cells), false);
+    let mut replay = PredictionReplay::try_new(epoch(1), limits()).expect("replay");
+    let first = authority(1, 0, [0.0; 3], [0.0; 3], true, look(0.0, 0.0));
+    replay
+        .apply_confirmed(&key(epoch(1), 1), &first, &env)
+        .expect("authority");
+    replay
+        .predict_step(1, control(0, 1, 0.0), &env)
+        .expect("first step");
+    replay
+        .predict_step(2, control(0, 1, 0.0), &env)
+        .expect("second step");
+    let before = replay.projection().expect("projection");
+    let origin = [996, -1, -8];
+    let distant = fixture_cells(origin, WALK_DIMS, false, &[]);
+    let grid = CollisionGrid::try_new(origin, WALK_DIMS, &distant).expect("distant grid");
+    assert_eq!(
+        replay
+            .reject(1, &StepEnvironment::new(grid, false))
+            .unwrap_err(),
+        ClientError::InvalidInput
+    );
+    let after = replay.projection().expect("retained projection");
+    assert_eq!(after.journal(), before.journal());
+    assert_eq!(after.predicted_pose(), before.predicted_pose());
+    assert_eq!(after.correction(), before.correction());
+    assert!(replay.reject(1, &env).expect("rejection retry").is_some());
+    assert_eq!(
+        replay.projection().expect("replayed").journal()[0].sequence(),
+        2
+    );
+}

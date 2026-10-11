@@ -381,6 +381,7 @@ impl RejectedPrediction {
 /// bit already gated by the confirmed hunger, exactly the input the accepted
 /// predictor journals after gating — so replay reproduces the original step
 /// bit-for-bit.
+#[derive(Clone)]
 struct PendingStep {
     sequence: u64,
     control: PlayerControl,
@@ -389,6 +390,7 @@ struct PendingStep {
 /// The latest confirmed authoritative base a replay starts from: the kernel
 /// state, the authority's look, mining and hunger, the confirmed revision of
 /// the observation that carried it, and whether the authority was ready.
+#[derive(Clone)]
 struct ConfirmedBase {
     revision: ConfirmedRevision,
     state: PhysicsState,
@@ -442,6 +444,7 @@ impl RayTarget {
 /// sequence order from the latest confirmed state through the frozen kernel.
 /// A correction from another epoch rejects with `StaleEpoch` before any
 /// state changes, so an old epoch can never affect a new one.
+#[derive(Clone)]
 pub struct PredictionReplay {
     epoch: SessionEpoch,
     limits: ClientLimits,
@@ -671,6 +674,19 @@ impl PredictionReplay {
         state: &PlayerState,
         environment: &StepEnvironment<'_>,
     ) -> Result<CorrectionWitness, ClientError> {
+        // Replay and ray validation must succeed before replacing the live owner.
+        let mut candidate = self.clone();
+        let witness = candidate.apply_confirmed_candidate(key, state, environment)?;
+        *self = candidate;
+        Ok(witness)
+    }
+
+    fn apply_confirmed_candidate(
+        &mut self,
+        key: &ObservationKey,
+        state: &PlayerState,
+        environment: &StepEnvironment<'_>,
+    ) -> Result<CorrectionWitness, ClientError> {
         if key.epoch() != self.epoch {
             return Err(ClientError::StaleEpoch);
         }
@@ -756,6 +772,18 @@ impl PredictionReplay {
     /// confirmed state in sequence order. A sequence with no pending
     /// prediction has nothing to remove and changes nothing.
     pub fn reject(
+        &mut self,
+        sequence: u64,
+        environment: &StepEnvironment<'_>,
+    ) -> Result<Option<RejectedPrediction>, ClientError> {
+        // Replay and ray validation must succeed before replacing the live owner.
+        let mut candidate = self.clone();
+        let witness = candidate.reject_candidate(sequence, environment)?;
+        *self = candidate;
+        Ok(witness)
+    }
+
+    fn reject_candidate(
         &mut self,
         sequence: u64,
         environment: &StepEnvironment<'_>,
