@@ -468,22 +468,9 @@ fn admit(fixture: &mut FrameFixture, actions: Vec<InputAction>) {
     let batch = InputBatch::try_new(epoch, actions).expect("batch");
     let validated =
         InputTranslator::validate_batch(&batch, &mirror, &fixture.limits).expect("validated");
-    let receipt = InputTranslator::commit(validated, &mut admission).expect("admitted batch");
-    // The controller wiring records the receipt's sequenced metadata into
-    // the publication owner's projection state; the admission commit itself
-    // stages only the native local cue events.
-    let mut projection = admission.projection().clone();
-    if let mornlea_client_core::contracts::InputReceipt::Queued { first_sequence, .. } = receipt {
-        let mut sequence = first_sequence.unwrap_or(0);
-        for action in batch.actions() {
-            if !matches!(action.intent, ClientIntent::Chat(_)) {
-                projection.record_admitted(sequence, action.intent.kind());
-                sequence += 1;
-            }
-        }
-    }
-    fixture.input_owner =
-        InputAdmissionOwner::try_new(projection).expect("publication input owner");
+    InputTranslator::commit(validated, &mut admission).expect("admitted batch");
+    fixture.input_owner = InputAdmissionOwner::try_new(admission.projection().clone())
+        .expect("publication input owner");
 }
 
 fn collect_water() -> InputAction {

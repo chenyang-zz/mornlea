@@ -255,6 +255,7 @@ ci-integration-client: ci-verify-macos-artifact
 # 与 Rust fmt/clippy/单测。完整门禁(test/test-race/visual-check/rust-check)
 # 仍留给 CI 与提交前,短模式不做任何正确性放宽。
 dev-check:
+	$(GO) run scripts/client-native-data.go -check
 	@unformatted=$$(find . -type f -name '*.go' -not -path './vendor/*' -not -path './.worktrees/*' -not -path './.claude/worktrees/*' -exec gofmt -l {} +); if [ -n "$$unformatted" ]; then echo "gofmt 需要格式化: $$unformatted"; exit 1; fi
 	for module in $(GO_TEST_MODULES); do $(GO) vet $$module/... || exit 1; done
 	for module in $(GO_TEST_MODULES); do $(GO) test $$module/... -short || exit 1; done

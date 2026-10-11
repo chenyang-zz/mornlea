@@ -1262,12 +1262,28 @@ fn sequence_exhaustion_returns_typed_capacity_and_restarts() {
     let mut stack = Stack::new();
     let first = stack.connect();
 
-    // Two full batches fill the prediction journal; the third sequenced
+    // One full batch fills the selected prediction journal; another sequenced
     // action refuses the whole batch with the typed capacity failure and
     // every owner unchanged.
+    let base = limits();
+    let selected = ClientLimits::try_new_with(
+        base.queued_input_events(),
+        base.inbound_observations(),
+        base.inbound_bytes(),
+        base.outbound_commands(),
+        base.outbound_bytes(),
+        128,
+        base.message_work(),
+        base.mesh_work(),
+        base.preparation_results(),
+        base.preparation_bytes(),
+        base.family_records(),
+        base.frame_bytes(),
+    )
+    .unwrap();
+    stack.admission = InputAdmissionState::try_new(first, selected).unwrap();
     stack.submit(vec![drop_item(); 128]);
-    stack.submit(vec![drop_item(); 128]);
-    assert_eq!(stack.admission.journal_entries(), 256);
+    assert_eq!(stack.admission.journal_entries(), 128);
     let outbound_before = stack.admission.outbound_records();
     let exhausted = InputBatch::try_new(first, vec![drop_item()]).expect("batch");
     let validated = InputTranslator::validate_batch(
@@ -1281,9 +1297,9 @@ fn sequence_exhaustion_returns_typed_capacity_and_restarts() {
         Some(ClientError::Capacity),
         "the exhausted sequence space refuses the whole batch"
     );
-    assert_eq!(stack.admission.journal_entries(), 256, "unchanged");
+    assert_eq!(stack.admission.journal_entries(), 128, "unchanged");
     assert_eq!(stack.admission.outbound_records(), outbound_before);
-    assert_eq!(stack.admission.next_sequence(), 257);
+    assert_eq!(stack.admission.next_sequence(), 129);
 
     // The reset restarts the sequence space: the new epoch's first receipt
     // sequences from one, and the old space is unreachable.
