@@ -1178,7 +1178,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/tests/numerical_migration.rs",
@@ -1265,7 +1265,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
@@ -1360,7 +1360,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
@@ -1452,7 +1452,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
@@ -1560,7 +1560,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/quad.rs",
@@ -1651,7 +1651,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/physics.rs",
@@ -1739,7 +1739,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/raycast.rs",
@@ -1826,7 +1826,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/tree.rs",
@@ -1913,11 +1913,11 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/worldgen.rs",
-          "sha256": "sha256:f940e2adbf3838aa717fad93995586c10c53a5bb384a7d8b26edf48fe2164fda"
+          "sha256": "sha256:6b7f3142631f33bbb9b9dd90da10ebbbcd50258cf893a1becca3c3266006720e"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/worldgen.rs",
@@ -2000,7 +2000,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/world_probe.rs",
@@ -2084,7 +2084,7 @@
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/mod.rs",
-          "sha256": "sha256:703ef9c0fbe9ee9702a1c91d10ceebaf4c3fca6e55cec87d4809555333b727f8"
+          "sha256": "sha256:53977bc0b44a08db5d32f38fb95cdda1c46c18162dd2c2d56b87a639537c1f2c"
         },
         {
           "path": "packages/engine/crates/mornlea_engine/src/native/pathfind.rs",
