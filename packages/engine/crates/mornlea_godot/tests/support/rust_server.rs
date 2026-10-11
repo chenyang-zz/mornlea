@@ -732,18 +732,15 @@ impl TcpServer {
         self.transport.local_addr().unwrap()
     }
     fn observe(&mut self, id: ConnectionId, progress: ConnectionProgress) {
-        match progress {
-            ConnectionProgress::Closed { reason, class } => {
-                if self.connections.contains(&id) {
-                    self.retired += 1;
-                    if !matches!(reason, CloseReason::PeerGone | CloseReason::Shutdown) {
-                        self.errors.push(format!("closed: {reason:?}, {class:?}"));
-                    }
+        if let ConnectionProgress::Closed { reason, class } = progress {
+            if self.connections.contains(&id) {
+                self.retired += 1;
+                if !matches!(reason, CloseReason::PeerGone | CloseReason::Shutdown) {
+                    self.errors.push(format!("closed: {reason:?}, {class:?}"));
                 }
-                self.connections.retain(|live| *live != id);
-                self.owners.remove(&id);
             }
-            _ => {}
+            self.connections.retain(|live| *live != id);
+            self.owners.remove(&id);
         }
     }
     fn bind_new_activations(&mut self, id: ConnectionId, start: usize) {
@@ -849,6 +846,37 @@ impl TcpServer {
         {
             self.errors.push(format!("shutdown: {error:?}"));
         }
+    }
+}
+
+#[cfg(test)]
+pub use client::*;
+
+fn contract_runtime(id: CompanionId) -> ActorRuntime {
+    ActorRuntime {
+        key: ActorKey::Companion(id),
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 300,
+        peak_y: 65.0,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Companion {
+            generation: 0,
+            attempt: 3,
+            task: StoredCompanionTask::default(),
+            mining_target: None,
+        },
     }
 }
 
@@ -982,7 +1010,7 @@ mod client {
                             assert!(self.core.prepared_resource(key).is_ok());
                             capture.prepared += 1;
                             if !capture.resources.contains(key) {
-                                capture.resources.push(key.clone());
+                                capture.resources.push(*key);
                             }
                         }
                     }
@@ -1017,7 +1045,7 @@ mod client {
             ingress: State,
             pending: VecDeque<(Vec<u8>, usize, bool)>,
         },
-        Tcp(TcpServer),
+        Tcp(Box<TcpServer>),
     }
     pub struct Rig {
         pub server: Server,
@@ -1046,7 +1074,7 @@ mod client {
             let (link, endpoint) = if tcp {
                 let tcp = TcpServer::new();
                 let addr = tcp.address();
-                (Link::Tcp(tcp), Endpoint::Tcp(addr))
+                (Link::Tcp(Box::new(tcp)), Endpoint::Tcp(addr))
             } else {
                 let connector = F2Memory::new();
                 registry
@@ -1460,35 +1488,5 @@ mod client {
                 _ => None,
             }
         }
-    }
-}
-#[cfg(test)]
-pub use client::*;
-
-fn contract_runtime(id: CompanionId) -> ActorRuntime {
-    ActorRuntime {
-        key: ActorKey::Companion(id),
-        controls: None,
-        has_view: false,
-        reset: false,
-        attack_cooldown: 0,
-        hurt_cooldown: 0,
-        burn_cooldown: 0,
-        oxygen: 300,
-        peak_y: 65.0,
-        exhaustion_milli: 0,
-        saturation_milli: 0,
-        since_damage_ticks: 0,
-        drown_ticks: 0,
-        starvation_ticks: 0,
-        eating: None,
-        bow: None,
-        path: None,
-        aux: ActorAux::Companion {
-            generation: 0,
-            attempt: 3,
-            task: StoredCompanionTask::default(),
-            mining_target: None,
-        },
     }
 }

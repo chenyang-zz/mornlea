@@ -352,7 +352,7 @@ fn injected_malformed_and_capacity_frames_preserve_actual_last_visible_copy() {
         .position(|family| family.key().logical_name == "diagnostics")
         .unwrap();
     let diagnostic = match families[index].records() {
-        FamilyRecords::Diagnostics(records) => records[0].clone(),
+        FamilyRecords::Diagnostics(records) => records[0],
         _ => unreachable!(),
     };
     families[index] = mornlea_client_core::FamilyFrame::try_new(

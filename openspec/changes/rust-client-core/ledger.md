@@ -663,3 +663,12 @@ the complete derivative matrix is rerun. Formal native100, final source review
 and complete stage gates remain pending; original task status is unchanged.
 Architecture skill: no change; the established artifact qualification and
 single-owner publication/lifecycle rules cover these findings.
+
+Qualification-feature all-target Clippy exposed five fixture lint failures after
+the complete Godot test suite passed. The fixture now uses the existing closed
+progress pattern directly, copies Copy values, boxes its large TCP variant and
+keeps non-test items before the test-only module. No server production file or
+test expectations changed. The preserved failure is
+`/private/tmp/mornlea-f3-native-final-feature-clippy.log`; the repaired feature
+Clippy and real-provider39 both pass in the corresponding `-v2` and
+`/private/tmp/mornlea-f3-real-provider-lint-final.log` logs.
