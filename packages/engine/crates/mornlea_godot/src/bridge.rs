@@ -83,50 +83,126 @@ pub(crate) const RUST_FACADE_METHODS: [&str; 8] = [
 /// keep their type: booleans never become integers, floats must be finite
 /// to cross, and dictionaries and arrays become owned field lists and
 /// vectors.
-fn boundary_from_variant(variant: &Variant) -> Result<crate::abi::boundary::BoundaryValue, ()> {
+fn boundary_from_variant(
+    variant: &Variant,
+) -> Result<crate::abi::boundary::BoundaryValue, mornlea_client_core::contracts::ClientError> {
+    boundary_from_variant_at(
+        variant,
+        1,
+        &mut crate::abi::boundary::InputConversionBudget::default(),
+    )
+}
+
+fn boundary_from_variant_at(
+    variant: &Variant,
+    depth: usize,
+    budget: &mut crate::abi::boundary::InputConversionBudget,
+) -> Result<crate::abi::boundary::BoundaryValue, mornlea_client_core::contracts::ClientError> {
     use crate::abi::boundary::BoundaryValue;
     use godot::builtin::VariantType;
+    use mornlea_client_core::contracts::ClientError;
+    budget.node(depth)?;
     match variant.get_type() {
         VariantType::NIL => Ok(BoundaryValue::Null),
         VariantType::BOOL => variant
             .try_to::<bool>()
             .map(BoundaryValue::Bool)
-            .map_err(|_| ()),
+            .map_err(|_| ClientError::InvalidInput),
         VariantType::INT => variant
             .try_to::<i64>()
             .map(BoundaryValue::Int)
-            .map_err(|_| ()),
+            .map_err(|_| ClientError::InvalidInput),
         VariantType::FLOAT => {
-            let value = variant.try_to::<f64>().map_err(|_| ())?;
+            let value = variant
+                .try_to::<f64>()
+                .map_err(|_| ClientError::InvalidInput)?;
             if value.is_finite() {
                 Ok(BoundaryValue::Float(value))
             } else {
-                Err(())
+                Err(ClientError::InvalidInput)
             }
         }
-        VariantType::STRING => variant
-            .try_to::<GString>()
-            .map(|text| BoundaryValue::Text(text.to_string()))
-            .map_err(|_| ()),
+        VariantType::STRING => {
+            let text = variant
+                .try_to::<GString>()
+                .map_err(|_| ClientError::InvalidInput)?;
+            Ok(BoundaryValue::Text(bounded_native_text(
+                &text, budget, false,
+            )?))
+        }
         VariantType::ARRAY => {
-            let array = variant.try_to::<VarArray>().map_err(|_| ())?;
+            let array = variant
+                .try_to::<VarArray>()
+                .map_err(|_| ClientError::InvalidInput)?;
+            budget.array(array.len())?;
             let mut items = Vec::with_capacity(array.len());
             for item in array.iter_shared() {
-                items.push(boundary_from_variant(&item)?);
+                items.push(boundary_from_variant_at(&item, depth + 1, budget)?);
             }
             Ok(BoundaryValue::List(items))
         }
         VariantType::DICTIONARY => {
-            let dictionary = variant.try_to::<VarDictionary>().map_err(|_| ())?;
+            let dictionary = variant
+                .try_to::<VarDictionary>()
+                .map_err(|_| ClientError::InvalidInput)?;
+            budget.dictionary(dictionary.len())?;
             let mut fields = Vec::with_capacity(dictionary.len());
             for (key, value) in dictionary.iter_shared() {
-                let key = key.try_to::<GString>().map_err(|_| ())?;
-                fields.push((key.to_string(), boundary_from_variant(&value)?));
+                let key = key
+                    .try_to::<GString>()
+                    .map_err(|_| ClientError::InvalidInput)?;
+                let key = bounded_native_text(&key, budget, true)?;
+                fields.push((key, boundary_from_variant_at(&value, depth + 1, budget)?));
             }
             Ok(BoundaryValue::Fields(fields))
         }
-        _ => Err(()),
+        _ => Err(ClientError::InvalidInput),
     }
+}
+
+fn bounded_native_text(
+    text: &GString,
+    budget: &mut crate::abi::boundary::InputConversionBudget,
+    key: bool,
+) -> Result<String, mornlea_client_core::contracts::ClientError> {
+    use crate::abi::boundary::InputConversionBudget;
+    use mornlea_client_core::contracts::ClientError;
+    let maximum = if key {
+        InputConversionBudget::MAX_KEY_BYTES
+    } else {
+        InputConversionBudget::MAX_TEXT_BYTES
+    };
+    // Bound the UTF-32 scan first, then charge exact UTF-8 bytes before copying.
+    if text.len() > maximum {
+        return Err(ClientError::InvalidInput);
+    }
+    let bytes = text
+        .chars()
+        .iter()
+        .map(|character| character.len_utf8())
+        .sum();
+    if key {
+        budget.key(bytes)?;
+    } else {
+        budget.text(bytes)?;
+    }
+    Ok(text.to_string())
+}
+
+fn boundary_from_input_batch(
+    batch: &VarDictionary,
+) -> Result<crate::abi::boundary::BoundaryValue, mornlea_client_core::contracts::ClientError> {
+    use mornlea_client_core::contracts::ClientError;
+    if batch.len() != 2 || !batch.contains_key("epoch") || !batch.contains_key("actions") {
+        return Err(ClientError::InvalidInput);
+    }
+    let actions = batch
+        .get("actions")
+        .ok_or(ClientError::InvalidInput)?
+        .try_to::<VarArray>()
+        .map_err(|_| ClientError::InvalidInput)?;
+    crate::abi::boundary::check_input_action_count(actions.len())?;
+    boundary_from_variant(&batch.to_variant())
 }
 
 /// Converts one owned boundary copy back into a Godot-owned variant.
@@ -520,7 +596,7 @@ impl MornleaClientBridge {
     #[func]
     fn open_core(&mut self, config: VarDictionary) -> VarDictionary {
         self.rust_call(
-            boundary_from_variant(&config.to_variant()),
+            || boundary_from_variant(&config.to_variant()),
             |arena, config| {
                 arena.open_core_routine(
                     config,
@@ -541,9 +617,9 @@ impl MornleaClientBridge {
         identity: VarDictionary,
     ) -> VarDictionary {
         self.rust_call3(
-            boundary_from_variant(&token.to_variant()),
-            boundary_from_variant(&endpoint.to_variant()),
-            boundary_from_variant(&identity.to_variant()),
+            || boundary_from_variant(&token.to_variant()),
+            || boundary_from_variant(&endpoint.to_variant()),
+            || boundary_from_variant(&identity.to_variant()),
             |arena, token, endpoint, identity| arena.connect_routine(token, endpoint, identity),
         )
     }
@@ -556,11 +632,10 @@ impl MornleaClientBridge {
         epoch: GString,
         batch: VarDictionary,
     ) -> VarDictionary {
-        let epoch = boundary_from_variant(&Variant::from(epoch));
         self.rust_call3(
-            boundary_from_variant(&token.to_variant()),
-            epoch,
-            boundary_from_variant(&batch.to_variant()),
+            || boundary_from_variant(&token.to_variant()),
+            || boundary_from_variant(&Variant::from(epoch)),
+            || boundary_from_input_batch(&batch),
             |arena, token, epoch, batch| arena.submit_routine(token, epoch, batch),
         )
     }
@@ -568,11 +643,10 @@ impl MornleaClientBridge {
     /// Drives exactly one bounded step and answers the checked report copy.
     #[func]
     fn step(&mut self, token: VarDictionary, epoch: GString, work: VarDictionary) -> VarDictionary {
-        let epoch = boundary_from_variant(&Variant::from(epoch));
         self.rust_call3(
-            boundary_from_variant(&token.to_variant()),
-            epoch,
-            boundary_from_variant(&work.to_variant()),
+            || boundary_from_variant(&token.to_variant()),
+            || boundary_from_variant(&Variant::from(epoch)),
+            || boundary_from_variant(&work.to_variant()),
             |arena, token, epoch, work| arena.step_routine(token, epoch, work),
         )
     }
@@ -581,10 +655,9 @@ impl MornleaClientBridge {
     /// copy.
     #[func]
     fn pull_typed_frame(&mut self, token: VarDictionary, epoch: GString) -> VarDictionary {
-        let epoch = boundary_from_variant(&Variant::from(epoch));
         self.rust_call2(
-            boundary_from_variant(&token.to_variant()),
-            epoch,
+            || boundary_from_variant(&token.to_variant()),
+            || boundary_from_variant(&Variant::from(epoch)),
             |arena, token, epoch| arena.pull_frame_routine(token, epoch),
         )
     }
@@ -593,7 +666,7 @@ impl MornleaClientBridge {
     #[func]
     fn family_table(&mut self, token: VarDictionary) -> VarDictionary {
         self.rust_call(
-            boundary_from_variant(&token.to_variant()),
+            || boundary_from_variant(&token.to_variant()),
             |arena, token| arena.family_table_routine(token),
         )
     }
@@ -601,10 +674,9 @@ impl MornleaClientBridge {
     /// Resets the live session onto a fresh epoch after invalidation.
     #[func]
     fn reset(&mut self, token: VarDictionary, epoch: GString) -> VarDictionary {
-        let epoch = boundary_from_variant(&Variant::from(epoch));
         self.rust_call2(
-            boundary_from_variant(&token.to_variant()),
-            epoch,
+            || boundary_from_variant(&token.to_variant()),
+            || boundary_from_variant(&Variant::from(epoch)),
             |arena, token, epoch| arena.reset_routine(token, epoch),
         )
     }
@@ -614,7 +686,7 @@ impl MornleaClientBridge {
     #[func]
     fn close(&mut self, token: VarDictionary) -> VarDictionary {
         self.rust_call(
-            boundary_from_variant(&token.to_variant()),
+            || boundary_from_variant(&token.to_variant()),
             |arena, token| arena.close_routine(token),
         )
     }
@@ -628,67 +700,71 @@ impl MornleaClientBridge {
         }
     }
 
-    /// One rust-facade call over one marshalled argument. An off-thread call
-    /// or a marshalling refusal answers the closed envelope's `Internal` or
-    /// `InvalidInput` failure instead of panicking across the engine
-    /// boundary, and the shared routine runs only on the main thread.
-    fn rust_call(
+    /// Admit the thread before conversion, and contain conversion, owner-call,
+    /// and output-marshalling panics at the native boundary.
+    fn rust_call<T>(
         &mut self,
-        argument: Result<crate::abi::boundary::BoundaryValue, ()>,
+        arguments: impl FnOnce() -> Result<T, mornlea_client_core::contracts::ClientError>,
         call: impl FnOnce(
             &mut crate::client_core::rust_core::CoreArena,
-            &crate::abi::boundary::BoundaryValue,
+            &T,
         ) -> crate::abi::boundary::BoundaryValue,
     ) -> VarDictionary {
         use crate::abi::boundary;
-        use mornlea_client_core::contracts::ClientError;
-        let value = match argument {
-            Ok(argument) if Self::on_main_thread() => call(&mut self.rust_cores, &argument),
-            Ok(_) => boundary::outcome(Err(ClientError::Internal)),
-            Err(()) => boundary::outcome(Err(ClientError::InvalidInput)),
-        };
-        self.rust_envelope(value)
+        let result = boundary::guard_native(Self::on_main_thread(), || {
+            let arguments = arguments()?;
+            let value = call(&mut self.rust_cores, &arguments);
+            Ok(self.rust_envelope(value))
+        });
+        match result {
+            Ok(value) => value,
+            Err(error) => {
+                // The failure envelope is bounded too; a secondary engine panic
+                // must still never unwind across the native method boundary.
+                boundary::guard_native(true, || {
+                    Ok(self.rust_envelope(boundary::outcome(Err(error))))
+                })
+                .unwrap_or_default()
+            }
+        }
     }
 
-    /// The closed refusal envelope for a marshalling failure: no routine
-    /// runs and no panic can cross the engine boundary, whatever argument
-    /// position refused.
-    fn rust_marshalling_refusal(&mut self) -> VarDictionary {
-        use crate::abi::boundary;
-        use mornlea_client_core::contracts::ClientError;
-        let value = boundary::outcome(Err(ClientError::InvalidInput));
-        self.rust_envelope(value)
-    }
-
-    /// One rust-facade call over two marshalled arguments. The admission is
-    /// the shared engine-free join: a refusal in any position — including a
-    /// late one behind an already-marshalled first argument — answers the
-    /// closed envelope without dispatching.
     fn rust_call2(
         &mut self,
-        first: Result<crate::abi::boundary::BoundaryValue, ()>,
-        second: Result<crate::abi::boundary::BoundaryValue, ()>,
+        first: impl FnOnce() -> Result<
+            crate::abi::boundary::BoundaryValue,
+            mornlea_client_core::contracts::ClientError,
+        >,
+        second: impl FnOnce() -> Result<
+            crate::abi::boundary::BoundaryValue,
+            mornlea_client_core::contracts::ClientError,
+        >,
         call: impl FnOnce(
             &mut crate::client_core::rust_core::CoreArena,
             &crate::abi::boundary::BoundaryValue,
             &crate::abi::boundary::BoundaryValue,
         ) -> crate::abi::boundary::BoundaryValue,
     ) -> VarDictionary {
-        match crate::abi::boundary::join_arguments2(first, second) {
-            Ok((first, second)) => {
-                self.rust_call(Ok(first), move |arena, first| call(arena, first, &second))
-            }
-            Err(()) => self.rust_marshalling_refusal(),
-        }
+        self.rust_call(
+            || crate::abi::boundary::join_arguments2(first(), second()),
+            |arena, (first, second)| call(arena, first, second),
+        )
     }
 
-    /// One rust-facade call over three marshalled arguments, with the same
-    /// any-position admission rule as [`Self::rust_call2`].
     fn rust_call3(
         &mut self,
-        first: Result<crate::abi::boundary::BoundaryValue, ()>,
-        second: Result<crate::abi::boundary::BoundaryValue, ()>,
-        third: Result<crate::abi::boundary::BoundaryValue, ()>,
+        first: impl FnOnce() -> Result<
+            crate::abi::boundary::BoundaryValue,
+            mornlea_client_core::contracts::ClientError,
+        >,
+        second: impl FnOnce() -> Result<
+            crate::abi::boundary::BoundaryValue,
+            mornlea_client_core::contracts::ClientError,
+        >,
+        third: impl FnOnce() -> Result<
+            crate::abi::boundary::BoundaryValue,
+            mornlea_client_core::contracts::ClientError,
+        >,
         call: impl FnOnce(
             &mut crate::client_core::rust_core::CoreArena,
             &crate::abi::boundary::BoundaryValue,
@@ -696,12 +772,10 @@ impl MornleaClientBridge {
             &crate::abi::boundary::BoundaryValue,
         ) -> crate::abi::boundary::BoundaryValue,
     ) -> VarDictionary {
-        match crate::abi::boundary::join_arguments3(first, second, third) {
-            Ok((first, second, third)) => self.rust_call(Ok(first), move |arena, first| {
-                call(arena, first, &second, &third)
-            }),
-            Err(()) => self.rust_marshalling_refusal(),
-        }
+        self.rust_call(
+            || crate::abi::boundary::join_arguments3(first(), second(), third()),
+            |arena, (first, second, third)| call(arena, first, second, third),
+        )
     }
 
     /// The pinned pilot feature-family table as JSON, one object per family

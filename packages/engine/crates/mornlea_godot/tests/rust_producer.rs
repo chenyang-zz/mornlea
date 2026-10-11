@@ -720,6 +720,195 @@ mod rust_producer {
         .expect("candidate")
     }
 
+    #[test]
+    fn input_union_extra_fields_and_non_null_nullary_views_are_rejected() {
+        let (mut arena, token, counts, epoch) = counting_admitted();
+        let mut intent = BoundaryValue::tagged("CloseContainer", BoundaryValue::Null);
+        if let BoundaryValue::Fields(fields) = &mut intent {
+            fields.push(("extra".into(), BoundaryValue::Null));
+        }
+        let extra = BoundaryValue::fields([
+            ("intent", intent),
+            ("container", BoundaryValue::Null),
+            ("crafting", BoundaryValue::Null),
+        ]);
+        let invalid_view = action_value(
+            "QuickMove",
+            BoundaryValue::fields([
+                (
+                    "view",
+                    BoundaryValue::tagged("Inventory", BoundaryValue::Int(1)),
+                ),
+                ("slot", BoundaryValue::Int(0)),
+            ]),
+            BoundaryValue::Null,
+            BoundaryValue::Null,
+        );
+        for action in [extra, invalid_view] {
+            let batch = batch_value(epoch, vec![player_input_value(), action]);
+            assert_eq!(
+                boundary::decode_input_batch(&batch),
+                Err(ClientError::InvalidInput)
+            );
+            assert_failure(
+                &arena.submit_routine(&token.to_boundary(), &epoch_text(epoch), &batch),
+                "InvalidInput",
+            );
+            assert_eq!(counts.submits.get(), 0);
+        }
+    }
+
+    #[test]
+    fn oversized_input_rejects_before_decoding_any_action() {
+        let (mut arena, token, counts, epoch) = counting_admitted();
+        let batch = batch_value(epoch, vec![BoundaryValue::Null; 129]);
+        assert_eq!(
+            boundary::decode_input_batch(&batch),
+            Err(ClientError::Capacity)
+        );
+        assert_failure(
+            &arena.submit_routine(&token.to_boundary(), &epoch_text(epoch), &batch),
+            "Capacity",
+        );
+        assert_eq!(counts.submits.get(), 0);
+        let accepted = batch_value(epoch, vec![player_input_value(); 128]);
+        assert_eq!(
+            boundary::decode_input_batch(&accepted)
+                .unwrap()
+                .actions()
+                .len(),
+            128
+        );
+    }
+
+    #[test]
+    fn conversion_budget_enforces_every_schema_ceiling() {
+        use boundary::InputConversionBudget as Budget;
+        let mut budget = Budget::default();
+        assert!(budget.node(9).is_ok());
+        assert_eq!(budget.node(10), Err(ClientError::InvalidInput));
+        assert!(budget.array(128).is_ok());
+        assert_eq!(budget.array(129), Err(ClientError::InvalidInput));
+        assert!(budget.dictionary(12).is_ok());
+        assert_eq!(budget.dictionary(13), Err(ClientError::InvalidInput));
+        assert!(budget.text(1024).is_ok());
+        assert_eq!(budget.text(1025), Err(ClientError::InvalidInput));
+        assert!(budget.key(32).is_ok());
+        assert_eq!(budget.key(33), Err(ClientError::InvalidInput));
+        let mut nodes = Budget::default();
+        for _ in 0..3843 {
+            nodes.node(1).unwrap();
+        }
+        assert_eq!(nodes.node(1), Err(ClientError::InvalidInput));
+    }
+
+    fn check_conversion(
+        value: &BoundaryValue,
+        depth: usize,
+        budget: &mut boundary::InputConversionBudget,
+    ) -> Result<(), ClientError> {
+        budget.node(depth)?;
+        match value {
+            BoundaryValue::Text(text) => budget.text(text.len()),
+            BoundaryValue::List(items) => {
+                budget.array(items.len())?;
+                for item in items {
+                    check_conversion(item, depth + 1, budget)?;
+                }
+                Ok(())
+            }
+            BoundaryValue::Fields(fields) => {
+                budget.dictionary(fields.len())?;
+                for (key, value) in fields {
+                    budget.key(key.len())?;
+                    check_conversion(value, depth + 1, budget)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    #[test]
+    fn conversion_budget_accepts_full_structural_input_and_rejects_nested_extras() {
+        let token = container_token_value(1, 1);
+        let view = BoundaryValue::tagged("Container", container_ref_value(3, 1, 2));
+        let action = action_value(
+            "MovePartial",
+            BoundaryValue::fields([
+                ("view", view),
+                ("from", BoundaryValue::Int(0)),
+                ("to", BoundaryValue::Int(1)),
+                ("single", BoundaryValue::Bool(true)),
+            ]),
+            token,
+            crafting_token_value(1, 1),
+        );
+        for value in [
+            config_value(),
+            identity_value(9),
+            memory_endpoint_value(),
+            work_value(4096, 4096),
+        ] {
+            check_conversion(&value, 1, &mut boundary::InputConversionBudget::default()).unwrap();
+        }
+        let text = format!("{}a", "界".repeat(341));
+        let chat = action_value(
+            "Chat",
+            BoundaryValue::fields([("text", BoundaryValue::Text(text))]),
+            BoundaryValue::Null,
+            BoundaryValue::Null,
+        );
+        let chat_batch = batch_value(1, vec![chat; 128]);
+        check_conversion(
+            &chat_batch,
+            1,
+            &mut boundary::InputConversionBudget::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            boundary::decode_input_batch(&chat_batch)
+                .unwrap()
+                .actions()
+                .len(),
+            128
+        );
+        let maximum = batch_value(1, vec![action; 128]);
+        check_conversion(&maximum, 1, &mut boundary::InputConversionBudget::default()).unwrap();
+        let mut deep = BoundaryValue::Null;
+        for _ in 0..10 {
+            deep = BoundaryValue::List(vec![deep]);
+        }
+        assert_eq!(
+            check_conversion(&deep, 1, &mut boundary::InputConversionBudget::default()),
+            Err(ClientError::InvalidInput)
+        );
+        let mut wide = BoundaryValue::List(vec![BoundaryValue::Null; 128]);
+        wide = BoundaryValue::List(vec![wide; 31]);
+        assert_eq!(
+            check_conversion(&wide, 1, &mut boundary::InputConversionBudget::default()),
+            Err(ClientError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn native_guard_refuses_thread_before_conversion_and_contains_panics() {
+        let conversions = Cell::new(0);
+        let result: Result<BoundaryValue, ClientError> = boundary::guard_native(false, || {
+            conversions.set(conversions.get() + 1);
+            Ok(BoundaryValue::Null)
+        });
+        assert_eq!(result, Err(ClientError::Internal));
+        assert_eq!(conversions.get(), 0);
+        let result: Result<BoundaryValue, ClientError> = boundary::guard_native(true, || {
+            conversions.set(conversions.get() + 1);
+            panic!("conversion failed");
+        });
+        assert_eq!(result, Err(ClientError::Internal));
+        assert_eq!(conversions.get(), 1);
+        assert_failure(&boundary::outcome(result), "Internal");
+    }
+
     fn rendered_records(name: &'static str, records: FamilyRecords) -> Vec<BoundaryValue> {
         let source = rich_example_frame();
         let frame = PresentationFrame::try_new(
@@ -1662,8 +1851,9 @@ mod rust_producer {
             ),
         ];
         assert_eq!(actions.len(), 20, "exactly the twenty closed actions");
-        let decoded = boundary::decode_input_batch(&batch_value(1, actions))
-            .expect("the whole batch decodes");
+        let value = batch_value(1, actions);
+        check_conversion(&value, 1, &mut boundary::InputConversionBudget::default()).unwrap();
+        let decoded = boundary::decode_input_batch(&value).expect("the whole batch decodes");
         assert_eq!(decoded.epoch().get(), 1);
         assert_eq!(decoded.actions().len(), 20);
         let expected: Vec<ClientIntent> = vec![
@@ -2240,7 +2430,7 @@ mod rust_producer {
     /// dispatch remain engine-deferred and are not claimed here.
     #[test]
     fn late_argument_marshalling_refusal_closes_the_call() {
-        let ok = || Ok(BoundaryValue::Text("marshalled".to_string()));
+        let ok = || Ok::<_, ()>(BoundaryValue::Text("marshalled".to_string()));
         let refused = || Err(());
 
         // Two arguments: every refusal permutation, and especially the

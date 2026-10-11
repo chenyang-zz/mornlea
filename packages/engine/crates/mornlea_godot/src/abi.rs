@@ -387,6 +387,89 @@ pub mod boundary {
         Fields(Vec<(String, BoundaryValue)>),
     }
 
+    /// Bounds native input traversal before copying or recursing. These ceilings
+    /// cover the largest checked action with both optional token records;
+    /// output publications have their separate core-owned frame limits.
+    #[derive(Default)]
+    pub struct InputConversionBudget {
+        nodes: usize,
+        text_bytes: usize,
+    }
+
+    impl InputConversionBudget {
+        pub const MAX_DEPTH: usize = 9;
+        pub const MAX_NODES: usize = 3 + 128 * 30;
+        pub const MAX_ARRAY: usize = 128;
+        pub const MAX_DICTIONARY: usize = 12;
+        pub const MAX_TEXT_BYTES: usize = 1024;
+        pub const MAX_KEY_BYTES: usize = 32;
+        // Each value has at most one dictionary key and one text payload.
+        const MAX_TOTAL_TEXT_BYTES: usize =
+            Self::MAX_NODES * (Self::MAX_TEXT_BYTES + Self::MAX_KEY_BYTES);
+
+        pub fn node(&mut self, depth: usize) -> Result<(), ClientError> {
+            if depth == 0 || depth > Self::MAX_DEPTH || self.nodes == Self::MAX_NODES {
+                return Err(ClientError::InvalidInput);
+            }
+            self.nodes += 1;
+            Ok(())
+        }
+
+        pub fn array(&self, len: usize) -> Result<(), ClientError> {
+            if len > Self::MAX_ARRAY {
+                Err(ClientError::InvalidInput)
+            } else {
+                Ok(())
+            }
+        }
+
+        pub fn dictionary(&self, len: usize) -> Result<(), ClientError> {
+            if len > Self::MAX_DICTIONARY {
+                Err(ClientError::InvalidInput)
+            } else {
+                Ok(())
+            }
+        }
+
+        pub fn text(&mut self, bytes: usize) -> Result<(), ClientError> {
+            self.charge_text(bytes, Self::MAX_TEXT_BYTES)
+        }
+
+        pub fn key(&mut self, bytes: usize) -> Result<(), ClientError> {
+            self.charge_text(bytes, Self::MAX_KEY_BYTES)
+        }
+
+        fn charge_text(&mut self, bytes: usize, maximum: usize) -> Result<(), ClientError> {
+            if bytes > maximum || bytes > Self::MAX_TOTAL_TEXT_BYTES - self.text_bytes {
+                return Err(ClientError::InvalidInput);
+            }
+            self.text_bytes += bytes;
+            Ok(())
+        }
+    }
+
+    /// The outer native guard includes conversion and output marshalling;
+    /// thread refusal must precede all engine-value traversal.
+    pub fn guard_native<T>(
+        on_main_thread: bool,
+        call: impl FnOnce() -> Result<T, ClientError>,
+    ) -> Result<T, ClientError> {
+        if !on_main_thread {
+            return Err(ClientError::Internal);
+        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(call))
+            .unwrap_or(Err(ClientError::Internal))
+    }
+
+    /// Enforce batch ownership before any per-action decoding or allocation.
+    pub fn check_input_action_count(len: usize) -> Result<(), ClientError> {
+        if len > ClientLimits::MAX_QUEUED_INPUT_EVENTS {
+            Err(ClientError::Capacity)
+        } else {
+            Ok(())
+        }
+    }
+
     impl BoundaryValue {
         /// Builds a struct value from field pairs.
         pub fn fields<const N: usize>(pairs: [(&str, BoundaryValue); N]) -> Self {
@@ -416,6 +499,7 @@ pub mod boundary {
 
         /// The tag and payload of a tagged union value.
         pub fn tag(&self) -> Option<(&str, &BoundaryValue)> {
+            self.exact_fields(&["tag", "value"]).ok()?;
             let tag = self.field("tag")?;
             let value = self.field("value")?;
             let tag = match tag {
@@ -688,26 +772,26 @@ pub mod boundary {
     /// purpose: the bridge marshals the native variants and the engine-free
     /// tests pin this exact admission, because no engine-free test can
     /// construct the hostile native leaves themselves.
-    pub fn join_arguments2(
-        first: Result<BoundaryValue, ()>,
-        second: Result<BoundaryValue, ()>,
-    ) -> Result<(BoundaryValue, BoundaryValue), ()> {
+    pub fn join_arguments2<E>(
+        first: Result<BoundaryValue, E>,
+        second: Result<BoundaryValue, E>,
+    ) -> Result<(BoundaryValue, BoundaryValue), E> {
         match (first, second) {
             (Ok(first), Ok(second)) => Ok((first, second)),
-            (Err(()), _) | (_, Err(())) => Err(()),
+            (Err(error), _) | (_, Err(error)) => Err(error),
         }
     }
 
     /// The three-argument marshalling admission: the same rule as
     /// [`join_arguments2`] over three marshalled arguments.
-    pub fn join_arguments3(
-        first: Result<BoundaryValue, ()>,
-        second: Result<BoundaryValue, ()>,
-        third: Result<BoundaryValue, ()>,
-    ) -> Result<(BoundaryValue, BoundaryValue, BoundaryValue), ()> {
+    pub fn join_arguments3<E>(
+        first: Result<BoundaryValue, E>,
+        second: Result<BoundaryValue, E>,
+        third: Result<BoundaryValue, E>,
+    ) -> Result<(BoundaryValue, BoundaryValue, BoundaryValue), E> {
         match (first, second, third) {
             (Ok(first), Ok(second), Ok(third)) => Ok((first, second, third)),
-            (Err(()), _, _) | (_, Err(()), _) | (_, _, Err(())) => Err(()),
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => Err(error),
         }
     }
 
@@ -883,8 +967,14 @@ pub mod boundary {
     fn decode_stack_view(value: &BoundaryValue) -> Result<StackView, ClientError> {
         let (tag, payload) = value.tag().ok_or(ClientError::InvalidInput)?;
         match tag {
-            "Inventory" => Ok(StackView::Inventory),
-            "Crafting" => Ok(StackView::Crafting),
+            "Inventory" => {
+                nullary(payload)?;
+                Ok(StackView::Inventory)
+            }
+            "Crafting" => {
+                nullary(payload)?;
+                Ok(StackView::Crafting)
+            }
             "Container" => Ok(StackView::Container(decode_container_ref(payload)?)),
             _ => Err(ClientError::InvalidInput),
         }
@@ -1100,6 +1190,7 @@ pub mod boundary {
         let epoch = decode_epoch(required(value, "epoch")?)?;
         let actions_value = required(value, "actions")?;
         let items = actions_value.as_list()?;
+        check_input_action_count(items.len())?;
         let mut actions = Vec::with_capacity(items.len());
         for item in items {
             actions.push(decode_action(item)?);
