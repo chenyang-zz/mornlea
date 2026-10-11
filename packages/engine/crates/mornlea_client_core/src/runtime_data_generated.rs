@@ -2080,3 +2080,11 @@ pub(super) static COLLISION: [(u8, [Aabb; 8]); 90] = [
         ],
     ),
 ];
+pub(super) const INTERACTION_TARGET: [bool; 90] = [
+    false, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+    true, true, true, true, true, true, true, true, true, true, true, true, false, false, false,
+    false, false, false, false, false, true, true, true, true, true, true, true, true, true, true,
+    true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+    true, true, false, true, false, true, false, true, false, true, true, true, true, true, true,
+    true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+];

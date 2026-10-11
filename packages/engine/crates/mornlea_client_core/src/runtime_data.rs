@@ -62,6 +62,33 @@ pub(crate) fn worldgen_params(
         .map_err(|_| ClientError::Internal)
 }
 
+/// The compatibility interaction predicate differs from physical collision occupancy.
+pub(crate) fn interaction_target(block: u16) -> bool {
+    generated::INTERACTION_TARGET
+        .get(usize::from(block))
+        .copied()
+        .unwrap_or(false)
+}
+
+pub(crate) fn ray_cell(block: Option<u16>) -> Result<CollisionCell, ClientError> {
+    let Some(block) = block else {
+        return Ok(CollisionCell::default());
+    };
+    if !mornlea_domain::registered_block(block) {
+        return Err(ClientError::InvalidInput);
+    }
+    let mut boxes = [mornlea_engine::native::contracts::Aabb {
+        minimum: [0.0; 3],
+        maximum: [0.0; 3],
+    }; 8];
+    boxes[0] = mornlea_engine::native::contracts::Aabb {
+        minimum: [0.0; 3],
+        maximum: [1.0; 3],
+    };
+    CollisionCell::try_new(true, boxes, u8::from(interaction_target(block)))
+        .map_err(|_| ClientError::Internal)
+}
+
 pub(crate) fn is_water(block: u16) -> bool {
     (27..=34).contains(&block)
 }

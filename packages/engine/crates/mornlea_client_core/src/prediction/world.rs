@@ -41,7 +41,13 @@ impl BorrowedEnvironment<'_> {
                     minimum[axis] = checked_integer(lower[axis].floor() - 1.0)?;
                     maximum[axis] = checked_integer(upper[axis].floor() + 1.0)?;
                 }
-                let owned = WorldGrid::new(world, dimension, minimum, maximum)?;
+                let owned = WorldGrid::new(
+                    world,
+                    dimension,
+                    minimum,
+                    maximum,
+                    runtime_data::collision_cell,
+                )?;
                 kernel_step(
                     state,
                     control,
@@ -67,7 +73,8 @@ impl BorrowedEnvironment<'_> {
                     minimum[axis] = checked_integer(center - 7.0)?;
                     maximum[axis] = checked_integer(center + 7.0)?;
                 }
-                let owned = WorldGrid::new(world, dimension, minimum, maximum)?;
+                let owned =
+                    WorldGrid::new(world, dimension, minimum, maximum, runtime_data::ray_cell)?;
                 ray_target(origin, look, revision, &owned.borrow()?)
             }
         }
@@ -93,6 +100,7 @@ impl WorldGrid {
         dimension: Dimension,
         minimum: [i32; 3],
         maximum: [i32; 3],
+        cell: fn(Option<u16>) -> Result<CollisionCell, ClientError>,
     ) -> Result<Self, ClientError> {
         let mut dimensions = [0; 3];
         let mut count = 1u64;
@@ -111,9 +119,7 @@ impl WorldGrid {
         for y in minimum[1]..=maximum[1] {
             for x in minimum[0]..=maximum[0] {
                 for z in minimum[2]..=maximum[2] {
-                    cells.push(runtime_data::collision_cell(
-                        world.block_at(dimension, BlockPos::new(x, y, z)),
-                    )?);
+                    cells.push(cell(world.block_at(dimension, BlockPos::new(x, y, z)))?);
                 }
             }
         }

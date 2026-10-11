@@ -1594,6 +1594,23 @@ mod world_tests {
     }
 
     #[test]
+    fn world_ray_targets_interaction_cells_without_collision_boxes() {
+        for id in [37, 44, 70, 84, 89] {
+            let world = world(Dimension::OVERWORLD, |p| {
+                if p == BlockPos::new(6, 2, 5) { id } else { 0 }
+            });
+            let state = authority(1, 0, Dimension::OVERWORLD, [3.5, 2.5, 5.5], [0.0; 3], true);
+            assert_eq!(
+                owner(&state, &world)
+                    .confirmed_target()
+                    .map(|hit| hit.position()),
+                Some(BlockPos::new(6, 2, 5)),
+                "id {id}"
+            );
+        }
+    }
+
+    #[test]
     fn compact_world_steps_land_on_asymmetric_registered_shapes() {
         for (id, height) in [(2, 1.0), (35, 15.0 / 16.0), (76, 9.0 / 16.0)] {
             let world = world(Dimension::OVERWORLD, |p| {

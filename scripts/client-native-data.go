@@ -84,6 +84,11 @@ func run() error {
 		fmt.Fprintln(&source, "]),")
 	}
 	fmt.Fprintln(&source, "];")
+	fmt.Fprintf(&source, "pub(super) const INTERACTION_TARGET: [bool; %d] = [\n", core.BlockIDMax)
+	for id := core.AirID; id < core.BlockIDMax; id++ {
+		fmt.Fprintf(&source, "%t,\n", core.InteractionTarget(id))
+	}
+	fmt.Fprintln(&source, "];")
 	toolchain, err := os.ReadFile("packages/engine/rust-toolchain.toml")
 	if err != nil {
 		return err
