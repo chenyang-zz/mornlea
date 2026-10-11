@@ -989,6 +989,9 @@ dependencies = [
  "mornlea_client_core",
  "mornlea_domain",
  "mornlea_protocol",
+ "mornlea_server",
+ "mornlea_storage",
+ "serde_json",
 ]
 
 [[package]]
