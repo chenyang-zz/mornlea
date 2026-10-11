@@ -1013,17 +1013,15 @@ fn outbound_record_and_byte_bounds_admit_n_reject_n_plus_one() {
 
 #[test]
 fn full_journal_rejects_sequenced_batches_but_admits_chat() {
-    let mut admission = owner(1);
+    let mut admission =
+        InputAdmissionState::try_new(epoch(1), tightened(128, 4104, 8 << 20, 2)).unwrap();
     let mirror = full_mirror(1);
     let one = plain(ClientIntent::PlayerInput(control(1, 0)));
-    for _ in 0..2 {
-        let batch: Vec<InputAction> = std::iter::repeat_n(one.clone(), 128).collect();
-        assert!(submit(batch, &mirror, &mut admission).is_ok());
-    }
+    assert!(submit(vec![one.clone(); 2], &mirror, &mut admission).is_ok());
     assert_eq!(
         admission.journal_entries(),
-        256,
-        "the measured 256-entry journal is exactly full"
+        2,
+        "the selected 2-entry journal is exactly full"
     );
     let before = admission.next_sequence();
     assert_eq!(
@@ -1032,7 +1030,7 @@ fn full_journal_rejects_sequenced_batches_but_admits_chat() {
         "one more sequenced command is a valid over-limit demand"
     );
     assert_eq!(admission.next_sequence(), before, "no sequence consumed");
-    assert_eq!(admission.outbound_records(), 256, "no partial send");
+    assert_eq!(admission.outbound_records(), 2, "no partial send");
     assert!(
         submit(
             vec![plain(ClientIntent::Chat(
@@ -1044,7 +1042,7 @@ fn full_journal_rejects_sequenced_batches_but_admits_chat() {
         .is_ok(),
         "chat demands no journal entry and still admits"
     );
-    assert_eq!(admission.journal_entries(), 256);
+    assert_eq!(admission.journal_entries(), 2);
 }
 
 #[test]
@@ -1526,6 +1524,8 @@ fn accepted_collect_water_emits_bounded_native_local_cue_sources() {
     // The pending cue queue is bounded like every input-side bound: it admits
     // the measured per-batch event count and rejects one more with Capacity
     // before any sequence advance.
+    // Use a fresh owner so unrelated admission metadata cannot exhaust first.
+    admission.reset_epoch(epoch(1), limits()).unwrap();
     while admission.pending_local_cues().len() < 128 {
         assert!(submit(vec![bucket()], &mirror, &mut admission).is_ok());
     }
@@ -1541,8 +1541,8 @@ fn accepted_collect_water_emits_bounded_native_local_cue_sources() {
 
 /// The input projection state carries the pending local cue-source events the
 /// admission commit emits: a real admitted semantic UI action populates the
-/// projection-side copy with the same native local events, a rejected batch
-/// populates nothing, a read never consumes either copy, and reset clears the
+/// publication queue with the accepted native local events, a rejected batch
+/// populates nothing, a read never consumes the queue, and reset clears the
 /// projection side with the rest.
 #[test]
 fn projection_state_carries_pending_local_cues() {
@@ -1550,7 +1550,7 @@ fn projection_state_carries_pending_local_cues() {
     let mirror = full_mirror(1);
     let bucket = || plain(ClientIntent::CollectWater(fixture_look()));
 
-    // Before anything is admitted both copies are empty.
+    // Before admission the shared queue is empty.
     assert!(
         admission.projection().pending_local_cues().is_empty(),
         "a fresh owner's projection state carries no cue events"
@@ -1577,10 +1577,10 @@ fn projection_state_carries_pending_local_cues() {
     assert_eq!(
         admission.pending_local_cues(),
         &expected,
-        "the owner's own queue holds the same unconsumed events"
+        "the admission accessor reads the same unconsumed events"
     );
 
-    // Reads never consume: a second read of either copy returns the same
+    // Reads never consume: both accessors return the same
     // events.
     assert_eq!(admission.projection().pending_local_cues(), &expected);
     assert_eq!(admission.pending_local_cues(), &expected);
@@ -1717,4 +1717,67 @@ fn identity(name: &str, salt: u8) -> mornlea_client_core::ClientIdentity {
         .expect("login start"),
     )
     .expect("identity")
+}
+
+#[test]
+fn real_commit_records_exact_sequenced_admission_without_chat_sequence() {
+    let mut admission = owner(1);
+    let mirror = full_mirror(1);
+    submit(
+        vec![
+            plain(ClientIntent::DropSelectedItem),
+            plain(ClientIntent::Chat(
+                ChatIntent::try_new(chat_text(3)).unwrap(),
+            )),
+            plain(ClientIntent::CollectWater(fixture_look())),
+        ],
+        &mirror,
+        &mut admission,
+    )
+    .unwrap();
+    assert_eq!(
+        admission.projection().admitted(),
+        &[
+            (1, ClientIntentKind::DropSelectedItem),
+            (2, ClientIntentKind::CollectWater),
+        ]
+    );
+    assert_eq!(admission.journal_entries(), 2);
+}
+
+#[test]
+fn pending_admission_metadata_cap_rejects_whole_batch_before_mutation() {
+    let mut admission =
+        InputAdmissionState::try_new(epoch(1), tightened(2, 4104, 8 << 20, 256)).unwrap();
+    let mirror = full_mirror(1);
+    submit(
+        vec![plain(ClientIntent::DropSelectedItem); 2],
+        &mirror,
+        &mut admission,
+    )
+    .unwrap();
+    let before = (
+        admission.next_sequence(),
+        admission.outbound_records(),
+        admission.outbound_bytes(),
+        admission.journal_entries(),
+    );
+    assert_eq!(
+        submit(
+            vec![plain(ClientIntent::CollectWater(fixture_look()))],
+            &mirror,
+            &mut admission
+        ),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(
+        (
+            admission.next_sequence(),
+            admission.outbound_records(),
+            admission.outbound_bytes(),
+            admission.journal_entries()
+        ),
+        before
+    );
+    assert!(admission.pending_local_cues().is_empty());
 }

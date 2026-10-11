@@ -21,6 +21,7 @@ use mornlea_domain::{
 use mornlea_protocol::{ClientPacket, PlayIntent, ProtocolError};
 
 use crate::contracts::{ClientError, ClientLimits, ConfirmedRevision, InputReceipt, SessionEpoch};
+use crate::presentation::InputAdmissionOwner;
 use crate::session::ConfirmedMirror;
 
 /// One semantic client action with its optional view tokens.
@@ -432,11 +433,13 @@ pub(crate) struct OutboundRecord {
 }
 
 /// One prediction journal entry, counted once per accepted local sequence.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct JournalEntry {
     pub epoch: SessionEpoch,
     pub sequence: u64,
     pub kind: ClientIntentKind,
+    control: Option<PlayerControl>,
+    predicted: bool,
 }
 
 /// A pending local cue-source event emitted by an accepted semantic UI
@@ -522,9 +525,9 @@ impl LocalViewValidity {
 /// journal, next sequence, the local view-validity overlay and the pending
 /// local cue-source metadata beside its native local event sequence, all
 /// epoch-scoped beside the frozen `ClientLimits` it was constructed with,
-/// plus the projection input state the same commit feeds. No projection or
-/// host callback obtains a mutable borrow of this owner; `commit` is its
-/// only writer.
+/// plus the single projection owner the publication transaction consumes.
+/// Transport, prediction and observation integration retire held sources
+/// through crate-private operations; host callbacks never mutate this owner.
 pub struct InputAdmissionState {
     limits: ClientLimits,
     outbound: Vec<OutboundRecord>,
@@ -532,9 +535,8 @@ pub struct InputAdmissionState {
     journal: Vec<JournalEntry>,
     next_sequence: u64,
     overlay: LocalViewValidity,
-    pending_local_cues: Vec<LocalCueSource>,
     next_local_event_sequence: u64,
-    projection: InputProjectionState,
+    projection: InputAdmissionOwner,
 }
 
 impl InputAdmissionState {
@@ -550,9 +552,8 @@ impl InputAdmissionState {
             journal: Vec::new(),
             next_sequence: 1,
             overlay: LocalViewValidity::try_new(epoch)?,
-            pending_local_cues: Vec::new(),
             next_local_event_sequence: 1,
-            projection: InputProjectionState::try_new(1)?,
+            projection: InputAdmissionOwner::try_new(InputProjectionState::try_new(1)?)?,
         })
     }
 
@@ -582,15 +583,97 @@ impl InputAdmissionState {
     }
 
     pub fn pending_local_cues(&self) -> &[LocalCueSource] {
-        &self.pending_local_cues
+        self.projection().pending_local_cues()
     }
 
     /// The input projection state this owner's commit feeds. The read is
-    /// non-consuming: its pending local cue-source events mirror the owner's
-    /// own queue until a successful publication drains them, and no admission
-    /// query mutates either copy.
+    /// non-consuming: admission and publication share this single metadata
+    /// and local cue queue until a successful publication drains it.
     pub fn projection(&self) -> &InputProjectionState {
-        &self.projection
+        self.projection.projection()
+    }
+
+    /// Lends the single projection owner to the serial publication transaction.
+    pub(crate) fn publication_input(&mut self) -> &mut InputAdmissionOwner {
+        &mut self.projection
+    }
+
+    /// Reuses held admission facts; UI actions never become movement predictions.
+    pub(crate) fn pending_control(&self) -> Option<(u64, PlayerControl)> {
+        self.journal.iter().find_map(|entry| {
+            (!entry.predicted)
+                .then_some(entry.control)
+                .flatten()
+                .map(|control| (entry.sequence, control))
+        })
+    }
+
+    /// Only the next pending movement source can be marked after successful advance.
+    pub(crate) fn mark_predicted(&mut self, sequence: u64) -> Result<(), ClientError> {
+        if self.pending_control().map(|(held, _)| held) != Some(sequence) {
+            return Err(ClientError::InvalidInput);
+        }
+        self.journal
+            .iter_mut()
+            .find(|entry| entry.sequence == sequence)
+            .ok_or(ClientError::InvalidInput)?
+            .predicted = true;
+        Ok(())
+    }
+
+    /// A server acknowledgment retires all admitted kinds, including unpredicted UI actions.
+    pub(crate) fn acknowledge(&mut self, sequence: u64) -> Result<(), ClientError> {
+        if sequence >= self.next_sequence {
+            return Err(ClientError::InvalidInput);
+        }
+        self.journal.retain(|entry| entry.sequence > sequence);
+        Ok(())
+    }
+
+    /// Rejection must retain its publication fact before retiring the held journal source.
+    pub(crate) fn reject(&mut self, sequence: u64, class: ClientError) -> Result<(), ClientError> {
+        let index = self
+            .journal
+            .iter()
+            .position(|entry| entry.sequence == sequence)
+            .ok_or(ClientError::InvalidInput)?;
+        self.check_metadata_capacity(1)?;
+        self.projection
+            .projection_mut()
+            .record_rejected(sequence, class);
+        self.journal.remove(index);
+        Ok(())
+    }
+
+    fn check_metadata_capacity(&self, additional: usize) -> Result<(), ClientError> {
+        let projection = self.projection();
+        let count = projection
+            .admitted()
+            .len()
+            .checked_add(projection.rejected().len())
+            .and_then(|held| held.checked_add(additional))
+            .ok_or(ClientError::Capacity)?;
+        if count > self.limits.queued_input_events() {
+            return Err(ClientError::Capacity);
+        }
+        Ok(())
+    }
+
+    /// Called only after a successful complete send; refusal leaves this FIFO head retryable.
+    pub(crate) fn sent_head(&mut self) -> Result<(), ClientError> {
+        let bytes = self
+            .outbound
+            .first()
+            .ok_or(ClientError::InvalidState)?
+            .frame
+            .len();
+        let remaining = self
+            .outbound_bytes
+            .checked_sub(bytes)
+            .ok_or(ClientError::InvalidState)?;
+        self.outbound.remove(0);
+        self.outbound_bytes = remaining;
+        Ok(())
     }
 
     /// The framed bytes of the queue head, for retry after a transport
@@ -615,9 +698,8 @@ impl InputAdmissionState {
         self.journal.clear();
         self.next_sequence = 1;
         self.overlay = LocalViewValidity::try_new(epoch)?;
-        self.pending_local_cues.clear();
         self.next_local_event_sequence = 1;
-        self.projection = InputProjectionState::try_new(1)?;
+        self.projection = InputAdmissionOwner::try_new(InputProjectionState::try_new(1)?)?;
         Ok(())
     }
 }
@@ -725,6 +807,7 @@ impl InputTranslator {
         if batch.actions().is_empty() {
             return Ok(InputReceipt::Noop);
         }
+        admission.check_metadata_capacity(usize::from(batch.sequenced_count()))?;
         let limits = admission.limits();
         let new_records = usize::from(batch.sequenced_count()) + usize::from(batch.chat_count());
         if admission.outbound.len() + new_records > limits.outbound_commands() {
@@ -750,7 +833,7 @@ impl InputTranslator {
             .iter()
             .filter(|action| is_local_cue_source(&action.intent))
             .count();
-        if admission.pending_local_cues.len() + new_cues > limits.queued_input_events() {
+        if admission.pending_local_cues().len() + new_cues > limits.queued_input_events() {
             return Err(ClientError::Capacity);
         }
         // The sequence span is checked as one contiguous range whose end must
@@ -814,6 +897,11 @@ impl InputTranslator {
                         epoch: batch.epoch(),
                         sequence,
                         kind: action.intent.kind(),
+                        control: match &action.intent {
+                            ClientIntent::PlayerInput(control) => Some(*control),
+                            _ => None,
+                        },
+                        predicted: false,
                     });
                     if is_local_cue_source(&action.intent) {
                         cues.push(LocalCueSource {
@@ -834,17 +922,24 @@ impl InputTranslator {
             return Err(ClientError::Capacity);
         }
         // The critical section: all owners change together or not at all.
-        // The projection input is fed inside the same section so the exposed
-        // cue events can never diverge from the owner's own queue; neither
-        // copy is consumed here — publication owns the drain.
+        // Admission and publication share one metadata and local cue owner;
+        // the serial publication transaction alone consumes those facts.
         admission.outbound.extend(records);
         admission.outbound_bytes = final_bytes;
+        for entry in &entries {
+            admission
+                .projection
+                .projection_mut()
+                .record_admitted(entry.sequence, entry.kind);
+        }
         admission.journal.extend(entries);
         admission.next_sequence = sequence_end;
         admission.overlay = simulated;
-        admission.pending_local_cues.extend(cues.iter().copied());
         admission.next_local_event_sequence = next_cue;
-        admission.projection.stage_local_cues(&cues);
+        admission
+            .projection
+            .projection_mut()
+            .stage_local_cues(&cues);
         Ok(InputReceipt::Queued {
             epoch: batch.epoch(),
             first_sequence,
@@ -999,11 +1094,8 @@ fn simulate_local_close(
 
 /// The per-batch input projection state owner declared by the contract
 /// landing: checked admitted/rejected input metadata, the sequence hint and
-/// the pending local cue-source events. The admission owner populates the
-/// pending local cue-source half from its commit — appending the emitted
-/// native local events without consuming its own queue — while the
-/// publication wiring owns the per-batch admitted/rejected metadata, the
-/// sequence hint and the consumption of both halves.
+/// pending local cue-source events. Admission stages every accepted source
+/// once; the serial publication transaction consumes these same facts.
 #[derive(Clone, Debug, Default)]
 pub struct InputProjectionState {
     admitted: Vec<(u64, ClientIntentKind)>,
@@ -1048,9 +1140,8 @@ impl InputProjectionState {
 
     /// Stages the cue events one successful whole-batch commit emitted. The
     /// admission owner calls this inside its critical section so the exposed
-    /// projection input carries the same native local events its own queue
-    /// holds; the caller has already enforced the shared cue ceiling, and a
-    /// read of either copy consumes nothing — publication owns the drain.
+    /// projection input carries the accepted native local events; the caller
+    /// has already enforced the cue ceiling, and publication owns the drain.
     pub(crate) fn stage_local_cues(&mut self, cues: &[LocalCueSource]) {
         self.pending_local_cues.extend_from_slice(cues);
     }
@@ -1101,5 +1192,220 @@ mod tests {
         assert_eq!(admission.outbound_bytes(), 0, "no queued bytes");
         assert_eq!(admission.journal_entries(), 0, "no journal entry");
         assert!(admission.overlay.tombstones().is_empty(), "no tombstone");
+    }
+    fn admitted_fixture(limits: ClientLimits, intents: Vec<ClientIntent>) -> InputAdmissionState {
+        let epoch = SessionEpoch::try_new(1).unwrap();
+        let mirror = ConfirmedMirror::try_new(ConfirmedMirrorParts {
+            epoch,
+            revision: ConfirmedRevision::new(0),
+            phase: crate::contracts::SessionPhase::Admitted,
+            world: None,
+            actors: None,
+            inventory: None,
+            world_ui: None,
+        })
+        .unwrap();
+        let mut admission = InputAdmissionState::try_new(epoch, limits).unwrap();
+        let actions = intents
+            .into_iter()
+            .map(|intent| InputAction {
+                intent,
+                container: None,
+                crafting: None,
+            })
+            .collect();
+        let batch = InputBatch::try_new(epoch, actions).unwrap();
+        let validated = InputTranslator::validate_batch(&batch, &mirror, &limits).unwrap();
+        InputTranslator::commit(validated, &mut admission).unwrap();
+        admission
+    }
+
+    fn fixture_control() -> PlayerControl {
+        PlayerControl::new(mornlea_domain::PlayerControlParts {
+            movement: mornlea_domain::Movement {
+                move_x: 1,
+                move_z: 0,
+                jump: false,
+            },
+            look: LookAngles::try_new(0.0, 0.0).unwrap(),
+            actions: mornlea_domain::HeldActions {
+                primary: false,
+                eating: false,
+                sprinting: false,
+                sneaking: false,
+            },
+        })
+    }
+
+    #[test]
+    fn successful_send_drains_fifo_bytes_without_retiring_journal() {
+        let mut admission = admitted_fixture(
+            ClientLimits::try_new().unwrap(),
+            vec![
+                ClientIntent::DropSelectedItem,
+                ClientIntent::SelectHotbar(HotbarSlot::new(2).unwrap()),
+            ],
+        );
+        let first = admission.outbound_head_frame().unwrap().to_vec();
+        let second = admission.outbound[1].frame.clone();
+        let held = admission.outbound_bytes();
+        assert_eq!(admission.outbound_head_frame(), Some(first.as_slice()));
+        assert_eq!(admission.outbound_bytes(), held);
+        admission.sent_head().unwrap();
+        assert_eq!(admission.outbound_head_frame(), Some(second.as_slice()));
+        assert_eq!(admission.outbound_bytes(), second.len());
+        assert_eq!(admission.journal_entries(), 2);
+        assert_eq!(admission.next_sequence(), 3);
+        admission.sent_head().unwrap();
+        assert_eq!(admission.outbound_head_frame(), None);
+        assert_eq!(admission.outbound_bytes(), 0);
+        assert_eq!(admission.sent_head(), Err(ClientError::InvalidState));
+        assert_eq!(admission.journal_entries(), 2);
+    }
+
+    #[test]
+    fn pending_control_tracks_only_unpredicted_movement_and_acknowledges_all_actions() {
+        let control = fixture_control();
+        let mut admission = admitted_fixture(
+            ClientLimits::try_new().unwrap(),
+            vec![
+                ClientIntent::DropSelectedItem,
+                ClientIntent::PlayerInput(control),
+                ClientIntent::CollectWater(LookAngles::try_new(0.0, 0.0).unwrap()),
+                ClientIntent::PlayerInput(control),
+            ],
+        );
+        assert_eq!(admission.pending_control(), Some((2, control)));
+        let before = admission.journal.clone();
+        assert_eq!(admission.mark_predicted(1), Err(ClientError::InvalidInput));
+        assert_eq!(admission.mark_predicted(4), Err(ClientError::InvalidInput));
+        assert_eq!(admission.journal, before);
+        admission.mark_predicted(2).unwrap();
+        assert_eq!(admission.pending_control(), Some((4, control)));
+        assert_eq!(admission.mark_predicted(2), Err(ClientError::InvalidInput));
+        admission.mark_predicted(4).unwrap();
+        assert_eq!(admission.pending_control(), None);
+        admission.acknowledge(0).unwrap();
+        assert_eq!(admission.journal_entries(), 4);
+        let before = admission.journal.clone();
+        assert_eq!(admission.acknowledge(5), Err(ClientError::InvalidInput));
+        assert_eq!(admission.journal, before);
+        admission.acknowledge(3).unwrap();
+        assert_eq!(admission.journal_entries(), 1);
+        admission.acknowledge(4).unwrap();
+        assert_eq!(admission.journal_entries(), 0);
+        assert_eq!(admission.outbound_records(), 4);
+        assert_eq!(admission.projection().admitted().len(), 4);
+    }
+
+    #[test]
+    fn rejection_metadata_cap_and_unknown_sequences_preserve_held_journal() {
+        let base = ClientLimits::try_new().unwrap();
+        let limits = ClientLimits::try_new_with(
+            2,
+            base.inbound_observations(),
+            base.inbound_bytes(),
+            base.outbound_commands(),
+            base.outbound_bytes(),
+            base.prediction_journal(),
+            base.message_work(),
+            base.mesh_work(),
+            base.preparation_results(),
+            base.preparation_bytes(),
+            base.family_records(),
+            base.frame_bytes(),
+        )
+        .unwrap();
+        let mut admission = admitted_fixture(limits, vec![ClientIntent::DropSelectedItem; 2]);
+        let before = admission.journal.clone();
+        assert_eq!(
+            admission.reject(1, ClientError::InvalidInput),
+            Err(ClientError::Capacity)
+        );
+        assert_eq!(admission.journal, before);
+        assert!(admission.projection().rejected().is_empty());
+        *admission.publication_input().projection_mut() = InputProjectionState::try_new(3).unwrap();
+        assert_eq!(
+            admission.reject(0, ClientError::InvalidInput),
+            Err(ClientError::InvalidInput)
+        );
+        assert_eq!(
+            admission.reject(3, ClientError::InvalidInput),
+            Err(ClientError::InvalidInput)
+        );
+        admission.reject(1, ClientError::InvalidInput).unwrap();
+        assert_eq!(admission.journal_entries(), 1);
+        assert_eq!(
+            admission.projection().rejected(),
+            &[(1, ClientError::InvalidInput)]
+        );
+        assert_eq!(
+            admission.reject(1, ClientError::InvalidInput),
+            Err(ClientError::InvalidInput)
+        );
+        admission.reject(2, ClientError::InvalidInput).unwrap();
+        assert_eq!(admission.journal_entries(), 0);
+        assert_eq!(admission.next_sequence(), 3);
+        assert_eq!(admission.outbound_records(), 2);
+    }
+
+    #[test]
+    fn publication_consumes_the_actual_admission_cue_queue() {
+        use crate::presentation::assembly::{commit_publication, prepare_publication};
+        use crate::presentation::frame::{FamilyFrame, FamilyRecords, PresentationFrame};
+        use crate::presentation::{
+            AudioDedupDelta, AudioProjectionState, LifecycleProjectionState,
+            PublicationConsumption, PublicationOwners,
+        };
+        let limits = ClientLimits::try_new().unwrap();
+        let mut admission = admitted_fixture(
+            limits,
+            vec![ClientIntent::CollectWater(
+                LookAngles::try_new(0.0, 0.0).unwrap(),
+            )],
+        );
+        let epoch = admission.overlay().epoch();
+        let empty_frame = |index| {
+            let families = vec![
+                FamilyRecords::Session(vec![]),
+                FamilyRecords::Input(vec![]),
+                FamilyRecords::Terrain(vec![]),
+                FamilyRecords::Actors(vec![]),
+                FamilyRecords::PlayerView(vec![]),
+                FamilyRecords::InventoryUi(vec![]),
+                FamilyRecords::WorldUi(vec![]),
+                FamilyRecords::AudioCues(vec![]),
+                FamilyRecords::Lifecycle(vec![]),
+                FamilyRecords::Diagnostics(vec![]),
+            ]
+            .into_iter()
+            .map(|records| FamilyFrame::try_new(records.key(), records).unwrap())
+            .collect();
+            PresentationFrame::try_new(epoch, ConfirmedRevision::new(0), index, families).unwrap()
+        };
+        let mut visible = std::sync::Arc::new(empty_frame(0));
+        let mut observations = vec![];
+        let mut audio = AudioProjectionState::try_new().unwrap();
+        let mut lifecycle = LifecycleProjectionState::try_new(1).unwrap();
+        let mut owners = PublicationOwners::try_new(
+            &mut visible,
+            &mut observations,
+            admission.publication_input(),
+            &mut audio,
+            &mut lifecycle,
+        )
+        .unwrap();
+        let reservation = prepare_publication(
+            &owners,
+            empty_frame(1),
+            AudioDedupDelta::default(),
+            PublicationConsumption::try_new(0, 0, 1, 0).unwrap(),
+            &limits,
+        )
+        .unwrap();
+        commit_publication(&mut owners, reservation);
+        assert!(admission.pending_local_cues().is_empty());
+        assert!(admission.projection().pending_local_cues().is_empty());
+        assert_eq!(admission.projection().admitted().len(), 1);
     }
 }

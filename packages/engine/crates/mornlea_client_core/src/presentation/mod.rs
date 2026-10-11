@@ -1128,6 +1128,11 @@ impl InputAdmissionOwner {
     pub fn projection(&self) -> &InputProjectionState {
         &self.projection
     }
+
+    /// Exclusive admission and publication mutation of the one input projection.
+    pub(crate) fn projection_mut(&mut self) -> &mut InputProjectionState {
+        &mut self.projection
+    }
 }
 
 /// The checked consumption cursors of one publication: prefix counts for the
