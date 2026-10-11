@@ -1226,3 +1226,85 @@ fn summary_slots_stay_bounded() {
         "the cross-epoch drain drop releases its admission-summary slot"
     );
 }
+
+fn prepare_publication(
+    h: &mut Harness,
+    center: ChunkPos,
+    budget: ClientWorkBudget,
+) -> Result<mornlea_client_core::presentation::family_terrain::TerrainPublication, ClientError> {
+    h.frame_index += 1;
+    let input = InputProjectionState::try_new(1).expect("input state");
+    let player = PlayerProjectionState::try_new(
+        h.epoch,
+        ConfirmedRevision::new(h.frame_revision),
+        Pose::try_new([0.0; 3], 0.0, 0.0).expect("pose"),
+        None,
+        Vec::new(),
+        None,
+        None,
+        MovementIntent::try_new(None, true).expect("movement"),
+    )
+    .expect("player state");
+    let audio = AudioProjectionState::try_new().expect("audio state");
+    let lifecycle = LifecycleProjectionState::try_new(1).expect("lifecycle state");
+    let diagnostics = DiagnosticProjectionState::try_new(
+        ProducerIdentity::try_new([0; 20], [0; 32]).expect("producer"),
+        QueueCounters::try_new(0, 0, 0, 0, 0, 0, 0).expect("queue counters"),
+        ErrorClassCounters::try_new(0, 0, 0, 0, 0, 0).expect("rejection counters"),
+    )
+    .expect("diagnostics state");
+    let view = ProjectionView::try_new(
+        &h.mirror,
+        &[],
+        &input,
+        &player,
+        &audio,
+        &lifecycle,
+        &diagnostics,
+        h.epoch,
+        ConfirmedRevision::new(h.frame_revision),
+        h.frame_index,
+        &h.limits,
+    )
+    .expect("projection view");
+    h.publisher.prepare(
+        &view,
+        &mut h.queue,
+        &mut h.selection,
+        center,
+        &h.params,
+        budget,
+    )
+}
+
+#[test]
+fn staged_terrain_waits_for_commit_and_retries_abandoned_proposal() {
+    let mut h = new_harness(1, 1, far_config(false, 2, 3, charge()), frozen_limits());
+    let center = ChunkPos::new(0, 0);
+    set_mirror(&mut h, &[(Dimension::OVERWORLD, 0, 0, 1)]);
+    let job = near_job(&mut h, center, 0, 1, 2);
+    let key = *job.key();
+    admit_near(&mut h, job).expect("admitted near job");
+    let proposal = prepare_publication(&mut h, center, full_budget()).expect("prepared stage");
+    assert_eq!(proposal.records().len(), 1);
+    assert!(h.publisher.published_resources().is_empty());
+    assert!(h.queue.prepared_resource(&key).is_ok());
+    drop(proposal);
+    let retry = prepare_publication(&mut h, center, full_budget()).expect("retry stage");
+    assert_eq!(retry.records().len(), 1);
+    h.publisher.commit(&mut h.queue, retry);
+    assert_eq!(h.publisher.published_resources(), &[key]);
+    assert_eq!(h.publisher.retry_owned(), 0);
+
+    set_mirror(&mut h, &[]);
+    let removal = prepare_publication(&mut h, center, full_budget()).expect("prepared removal");
+    assert_eq!(removal.records().len(), 1);
+    assert_eq!(h.publisher.published_resources(), &[key]);
+    assert!(h.queue.prepared_resource(&key).is_ok());
+    h.publisher.commit(&mut h.queue, removal);
+    assert!(h.publisher.published_resources().is_empty());
+    assert_eq!(
+        h.queue.prepared_resource(&key).unwrap_err(),
+        ClientError::InvalidInput
+    );
+}

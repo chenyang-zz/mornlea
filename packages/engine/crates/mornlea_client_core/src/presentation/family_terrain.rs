@@ -163,6 +163,20 @@ pub struct TerrainPublisher {
     retry: Vec<(PreparedResourceKey, SectionSummary)>,
 }
 
+/// A checked terrain proposal whose references retire only at whole-frame commit.
+/// Dropping a proposal leaves newly prepared upserts retry-owned by the publisher.
+pub struct TerrainPublication {
+    records: Vec<TerrainRecord>,
+    published: Vec<PreparedResourceKey>,
+    retire: Vec<PreparedResourceKey>,
+}
+
+impl TerrainPublication {
+    pub fn records(&self) -> &[TerrainRecord] {
+        &self.records
+    }
+}
+
 impl TerrainPublisher {
     pub fn try_new() -> Result<Self, ClientError> {
         Ok(Self {
@@ -233,6 +247,23 @@ impl TerrainPublisher {
         params: &Arc<WorldgenParams>,
         budget: ClientWorkBudget,
     ) -> Result<Vec<TerrainRecord>, ClientError> {
+        let publication = self.prepare(view, queue, selection, center, params, budget)?;
+        let records = publication.records.clone();
+        self.commit(queue, publication);
+        Ok(records)
+    }
+
+    /// Advances bounded preparation without retiring previously published resources.
+    /// The caller commits this proposal only after complete-frame admission succeeds.
+    pub fn prepare(
+        &mut self,
+        view: &ProjectionView<'_>,
+        queue: &mut PreparationQueue,
+        selection: &mut LodSelection,
+        center: ChunkPos,
+        params: &Arc<WorldgenParams>,
+        budget: ClientWorkBudget,
+    ) -> Result<TerrainPublication, ClientError> {
         if selection.epoch() != view.frame_epoch() {
             // A selection of another epoch never feeds this frame; the
             // frame's terrain family must be rebased by its controller.
@@ -435,29 +466,29 @@ impl TerrainPublisher {
             return Err(ClientError::Capacity);
         }
 
-        // The single commit: apply the staged retirements exactly once (a
-        // late or repeated forget after a supersede or an invalidation
-        // releases nothing), then swap the reference set to the survivors
-        // plus this frame's upserts. Every attempted upsert published or
-        // was superseded inside the same vector by a fresher identity of
-        // its terrain key, whose delivery already released the older
-        // geometry, so the retry list empties.
-        for key in &retire {
-            let _ = queue.forget(key);
-        }
         kept.extend(
             records
                 .iter()
                 .filter_map(|record| record.resource().copied()),
         );
-        self.published = kept;
-        self.retry = Vec::new();
-        Ok(records)
+        self.retry = attempted;
+        Ok(TerrainPublication {
+            records,
+            published: kept,
+            retire,
+        })
     }
 
-    /// Whether one retry-owned identity may still publish: its epoch is the
-    /// frame's, the real arena still retains its geometry, and its section
-    /// or tile is still current against the mirror and the ring.
+    /// Releases exact prior keys and moves prebuilt references after whole-frame validation.
+    /// This single-owner commit performs no allocation or fallible work.
+    pub fn commit(&mut self, queue: &mut PreparationQueue, publication: TerrainPublication) {
+        for key in &publication.retire {
+            let _ = queue.forget(key);
+        }
+        self.published = publication.published;
+        self.retry.clear();
+    }
+
     fn retry_current(
         &self,
         view: &ProjectionView<'_>,
