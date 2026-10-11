@@ -274,17 +274,18 @@ impl TerrainPublisher {
                 retire.push(*key);
                 continue;
             }
-            let current = match key.key() {
-                TerrainKey::Section(section) => {
-                    // The committed effect of a forget or a newer snapshot:
-                    // the mirror holds the chunk at a different revision.
-                    held_revision(view, key.dimension(), section.chunk())
-                        == Some(key.content_revision())
-                }
-                TerrainKey::LodTile(tile) => {
-                    selection.tracks(*tile) && key.generation() == selection.generation()
-                }
-            };
+            let current = key.dimension() == selection.dimension()
+                && match key.key() {
+                    TerrainKey::Section(section) => {
+                        // The committed effect of a forget or a newer snapshot:
+                        // the mirror holds the chunk at a different revision.
+                        held_revision(view, key.dimension(), section.chunk())
+                            == Some(key.content_revision())
+                    }
+                    TerrainKey::LodTile(tile) => {
+                        selection.tracks(*tile) && key.generation() == selection.generation()
+                    }
+                };
             if current {
                 kept.push(*key);
             } else {
@@ -343,7 +344,7 @@ impl TerrainPublisher {
             if !delivered {
                 continue;
             }
-            if key.epoch() != view.frame_epoch() {
+            if key.epoch() != view.frame_epoch() || key.dimension() != selection.dimension() {
                 dropped.push(key);
                 continue;
             }
@@ -511,7 +512,7 @@ impl TerrainPublisher {
         queue: &PreparationQueue,
         key: &PreparedResourceKey,
     ) -> bool {
-        if key.epoch() != view.frame_epoch() {
+        if key.epoch() != view.frame_epoch() || key.dimension() != selection.dimension() {
             return false;
         }
         if queue.prepared_resource(key).is_err() {

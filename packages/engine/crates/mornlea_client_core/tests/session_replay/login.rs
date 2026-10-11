@@ -692,9 +692,21 @@ fn repair_session(
     mornlea_client_core::session::io::MemoryPeer,
     SessionEpoch,
 ) {
+    repair_session_with_transport(limits, limits)
+}
+
+fn repair_session_with_transport(
+    limits: mornlea_client_core::ClientLimits,
+    transport_limits: mornlea_client_core::ClientLimits,
+) -> (
+    LoginSession,
+    std::sync::Arc<ReleaseRetryConnector>,
+    mornlea_client_core::session::io::MemoryPeer,
+    SessionEpoch,
+) {
     use mornlea_client_core::{ClientConfig, ConnectorRegistry, StdMonotonicClock};
     let (inner, peer) = mornlea_client_core::session::io::MemoryConnector::pair(
-        limits,
+        transport_limits,
         NonZeroU64::new(1).unwrap(),
     );
     let connector = std::sync::Arc::new(ReleaseRetryConnector {
@@ -993,14 +1005,11 @@ fn repaired_capacity_work_limit_preserves_queued_messages() {
 fn repaired_capacity_observation_overflow_is_terminal() {
     let l = mornlea_client_core::ClientLimits::try_new().unwrap();
     let (mut session, connector, peer, epoch) =
-        repair_session(repair_limits(1, 1, 1, l.inbound_bytes()));
+        repair_session_with_transport(repair_limits(2, 1, 1, l.inbound_bytes()), l);
     peer.feed(&repair_forget(0)).unwrap();
-    session
-        .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
-        .unwrap();
     peer.feed(&repair_forget(1)).unwrap();
     let report = session
-        .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
+        .step(epoch, ClientWorkBudget::try_new(2, 0).unwrap())
         .unwrap();
     assert_eq!(report.terminal(), Some(&CloseReason::Capacity));
     assert_eq!(report.pending_inbound(), 0);
@@ -1014,6 +1023,7 @@ fn repaired_capacity_observation_overflow_is_terminal() {
 fn already_released_known_transport_publishes_terminal_once() {
     let (mut session, connector, _, epoch) =
         repair_session(mornlea_client_core::ClientLimits::try_new().unwrap());
+    session.submit_input(epoch, batch(epoch)).unwrap();
     let ticket = mornlea_client_core::TransportTicket::try_new(
         NonZeroU64::new(1).unwrap(),
         NonZeroU64::new(1).unwrap(),

@@ -1,59 +1,46 @@
-//! The login/session-observation provider: the first real `ClientEndpoint`
-//! implementation inside the session seam.
-//!
-//! This provider owns the state-checked hello/login exchange before play, the
-//! accepted monotonic deadlines, one terminal publication and one transport
-//! release per session, and the real lifecycle Open/terminal records a pending
-//! epoch issues. It is the sole place the session phase advances during
-//! connection: `Connecting` issues the current-version hello, a validated
-//! server hello moves the session to `Handshaking` and sends the login start,
-//! and only a complete login success admits the session to `Play`. A frame
-//! that does not belong to the current phase, that is structurally truncated,
-//! that carries a foreign protocol version or whose declared body exceeds the
-//! accepted frame cap is rejected in place: no transition, no terminal and no
-//! release, exactly as a rejected frame is never a failed step.
-//!
-//! The deadlines come from the injected configuration. The accepted session
-//! policy they carry is the landed transport binding's `HandshakeTimeout` of
-//! five seconds and `LoginTimeout` of ten seconds
-//! (`packages/shared/network/login.go`), the same values the replay harness
-//! configuration builds its `ClientConfig` with, so a deployment may tighten
-//! them but the tests pin the accepted policy.
-//!
-//! Ownership boundaries: the confirmed mirror's revision is advanced only by
-//! the mirror provider, so this provider publishes session and lifecycle
-//! records at revision zero and stages admitted play packets as pending
-//! accepted observations for that owner to consume; the serial frame
-//! assembler consumes those observations. Lifecycle ownership is shared with
-//! the repeatable lifecycle provider, which alone issues and retires epochs.
+//! The sole live session composes the accepted transport, mirror and publication owners.
+//! Wire packets use the shared protocol codec; observations retire only at full-frame commit.
 
 use std::collections::VecDeque;
+use std::num::NonZeroU64;
+
+#[path = "publication.rs"]
+mod publication;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mornlea_domain::{Identities, PlayerId};
+use mornlea_domain::{BlockPos, ChunkPos, Dimension, Event, Identities, PlayerId};
 use mornlea_protocol::{
-    ClientHello, LoginStart, ProtocolCodec, ProtocolError, ServerPacket, State, read_frame_ref,
-    write_frame,
+    ClientHello, ClientPacket, KeepAliveReply, LoginStart, ProtocolCodec, ProtocolError,
+    ServerPacket, State, encode_client_into, read_frame_ref, write_frame,
 };
 
 use crate::contracts::{
     ClientConfig, ClientEndpoint, ClientError, ClientIdentity, ClientLimits, ClientWorkBudget,
-    CloseReason, ConfirmedRevision, Connector, ConnectorRegistry, Endpoint, FAMILY_LIFECYCLE,
-    FAMILY_SESSION, FamilyKey, FamilyOperation, InputReceipt, MonotonicClock, ObservationKey,
-    RecordHeader, SessionEpoch, SessionPhase, StepReport, TransportPoll, TransportTicket,
+    CloseReason, ConfirmedRevision, Connector, ConnectorRegistry, Endpoint, FAMILY_SESSION,
+    FamilyKey, FamilyOperation, InputReceipt, MonotonicClock, ObservationKey, RecordHeader,
+    SessionEpoch, SessionPhase, StepReport, TransportPoll, TransportTicket,
 };
 use crate::input::{InputAdmissionState, InputBatch, InputTranslator};
-use crate::preparation::PreparationQueue;
+use crate::prediction::{PlayerProjectionState, PredictionReplay};
+use crate::preparation::{LodConfig, LodStep, PreparationQueue};
+use crate::preparation::{lod::LodSelection, near::NearScheduler};
 use crate::presentation::AudioProjectionState;
+use crate::presentation::assembly::{commit_publication, prepare_publication};
+use crate::presentation::family_terrain::TerrainPublisher;
 use crate::presentation::frame::{
     FamilyFrame, FamilyRecords, LifecycleRecord, PresentationFrame, SessionRecord,
 };
 use crate::presentation::{AcceptedObservation, BoundedText, LifecycleProjectionState, TextKind};
+use crate::presentation::{
+    MovementIntent, Pose, ProjectionView, PublicationConsumption, PublicationOwners,
+};
+use crate::session::io::TcpConnector;
 use crate::session::lifecycle::{
     LifecycleInvalidation, LifecycleOwner, close_projection, open_projection, reset_projection,
 };
-use crate::session::{ConfirmedMirror, ConfirmedMirrorParts};
+use crate::session::mirror::MirrorProvider;
+use mornlea_engine::native::contracts::{MeshRegistry, WorldgenParams};
 
 /// The login/session state machine over the injected substitution ports.
 ///
@@ -67,6 +54,7 @@ pub struct LoginSession {
     login_timeout: Duration,
     clock: Arc<dyn MonotonicClock>,
     connectors: Arc<ConnectorRegistry>,
+    tcp: Arc<dyn Connector>,
     owner: LifecycleOwner,
     session: Option<LiveSession>,
 }
@@ -88,10 +76,12 @@ struct LiveSession {
     /// refusal; the head is retried before any new poll.
     outbound: VecDeque<Vec<u8>>,
     codec: ProtocolCodec,
-    mirror: ConfirmedMirror,
+    mirror: MirrorProvider,
+    prediction: PredictionReplay,
+    player_source: Option<(u64, Dimension, bool)>,
+    effects_cursor: usize,
+    world_seed: Option<u64>,
     admission: InputAdmissionState,
-    pending_inbound: Vec<AcceptedObservation>,
-    inbound_limit: usize,
     limits: ClientLimits,
     lifecycle: LifecycleProjectionState,
     player_id: Option<PlayerId>,
@@ -99,14 +89,173 @@ struct LiveSession {
     pending_terminal: Option<CloseReason>,
     audio: AudioProjectionState,
     preparation: PreparationQueue,
+    near: NearScheduler,
+    terrain: TerrainPublisher,
+    registry: Arc<MeshRegistry>,
+    far: Option<(LodSelection, Arc<WorldgenParams>)>,
+    terrain_generation: u64,
     visible: Option<Arc<PresentationFrame>>,
     frame_index: u64,
-    /// Rejected inbound frames by class source; the diagnostics projection
-    /// consumes this counter when its owner lands.
+    queue_high_water: crate::presentation::QueueCounters,
+    /// Invalid wire observations remain visible in epoch diagnostics after consumption.
     rejected_inbound: u64,
 }
 
+impl LiveSession {
+    fn select_terrain_dimension(&mut self, dimension: Dimension) -> Result<(), ClientError> {
+        if self
+            .far
+            .as_ref()
+            .is_some_and(|(selection, _)| selection.dimension() == dimension)
+        {
+            return Ok(());
+        }
+        let generation = self
+            .terrain_generation
+            .checked_add(1)
+            .ok_or(ClientError::Capacity)?;
+        let config = LodConfig::try_new(
+            true,
+            self.identity.login().view_distance,
+            LodConfig::DEFAULT_FAR_MULTIPLIER,
+            LodStep::try_new(4)?,
+            4 << 20,
+        )?;
+        let params = crate::runtime_data::worldgen_params(
+            self.world_seed.ok_or(ClientError::InvalidState)? as i64,
+            dimension,
+            true,
+        )?;
+        let selection = LodSelection::try_new(self.epoch, dimension, config, generation)?;
+        self.far = Some((selection, params));
+        self.terrain_generation = generation;
+        Ok(())
+    }
+
+    fn player_projection(&self) -> Result<PlayerProjectionState, ClientError> {
+        if self.player_source.is_some() {
+            return self.prediction.projection();
+        }
+        // The pending context carries no player fact into an emitted family.
+        PlayerProjectionState::try_new(
+            self.epoch,
+            self.mirror.mirror().revision(),
+            Pose::try_new([0.0; 3], 0.0, 0.0)?,
+            None,
+            Vec::new(),
+            None,
+            None,
+            MovementIntent::try_new(None, false)?,
+        )
+    }
+
+    fn advance_sources(&mut self) -> Result<(), ClientError> {
+        self.prediction.begin_frame();
+        while self.effects_cursor < self.mirror.observations().len() {
+            let observation = &self.mirror.observations()[self.effects_cursor];
+            let event = Event::try_from(observation.packet().clone())
+                .map_err(|_| ClientError::InvalidInput)?;
+            match event {
+                Event::PlayerState(state)
+                    if state.server_tick() > self.player_source.map_or(0, |source| source.0) =>
+                {
+                    if state.last_input_sequence() >= self.admission.next_sequence() {
+                        return Err(ClientError::InvalidInput);
+                    }
+                    self.prediction.apply_world(
+                        observation.key(),
+                        &state,
+                        self.mirror.mirror().world(),
+                    )?;
+                    self.admission.acknowledge(state.last_input_sequence())?;
+                    self.player_source =
+                        Some((state.server_tick(), state.dimension(), state.ready()));
+                }
+                Event::CommandRejected(rejection)
+                    if self.admission.holds_sequence(rejection.sequence()) =>
+                {
+                    let dimension = self
+                        .player_source
+                        .map_or(Dimension::OVERWORLD, |source| source.1);
+                    let mut prediction = self.prediction.clone();
+                    prediction.reject_world(
+                        rejection.sequence(),
+                        self.mirror.mirror().world(),
+                        dimension,
+                    )?;
+                    self.admission
+                        .reject(rejection.sequence(), ClientError::InvalidInput)?;
+                    self.prediction = prediction;
+                }
+                _ => {}
+            }
+            self.effects_cursor += 1;
+        }
+        if let Some((_, dimension, true)) = self.player_source {
+            let mut last = None;
+            for _ in 0..5 {
+                let Some((sequence, control)) = self.admission.pending_control() else {
+                    break;
+                };
+                let witness = self.prediction.predict_world(
+                    sequence,
+                    control,
+                    self.mirror.mirror().world(),
+                    dimension,
+                )?;
+                self.admission.mark_predicted(sequence)?;
+                last = Some(witness);
+            }
+            if let Some(witness) = last {
+                let position = witness.pose().position();
+                let foot = BlockPos::new(
+                    position[0].floor() as i32,
+                    position[1].floor() as i32,
+                    position[2].floor() as i32,
+                );
+                self.prediction
+                    .observe_snow_step(self.mirror.mirror().world().block_at(dimension, foot))?;
+            }
+            self.prediction.refresh_world_targets(
+                self.mirror.mirror().world(),
+                dimension,
+                self.mirror.mirror().revision(),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn queue_control(session: &mut LiveSession, frame: Vec<u8>) -> Result<(), ClientError> {
+    let count = session.outbound.len() + session.admission.outbound_records() + 1;
+    let bytes = session
+        .outbound
+        .iter()
+        .try_fold(session.admission.outbound_bytes(), |held, value| {
+            held.checked_add(value.len())
+        })
+        .and_then(|held| held.checked_add(frame.len()))
+        .ok_or(ClientError::Capacity)?;
+    if count > session.limits.outbound_commands() || bytes > session.limits.outbound_bytes() {
+        return Err(ClientError::Capacity);
+    }
+    session.outbound.push_back(frame);
+    publication::observe_queues(session);
+    Ok(())
+}
+
 impl LoginSession {
+    /// Resolves only the live owning epoch; reset cannot resurrect an old geometry.
+    pub fn prepared_resource(
+        &self,
+        key: &crate::preparation::PreparedResourceKey,
+    ) -> Result<Arc<crate::preparation::PreparedGeometry>, ClientError> {
+        let session = self.session.as_ref().ok_or(ClientError::InvalidInput)?;
+        if key.epoch() != session.epoch {
+            return Err(ClientError::StaleEpoch);
+        }
+        session.preparation.prepared_resource(key)
+    }
     /// Builds the session state machine from a checked configuration. The
     /// clock, connector registry and deadline policy are exactly the injected
     /// ones; no default deadline exists here.
@@ -117,6 +266,11 @@ impl LoginSession {
             login_timeout: config.login_timeout(),
             clock: Arc::clone(config.clock()),
             connectors: Arc::clone(config.connectors()),
+            tcp: Arc::new(TcpConnector::new(
+                NonZeroU64::MAX,
+                *config.limits(),
+                config.hello_timeout(),
+            )?),
             owner: LifecycleOwner::try_new(*config.limits())?,
             session: None,
         })
@@ -136,7 +290,7 @@ impl LoginSession {
     ) -> Result<LiveSession, ClientError> {
         let login_frame = login_frame_bytes(&identity)?;
         let codec = ProtocolCodec::new().map_err(|_| ClientError::Internal)?;
-        let mirror = ConfirmedMirror::try_new(ConfirmedMirrorParts::pending(epoch))?;
+        let mirror = MirrorProvider::new(epoch, self.limits)?;
         let admission = InputAdmissionState::try_new(epoch, self.limits)?;
         let lifecycle = LifecycleProjectionState::try_new(epoch.get())?;
         let now = self.clock.now();
@@ -153,9 +307,11 @@ impl LoginSession {
             outbound: VecDeque::new(),
             codec,
             mirror,
+            prediction: PredictionReplay::try_new(epoch, self.limits)?,
+            player_source: None,
+            effects_cursor: 0,
+            world_seed: None,
             admission,
-            pending_inbound: Vec::new(),
-            inbound_limit: self.limits.inbound_observations(),
             limits: self.limits,
             lifecycle,
             player_id: None,
@@ -163,27 +319,139 @@ impl LoginSession {
             pending_terminal: None,
             audio: AudioProjectionState::try_new()?,
             preparation: PreparationQueue::new(self.limits),
+            near: NearScheduler::new(epoch, self.limits),
+            terrain: TerrainPublisher::try_new()?,
+            registry: crate::runtime_data::mesh_registry()?,
+            far: None,
+            terrain_generation: 0,
             visible: None,
             frame_index: 0,
+            queue_high_water: crate::presentation::QueueCounters::default(),
             rejected_inbound: 0,
         })
     }
 
-    /// Publishes one validator-checked frame at `next_index`: the current
-    /// session record plus every still-pending lifecycle record, which the
-    /// publication consumes exactly once.
-    fn publish(&mut self, next_index: u64) -> Result<(), ClientError> {
+    /// Commits all families together before retiring source cursors or terrain references.
+    fn publish(&mut self, next_index: u64, work: ClientWorkBudget) -> Result<u16, ClientError> {
         let session = self.session.as_mut().ok_or(ClientError::InvalidState)?;
-        let frame = prepare_frame(
-            session,
-            session.phase,
-            session.terminal.clone(),
-            session.lifecycle.pending().to_vec(),
+        publication::observe_queues(session);
+        if let Err(error) = session.advance_sources() {
+            // Consumed authority cannot disappear when its retained effect cannot fit.
+            session.pending_terminal = Some(if error == ClientError::Capacity {
+                CloseReason::Capacity
+            } else {
+                CloseReason::Internal
+            });
+            return Err(error);
+        }
+        let player = session.player_projection()?;
+        let ready = session.player_source.is_some_and(|(_, _, ready)| ready);
+        if let Some((_, dimension, _)) = session.player_source
+            && (ready || session.far.is_some())
+        {
+            session.select_terrain_dimension(dimension)?;
+        }
+        let near_jobs = if ready {
+            session.near.dispatch(
+                session.mirror.mirror().world(),
+                session.player_source.expect("authority").1,
+                &session.registry,
+                &mut session.terrain,
+                &mut session.preparation,
+                work,
+            )?
+        } else {
+            0
+        };
+        publication::observe_queues(session);
+        let diagnostics = publication::diagnostics(session)?;
+        let view = ProjectionView::try_new(
+            session.mirror.mirror(),
+            session.mirror.observations(),
+            session.admission.projection(),
+            &player,
+            &session.audio,
+            &session.lifecycle,
+            &diagnostics,
+            session.epoch,
+            session.mirror.mirror().revision(),
             next_index,
-            &self.limits,
+            &session.limits,
         )?;
-        install_frame(session, frame);
-        Ok(())
+        let proposal = if let Some((selection, params)) = session.far.as_mut() {
+            let position = player
+                .predicted_pose()
+                .unwrap_or(player.confirmed_pose())
+                .position();
+            let center = ChunkPos::new(
+                (position[0].floor() as i32).div_euclid(16),
+                (position[2].floor() as i32).div_euclid(16),
+            );
+            Some(session.terrain.prepare_with_dispatch_limit(
+                &view,
+                &mut session.preparation,
+                selection,
+                center,
+                params,
+                work,
+                if ready {
+                    work.meshes() - u16::try_from(near_jobs).map_err(|_| ClientError::Internal)?
+                } else {
+                    0
+                },
+            )?)
+        } else {
+            None
+        };
+        let processed_meshes = proposal
+            .as_ref()
+            .map_or(0, |proposal| proposal.processed_meshes());
+        let built = publication::complete(
+            &view,
+            session.phase,
+            session.player_id,
+            session.terminal.clone(),
+            proposal
+                .as_ref()
+                .map_or_else(Vec::new, |proposal| proposal.records().to_vec()),
+            session.lifecycle.pending().to_vec(),
+            session.player_source.is_some(),
+        )?;
+        let consumption = PublicationConsumption::try_new(
+            session.mirror.observations().len(),
+            session.admission.projection().admitted().len()
+                + session.admission.projection().rejected().len(),
+            session.admission.pending_local_cues().len(),
+            session.lifecycle.pending().len(),
+        )?;
+        let snow_count = player.predicted_snow_cues().len();
+        let visible = session.visible.as_mut().ok_or(ClientError::InvalidState)?;
+        let mut owners = PublicationOwners::try_new(
+            visible,
+            session.mirror.publication_observations_mut(),
+            session.admission.publication_input(),
+            &mut session.audio,
+            &mut session.lifecycle,
+        )?;
+        let reservation = prepare_publication(
+            &owners,
+            built.frame,
+            built.audio,
+            consumption,
+            &session.limits,
+        )?;
+        let frame = commit_publication(&mut owners, reservation);
+        session.frame_index = frame.frame_index();
+        session.effects_cursor = 0;
+        if let Some(proposal) = proposal {
+            session.terrain.commit(&mut session.preparation, proposal);
+        }
+        session
+            .prediction
+            .consume_snow_cues(snow_count)
+            .expect("prevalidated cue prefix");
+        publication::observe_queues(session);
+        Ok(processed_meshes)
     }
 
     /// Prepares terminal output before the fallible release. A refused
@@ -196,7 +464,10 @@ impl LoginSession {
             .checked_add(1)
             .ok_or(ClientError::Capacity)?;
         let mut records = session.lifecycle.pending().to_vec();
-        records.extend(close_projection(session.epoch, session.mirror.revision())?);
+        records.extend(close_projection(
+            session.epoch,
+            session.mirror.mirror().revision(),
+        )?);
         let frame = prepare_frame(
             session,
             SessionPhase::Closing,
@@ -206,7 +477,7 @@ impl LoginSession {
             &self.limits,
         )?;
         let owners = LifecycleInvalidation::try_new(
-            &mut session.pending_inbound,
+            session.mirror.publication_observations_mut(),
             &mut session.admission,
             &mut session.audio,
             &mut session.lifecycle,
@@ -240,15 +511,12 @@ impl ClientEndpoint for LoginSession {
         {
             return Err(ClientError::InvalidState);
         }
-        // Memory connector ids resolve only through the injected registry;
-        // the TCP connector provider has not landed, so a TCP endpoint is an
-        // invalid target here rather than an invented transport.
         let connector = match &endpoint {
             Endpoint::Memory { connector_id } => self
                 .connectors
                 .resolve(*connector_id)
                 .ok_or(ClientError::InvalidInput)?,
-            Endpoint::Tcp(_) => return Err(ClientError::InvalidInput),
+            Endpoint::Tcp(_) => Arc::clone(&self.tcp),
         };
         // The hello frame is encoded before the transport is acquired, so an
         // encoding refusal can never leak a ticket.
@@ -277,7 +545,10 @@ impl ClientEndpoint for LoginSession {
         match session.connector.try_send(session.ticket, &hello) {
             Ok(()) => {}
             Err(ClientError::Capacity) | Err(ClientError::Io) => {
-                session.outbound.push_back(hello);
+                if let Err(error) = queue_control(&mut session, hello) {
+                    let _ = connector.close(ticket);
+                    return Err(error);
+                }
             }
             Err(error) => {
                 let _ = session.connector.close(session.ticket);
@@ -325,8 +596,21 @@ impl ClientEndpoint for LoginSession {
         // The landed admission path is state-checked: a mirror that has not
         // been admitted by a complete login rejects with `InvalidState`
         // before any sequence, queue or journal changes.
-        let validated = InputTranslator::validate_batch(&input, &session.mirror, &session.limits)?;
-        InputTranslator::commit(validated, &mut session.admission)
+        let validated =
+            InputTranslator::validate_batch(&input, session.mirror.mirror(), &session.limits)?;
+        let control_count = session.outbound.len();
+        let control_bytes: usize = session.outbound.iter().map(Vec::len).sum();
+        let receipt = InputTranslator::commit_with_reserved(
+            validated,
+            &mut session.admission,
+            control_count,
+            control_bytes,
+        )?;
+        session
+            .prediction
+            .admit_through(session.admission.next_sequence() - 1)?;
+        publication::observe_queues(session);
+        Ok(receipt)
     }
 
     fn step(
@@ -376,16 +660,34 @@ impl ClientEndpoint for LoginSession {
             if terminal.is_none() {
                 // Retry the retained outbound head first; a still-refused
                 // head stays queued for the next step.
-                while let Some(frame) = session.outbound.front().cloned() {
-                    match session.connector.try_send(session.ticket, &frame) {
+                for _ in 0..work.messages() {
+                    let control = session.outbound.front();
+                    let frame = match control {
+                        Some(frame) => frame.as_slice(),
+                        None if session.phase == SessionPhase::Admitted => {
+                            match session.admission.outbound_head_frame() {
+                                Some(frame) => frame,
+                                None => break,
+                            }
+                        }
+                        None => break,
+                    };
+                    match session.connector.try_send(session.ticket, frame) {
                         Ok(()) => {
-                            session.outbound.pop_front();
+                            if control.is_some() {
+                                session.outbound.pop_front();
+                            } else {
+                                session.admission.sent_head()?;
+                            }
                         }
                         Err(ClientError::Capacity) | Err(ClientError::Io) => break,
-                        Err(error) => return Err(error),
+                        Err(error) => {
+                            terminal = Some(transport_close_reason(error)?);
+                            break;
+                        }
                     }
                 }
-                while processed < work.messages() {
+                while terminal.is_none() && processed < work.messages() {
                     match session.connector.poll(session.ticket) {
                         // Connection-established and idle are both "no frame
                         // now": the bounded loop stops instead of spinning on
@@ -408,6 +710,7 @@ impl ClientEndpoint for LoginSession {
             }
             (terminal, processed)
         };
+        let mut processed_meshes = 0;
         match terminal {
             Some(reason) => self.terminate(reason)?,
             None => {
@@ -418,19 +721,32 @@ impl ClientEndpoint for LoginSession {
                     .frame_index
                     .checked_add(1)
                     .ok_or(ClientError::Capacity)?;
-                self.publish(next)?;
+                match self.publish(next, work) {
+                    Ok(processed) => processed_meshes = processed,
+                    Err(error) => {
+                        let reason = self
+                            .session
+                            .as_ref()
+                            .and_then(|live| live.pending_terminal.clone());
+                        if let Some(reason) = reason {
+                            self.terminate(reason)?;
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                }
             }
         }
         let session = self.session.as_ref().expect("live session");
         StepReport::try_new(
             session.epoch,
-            session.mirror.revision(),
+            session.mirror.mirror().revision(),
             session.frame_index,
             processed,
-            0,
+            processed_meshes,
             session.admission.outbound_records(),
-            session.pending_inbound.len(),
-            0,
+            session.mirror.observations().len(),
+            session.preparation.pending_jobs(),
             session.terminal.clone(),
         )
     }
@@ -457,12 +773,12 @@ impl ClientEndpoint for LoginSession {
             .checked_add(1)
             .ok_or(ClientError::Capacity)?;
         let mut records = session.lifecycle.pending().to_vec();
-        records.extend(reset_projection(epoch, session.mirror.revision())?);
+        records.extend(reset_projection(epoch, session.mirror.mirror().revision())?);
         // The fixed facade returns the fresh epoch; the dying publication is
         // validated and consumed internally before a new generation opens.
         let dying = prepare_frame(session, session.phase, None, records, next, &self.limits)?;
         let owners = LifecycleInvalidation::try_new(
-            &mut session.pending_inbound,
+            session.mirror.publication_observations_mut(),
             &mut session.admission,
             &mut session.audio,
             &mut session.lifecycle,
@@ -515,7 +831,7 @@ fn handle_frame(
     let frame = match read_frame_ref(bytes) {
         Ok(frame) => frame,
         Err(_) => {
-            session.rejected_inbound += 1;
+            session.rejected_inbound = session.rejected_inbound.saturating_add(1);
             return Ok(());
         }
     };
@@ -526,7 +842,7 @@ fn handle_frame(
     {
         Ok(packet) => packet,
         Err(_) => {
-            session.rejected_inbound += 1;
+            session.rejected_inbound = session.rejected_inbound.saturating_add(1);
             return Ok(());
         }
     };
@@ -542,13 +858,16 @@ fn handle_frame(
             {
                 Ok(()) => {}
                 Err(ClientError::Capacity) | Err(ClientError::Io) => {
-                    session.outbound.push_back(session.login_frame.clone());
+                    if let Err(error) = queue_control(session, session.login_frame.clone()) {
+                        if error == ClientError::Capacity {
+                            *terminal = Some(CloseReason::Capacity);
+                        } else {
+                            return Err(error);
+                        }
+                    }
                 }
                 Err(error) => {
-                    // The refused frame stays owned for the next step's
-                    // retry or terminal reporting; it is never dropped.
-                    session.outbound.push_back(session.login_frame.clone());
-                    return Err(error);
+                    *terminal = Some(transport_close_reason(error)?);
                 }
             }
         }
@@ -560,20 +879,13 @@ fn handle_frame(
                 // A confirmed identity that is not the requested one never
                 // admits the session; the rejection leaves the handshake
                 // waiting for the real answer.
-                session.rejected_inbound += 1;
+                session.rejected_inbound = session.rejected_inbound.saturating_add(1);
                 return Ok(());
             }
             session.phase = SessionPhase::Admitted;
             session.player_id = Some(success.player_id);
-            session.mirror = ConfirmedMirror::try_new(ConfirmedMirrorParts {
-                epoch: session.epoch,
-                revision: session.mirror.revision(),
-                phase: SessionPhase::Admitted,
-                world: Some(session.mirror.world().clone()),
-                actors: Some(session.mirror.actors().clone()),
-                inventory: Some(session.mirror.inventory().clone()),
-                world_ui: Some(session.mirror.world_ui().clone()),
-            })?;
+            session.mirror.admit()?;
+            session.world_seed = Some(success.world_seed);
         }
         (SessionPhase::Handshaking, ServerPacket::LoginReject(reject)) => {
             *terminal = Some(CloseReason::LoginRejected(control_text(&reject.message)?));
@@ -583,15 +895,33 @@ fn handle_frame(
                 &disconnect.message,
             )?));
         }
+        (SessionPhase::Admitted, ServerPacket::KeepAlive(alive)) => {
+            let reply = ClientPacket::KeepAliveReply(
+                KeepAliveReply::new(alive.token).map_err(encode_failed)?,
+            );
+            let mut payload = [0; 8];
+            let written = encode_client_into(&reply, &mut payload).map_err(encode_failed)?;
+            let frame = write_frame(reply.key().id, &payload[..written]).map_err(encode_failed)?;
+            if let Err(error) = queue_control(session, frame) {
+                if error == ClientError::Capacity {
+                    *terminal = Some(CloseReason::Capacity);
+                } else {
+                    return Err(error);
+                }
+            }
+        }
         (SessionPhase::Admitted, packet) => match stage_observation(session, packet) {
             Ok(()) => {}
             // A complete authoritative packet already left the transport;
             // capacity ends this epoch explicitly rather than losing an update.
             Err(ClientError::Capacity) => *terminal = Some(CloseReason::Capacity),
+            Err(ClientError::InvalidInput) => {
+                session.rejected_inbound = session.rejected_inbound.saturating_add(1)
+            }
             Err(error) => return Err(error),
         },
         _ => {
-            session.rejected_inbound += 1;
+            session.rejected_inbound = session.rejected_inbound.saturating_add(1);
         }
     }
     Ok(())
@@ -602,26 +932,39 @@ fn handle_frame(
 /// mirror revision and the staged ordinal; source ticks and actor identity
 /// resolution belong to that provider, so staging here is structural.
 fn stage_observation(session: &mut LiveSession, packet: ServerPacket) -> Result<(), ClientError> {
-    if session.pending_inbound.len() + 1 > session.inbound_limit {
-        return Err(ClientError::Capacity);
+    // Reject unissued source identities before they enter the retry-owned queue.
+    match &packet {
+        ServerPacket::PlayerState(state)
+            if state.server_tick > session.player_source.map_or(0, |source| source.0)
+                && state.last_input_sequence >= session.admission.next_sequence() =>
+        {
+            return Err(ClientError::InvalidInput);
+        }
+        ServerPacket::CommandRejected(rejection)
+            if rejection.sequence >= session.admission.next_sequence() =>
+        {
+            return Err(ClientError::InvalidInput);
+        }
+        _ => {}
     }
     let revision = ConfirmedRevision::new(
         session
             .mirror
+            .mirror()
             .revision()
             .get()
             .checked_add(1)
             .ok_or(ClientError::Capacity)?,
     );
     let ordinal =
-        u32::try_from(session.pending_inbound.len()).map_err(|_| ClientError::Capacity)?;
+        u32::try_from(session.mirror.observations().len()).map_err(|_| ClientError::Capacity)?;
     let key = ObservationKey::try_new(session.epoch, revision, ordinal)?;
-    let mut pending = session.pending_inbound.clone();
-    pending.push(AcceptedObservation::try_new(key, None, packet, Vec::new())?);
-    if crate::session::mirror::observation_queue_bytes(&pending)? > session.limits.inbound_bytes() {
-        return Err(ClientError::Capacity);
-    }
-    session.pending_inbound = pending;
+    session.mirror.commit(&AcceptedObservation::try_new(
+        key,
+        None,
+        packet,
+        Vec::new(),
+    )?)?;
     Ok(())
 }
 
@@ -663,18 +1006,25 @@ fn prepare_frame(
     next_index: u64,
     limits: &ClientLimits,
 ) -> Result<Arc<PresentationFrame>, ClientError> {
-    let revision = session.mirror.revision();
+    let revision = session.mirror.mirror().revision();
     let header = RecordHeader::try_new(session.epoch, revision, None, FamilyOperation::Upsert)?;
     let record = SessionRecord::try_new(header, phase, session.player_id, terminal)?;
     let mut families = vec![FamilyFrame::try_new(
         FamilyKey::try_new(FAMILY_SESSION)?,
         FamilyRecords::Session(vec![record]),
     )?];
-    if !records.is_empty() {
-        families.push(FamilyFrame::try_new(
-            FamilyKey::try_new(FAMILY_LIFECYCLE)?,
-            FamilyRecords::Lifecycle(records),
-        )?);
+    for records in [
+        FamilyRecords::Input(vec![]),
+        FamilyRecords::Terrain(vec![]),
+        FamilyRecords::Actors(vec![]),
+        FamilyRecords::PlayerView(vec![]),
+        FamilyRecords::InventoryUi(vec![]),
+        FamilyRecords::WorldUi(vec![]),
+        FamilyRecords::AudioCues(vec![]),
+        FamilyRecords::Lifecycle(records),
+        FamilyRecords::Diagnostics(vec![publication::diagnostic_record(session, next_index)?]),
+    ] {
+        families.push(FamilyFrame::try_new(records.key(), records)?);
     }
     let frame = PresentationFrame::try_new(session.epoch, revision, next_index, families)?;
     frame.validate(limits)?;

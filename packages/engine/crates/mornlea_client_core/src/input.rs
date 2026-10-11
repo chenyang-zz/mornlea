@@ -608,6 +608,10 @@ impl InputAdmissionState {
         })
     }
 
+    pub(crate) fn holds_sequence(&self, sequence: u64) -> bool {
+        self.journal.iter().any(|entry| entry.sequence == sequence)
+    }
+
     /// Only the next pending movement source can be marked after successful advance.
     pub(crate) fn mark_predicted(&mut self, sequence: u64) -> Result<(), ClientError> {
         if self.pending_control().map(|(held, _)| held) != Some(sequence) {
@@ -789,6 +793,16 @@ impl InputTranslator {
         batch: ValidatedInputBatch,
         admission: &mut InputAdmissionState,
     ) -> Result<InputReceipt, ClientError> {
+        Self::commit_with_reserved(batch, admission, 0, 0)
+    }
+
+    /// Session control frames share capacity with admitted input without moving either owner.
+    pub(crate) fn commit_with_reserved(
+        batch: ValidatedInputBatch,
+        admission: &mut InputAdmissionState,
+        reserved_records: usize,
+        reserved_bytes: usize,
+    ) -> Result<InputReceipt, ClientError> {
         // The admission owner re-checks epoch and phase against the
         // validate-time snapshot before any owner changes.
         if batch.mirror().phase() != &crate::contracts::SessionPhase::Admitted {
@@ -810,14 +824,16 @@ impl InputTranslator {
         admission.check_metadata_capacity(usize::from(batch.sequenced_count()))?;
         let limits = admission.limits();
         let new_records = usize::from(batch.sequenced_count()) + usize::from(batch.chat_count());
-        if admission.outbound.len() + new_records > limits.outbound_commands() {
+        if admission.outbound.len() + new_records
+            > limits.outbound_commands().saturating_sub(reserved_records)
+        {
             return Err(ClientError::Capacity);
         }
         let new_bytes = admission
             .outbound_bytes
             .checked_add(batch.required_encoded_bytes())
             .ok_or(ClientError::Capacity)?;
-        if new_bytes > limits.outbound_bytes() {
+        if new_bytes > limits.outbound_bytes().saturating_sub(reserved_bytes) {
             return Err(ClientError::Capacity);
         }
         if admission.journal.len() + batch.required_journal() > limits.prediction_journal() {
@@ -918,7 +934,7 @@ impl InputTranslator {
             .outbound_bytes
             .checked_add(actual_bytes)
             .ok_or(ClientError::Capacity)?;
-        if final_bytes > limits.outbound_bytes() {
+        if final_bytes > limits.outbound_bytes().saturating_sub(reserved_bytes) {
             return Err(ClientError::Capacity);
         }
         // The critical section: all owners change together or not at all.

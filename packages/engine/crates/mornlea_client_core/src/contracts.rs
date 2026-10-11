@@ -419,17 +419,18 @@ pub trait ClientEndpoint {
 }
 
 /// The client core owner: created from a checked config, it validates the
-/// configuration (including registered memory connector ids) before any
-/// epoch exists and owns the prepared-resource arena lookup later providers
-/// fill in.
+/// configuration before any epoch exists and owns one actual session and its
+/// prepared-resource arena.
 pub struct ClientCore {
     config: ClientConfig,
+    session: crate::session::login::LoginSession,
 }
 
 impl ClientCore {
     pub fn new(config: ClientConfig) -> Result<Self, ClientError> {
         config.validate()?;
-        Ok(Self { config })
+        let session = crate::session::login::LoginSession::new(config.clone())?;
+        Ok(Self { config, session })
     }
 
     pub fn config(&self) -> &ClientConfig {
@@ -438,15 +439,45 @@ impl ClientCore {
 
     /// Safe Rust-only lookup of one retained prepared geometry.
     ///
-    /// The arena is owned by the bounded preparation queue; until that owner
-    /// lands, no key can be retained, so every lookup is an invalid input and
-    /// no fabricated resource is ever returned.
+    /// The live session's bounded preparation queue is the sole arena owner.
     pub fn prepared_resource(
         &self,
         key: &crate::preparation::PreparedResourceKey,
     ) -> Result<Arc<crate::preparation::PreparedGeometry>, ClientError> {
-        let _ = key;
-        Err(ClientError::InvalidInput)
+        self.session.prepared_resource(key)
+    }
+}
+
+impl ClientEndpoint for ClientCore {
+    fn connect(
+        &mut self,
+        endpoint: Endpoint,
+        identity: ClientIdentity,
+    ) -> Result<SessionEpoch, ClientError> {
+        self.session.connect(endpoint, identity)
+    }
+    fn submit_input(
+        &mut self,
+        epoch: SessionEpoch,
+        input: InputBatch,
+    ) -> Result<InputReceipt, ClientError> {
+        self.session.submit_input(epoch, input)
+    }
+    fn step(
+        &mut self,
+        epoch: SessionEpoch,
+        work: ClientWorkBudget,
+    ) -> Result<StepReport, ClientError> {
+        self.session.step(epoch, work)
+    }
+    fn snapshot(&self, epoch: SessionEpoch) -> Result<Arc<PresentationFrame>, ClientError> {
+        self.session.snapshot(epoch)
+    }
+    fn reset(&mut self, epoch: SessionEpoch) -> Result<SessionEpoch, ClientError> {
+        self.session.reset(epoch)
+    }
+    fn close(&mut self) -> Result<(), ClientError> {
+        self.session.close()
     }
 }
 
@@ -547,6 +578,7 @@ impl ConnectorRegistry {
 /// hello/login deadline policy and the injected clock plus connector
 /// registry. Deadlines must be nonzero; the 5 s / 10 s policy values are the
 /// caller's choice, not a second default here.
+#[derive(Clone)]
 pub struct ClientConfig {
     limits: ClientLimits,
     hello_timeout: Duration,

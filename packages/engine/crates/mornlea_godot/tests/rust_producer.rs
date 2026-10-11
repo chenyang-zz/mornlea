@@ -274,6 +274,7 @@ mod rust_producer {
         steps: Cell<usize>,
         snapshots: Cell<usize>,
         resets: Cell<usize>,
+        refuse_close: Cell<bool>,
     }
 
     impl CountCell {
@@ -329,6 +330,9 @@ mod rust_producer {
         }
 
         fn close(&mut self) -> Result<(), ClientError> {
+            if self.counts.refuse_close.get() {
+                return Err(ClientError::Io);
+            }
             self.inner.close()
         }
     }
@@ -532,6 +536,23 @@ mod rust_producer {
         });
         let epoch = connect_and_admit(&mut arena, token, &peer, 3);
         (arena, token, counts, epoch)
+    }
+
+    #[test]
+    fn refused_close_preserves_the_live_token_for_retry() {
+        let (mut arena, token, counts, epoch) = counting_admitted();
+        let before = arena
+            .pull_frame(token, SessionEpoch::try_new(epoch).unwrap())
+            .unwrap();
+        counts.refuse_close.set(true);
+        assert_eq!(arena.close(token), Err(ClientError::Io));
+        assert_eq!(arena.releases(), 0);
+        assert_eq!(arena.visible_frame(token).unwrap(), &before);
+        counts.refuse_close.set(false);
+        arena.close(token).unwrap();
+        arena.close(token).unwrap();
+        assert_eq!(arena.releases(), 1);
+        assert_eq!(arena.family_table(token), Err(ClientError::InvalidState));
     }
 
     /// Connects and admits through the real facade routines.

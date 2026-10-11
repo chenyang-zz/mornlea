@@ -17,3 +17,6 @@ mod mirror;
 
 #[path = "session_replay/world.rs"]
 mod world;
+
+#[path = "session_replay/live.rs"]
+mod live;

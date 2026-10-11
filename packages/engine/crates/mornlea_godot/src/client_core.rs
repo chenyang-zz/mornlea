@@ -1038,20 +1038,14 @@ pub mod rust_core {
         ConnectorRegistry, Endpoint, InputReceipt, MonotonicClock, SessionEpoch, StdMonotonicClock,
     };
     use mornlea_client_core::input::InputBatch;
-    use mornlea_client_core::session::login::LoginSession;
 
     use crate::abi::boundary::{self, BoundaryValue, CoreOpenSpec, CoreTokenValue};
     use crate::feature_negotiation::{
         RUST_PRODUCER_FAMILIES, RUST_PRODUCER_FAMILY_RECORD_LIMIT, RUST_PRODUCER_NAME,
     };
 
-    /// One arena slot's live core: the checked C1 configuration owner beside
-    /// the live endpoint provider. The endpoint is the C1 substitution port,
-    /// so the production path stores the real `LoginSession` and
-    /// deterministic wrappers can only wrap a real endpoint, never replace
-    /// the adapter routines themselves.
+    /// One slot owns the actual endpoint and its checked publication limits.
     struct CoreSlot {
-        core: ClientCore,
         endpoint: Box<dyn ClientEndpoint>,
         limits: ClientLimits,
         /// The last successfully rendered whole-frame copy. It exists only
@@ -1115,12 +1109,7 @@ pub mod rust_core {
                 .ok_or(ClientError::Internal)
         }
 
-        /// The production open path: the safe Rust core over the real C1
-        /// login provider. The bridge passes its native clock and connector
-        /// registry; the boundary value carries only checked numbers. The
-        /// checked configuration owner validates first, and the endpoint's
-        /// own configuration is derived from that owner's accessors so both
-        /// halves always agree.
+        /// Production stores the same `ClientCore` that owns the live session and arena.
         pub fn open(
             &mut self,
             spec: &CoreOpenSpec,
@@ -1128,16 +1117,8 @@ pub mod rust_core {
             connectors: Arc<ConnectorRegistry>,
         ) -> Result<CoreTokenValue, ClientError> {
             let config = checked_config(spec, clock, connectors)?;
-            let core = ClientCore::new(config)?;
-            let endpoint_config = ClientConfig::try_new(
-                *core.config().limits(),
-                core.config().hello_timeout(),
-                core.config().login_timeout(),
-                Arc::clone(core.config().clock()),
-                Arc::clone(core.config().connectors()),
-            )?;
-            let endpoint = LoginSession::new(endpoint_config)?;
-            self.install(core, Box::new(endpoint))
+            let limits = *config.limits();
+            self.install(limits, Box::new(ClientCore::new(config)?))
         }
 
         /// The deterministic-substitution open path over the same slot,
@@ -1154,7 +1135,7 @@ pub mod rust_core {
                 Arc::new(StdMonotonicClock),
                 Arc::new(ConnectorRegistry::new()),
             )?;
-            self.install(ClientCore::new(config)?, endpoint)
+            self.install(*config.limits(), endpoint)
         }
 
         /// Installs one checked core under a fresh token. The C1 owner has
@@ -1162,12 +1143,10 @@ pub mod rust_core {
         /// reached here and no token exists.
         fn install(
             &mut self,
-            core: ClientCore,
+            limits: ClientLimits,
             endpoint: Box<dyn ClientEndpoint>,
         ) -> Result<CoreTokenValue, ClientError> {
-            let limits = *core.config().limits();
             let slot = CoreSlot {
-                core,
                 endpoint,
                 limits,
                 visible: None,
@@ -1258,22 +1237,22 @@ pub mod rust_core {
             self.slot_mut(token)?.endpoint.reset(epoch)
         }
 
-        /// Releases one token's core. The first close of a live token drops
-        /// the slot, advances its generation and counts one release; the
-        /// endpoint's own terminal path runs inside that drop-adjacent call,
-        /// and its typed refusal for a session that never connected is not a
-        /// facade failure because there is nothing left to terminate. Every
-        /// later close of the same issued token succeeds without another
-        /// release.
+        /// Release follows successful endpoint close; refusal keeps the token retryable.
         pub fn close(&mut self, token: CoreTokenValue) -> Result<(), ClientError> {
             let Some(index) = self.live_index(token) else {
                 return Ok(());
             };
-            if let Some(mut slot) = self.slots[index].take() {
-                let _ = slot.endpoint.close();
-                self.generations[index] += 1;
-                self.releases += 1;
-            }
+            let next = self.generations[index]
+                .checked_add(1)
+                .ok_or(ClientError::Capacity)?;
+            self.slots[index]
+                .as_mut()
+                .ok_or(ClientError::Internal)?
+                .endpoint
+                .close()?;
+            self.slots[index] = None;
+            self.generations[index] = next;
+            self.releases += 1;
             Ok(())
         }
 

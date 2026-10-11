@@ -18,21 +18,27 @@ wire decoder.
 - `src/input.rs` — the twenty semantic actions, whole-batch token rules, the
   F1 mapping table, `InputTranslator` validate/commit and the local
   view-validity overlay.
-- `src/prediction.rs` — the declared player prediction state owner.
+- `build.rs` — source/contract diagnostics identity from Git and the system
+  SHA256 utility at build time; live sessions perform no identity I/O.
+- `src/prediction.rs` — atomic replay, actual-dimension target and snow owners;
+  `src/prediction/world.rs` borrows bounded numerical views at each position.
 - `src/preparation.rs` — terrain keys, LOD configuration, owned preparation
   jobs/results/tickets and their byte charge; `src/preparation/lod.rs` is the
-  far-LOD provider's file. `src/preparation/native.rs` uses the existing mesh
+  far-LOD provider's file; `src/preparation/near.rs` schedules bounded immutable
+  confirmed sections and neighbor replacements. `src/preparation/native.rs` uses the existing mesh
   and LOD kernels with reusable scratch charged to the selected byte limit.
 - `src/session/` — the confirmed mirror contract (`mod.rs`) and the login,
   mirror, I/O and lifecycle provider files. `world.rs` holds compact immutable
   block columns inside that same confirmed owner for prediction, preparation
   and prompt readers; it is not an independently mutable world cache.
+  `login.rs` serially composes all live owners, and `publication.rs` assembles
+  the ten families before source consumption or resource retirement.
 - `src/presentation/` — supporting values and projection context (`mod.rs`),
   the records and frame validator (`frame.rs`), the checked drop-geometry
   helper (`geometry.rs`), and the per-family provider files.
 - `src/runtime_data.rs` — private native input constructors; generated mesh
   and collision tables in `src/runtime_data_generated.rs` preserve the
-  compatibility registry. Callers cache registry/worldgen Arcs per session
+  compatibility mesh, collision and interaction registry. Callers cache registry/worldgen Arcs per session
   outside hot numerical work.
 - `tests/` — the four registered contract targets plus `support/mod.rs`, the
   deterministic replay harness and contract doubles.
@@ -55,7 +61,8 @@ wire decoder.
 ## Entry points
 
 - Library consumers start at `ClientCore::new` and the `ClientEndpoint`
-  trait; the Godot adapter consumes the same safe Rust surface later.
+  trait; the Godot arena stores this same core and preserves its token when
+  close refuses. Numeric TCP and injected Memory use the same login/codec path.
 - The registered test targets are `session_replay`, `prediction_replay`,
   `presentation_contract` and `lifecycle_contract`.
 
