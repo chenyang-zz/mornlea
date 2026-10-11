@@ -25,6 +25,7 @@ HOST_MODULE_PATH = PROJECT_ROOT / "app" / "host" / "feature_host.py"
 
 # The scripted producer family table mirrors the frozen rust-client-core
 # descriptors: ten logical families, numeric IDs 1..10, every version 1.0.
+_FRAME_BYTES = 8 << 20
 PRODUCER_FAMILIES = (
     "session",
     "input",
@@ -259,6 +260,274 @@ def frame_value(
         "frame_index": frame_index,
         "families": entries,
     }
+
+
+def representative_records() -> list[list[dict[str, Any]]]:
+    header = {"epoch": "7", "revision": "3", "source_tick": None, "operation": "Upsert"}
+    uuid = "00000000000040008000000000000001"
+    empty = {"item": 0, "count": 0, "durability": 0}
+    chunk = {"x": -1, "z": 2}
+    block = {**chunk, "y": -64}
+    pose = {"position": [0.0, 0.0, 0.0], "yaw": 0.0, "pitch": 0.0}
+    companion = {"id": uuid, "name": "Nova"}
+    observation = {"epoch": "7", "confirmed_revision": "3", "ordinal": 0}
+
+    def tagged(tag: str, value: object = None) -> dict[str, Any]:
+        return {"tag": tag, "value": value}
+
+    def record(**parts: object) -> dict[str, Any]:
+        return {"header": copy.deepcopy(header), **copy.deepcopy(parts)}
+
+    reference = {"chunk": chunk, "kind": "Furnace", "slot": 31, "generation": 1}
+    section = tagged("Section", {"chunk": chunk, "section": 23})
+    resource = {
+        "epoch": "7",
+        "dimension": 0,
+        "key": section,
+        "generation": "1",
+        "content_revision": "2",
+        "job_id": "1",
+    }
+    terrain = record(
+        dimension=0,
+        key=section,
+        content_revision="2",
+        generation="1",
+        material="Opaque",
+        visibility="Near",
+        light={"sky": 15, "block": 0},
+        resource=resource,
+    )
+    far = copy.deepcopy(terrain)
+    far.update(key=tagged("LodTile", chunk), visibility="Far", resource=None)
+    actor_records = []
+    for kind, identity, detail in (
+        ("RemotePlayer", uuid, {"display_name": "Ada", "reset": False}),
+        (
+            "Drop",
+            {"dimension": -9, "slot": 31, "generation": 1, "chunk": chunk},
+            {"block_index": 98303, "stack": {"item": 10, "count": 1, "durability": 131}},
+        ),
+        ("Hostile", "1", {"archetype": 255, "health": 255}),
+        ("Passive", "2", {"health": None, "grazing": 0, "despawn_reason": "Died"}),
+        ("Projectile", "3", {"archetype": None}),
+        ("Companion", uuid, {"name": "Nova", "reset": None}),
+    ):
+        actor_records.append(
+            record(
+                kind=kind,
+                id=tagged(kind, identity),
+                dimension=tagged("DropRaw", -9) if kind == "Drop" else tagged("Known", 0),
+                position=[0.0, 0.0, 0.0],
+                yaw=0.0,
+                pitch=None,
+                velocity=None,
+                detail=tagged(kind, detail),
+            )
+        )
+    inventory = []
+    value: Any
+    for tag, value in (
+        ("Inventory", {"selected": 8, "hotbar": [empty] * 9, "backpack": [empty] * 27}),
+        ("Crafting", {"size": "Personal", "slots": [empty] * 9, "output": empty}),
+        ("Crafting", {"size": "Workbench", "slots": [empty] * 9, "output": empty}),
+        (
+            "Furnace",
+            {
+                "container": reference,
+                "input": empty,
+                "fuel": empty,
+                "output": empty,
+                "progress_ticks": 199,
+                "burn_ticks": 1600,
+            },
+        ),
+        ("Chest", {"container": {**reference, "kind": "Chest", "slot": 15}, "items": [empty] * 27}),
+        ("Closed", reference),
+        ("Rejected", {"sequence": "0", "reason": "InvalidRay"}),
+    ):
+        inventory.append(record(view=tagged(tag, value), token=None, outcome=None))
+    inventory[3]["token"] = {"epoch": "7", "reference": reference, "confirmed_revision": "3"}
+    inventory[3]["outcome"] = tagged("PlacementAccepted", {"sequence": "1"})
+    inventory[-1]["outcome"] = tagged("Rejected", {"sequence": "2", "reason": "NotArmor"})
+    worlds = [
+        record(
+            view=tagged(
+                "Environment",
+                {
+                    "day_phase_offset": 23999,
+                    "world_time_ticks": "18446744073709551615",
+                    "weather": "Thunder",
+                    "season": "Winter",
+                    "season_progress": 255,
+                    "temperature": -128,
+                },
+            )
+        ),
+        record(
+            view=tagged(
+                "Survival",
+                {
+                    "health": 20,
+                    "oxygen": 300,
+                    "hunger": 20,
+                    "saturation_zero": False,
+                    "armor_points": 20,
+                },
+            )
+        ),
+        record(
+            view=tagged(
+                "Task",
+                {
+                    "observation": observation,
+                    "companion": companion,
+                    "command": "work",
+                    "state": tagged("Started"),
+                },
+            )
+        ),
+        record(view=tagged("Prompt")),
+        record(view=tagged("Prompt", {"target": block, "label": "stone"})),
+    ]
+    for tag, value in (
+        ("InvalidFormat", None),
+        ("UnknownCompanion", {"name": "Nova"}),
+        ("Accepted", {"companion": companion, "command": "work"}),
+        ("QueueFull", {"companion": companion, "command": "work"}),
+        ("NotFollowing", {"companion": companion, "command": "work"}),
+        (
+            "Task",
+            {"companion": companion, "command": "work", "state": tagged("Failed", "WorldChanged")},
+        ),
+        ("Speech", {"companion": companion, "text": "hello"}),
+    ):
+        worlds.append(
+            record(
+                view=tagged(
+                    "Chat",
+                    {
+                        "event_id": "1",
+                        "player_id": uuid,
+                        "player_name": "Ada Lovelace",
+                        "body": tagged(tag, value),
+                    },
+                )
+            )
+        )
+    return [
+        [
+            record(phase="Admitted", player_id=uuid, terminal=None),
+            record(phase="Closing", player_id=None, terminal=tagged("RemoteDisconnect", "bye")),
+        ],
+        [
+            record(local_sequence="0", intent_kind="PlayerInput", receipt=tagged("Queued")),
+            record(local_sequence=None, intent_kind="Chat", receipt=tagged("Rejected", "Capacity")),
+            record(
+                local_sequence="1",
+                intent_kind="PlaceBlock",
+                receipt=tagged("Confirmed", {"server_tick": None}),
+            ),
+            record(
+                local_sequence="2",
+                intent_kind="PlaceBlock",
+                receipt=tagged("Confirmed", {"server_tick": "9"}),
+            ),
+        ],
+        [terrain, far],
+        actor_records,
+        [
+            record(
+                confirmed_pose=pose,
+                predicted_pose=pose,
+                look_ray={
+                    "origin": [0.0, 0.0, 0.0],
+                    "look": {"yaw": 0.0, "pitch": 0.0},
+                    "reach": 6.0,
+                },
+                movement={
+                    "control": {
+                        "movement": {"move_x": -128, "move_z": 127, "jump": False},
+                        "look": {"yaw": 0.0, "pitch": 0.0},
+                        "actions": {
+                            "primary": True,
+                            "eating": False,
+                            "sprinting": False,
+                            "sneaking": False,
+                        },
+                    },
+                    "on_ground": True,
+                },
+                correction={"last_input_sequence": "0", "reason": "AcknowledgedReplay"},
+                mining=tagged(
+                    "Active", {"target": block, "progress": 1, "required": 2, "harvestable": True}
+                ),
+            ),
+            record(
+                confirmed_pose=pose,
+                predicted_pose=None,
+                look_ray=None,
+                movement={"control": None, "on_ground": False},
+                correction=None,
+                mining=tagged("Idle"),
+            ),
+        ],
+        inventory,
+        worlds,
+        [
+            record(
+                cue_id=6,
+                provenance=tagged(tag, value),
+                category="World",
+                position=None,
+                gain=1.0,
+                pitch=1.0,
+            )
+            for tag, value in (
+                ("Confirmed", {"observation": observation, "authoritative_event_id": None}),
+                ("Predicted", {"input_sequence": "0"}),
+                ("Local", {"local_event_sequence": "0"}),
+            )
+        ],
+        [
+            record(
+                transition="Reset",
+                generation="0",
+                resource_order=[
+                    tagged(tag)
+                    for tag in (
+                        "InputJournal",
+                        "PreparationQueue",
+                        "PresentationFrames",
+                        "BridgeHandles",
+                    )
+                ]
+                + [tagged("Feature", "0")],
+            )
+        ],
+        [
+            record(
+                producer={"source_sha": "0" * 40, "contract_sha": "f" * 64},
+                frame_index="0",
+                queue_high_water={
+                    key: "0"
+                    for key in (
+                        "input",
+                        "inbound_records",
+                        "inbound_bytes",
+                        "outbound_records",
+                        "outbound_bytes",
+                        "journal",
+                        "preparation",
+                    )
+                },
+                rejected={
+                    key: "0"
+                    for key in ("invalid", "capacity", "stale", "disconnected", "io", "internal")
+                },
+            )
+        ],
+    ]
 
 
 class ScriptedBridge(StubNode):
@@ -679,6 +948,331 @@ class RustFeatureHostTest(unittest.TestCase):
         self.bridge.frame_value = first_frame
         self.host._process(0.01)
         self.assertEqual(len(self.active_feature("consumer").frames), 2)
+
+    def test_complete_payload_refusal_preserves_frame_and_resources(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("payload-refusal", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.host._process(0.01)
+        previous = self.host._rust_frame
+        header = {"epoch": "7", "revision": "3", "source_tick": None, "operation": "Upsert"}
+        malformed = (
+            {"header": header},
+            {"header": header, "phase": 123, "player_id": [], "terminal": "bad", "extra": None},
+            {
+                "header": header,
+                "phase": "Admitted",
+                "player_id": None,
+                "terminal": None,
+                "extra": [0] * 100000,
+            },
+        )
+        for record in malformed:
+            candidate = frame_value(frame_index="2")
+            cast(list[dict[str, object]], candidate["families"])[0]["records"] = [record]
+            self.bridge.frame_value = candidate
+            self.host._process(0.01)
+            self.assert_retains_last_frame_and_resources(("consumer",), previous)
+        for missing in range(10):
+            candidate = frame_value(frame_index="2")
+            cast(list[dict[str, object]], candidate["families"]).pop(missing)
+            self.bridge.frame_value = candidate
+            self.host._process(0.01)
+            self.assert_retains_last_frame_and_resources(("consumer",), previous)
+        self.bridge.frame_value = frame_value(frame_index="2", families=("session",))
+        self.host._process(0.01)
+        self.assert_retains_last_frame_and_resources(("consumer",), previous)
+
+    def test_renderer_payload_variants_are_dispatched_as_one_frame(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("payload-success", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        candidate = frame_value()
+        for family, records in zip(
+            cast(list[dict[str, Any]], candidate["families"]), representative_records(), strict=True
+        ):
+            family["records"] = records
+        self.bridge.frame_value = candidate
+        self.host._process(0.01)
+        self.assertIs(self.host._rust_frame, candidate)
+        self.assertEqual(self.active_feature("consumer").frames, [candidate])
+
+    def test_every_payload_field_is_required_and_extra_data_is_refused(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("closed-payloads", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.host._process(0.01)
+        previous = self.host._rust_frame
+        for index, records in enumerate(representative_records()):
+            for record in records:
+                for field in (*record, "extra"):
+                    with self.subTest(family=index + 1, field=field):
+                        malformed = copy.deepcopy(record)
+                        if field == "extra":
+                            malformed[field] = [0] * 100000
+                        else:
+                            del malformed[field]
+                        candidate = frame_value(frame_index="2")
+                        cast(list[dict[str, Any]], candidate["families"])[index]["records"] = [
+                            malformed
+                        ]
+                        self.bridge.frame_value = candidate
+                        self.host._process(0.01)
+                        self.assert_retains_last_frame_and_resources(("consumer",), previous)
+
+    def test_nested_shapes_types_and_domain_bounds_preserve_consumers(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("nested-payloads", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.host._process(0.01)
+        previous = self.host._rust_frame
+        records = representative_records()
+
+        def mutations(value: Any) -> list[tuple[tuple[object, ...], object]]:
+            results: list[tuple[tuple[object, ...], object]] = []
+            if isinstance(value, dict):
+                results.append(((), {**value, "extra": [0] * 100000}))
+                for key, child in value.items():
+                    removed = dict(value)
+                    del removed[key]
+                    results.append(((), removed))
+                    results.extend(((key, *path), changed) for path, changed in mutations(child))
+            elif isinstance(value, list):
+                results.append(((), value + [None] * 100000))
+                for index, child in enumerate(value):
+                    results.extend(((index, *path), changed) for path, changed in mutations(child))
+            elif value is not None:
+                results.append(((), {} if isinstance(value, str) else "wrong-type"))
+                if type(value) is int:
+                    results.append(((), True))
+                if type(value) is float:
+                    results.extend(((), changed) for changed in (float("nan"), float("inf"), 0))
+            return results
+
+        for family_index, family_records in enumerate(records):
+            for source in family_records:
+                for path, changed in mutations(source):
+                    with self.subTest(family=family_index + 1, path=path):
+                        malformed: Any = copy.deepcopy(source)
+                        if not path:
+                            malformed = changed
+                        else:
+                            target: Any = malformed
+                            for key in path[:-1]:
+                                target = target[key]
+                            target[path[-1]] = changed
+                        candidate = frame_value(frame_index="2")
+                        cast(list[dict[str, Any]], candidate["families"])[family_index][
+                            "records"
+                        ] = [malformed]
+                        self.bridge.frame_value = candidate
+                        self.host._process(0.01)
+                        self.assert_retains_last_frame_and_resources(("consumer",), previous)
+
+        cases: tuple[tuple[int, int, tuple[str, ...], object], ...] = (
+            (0, 0, ("player_id",), "0" * 32),
+            (0, 0, ("player_id",), "00000000000050008000000000000001"),
+            (1, 0, ("local_sequence",), "01"),
+            (1, 0, ("local_sequence",), "18446744073709551616"),
+            (1, 0, ("receipt", "tag"), "Invented"),
+            (2, 0, ("key", "value", "section"), 24),
+            (2, 0, ("light", "sky"), 16),
+            (2, 0, ("resource", "job_id"), "0"),
+            (2, 0, ("visibility",), "Far"),
+            (3, 0, ("id", "tag"), "Companion"),
+            (3, 0, ("detail", "tag"), "Companion"),
+            (3, 0, ("dimension",), {"tag": "DropRaw", "value": 0}),
+            (3, 1, ("id", "value", "slot"), 32),
+            (3, 1, ("detail", "value", "stack", "durability"), 132),
+            (4, 0, ("mining", "value", "progress"), 2),
+            (4, 0, ("look_ray", "reach"), 6.1),
+            (5, 0, ("view", "value", "selected"), 9),
+            (5, 1, ("view", "value", "slots"), [{"item": 1, "count": 1, "durability": 0}] * 9),
+            (5, 3, ("view", "value", "progress_ticks"), 200),
+            (5, 3, ("view", "value", "burn_ticks"), 1601),
+            (5, 3, ("view", "value", "fuel"), {"item": 1, "count": 1, "durability": 0}),
+            (5, 4, ("view", "value", "container", "slot"), 16),
+            (6, 0, ("view", "value", "day_phase_offset"), 24000),
+            (6, 1, ("view", "value", "oxygen"), 301),
+            (6, 2, ("view", "value", "companion", "name"), "two names"),
+            (6, 2, ("view", "value", "command"), " work "),
+            (6, 2, ("view", "value", "command"), "界" * 342),
+            (7, 0, ("cue_id",), 7),
+            (7, 0, ("gain",), 1.1),
+            (7, 0, ("pitch",), 0.0),
+            (
+                8,
+                0,
+                ("resource_order",),
+                [{"tag": "Feature", "value": "0"}] * ((_FRAME_BYTES // 2) + 1),
+            ),
+            (9, 0, ("producer", "source_sha"), "A" * 40),
+        )
+        for index, record_index, path, changed in cases:
+            with self.subTest(family=index + 1, domain=path):
+                malformed = copy.deepcopy(records[index][record_index])
+                target = malformed
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = changed
+                candidate = frame_value(frame_index="2")
+                cast(list[dict[str, Any]], candidate["families"])[index]["records"] = [malformed]
+                self.bridge.frame_value = candidate
+                self.host._process(0.01)
+                self.assert_retains_last_frame_and_resources(("consumer",), previous)
+
+    def test_all_renderer_error_classes_and_legal_opaque_relationships_are_admitted(self) -> None:
+        table = HOST.FamilyTable(
+            {name: (1, 0) for name in PRODUCER_FAMILIES},
+            {name: (index + 1, 1, 0, 4096, 0) for index, name in enumerate(PRODUCER_FAMILIES)},
+        )
+        for error_class in (
+            "InvalidInput",
+            "InvalidState",
+            "IncompatibleVersion",
+            "StaleEpoch",
+            "Capacity",
+            "Timeout",
+            "Disconnected",
+            "Io",
+            "Internal",
+        ):
+            candidate = frame_value()
+            record = representative_records()[1][1]
+            record["receipt"]["value"] = error_class
+            cast(list[dict[str, Any]], candidate["families"])[1]["records"] = [record]
+            self.assertIs(HOST._rust_frame_from(ok_envelope(candidate), "7", table, ()), candidate)
+
+        candidate = frame_value()
+        records = representative_records()
+        records[2][0]["resource"].update(
+            epoch="99",
+            generation="0",
+            content_revision="0",
+            key={"tag": "LodTile", "value": {"x": 0, "z": 0}},
+        )
+        records[3][1]["detail"]["value"]["block_index"] = 98304
+        records[3][1]["dimension"] = {"tag": "Known", "value": 1}
+        records[5][0]["token"] = {
+            "epoch": "99",
+            "confirmed_revision": "0",
+            "reference": {"chunk": {"x": 0, "z": 0}, "kind": "Chest", "slot": 0, "generation": 1},
+        }
+        for family, values in zip(
+            cast(list[dict[str, Any]], candidate["families"]), records, strict=True
+        ):
+            family["records"] = values
+        self.assertIs(HOST._rust_frame_from(ok_envelope(candidate), "7", table, ()), candidate)
+
+    def test_f32_fields_reject_finite_double_overflow(self) -> None:
+        table = HOST.FamilyTable(
+            {name: (1, 0) for name in PRODUCER_FAMILIES},
+            {name: (index + 1, 1, 0, 4096, 0) for index, name in enumerate(PRODUCER_FAMILIES)},
+        )
+        for family_index, path in (
+            (4, ("look_ray", "look", "yaw")),
+            (4, ("movement", "control", "look", "pitch")),
+            (7, ("pitch",)),
+        ):
+            candidate = frame_value()
+            record = representative_records()[family_index][0]
+            target = record
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = 1e300
+            cast(list[dict[str, Any]], candidate["families"])[family_index]["records"] = [record]
+            self.assertTrue(HOST._rust_frame_from(ok_envelope(candidate), "7", table, ()) is None)
+
+    def test_erased_text_kind_accepts_constructor_union_without_widening_domain_text(self) -> None:
+        table = HOST.FamilyTable(
+            {name: (1, 0) for name in PRODUCER_FAMILIES},
+            {name: (index + 1, 1, 0, 4096, 0) for index, name in enumerate(PRODUCER_FAMILIES)},
+        )
+        for text in ("", "x" * 1024, "\n", "界" * 341):
+            candidate = frame_value()
+            records = representative_records()
+            records[0][1]["terminal"]["value"] = text
+            records[3][0]["detail"]["value"]["display_name"] = text
+            records[6][4]["view"]["value"]["label"] = text
+            for family, values in zip(
+                cast(list[dict[str, Any]], candidate["families"]), records, strict=True
+            ):
+                family["records"] = values
+            self.assertIs(HOST._rust_frame_from(ok_envelope(candidate), "7", table, ()), candidate)
+        for text in ("x" * 1025, "界" * 342, "\ud800"):
+            for numeric_id, record_index, path in (
+                (1, 1, ("terminal", "value")),
+                (4, 0, ("detail", "value", "display_name")),
+                (7, 4, ("view", "value", "label")),
+            ):
+                candidate = frame_value()
+                record = representative_records()[numeric_id - 1][record_index]
+                target = record
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = text
+                cast(list[dict[str, Any]], candidate["families"])[numeric_id - 1]["records"] = [
+                    record
+                ]
+                self.assertTrue(
+                    HOST._rust_frame_from(ok_envelope(candidate), "7", table, ()) is None
+                )
+
+    def test_oversized_values_refuse_before_iteration_or_encoding(self) -> None:
+        class UnvisitedArray(list[Any]):
+            def __iter__(self) -> Any:
+                raise AssertionError("an oversized array was traversed")
+
+        class UnencodedText(str):
+            def encode(self, encoding: str = "utf-8", errors: str = "strict") -> bytes:
+                raise AssertionError("an oversized text was encoded")
+
+        class UnvisitedRecord(dict[str, Any]):
+            def items(self) -> Any:
+                raise AssertionError("an oversized record was traversed")
+
+        table = HOST.FamilyTable(
+            {name: (1, 0) for name in PRODUCER_FAMILIES},
+            {name: (index + 1, 1, 0, 4096, 0) for index, name in enumerate(PRODUCER_FAMILIES)},
+        )
+        records = representative_records()
+        records[0][1]["terminal"]["value"] = UnencodedText("x" * 1025)
+        records[3][0]["position"] = UnvisitedArray([0.0] * 4)
+        records[5][0]["view"]["value"]["hotbar"] = UnvisitedArray([{}] * 10)
+        records[9][0] = UnvisitedRecord({str(index): None for index in range(12)})
+        for index in (0, 3, 5, 9):
+            candidate = frame_value()
+            cast(list[dict[str, Any]], candidate["families"])[index]["records"] = records[index]
+            self.assertTrue(HOST._rust_frame_from(ok_envelope(candidate), "7", table, ()) is None)
+
+    def test_semantic_frame_bytes_use_actual_nullary_and_feature_charges(self) -> None:
+        table = HOST.FamilyTable(
+            {name: (1, 0) for name in PRODUCER_FAMILIES},
+            {name: (index + 1, 1, 0, 4096, 0) for index, name in enumerate(PRODUCER_FAMILIES)},
+        )
+        candidate = frame_value()
+        base = 36 + sum(len(name) + 13 for name in PRODUCER_FAMILIES) + 35
+        for tag, width in (("InputJournal", 2), ("Feature", 9)):
+            with self.subTest(tag=tag):
+                record = representative_records()[8][0]
+                entry = {"tag": tag, "value": "0" if tag == "Feature" else None}
+                count = (_FRAME_BYTES - base) // width
+                record["resource_order"] = [entry] * count
+                cast(list[dict[str, Any]], candidate["families"])[8]["records"] = [record]
+                self.assertIs(
+                    HOST._rust_frame_from(ok_envelope(candidate), "7", table, ()), candidate
+                )
+                record["resource_order"] = [entry] * (count + 1)
+                self.assertTrue(
+                    HOST._rust_frame_from(ok_envelope(candidate), "7", table, ()) is None
+                )
+        empty_revision = {**frame_value(), "confirmed_revision": "0"}
+        for index in range(2, 8):
+            record = representative_records()[index][0]
+            record["header"]["revision"] = "0"
+            candidate = copy.deepcopy(empty_revision)
+            cast(list[dict[str, Any]], candidate["families"])[index]["records"] = [record]
+            self.assertTrue(HOST._rust_frame_from(ok_envelope(candidate), "7", table, ()) is None)
 
     def test_declared_descriptor_identity_and_bounds_are_required(self) -> None:
         mutations: tuple[Callable[[dict[str, Any]], object], ...] = (

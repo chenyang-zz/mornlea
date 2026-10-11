@@ -8,9 +8,11 @@ independent of ambient ``sys.path`` entries and sibling-module imports.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
-from typing import Protocol, cast, runtime_checkable
+from collections.abc import Callable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from py4godot.classes import gdclass
 from py4godot.classes.Node import Node
@@ -165,7 +167,11 @@ def _u16_word(value: object) -> int | None:
 
 
 def _exact_fields(value: object, names: tuple[str, ...]) -> bool:
-    return isinstance(value, dict) and set(value) == set(names)
+    return (
+        isinstance(value, dict)
+        and len(value) == len(names)
+        and all(name in value for name in names)
+    )
 
 
 def _bounded_integer(value: object, maximum: int) -> bool:
@@ -180,7 +186,624 @@ def _rust_terminal(value: object) -> bool:
     tag = value["tag"]
     if tag in ("LocalClose", "Timeout", "Capacity", "Internal"):
         return value["value"] is None
-    return tag in ("RemoteDisconnect", "LoginRejected") and isinstance(value["value"], str)
+    return tag in ("RemoteDisconnect", "LoginRejected") and _bounded_text(value["value"])
+
+
+# These schemas mirror the owned renderer, without importing project modules.
+_ValueCheck = Callable[[object], bool]
+_RUST_FRAME_BYTES = 8 << 20
+
+
+def _word(minimum: int, maximum: int) -> _ValueCheck:
+    return lambda value: type(value) is int and minimum <= value <= maximum
+
+
+def _enum(*names: str) -> _ValueCheck:
+    return lambda value: isinstance(value, str) and value in names
+
+
+def _optional(check: _ValueCheck) -> _ValueCheck:
+    return lambda value: value is None or check(value)
+
+
+def _struct(**fields: _ValueCheck) -> _ValueCheck:
+    def check(value: object) -> bool:
+        return (
+            isinstance(value, dict)
+            and _exact_fields(value, tuple(fields))
+            and all(validator(value[name]) for name, validator in fields.items())
+        )
+
+    return check
+
+
+def _union(**variants: _ValueCheck) -> _ValueCheck:
+    def check(value: object) -> bool:
+        if not isinstance(value, dict) or not _exact_fields(value, ("tag", "value")):
+            return False
+        tag = value["tag"]
+        return isinstance(tag, str) and tag in variants and variants[tag](value["value"])
+
+    return check
+
+
+def _array(check: _ValueCheck, length: int) -> _ValueCheck:
+    return lambda value: (
+        isinstance(value, list) and len(value) == length and all(check(item) for item in value)
+    )
+
+
+def _float(value: object) -> bool:
+    return type(value) is float and math.isfinite(value)
+
+
+def _f32(value: object) -> bool:
+    return _float(value) and abs(cast(float, value)) <= 3.4028234663852886e38
+
+
+def _hex(length: int) -> _ValueCheck:
+    return lambda value: (
+        isinstance(value, str)
+        and len(value) == length
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _uuid(value: object) -> bool:
+    return _hex(32)(value) and cast(str, value)[12] == "4" and cast(str, value)[16] in "89ab"
+
+
+def _text(maximum: int, minimum: int = 0, scalars: int | None = None) -> _ValueCheck:
+    def check(value: object) -> bool:
+        # Python character length bounds encoding work before UTF-8 allocation.
+        if not isinstance(value, str) or not minimum <= len(value) <= maximum:
+            return False
+        if scalars is not None and len(value) > scalars:
+            return False
+        try:
+            return len(value.encode("utf-8")) <= maximum
+        except UnicodeEncodeError:
+            return False
+
+    return check
+
+
+_PINNED_SPACE = (
+    "\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004"
+    "\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+)
+
+
+def _canonical(maximum: int, name: bool = False, companion: bool = False) -> _ValueCheck:
+    def check(value: object) -> bool:
+        if not _text(maximum, 1, 32 if name else None)(value):
+            return False
+        text = cast(str, value)
+        return (
+            text[0] not in _PINNED_SPACE
+            and text[-1] not in _PINNED_SPACE
+            and all(
+                not (ord(char) < 32 or 127 <= ord(char) <= 159)
+                and (not companion or char not in _PINNED_SPACE)
+                for char in text
+            )
+        )
+
+    return check
+
+
+def _u64(value: object) -> bool:
+    return _u64_text(value) is not None
+
+
+def _nonzero_u64(value: object) -> bool:
+    return _u64_text(value) not in (None, 0)
+
+
+def _bool(value: object) -> bool:
+    return type(value) is bool
+
+
+def _null(value: object) -> bool:
+    return value is None
+
+
+_u8 = _word(0, 255)
+_u16 = _word(0, 65535)
+_u32 = _word(0, 4294967295)
+_i32 = _word(-2147483648, 2147483647)
+_vec3 = _array(_float, 3)
+_chunk = _struct(x=_i32, z=_i32)
+_block = _struct(x=_i32, y=_i32, z=_i32)
+_pose = _struct(position=_vec3, yaw=_float, pitch=_float)
+_look = _struct(yaw=_f32, pitch=_f32)
+# G1 erases BoundedText.kind, so generic fields admit its constructor union.
+_bounded_text = _text(1024)
+_errors = _enum(
+    "InvalidInput",
+    "InvalidState",
+    "IncompatibleVersion",
+    "StaleEpoch",
+    "Timeout",
+    "Capacity",
+    "Disconnected",
+    "Io",
+    "Internal",
+)
+_reject = _enum(
+    "InvalidRay",
+    "NoTarget",
+    "ChunkNotReady",
+    "ProtectedBlock",
+    "InvalidBlock",
+    "Occupied",
+    "InvalidInput",
+    "PlayerNotReady",
+    "InvalidSlot",
+    "HotbarFull",
+    "DropCapacity",
+    "ContainerCapacity",
+    "NotFluidSource",
+    "BucketMismatch",
+    "NotArmor",
+)
+_task_state = _union(
+    Started=_null,
+    Progress=_null,
+    Completed=_null,
+    TimedOut=_null,
+    Stopped=_null,
+    Failed=_enum(
+        "PlannerUnavailable", "InvalidPlan", "PathUnreachable", "WorldChanged", "InventoryFull"
+    ),
+)
+_companion = _struct(id=_uuid, name=_canonical(128, True, True))
+_observation = _struct(epoch=_nonzero_u64, confirmed_revision=_u64, ordinal=_u32)
+_terrain_key = _union(Section=_struct(chunk=_chunk, section=_word(0, 23)), LodTile=_chunk)
+_resource = _struct(
+    epoch=_nonzero_u64,
+    dimension=_word(0, 1),
+    key=_terrain_key,
+    generation=_u64,
+    content_revision=_u64,
+    job_id=_nonzero_u64,
+)
+_control = _struct(
+    movement=_struct(move_x=_word(-128, 127), move_z=_word(-128, 127), jump=_bool),
+    look=_look,
+    actions=_struct(primary=_bool, eating=_bool, sprinting=_bool, sneaking=_bool),
+)
+
+
+def _container(value: object) -> bool:
+    if not _struct(
+        chunk=_chunk, kind=_enum("Furnace", "Chest"), slot=_u8, generation=_word(1, 4294967295)
+    )(value):
+        return False
+    parts = cast(dict[str, object], value)
+    return cast(int, parts["slot"]) < (32 if parts["kind"] == "Furnace" else 16)
+
+
+def _stack(value: object) -> bool:
+    if not _struct(item=_u16, count=_u8, durability=_u16)(value):
+        return False
+    parts = cast(dict[str, int], value)
+    item, count, durability = parts["item"], parts["count"], parts["durability"]
+    if item == 0:
+        return count == 0 and durability == 0
+    single = (
+        10,
+        11,
+        12,
+        13,
+        30,
+        31,
+        32,
+        33,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        55,
+        56,
+        58,
+        59,
+        60,
+        61,
+        62,
+        65,
+    )
+    maxima = {
+        10: 131,
+        11: 250,
+        30: 131,
+        31: 250,
+        47: 59,
+        48: 131,
+        49: 250,
+        58: 165,
+        59: 240,
+        60: 225,
+        61: 195,
+        62: 120,
+    }
+    return (
+        1 <= item < 66
+        and 1 <= count <= (1 if item in single else 64)
+        and (1 <= durability <= maxima[item] if item in maxima else durability == 0)
+    )
+
+
+def _crafting(value: object) -> bool:
+    if not _struct(size=_enum("Personal", "Workbench"), slots=_array(_stack, 9), output=_stack)(
+        value
+    ):
+        return False
+    parts = cast(dict[str, Any], value)
+    return parts["size"] != "Personal" or all(slot["item"] == 0 for slot in parts["slots"][4:])
+
+
+def _furnace(value: object) -> bool:
+    if not _struct(
+        container=_container,
+        input=_stack,
+        fuel=_stack,
+        output=_stack,
+        progress_ticks=_word(0, 199),
+        burn_ticks=_word(0, 1600),
+    )(value):
+        return False
+    parts = cast(dict[str, Any], value)
+    return (
+        parts["container"]["kind"] == "Furnace"
+        and parts["input"]["item"] in (0, 6, 18, 27, 53)
+        and parts["fuel"]["item"] in (0, 5)
+        and parts["output"]["item"] in (0, 7, 23, 24, 54)
+    )
+
+
+def _chest(value: object) -> bool:
+    return (
+        _struct(container=_container, items=_array(_stack, 27))(value)
+        and cast(dict[str, Any], value)["container"]["kind"] == "Chest"
+    )
+
+
+def _mining_active(value: object) -> bool:
+    return (
+        _struct(target=_block, progress=_u16, required=_u16, harvestable=_bool)(value)
+        and 0 < cast(dict[str, int], value)["progress"] < cast(dict[str, int], value)["required"]
+    )
+
+
+_inventory_view = _union(
+    Inventory=_struct(selected=_word(0, 8), hotbar=_array(_stack, 9), backpack=_array(_stack, 27)),
+    Crafting=_crafting,
+    Furnace=_furnace,
+    Chest=_chest,
+    Closed=_container,
+    Rejected=_struct(sequence=_u64, reason=_reject),
+)
+_chat_speaker = _struct(companion=_companion, command=_canonical(1024))
+_chat_body = _union(
+    Accepted=_chat_speaker,
+    InvalidFormat=_null,
+    UnknownCompanion=_struct(name=_canonical(128, True, True)),
+    QueueFull=_chat_speaker,
+    NotFollowing=_chat_speaker,
+    Task=_struct(companion=_companion, command=_canonical(1024), state=_task_state),
+    Speech=_struct(companion=_companion, text=_canonical(256)),
+)
+_world_view = _union(
+    Environment=_struct(
+        day_phase_offset=_word(0, 23999),
+        world_time_ticks=_u64,
+        weather=_enum("Clear", "Rain", "Thunder"),
+        season=_enum("Spring", "Summer", "Autumn", "Winter"),
+        season_progress=_u8,
+        temperature=_word(-128, 127),
+    ),
+    Survival=_struct(
+        health=_word(0, 20),
+        oxygen=_word(0, 300),
+        hunger=_word(0, 20),
+        saturation_zero=_bool,
+        armor_points=_word(0, 20),
+    ),
+    Chat=_struct(
+        event_id=_nonzero_u64, player_id=_uuid, player_name=_canonical(128, True), body=_chat_body
+    ),
+    Task=_struct(
+        observation=_observation, companion=_companion, command=_canonical(1024), state=_task_state
+    ),
+    Prompt=_optional(_struct(target=_block, label=_bounded_text)),
+)
+_actor_id = _union(
+    RemotePlayer=_uuid,
+    Companion=_uuid,
+    Hostile=_nonzero_u64,
+    Passive=_nonzero_u64,
+    Projectile=_nonzero_u64,
+    Drop=_struct(dimension=_i32, slot=_word(0, 31), generation=_word(1, 4294967295), chunk=_chunk),
+)
+_actor_detail = _union(
+    RemotePlayer=_struct(display_name=_optional(_bounded_text), reset=_optional(_bool)),
+    Companion=_struct(name=_optional(_bounded_text), reset=_optional(_bool)),
+    Drop=_struct(block_index=_u32, stack=_stack),
+    Hostile=_struct(archetype=_u8, health=_u8),
+    Passive=_struct(
+        health=_optional(_u8),
+        grazing=_optional(_u8),
+        despawn_reason=_optional(_enum("Vanished", "Died")),
+    ),
+    Projectile=_struct(archetype=_optional(_u8)),
+)
+_provenance = _union(
+    Confirmed=_struct(observation=_observation, authoritative_event_id=_optional(_u64)),
+    Predicted=_struct(input_sequence=_u64),
+    Local=_struct(local_event_sequence=_u64),
+)
+_resource_order_entry = _union(
+    InputJournal=_null,
+    PreparationQueue=_null,
+    PresentationFrames=_null,
+    BridgeHandles=_null,
+    Feature=_u64,
+)
+
+
+def _resource_order(value: object) -> bool:
+    # Nullary entries cost two semantic bytes; Feature entries cost nine.
+    return (
+        isinstance(value, list)
+        and len(value) <= _RUST_FRAME_BYTES // 2
+        and all(_resource_order_entry(entry) for entry in value)
+    )
+
+
+_RECORD_SCHEMAS = {
+    1: _struct(
+        phase=_enum("Disconnected", "Connecting", "Handshaking", "Admitted", "Closing"),
+        player_id=_optional(_uuid),
+        terminal=_rust_terminal,
+    ),
+    2: _struct(
+        local_sequence=_optional(_u64),
+        intent_kind=_enum(
+            "PlayerInput",
+            "PlaceBlock",
+            "Resync",
+            "SelectHotbar",
+            "OpenContainer",
+            "TillSoil",
+            "BoneMeal",
+            "CollectWater",
+            "PlaceWater",
+            "MoveInventory",
+            "MoveCrafting",
+            "MoveContainer",
+            "CloseContainer",
+            "DropSelectedItem",
+            "TakeCraftingOutput",
+            "EquipArmor",
+            "MovePartial",
+            "QuickMove",
+            "DropStack",
+            "Chat",
+        ),
+        receipt=_union(
+            Queued=_null, Rejected=_errors, Confirmed=_struct(server_tick=_optional(_u64))
+        ),
+    ),
+    3: _struct(
+        dimension=_word(0, 1),
+        key=_terrain_key,
+        content_revision=_u64,
+        generation=_u64,
+        material=_enum("Opaque", "Cutout", "Water"),
+        visibility=_enum("Near", "Far"),
+        light=_struct(sky=_word(0, 15), block=_word(0, 15)),
+        resource=_optional(_resource),
+    ),
+    4: _struct(
+        kind=_enum("RemotePlayer", "Drop", "Hostile", "Passive", "Projectile", "Companion"),
+        id=_actor_id,
+        dimension=_union(Known=_word(0, 1), DropRaw=_i32),
+        position=_optional(_vec3),
+        yaw=_optional(_float),
+        pitch=_optional(_float),
+        velocity=_optional(_vec3),
+        detail=_optional(_actor_detail),
+    ),
+    5: _struct(
+        confirmed_pose=_pose,
+        predicted_pose=_optional(_pose),
+        look_ray=_optional(
+            _struct(
+                origin=_vec3,
+                look=_look,
+                reach=lambda value: _float(value) and 0 < cast(float, value) <= 6,
+            )
+        ),
+        movement=_struct(control=_optional(_control), on_ground=_bool),
+        correction=_optional(
+            _struct(
+                last_input_sequence=_u64,
+                reason=_enum("AuthoritativeReset", "AcknowledgedReplay", "RejectedInput"),
+            )
+        ),
+        mining=_union(Idle=_null, Active=_mining_active),
+    ),
+    6: _struct(
+        view=_inventory_view,
+        token=_optional(_struct(epoch=_nonzero_u64, reference=_container, confirmed_revision=_u64)),
+        outcome=_optional(
+            _union(
+                Rejected=_struct(sequence=_u64, reason=_reject),
+                PlacementAccepted=_struct(sequence=_u64),
+            )
+        ),
+    ),
+    7: _struct(view=_world_view),
+    8: _struct(
+        cue_id=_word(0, 6),
+        provenance=_provenance,
+        category=_enum("Ui", "Footstep", "World", "Combat", "Ambient"),
+        position=_optional(_vec3),
+        gain=lambda value: _float(value) and 0 <= cast(float, value) <= 1,
+        pitch=lambda value: _f32(value) and cast(float, value) > 0,
+    ),
+    9: _struct(
+        transition=_enum("Open", "Reset", "Close", "Invalidate"),
+        generation=_u64,
+        resource_order=_resource_order,
+    ),
+    10: _struct(
+        producer=_struct(source_sha=_hex(40), contract_sha=_hex(64)),
+        frame_index=_u64,
+        queue_high_water=_struct(
+            input=_u64,
+            inbound_records=_u64,
+            inbound_bytes=_u64,
+            outbound_records=_u64,
+            outbound_bytes=_u64,
+            journal=_u64,
+            preparation=_u64,
+        ),
+        rejected=_struct(
+            invalid=_u64, capacity=_u64, stale=_u64, disconnected=_u64, io=_u64, internal=_u64
+        ),
+    ),
+}
+
+
+def _rust_record_payload(record: dict[str, Any], numeric_id: int) -> bool:
+    # The fixed schema graph never traverses undeclared data or recursive values.
+    schema = _RECORD_SCHEMAS.get(numeric_id)
+    if schema is None or not schema(
+        {key: value for key, value in record.items() if key != "header"}
+    ):
+        return False
+    if numeric_id == 3:
+        return bool((record["key"]["tag"] == "Section") == (record["visibility"] == "Near"))
+    if numeric_id == 4:
+        return bool(
+            record["kind"] == record["id"]["tag"]
+            and (record["detail"] is None or record["kind"] == record["detail"]["tag"])
+            and (record["kind"] == "Drop" or record["dimension"]["tag"] == "Known")
+        )
+    return True
+
+
+def _utf8_size(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _terrain_key_size(key: dict[str, Any]) -> int:
+    return 10 if key["tag"] == "Section" else 9
+
+
+def _chat_body_size(body: dict[str, Any]) -> int:
+    tag, value = body["tag"], body["value"]
+    if tag == "InvalidFormat":
+        return 1
+    if tag == "UnknownCompanion":
+        return 2 + _utf8_size(value["name"])
+    return 18 + _utf8_size(value["text"] if tag == "Speech" else value["command"])
+
+
+def _rust_record_size(record: dict[str, Any], numeric_id: int) -> int:
+    """Match C2 validated_size, including its option and vector accounting."""
+    header = 18 + (8 if record["header"]["source_tick"] is not None else 0)
+    if numeric_id == 1:
+        terminal = record["terminal"]
+        terminal_bytes = 0 if terminal is None else 1
+        if terminal is not None and terminal["value"] is not None:
+            terminal_bytes += 1 + _utf8_size(terminal["value"])
+        return header + 1 + (17 if record["player_id"] is not None else 0) + terminal_bytes
+    if numeric_id == 2:
+        receipt = record["receipt"]
+        receipt_bytes = 1 if receipt["tag"] == "Queued" else 2
+        if receipt["tag"] == "Confirmed" and receipt["value"]["server_tick"] is not None:
+            receipt_bytes += 8
+        return header + 2 + (8 if record["local_sequence"] is not None else 0) + receipt_bytes
+    if numeric_id == 3:
+        key_bytes = _terrain_key_size(record["key"])
+        return header + 21 + key_bytes + (34 + key_bytes if record["resource"] is not None else 0)
+    if numeric_id == 4:
+        kind = record["kind"]
+        identity = 18 if kind == "Drop" else 17 if kind in ("RemotePlayer", "Companion") else 9
+        size = header + 2 + identity + (1 if record["dimension"]["tag"] == "Known" else 4)
+        size += sum(
+            width
+            for field, width in (("position", 25), ("yaw", 9), ("pitch", 9), ("velocity", 25))
+            if record[field] is not None
+        )
+        detail = record["detail"]
+        if detail is not None:
+            value = detail["value"]
+            size += 1
+            if kind in ("RemotePlayer", "Companion"):
+                name = value["display_name" if kind == "RemotePlayer" else "name"]
+                size += 0 if name is None else 1 + _utf8_size(name)
+                size += int(value["reset"] is not None)
+            else:
+                size += {"Drop": 10, "Hostile": 2, "Passive": 3, "Projectile": 1}[kind]
+        return size
+    if numeric_id == 5:
+        return (
+            header
+            + 43
+            + (40 if record["predicted_pose"] is not None else 0)
+            + (37 if record["look_ray"] is not None else 0)
+            + (19 if record["movement"]["control"] is not None else 0)
+            + (10 if record["correction"] is not None else 0)
+            + (18 if record["mining"]["tag"] == "Active" else 0)
+        )
+    if numeric_id == 6:
+        view = record["view"]["tag"]
+        size = (
+            header
+            + 1
+            + {
+                "Inventory": 181,
+                "Crafting": 52,
+                "Furnace": 19,
+                "Chest": 136,
+                "Closed": 15,
+                "Rejected": 10,
+            }[view]
+        )
+        size += 31 if record["token"] is not None else 0
+        if record["outcome"] is not None:
+            size += 11 if record["outcome"]["tag"] == "Rejected" else 10
+        return size
+    if numeric_id == 7:
+        tag, value = record["view"]["tag"], record["view"]["value"]
+        if tag in ("Environment", "Survival"):
+            size = 15 if tag == "Environment" else 7
+        elif tag == "Chat":
+            size = 25 + _utf8_size(value["player_name"]) + _chat_body_size(value["body"])
+        elif tag == "Task":
+            size = 38 + _utf8_size(value["command"])
+        else:
+            size = 1 if value is None else 15 + _utf8_size(value["label"])
+        return header + 1 + size
+    if numeric_id == 8:
+        provenance = record["provenance"]
+        size = 9
+        if provenance["tag"] == "Confirmed":
+            size = 22 + (8 if provenance["value"]["authoritative_event_id"] is not None else 0)
+        return header + 11 + size + (25 if record["position"] is not None else 0)
+    if numeric_id == 9:
+        return (
+            header
+            + 17
+            + sum(9 if entry["tag"] == "Feature" else 2 for entry in record["resource_order"])
+        )
+    return header + 164
 
 
 def _rust_error_class(result: object) -> str:
@@ -1069,6 +1692,7 @@ def _rust_frame_from(
     ):
         return None
     seen: set[str] = set()
+    total_bytes = 36
     for family in families_list:
         if not isinstance(family, dict) or not _exact_fields(family, ("key", "records")):
             return None
@@ -1086,9 +1710,16 @@ def _rust_frame_from(
             return None
         if not isinstance(records, list) or len(records) > descriptor[3]:
             return None
+        if revision == 0 and records and descriptor[0] not in (1, 2, 9, 10):
+            return None
+        total_bytes += _utf8_size(name) + 13
         seen.add(name)
         for record in records:
-            if not isinstance(record, dict):
+            if (
+                not isinstance(record, dict)
+                or len(record) > 11
+                or not _rust_record_payload(record, descriptor[0])
+            ):
                 return None
             header = record.get("header")
             if not isinstance(header, dict) or not _exact_fields(
@@ -1101,6 +1732,11 @@ def _rust_frame_from(
                 return None
             if header["operation"] not in ("Upsert", "Remove"):
                 return None
+            total_bytes += _rust_record_size(record, descriptor[0])
+            if total_bytes > _RUST_FRAME_BYTES:
+                return None
+    if total_bytes > _RUST_FRAME_BYTES or seen != set(families.descriptors):
+        return None
     for name, required_major, required_minor in required:
         registered = families.versions.get(name)
         if (
