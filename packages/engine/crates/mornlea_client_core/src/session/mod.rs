@@ -201,10 +201,10 @@ impl InventoryConfirmed {
         self.containers.remove(reference);
     }
 
-    /// The checked constructor surface for one staged crafting view. A size
-    /// already staged is replaced, mirroring one confirmed view per size.
+    /// Replaces the sole current crafting attribution, including a change
+    /// between personal and workbench grids that retires the previous token.
     pub fn with_crafting_view(mut self, size: CraftingSize, revision: ConfirmedRevision) -> Self {
-        self.crafting.retain(|(staged, _)| *staged != size);
+        self.crafting.clear();
         self.crafting.push((size, revision));
         self
     }

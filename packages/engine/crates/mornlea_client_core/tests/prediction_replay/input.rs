@@ -139,14 +139,13 @@ fn crafting_token(epoch: SessionEpoch, revision: u64, size: CraftingSize) -> Cra
         .expect("crafting token")
 }
 
-/// The confirmed inventory holding the chest, the furnace and both crafting
-/// views, each attributed to its own revision.
+/// The confirmed inventory holding the chest, furnace and current personal
+/// crafting grid, each attributed to its own revision.
 fn full_inventory() -> InventoryConfirmed {
     empty_inventory()
         .with_container_view(chest(1), ConfirmedRevision::new(11))
         .with_container_view(furnace(1), ConfirmedRevision::new(12))
         .with_crafting_view(CraftingSize::Personal, ConfirmedRevision::new(13))
-        .with_crafting_view(CraftingSize::Workbench, ConfirmedRevision::new(14))
 }
 
 /// One admitted mirror holding every fixture view.
@@ -297,7 +296,7 @@ fn all_twenty(epoch_value: u64) -> Vec<InputAction> {
         InputAction {
             intent: ClientIntent::TakeCraftingOutput,
             container: None,
-            crafting: Some(crafting_token(epoch, 14, CraftingSize::Workbench)),
+            crafting: Some(crafting_token(epoch, 13, CraftingSize::Personal)),
         },
         plain(ClientIntent::EquipArmor),
         chest_action(ClientIntent::CloseContainer, epoch_value, 11),
@@ -571,7 +570,13 @@ fn every_container_and_crafting_region_takes_exactly_its_token() {
     ];
     for (name, action, container_required, crafting_required) in cases {
         let mut admission = owner(1);
-        let mirror = full_mirror(1);
+        let inventory = match &action.crafting {
+            Some(token) => {
+                full_inventory().with_crafting_view(token.size(), token.confirmed_revision())
+            }
+            None => full_inventory(),
+        };
+        let mirror = admitted_mirror(epoch(1), 20, inventory);
         if container_required {
             let without = InputAction {
                 container: None,

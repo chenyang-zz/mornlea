@@ -655,12 +655,12 @@ fn later_publication_advances_the_confirmed_revision_and_stales_old_tokens() {
     commit(&mut provider, Event::CraftingState(workbench));
     assert_eq!(
         provider.mirror().crafting_revision(CraftingSize::Personal),
-        Some(ConfirmedRevision::new(1))
+        None
     );
     assert_eq!(
         provider.mirror().crafting_revision(CraftingSize::Workbench),
         Some(ConfirmedRevision::new(2)),
-        "each grid size carries its own confirmed attribution"
+        "the workbench replaces the current crafting attribution"
     );
 
     let epoch = provider.mirror().epoch();
@@ -679,9 +679,9 @@ fn later_publication_advances_the_confirmed_revision_and_stales_old_tokens() {
     let old_token =
         CraftingViewToken::try_new(epoch, ConfirmedRevision::new(1), CraftingSize::Personal)
             .expect("checked crafting token");
-    assert!(
-        InputTranslator::validate_batch(&action_with(old_token), provider.mirror(), &limits)
-            .is_ok()
+    assert_eq!(
+        InputTranslator::validate_batch(&action_with(old_token), provider.mirror(), &limits),
+        Err(ClientError::StaleEpoch)
     );
 
     commit(&mut provider, Event::CraftingState(cleared));
@@ -692,8 +692,8 @@ fn later_publication_advances_the_confirmed_revision_and_stales_old_tokens() {
     );
     assert_eq!(
         provider.mirror().crafting_revision(CraftingSize::Workbench),
-        Some(ConfirmedRevision::new(2)),
-        "the other size's attribution is untouched"
+        None,
+        "the personal grid retires the previous workbench attribution"
     );
     assert_eq!(
         InputTranslator::validate_batch(&action_with(old_token), provider.mirror(), &limits),

@@ -1524,3 +1524,100 @@ fn repaired_capacity_actor_resolution_and_name_are_charged() {
         std::mem::size_of::<ResolvedActor>()
     );
 }
+
+#[test]
+fn repaired_crafting_replaces_the_sole_current_attribution() {
+    use mornlea_client_core::{
+        ClientIntent, CraftingViewToken, InputAction, InputAdmissionState, InputBatch,
+        InputTranslator,
+    };
+    for (old_size, new_size) in [
+        (CraftingSize::Workbench, CraftingSize::Personal),
+        (CraftingSize::Personal, CraftingSize::Workbench),
+        (CraftingSize::Workbench, CraftingSize::Workbench),
+    ] {
+        let mut mirror = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+        for (revision, size) in [(1, old_size), (2, new_size)] {
+            let size_byte = match size {
+                CraftingSize::Personal => 2,
+                CraftingSize::Workbench => 3,
+            };
+            let packet = ServerPacket::CraftingState(
+                CraftingState::new(size_byte, [ItemStack::EMPTY; 9], ItemStack::EMPTY).unwrap(),
+            );
+            mirror
+                .commit(&charged_observation(packet, revision))
+                .unwrap();
+        }
+        let epoch = SessionEpoch::try_new(1).unwrap();
+        let mut admission =
+            InputAdmissionState::try_new(epoch, ClientLimits::try_new().unwrap()).unwrap();
+        let before = (
+            admission.next_sequence(),
+            admission.outbound_records(),
+            admission.journal_entries(),
+            admission.projection().admitted().len(),
+        );
+        let old_token =
+            CraftingViewToken::try_new(epoch, ConfirmedRevision::new(1), old_size).unwrap();
+        let stale = InputBatch::try_new(
+            epoch,
+            vec![
+                InputAction {
+                    intent: ClientIntent::DropSelectedItem,
+                    container: None,
+                    crafting: None,
+                },
+                InputAction {
+                    intent: ClientIntent::TakeCraftingOutput,
+                    container: None,
+                    crafting: Some(old_token),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            InputTranslator::validate_batch(
+                &stale,
+                mirror.mirror(),
+                &ClientLimits::try_new().unwrap()
+            )
+            .err(),
+            Some(ClientError::StaleEpoch)
+        );
+        assert_eq!(
+            (
+                admission.next_sequence(),
+                admission.outbound_records(),
+                admission.journal_entries(),
+                admission.projection().admitted().len()
+            ),
+            before
+        );
+        let current =
+            CraftingViewToken::try_new(epoch, ConfirmedRevision::new(2), new_size).unwrap();
+        let valid = InputBatch::try_new(
+            epoch,
+            vec![InputAction {
+                intent: ClientIntent::TakeCraftingOutput,
+                container: None,
+                crafting: Some(current),
+            }],
+        )
+        .unwrap();
+        let validated = InputTranslator::validate_batch(
+            &valid,
+            mirror.mirror(),
+            &ClientLimits::try_new().unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            InputTranslator::commit(validated, &mut admission),
+            Ok(mornlea_client_core::InputReceipt::Queued {
+                first_sequence: Some(1),
+                sequenced_count: 1,
+                ..
+            })
+        ));
+    }
+}
