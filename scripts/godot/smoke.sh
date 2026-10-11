@@ -6,10 +6,13 @@ repository_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 project_root="${repository_root}/apps/mornlea-godot"
 iterations=100
 isolated_python="false"
+core="pilot"
+core_selected="false"
+exercise_session="false"
 smoke_root=""
 
 usage() {
-  printf 'usage: %s [--iterations POSITIVE_INTEGER] [--isolated-python]\n' "${0##*/}" >&2
+  printf 'usage: %s [--iterations POSITIVE_INTEGER] [--isolated-python] [--core rust --exercise-session]\n' "${0##*/}" >&2
 }
 
 cleanup() {
@@ -35,6 +38,16 @@ while (($# > 0)); do
       isolated_python="true"
       shift
       ;;
+    --core)
+      (($# >= 2)) || { usage; exit 2; }
+      core="$2"
+      core_selected="true"
+      shift 2
+      ;;
+    --exercise-session)
+      exercise_session="true"
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -50,6 +63,30 @@ done
   printf 'Godot smoke iterations must be a positive integer: %s\n' "${iterations}" >&2
   exit 2
 }
+
+if [[ "${core_selected}" == "true" || "${exercise_session}" == "true" ]]; then
+  [[ "${core}" == "rust" && "${core_selected}" == "true" && "${exercise_session}" == "true" ]] || {
+    printf '%s\n' '--core rust and --exercise-session must appear together' >&2
+    exit 2
+  }
+  [[ "$(uname -s):$(uname -m)" == "Darwin:arm64" ]] || {
+    printf '%s\n' 'Rust session smoke requires the qualified Darwin arm64 sandbox policy' >&2
+    exit 1
+  }
+  "${script_dir}/build-python-runtime.sh" --verify --offline
+  "${script_dir}/build-extension.sh" --verify
+  # Qualification builds use the existing native artifact owners and no production fallback.
+  export CARGO_TARGET_DIR="${repository_root}/packages/engine/target"
+  rustup run 1.97.1 cargo build --manifest-path "${repository_root}/packages/engine/Cargo.toml" \
+    --package mornlea_godot --locked --target aarch64-apple-darwin --features runtime-qualification
+  cp -- "${CARGO_TARGET_DIR}/aarch64-apple-darwin/debug/libmornlea_godot.dylib" \
+    "${project_root}/addons/mornlea_bridge/bin/macos-universal/debug/libmornlea_godot.dylib"
+  rustup run 1.97.1 cargo build --manifest-path "${repository_root}/packages/engine/Cargo.toml" \
+    --package mornlea_godot --locked --example rust_session_server
+  godot_binary="$("${script_dir}/godot.sh" --print-path)"
+  exec /usr/bin/python3 -I "${script_dir}/rust-session-smoke.py" \
+    --repository-root "${repository_root}" --godot "${godot_binary}" --iterations "${iterations}"
+fi
 
 require_marker_once() {
   local output="$1"
