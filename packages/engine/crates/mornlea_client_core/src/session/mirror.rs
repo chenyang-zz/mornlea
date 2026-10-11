@@ -136,6 +136,12 @@ impl MirrorProvider {
         &self.observations
     }
 
+    /// Actual retained decoded storage, including spare queue backing.
+    /// Consumption releases packet allocations while spare backing stays charged.
+    pub fn held_observation_bytes(&self) -> Result<usize, ClientError> {
+        observation_queue_bytes(&self.observations)
+    }
+
     /// Consumes the observation prefix one successful publication has
     /// projected. The other consumption counts belong to their own owners;
     /// only the observation cursor is read here, and an over-long cursor is
@@ -208,8 +214,17 @@ impl MirrorProvider {
             key,
             source_tick(&event),
             staged.packet().clone(),
-            resolved,
+            // Normalization makes the private resolved capacity equal its
+            // borrowed slice length, so retained accounting needs no hidden getter.
+            resolved.into_boxed_slice().into_vec(),
         )?;
+        // Copying the bounded prior queue stages one complete addition while
+        // preserving its allocation and mirror state on every refusal.
+        let mut observations = self.observations.clone();
+        observations.push(committed);
+        if observation_queue_bytes(&observations)? > self.limits.inbound_bytes() {
+            return Err(ClientError::Capacity);
+        }
         self.mirror = ConfirmedMirror::try_new(ConfirmedMirrorParts {
             epoch: self.mirror.epoch(),
             revision,
@@ -219,7 +234,7 @@ impl MirrorProvider {
             inventory: Some(inventory),
             world_ui: Some(world_ui),
         })?;
-        self.observations.push(committed);
+        self.observations = observations;
         Ok(revision)
     }
 }
@@ -657,4 +672,90 @@ fn source_tick(event: &Event) -> Option<u64> {
         | Event::PlaceBlockSucceeded(_)
         | Event::CraftingState(_) => None,
     }
+}
+
+/// Charges actual retained allocations; compressed snapshot bytes do not
+/// describe the decoded section, palette and packed-word ownership.
+pub(crate) fn observation_queue_bytes(
+    observations: &Vec<AcceptedObservation>,
+) -> Result<usize, ClientError> {
+    use std::mem::size_of;
+    fn storage<T>(values: &Vec<T>) -> Result<usize, ClientError> {
+        values
+            .capacity()
+            .checked_mul(size_of::<T>())
+            .ok_or(ClientError::Capacity)
+    }
+    fn add(total: &mut usize, bytes: usize) -> Result<(), ClientError> {
+        *total = total.checked_add(bytes).ok_or(ClientError::Capacity)?;
+        Ok(())
+    }
+    let mut total = storage(observations)?;
+    for observation in observations {
+        // Committed resolved vectors are normalized through a boxed slice;
+        // structural login observations have the checked empty vector.
+        add(
+            &mut total,
+            observation
+                .resolved()
+                .len()
+                .checked_mul(size_of::<ResolvedActor>())
+                .ok_or(ClientError::Capacity)?,
+        )?;
+        use mornlea_protocol::ServerPacket::*;
+        match observation.packet() {
+            ChunkSnapshot(snapshot) => {
+                add(&mut total, storage(&snapshot.sections)?)?;
+                for section in &snapshot.sections {
+                    add(&mut total, storage(&section.palette)?)?;
+                    add(&mut total, storage(&section.packed)?)?;
+                }
+            }
+            BlockChanges(packet) => add(&mut total, storage(&packet.changes)?)?,
+            ForgetChunks(packet) => add(&mut total, storage(&packet.chunks)?)?,
+            RemotePlayerStates(packet) => add(&mut total, storage(&packet.players)?)?,
+            ItemDropUpserts(packet) => add(&mut total, storage(&packet.drops)?)?,
+            ItemDropRemoves(packet) => add(&mut total, storage(&packet.ids)?)?,
+            CompanionStates(packet) => add(&mut total, storage(&packet.states)?)?,
+            HostileSpawn(packet) => add(&mut total, storage(&packet.spawns)?)?,
+            HostileState(packet) => add(&mut total, storage(&packet.states)?)?,
+            HostileDespawn(packet) => add(&mut total, storage(&packet.ids)?)?,
+            PassiveSpawn(packet) => add(&mut total, storage(&packet.spawns)?)?,
+            PassiveState(packet) => add(&mut total, storage(&packet.states)?)?,
+            PassiveDespawn(packet) => add(&mut total, storage(&packet.despawns)?)?,
+            ProjectileSpawn(packet) => add(&mut total, storage(&packet.spawns)?)?,
+            ProjectileState(packet) => add(&mut total, storage(&packet.states)?)?,
+            ProjectileDespawn(packet) => add(&mut total, storage(&packet.ids)?)?,
+            RemotePlayerSpawn(packet) => add(&mut total, packet.display_name.capacity())?,
+            CompanionSpawn(packet) => add(&mut total, packet.name.capacity())?,
+            ChatEvent(packet) => {
+                for text in [
+                    &packet.player_name,
+                    &packet.companion_name,
+                    &packet.command,
+                    &packet.speech,
+                ] {
+                    add(&mut total, text.capacity())?;
+                }
+            }
+            HandshakeReject(packet) => add(&mut total, packet.message.capacity())?,
+            LoginReject(packet) => add(&mut total, packet.message.capacity())?,
+            Disconnect(packet) => add(&mut total, packet.message.capacity())?,
+            ServerHello(_)
+            | LoginSuccess(_)
+            | PlayerState(_)
+            | CommandRejected(_)
+            | KeepAlive(_)
+            | RemotePlayerDespawn(_)
+            | InventoryState(_)
+            | FurnaceState(_)
+            | ContainerClosed(_)
+            | ChestState(_)
+            | CompanionDespawn(_)
+            | PlaceBlockSucceeded(_)
+            | CraftingState(_)
+            | CombatHit(_) => {}
+        }
+    }
+    Ok(total)
 }

@@ -344,6 +344,11 @@ impl ClientEndpoint for LoginSession {
                 // already published it and released the transport.
                 return Err(ClientError::Disconnected);
             }
+            if usize::from(work.messages()) > session.limits.message_work()
+                || usize::from(work.meshes()) > session.limits.mesh_work()
+            {
+                return Err(ClientError::Capacity);
+            }
             // The monotonic deadlines are checked at step entry, before any
             // frame is processed: a hello or login answer that only arrives
             // after its deadline cannot extend the phase, exactly as a
@@ -578,7 +583,13 @@ fn handle_frame(
                 &disconnect.message,
             )?));
         }
-        (SessionPhase::Admitted, packet) => stage_observation(session, packet)?,
+        (SessionPhase::Admitted, packet) => match stage_observation(session, packet) {
+            Ok(()) => {}
+            // A complete authoritative packet already left the transport;
+            // capacity ends this epoch explicitly rather than losing an update.
+            Err(ClientError::Capacity) => *terminal = Some(CloseReason::Capacity),
+            Err(error) => return Err(error),
+        },
         _ => {
             session.rejected_inbound += 1;
         }
@@ -592,8 +603,7 @@ fn handle_frame(
 /// resolution belong to that provider, so staging here is structural.
 fn stage_observation(session: &mut LiveSession, packet: ServerPacket) -> Result<(), ClientError> {
     if session.pending_inbound.len() + 1 > session.inbound_limit {
-        session.rejected_inbound += 1;
-        return Ok(());
+        return Err(ClientError::Capacity);
     }
     let revision = ConfirmedRevision::new(
         session
@@ -606,9 +616,12 @@ fn stage_observation(session: &mut LiveSession, packet: ServerPacket) -> Result<
     let ordinal =
         u32::try_from(session.pending_inbound.len()).map_err(|_| ClientError::Capacity)?;
     let key = ObservationKey::try_new(session.epoch, revision, ordinal)?;
-    session
-        .pending_inbound
-        .push(AcceptedObservation::try_new(key, None, packet, Vec::new())?);
+    let mut pending = session.pending_inbound.clone();
+    pending.push(AcceptedObservation::try_new(key, None, packet, Vec::new())?);
+    if crate::session::mirror::observation_queue_bytes(&pending)? > session.limits.inbound_bytes() {
+        return Err(ClientError::Capacity);
+    }
+    session.pending_inbound = pending;
     Ok(())
 }
 

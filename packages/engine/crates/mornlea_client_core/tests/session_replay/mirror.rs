@@ -1381,3 +1381,146 @@ fn domain_container_ref(
         .to_domain_present()
         .expect("present container reference")
 }
+
+fn byte_limited_mirror(bytes: usize) -> MirrorProvider {
+    let l = ClientLimits::try_new().unwrap();
+    let limits = ClientLimits::try_new_with(
+        l.queued_input_events(),
+        l.inbound_observations(),
+        bytes,
+        l.outbound_commands(),
+        l.outbound_bytes(),
+        l.prediction_journal(),
+        l.message_work(),
+        l.mesh_work(),
+        l.preparation_results(),
+        l.preparation_bytes(),
+        l.family_records(),
+        l.frame_bytes(),
+    )
+    .unwrap();
+    let mut mirror = MirrorProvider::new(SessionEpoch::try_new(1).unwrap(), limits).unwrap();
+    mirror.admit().unwrap();
+    mirror
+}
+
+fn charged_observation(packet: ServerPacket, revision: u64) -> AcceptedObservation {
+    AcceptedObservation::try_new(
+        ObservationKey::try_new(
+            SessionEpoch::try_new(1).unwrap(),
+            ConfirmedRevision::new(revision),
+            0,
+        )
+        .unwrap(),
+        None,
+        packet,
+        vec![],
+    )
+    .unwrap()
+}
+
+#[test]
+fn repaired_capacity_decoded_observation_exceeds_bytes() {
+    let mut mirror = byte_limited_mirror(1);
+    let before = mirror.mirror().clone();
+    let packet = ServerPacket::ForgetChunks(
+        ForgetChunks::new(Dimension::OVERWORLD, (0..4096).map(|x| (x, 0)).collect()).unwrap(),
+    );
+    assert_eq!(
+        mirror.commit(&charged_observation(packet, 1)),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(mirror.mirror(), &before);
+    assert!(mirror.observations().is_empty());
+}
+
+#[test]
+fn repaired_capacity_compressed_snapshot_charges_decoded_heap() {
+    let sections: Vec<_> = (0..mornlea_protocol::SECTIONS_PER_CHUNK)
+        .map(|index| SectionData::direct(index as i32, vec![0; 1024]))
+        .collect();
+    let packet = ServerPacket::ChunkSnapshot(
+        ChunkSnapshot::new(Dimension::OVERWORLD, 0, 0, 1, sections).unwrap(),
+    );
+    let mut codec = mornlea_protocol::ProtocolCodec::new().unwrap();
+    let mut wire = vec![0; 2 << 20];
+    let wire_len = codec.encode_server_into(&packet, &mut wire).unwrap();
+    wire.truncate(wire_len);
+    assert!(wire.len() < 8192);
+    let mut mirror = byte_limited_mirror(8192);
+    assert_eq!(
+        mirror.commit(&charged_observation(packet, 1)),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(mirror.mirror().revision(), ConfirmedRevision::new(0));
+    assert!(mirror.observations().is_empty());
+}
+
+#[test]
+fn repaired_capacity_exact_bytes_refusal_and_consumption_retry() {
+    let packet =
+        ServerPacket::ForgetChunks(ForgetChunks::new(Dimension::OVERWORLD, vec![(0, 0)]).unwrap());
+    let mut measured = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+    measured
+        .commit(&charged_observation(packet.clone(), 1))
+        .unwrap();
+    let cap = measured.held_observation_bytes().unwrap();
+    let mut refused = byte_limited_mirror(cap - 1);
+    assert_eq!(
+        refused.commit(&charged_observation(packet.clone(), 1)),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(refused.held_observation_bytes().unwrap(), 0);
+    let mut mirror = byte_limited_mirror(cap);
+    mirror
+        .commit(&charged_observation(packet.clone(), 1))
+        .unwrap();
+    assert_eq!(mirror.held_observation_bytes().unwrap(), cap);
+    let before = mirror.mirror().clone();
+    assert_eq!(
+        mirror.commit(&charged_observation(packet.clone(), 2)),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(mirror.mirror(), &before);
+    assert_eq!(mirror.held_observation_bytes().unwrap(), cap);
+    mirror
+        .consume(&PublicationConsumption::try_new(1, 0, 0, 0).unwrap())
+        .unwrap();
+    let spare = mirror.held_observation_bytes().unwrap();
+    assert_eq!(cap - spare, std::mem::size_of::<(i32, i32)>());
+    assert!(spare > 0);
+    mirror.commit(&charged_observation(packet, 2)).unwrap();
+    assert_eq!(mirror.held_observation_bytes().unwrap(), cap);
+}
+
+#[test]
+fn repaired_capacity_actor_resolution_and_name_are_charged() {
+    let mut mirror = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+    mirror
+        .commit(&charged_observation(remote_spawn(player(45), 1), 1))
+        .unwrap();
+    let held = mirror.held_observation_bytes().unwrap();
+    let observation = &mirror.observations()[0];
+    let ServerPacket::RemotePlayerSpawn(packet) = observation.packet() else {
+        panic!("remote spawn");
+    };
+    let dynamic = packet.display_name.capacity()
+        + observation.resolved().len() * std::mem::size_of::<ResolvedActor>();
+    assert_eq!(observation.resolved().len(), 0);
+    mirror
+        .consume(&PublicationConsumption::try_new(1, 0, 0, 0).unwrap())
+        .unwrap();
+    assert_eq!(held - mirror.held_observation_bytes().unwrap(), dynamic);
+    mirror
+        .commit(&charged_observation(remote_despawn(player(45)), 2))
+        .unwrap();
+    let held = mirror.held_observation_bytes().unwrap();
+    assert_eq!(mirror.observations()[0].resolved().len(), 1);
+    mirror
+        .consume(&PublicationConsumption::try_new(1, 0, 0, 0).unwrap())
+        .unwrap();
+    assert_eq!(
+        held - mirror.held_observation_bytes().unwrap(),
+        std::mem::size_of::<ResolvedActor>()
+    );
+}

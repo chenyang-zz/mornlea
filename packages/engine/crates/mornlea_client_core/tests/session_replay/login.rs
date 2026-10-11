@@ -922,3 +922,90 @@ fn repaired_lifecycle_publication_capacity_precedes_release() {
         &session.snapshot(epoch).unwrap()
     ));
 }
+
+fn repair_limits(
+    messages: usize,
+    meshes: usize,
+    observations: usize,
+    bytes: usize,
+) -> mornlea_client_core::ClientLimits {
+    let l = mornlea_client_core::ClientLimits::try_new().unwrap();
+    mornlea_client_core::ClientLimits::try_new_with(
+        l.queued_input_events(),
+        observations,
+        bytes,
+        l.outbound_commands(),
+        l.outbound_bytes(),
+        l.prediction_journal(),
+        messages,
+        meshes,
+        l.preparation_results(),
+        l.preparation_bytes(),
+        l.family_records(),
+        l.frame_bytes(),
+    )
+    .unwrap()
+}
+
+fn repair_forget(x: i32) -> Vec<u8> {
+    frame_server_packet(&ServerPacket::ForgetChunks(
+        mornlea_protocol::ForgetChunks::new(mornlea_domain::Dimension::OVERWORLD, vec![(x, 0)])
+            .unwrap(),
+    ))
+}
+
+#[test]
+fn repaired_capacity_work_limit_preserves_queued_messages() {
+    let l = mornlea_client_core::ClientLimits::try_new().unwrap();
+    let (mut session, _, peer, epoch) = repair_session(repair_limits(
+        1,
+        1,
+        l.inbound_observations(),
+        l.inbound_bytes(),
+    ));
+    peer.feed(&repair_forget(0)).unwrap();
+    peer.feed(&repair_forget(1)).unwrap();
+    let before = session.snapshot(epoch).unwrap();
+    for budget in [
+        ClientWorkBudget::try_new(2, 0).unwrap(),
+        ClientWorkBudget::try_new(0, 2).unwrap(),
+    ] {
+        assert_eq!(
+            session.step(epoch, budget).err(),
+            Some(ClientError::Capacity)
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &before,
+            &session.snapshot(epoch).unwrap()
+        ));
+    }
+    let report = session
+        .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
+        .unwrap();
+    assert_eq!(report.processed_messages(), 1);
+    let report = session
+        .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
+        .unwrap();
+    assert_eq!(report.processed_messages(), 1);
+}
+
+#[test]
+fn repaired_capacity_observation_overflow_is_terminal() {
+    let l = mornlea_client_core::ClientLimits::try_new().unwrap();
+    let (mut session, connector, peer, epoch) =
+        repair_session(repair_limits(1, 1, 1, l.inbound_bytes()));
+    peer.feed(&repair_forget(0)).unwrap();
+    session
+        .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
+        .unwrap();
+    peer.feed(&repair_forget(1)).unwrap();
+    let report = session
+        .step(epoch, ClientWorkBudget::try_new(1, 0).unwrap())
+        .unwrap();
+    assert_eq!(report.terminal(), Some(&CloseReason::Capacity));
+    assert_eq!(report.pending_inbound(), 0);
+    assert_eq!(
+        connector.releases.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
