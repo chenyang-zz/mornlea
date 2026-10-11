@@ -796,7 +796,7 @@ impl PredictionReplay {
         self.frame_steps += 1;
         self.predicted = Some(state);
         // Both targets must validate before this staged owner replaces live state.
-        self.refresh_ray_targets(environment)?;
+        self.refresh_ray_targets(environment, None)?;
         Ok(witness)
     }
 
@@ -848,6 +848,28 @@ impl PredictionReplay {
         Ok(witness)
     }
 
+    /// World changes recast targets at the current mirror revision without
+    /// adopting a new authoritative player pose or correction base.
+    pub(crate) fn refresh_world_targets(
+        &mut self,
+        world: &WorldConfirmed,
+        dimension: Dimension,
+        revision: ConfirmedRevision,
+    ) -> Result<(), ClientError> {
+        if self
+            .confirmed
+            .as_ref()
+            .is_some_and(|base| revision < base.revision)
+        {
+            return Err(ClientError::InvalidInput);
+        }
+        let mut candidate = self.clone();
+        candidate
+            .refresh_ray_targets(BorrowedEnvironment::World(world, dimension), Some(revision))?;
+        *self = candidate;
+        Ok(())
+    }
+
     fn apply_confirmed_candidate(
         &mut self,
         key: &ObservationKey,
@@ -897,7 +919,7 @@ impl PredictionReplay {
             self.clear_snow();
             self.issued_high_water = last;
             self.last_acknowledged = self.last_acknowledged.max(last);
-            self.refresh_ray_targets(environment)?;
+            self.refresh_ray_targets(environment, None)?;
             return CorrectionWitness::try_new(0, 0, false);
         }
         let reset = self
@@ -1034,7 +1056,7 @@ impl PredictionReplay {
             state = environment.step(state, &step.control)?.0;
         }
         self.predicted = (!self.pending.is_empty()).then_some(state);
-        self.refresh_ray_targets(environment)?;
+        self.refresh_ray_targets(environment, None)?;
         Ok(())
     }
 
@@ -1049,17 +1071,18 @@ impl PredictionReplay {
     fn refresh_ray_targets(
         &mut self,
         environment: BorrowedEnvironment<'_>,
+        revision: Option<ConfirmedRevision>,
     ) -> Result<(), ClientError> {
         let Some(base) = self.confirmed.as_ref() else {
             self.confirmed_target = None;
             self.predicted_target = None;
             return Ok(());
         };
-        self.confirmed_target =
-            environment.target(base.state.position, base.look, base.revision)?;
+        let revision = revision.unwrap_or(base.revision);
+        self.confirmed_target = environment.target(base.state.position, base.look, revision)?;
         self.predicted_target = match (self.predicted, self.pending.last()) {
             (Some(state), Some(step)) => {
-                environment.target(state.position, step.control.look(), base.revision)?
+                environment.target(state.position, step.control.look(), revision)?
             }
             _ => None,
         };
@@ -1723,6 +1746,85 @@ mod world_tests {
             assert!(owner.confirmed_target().is_none());
             assert!(owner.predicted_target().is_none());
         }
+    }
+
+    #[test]
+    fn world_changes_refresh_targets_without_relabeling_the_confirmed_pose() {
+        use mornlea_domain::{BlockChange, BlockChanges, BlockChangesParts};
+        let dimension = Dimension::DEPTHS;
+        let target = BlockPos::new(5, 1, 0);
+        let mut world = world(dimension, |p| if p.y() == 0 || p == target { 2 } else { 0 });
+        let mut owner = owner(
+            &authority(1, 0, dimension, [0.5, 1.0, 0.5], [0.0; 3], true),
+            &world,
+        );
+        owner.admit_through(1).unwrap();
+        owner
+            .predict_world(1, control(), &world, dimension)
+            .unwrap();
+        let original = owner.projection().unwrap();
+        assert_eq!(
+            owner.refresh_world_targets(&world, dimension, ConfirmedRevision::new(0)),
+            Err(ClientError::InvalidInput)
+        );
+        assert_eq!(
+            owner.confirmed_target().unwrap().source_revision(),
+            ConfirmedRevision::new(1)
+        );
+        owner
+            .refresh_world_targets(&world, dimension, ConfirmedRevision::new(2))
+            .unwrap();
+        assert_eq!(
+            owner.confirmed_target().unwrap().source_revision(),
+            ConfirmedRevision::new(2)
+        );
+        assert_eq!(
+            owner.predicted_target().unwrap().source_revision(),
+            ConfirmedRevision::new(2)
+        );
+        for (base_revision, block, revision) in [(1, 0, 3), (2, 2, 4)] {
+            world
+                .apply_changes(
+                    &BlockChanges::try_new(BlockChangesParts {
+                        dimension,
+                        chunk: ChunkPos::new(0, 0),
+                        base_revision,
+                        new_revision: base_revision + 1,
+                        changes: vec![BlockChange::try_new(target, block).unwrap()]
+                            .into_boxed_slice(),
+                    })
+                    .unwrap(),
+                    &ClientLimits::try_new().unwrap(),
+                )
+                .unwrap();
+            owner
+                .refresh_world_targets(&world, dimension, ConfirmedRevision::new(revision))
+                .unwrap();
+            assert_eq!(
+                owner.confirmed_target().map(|t| t.position()),
+                (block != 0).then_some(target)
+            );
+            assert_eq!(
+                owner.predicted_target().map(|t| t.position()),
+                (block != 0).then_some(target)
+            );
+        }
+        world.remove_chunk(dimension, ChunkPos::new(0, 0));
+        owner
+            .refresh_world_targets(&world, dimension, ConfirmedRevision::new(5))
+            .unwrap();
+        assert!(owner.confirmed_target().is_none());
+        assert!(owner.predicted_target().is_none());
+        let refreshed = owner.projection().unwrap();
+        assert_eq!(refreshed.confirmed_pose(), original.confirmed_pose());
+        assert_eq!(refreshed.predicted_pose(), original.predicted_pose());
+        assert_eq!(refreshed.journal(), original.journal());
+        assert_eq!(refreshed.revision(), original.revision());
+        assert_eq!(owner.last_server_tick, 1);
+        assert_eq!(
+            owner.confirmed.as_ref().unwrap().revision,
+            ConfirmedRevision::new(1)
+        );
     }
 
     #[test]
