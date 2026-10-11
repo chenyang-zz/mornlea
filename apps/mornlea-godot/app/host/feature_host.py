@@ -51,6 +51,8 @@ RUST_FACADE_METHODS = (
 RUST_PRODUCER_NAME = "rust-client-core"
 RUST_STEP_MESSAGE_BUDGET = 64
 RUST_STEP_MESH_BUDGET = 32
+RUST_FRAME_LAYOUT = (1, 0)
+RUST_REGISTRY_PATH = "res://catalog/capability_registry.tres"
 U64_MAX = 18_446_744_073_709_551_615
 
 
@@ -162,6 +164,25 @@ def _u16_word(value: object) -> int | None:
     return value if 0 <= value <= 65_535 else None
 
 
+def _exact_fields(value: object, names: tuple[str, ...]) -> bool:
+    return isinstance(value, dict) and set(value) == set(names)
+
+
+def _bounded_integer(value: object, maximum: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= maximum
+
+
+def _rust_terminal(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, dict) or not _exact_fields(value, ("tag", "value")):
+        return False
+    tag = value["tag"]
+    if tag in ("LocalClose", "Timeout", "Capacity", "Internal"):
+        return value["value"] is None
+    return tag in ("RemoteDisconnect", "LoginRejected") and isinstance(value["value"], str)
+
+
 def _rust_error_class(result: object) -> str:
     """The closed error class name of one facade envelope, for diagnostics."""
     if isinstance(result, dict):
@@ -181,9 +202,11 @@ def _rust_envelope_value(result: object) -> object:
     result", and the caller keeps its prior visible state instead of
     inventing a default value.
     """
-    if not isinstance(result, dict) or result.get("ok") is not True:
+    if not isinstance(result, dict) or not _exact_fields(result, ("ok", "value", "error")):
         return None
-    return result.get("value")
+    if result["ok"] is not True or result["error"] is not None:
+        return None
+    return result["value"]
 
 
 def _rust_token_from(result: object) -> dict[str, object] | None:
@@ -194,12 +217,12 @@ def _rust_token_from(result: object) -> dict[str, object] | None:
     object on every call, never rebuilding or mutating it.
     """
     token = _rust_envelope_value(result)
-    if not isinstance(token, dict):
+    if not isinstance(token, dict) or not _exact_fields(token, ("slot", "generation")):
         return None
     slot = token.get("slot")
-    if not isinstance(slot, int) or isinstance(slot, bool) or slot <= 0:
+    if not _bounded_integer(slot, 4_294_967_295) or slot == 0:
         return None
-    if _u64_text(token.get("generation")) is None:
+    if _u64_text(token.get("generation")) in (None, 0):
         return None
     return token
 
@@ -207,7 +230,7 @@ def _rust_token_from(result: object) -> dict[str, object] | None:
 def _rust_epoch_text_from(result: object) -> str | None:
     """One canonical session-epoch text answered by connect or reset."""
     epoch = _rust_envelope_value(result)
-    if not isinstance(epoch, str) or _u64_text(epoch) is None:
+    if not isinstance(epoch, str) or _u64_text(epoch) in (None, 0):
         return None
     return epoch
 
@@ -239,7 +262,7 @@ class feature_host(Node):
     _rust_token: dict[str, object] | None
     _rust_epoch: str | None
     _rust_frame: dict[str, object] | None
-    _rust_families: dict[str, tuple[int, int]] | None
+    _rust_families: FamilyTable | None
     _rust_required: tuple[tuple[str, int, int], ...]
 
     def _ready(self) -> None:
@@ -514,8 +537,13 @@ class FamilyTable:
     same requirement grammar, so the host keeps one negotiation core.
     """
 
-    def __init__(self, versions: dict[str, tuple[int, int]]) -> None:
+    def __init__(
+        self,
+        versions: dict[str, tuple[int, int]],
+        descriptors: dict[str, tuple[int, int, int, int, int]] | None = None,
+    ) -> None:
         self.versions = versions
+        self.descriptors = descriptors if descriptors is not None else {}
 
 
 def _bridge_family_table(bridge: Node) -> tuple[FamilyTable | None, str]:
@@ -904,46 +932,83 @@ def _close_rust(host: feature_host) -> None:
     host._rust_mode = False
 
 
-def _rust_family_table(bridge: Node, token: dict[str, object]) -> tuple[FamilyTable | None, str]:
-    """Negotiate the rust producer descriptor table for one live core.
+def _rust_declared_descriptors() -> dict[str, tuple[int, int, int, int, int]] | None:
+    """Read producer identity from the existing catalog, never feature identities."""
+    registry = _load_resource(RUST_REGISTRY_PATH)
+    if registry is None or _metadata(registry, "rust_producer", "") != RUST_PRODUCER_NAME:
+        return None
+    descriptors: dict[str, tuple[int, int, int, int, int]] = {}
+    for token in _metadata_strings(registry, "rust_producer_families"):
+        parts = token.split(":")
+        if len(parts) != 4:
+            return None
+        name_version = parts[0].rsplit("@", 1)
+        if len(name_version) != 2:
+            return None
+        name, version_text = name_version
+        version = _parse_version(version_text)
+        numbers = tuple(_u64_text(part) for part in parts[1:])
+        if not name or name in descriptors or version is None or any(n is None for n in numbers):
+            return None
+        numeric_id, record_limit, record_bytes = cast(tuple[int, int, int], numbers)
+        descriptors[name] = (numeric_id, version[0], version[1], record_limit, record_bytes)
+    return descriptors if descriptors else None
 
-    The table is the producer identity the rust manifests negotiate against:
-    symbolic logical names with per-family contract versions, so a duplicate
-    name, an unnamed or unversioned descriptor, or a non-canonical bound is a
-    producer-contract break the host refuses before instantiating features.
-    """
+
+def _rust_family_table(bridge: Node, token: dict[str, object]) -> tuple[FamilyTable | None, str]:
+    """Match the entire producer table to the frozen catalog before activation."""
     result = bridge.call("family_table", token)
     value = _rust_envelope_value(result)
     if value is None:
         return None, f"the rust core did not answer its family table ({_rust_error_class(result)})"
-    if not isinstance(value, dict) or value.get("producer") != RUST_PRODUCER_NAME:
+    if (
+        not isinstance(value, dict)
+        or not _exact_fields(value, ("producer", "descriptors"))
+        or value["producer"] != RUST_PRODUCER_NAME
+    ):
         return None, "the rust producer identity is not the frozen rust-client-core table"
-    descriptors = value.get("descriptors")
-    if not isinstance(descriptors, list) or not descriptors:
-        return None, "the rust family table reported no descriptors"
+    declared = _rust_declared_descriptors()
+    if declared is None:
+        return None, "the declared rust producer table is unavailable"
+    descriptors = value["descriptors"]
+    if not isinstance(descriptors, list) or not descriptors or len(descriptors) > len(declared):
+        return None, "the rust family table has an invalid descriptor count"
     versions: dict[str, tuple[int, int]] = {}
+    accepted: dict[str, tuple[int, int, int, int, int]] = {}
+    ids: set[int] = set()
     for descriptor in descriptors:
-        if not isinstance(descriptor, dict):
+        if not isinstance(descriptor, dict) or not _exact_fields(
+            descriptor,
+            ("logical_name", "numeric_id", "major", "minor", "record_limit", "record_bytes"),
+        ):
             return None, "the rust family table reported an unreadable descriptor"
-        name = descriptor.get("logical_name")
+        name = descriptor["logical_name"]
         if not isinstance(name, str) or not name:
             return None, "the rust family table reported an unnamed descriptor"
         if name in versions:
             return None, f"the rust family table reports family {name} twice"
-        major = _u16_word(descriptor.get("major"))
-        minor = _u16_word(descriptor.get("minor"))
-        numeric_id = descriptor.get("numeric_id")
-        if major is None or minor is None or major < 1:
-            return None, f"the rust family table reported an invalid version for {name}"
-        if not isinstance(numeric_id, int) or isinstance(numeric_id, bool) or numeric_id <= 0:
-            return None, f"the rust family table reported an invalid numeric ID for {name}"
+        major = _u16_word(descriptor["major"])
+        minor = _u16_word(descriptor["minor"])
+        numeric_id = _u16_word(descriptor["numeric_id"])
+        record_limit = _u64_text(descriptor["record_limit"])
+        record_bytes = _u64_text(descriptor["record_bytes"])
         if (
-            _u64_text(descriptor.get("record_limit")) is None
-            or _u64_text(descriptor.get("record_bytes")) is None
+            major is None
+            or minor is None
+            or numeric_id in (None, 0)
+            or record_limit is None
+            or record_bytes is None
         ):
-            return None, f"the rust family table reported an invalid bound for {name}"
+            return None, f"the rust family table reported invalid fields for {name}"
+        identity = (numeric_id, major, minor, record_limit, record_bytes)
+        if numeric_id in ids or identity != declared.get(name):
+            return None, f"the rust family table disagrees with the declared descriptor for {name}"
+        ids.add(numeric_id)
         versions[name] = (major, minor)
-    return FamilyTable(versions), ""
+        accepted[name] = identity
+    if set(accepted) != set(declared):
+        return None, "the rust family table is missing a declared descriptor"
+    return FamilyTable(versions, accepted), ""
 
 
 def _required_families(
@@ -965,59 +1030,122 @@ def _required_families(
 def _rust_frame_from(
     result: object,
     epoch: str,
-    families: dict[str, tuple[int, int]] | None,
+    families: FamilyTable | None,
     required: tuple[tuple[str, int, int], ...],
+    previous: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
-    """Validate one whole pulled frame, or refuse it without side effects.
-
-    The facade already validates the frame it renders; this is the host's own
-    closed-shape check so a torn, mixed, or stale scripted or drifted result
-    never reaches a feature: complete scalar fields in canonical spellings,
-    the current session epoch, no duplicate family keys, every key known to
-    the negotiated table at a compatible version, and every family the active
-    manifests declared required present in the same frame.
-    """
+    """Validate the complete publication before replacing or dispatching any value."""
     frame = _rust_envelope_value(result)
-    if not isinstance(frame, dict):
+    if not isinstance(frame, dict) or not _exact_fields(
+        frame,
+        (
+            "layout_major",
+            "layout_minor",
+            "session_epoch",
+            "confirmed_revision",
+            "frame_index",
+            "families",
+        ),
+    ):
         return None
-    if _u16_word(frame.get("layout_major")) is None or _u16_word(frame.get("layout_minor")) is None:
+    layout = (_u16_word(frame["layout_major"]), _u16_word(frame["layout_minor"]))
+    if layout != RUST_FRAME_LAYOUT or frame["session_epoch"] != epoch:
         return None
-    if frame.get("session_epoch") != epoch or _u64_text(frame.get("session_epoch")) is None:
+    revision = _u64_text(frame["confirmed_revision"])
+    index = _u64_text(frame["frame_index"])
+    if _u64_text(frame["session_epoch"]) in (None, 0) or revision is None or index is None:
         return None
-    if _u64_text(frame.get("confirmed_revision")) is None:
+    if previous is not None and (
+        revision < cast(int, _u64_text(previous["confirmed_revision"]))
+        or index < cast(int, _u64_text(previous["frame_index"]))
+    ):
         return None
-    if _u64_text(frame.get("frame_index")) is None:
-        return None
-    families_list = frame.get("families")
-    if not isinstance(families_list, list) or not families_list:
+    families_list = frame["families"]
+    if (
+        families is None
+        or not isinstance(families_list, list)
+        or not families_list
+        or len(families_list) > len(families.descriptors)
+    ):
         return None
     seen: set[str] = set()
     for family in families_list:
-        if not isinstance(family, dict) or not isinstance(family.get("records"), list):
+        if not isinstance(family, dict) or not _exact_fields(family, ("key", "records")):
             return None
-        key = family.get("key")
-        if not isinstance(key, dict):
+        records = family["records"]
+        key = family["key"]
+        if not isinstance(key, dict) or not _exact_fields(key, ("logical_name", "major", "minor")):
             return None
-        name = key.get("logical_name")
-        major = _u16_word(key.get("major"))
-        minor = _u16_word(key.get("minor"))
-        if not isinstance(name, str) or not name or name in seen:
+        name = key["logical_name"]
+        major = _u16_word(key["major"])
+        minor = _u16_word(key["minor"])
+        if not isinstance(name, str) or name in seen:
             return None
-        if major is None or minor is None:
+        descriptor = families.descriptors.get(name)
+        if descriptor is None or (major, minor) != families.versions[name]:
+            return None
+        if not isinstance(records, list) or len(records) > descriptor[3]:
             return None
         seen.add(name)
-        registered = families.get(name) if families is not None else None
-        if registered is None:
-            return None
-        if major != registered[0] or minor > registered[1]:
-            return None
+        for record in records:
+            if not isinstance(record, dict):
+                return None
+            header = record.get("header")
+            if not isinstance(header, dict) or not _exact_fields(
+                header, ("epoch", "revision", "source_tick", "operation")
+            ):
+                return None
+            if header["epoch"] != epoch or header["revision"] != frame["confirmed_revision"]:
+                return None
+            if header["source_tick"] is not None and _u64_text(header["source_tick"]) is None:
+                return None
+            if header["operation"] not in ("Upsert", "Remove"):
+                return None
     for name, required_major, required_minor in required:
-        if name not in seen:
-            return None
-        registered = families[name] if families is not None else (required_major, required_minor)
-        if required_major != registered[0] or required_minor > registered[1]:
+        registered = families.versions.get(name)
+        if (
+            name not in seen
+            or registered is None
+            or required_major != registered[0]
+            or required_minor > registered[1]
+        ):
             return None
     return frame
+
+
+def _rust_step_from(result: object, epoch: str) -> dict[str, object] | None:
+    report = _rust_envelope_value(result)
+    if not isinstance(report, dict) or not _exact_fields(
+        report,
+        (
+            "epoch",
+            "confirmed_revision",
+            "frame_index",
+            "processed_messages",
+            "processed_meshes",
+            "pending_input",
+            "pending_inbound",
+            "pending_preparation",
+            "terminal",
+        ),
+    ):
+        return None
+    if report["epoch"] != epoch:
+        return None
+    if any(
+        _u64_text(report[field]) is None for field in ("epoch", "confirmed_revision", "frame_index")
+    ):
+        return None
+    for field, maximum in (
+        ("processed_messages", RUST_STEP_MESSAGE_BUDGET),
+        ("processed_meshes", RUST_STEP_MESH_BUDGET),
+        ("pending_input", 128),
+        ("pending_inbound", 4096),
+        ("pending_preparation", 4096),
+    ):
+        if not _bounded_integer(report[field], maximum):
+            return None
+    return report if _rust_terminal(report["terminal"]) else None
 
 
 def _rust_dispatch(host: feature_host) -> int:
@@ -1036,10 +1164,12 @@ def _rust_dispatch(host: feature_host) -> int:
         return 0
     work = {"messages": RUST_STEP_MESSAGE_BUDGET, "meshes": RUST_STEP_MESH_BUDGET}
     step_result = bridge.call("step", token, epoch, work)
-    if not isinstance(_rust_envelope_value(step_result), dict):
+    if _rust_step_from(step_result, epoch) is None:
         return 0
     pull_result = bridge.call("pull_typed_frame", token, epoch)
-    frame = _rust_frame_from(pull_result, epoch, host._rust_families, host._rust_required)
+    frame = _rust_frame_from(
+        pull_result, epoch, host._rust_families, host._rust_required, host._rust_frame
+    )
     if frame is None:
         return 0
     host._rust_frame = frame
@@ -1103,7 +1233,7 @@ def _activate_rust(
     table, table_error = _rust_family_table(bridge, token)
     if table is None:
         return _rust_abandon(host, PlanResult(False, (table_error,), (), ()))
-    host._rust_families = table.versions
+    host._rust_families = table
     plan, manifests = _build_rust_plan(catalog_path, table)
     if not plan.ok:
         return _rust_abandon(host, plan)

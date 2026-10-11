@@ -10,11 +10,13 @@ Godot engine or launches a window.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import sys
 import types
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -275,7 +277,17 @@ class ScriptedBridge(StubNode):
         self.connect_value: object = "7"
         self.reset_value: object = "9"
         self.table_value: object = family_table_value()
-        self.step_value: object = {"messages": 0, "meshes": 0}
+        self.step_value: object = {
+            "epoch": "7",
+            "confirmed_revision": "3",
+            "frame_index": "1",
+            "processed_messages": 0,
+            "processed_meshes": 0,
+            "pending_input": 0,
+            "pending_inbound": 0,
+            "pending_preparation": 0,
+            "terminal": None,
+        }
         self.frame_value: object = frame_value()
 
     def has_method(self, name: str) -> bool:
@@ -373,6 +385,17 @@ IDENTITY_JSON = '{"login": {}, "requested_view_distance": 8}'
 class RustFeatureHostTest(unittest.TestCase):
     def setUp(self) -> None:
         RESOURCE_REGISTRY.clear()
+        RESOURCE_REGISTRY["res://catalog/capability_registry.tres"] = StubResource(
+            {
+                "rust_producer": "rust-client-core",
+                "rust_producer_families": StringArray(
+                    *(
+                        f"{name}@1.0:{index + 1}:4096:0"
+                        for index, name in enumerate(PRODUCER_FAMILIES)
+                    )
+                ),
+            }
+        )
         CAST_REGISTRATIONS.clear()
         # Re-running the production module import refreshes the identity-cast
         # registration the host performs at import time.
@@ -606,6 +629,108 @@ class RustFeatureHostTest(unittest.TestCase):
         self.host._process(1 / 60)
         self.assert_retains_last_frame_and_resources(("provider",), first_frame)
 
+    def test_success_envelope_requires_exact_fields_and_null_error(self) -> None:
+        for result in (
+            {"ok": True, "value": {"visible": True}, "error": {"class": "Internal"}},
+            {"ok": True, "value": {"visible": True}},
+            {"ok": True, "value": {"visible": True}, "error": None, "extra": 0},
+        ):
+            with self.subTest(result=result):
+                self.assertIsNone(HOST._rust_envelope_value(result))
+
+    def test_incompatible_mixed_and_regressed_publications_retain_resources(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("strict-frames", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.bridge.frame_value = frame_value(frame_index="9")
+        self.host._process(0.01)
+        first_frame = self.host._rust_frame
+        bad_frames: list[dict[str, object]] = [
+            {**frame_value(), "layout_major": 65535},
+            {**frame_value(), "layout_minor": 1},
+            frame_value(frame_index="1"),
+            {**frame_value(frame_index="10"), "confirmed_revision": "2"},
+            {**frame_value(frame_index="10"), "extra": None},
+        ]
+        child = {
+            "header": {"epoch": "6", "revision": "99", "source_tick": None, "operation": "Upsert"},
+            "phase": "Admitted",
+            "player_id": None,
+            "terminal": None,
+        }
+        for header_change in (
+            {},
+            {"epoch": "7", "revision": "3", "source_tick": "01"},
+            {"epoch": "7", "revision": "3", "operation": "Unknown"},
+        ):
+            bad = frame_value(frame_index="10")
+            cast(list[dict[str, object]], bad["families"])[0]["records"] = [
+                {**child, "header": {**cast(dict[str, object], child["header"]), **header_change}}
+            ]
+            bad_frames.append(bad)
+        bad = frame_value(frame_index="10")
+        cast(list[dict[str, object]], bad["families"])[0]["records"] = [child] * 4097
+        bad_frames.append(bad)
+        for frame in bad_frames:
+            with self.subTest(frame=frame.get("frame_index")):
+                self.bridge.frame_value = frame
+                self.host._process(0.01)
+                self.assert_retains_last_frame_and_resources(("consumer",), first_frame)
+        self.bridge.frame_value = first_frame
+        self.host._process(0.01)
+        self.assertEqual(len(self.active_feature("consumer").frames), 2)
+
+    def test_declared_descriptor_identity_and_bounds_are_required(self) -> None:
+        mutations: tuple[Callable[[dict[str, Any]], object], ...] = (
+            lambda table: table["descriptors"][1].update(numeric_id=1),
+            lambda table: table["descriptors"].append(
+                {
+                    "logical_name": "invented",
+                    "numeric_id": 70000,
+                    "major": 1,
+                    "minor": 0,
+                    "record_limit": "0",
+                    "record_bytes": "0",
+                }
+            ),
+            lambda table: table["descriptors"][0].update(record_limit="4095"),
+            lambda table: table["descriptors"][0].update(record_bytes="1"),
+            lambda table: table["descriptors"][0].update(major=True),
+            lambda table: table["descriptors"][0].update(extra=None),
+            lambda table: table["descriptors"].pop(),
+            lambda table: table.update(extra=None),
+        )
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                self.setUp()
+                self.register_feature("consumer")
+                catalog = self.register_catalog("strict-table", ("consumer",))
+                table = copy.deepcopy(family_table_value())
+                mutate(table)
+                self.bridge.table_value = table
+                self.assertFalse(self.activate_rust(catalog)["ok"])
+                self.assertEqual(self.host.active_count(), 0)
+                self.assertEqual(self.bridge.count("close"), 1)
+
+    def test_step_report_is_validated_before_pull(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("strict-step", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.host._process(0.01)
+        first_frame = self.host._rust_frame
+        report = cast(dict[str, object], self.bridge.step_value)
+        for bad in (
+            {"messages": 0, "meshes": 0},
+            {**report, "epoch": "6"},
+            {**report, "processed_messages": True},
+            {**report, "pending_input": -1},
+            {**report, "terminal": {"tag": "Unknown", "value": None}},
+        ):
+            self.bridge.step_value = bad
+            self.host._process(0.01)
+            self.assertEqual(self.bridge.count("pull_typed_frame"), 1)
+            self.assert_retains_last_frame_and_resources(("consumer",), first_frame)
+
     def test_symbolic_audio_cues_and_lifecycle_families_resolve(self) -> None:
         self.register_feature("cues", families=("audio-cues@1.0",))
         self.register_feature("cycle", depends=("cues",), families=("lifecycle@1.0",))
@@ -789,6 +914,7 @@ class RustFeatureHostTest(unittest.TestCase):
         self.assertEqual(len(self.active_feature("solo").frames), 1)
         self.assertIsNone(self.host._rust_frame)
         # The fresh epoch applies again.
+        self.bridge.step_value = {**cast(dict[str, object], self.bridge.step_value), "epoch": "9"}
         self.bridge.frame_value = frame_value(epoch="9")
         self.host._process(1 / 60)
         self.assertEqual(len(self.active_feature("solo").frames), 2)
