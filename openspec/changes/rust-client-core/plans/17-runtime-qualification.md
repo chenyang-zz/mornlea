@@ -247,6 +247,47 @@ inferred from macOS.
 
 ### Stage acceptance
 
+### Integration-discovered TCP retirement repair
+
+Native100 at round-five source `908a099282a1ad35736d0ce7ba17abcb089299a8`
+failed in process12 after11 complete cycles: reset's new epoch was rejected as
+the same player still online. The TCP connector returned close success after
+setting a cancellation flag, while its detached worker still held the active
+socket until a bounded read returned. Engine-free TCP reset qualification also
+closed the server peer explicitly, hiding the actual client retirement race.
+
+The controller retains the frozen nonblocking C1 close/reset contracts. Reuse
+the same single OS socket through an `Arc<TcpStream>`: the worker owns read/write
+waits, and its generation's private shared owner holds only a shutdown reference.
+No cloned descriptor, worker join, reconnect delay, retry of a real rejection,
+player-ID replacement, authority change or new public interface is accepted.
+Worker binding and close acquire the socket-control mutex before the state mutex;
+close retains the connector-inner mutex until retirement. Before mutating queues,
+flags or ticket ownership, close performs `shutdown(Both)` on an established
+socket. `NotConnected` means already retired; every other shutdown error is typed
+Io and preserves retry ownership. Successful shutdown drops the shared reference,
+clears the old state, removes its ticket and wakes its worker. Binding after a
+close or connector drop refuses and drops its freshly dialed stream before any
+handshake publication. Worker I/O remains outside every mutex. Drop cancels and
+shuts down established sockets without joining workers.
+
+One isolated worker owns only client-core `src/session/io.rs`, its focused tests
+and the crate guide if materially needed. It writes actual socket-owner tests
+before the minimum repair: a held data-side reference cannot prevent peer EOF
+after close; a closed generation cannot bind/publish a late connection; released
+and foreign tickets retain their typed errors. Native100 is the existing actual
+behavioral red; no synthetic frame is substituted. Validate pinned core session
+tests, all-target core Clippy and formatting; commit this coherent repair.
+Controller owns the provider fixture/test files, integration and rollback: TCP
+reset must not call the server-side close helper, while Memory keeps its declared
+transport pairing. Add repeated same-player actual TCP reset/admission coverage
+with old-epoch refusal and sequence restart, retaining normal admission rejection.
+Run actual-provider39 plus the additive regression, fresh independent review,
+same-source native100 and complete stage gates. Preserve both failed rounds and
+their original criteria. Scope still excludes production F2 or default changes.
+
+### Final stage acceptance
+
 Reconcile every existing capability-inventory row to actual nonempty provider and
 integration cases; preserve fixtures, IDs, versions and test definitions. Record
 explicit rollback selection of the pilot, without default change or shadow writer.

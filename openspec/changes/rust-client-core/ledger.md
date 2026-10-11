@@ -693,3 +693,21 @@ fork/isolation/foreign-host audit cases pass. Failures remain in
 `/private/tmp/mornlea-f3-final-python-fork-audit-green.log`. Round-four verdicts
 are historical, not approval of the next source. Round five requires source-bound
 re-review and complete matrix/native100/stage gates. Architecture skill: no change.
+
+Round-five source passed the complete Darwin `.3` isolated editor/headless100,
+bridge coexistence and exported-program matrix. Independent owned native probe
+also passed exact scalars, contained panic and release, with source/artifact
+identity checks and two1122-unit main rebuilds independently verified. Native100
+then failed process12/epoch2 with an actual same-player LoginRejected after11
+complete processes. Report `/private/tmp/mornlea-rust-session-smoke.g2vuqdzp`
+retains failed iteration, unchanged identities and actual server counts. No
+retry, alternate player identity or partial100 acceptance is claimed.
+
+Controller traced asynchronous TCP close and the fixture's explicit server-peer
+close masking it, then refined packet17 with Superpowers brainstorming and
+writing-plans while retaining the approved nonblocking port and server authority.
+An isolated worker is selected for the private socket-owner lifetime/test trace;
+the controller owns disjoint actual-provider reset tests and final integration.
+The accepted public boundary remains unchanged; the worker implements the exact
+Arc/control-lock/shutdown/error policy, not a new reconnect policy. Round-five
+scoped reviews remain historical and cannot accept the next candidate.
