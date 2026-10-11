@@ -4,7 +4,9 @@
 
 The Godot extension copies checked semantic values and owns host-facing resource
 lifetimes. It consumes `mornlea_client_core`, protocol/domain values and numerical
-engine contracts; it must not import the Rust server implementation.
+engine contracts; production dependencies must not import the Rust server implementation.
+Test targets and disposable examples may use actual server/storage dev-dependencies
+for provider qualification without entering the extension runtime.
 
 - `src/client_core.rs` — explicit Go pilot FFI plus the separate safe Rust
   `CoreArena`; production Rust slots own the actual `ClientCore` endpoint.
@@ -15,7 +17,12 @@ engine contracts; it must not import the Rust server implementation.
   lifecycle and owned pilot buffer handling.
 - `src/terrain_*.rs`, `mesh_worker.rs`, `quad_decode.rs` — terrain preparation,
   decoding, bounded host resources and worker retirement.
-- `tests/` — registered engine-free lifecycle, family and Rust producer targets.
+- `src/qualification.rs` — native probe compiled only with the explicit
+  `runtime-qualification` feature; it is absent from ordinary artifacts.
+- `tests/` — registered engine-free lifecycle, family and Rust producer targets,
+  plus actual Memory/TCP authority integration through `support/rust_server.rs`.
+- `examples/rust_session_server.rs` — disposable loopback authority, owned ready/stop
+  files and source report for the external native qualification runner.
 
 ## Ownership and entry points
 
@@ -39,6 +46,10 @@ make godot-project-check
 make godot-capability-check
 ```
 
-These source/engine-free checks do not qualify native Godot marshalling, real
-server integration or runtime session cycles. Automated work must not launch a
+The `rust_server_integration` target qualifies actual server transport/provider
+composition. Source checks do not qualify native Godot marshalling or process
+cycles. With explicit runtime authorization on Darwin arm64, use
+`scripts/godot/smoke.sh --core rust --exercise-session --iterations 100`; its
+runner rebuilds the native producer, owns the disposable server and all children,
+permits only that numeric loopback IPv4 port, and retains source-bound evidence. Automated work must not launch a
 Godot process or game window without explicit runtime authorization.

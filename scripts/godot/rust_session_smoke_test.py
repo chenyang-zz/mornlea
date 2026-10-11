@@ -178,6 +178,10 @@ class RunnerTests(unittest.TestCase):
             source.write_text("changed")
             with self.assertRaisesRegex(ValueError, "uncommitted"):
                 runner.source_identity(root)
+            source.write_text("original")
+            (engine / "uncommitted.rs").write_text("untracked runtime source")
+            with self.assertRaisesRegex(ValueError, "uncommitted"):
+                runner.source_identity(root)
 
     def test_python_identity_separates_generated_cache_from_static_runtime(self):
         with tempfile.TemporaryDirectory() as directory:

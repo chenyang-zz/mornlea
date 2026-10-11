@@ -263,7 +263,7 @@ def source_identity(repository):
             str(repository),
             "status",
             "--porcelain",
-            "--untracked-files=no",
+            "--untracked-files=all",
             "--",
             "packages/engine",
             "apps/mornlea-godot",

@@ -21,6 +21,14 @@ impl INode for MornleaBoundaryProbe {
 #[godot_api]
 impl MornleaBoundaryProbe {
     #[func]
+    fn current_token(&mut self) -> VarDictionary {
+        let mut bridge = self
+            .base()
+            .get_node_as::<MornleaClientBridge>("../ClientBridge");
+        bridge.bind_mut().qualification_token()
+    }
+
+    #[func]
     fn panic_result(&mut self) -> VarDictionary {
         let mut bridge = self
             .base()

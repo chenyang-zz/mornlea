@@ -133,3 +133,23 @@ Godot 只负责桌面窗口、键盘鼠标采集、呈现、试点 UI 与 Godot 
 未来功能通过同一根目录中的粗粒度 `features/`、`platform/desktop/`、`config/` 与唯一 `addons/mornlea_bridge/` 边界扩展。Bootstrap 必须保持与具体功能无关。移动端、Web、主机、触摸、传感器和移动生命周期支持均不属于本项目范围。
 
 编辑器缓存和原生桥接二进制会被忽略；Godot 生成脚本与着色器 `.uid` 伴随文件后应纳入版本控制。
+
+## Rust 核心验证
+
+在已验证的 Darwin arm64 环境中，授权无窗口运行后执行：
+
+```bash
+scripts/godot/smoke.sh --core rust --exercise-session --iterations 100
+```
+
+该命令重建原生 Rust 客户端，启动临时本机 Rust 服务端，并逐次启动 Godot。
+每个进程检查十类数据和真实地形资源，提交输入，重置重连，保留旧帧，最后先释放
+Python 消费者再关闭 Rust 核心。源码和制品身份、每次日志及服务端统计保存在
+`/private/tmp/mornlea-rust-session-smoke.*`；沙箱只放行该服务端的 IPv4 回环端口。
+测试探针不进入普通构建。
+
+Darwin Python 衍生版同时重建加载器与原生主库，修复 NIL 空值转换。独立钉定的
+Linux 试点保留先前衍生版；Linux Rust 原生传值需要单独重建主库并验证。
+切回试点时，先调用 `deactivate_features` 并确认 Rust 关闭成功，再通过
+`activate_catalog` 选择现有试点目录。关闭失败时保留所有权，显式重试成功前禁止
+新激活。验证命令不改变生产目录的选择。

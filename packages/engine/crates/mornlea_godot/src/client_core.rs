@@ -1274,6 +1274,20 @@ pub mod rust_core {
             failure.map_or(Ok(()), Err)
         }
 
+        /// Test artifacts can drive the host-owned slot without expanding the G1 facade.
+        #[cfg(feature = "runtime-qualification")]
+        pub fn qualification_live_token(&self) -> Result<CoreTokenValue, ClientError> {
+            let index = self
+                .slots
+                .iter()
+                .position(Option::is_some)
+                .ok_or(ClientError::InvalidState)?;
+            CoreTokenValue::new(
+                u32::try_from(index + 1).map_err(|_| ClientError::Capacity)?,
+                self.generations[index],
+            )
+        }
+
         /// Renders the frozen producer family table for one live core.
         pub fn family_table(&self, token: CoreTokenValue) -> Result<BoundaryValue, ClientError> {
             self.slot(token)?;

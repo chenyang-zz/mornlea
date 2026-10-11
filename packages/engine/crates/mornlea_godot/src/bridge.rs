@@ -571,6 +571,20 @@ impl MornleaClientBridge {
         self.rust_cores.releases()
     }
 
+    #[cfg(feature = "runtime-qualification")]
+    pub(crate) fn qualification_token(&mut self) -> VarDictionary {
+        self.rust_call(
+            || Ok(()),
+            |arena, ()| {
+                crate::abi::boundary::outcome(
+                    arena
+                        .qualification_live_token()
+                        .map(|token| token.to_boundary()),
+                )
+            },
+        )
+    }
+
     // Identity calls are deliberately allocation-free except for the Godot string
     // conversion and do not create a second path to engine or gameplay state.
     // The client-core identity comes from the header-pinned abi module, so a

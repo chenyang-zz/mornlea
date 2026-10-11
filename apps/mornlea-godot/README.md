@@ -133,3 +133,33 @@ Godot owns desktop windowing, keyboard/mouse collection, presentation, pilot UI,
 Future functionality extends the same root through coarse `features/`, `platform/desktop/`, `config/`, and the single `addons/mornlea_bridge/` boundary. Bootstrap must remain feature-agnostic. Mobile, Web, console, touch, sensors, and mobile lifecycle support are outside this project.
 
 Generated editor cache and native bridge binaries are ignored. Script and shader `.uid` sidecars are intentionally tracked once Godot generates them.
+
+## Rust core qualification
+
+The Rust session host is exercised through an explicit test catalog. On the
+qualified Darwin arm64 environment, with headless runtime execution authorized:
+
+```bash
+scripts/godot/smoke.sh --core rust --exercise-session --iterations 100
+```
+
+This rebuilds the checked native producer and uses the actual Rust server library
+in a disposable loopback process. Every Godot process opens a session, observes
+all ten families and prepared terrain, submits semantic input, resets/reconnects,
+checks a retained native frame, and releases consumers before the owning core.
+The runner retains source/artifact identities, per-process logs and server counts
+under `/private/tmp/mornlea-rust-session-smoke.*`. Its sandbox allows only that
+server's IPv4 loopback port. The qualification-only native probe is absent from
+ordinary builds.
+
+The Darwin Python derivative rebuilds both the loader and native main library,
+including proper NIL construction. The independently pinned Linux pilot remains
+on its earlier derivative; Rust native marshalling on Linux requires a separately
+rebuilt and qualified native main library. Compiler/SDK/source and all resulting
+artifact checksums remain mandatory.
+
+To return a host to the pilot, call `deactivate_features` and wait for successful
+Rust core close, then select the existing pilot catalog through `activate_catalog`.
+A refused close retains retirement ownership and blocks another activation until
+an explicit retry succeeds. Production catalogs select their existing producer;
+qualification does not alter that selection or run a shadow writer.
