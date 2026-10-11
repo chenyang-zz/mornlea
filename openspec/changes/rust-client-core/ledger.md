@@ -672,3 +672,24 @@ test expectations changed. The preserved failure is
 `/private/tmp/mornlea-f3-native-final-feature-clippy.log`; the repaired feature
 Clippy and real-provider39 both pass in the corresponding `-v2` and
 `/private/tmp/mornlea-f3-real-provider-lint-final.log` logs.
+
+Round-four candidate `ffa3d90d5c65356ffcd60967b163013aab60050c` passed
+source-bound provider review (session86/provider39/G1 42 plus five independent
+probes), native host45, runner12, builder7 and all139 inventory registrations.
+The independent native reviewer correctly withheld acceptance: the complete
+Darwin derivative export instantiated qualification-only Probe scenes with the
+ordinary extension. The existing qualification presets now exclude just those
+two scenes; production presets already exclude tests. The actual exported probe
+now passes, without adding the probe to ordinary artifacts. The complete matrix
+will be rerun at the next committed candidate.
+
+Uncached audit also rejected the stale Darwin derivative expectation `.2`.
+The existing audit now checks `.3`, a pinned main digest and the NIL patch,
+while retaining explicit Linux `.2`/separate-series checks. All four focused
+fork/isolation/foreign-host audit cases pass. Failures remain in
+`/private/tmp/mornlea-f3-python-derivative-qualification-final.log` and
+`/private/tmp/mornlea-f3-final-audit-uncached.log`; focused repaired evidence is
+`/private/tmp/mornlea-f3-python-derivative-export-green.log` and
+`/private/tmp/mornlea-f3-final-python-fork-audit-green.log`. Round-four verdicts
+are historical, not approval of the next source. Round five requires source-bound
+re-review and complete matrix/native100/stage gates. Architecture skill: no change.

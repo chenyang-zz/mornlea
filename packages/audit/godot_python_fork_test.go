@@ -15,11 +15,12 @@ func TestGodotPythonForkIsPinnedAndMinimal(t *testing.T) {
 	forkRoot := filepath.Join(root, "scripts", "godot", "py4godot")
 	values := readGodotVersionEnvironment(t, filepath.Join(forkRoot, "build-inputs.env"))
 	want := map[string]string{
-		"PY4GODOT_HARDENED_VERSION":      "4.7-alpha21-mornlea.2",
+		"PY4GODOT_HARDENED_VERSION":      "4.7-alpha21-mornlea.3",
 		"PY4GODOT_SOURCE_ARCHIVE_URL":    "https://codeload.github.com/niklas2902/py4godot/tar.gz/d8e17428deeb0428587349b663f6da26cd71ef3a",
 		"PY4GODOT_SOURCE_ARCHIVE_SHA256": "e7a763fee661acecf1a4878501737299ba5fb7f6f0e58b4d3ac95fc58047fdd0",
 		"PY4GODOT_SOURCE_ARCHIVE_ROOT":   "py4godot-d8e17428deeb0428587349b663f6da26cd71ef3a",
 		"PY4GODOT_BUILD_TARGET":          "darwin-arm64",
+		"PY4GODOT_PATCH_SERIES":          "series",
 		"PY4GODOT_APPLE_CLANG_VERSION":   "21.0.0",
 		"PY4GODOT_MACOS_SDK_VERSION":     "26.5",
 	}
@@ -31,6 +32,7 @@ func TestGodotPythonForkIsPinnedAndMinimal(t *testing.T) {
 	for _, key := range []string{
 		"PY4GODOT_PATCH_SERIES_SHA256",
 		"PY4GODOT_HARDENED_LOADER_SHA256",
+		"PY4GODOT_HARDENED_MAIN_SHA256",
 		"PY4GODOT_HARDENED_ARTIFACT_SHA256",
 	} {
 		if !sha256Pattern.MatchString(values[key]) {
@@ -77,6 +79,7 @@ func TestGodotPythonForkIsPinnedAndMinimal(t *testing.T) {
 		"Py_InitializeFromConfig",
 		"construct_without_init",
 		"casted_from",
+		"get_variant_new_nil",
 	} {
 		if !strings.Contains(patches, required) {
 			t.Errorf("hardening patch stack is missing %q", required)
@@ -110,6 +113,8 @@ func TestGodotPythonIsolationBuildEntryPoint(t *testing.T) {
 		"PY4GODOT_HARDENED_ARTIFACT_SHA256",
 		"patches/series",
 		"generated singleton rewrite count mismatch",
+		"build-main.py",
+		"PY4GODOT_HARDENED_MAIN_SHA256",
 		"py4godot/utils/smart_cast.py",
 		"unsupported Py4Godot build target",
 	} {
@@ -144,8 +149,10 @@ func TestGodotLinuxPythonForkHasIndependentBuildPins(t *testing.T) {
 	root := repositoryRoot(t)
 	values := readGodotVersionEnvironment(t, filepath.Join(root, "scripts", "godot", "py4godot", "linux-build-inputs.env"))
 	for key, expected := range map[string]string{
-		"PY4GODOT_BUILD_TARGET": "x86_64-unknown-linux-gnu",
-		"PY4GODOT_GCC_VERSION":  "14.2.0",
+		"PY4GODOT_BUILD_TARGET":     "x86_64-unknown-linux-gnu",
+		"PY4GODOT_GCC_VERSION":      "14.2.0",
+		"PY4GODOT_HARDENED_VERSION": "4.7-alpha21-mornlea.2",
+		"PY4GODOT_PATCH_SERIES":     "linux-series",
 	} {
 		if got := values[key]; got != expected {
 			t.Errorf("%s = %q, want %q", key, got, expected)
