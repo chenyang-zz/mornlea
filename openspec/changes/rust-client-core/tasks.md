@@ -1,6 +1,6 @@
 # F3 Rust client core and Godot bridge implementation
 
-The code-only implementation batch has landed; the checkboxes below distinguish completed code nodes from pending prompt and runtime qualification. [C1/C2/G1 contract and graph](plans/00-client-contract.md), [typed family schema](plans/02-family-schemas.md) and [worker packets](plans/01-client-slices.md) define prerequisites, exact exclusive files, cases and commands. `ledger.md` records accepted contract SHA, fixtures, red/green and scoped commits. The current Go pilot remains explicitly selectable for rollback until the separate product cutover.
+The implementation has landed, but comprehensive review found acceptance defects. Affected nodes are reopened below; the [repair packet](plans/08-review-repairs.md) defines regression-driven repairs without waiving native or real-server qualification. [C1/C2/G1 contract and graph](plans/00-client-contract.md), [typed family schema](plans/02-family-schemas.md) and [worker packets](plans/01-client-slices.md) define prerequisites, exact exclusive files, cases and commands. `ledger.md` records accepted contract SHA, fixtures, red/green and scoped commits. The current Go pilot remains explicitly selectable for rollback until the separate product cutover.
 
 See the [node-by-node dependency and ownership gate](plans/03-parallel-readiness.md) before dispatch. It refines the linked packets without duplicating status.
 
@@ -10,25 +10,25 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 
 - [x] 1.1 Bind F1/F2 accepted prerequisites and enumerate all client semantic families.
 - [x] 1.2 Land compiling C1/C2 contract, typed family schema, frame validator and executing consumer double.
-- [x] 1.3 Implement login/session observation state machine.
-- [x] 1.4 Implement confirmed mirror and atomic observation order.
+- [ ] 1.3 Implement login/session observation state machine.
+- [ ] 1.4 Implement confirmed mirror and atomic observation order.
 - [x] 1.5 Implement bounded shared Memory/TCP I/O queues.
 
 ## 2. Parallel input, prediction, preparation and family providers
 
-- [x] 2.1 Implement semantic typed input, UI token and local sequence validation.
-- [x] 2.2 Implement reversible prediction and authoritative correction replay.
-- [x] 2.3 Implement bounded preparation scheduling and stale-result rejection.
-- [x] 2.3b Implement bounded far-tile LOD preparation and stale completion cancellation.
-- [x] 2.4 Assemble and atomically publish validated immutable frames.
-- [x] 2.5 Publish `terrain@1` semantics.
+- [ ] 2.1 Implement semantic typed input, UI token and local sequence validation.
+- [ ] 2.2 Implement reversible prediction and authoritative correction replay.
+- [ ] 2.3 Implement bounded preparation scheduling and stale-result rejection.
+- [ ] 2.3b Implement bounded far-tile LOD preparation and stale completion cancellation.
+- [ ] 2.4 Assemble and atomically publish validated immutable frames.
+- [ ] 2.5 Publish `terrain@1` semantics.
 - [x] 2.6a Project remote players into `actors@1`.
 - [x] 2.6c Project hostiles into `actors@1`.
 - [x] 2.6d Project passives into `actors@1`.
 - [x] 2.6e Project projectiles into `actors@1`.
 - [x] 2.6f1 Project companions into `actors@1`.
 - [x] 2.6f2 Project item drops into `actors@1`.
-- [x] 2.6g Assemble the complete `actors@1` family.
+- [ ] 2.6g Assemble the complete `actors@1` family.
 - [x] 2.6b Publish `player-view@1` semantics.
 - [x] 2.7a1 Project inventory and hotbar state.
 - [x] 2.7a2 Project containers and chest revision.
@@ -41,16 +41,16 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 2.7b4 Project task state.
 - [ ] 2.7b5 Project prompts.
 - [x] 2.7b6 Assemble `world-ui@1`.
-- [x] 2.8 Publish provenance-aware `audio-cues@1` semantics.
+- [ ] 2.8 Publish provenance-aware `audio-cues@1` semantics.
 - [x] 2.9 Publish `diagnostics@1` semantics.
 
 ## 3. Serial adapter and real integration
 
 - [x] 3.1a Assign and validate G1 logical-to-numeric descriptors without enabling features.
-- [x] 3.1b Connect the safe Rust core adapter and migrate Godot-callable methods serially.
-- [x] 3.2 Implement symbolic family negotiation and one-session feature host activation.
-- [x] 3.3a Implement core reset, reconnect and close with queued-work invalidation.
-- [x] 3.3b Implement native Godot/Python release ordering and boundary panic containment.
+- [ ] 3.1b Connect the safe Rust core adapter and migrate Godot-callable methods serially.
+- [ ] 3.2 Implement symbolic family negotiation and one-session feature host activation.
+- [ ] 3.3a Implement core reset, reconnect and close with queued-work invalidation.
+- [ ] 3.3b Implement native Godot/Python release ordering and boundary panic containment.
 - [ ] 3.3c Qualify rebuilt Rust producer artifacts through 100 real headless session cycles.
 - [ ] 3.4 Integrate real F2 Memory/TCP server, C1/C2 and G1 against all accepted families.
 
@@ -63,3 +63,15 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 ## Current execution packet and qualification boundary
 
 The approved complete code-only scope is detailed in [07-code-only-implementation-handoff.md](plans/07-code-only-implementation-handoff.md). It refines allowed code-level checks without removing original qualification gates. This file remains the sole checkbox/status source. Native Godot marshalling/real bridge checks, 3.3c, 3.4, and full closeout remain pending; any node whose complete prescribed acceptance has not run remains unchecked. Local branch integration and aggregate code checks do not close those gates. The F2 implementation and P8–P14 product work are separately owned.
+
+## 5. Comprehensive-review repairs
+
+- [ ] 5.1 Restore exact G1 value schemas, bounded native input conversion and fail-closed host frame admission.
+- [ ] 5.2 Repair actual session lifecycle, observation capacity handling, retained bytes, work limits and crafting attribution.
+- [ ] 5.3 Repair cross-frame actor retirement and failed prediction replay atomicity.
+- [ ] 5.4 Repair terrain admission, resource retention, request identity and bounded preparation metadata.
+- [ ] 5.5 Stage terrain references until complete-frame commit and reject stale or incomplete publications.
+- [ ] 5.6 Build real bounded near/far CPU geometry and expose the owning core's resource arena.
+- [ ] 5.7 Bound audio provenance history and derive snow cues from actual prediction source facts.
+- [ ] 5.8 Compose the real endpoint, confirmed block ownership, input/keepalive output, prediction and all ten families.
+- [ ] 5.9 Run repaired provider/integration regressions, independent review and aggregate code gates; reconcile remaining qualification status.

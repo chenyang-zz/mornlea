@@ -479,3 +479,14 @@ Archiving `rust-runtime-foundation-acceptance` (PR #9) moved it to `openspec/cha
 - All 41 feature task checkbox rows are preserved. Native/real-process integration, prompt projection and full F3 acceptance remain open; no Godot process/window, default switch or archive occurred. Keep the existing feature branch/worktree for that unfinished work and preserve unrelated artifacts. No remote push or GitHub write occurred.
 - Closeout evidence is an independently reviewable documentation-only follow-up; it introduces no new directory ownership boundary and inherits root guidance. Rollback/integration remain controller-owned; this merge preserves both input histories and requires no destructive Git operation.
 - Architecture skill: no change. Current verified integration uses existing ownership and qualification rules.
+
+
+## Comprehensive-review repair entry — 2026-10-11
+
+- User authorization: repair the preceding full review, preserving existing F3 scope and no-Godot-process constraints. Baseline `b383673e383dcf1f6177998854e4752a28304a2b`; main checkout clean; `make rust` exit 0 before Rust repair work.
+- Review identity: `/private/tmp/mornlea-f3-full-review.md` binds seventeen finding groups to that baseline; nine disposable projection cases were red, with the inherited tick-zero question excluded from new blocking regressions. Findings map to packet08 and reopened original tasks.
+- Orphan audit: existing task status/ledger examined; no untracked in-flight source or overlapping user changes. Existing feature and unrelated worktrees remain untouched.
+- Orchestration: three fresh minimal-context non-Astra workers performed bounded read-only session, projection and boundary discovery. Their source facts informed the controller's frozen decisions; they do not own missing design. Isolated worktrees will prevent shared checkout edits. Serial controller ownership covers new shared seams, endpoint integration, source/fixture identities and final evidence. No remote or external message write authorized.
+- Planning: installed Superpowers brainstorming/writing-plans and project orchestration/architecture/handoff resources read. Packet08 selects composition rather than symptom-only repair or reduced acceptance. Existing authorization supplies the repair execution method; no redundant approval round is added. The packet, design and task reconciliation precede product edits.
+- Qualification: reopened 3.3b because actual native release/marshalling remains unexecuted. Original runtime gates stay pending; previous broad passing commands remain historical evidence, not repaired-candidate evidence.
+- Architecture skill: no change at entry; existing atomic publication, ownership and boundedness rules already cover the defects.

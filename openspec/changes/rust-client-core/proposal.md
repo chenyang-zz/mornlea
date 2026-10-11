@@ -4,7 +4,7 @@ The Godot pilot still receives its session, mirror, prediction and presentation 
 
 ## Status and prerequisites
 
-The code-only implementation batch for F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md) is complete within its recorded scope. Its implementation entry bound completed [F1](../archive/2026-10-08-rust-runtime-foundation-acceptance/proposal.md) and the jointly accepted [F2](../rust-authoritative-server/proposal.md) common/Memory/TCP S2 contract to accepted source identities in `ledger.md`. Full F3 final integration acceptance still requires the F2 Rust server parity evidence and the pending native/runtime qualification gates. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
+The code-only implementation batch for F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md) is under repair after comprehensive review of source `b383673e383dcf1f6177998854e4752a28304a2b`; previously recorded code completion does not establish current acceptance. Its implementation entry bound completed [F1](../archive/2026-10-08-rust-runtime-foundation-acceptance/proposal.md) and the jointly accepted [F2](../rust-authoritative-server/proposal.md) common/Memory/TCP S2 contract to accepted source identities in `ledger.md`. Full F3 final integration acceptance still requires the F2 Rust server parity evidence and the pending native/runtime qualification gates. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
 
 ## What Changes
 
