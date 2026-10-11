@@ -1,0 +1,221 @@
+{
+  "format_version": 1,
+  "source_sha": "aab9b0f0c998924124567bdbe2d22003e1a55b78",
+  "merge_tree": "ef48de84206f2ad70724f623f4f5fbdf7d495401",
+  "ordered_parents": [
+    "84cd626d6a6f233608bbc63245f1aa09c1f951ee",
+    "e9bf930e0a3868ed57a30837b6833bb9b8c38c8c"
+  ],
+  "cwd": "/Users/chen/work/mornlea",
+  "scope": "User-authorized local dev integration and project AOCI removal; gameplay completion, remote publication and F2 archive remain open.",
+  "local_ref_checkpoint": {
+    "dev": "aab9b0f0c998924124567bdbe2d22003e1a55b78",
+    "cursor/rust-authoritative-server-98e6": "aab9b0f0c998924124567bdbe2d22003e1a55b78"
+  },
+  "closing_edit_scope": "OpenSpec task status, ledger and evidence only; product and acceptance criteria unchanged.",
+  "gates": [
+    {
+      "id": "native",
+      "cwd": "/Users/chen/work/mornlea",
+      "command": "make rust",
+      "environment": {
+        "TMPDIR": "/private/tmp"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "Release native build and deployment.",
+      "source_binding": "Started on reviewed pending merge tree ef48de84206f2ad70724f623f4f5fbdf7d495401; normal merge commit aab9b0f0c998924124567bdbe2d22003e1a55b78 contains exactly those tree bytes.",
+      "log": {
+        "path": "/tmp/mornlea-dev-merge-native.log",
+        "bytes": 1160,
+        "sha256": "1bdfb133ffa95501e3890c3ff7f5c58f3b5376d5a6368a84119a03b31be0e314",
+        "availability": "local; external recipient access unverified"
+      }
+    },
+    {
+      "id": "race",
+      "cwd": "/Users/chen/work/mornlea",
+      "command": "make test-race",
+      "environment": {
+        "TMPDIR": "/private/tmp",
+        "PATH_prefix": "/Users/chen/work/mornlea/packages/agent/.venv/bin",
+        "MORNLEA_AGENT_PYTHON": "/Users/chen/work/mornlea/packages/agent/.venv/bin/python",
+        "MORNLEA_COMPANION_AGENT_PYTHON": "/Users/chen/work/mornlea/packages/agent/.venv/bin/python",
+        "MORNLEA_PREVIOUS_SERVER_BIN": "/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-server",
+        "MORNLEA_PREVIOUS_PACKAGE": "/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-runtime.json"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "All six Go module race suites, including tools runtime oracle (444.261s) and audit (251.763s).",
+      "source_binding": "Started on reviewed pending merge tree ef48de84206f2ad70724f623f4f5fbdf7d495401; normal merge commit aab9b0f0c998924124567bdbe2d22003e1a55b78 contains exactly those tree bytes. Race completed after the commit; product bytes never changed.",
+      "log": {
+        "path": "/tmp/mornlea-dev-merge-race.log",
+        "bytes": 4744,
+        "sha256": "4b59b180b04bb6c53dff78fd58aa5843a159551a30b50f872b935a28847c10f9",
+        "availability": "local; external recipient access unverified"
+      }
+    },
+    {
+      "id": "dev-check-serial",
+      "cwd": "/Users/chen/work/mornlea",
+      "command": "make dev-check",
+      "environment": {
+        "TMPDIR": "/private/tmp",
+        "PATH_prefix": "/Users/chen/work/mornlea/packages/agent/.venv/bin",
+        "MORNLEA_AGENT_PYTHON": "/Users/chen/work/mornlea/packages/agent/.venv/bin/python",
+        "MORNLEA_COMPANION_AGENT_PYTHON": "/Users/chen/work/mornlea/packages/agent/.venv/bin/python",
+        "MORNLEA_PREVIOUS_SERVER_BIN": "/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-server",
+        "MORNLEA_PREVIOUS_PACKAGE": "/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-runtime.json"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "Formatting, six-module vet/short, Rust fmt/Clippy and 76 summaries / 4142 passing / zero failed or ignored. Actual server short suite: 87.343s.",
+      "source_binding": "Executed serially after full race on the clean immutable merge commit aab9b0f0c998924124567bdbe2d22003e1a55b78.",
+      "log": {
+        "path": "/tmp/mornlea-dev-merge-dev-check-serial.log",
+        "bytes": 347840,
+        "sha256": "99c9438687c07ebc9af2e0c1e3999245a26158732ffb6b06038af0aeeb63b850",
+        "availability": "local; external recipient access unverified"
+      }
+    },
+    {
+      "id": "agent-integration",
+      "cwd": "/Users/chen/work/mornlea",
+      "command": "make companion-agent-integration",
+      "environment": {
+        "TMPDIR": "/private/tmp"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "Locked install, Ruff, mypy (53 files), actual server integration (10.745s). Empty shared-companion selector is not provider acceptance.",
+      "source_binding": "Started on reviewed pending merge tree ef48de84206f2ad70724f623f4f5fbdf7d495401; normal merge commit aab9b0f0c998924124567bdbe2d22003e1a55b78 contains exactly those tree bytes.",
+      "log": {
+        "path": "/tmp/mornlea-dev-merge-agent-integration.log",
+        "bytes": 801,
+        "sha256": "fc739bd08b6a99aa84c450c3dbc338a0c550e66d536118579e334551651f35b9",
+        "availability": "local; external recipient access unverified"
+      }
+    },
+    {
+      "id": "openspec-before-close",
+      "cwd": "/Users/chen/work/mornlea",
+      "command": "openspec validate --all --strict --no-interactive",
+      "environment": {},
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "127 passed, zero failed before closing evidence/status edits.",
+      "source_binding": "Started on reviewed pending merge tree ef48de84206f2ad70724f623f4f5fbdf7d495401; normal merge commit aab9b0f0c998924124567bdbe2d22003e1a55b78 contains exactly those tree bytes.",
+      "log": {
+        "path": "/tmp/mornlea-dev-merge-openspec.log",
+        "bytes": 4037,
+        "sha256": "2f748f8fb4f3f06733fc54bca5bab90bcc3c08e3e4e8884ed7019009a83da2a8",
+        "availability": "local; external recipient access unverified"
+      }
+    },
+    {
+      "id": "openspec-close",
+      "cwd": "/Users/chen/work/mornlea",
+      "command": "openspec validate --all --strict --no-interactive",
+      "environment": {},
+      "exit_code": 0,
+      "result": "pass",
+      "coverage": "127 passed, zero failed with closing task/ledger/evidence edits.",
+      "source_binding": "Product remains the immutable merge source; this result is added only to evidence metadata after validation.",
+      "log": {
+        "path": "/tmp/mornlea-dev-merge-openspec-close.log",
+        "bytes": 4037,
+        "sha256": "2f748f8fb4f3f06733fc54bca5bab90bcc3c08e3e4e8884ed7019009a83da2a8",
+        "availability": "local; external recipient access unverified"
+      }
+    }
+  ],
+  "historical_support": [
+    {
+      "id": "dev-check-first",
+      "cwd": "/Users/chen/work/mornlea",
+      "command": "make dev-check",
+      "environment": {
+        "TMPDIR": "/private/tmp",
+        "PATH_prefix": "/Users/chen/work/mornlea/packages/agent/.venv/bin",
+        "MORNLEA_AGENT_PYTHON": "/Users/chen/work/mornlea/packages/agent/.venv/bin/python",
+        "MORNLEA_COMPANION_AGENT_PYTHON": "/Users/chen/work/mornlea/packages/agent/.venv/bin/python",
+        "MORNLEA_PREVIOUS_SERVER_BIN": "/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-server",
+        "MORNLEA_PREVIOUS_PACKAGE": "/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-runtime.json"
+      },
+      "exit_code": 2,
+      "result": "fail",
+      "interpretation": "First parallel attempt failed TestCompanionManagerMineApproachesBeforeMining with event kinds [1 6], expected [1 3 5]. Root cause remains undetermined; no source fix was made.",
+      "log": {
+        "path": "/tmp/mornlea-dev-merge-dev-check.log",
+        "bytes": 3909,
+        "sha256": "3e7648bd611af471ab8a4a42b5136e95364747abea3a72d3055b1b09b6946158",
+        "availability": "local; external recipient access unverified"
+      }
+    },
+    {
+      "id": "mine-reproduction",
+      "cwd": "/Users/chen/work/mornlea",
+      "command": "go test ./packages/server/server -short -run '^TestCompanionManagerMineApproachesBeforeMining$' -count=20 -v",
+      "environment": {
+        "TMPDIR": "/private/tmp"
+      },
+      "exit_code": 0,
+      "result": "pass",
+      "interpretation": "20/20 focused runs pass (9.467s); this does not establish a root-cause fix.",
+      "log": {
+        "path": "/tmp/mornlea-dev-merge-mine-reproduction.log",
+        "bytes": 2511,
+        "sha256": "ed1784c68f0ad16720c9d993d0ef22660a11b9e016625358f691b54e270139df",
+        "availability": "local; external recipient access unverified"
+      }
+    }
+  ],
+  "independent_review": {
+    "verdict": "SCOPED_PASS",
+    "actor": "Codex /root/closeout_inventory",
+    "source_sha": "aab9b0f0c998924124567bdbe2d22003e1a55b78",
+    "scope": "Immutable source preservation only; not full-stage or gameplay acceptance.",
+    "copied_to": "openspec/changes/rust-authoritative-server/evidence/closeout/DEV_MERGE_REVIEW.md",
+    "log": {
+      "path": "/tmp/mornlea-dev-merge-final-paired-review.md",
+      "bytes": 7253,
+      "sha256": "b5c0929fb99b7352153b8e40bef12c772258261c72a7cdc39ea4dae66ba7b7c2",
+      "availability": "local; external recipient access unverified"
+    }
+  },
+  "aoci_cleanup": {
+    "proof": {
+      "path": "/tmp/mornlea-aoci-removal-result.json",
+      "bytes": 363,
+      "sha256": "aa868a50717b7fac9458300c36ca7c776514f0b1705f615399148e2795f98cd7",
+      "availability": "local; external recipient access unverified"
+    },
+    "project_assets_absent": true,
+    "guidance_and_ignore_integration_absent": true,
+    "global_cli_uninstalled": false,
+    "historical_mentions_preserved": true,
+    "original_user_stashes_preserved": [
+      "d69806374e6196ac74d37b1a68a72474a15b5bd8",
+      "bf507d06dbbf5c476970d7f6a2782f1fce231c7a"
+    ]
+  },
+  "prior_ci_source_preservation": {
+    "comparison_source_sha": "e4fd8b770ff501ed8db832fa715a10c73cf27fb4",
+    "unchanged_paths": [
+      "Makefile",
+      "scripts/ci/doctor.sh",
+      "scripts/ci/run-rust-quality.sh",
+      "packages/audit/ci_entrypoints_test.go",
+      "packages/audit/ci_local_contracts_test.go",
+      "packages/audit/ci_workflow_standard_test.go"
+    ]
+  },
+  "publication": {
+    "pushed": false,
+    "pr_edited": false,
+    "issue_written": false,
+    "archived": false,
+    "remote_pr_head_observed_this_round": false,
+    "raw_evidence_access": "Local only; /tmp logs can expire and external recipient access is unverified."
+  }
+}
