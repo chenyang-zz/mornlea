@@ -17,18 +17,21 @@
 //! integrator: the sweep envelope supplied to the kernel is the caller half
 //! of that frozen ABI, mirrored operation-for-operation from the accepted
 //! rule. The world facts the ABI needs beside the control — the borrowed
-//! collision grid and the body-in-fluid bit — are caller-owned mirror facts
-//! supplied per call, because this crate holds no block mirror. The same
-//! borrowed grid feeds the step-time ray-target recording: each step and
-//! replay walks the accepted engine raycast kernel along the confirmed and
-//! the predicted pose's look rays and records the first target cell each
-//! reaches, stamped with the confirmed base's revision; no grid is read
+//! collision grid and the body-in-fluid bit — come from the borrowed
+//! confirmed world or the legacy caller-supplied grid. World views rebuild
+//! bounded grids at each actual step and ray position, without owning a
+//! second block mirror. Each step and replay walks the accepted engine
+//! raycast kernel along the confirmed and predicted poses' look rays,
+//! recording the first target cell each reaches, stamped with the confirmed base's revision; no grid is read
 //! outside step time and no hit is ever invented.
 
 use crate::contracts::{
     ClientError, ClientLimits, ConfirmedRevision, ObservationKey, SessionEpoch,
 };
 use crate::presentation::{Correction, CorrectionReason, FiniteRay, MovementIntent, Pose};
+use crate::session::WorldConfirmed;
+
+mod world;
 use mornlea_domain::{
     BlockPos, Dimension, LookAngles, MiningState, PlayerControl, PlayerControlParts, PlayerState,
 };
@@ -39,6 +42,7 @@ use mornlea_engine::native::contracts::{
 };
 use mornlea_engine::native::physics::step_physics;
 use mornlea_engine::native::raycast::NativeRaycast;
+use world::BorrowedEnvironment;
 
 /// One accepted prediction journal observation, keyed by epoch and local
 /// sequence. A rejected input removes its pending entry; an acknowledged one
@@ -272,8 +276,8 @@ const HUNGER_SPRINT_FLOOR: u8 = 6;
 
 /// The per-call world facts the frozen F1 step ABI requires beside the
 /// control: the borrowed collision grid around the body and the body-in-fluid
-/// bit. Both are mirror facts the caller derives from its own world view;
-/// this crate holds no block mirror, so no second derivation exists here.
+/// bit. Legacy grid callers supply these facts directly; the private world
+/// adapter derives them from the confirmed mirror at each actual position.
 #[derive(Clone, Copy)]
 pub struct StepEnvironment<'a> {
     grid: CollisionGrid<'a>,
@@ -505,6 +509,7 @@ pub struct PredictionReplay {
     predicted: Option<PhysicsState>,
     pending: Vec<PendingStep>,
     issued_high_water: u64,
+    admitted_high_water: u64,
     last_acknowledged: u64,
     last_server_tick: u64,
     correction: Option<Correction>,
@@ -528,6 +533,7 @@ impl PredictionReplay {
             predicted: None,
             pending: Vec::new(),
             issued_high_water: 0,
+            admitted_high_water: 0,
             last_acknowledged: 0,
             last_server_tick: 0,
             correction: None,
@@ -697,6 +703,51 @@ impl PredictionReplay {
         control: PlayerControl,
         environment: &StepEnvironment<'_>,
     ) -> Result<StepWitness, ClientError> {
+        let mut candidate = self.clone();
+        candidate.admit_through(candidate.admitted_high_water.max(sequence))?;
+        let witness = candidate.predict_candidate(
+            sequence,
+            control,
+            BorrowedEnvironment::Grid(*environment),
+        )?;
+        *self = candidate;
+        Ok(witness)
+    }
+
+    /// Tracks real input admission independently of movement; zero and equal
+    /// marks are valid, while a decrease leaves admission unchanged.
+    pub(crate) fn admit_through(&mut self, sequence: u64) -> Result<(), ClientError> {
+        if sequence < self.admitted_high_water {
+            return Err(ClientError::InvalidInput);
+        }
+        self.admitted_high_water = sequence;
+        Ok(())
+    }
+
+    /// Stages world reads and numerical results before advancing prediction ownership.
+    pub(crate) fn predict_world(
+        &mut self,
+        sequence: u64,
+        control: PlayerControl,
+        world: &WorldConfirmed,
+        dimension: Dimension,
+    ) -> Result<StepWitness, ClientError> {
+        let mut candidate = self.clone();
+        let witness = candidate.predict_candidate(
+            sequence,
+            control,
+            BorrowedEnvironment::World(world, dimension),
+        )?;
+        *self = candidate;
+        Ok(witness)
+    }
+
+    fn predict_candidate(
+        &mut self,
+        sequence: u64,
+        control: PlayerControl,
+        environment: BorrowedEnvironment<'_>,
+    ) -> Result<StepWitness, ClientError> {
         let base = self
             .confirmed
             .as_ref()
@@ -706,7 +757,11 @@ impl PredictionReplay {
         if !(-1..=1).contains(&movement.move_x) || !(-1..=1).contains(&movement.move_z) {
             return Err(ClientError::InvalidInput);
         }
-        if sequence == 0 || sequence <= self.issued_high_water {
+        if sequence == 0
+            || sequence <= self.issued_high_water
+            || sequence <= self.last_acknowledged
+            || sequence > self.admitted_high_water
+        {
             return Err(ClientError::InvalidInput);
         }
         if self.frame_steps >= MAX_STEPS_PER_FRAME {
@@ -717,8 +772,7 @@ impl PredictionReplay {
         }
         let effective = effective_control(control, base.hunger);
         let current = self.predicted.unwrap_or(base.state);
-        let (state, clipped, used_step, hit_unknown) =
-            kernel_step(current, &effective, environment)?;
+        let (state, clipped, used_step, hit_unknown) = environment.step(current, &effective)?;
         let look = effective.look();
         let pose = Pose::try_new(
             state.position.map(f64::from),
@@ -741,12 +795,7 @@ impl PredictionReplay {
         self.issued_high_water = sequence;
         self.frame_steps += 1;
         self.predicted = Some(state);
-        // The step-time target refresh: both recorded rays are re-derived
-        // against the grid this very step borrowed, so no grid is ever read
-        // outside a step or replay. The ray walk runs over checked inputs —
-        // finite origin, checked angles, the landed reach — so its kernel
-        // refusal is structurally unreachable and still surfaces typed
-        // rather than being swallowed into a silent no-hit.
+        // Both targets must validate before this staged owner replaces live state.
         self.refresh_ray_targets(environment)?;
         Ok(witness)
     }
@@ -773,7 +822,28 @@ impl PredictionReplay {
     ) -> Result<CorrectionWitness, ClientError> {
         // Replay and ray validation must succeed before replacing the live owner.
         let mut candidate = self.clone();
-        let witness = candidate.apply_confirmed_candidate(key, state, environment)?;
+        let witness = candidate.apply_confirmed_candidate(
+            key,
+            state,
+            BorrowedEnvironment::Grid(*environment),
+        )?;
+        *self = candidate;
+        Ok(witness)
+    }
+
+    /// Corrections read the authority's actual dimension, including Depths.
+    pub(crate) fn apply_world(
+        &mut self,
+        key: &ObservationKey,
+        state: &PlayerState,
+        world: &WorldConfirmed,
+    ) -> Result<CorrectionWitness, ClientError> {
+        let mut candidate = self.clone();
+        let witness = candidate.apply_confirmed_candidate(
+            key,
+            state,
+            BorrowedEnvironment::World(world, state.dimension()),
+        )?;
         *self = candidate;
         Ok(witness)
     }
@@ -782,7 +852,7 @@ impl PredictionReplay {
         &mut self,
         key: &ObservationKey,
         state: &PlayerState,
-        environment: &StepEnvironment<'_>,
+        environment: BorrowedEnvironment<'_>,
     ) -> Result<CorrectionWitness, ClientError> {
         if key.epoch() != self.epoch {
             return Err(ClientError::StaleEpoch);
@@ -792,11 +862,13 @@ impl PredictionReplay {
             // old news, never a second acknowledgement or a rollback.
             return CorrectionWitness::try_new(0, 0, false);
         }
-        if state.dimension() != Dimension::OVERWORLD {
+        if matches!(environment, BorrowedEnvironment::Grid(_))
+            && state.dimension() != Dimension::OVERWORLD
+        {
             return Err(ClientError::InvalidInput);
         }
         let last = state.last_input_sequence();
-        if last > self.issued_high_water {
+        if last > self.admitted_high_water {
             // The authority may not confirm input this epoch never issued.
             return Err(ClientError::InvalidInput);
         }
@@ -878,7 +950,22 @@ impl PredictionReplay {
     ) -> Result<Option<RejectedPrediction>, ClientError> {
         // Replay and ray validation must succeed before replacing the live owner.
         let mut candidate = self.clone();
-        let witness = candidate.reject_candidate(sequence, environment)?;
+        let witness =
+            candidate.reject_candidate(sequence, BorrowedEnvironment::Grid(*environment))?;
+        *self = candidate;
+        Ok(witness)
+    }
+
+    /// Rejection replays only remaining movement against the confirmed world.
+    pub(crate) fn reject_world(
+        &mut self,
+        sequence: u64,
+        world: &WorldConfirmed,
+        dimension: Dimension,
+    ) -> Result<Option<RejectedPrediction>, ClientError> {
+        let mut candidate = self.clone();
+        let witness =
+            candidate.reject_candidate(sequence, BorrowedEnvironment::World(world, dimension))?;
         *self = candidate;
         Ok(witness)
     }
@@ -886,7 +973,7 @@ impl PredictionReplay {
     fn reject_candidate(
         &mut self,
         sequence: u64,
-        environment: &StepEnvironment<'_>,
+        environment: BorrowedEnvironment<'_>,
     ) -> Result<Option<RejectedPrediction>, ClientError> {
         if self.pending.iter().all(|step| step.sequence != sequence) {
             return Ok(None);
@@ -911,6 +998,7 @@ impl PredictionReplay {
         self.predicted = None;
         self.pending.clear();
         self.issued_high_water = 0;
+        self.admitted_high_water = 0;
         self.last_acknowledged = 0;
         self.last_server_tick = 0;
         self.correction = None;
@@ -937,13 +1025,13 @@ impl PredictionReplay {
     /// confirmed base — never from the pre-correction prediction. With no
     /// pending entries nothing is attributable and the confirmed base is the
     /// whole projection.
-    fn replay(&mut self, environment: &StepEnvironment<'_>) -> Result<(), ClientError> {
+    fn replay(&mut self, environment: BorrowedEnvironment<'_>) -> Result<(), ClientError> {
         let Some(base) = self.confirmed.as_ref() else {
             return Ok(());
         };
         let mut state = base.state;
         for step in &self.pending {
-            state = kernel_step(state, &step.control, environment)?.0;
+            state = environment.step(state, &step.control)?.0;
         }
         self.predicted = (!self.pending.is_empty()).then_some(state);
         self.refresh_ray_targets(environment)?;
@@ -960,18 +1048,18 @@ impl PredictionReplay {
     /// data; the predicted target is data only.
     fn refresh_ray_targets(
         &mut self,
-        environment: &StepEnvironment<'_>,
+        environment: BorrowedEnvironment<'_>,
     ) -> Result<(), ClientError> {
         let Some(base) = self.confirmed.as_ref() else {
             self.confirmed_target = None;
             self.predicted_target = None;
             return Ok(());
         };
-        let grid = environment.grid();
-        self.confirmed_target = ray_target(base.state.position, base.look, base.revision, grid)?;
+        self.confirmed_target =
+            environment.target(base.state.position, base.look, base.revision)?;
         self.predicted_target = match (self.predicted, self.pending.last()) {
             (Some(state), Some(step)) => {
-                ray_target(state.position, step.control.look(), base.revision, grid)?
+                environment.target(state.position, step.control.look(), base.revision)?
             }
             _ => None,
         };
@@ -1009,18 +1097,7 @@ fn kernel_step(
     control: &PlayerControl,
     environment: &StepEnvironment<'_>,
 ) -> Result<(PhysicsState, [bool; 3], bool, bool), ClientError> {
-    let look = control.look();
-    let yaw = f64::from(look.yaw());
-    let controls = PhysicsControls {
-        move_x: control.movement().move_x,
-        move_z: control.movement().move_z,
-        jump: control.movement().jump,
-        yaw_sin: yaw.sin() as f32,
-        yaw_cos: yaw.cos() as f32,
-        body_in_fluid: environment.body_in_fluid(),
-        sprinting: control.actions().sprinting,
-        sneaking: control.actions().sneaking,
-    };
+    let controls = physics_controls(control, environment.body_in_fluid());
     let request = PhysicsRequest {
         state,
         controls,
@@ -1038,6 +1115,21 @@ fn kernel_step(
         result.used_step,
         result.hit_unknown,
     ))
+}
+
+fn physics_controls(control: &PlayerControl, body_in_fluid: bool) -> PhysicsControls {
+    let look = control.look();
+    let yaw = f64::from(look.yaw());
+    PhysicsControls {
+        move_x: control.movement().move_x,
+        move_z: control.movement().move_z,
+        jump: control.movement().jump,
+        yaw_sin: yaw.sin() as f32,
+        yaw_cos: yaw.cos() as f32,
+        body_in_fluid,
+        sprinting: control.actions().sprinting,
+        sneaking: control.actions().sneaking,
+    }
 }
 
 /// The convex displacement envelope the frozen step ABI requires the caller
@@ -1319,4 +1411,380 @@ fn normalized_direction(direction: [f32; 3]) -> Option<[f32; 3]> {
     }
     let inverse = (1.0 / length) as f32;
     Some(direction.map(|component| component * inverse))
+}
+
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+    use crate::session::WorldConfirmed;
+    use mornlea_domain::{
+        ChunkPos, ChunkSnapshot, ChunkSnapshotParts, FiniteVec3, HeldActions, MotionState,
+        MotionStateParts, Movement, PalettedSection, PlayerStateParts, Season, SurvivalState,
+        SurvivalStateParts, Weather, WorldState, WorldStateParts, chunk_block_index,
+    };
+
+    fn world(dimension: Dimension, blocks: impl Fn(BlockPos) -> u16) -> WorldConfirmed {
+        let mut world = WorldConfirmed::default();
+        for cx in -1..=2 {
+            for cz in -1..=1 {
+                let mut sections =
+                    Box::new(std::array::from_fn(|_| PalettedSection::single(0).unwrap()));
+                for sy in 3..=4 {
+                    let mut words = vec![0u64; 1024];
+                    for y in 0..16 {
+                        for z in 0..16 {
+                            for x in 0..16 {
+                                let pos = BlockPos::new(
+                                    cx * 16 + x,
+                                    (sy as i32) * 16 - 64 + y,
+                                    cz * 16 + z,
+                                );
+                                let index = chunk_block_index(pos) as usize % 4096;
+                                words[index / 4] |= u64::from(blocks(pos)) << ((index % 4) * 15);
+                            }
+                        }
+                    }
+                    sections[sy] = PalettedSection::direct(words.into_boxed_slice()).unwrap();
+                }
+                world
+                    .apply_snapshot(
+                        &ChunkSnapshot::try_new(ChunkSnapshotParts {
+                            dimension,
+                            chunk: ChunkPos::new(cx, cz),
+                            revision: 1,
+                            sections,
+                        })
+                        .unwrap(),
+                        &ClientLimits::try_new().unwrap(),
+                    )
+                    .unwrap();
+            }
+        }
+        world
+    }
+
+    fn authority(
+        tick: u64,
+        ack: u64,
+        dimension: Dimension,
+        position: [f32; 3],
+        velocity: [f32; 3],
+        on_ground: bool,
+    ) -> PlayerState {
+        PlayerState::new(PlayerStateParts {
+            server_tick: tick,
+            last_input_sequence: ack,
+            dimension,
+            motion: MotionState::new(MotionStateParts {
+                position: FiniteVec3::try_new(position).unwrap(),
+                velocity: FiniteVec3::try_new(velocity).unwrap(),
+                on_ground,
+            }),
+            look: LookAngles::try_new(-std::f32::consts::FRAC_PI_2, 0.0).unwrap(),
+            ready: true,
+            reset: false,
+            mining: MiningState::Idle,
+            survival: SurvivalState::try_new(SurvivalStateParts {
+                health: 20,
+                oxygen: 300,
+                hunger: 20,
+                saturation_zero: false,
+                armor_points: 0,
+            })
+            .unwrap(),
+            world: WorldState::try_new(WorldStateParts {
+                day_phase_offset: 0,
+                world_time_ticks: 0,
+                weather: Weather::Clear,
+                season: Season::Spring,
+                season_progress: 0,
+                temperature: 0,
+            })
+            .unwrap(),
+        })
+    }
+
+    fn key(tick: u64) -> ObservationKey {
+        ObservationKey::try_new(
+            SessionEpoch::try_new(1).unwrap(),
+            ConfirmedRevision::new(tick),
+            0,
+        )
+        .unwrap()
+    }
+
+    fn owner(state: &PlayerState, world: &WorldConfirmed) -> PredictionReplay {
+        let mut owner = PredictionReplay::try_new(
+            SessionEpoch::try_new(1).unwrap(),
+            ClientLimits::try_new().unwrap(),
+        )
+        .unwrap();
+        owner.apply_world(&key(1), state, world).unwrap();
+        owner
+    }
+
+    fn control() -> PlayerControl {
+        PlayerControl::new(PlayerControlParts {
+            movement: Movement {
+                move_x: 0,
+                move_z: 0,
+                jump: false,
+            },
+            look: LookAngles::try_new(-std::f32::consts::FRAC_PI_2, 0.0).unwrap(),
+            actions: HeldActions {
+                primary: false,
+                eating: false,
+                sprinting: false,
+                sneaking: false,
+            },
+        })
+    }
+
+    #[test]
+    fn compact_world_steps_land_on_asymmetric_registered_shapes() {
+        for (id, height) in [(2, 1.0), (35, 15.0 / 16.0), (76, 9.0 / 16.0)] {
+            let world = world(Dimension::OVERWORLD, |p| {
+                if p == BlockPos::new(3, 0, 5) { id } else { 0 }
+            });
+            let state = authority(
+                1,
+                0,
+                Dimension::OVERWORLD,
+                [3.5, 1.2, 5.5],
+                [5.0, -10.0, 0.0],
+                false,
+            );
+            let mut owner = owner(&state, &world);
+            for sequence in 1..=3 {
+                owner.admit_through(sequence).unwrap();
+                owner
+                    .predict_world(sequence, control(), &world, Dimension::OVERWORLD)
+                    .unwrap();
+            }
+            let predicted = owner.predicted.unwrap();
+            assert_eq!(predicted.position[1], height, "id {id}");
+            assert!(predicted.on_ground, "id {id}");
+        }
+    }
+
+    #[test]
+    fn water_boundary_is_dry_but_positive_body_volume_uses_fluid_physics() {
+        let world = world(Dimension::OVERWORLD, |p| {
+            if p.x() == 1 && p.y() == 0 { 27 } else { 0 }
+        });
+        for (x, expected) in [(0.7, -1.6), (0.7001, -0.32)] {
+            let mut owner = owner(
+                &authority(1, 0, Dimension::OVERWORLD, [x, 0.0, 0.5], [0.0; 3], false),
+                &world,
+            );
+            owner.admit_through(1).unwrap();
+            let witness = owner
+                .predict_world(1, control(), &world, Dimension::OVERWORLD)
+                .unwrap();
+            assert!((witness.velocity()[1] - expected).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn correction_rebuilds_each_step_and_each_ray_in_the_actual_dimension() {
+        for dimension in [Dimension::OVERWORLD, Dimension::DEPTHS] {
+            let world = world(dimension, |p| {
+                if p.y() == 0 || (p.x() == 20 && (1..=3).contains(&p.y())) {
+                    2
+                } else {
+                    0
+                }
+            });
+            let mut owner = owner(
+                &authority(1, 0, dimension, [14.0, 1.0, 0.5], [30.0, 0.0, 0.0], true),
+                &world,
+            );
+            for sequence in 1..=8 {
+                owner.begin_frame();
+                owner.admit_through(sequence).unwrap();
+                owner
+                    .predict_world(sequence, control(), &world, dimension)
+                    .unwrap();
+            }
+            let witness = owner
+                .apply_world(
+                    &key(2),
+                    &authority(2, 0, dimension, [15.0, 1.0, 0.5], [30.0, 0.0, 0.0], true),
+                    &world,
+                )
+                .unwrap();
+            assert_eq!(witness.replayed(), 8);
+            assert!((owner.predicted.unwrap().position[0] - 19.7).abs() < 1e-5);
+            assert_eq!(
+                owner.confirmed_target().unwrap().position(),
+                BlockPos::new(20, 1, 0)
+            );
+            assert_eq!(
+                owner.predicted_target().unwrap().position(),
+                BlockPos::new(20, 1, 0)
+            );
+            assert!(owner.reject_world(8, &world, dimension).unwrap().is_some());
+            assert_eq!(owner.pending.len(), 7);
+            assert!((owner.predicted.unwrap().position[0] - 19.7).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn replay_target_grid_follows_predicted_pose_far_from_confirmed_origin() {
+        let dimension = Dimension::DEPTHS;
+        let world = world(dimension, |p| {
+            if p.y() == 0 || (p.x() == 44 && p.y() == 1) {
+                2
+            } else {
+                0
+            }
+        });
+        let mut owner = owner(
+            &authority(1, 0, dimension, [3.0, 1.0, 0.5], [100.0, 0.0, 0.0], true),
+            &world,
+        );
+        for sequence in 1..=8 {
+            owner.begin_frame();
+            owner.admit_through(sequence).unwrap();
+            owner
+                .predict_world(sequence, control(), &world, dimension)
+                .unwrap();
+        }
+        owner
+            .apply_world(
+                &key(2),
+                &authority(2, 0, dimension, [4.0, 1.0, 0.5], [100.0, 0.0, 0.0], true),
+                &world,
+            )
+            .unwrap();
+        assert!((owner.predicted.unwrap().position[0] - 39.5).abs() < 1e-5);
+        assert!(owner.confirmed_target().is_none());
+        assert_eq!(
+            owner.predicted_target().unwrap().position(),
+            BlockPos::new(44, 1, 0)
+        );
+    }
+
+    #[test]
+    fn nonmovement_admission_acknowledges_without_allowing_future_input() {
+        let world = world(Dimension::OVERWORLD, |_| 0);
+        let state = authority(1, 0, Dimension::OVERWORLD, [0.5, 0.0, 0.5], [0.0; 3], false);
+        let mut owner = owner(&state, &world);
+        owner.admit_through(0).unwrap();
+        assert_eq!(
+            owner.predict_world(1, control(), &world, Dimension::OVERWORLD),
+            Err(ClientError::InvalidInput)
+        );
+        assert!(owner.pending.is_empty());
+        assert_eq!(owner.frame_steps, 0);
+        owner.admit_through(3).unwrap();
+        owner.admit_through(3).unwrap();
+        assert_eq!(owner.admit_through(2), Err(ClientError::InvalidInput));
+        owner
+            .apply_world(
+                &key(2),
+                &authority(2, 3, Dimension::OVERWORLD, [0.5, 0.0, 0.5], [0.0; 3], false),
+                &world,
+            )
+            .unwrap();
+        assert_eq!(owner.last_acknowledged_sequence(), 3);
+        let before = owner.projection().unwrap();
+        assert_eq!(
+            owner.apply_world(
+                &key(3),
+                &authority(3, 4, Dimension::OVERWORLD, [5.0, 0.0, 0.5], [0.0; 3], false),
+                &world
+            ),
+            Err(ClientError::InvalidInput)
+        );
+        assert_eq!(
+            owner.projection().unwrap().confirmed_pose(),
+            before.confirmed_pose()
+        );
+        assert_eq!(owner.last_server_tick, 2);
+        owner
+            .reset_epoch(SessionEpoch::try_new(2).unwrap())
+            .unwrap();
+        assert_eq!(owner.admitted_high_water, 0);
+    }
+
+    #[test]
+    fn missing_world_content_remains_unknown_while_loaded_air_is_empty() {
+        let loaded = world(Dimension::OVERWORLD, |_| 0);
+        let missing = WorldConfirmed::default();
+        let state = authority(1, 0, Dimension::OVERWORLD, [0.5, 1.0, 0.5], [0.0; 3], false);
+        for (world, unknown) in [(&missing, true), (&loaded, false)] {
+            let mut owner = owner(&state, world);
+            owner.admit_through(1).unwrap();
+            let witness = owner
+                .predict_world(1, control(), world, Dimension::OVERWORLD)
+                .unwrap();
+            assert_eq!(witness.hit_unknown(), unknown);
+            assert!(owner.confirmed_target().is_none());
+            assert!(owner.predicted_target().is_none());
+        }
+    }
+
+    #[test]
+    fn coordinate_overflow_refuses_prediction_before_owner_mutation() {
+        let world = world(Dimension::OVERWORLD, |_| 0);
+        let mut owner = owner(
+            &authority(
+                1,
+                0,
+                Dimension::OVERWORLD,
+                [0.5, 0.0, 0.5],
+                [50000000000.0, 0.0, 0.0],
+                true,
+            ),
+            &world,
+        );
+        owner.admit_through(1).unwrap();
+        assert_eq!(
+            owner.predict_world(1, control(), &world, Dimension::OVERWORLD),
+            Err(ClientError::InvalidInput)
+        );
+        assert!(owner.pending.is_empty());
+        assert!(owner.predicted.is_none());
+        assert_eq!(owner.frame_steps, 0);
+        assert_eq!(owner.issued_high_water, 0);
+        assert_eq!(owner.last_server_tick, 1);
+    }
+
+    #[test]
+    fn oversized_sweep_preserves_owner_and_sequence_for_retry() {
+        let world = world(Dimension::OVERWORLD, |_| 0);
+        let mut owner = owner(
+            &authority(
+                1,
+                0,
+                Dimension::OVERWORLD,
+                [0.5, 0.0, 0.5],
+                [100000.0, 0.0, 0.0],
+                true,
+            ),
+            &world,
+        );
+        owner.admit_through(1).unwrap();
+        assert_eq!(
+            owner.predict_world(1, control(), &world, Dimension::OVERWORLD),
+            Err(ClientError::Capacity)
+        );
+        assert!(owner.pending.is_empty());
+        assert!(owner.predicted.is_none());
+        assert_eq!(owner.frame_steps, 0);
+        assert_eq!(owner.issued_high_water, 0);
+        assert!(owner.snow_cues.is_empty());
+        owner
+            .apply_world(
+                &key(2),
+                &authority(2, 0, Dimension::OVERWORLD, [0.5, 0.0, 0.5], [0.0; 3], false),
+                &world,
+            )
+            .unwrap();
+        owner
+            .predict_world(1, control(), &world, Dimension::OVERWORLD)
+            .unwrap();
+        assert_eq!(owner.pending.len(), 1);
+    }
 }
