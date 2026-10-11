@@ -1,0 +1,21 @@
+From: Mornlea project hardening
+Subject: repair native NIL construction
+Upstream-Defect: Both Python None conversion paths use the INT constructor; the native pointer path also reads eight bytes from four-byte storage.
+Deletion-Condition: Remove this patch when the exact upstream runtime preserves native NIL through both Python None conversion paths and passes native container and method round-trip checks.
+
+--- a/py4godot/cppcore/Variant.cpp
++++ b/py4godot/cppcore/Variant.cpp
+@@ -1425,5 +1425,3 @@
+ void Variant::construct_Nil(PyObject* object){
+-        long long val = 0;
+-        auto constructor = functions::get_get_variant_from_type_constructor()(GDExtensionVariantType::GDEXTENSION_VARIANT_TYPE_INT);
+-        constructor(native_ptr, &val);
++        functions::get_variant_new_nil()(native_ptr);
+ }
+@@ -1663,5 +1661,3 @@
+ void Variant::construct_Nil_native_ptr(PyObject* object){
+-        int val = 0;
+-        auto constructor = functions::get_get_variant_from_type_constructor()(GDExtensionVariantType::GDEXTENSION_VARIANT_TYPE_INT);
+-        constructor(&native_ptr, &val);
++        functions::get_variant_new_nil()(&native_ptr);
+ }

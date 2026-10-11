@@ -1,2 +1,3 @@
 0001-isolate-runtime-and-repair-lifecycle.patch
 0002-repair-generated-wrapper-ownership.patch
+0003-repair-native-nil-construction.patch
