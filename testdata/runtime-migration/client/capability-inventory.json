@@ -135,8 +135,12 @@
     }
    ],
    "rust_tests": [
-    "session_replay::login",
-    "login::lifecycle_open_terminal"
+    "mornlea_client_core::session_replay::login::memory_success_admits_after_complete_login",
+    "mornlea_client_core::session_replay::login::valid_handshake_reject_publishes_terminal_once",
+    "mornlea_client_core::session_replay::login::bad_login_exchange_frames_reject",
+    "mornlea_client_core::session_replay::live::real_keepalive_returns_a_codec_checked_reply",
+    "mornlea_godot::rust_server_integration::actual_memory_login_reaches_owned_godot_frame",
+    "mornlea_godot::rust_server_integration::actual_tcp_login_reaches_owned_godot_frame"
    ]
   },
   {
@@ -176,7 +180,15 @@
     }
    ],
    "rust_tests": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch",
+    "mornlea_godot::rust_server_integration::actual_input_capacity_and_invalid_mixed_batch_preserve_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick",
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
    ]
   },
   {
@@ -222,8 +234,13 @@
     }
    ],
    "rust_tests": [
-    "presentation_contract::terrain",
-    "presentation_contract::lod"
+    "mornlea_client_core::presentation_contract::terrain::near_far_coexist_without_overlap",
+    "mornlea_client_core::presentation_contract::terrain::failed_replacement_preserves_previous_visible_geometry",
+    "mornlea_client_core::presentation_contract::lod::no_near_overlap",
+    "mornlea_client_core::session_replay::live::public_core_owns_actual_near_and_far_geometry_and_retires_after_forget_reset",
+    "mornlea_godot::rust_server_integration::actual_memory_and_tcp_placement_publications_match_with_prepared_terrain_delta",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -313,13 +330,29 @@
     }
    ],
    "rust_tests": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_carries_raw_identity_stack_and_exact_position",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
+    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
+    "mornlea_client_core::presentation_contract::actors::all_six_kinds_assemble_in_observation_order_any_parts_order",
+    "mornlea_client_core::presentation_contract::actors::remove_precedes_reused_identity_lifecycle",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -359,8 +392,11 @@
     }
    ],
    "rust_tests": [
-    "prediction_replay::correction",
-    "presentation_contract::player_view"
+    "mornlea_client_core::prediction_replay::correction::go_transcript_reconcile_replays_two_unconfirmed_steps",
+    "mornlea_client_core::presentation_contract::player_view::confirmed_pose_stays_authoritative_while_prediction_is_explicit",
+    "mornlea_client_core::presentation_contract::player_view::acknowledged_correction_publishes_reason_and_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance"
    ]
   },
   {
@@ -428,11 +464,19 @@
     }
    ],
    "rust_tests": [
-    "presentation_contract::inventory_core",
-    "presentation_contract::inventory_container",
-    "presentation_contract::inventory_crafting",
-    "presentation_contract::inventory_furnace",
-    "presentation_contract::inventory_ui"
+    "mornlea_client_core::presentation_contract::inventory_core::complete_nine_hotbar_and_twenty_seven_backpack_layout",
+    "mornlea_client_core::presentation_contract::inventory_core::rejected_selection_and_unconfirmed_input_never_change_contents",
+    "mornlea_client_core::presentation_contract::inventory_container::chest_open_projects_complete_view_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_container::matching_close_retires_view_and_orders_after_open",
+    "mornlea_client_core::presentation_contract::inventory_crafting::personal_and_workbench_checked_sizes_project_exactly",
+    "mornlea_client_core::presentation_contract::inventory_crafting::rejection_projects_separate_and_never_advances_the_confirmed_view",
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_open_projects_complete_state_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_material_states_project_verbatim",
+    "mornlea_client_core::presentation_contract::inventory_ui::four_providers_interleave_by_source_order_not_parts_order",
+    "mornlea_client_core::presentation_contract::inventory_ui::accepted_move_and_rejection_remain_distinct_records",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick"
    ]
   },
   {
@@ -494,12 +538,21 @@
     }
    ],
    "rust_tests": [
-    "presentation_contract::world_environment",
-    "presentation_contract::world_survival",
-    "presentation_contract::world_chat",
-    "presentation_contract::world_task",
-    "presentation_contract::world_prompt",
-    "presentation_contract::world_ui"
+    "mornlea_client_core::presentation_contract::world_environment::boundary_values_project_exactly",
+    "mornlea_client_core::presentation_contract::world_environment::optional_source_tick_preserved_verbatim",
+    "mornlea_client_core::presentation_contract::world_survival::damage_death_respawn_chain_projects_exactly",
+    "mornlea_client_core::presentation_contract::world_survival::survival_values_come_from_server_confirmations_only",
+    "mornlea_client_core::presentation_contract::world_chat::valid_utf8_and_actual_sender_id_project_verbatim",
+    "mornlea_client_core::presentation_contract::world_chat::ring_keeps_the_latest_thirty_two_in_source_order",
+    "mornlea_client_core::presentation_contract::world_task::task_lifecycle_chain_projects_in_accepted_order",
+    "mornlea_client_core::presentation_contract::world_task::task_records_carry_no_invented_facts",
+    "mornlea_client_core::presentation_contract::world_prompt::loaded_targets_use_actual_dimension_and_registered_label",
+    "mornlea_client_core::presentation_contract::world_prompt::absent_stale_future_and_unknown_targets_clear",
+    "mornlea_client_core::presentation_contract::world_ui::weather_task_and_chat_assemble_together",
+    "mornlea_client_core::presentation_contract::world_ui::derived_prompt_merges_after_confirmed_without_invented_event",
+    "mornlea_client_core::session_replay::live::live_prompt_uses_loaded_block_and_clears_when_forgotten",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -542,7 +595,11 @@
     }
    ],
    "rust_tests": [
-    "presentation_contract::audio"
+    "mornlea_client_core::presentation_contract::audio::combat_and_place_without_id_dedup_by_observation_key",
+    "mornlea_client_core::presentation_contract::audio::predicted_snow_step_emits_once_across_correction_replay",
+    "mornlea_client_core::presentation_contract::audio::local_cue_projects_end_to_end_from_real_admission",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance"
    ]
   },
   {
@@ -580,8 +637,13 @@
     }
    ],
    "rust_tests": [
-    "session_replay::login",
-    "lifecycle_contract::lifecycle"
+    "mornlea_client_core::session_replay::login::lifecycle_open_terminal",
+    "mornlea_client_core::lifecycle_contract::lifecycle::old_work_cannot_cross_reset",
+    "mornlea_client_core::session_replay::login::repaired_lifecycle_release_refusal_is_retryable",
+    "mornlea_godot::rust_server_integration::actual_memory_live_reset_reconnects_and_restarts_sequence",
+    "mornlea_godot::rust_server_integration::actual_tcp_live_reset_reconnects_and_restarts_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_close_reset_fences_retired_generation",
+    "mornlea_godot::rust_server_integration::actual_tcp_close_reset_fences_retired_epoch"
    ]
   },
   {
@@ -612,7 +674,11 @@
     }
    ],
    "rust_tests": [
-    "presentation_contract::diagnostics"
+    "mornlea_client_core::presentation_contract::diagnostics::record_carries_identity_correlation_and_counter_snapshots_only",
+    "mornlea_client_core::presentation_contract::diagnostics::saturated_counter_publishes_incomplete_evidence_without_wrap",
+    "mornlea_client_core::session_replay::live::diagnostic_high_water_survives_successful_outbound_drain",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   }
  ],
@@ -636,7 +702,14 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat"
+   ]
   },
   {
    "order": 2,
@@ -657,7 +730,13 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_godot::rust_server_integration::actual_memory_and_tcp_placement_publications_match_with_prepared_terrain_delta",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick"
+   ]
   },
   {
    "order": 3,
@@ -678,7 +757,11 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
+   ]
   },
   {
    "order": 4,
@@ -699,7 +782,14 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat"
+   ]
   },
   {
    "order": 5,
@@ -720,7 +810,13 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+   ]
   },
   {
    "order": 6,
@@ -737,7 +833,11 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
+   ]
   },
   {
    "order": 7,
@@ -754,7 +854,11 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
+   ]
   },
   {
    "order": 8,
@@ -771,7 +875,13 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::accepted_collect_water_emits_bounded_native_local_cue_sources",
+    "mornlea_client_core::presentation_contract::audio::local_cue_projects_end_to_end_from_real_admission"
+   ]
   },
   {
    "order": 9,
@@ -788,7 +898,11 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
+   ]
   },
   {
    "order": 10,
@@ -809,7 +923,11 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
+   ]
   },
   {
    "order": 11,
@@ -830,7 +948,13 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
+   ]
   },
   {
    "order": 12,
@@ -851,7 +975,13 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
+   ]
   },
   {
    "order": 13,
@@ -876,7 +1006,15 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+   ]
   },
   {
    "order": 14,
@@ -893,7 +1031,11 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
+   ]
   },
   {
    "order": 15,
@@ -910,7 +1052,13 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
+   ]
   },
   {
    "order": 16,
@@ -931,7 +1079,11 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
+   ]
   },
   {
    "order": 17,
@@ -952,7 +1104,13 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
+   ]
   },
   {
    "order": 18,
@@ -973,7 +1131,13 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
+   ]
   },
   {
    "order": 19,
@@ -990,7 +1154,13 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
+   ]
   },
   {
    "order": 20,
@@ -1011,7 +1181,15 @@
     }
    ],
    "consumer_node": "2.1",
-   "rust_test": "prediction_replay::input (all 20 variants and every container/crafting region)"
+   "rust_test": "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::empty_chat_only_and_mixed_batches_sequence_exactly",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat"
+   ]
   }
  ],
  "packet_variants": [
@@ -1028,6 +1206,9 @@
      "package": "./packages/client/cmd/mornlea-godot-core",
      "test": "TestFrameSnapshotConcurrentPullsWithStepsWorldAndMetricsStayConsistent"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::login::memory_success_admits_after_complete_login"
    ]
   },
   {
@@ -1043,6 +1224,11 @@
      "package": "./packages/client/cmd/mornlea-godot-core",
      "test": "TestInputSubmitMapsSeamRejectionPanicAndDisconnectRace"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::login::valid_handshake_reject_publishes_terminal_once",
+    "mornlea_protocol::runtime_contract::handshake_reject_round_trip_preserves_golden_bytes",
+    "mornlea_protocol::runtime_contract::handshake_reject_rejects_unknown_code_and_malformed_payload"
    ]
   },
   {
@@ -1058,6 +1244,9 @@
      "package": "./packages/client/cmd/mornlea-godot-core",
      "test": "TestInputSubmitRealRuntimeAcceptsAndRejectsSemantics"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::login::memory_success_admits_after_complete_login"
    ]
   },
   {
@@ -1073,6 +1262,10 @@
      "package": "./packages/client/cmd/mornlea-godot-core",
      "test": "TestInputSubmitMapsSeamRejectionPanicAndDisconnectRace"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::login::lifecycle_open_terminal",
+    "mornlea_client_core::presentation_contract::frame::real_lifecycle_terminal_pair_publishes"
    ]
   },
   {
@@ -1092,6 +1285,11 @@
      "package": "./packages/client/runtime",
      "test": "TestMirrorStateReturnsDetachedSlices"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::mirror::snapshot_block_change_forget",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1107,6 +1305,10 @@
      "package": "./packages/client/runtime",
      "test": "TestMessagesDrainBudgetAndMirrorTranscript"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::mirror::snapshot_block_change_forget",
+    "mornlea_godot::rust_server_integration::actual_memory_and_tcp_placement_publications_match_with_prepared_terrain_delta"
    ]
   },
   {
@@ -1123,7 +1325,12 @@
      "test": "TestMirrorResetOnCloseCannotBeRepopulated"
     }
    ],
-   "note": "valid packets without source tick keep source_tick None; ordered remove"
+   "note": "valid packets without source tick keep source_tick None; ordered remove",
+   "rust_tests": [
+    "mornlea_client_core::session_replay::mirror::tickless_forget_increments_once_without_tick",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+   ]
   },
   {
    "session_phase": "play",
@@ -1142,6 +1349,13 @@
      "package": "./packages/client/client",
      "test": "TestApplyPlayerStateReplaysOnlyUnacknowledgedInputs"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::correction::correction_replays_remaining_from_confirmed_in_sequence_order",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat",
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
    ]
   },
   {
@@ -1161,6 +1375,10 @@
      "package": "./packages/client/cmd/mornlea/app",
      "test": "TestGameRightClickPartialRejectsFurnaceOutputTarget"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::live::duplicate_rejection_does_not_stall_the_real_session",
+    "mornlea_client_core::presentation_contract::inventory_ui::accepted_move_and_rejection_remain_distinct_records"
    ]
   },
   {
@@ -1177,7 +1395,10 @@
      "test": "TestStepNoWallClockAndNoSynchronousNetworkWait"
     }
    ],
-   "note": "KeepAliveReply is generated by the session control path, never by a UI input batch"
+   "note": "KeepAliveReply is generated by the session control path, never by a UI input batch",
+   "rust_tests": [
+    "mornlea_client_core::session_replay::live::real_keepalive_returns_a_codec_checked_reply"
+   ]
   },
   {
    "session_phase": "play",
@@ -1196,6 +1417,9 @@
      "package": "./packages/client/runtime",
      "test": "TestRemoteReceiverTerminalErrorDisconnectsAndReleasesEndpoint"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::login::repaired_lifecycle_remote_terminal_survives_release_retry"
    ]
   },
   {
@@ -1211,6 +1435,12 @@
      "package": "./packages/client/client",
      "test": "TestRemotePlayersSpawnCreatesPresentation"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1226,6 +1456,12 @@
      "package": "./packages/client/client",
      "test": "TestRemotePlayersWarmsUpAgainAfterDespawnAndSpawn"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -1241,6 +1477,12 @@
      "package": "./packages/client/client",
      "test": "TestRemotePlayersInterpolatesTwoTicksBehind"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1256,6 +1498,12 @@
      "package": "./packages/client/client",
      "test": "TestInventoryMirrorAppliesAuthoritativeState"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_core::complete_nine_hotbar_and_twenty_seven_backpack_layout",
+    "mornlea_client_core::presentation_contract::inventory_core::rejected_selection_and_unconfirmed_input_never_change_contents",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1275,6 +1523,13 @@
      "package": "./packages/client/client",
      "test": "TestItemDropsKeepsToolDurability"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_carries_raw_identity_stack_and_exact_position",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
+    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1290,6 +1545,13 @@
      "package": "./packages/client/client",
      "test": "TestItemDropsRemoveRejectsUnknownIDWithoutMutating"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_carries_raw_identity_stack_and_exact_position",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
+    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -1309,6 +1571,12 @@
      "package": "./packages/client/client",
      "test": "TestFurnaceMirrorAppliesAllMaterialStates"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_open_projects_complete_state_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_material_states_project_verbatim",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1328,6 +1596,12 @@
      "package": "./packages/client/cmd/mornlea/app",
      "test": "TestChestClosedMessageClearsUIWithoutEcho"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_container::chest_open_projects_complete_view_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_container::matching_close_retires_view_and_orders_after_open",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1347,6 +1621,12 @@
      "package": "./packages/client/client",
      "test": "TestChestMirrorReplacesOnNewGeneration"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_container::chest_open_projects_complete_view_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_container::matching_close_retires_view_and_orders_after_open",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1366,6 +1646,14 @@
      "package": "./packages/client/client",
      "test": "TestChatEventsTaskLifecycleEnterRingAndEvictInOrder"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_chat::valid_utf8_and_actual_sender_id_project_verbatim",
+    "mornlea_client_core::presentation_contract::world_chat::ring_keeps_the_latest_thirty_two_in_source_order",
+    "mornlea_client_core::presentation_contract::world_task::task_lifecycle_chain_projects_in_accepted_order",
+    "mornlea_client_core::presentation_contract::world_task::task_records_carry_no_invented_facts",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1381,6 +1669,13 @@
      "package": "./packages/client/client",
      "test": "TestCompanionsSpawnStatesInterpolateDespawnAndReset"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1396,6 +1691,13 @@
      "package": "./packages/client/client",
      "test": "TestCompanionInterpolationBetweenBatchesStaysWithinAuthority"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1411,6 +1713,13 @@
      "package": "./packages/client/client",
      "test": "TestCompanionsSpawnStatesInterpolateDespawnAndReset"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -1426,6 +1735,12 @@
      "package": "./packages/client/cmd/mornlea/app",
      "test": "TestHotbarPlaceUsesLastConfirmedSlot"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::audio::combat_and_place_without_id_dedup_by_observation_key",
+    "mornlea_client_core::presentation_contract::inventory_ui::token_and_outcome_union_merged_unchanged",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick",
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
    ]
   },
   {
@@ -1445,6 +1760,12 @@
      "package": "./packages/client/cmd/mornlea/app",
      "test": "TestCraftingStateSizeThreeOpensWorkbenchUI"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_crafting::personal_and_workbench_checked_sizes_project_exactly",
+    "mornlea_client_core::presentation_contract::inventory_crafting::rejection_projects_separate_and_never_advances_the_confirmed_view",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1460,6 +1781,13 @@
      "package": "./packages/client/client",
      "test": "TestHostileMirrorLifecycle"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1475,6 +1803,13 @@
      "package": "./packages/client/client",
      "test": "TestHostilePresentationStaysInsideInterpolationWindow"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1490,6 +1825,13 @@
      "package": "./packages/client/client",
      "test": "TestHostileResetClearsMirror"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -1509,6 +1851,11 @@
      "package": "./packages/client/audio",
      "test": "TestCueCombatHitPCM"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::audio::combat_and_place_without_id_dedup_by_observation_key",
+    "mornlea_client_core::presentation_contract::actors_hostile::combat_hit_adds_no_attacker_association",
+    "mornlea_client_core::presentation_contract::actors_projectile::combat_hit_publishes_no_projectile_link_or_hit_marker"
    ]
   },
   {
@@ -1524,6 +1871,13 @@
      "package": "./packages/client/client",
      "test": "TestPassivesLatestWinsMirror"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1539,6 +1893,13 @@
      "package": "./packages/client/client",
      "test": "TestPassivesMirrorCarriesGrazingFlag"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1554,6 +1915,13 @@
      "package": "./packages/client/client",
      "test": "TestPassivesDeathKeepsRenderingForTwentyTicks"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -1569,6 +1937,13 @@
      "package": "./packages/client/client",
      "test": "TestProjectileMirrorLifecycle"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1584,6 +1959,13 @@
      "package": "./packages/client/client",
      "test": "TestProjectileVelocityEstimateDiffsAgainstLatestAuthoritativeSnapshot"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -1599,6 +1981,13 @@
      "package": "./packages/client/client",
      "test": "TestProjectileResetClearsMirror"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   }
  ],
@@ -1675,7 +2064,15 @@
      "source_sha256": "sha256:6119f396caad020018652a43a5a9a8ff1a02e4173594bcbde3859cb16eaabe4e"
     }
    ],
-   "discovery_command": "go test ./packages/client/runtime -list 'Session|Connect|Disconnect' -count=1"
+   "discovery_command": "go test ./packages/client/runtime -list 'Session|Connect|Disconnect' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::session_replay::login::memory_success_admits_after_complete_login",
+    "mornlea_client_core::session_replay::login::valid_handshake_reject_publishes_terminal_once",
+    "mornlea_client_core::session_replay::login::bad_login_exchange_frames_reject",
+    "mornlea_client_core::session_replay::live::real_keepalive_returns_a_codec_checked_reply",
+    "mornlea_godot::rust_server_integration::actual_memory_login_reaches_owned_godot_frame",
+    "mornlea_godot::rust_server_integration::actual_tcp_login_reaches_owned_godot_frame"
+   ]
   },
   {
    "owner_node": "1.4",
@@ -1734,7 +2131,11 @@
      "source_sha256": "sha256:fdcb9ce74bf56ab3e6ed549b3e33eaa538aa7436005f1bb9d26edab3ec3e7cb9"
     }
    ],
-   "discovery_command": "go test ./packages/client/runtime -list 'Mirror|Chunk|Entity' -count=1"
+   "discovery_command": "go test ./packages/client/runtime -list 'Mirror|Chunk|Entity' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::session_replay::mirror::whole_observation_atomic",
+    "mornlea_client_core::session_replay::mirror::snapshot_block_change_forget"
+   ]
   },
   {
    "owner_node": "1.5",
@@ -1878,7 +2279,11 @@
      "source_sha256": "sha256:596640e1d2a37827a953075baed86dad230857a9cf0df4363ee0d33a6ce87d2a"
     }
    ],
-   "discovery_command": "go test ./packages/client/cmd/mornlea-godot-core -list 'Step|Input' -count=1"
+   "discovery_command": "go test ./packages/client/cmd/mornlea-godot-core -list 'Step|Input' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::session_replay::io::work_budget_zero_retains_exactly",
+    "mornlea_client_core::session_replay::io::memory_tcp_transcript_same_admitted_observations"
+   ]
   },
   {
    "owner_node": "2.1",
@@ -1952,7 +2357,18 @@
      "source_sha256": "sha256:d66df9a9d912b2d4cd415401f2fe54a24ac26d2edfa3116b633a7b99fc9a7389"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list 'Input' -count=1"
+   "discovery_command": "go test ./packages/client/client -list 'Input' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch",
+    "mornlea_godot::rust_server_integration::actual_input_capacity_and_invalid_mixed_batch_preserve_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick",
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
+   ]
   },
   {
    "owner_node": "2.2 and 2.6b",
@@ -2076,7 +2492,14 @@
      "source_sha256": "sha256:fa7af519f1b24460d5b692d19bdb2e218d0ee244889871deff90657ab6c7fbb1"
     }
    ],
-   "discovery_command": "go test ./packages/client/runtime -list 'Predict|Step' -count=1"
+   "discovery_command": "go test ./packages/client/runtime -list 'Predict|Step' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::correction::go_transcript_reconcile_replays_two_unconfirmed_steps",
+    "mornlea_client_core::presentation_contract::player_view::confirmed_pose_stays_authoritative_while_prediction_is_explicit",
+    "mornlea_client_core::presentation_contract::player_view::acknowledged_correction_publishes_reason_and_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance"
+   ]
   },
   {
    "owner_node": "2.3",
@@ -2160,7 +2583,11 @@
      "source_sha256": "sha256:9f8d3399b043cf394e2aecd7876630276b01aa5dcb6369c318ff7a169b814a2d"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list 'Mesher|Backpressure' -count=1"
+   "discovery_command": "go test ./packages/client/client -list 'Mesher|Backpressure' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::preparation::admission_count_returns_whole_job",
+    "mornlea_client_core::presentation_contract::terrain::rejected_upserts_retry_and_dropped_release"
+   ]
   },
   {
    "owner_node": "2.3b",
@@ -2290,7 +2717,12 @@
     }
    ],
    "discovery_command": "go test ./packages/client/lod -list '.*' -count=1",
-   "note": "full-package oracle per packet 07 node 2.3b"
+   "note": "full-package oracle per packet 07 node 2.3b",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::lod::no_near_overlap",
+    "mornlea_client_core::presentation_contract::lod::negative_tile_and_radius_edges",
+    "mornlea_client_core::presentation_contract::lod::old_seed_or_epoch_is_stale"
+   ]
   },
   {
    "owner_node": "2.3b",
@@ -2354,7 +2786,11 @@
      "source_sha256": "sha256:2204f5af5582465ba57bcda34d9d74ea490c8757c6c394e430fba2e3893300eb"
     }
    ],
-   "discovery_command": "go test ./packages/client/cmd/mornlea/app -list 'Lod' -count=1"
+   "discovery_command": "go test ./packages/client/cmd/mornlea/app -list 'Lod' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::lod::budget_plus_one_retained",
+    "mornlea_client_core::session_replay::live::public_core_owns_actual_near_and_far_geometry_and_retires_after_forget_reset"
+   ]
   },
   {
    "owner_node": "2.5",
@@ -2658,7 +3094,11 @@
      "source_sha256": "sha256:c1e46fc20d1188eb943f16e6845444b86ec9fc17b42de26f344bb06a45229963"
     }
    ],
-   "discovery_command": "go test ./packages/client/mesh -list 'Visibility|Light|Native' -count=1"
+   "discovery_command": "go test ./packages/client/mesh -list 'Visibility|Light|Native' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::preparation_native::preparation_builds_and_retains_the_actual_near_mesh",
+    "mornlea_client_core::presentation_contract::terrain::fluid_material_and_light_summaries"
+   ]
   },
   {
    "owner_node": "2.6a and 2.6g",
@@ -2697,7 +3137,13 @@
      "source_sha256": "sha256:8f0f77e38dd04a0cebdefcfc4ff78863b1d17788d6d608a4fa9ae76f0ef6ee49"
     }
    ],
-   "discovery_command": "go test ./packages/client/presentation -list 'Entity' -count=1"
+   "discovery_command": "go test ./packages/client/presentation -list 'Entity' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_client_core::presentation_contract::actors::all_six_kinds_assemble_in_observation_order_any_parts_order",
+    "mornlea_client_core::presentation_contract::actors::remove_precedes_reused_identity_lifecycle"
+   ]
   },
   {
    "owner_node": "2.6c, 2.6d, 2.6e, 2.6f1, 2.6f2 (broad package oracle; per-kind rows bind the mirror transcripts above)",
@@ -4156,7 +4602,32 @@
      "source_sha256": "sha256:793977c7166c654a4de40f836cbeabfabeea6d82224f8770fcab82f3de6ec0ca"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list '.*' -count=1"
+   "discovery_command": "go test ./packages/client/client -list '.*' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_carries_raw_identity_stack_and_exact_position",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
+    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
+    "mornlea_client_core::presentation_contract::actors::all_six_kinds_assemble_in_observation_order_any_parts_order",
+    "mornlea_client_core::presentation_contract::actors::remove_precedes_reused_identity_lifecycle",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+   ]
   },
   {
    "owner_node": "2.7a1",
@@ -4200,7 +4671,11 @@
      "source_sha256": "sha256:0825e229f71755e2e6406b0a17c96590b384d474b03fbde9a94268984334a348"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list 'Inventory' -count=1"
+   "discovery_command": "go test ./packages/client/client -list 'Inventory' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_core::complete_nine_hotbar_and_twenty_seven_backpack_layout",
+    "mornlea_client_core::presentation_contract::inventory_core::rejected_selection_and_unconfirmed_input_never_change_contents"
+   ]
   },
   {
    "owner_node": "2.7a2",
@@ -4339,7 +4814,11 @@
      "source_sha256": "sha256:8a533fbfebfd096d27844c1971cb64a77a20f2a09d32df9f07cc9a749e6d2474"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list 'UI|Chest' -count=1"
+   "discovery_command": "go test ./packages/client/client -list 'UI|Chest' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_container::chest_open_projects_complete_view_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_container::matching_close_retires_view_and_orders_after_open"
+   ]
   },
   {
    "owner_node": "2.7a3",
@@ -4373,7 +4852,11 @@
      "source_sha256": "sha256:0825e229f71755e2e6406b0a17c96590b384d474b03fbde9a94268984334a348"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list 'Craft' -count=1"
+   "discovery_command": "go test ./packages/client/client -list 'Craft' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_crafting::personal_and_workbench_checked_sizes_project_exactly",
+    "mornlea_client_core::presentation_contract::inventory_crafting::rejection_projects_separate_and_never_advances_the_confirmed_view"
+   ]
   },
   {
    "owner_node": "2.7a4",
@@ -4417,7 +4900,11 @@
      "source_sha256": "sha256:b14f24d1b1652bd5638f34d0ce902bcd702a3e515e0108053bbb5a8f8b16dcd5"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list 'Furnace' -count=1"
+   "discovery_command": "go test ./packages/client/client -list 'Furnace' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_open_projects_complete_state_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_material_states_project_verbatim"
+   ]
   },
   {
    "owner_node": "2.7a5",
@@ -4561,7 +5048,12 @@
      "source_sha256": "sha256:0825e229f71755e2e6406b0a17c96590b384d474b03fbde9a94268984334a348"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list 'UI|Inventory' -count=1"
+   "discovery_command": "go test ./packages/client/client -list 'UI|Inventory' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_ui::four_providers_interleave_by_source_order_not_parts_order",
+    "mornlea_client_core::presentation_contract::inventory_ui::accepted_move_and_rejection_remain_distinct_records",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick"
+   ]
   },
   {
    "owner_node": "2.7b1",
@@ -4575,7 +5067,11 @@
      "source_sha256": "sha256:1188825cf4c4e5d09303a4cee3c1bd0351f6b8e24d90cb2729cf2dbea220bdd5"
     }
    ],
-   "discovery_command": "go test ./packages/client/presentation -list 'Environment' -count=1"
+   "discovery_command": "go test ./packages/client/presentation -list 'Environment' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_environment::boundary_values_project_exactly",
+    "mornlea_client_core::presentation_contract::world_environment::optional_source_tick_preserved_verbatim"
+   ]
   },
   {
    "owner_node": "2.7b2",
@@ -4589,7 +5085,11 @@
      "source_sha256": "sha256:1188825cf4c4e5d09303a4cee3c1bd0351f6b8e24d90cb2729cf2dbea220bdd5"
     }
    ],
-   "discovery_command": "go test ./packages/client/presentation -list 'HUD' -count=1"
+   "discovery_command": "go test ./packages/client/presentation -list 'HUD' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_survival::damage_death_respawn_chain_projects_exactly",
+    "mornlea_client_core::presentation_contract::world_survival::survival_values_come_from_server_confirmations_only"
+   ]
   },
   {
    "owner_node": "2.7b3",
@@ -4618,7 +5118,11 @@
      "source_sha256": "sha256:50b4faee0d1b39cbd50f07df5fdab595fc4b03bdd67153551b144c3a196a2949"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list 'ChatEvents' -count=1"
+   "discovery_command": "go test ./packages/client/client -list 'ChatEvents' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_chat::valid_utf8_and_actual_sender_id_project_verbatim",
+    "mornlea_client_core::presentation_contract::world_chat::ring_keeps_the_latest_thirty_two_in_source_order"
+   ]
   },
   {
    "owner_node": "2.7b4",
@@ -4632,7 +5136,11 @@
      "source_sha256": "sha256:50b4faee0d1b39cbd50f07df5fdab595fc4b03bdd67153551b144c3a196a2949"
     }
    ],
-   "discovery_command": "go test ./packages/client/client -list 'ChatEventsTaskLifecycle' -count=1"
+   "discovery_command": "go test ./packages/client/client -list 'ChatEventsTaskLifecycle' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_task::task_lifecycle_chain_projects_in_accepted_order",
+    "mornlea_client_core::presentation_contract::world_task::task_records_carry_no_invented_facts"
+   ]
   },
   {
    "owner_node": "2.7b5",
@@ -4646,7 +5154,11 @@
      "source_sha256": "sha256:1188825cf4c4e5d09303a4cee3c1bd0351f6b8e24d90cb2729cf2dbea220bdd5"
     }
    ],
-   "discovery_command": "go test ./packages/client/presentation -list 'Target|Prompt' -count=1"
+   "discovery_command": "go test ./packages/client/presentation -list 'Target|Prompt' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_prompt::loaded_targets_use_actual_dimension_and_registered_label",
+    "mornlea_client_core::presentation_contract::world_prompt::absent_stale_future_and_unknown_targets_clear"
+   ]
   },
   {
    "owner_node": "2.7b6",
@@ -4665,7 +5177,11 @@
      "source_sha256": "sha256:1188825cf4c4e5d09303a4cee3c1bd0351f6b8e24d90cb2729cf2dbea220bdd5"
     }
    ],
-   "discovery_command": "go test ./packages/client/presentation -list 'HUD|Environment' -count=1"
+   "discovery_command": "go test ./packages/client/presentation -list 'HUD|Environment' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_ui::weather_task_and_chat_assemble_together",
+    "mornlea_client_core::presentation_contract::world_ui::derived_prompt_merges_after_confirmed_without_invented_event"
+   ]
   },
   {
    "owner_node": "2.8",
@@ -4714,7 +5230,14 @@
      "source_sha256": "sha256:fa7af519f1b24460d5b692d19bdb2e218d0ee244889871deff90657ab6c7fbb1"
     }
    ],
-   "discovery_command": "go test ./packages/client/runtime -list 'Step' -count=1"
+   "discovery_command": "go test ./packages/client/runtime -list 'Step' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::audio::combat_and_place_without_id_dedup_by_observation_key",
+    "mornlea_client_core::presentation_contract::audio::predicted_snow_step_emits_once_across_correction_replay",
+    "mornlea_client_core::presentation_contract::audio::local_cue_projects_end_to_end_from_real_admission",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance"
+   ]
   },
   {
    "owner_node": "2.8 (supplementary PCM evidence, never provenance acceptance)",
@@ -4748,7 +5271,10 @@
      "source_sha256": "sha256:15448dfbd5306b27f1a42505171a74e4283f98139ea5a5276d75175d82c80f82"
     }
    ],
-   "discovery_command": "go test ./packages/client/audio -list 'Cue' -count=1"
+   "discovery_command": "go test ./packages/client/audio -list 'Cue' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::audio::absent_device_still_generates_cue_records"
+   ]
   },
   {
    "owner_node": "2.4 and 2.9",
@@ -4767,7 +5293,16 @@
      "source_sha256": "sha256:8f0f77e38dd04a0cebdefcfc4ff78863b1d17788d6d608a4fa9ae76f0ef6ee49"
     }
    ],
-   "discovery_command": "go test ./packages/client/presentation -list 'Frame' -count=1"
+   "discovery_command": "go test ./packages/client/presentation -list 'Frame' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::frame::complete_frame_publishes_every_family_atomically",
+    "mornlea_client_core::presentation_contract::diagnostics::record_carries_identity_correlation_and_counter_snapshots_only",
+    "mornlea_client_core::presentation_contract::diagnostics::saturated_counter_publishes_incomplete_evidence_without_wrap",
+    "mornlea_client_core::session_replay::live::diagnostic_high_water_survives_successful_outbound_drain",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
+   ]
   },
   {
    "owner_node": "3.3a",
@@ -4906,7 +5441,16 @@
      "source_sha256": "sha256:fa7af519f1b24460d5b692d19bdb2e218d0ee244889871deff90657ab6c7fbb1"
     }
    ],
-   "discovery_command": "go test ./packages/client/runtime -list 'Predict|Lifecycle|Step' -count=1"
+   "discovery_command": "go test ./packages/client/runtime -list 'Predict|Lifecycle|Step' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::session_replay::login::lifecycle_open_terminal",
+    "mornlea_client_core::lifecycle_contract::lifecycle::old_work_cannot_cross_reset",
+    "mornlea_client_core::session_replay::login::repaired_lifecycle_release_refusal_is_retryable",
+    "mornlea_godot::rust_server_integration::actual_memory_live_reset_reconnects_and_restarts_sequence",
+    "mornlea_godot::rust_server_integration::actual_tcp_live_reset_reconnects_and_restarts_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_close_reset_fences_retired_generation",
+    "mornlea_godot::rust_server_integration::actual_tcp_close_reset_fences_retired_epoch"
+   ]
   },
   {
    "owner_node": "04-refined-nodes combined oracle correction",
@@ -5220,7 +5764,14 @@
      "source_sha256": "sha256:fa7af519f1b24460d5b692d19bdb2e218d0ee244889871deff90657ab6c7fbb1"
     }
    ],
-   "discovery_command": "go test ./packages/client/runtime -list 'Predict|Step|Messages|Mirror|Mesh|Remote|Lifecycle' -count=1"
+   "discovery_command": "go test ./packages/client/runtime -list 'Predict|Step|Messages|Mirror|Mesh|Remote|Lifecycle' -count=1",
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::correction::go_transcript_reconcile_replays_two_unconfirmed_steps",
+    "mornlea_client_core::presentation_contract::player_view::confirmed_pose_stays_authoritative_while_prediction_is_explicit",
+    "mornlea_client_core::presentation_contract::player_view::acknowledged_correction_publishes_reason_and_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance"
+   ]
   },
   {
    "owner_node": "3.1b (G1 adapter architecture boundary)",
@@ -5489,7 +6040,12 @@
      "source_sha256": "sha256:665098d2828659144f0eac979252faec3caffc8913283bf24c7c9ad909b37478"
     }
    ],
-   "discovery_command": "go test ./packages/audit -list 'Architecture|Godot' -count=1"
+   "discovery_command": "go test ./packages/audit -list 'Architecture|Godot' -count=1",
+   "rust_tests": [
+    "mornlea_godot::rust_producer::rust_producer::rust_mode_does_not_load_go",
+    "mornlea_godot::rust_producer::rust_producer::whole_frame_failure_atomic",
+    "mornlea_godot::rust_producer::rust_producer::method_table_and_owned_values"
+   ]
   }
  ],
  "limits": [
@@ -5509,6 +6065,9 @@
      "note": "line 209: eventCount above MaxInputEvents rejected"
     },
     "openspec/changes/rust-client-core/plans/00-client-contract.md (queued_input_events default and maximum 128)"
+   ],
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::batch_action_ceiling_admits_128_rejects_129_atomically"
    ]
   },
   {
@@ -5527,6 +6086,9 @@
      "sha256": "sha256:12fdac4bacac4feec00f6bbb07436699ace4ded65a1dea13d1debf47b1a20e12",
      "note": "line 277: MORNLEA_CLIENT_INPUT_HEADER_BYTES 16u"
     }
+   ],
+   "rust_tests": [
+    "mornlea_godot::rust_producer::rust_producer::method_table_and_owned_values"
    ]
   },
   {
@@ -5544,6 +6106,10 @@
      "sha256": "sha256:12fdac4bacac4feec00f6bbb07436699ace4ded65a1dea13d1debf47b1a20e12",
      "note": "line 185"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::io::work_budget_4096_drains_exactly_fifo",
+    "mornlea_client_core::session_replay::io::work_budget_4097_rejects_before_dequeue"
    ]
   },
   {
@@ -5561,6 +6127,9 @@
      "sha256": "sha256:89677338ba714d0f6890183be33bf0c5d7b745ab48a516ff9f8ac5489aed532d",
      "note": "MaxWorldBatchOperations 4096 bounds the ready-section domain"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::preparation::budget_zero_retains_and_4097_rejects"
    ]
   },
   {
@@ -5573,6 +6142,9 @@
      "sha256": "sha256:0a3d2ac610cc05f96d0ca82b99a30b2121bd2a4d77b38b9451ee47b9de9c5334",
      "note": "line 31: stepOutboundQueueCapacity = MaxStepMessageBudget + 8 = 4104"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::io::outbound_record_cap_admits_4104_rejects_plus_one"
    ]
   },
   {
@@ -5590,6 +6162,9 @@
      "sha256": "sha256:6eb1cc54ac845fe13abc00922b4a3845e75c9a13d85d0fc8992f33b8932929dd",
      "note": "line 78: pilotConnectReceiverCapacity = 8192 mirrors the legacy application receiver capacity"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::io::inbound_record_cap_admits_8192_rejects_plus_one"
    ]
   },
   {
@@ -5617,6 +6192,9 @@
      "sha256": "sha256:0458795b7d9120584c5dcf10509fa9d5fad16ab8b01bc58dbbdd5cb7a67b046b",
      "note": "line 1136 pins RECEIVE_BUFFER_CAP == 4_194_314"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::io::malformed_and_oversized_inbound_fail_sticky"
    ]
   },
   {
@@ -5629,6 +6207,9 @@
      "sha256": "sha256:4dafc64ed8bb94c7afcbeeeeaae5d784573c7bbe61bc042bc58c3e1dc4ee4195",
      "note": "line 15: predictionHistoryCapacity = 256"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::correction::journal_bound_admits_256_rejects_257_typed"
    ]
   },
   {
@@ -5641,6 +6222,9 @@
      "sha256": "sha256:4dafc64ed8bb94c7afcbeeeeaae5d784573c7bbe61bc042bc58c3e1dc4ee4195",
      "note": "line 16: maxPredictionSteps = 5"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::correction::frame_bound_admits_five_steps_rejects_sixth_typed"
    ]
   },
   {
@@ -5658,6 +6242,9 @@
      "sha256": "sha256:12fdac4bacac4feec00f6bbb07436699ace4ded65a1dea13d1debf47b1a20e12",
      "note": "line 193"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::terrain::record_and_byte_caps_preserve_prior_output"
    ]
   },
   {
@@ -5676,6 +6263,9 @@
      "sha256": "sha256:12fdac4bacac4feec00f6bbb07436699ace4ded65a1dea13d1debf47b1a20e12",
      "note": "line 201: MORNLEA_CLIENT_MAX_WORLD_BATCH_QUADS 524288u"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::preparation_native::preparation_builds_and_retains_the_actual_near_mesh"
    ]
   },
   {
@@ -5699,6 +6289,9 @@
      "sha256": "sha256:12fdac4bacac4feec00f6bbb07436699ace4ded65a1dea13d1debf47b1a20e12",
      "note": "line 197"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::preparation_native::preparation_builds_and_retains_the_actual_near_mesh"
    ]
   },
   {
@@ -5723,6 +6316,10 @@
      "note": "line 11: a maximal world batch alone is 4,325,408 bytes"
     },
     "openspec/changes/rust-client-core/plans/00-client-contract.md (4 MiB is invalid as a parity cap for this aggregate)"
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::preparation::byte_bounds_frozen_cap_and_plus_one",
+    "mornlea_client_core::presentation_contract::frame::caps_plus_one_preserve_the_visible_frame"
    ]
   },
   {
@@ -5735,6 +6332,9 @@
      "sha256": "sha256:0d083a90c1b873d9d1ff74e83ec5afe6c41953022d22660391ed773425315b5f",
      "note": "line 13: mesherJobCapacity = 1024"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::preparation::admission_count_returns_whole_job"
    ]
   },
   {
@@ -5747,6 +6347,9 @@
      "sha256": "sha256:0d083a90c1b873d9d1ff74e83ec5afe6c41953022d22660391ed773425315b5f",
      "note": "line 14: mesherResultCapacity = 64"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::preparation::fifo_drain_and_retained_lookup"
    ]
   },
   {
@@ -5764,6 +6367,9 @@
      "sha256": "sha256:9e7271fda4080258bb4d870100e02ee446e01345b45986332a0e2fe11e0eba91",
      "note": "line 160: LOD scheduler reuses applicationUploadPerFrame as its bytesPerFrame"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::lod::budget_plus_one_retained"
    ]
   },
   {
@@ -5776,6 +6382,9 @@
      "sha256": "sha256:9e7271fda4080258bb4d870100e02ee446e01345b45986332a0e2fe11e0eba91",
      "note": "line 29: lodMaxTiles mirrors Rust MAX_LOD_TILES; TestLodMaxTilesMirrorsRustConstant pins it"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::lod::no_near_overlap"
    ]
   },
   {
@@ -5788,6 +6397,9 @@
      "sha256": "sha256:9e7271fda4080258bb4d870100e02ee446e01345b45986332a0e2fe11e0eba91",
      "note": "line 19: lodTileChunks = 4; lodTileFromChunk arithmetic-shifts chunk coords by 2"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::lod::negative_tile_and_radius_edges"
    ]
   },
   {
@@ -5800,6 +6412,9 @@
      "sha256": "sha256:7f17bfa1ec21e58417c876aec881f7215ab61c04a3fcc0124e91ac9f928f5525",
      "note": "lines 182-183: LoginViewDistanceMin 2, LoginViewDistanceMax 64"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::lod::negative_tile_and_radius_edges"
    ]
   },
   {
@@ -5812,6 +6427,9 @@
      "sha256": "sha256:a07d9e4f08bb71df1548bc5edc3fd7c51de0c99cd2d5e613db80cde5aa1c88c7",
      "note": "lines 76-81: LodFarMultiplierMin/Max/Default"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::lod::negative_tile_and_radius_edges"
    ]
   },
   {
@@ -5829,6 +6447,9 @@
      "sha256": "sha256:a07d9e4f08bb71df1548bc5edc3fd7c51de0c99cd2d5e613db80cde5aa1c88c7",
      "note": "line 82-83: LodStepDefault = 4"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::lod::budget_plus_one_retained"
    ]
   },
   {
@@ -5842,6 +6463,10 @@
      "note": "LodNearTileRadius and LodFarTileRadius"
     },
     "openspec/changes/rust-client-core/plans/05-supporting-values.md (same frozen formula)"
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::lod::no_near_overlap",
+    "mornlea_client_core::presentation_contract::lod::negative_tile_and_radius_edges"
    ]
   },
   {
@@ -5859,6 +6484,9 @@
      "sha256": "sha256:12fdac4bacac4feec00f6bbb07436699ace4ded65a1dea13d1debf47b1a20e12",
      "note": "line 205: MORNLEA_CLIENT_MAX_ENTITY_RECORDS 7u"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors::family_count_cap_plus_one_retains_old_output"
    ]
   },
   {
@@ -5871,6 +6499,10 @@
      "sha256": "sha256:fdc0d978eb05c536ff60f37043f86c789a407a54dd624c1a74a2f4db565be39b",
      "note": "line 13: remoteSnapshotCapacity = 4"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle"
    ]
   },
   {
@@ -5883,6 +6515,11 @@
      "sha256": "sha256:c078c3bd11d04509fe3f115587d03be961e9b0d17317acce66cf35a668adddb1",
      "note": "line 20: MaxHostiles = 64"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses"
    ]
   },
   {
@@ -5895,6 +6532,11 @@
      "sha256": "sha256:503b8ea3f4fdb3ce2bddf593e63344ac44db50da6ec62f9cd4da2d93925eedb4",
      "note": "line 20: MaxPassives = 32"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons"
    ]
   },
   {
@@ -5907,6 +6549,11 @@
      "sha256": "sha256:8f16a22b80a3eb1e4ee6ec5b755822dbf9b6ac7f9268ec5f2491ebf59637f535",
      "note": "line 20: MaxProjectiles = 128"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output"
    ]
   },
   {
@@ -5919,6 +6566,11 @@
      "sha256": "sha256:b9988a5f3237caf810dc0dff9100132c756f73b095386af40cd381f22301e1cd",
      "note": "line 14: MaxActive = 4"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension"
    ]
   },
   {
@@ -5932,6 +6584,11 @@
      "sha256": "sha256:53be4374c38365674fa9ffe2bef542cf6497270b0dbfa18bf7a1b4e071759b38",
      "note": "lines 4-10"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_carries_raw_identity_stack_and_exact_position",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
+    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity"
    ]
   },
   {
@@ -5944,6 +6601,9 @@
      "sha256": "sha256:523bb4bc689d228cac3eea11193b017815e099c461692d1f4b339d59b6e581c1",
      "note": "line 15: ChatEventCapacity = 32"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_chat::ring_keeps_the_latest_thirty_two_in_source_order"
    ]
   },
   {
@@ -5956,6 +6616,9 @@
      "sha256": "sha256:12fdac4bacac4feec00f6bbb07436699ace4ded65a1dea13d1debf47b1a20e12",
      "note": "line 211: MORNLEA_CLIENT_MAX_STATUS_RECORDS 64u"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::frame::caps_plus_one_preserve_the_visible_frame"
    ]
   },
   {
@@ -5969,6 +6632,9 @@
      "note": "line 208: MORNLEA_CLIENT_MAX_TARGET_NAME_BYTES 64u"
     },
     "openspec/changes/rust-client-core/plans/05-supporting-values.md (BoundedText Target matches the pilot target-name capacity)"
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_prompt::registered_label_boundary_pins"
    ]
   },
   {
@@ -5986,6 +6652,9 @@
      "sha256": "sha256:69fd5e2c5eeb7a8f80c2daac0ebd0067fc72c3a61c15076da0397ddc3af5c081",
      "note": "line 54: PLAYER_NAME_MAX_BYTES = 128; line 47: COMPANION_NAME_MAX_BYTES = 128"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::actors_companion::invalid_values_are_refused_at_the_checked_domain_boundary"
    ]
   },
   {
@@ -6003,6 +6672,9 @@
      "sha256": "sha256:30441a8e8e5ba6a4c9a6588cccab209bb37580eafe0465ef818f11c7d2bf514e",
      "note": "line 9: CHAT_COMMAND_TEXT_MAX_BYTES = 1024"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::prediction_replay::input::nonfinite_and_out_of_range_payloads_reject_at_checked_types"
    ]
   },
   {
@@ -6020,6 +6692,9 @@
      "sha256": "sha256:69fd5e2c5eeb7a8f80c2daac0ebd0067fc72c3a61c15076da0397ddc3af5c081",
      "note": "line 62: CHAT_SPEECH_TEXT_MAX_BYTES = 256"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_chat::accepted_text_caps_admit_and_plus_one_rejects_typed"
    ]
   },
   {
@@ -6032,6 +6707,9 @@
      "sha256": "sha256:07aef80f84aeb8f04b31a6318f87223542c02eb52758bc1eb4898aa3789d6fd4",
      "note": "lines 8-11: MESSAGE_MAX_BYTES = 256, MESSAGE_MAX_RUNES = 256, shared by control-message text validation"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::login::bad_login_exchange_frames_reject"
    ]
   },
   {
@@ -6069,6 +6747,11 @@
      "sha256": "sha256:799d4808eee0bab4548fa78e80147772d9929af1b0b8af1fd197d171f535133d",
      "note": "lines 9-10: FurnaceSmeltTicks 200, FurnaceBurnTicks 1600"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::inventory_core::complete_nine_hotbar_and_twenty_seven_backpack_layout",
+    "mornlea_client_core::presentation_contract::inventory_crafting::personal_and_workbench_checked_sizes_project_exactly",
+    "mornlea_client_core::presentation_contract::inventory_furnace::checked_timer_bounds_admit_extremes_reject_plus_one"
    ]
   },
   {
@@ -6091,6 +6774,9 @@
      "sha256": "sha256:8a0253f95a3bb125193cfca71ff1b39e3e191210dac5bd819e420d2d151e0fa8",
      "note": "line 20: MaxArmorPoints = 20"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_survival::bounds_admit_maxima_and_zeros_and_reject_plus_one"
    ]
   },
   {
@@ -6104,6 +6790,9 @@
      "note": "line 25: DayLengthTicks = 24000"
     },
     "openspec/changes/rust-client-core/plans/05-supporting-values.md (WorldState day phase offset below 24000)"
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::world_environment::domain_bounds_admit_extremes_and_reject_plus_one"
    ]
   },
   {
@@ -6122,6 +6811,10 @@
      "note": "BlockPosFromChunkIndex rejects index >= SectionsPerChunk*BlocksPerSection"
     },
     "openspec/changes/rust-client-core/plans/05-supporting-values.md (drop_position helper and the 34359738352 example)"
+   ],
+   "rust_tests": [
+    "mornlea_client_core::presentation_contract::geometry::checked_extreme_chunk",
+    "mornlea_client_core::presentation_contract::geometry::invalid_index"
    ]
   },
   {
@@ -6139,6 +6832,10 @@
      "sha256": "sha256:0458795b7d9120584c5dcf10509fa9d5fad16ab8b01bc58dbbdd5cb7a67b046b",
      "note": "line 1136 pins 4_194_314"
     }
+   ],
+   "rust_tests": [
+    "mornlea_client_core::session_replay::login::hello_and_login_deadlines_time_out_late_login_cannot_revive",
+    "mornlea_client_core::session_replay::io::fragmented_prefix_and_body_admit_complete_frame_only"
    ]
   }
  ],
@@ -6310,8 +7007,12 @@
    ],
    "rust_node": "1.3",
    "rust_test": [
-    "session_replay::login",
-    "login::lifecycle_open_terminal"
+    "mornlea_client_core::session_replay::login::memory_success_admits_after_complete_login",
+    "mornlea_client_core::session_replay::login::valid_handshake_reject_publishes_terminal_once",
+    "mornlea_client_core::session_replay::login::bad_login_exchange_frames_reject",
+    "mornlea_client_core::session_replay::live::real_keepalive_returns_a_codec_checked_reply",
+    "mornlea_godot::rust_server_integration::actual_memory_login_reaches_owned_godot_frame",
+    "mornlea_godot::rust_server_integration::actual_tcp_login_reaches_owned_godot_frame"
    ]
   },
   {
@@ -6333,7 +7034,15 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch",
+    "mornlea_godot::rust_server_integration::actual_input_capacity_and_invalid_mixed_batch_preserve_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick",
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
    ]
   },
   {
@@ -6358,8 +7067,13 @@
    ],
    "rust_node": "2.5",
    "rust_test": [
-    "presentation_contract::terrain",
-    "presentation_contract::lod"
+    "mornlea_client_core::presentation_contract::terrain::near_far_coexist_without_overlap",
+    "mornlea_client_core::presentation_contract::terrain::failed_replacement_preserves_previous_visible_geometry",
+    "mornlea_client_core::presentation_contract::lod::no_near_overlap",
+    "mornlea_client_core::session_replay::live::public_core_owns_actual_near_and_far_geometry_and_retires_after_forget_reset",
+    "mornlea_godot::rust_server_integration::actual_memory_and_tcp_placement_publications_match_with_prepared_terrain_delta",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -6407,13 +7121,29 @@
    ],
    "rust_node": "2.6a, 2.6c, 2.6d, 2.6e, 2.6f1, 2.6f2, 2.6g",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_carries_raw_identity_stack_and_exact_position",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
+    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
+    "mornlea_client_core::presentation_contract::actors::all_six_kinds_assemble_in_observation_order_any_parts_order",
+    "mornlea_client_core::presentation_contract::actors::remove_precedes_reused_identity_lifecycle",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -6435,8 +7165,11 @@
    ],
    "rust_node": "2.2 (2.6b)",
    "rust_test": [
-    "prediction_replay::correction",
-    "presentation_contract::player_view"
+    "mornlea_client_core::prediction_replay::correction::go_transcript_reconcile_replays_two_unconfirmed_steps",
+    "mornlea_client_core::presentation_contract::player_view::confirmed_pose_stays_authoritative_while_prediction_is_explicit",
+    "mornlea_client_core::presentation_contract::player_view::acknowledged_correction_publishes_reason_and_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance"
    ]
   },
   {
@@ -6471,11 +7204,19 @@
    ],
    "rust_node": "2.7a1, 2.7a2, 2.7a3, 2.7a4, 2.7a5",
    "rust_test": [
-    "presentation_contract::inventory_core",
-    "presentation_contract::inventory_container",
-    "presentation_contract::inventory_crafting",
-    "presentation_contract::inventory_furnace",
-    "presentation_contract::inventory_ui"
+    "mornlea_client_core::presentation_contract::inventory_core::complete_nine_hotbar_and_twenty_seven_backpack_layout",
+    "mornlea_client_core::presentation_contract::inventory_core::rejected_selection_and_unconfirmed_input_never_change_contents",
+    "mornlea_client_core::presentation_contract::inventory_container::chest_open_projects_complete_view_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_container::matching_close_retires_view_and_orders_after_open",
+    "mornlea_client_core::presentation_contract::inventory_crafting::personal_and_workbench_checked_sizes_project_exactly",
+    "mornlea_client_core::presentation_contract::inventory_crafting::rejection_projects_separate_and_never_advances_the_confirmed_view",
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_open_projects_complete_state_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_material_states_project_verbatim",
+    "mornlea_client_core::presentation_contract::inventory_ui::four_providers_interleave_by_source_order_not_parts_order",
+    "mornlea_client_core::presentation_contract::inventory_ui::accepted_move_and_rejection_remain_distinct_records",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick"
    ]
   },
   {
@@ -6504,12 +7245,21 @@
    ],
    "rust_node": "2.7b1, 2.7b2, 2.7b3, 2.7b4, 2.7b5, 2.7b6",
    "rust_test": [
-    "presentation_contract::world_environment",
-    "presentation_contract::world_survival",
-    "presentation_contract::world_chat",
-    "presentation_contract::world_task",
-    "presentation_contract::world_prompt",
-    "presentation_contract::world_ui"
+    "mornlea_client_core::presentation_contract::world_environment::boundary_values_project_exactly",
+    "mornlea_client_core::presentation_contract::world_environment::optional_source_tick_preserved_verbatim",
+    "mornlea_client_core::presentation_contract::world_survival::damage_death_respawn_chain_projects_exactly",
+    "mornlea_client_core::presentation_contract::world_survival::survival_values_come_from_server_confirmations_only",
+    "mornlea_client_core::presentation_contract::world_chat::valid_utf8_and_actual_sender_id_project_verbatim",
+    "mornlea_client_core::presentation_contract::world_chat::ring_keeps_the_latest_thirty_two_in_source_order",
+    "mornlea_client_core::presentation_contract::world_task::task_lifecycle_chain_projects_in_accepted_order",
+    "mornlea_client_core::presentation_contract::world_task::task_records_carry_no_invented_facts",
+    "mornlea_client_core::presentation_contract::world_prompt::loaded_targets_use_actual_dimension_and_registered_label",
+    "mornlea_client_core::presentation_contract::world_prompt::absent_stale_future_and_unknown_targets_clear",
+    "mornlea_client_core::presentation_contract::world_ui::weather_task_and_chat_assemble_together",
+    "mornlea_client_core::presentation_contract::world_ui::derived_prompt_merges_after_confirmed_without_invented_event",
+    "mornlea_client_core::session_replay::live::live_prompt_uses_loaded_block_and_clears_when_forgotten",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -6531,7 +7281,11 @@
    ],
    "rust_node": "2.8",
    "rust_test": [
-    "presentation_contract::audio"
+    "mornlea_client_core::presentation_contract::audio::combat_and_place_without_id_dedup_by_observation_key",
+    "mornlea_client_core::presentation_contract::audio::predicted_snow_step_emits_once_across_correction_replay",
+    "mornlea_client_core::presentation_contract::audio::local_cue_projects_end_to_end_from_real_admission",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance"
    ]
   },
   {
@@ -6551,8 +7305,13 @@
    ],
    "rust_node": "1.3 (Open/terminal), 3.3a (Reset/Invalidate/local close)",
    "rust_test": [
-    "session_replay::login",
-    "lifecycle_contract::lifecycle"
+    "mornlea_client_core::session_replay::login::lifecycle_open_terminal",
+    "mornlea_client_core::lifecycle_contract::lifecycle::old_work_cannot_cross_reset",
+    "mornlea_client_core::session_replay::login::repaired_lifecycle_release_refusal_is_retryable",
+    "mornlea_godot::rust_server_integration::actual_memory_live_reset_reconnects_and_restarts_sequence",
+    "mornlea_godot::rust_server_integration::actual_tcp_live_reset_reconnects_and_restarts_sequence",
+    "mornlea_godot::rust_server_integration::actual_memory_close_reset_fences_retired_generation",
+    "mornlea_godot::rust_server_integration::actual_tcp_close_reset_fences_retired_epoch"
    ]
   },
   {
@@ -6569,7 +7328,11 @@
    ],
    "rust_node": "2.9",
    "rust_test": [
-    "presentation_contract::diagnostics"
+    "mornlea_client_core::presentation_contract::diagnostics::record_carries_identity_correlation_and_counter_snapshots_only",
+    "mornlea_client_core::presentation_contract::diagnostics::saturated_counter_publishes_incomplete_evidence_without_wrap",
+    "mornlea_client_core::session_replay::live::diagnostic_high_water_survives_successful_outbound_drain",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -6586,7 +7349,11 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat"
    ]
   },
   {
@@ -6603,7 +7370,10 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_godot::rust_server_integration::actual_memory_and_tcp_placement_publications_match_with_prepared_terrain_delta",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick"
    ]
   },
   {
@@ -6620,7 +7390,8 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
    ]
   },
   {
@@ -6637,7 +7408,11 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat"
    ]
   },
   {
@@ -6654,7 +7429,10 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -6670,7 +7448,8 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
    ]
   },
   {
@@ -6686,7 +7465,8 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
    ]
   },
   {
@@ -6702,7 +7482,10 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::accepted_collect_water_emits_bounded_native_local_cue_sources",
+    "mornlea_client_core::presentation_contract::audio::local_cue_projects_end_to_end_from_real_admission"
    ]
   },
   {
@@ -6718,7 +7501,8 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
    ]
   },
   {
@@ -6735,7 +7519,8 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
    ]
   },
   {
@@ -6752,7 +7537,10 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
    ]
   },
   {
@@ -6769,7 +7557,10 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
    ]
   },
   {
@@ -6787,7 +7578,12 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -6803,7 +7599,8 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
    ]
   },
   {
@@ -6819,7 +7616,10 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
    ]
   },
   {
@@ -6836,7 +7636,8 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant"
    ]
   },
   {
@@ -6853,7 +7654,10 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
    ]
   },
   {
@@ -6870,7 +7674,10 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
    ]
   },
   {
@@ -6886,7 +7693,10 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::every_container_and_crafting_region_takes_exactly_its_token",
+    "mornlea_client_core::prediction_replay::input::missing_irrelevant_mismatched_and_stale_tokens_reject_whole_batch"
    ]
   },
   {
@@ -6903,7 +7713,12 @@
    ],
    "rust_node": "2.1",
    "rust_test": [
-    "prediction_replay::input"
+    "mornlea_client_core::prediction_replay::input::all_twenty_variants_admit_atomically_with_exact_receipt",
+    "mornlea_client_core::prediction_replay::input::f1_mapping_round_trips_every_variant",
+    "mornlea_client_core::prediction_replay::input::empty_chat_only_and_mixed_batches_sequence_exactly",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat"
    ]
   },
   {
@@ -7006,9 +7821,9 @@
    ],
    "rust_node": "3.1b",
    "rust_test": [
-    "rust_producer::rust_mode_does_not_load_go",
-    "rust_producer::whole_frame_failure_atomic",
-    "rust_producer::method_table_and_owned_values"
+    "mornlea_godot::rust_producer::rust_producer::rust_mode_does_not_load_go",
+    "mornlea_godot::rust_producer::rust_producer::whole_frame_failure_atomic",
+    "mornlea_godot::rust_producer::rust_producer::method_table_and_owned_values"
    ]
   },
   {
@@ -7026,8 +7841,7 @@
    ],
    "rust_node": "1.3",
    "rust_test": [
-    "session_replay::login",
-    "login::lifecycle_open_terminal"
+    "mornlea_client_core::session_replay::login::memory_success_admits_after_complete_login"
    ]
   },
   {
@@ -7045,8 +7859,9 @@
    ],
    "rust_node": "1.3",
    "rust_test": [
-    "session_replay::login",
-    "login::lifecycle_open_terminal"
+    "mornlea_client_core::session_replay::login::valid_handshake_reject_publishes_terminal_once",
+    "mornlea_protocol::runtime_contract::handshake_reject_round_trip_preserves_golden_bytes",
+    "mornlea_protocol::runtime_contract::handshake_reject_rejects_unknown_code_and_malformed_payload"
    ]
   },
   {
@@ -7064,8 +7879,7 @@
    ],
    "rust_node": "1.3",
    "rust_test": [
-    "session_replay::login",
-    "login::lifecycle_open_terminal"
+    "mornlea_client_core::session_replay::login::memory_success_admits_after_complete_login"
    ]
   },
   {
@@ -7083,8 +7897,8 @@
    ],
    "rust_node": "1.3",
    "rust_test": [
-    "session_replay::login",
-    "login::lifecycle_open_terminal"
+    "mornlea_client_core::session_replay::login::lifecycle_open_terminal",
+    "mornlea_client_core::presentation_contract::frame::real_lifecycle_terminal_pair_publishes"
    ]
   },
   {
@@ -7103,8 +7917,9 @@
    ],
    "rust_node": "1.4",
    "rust_test": [
-    "presentation_contract::terrain",
-    "presentation_contract::lod"
+    "mornlea_client_core::session_replay::mirror::snapshot_block_change_forget",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7122,8 +7937,8 @@
    ],
    "rust_node": "1.4",
    "rust_test": [
-    "presentation_contract::terrain",
-    "presentation_contract::lod"
+    "mornlea_client_core::session_replay::mirror::snapshot_block_change_forget",
+    "mornlea_godot::rust_server_integration::actual_memory_and_tcp_placement_publications_match_with_prepared_terrain_delta"
    ]
   },
   {
@@ -7141,8 +7956,9 @@
    ],
    "rust_node": "1.4",
    "rust_test": [
-    "presentation_contract::terrain",
-    "presentation_contract::lod"
+    "mornlea_client_core::session_replay::mirror::tickless_forget_increments_once_without_tick",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -7161,8 +7977,11 @@
    ],
    "rust_node": "1.4/2.2/2.7b",
    "rust_test": [
-    "prediction_replay::correction",
-    "presentation_contract::player_view"
+    "mornlea_client_core::prediction_replay::correction::correction_replays_remaining_from_confirmed_in_sequence_order",
+    "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat",
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
    ]
   },
   {
@@ -7181,11 +8000,8 @@
    ],
    "rust_node": "2.1/2.7a",
    "rust_test": [
-    "presentation_contract::inventory_core",
-    "presentation_contract::inventory_container",
-    "presentation_contract::inventory_crafting",
-    "presentation_contract::inventory_furnace",
-    "presentation_contract::inventory_ui"
+    "mornlea_client_core::session_replay::live::duplicate_rejection_does_not_stall_the_real_session",
+    "mornlea_client_core::presentation_contract::inventory_ui::accepted_move_and_rejection_remain_distinct_records"
    ]
   },
   {
@@ -7203,8 +8019,7 @@
    ],
    "rust_node": "1.3",
    "rust_test": [
-    "session_replay::login",
-    "login::lifecycle_open_terminal"
+    "mornlea_client_core::session_replay::live::real_keepalive_returns_a_codec_checked_reply"
    ]
   },
   {
@@ -7223,8 +8038,7 @@
    ],
    "rust_node": "1.3",
    "rust_test": [
-    "session_replay::login",
-    "login::lifecycle_open_terminal"
+    "mornlea_client_core::session_replay::login::repaired_lifecycle_remote_terminal_survives_release_retry"
    ]
   },
   {
@@ -7242,13 +8056,10 @@
    ],
    "rust_node": "2.6a",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7266,13 +8077,10 @@
    ],
    "rust_node": "2.6a",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -7290,13 +8098,10 @@
    ],
    "rust_node": "2.6a",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
+    "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7314,11 +8119,10 @@
    ],
    "rust_node": "2.7a1",
    "rust_test": [
-    "presentation_contract::inventory_core",
-    "presentation_contract::inventory_container",
-    "presentation_contract::inventory_crafting",
-    "presentation_contract::inventory_furnace",
-    "presentation_contract::inventory_ui"
+    "mornlea_client_core::presentation_contract::inventory_core::complete_nine_hotbar_and_twenty_seven_backpack_layout",
+    "mornlea_client_core::presentation_contract::inventory_core::rejected_selection_and_unconfirmed_input_never_change_contents",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7337,13 +8141,11 @@
    ],
    "rust_node": "2.6f2",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_carries_raw_identity_stack_and_exact_position",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
+    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7361,13 +8163,11 @@
    ],
    "rust_node": "2.6f2",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_carries_raw_identity_stack_and_exact_position",
+    "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
+    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -7386,11 +8186,10 @@
    ],
    "rust_node": "2.7a4",
    "rust_test": [
-    "presentation_contract::inventory_core",
-    "presentation_contract::inventory_container",
-    "presentation_contract::inventory_crafting",
-    "presentation_contract::inventory_furnace",
-    "presentation_contract::inventory_ui"
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_open_projects_complete_state_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_furnace::furnace_material_states_project_verbatim",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7409,11 +8208,10 @@
    ],
    "rust_node": "2.7a2",
    "rust_test": [
-    "presentation_contract::inventory_core",
-    "presentation_contract::inventory_container",
-    "presentation_contract::inventory_crafting",
-    "presentation_contract::inventory_furnace",
-    "presentation_contract::inventory_ui"
+    "mornlea_client_core::presentation_contract::inventory_container::chest_open_projects_complete_view_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_container::matching_close_retires_view_and_orders_after_open",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7432,11 +8230,10 @@
    ],
    "rust_node": "2.7a2",
    "rust_test": [
-    "presentation_contract::inventory_core",
-    "presentation_contract::inventory_container",
-    "presentation_contract::inventory_crafting",
-    "presentation_contract::inventory_furnace",
-    "presentation_contract::inventory_ui"
+    "mornlea_client_core::presentation_contract::inventory_container::chest_open_projects_complete_view_with_local_token",
+    "mornlea_client_core::presentation_contract::inventory_container::matching_close_retires_view_and_orders_after_open",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7455,12 +8252,12 @@
    ],
    "rust_node": "2.7b3/2.7b4",
    "rust_test": [
-    "presentation_contract::world_environment",
-    "presentation_contract::world_survival",
-    "presentation_contract::world_chat",
-    "presentation_contract::world_task",
-    "presentation_contract::world_prompt",
-    "presentation_contract::world_ui"
+    "mornlea_client_core::presentation_contract::world_chat::valid_utf8_and_actual_sender_id_project_verbatim",
+    "mornlea_client_core::presentation_contract::world_chat::ring_keeps_the_latest_thirty_two_in_source_order",
+    "mornlea_client_core::presentation_contract::world_task::task_lifecycle_chain_projects_in_accepted_order",
+    "mornlea_client_core::presentation_contract::world_task::task_records_carry_no_invented_facts",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7478,13 +8275,11 @@
    ],
    "rust_node": "2.6f1",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7502,13 +8297,11 @@
    ],
    "rust_node": "2.6f1",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7526,13 +8319,11 @@
    ],
    "rust_node": "2.6f1",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
+    "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -7550,11 +8341,10 @@
    ],
    "rust_node": "2.7a",
    "rust_test": [
-    "presentation_contract::inventory_core",
-    "presentation_contract::inventory_container",
-    "presentation_contract::inventory_crafting",
-    "presentation_contract::inventory_furnace",
-    "presentation_contract::inventory_ui"
+    "mornlea_client_core::presentation_contract::audio::combat_and_place_without_id_dedup_by_observation_key",
+    "mornlea_client_core::presentation_contract::inventory_ui::token_and_outcome_union_merged_unchanged",
+    "mornlea_client_core::session_replay::live::actual_placement_success_confirms_once_without_inventing_a_tick",
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
    ]
   },
   {
@@ -7573,11 +8363,10 @@
    ],
    "rust_node": "2.7a3",
    "rust_test": [
-    "presentation_contract::inventory_core",
-    "presentation_contract::inventory_container",
-    "presentation_contract::inventory_crafting",
-    "presentation_contract::inventory_furnace",
-    "presentation_contract::inventory_ui"
+    "mornlea_client_core::presentation_contract::inventory_crafting::personal_and_workbench_checked_sizes_project_exactly",
+    "mornlea_client_core::presentation_contract::inventory_crafting::rejection_projects_separate_and_never_advances_the_confirmed_view",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7595,13 +8384,11 @@
    ],
    "rust_node": "2.6c",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7619,13 +8406,11 @@
    ],
    "rust_node": "2.6c",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7643,13 +8428,11 @@
    ],
    "rust_node": "2.6c",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
+    "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -7668,7 +8451,9 @@
    ],
    "rust_node": "2.8",
    "rust_test": [
-    "presentation_contract::audio"
+    "mornlea_client_core::presentation_contract::audio::combat_and_place_without_id_dedup_by_observation_key",
+    "mornlea_client_core::presentation_contract::actors_hostile::combat_hit_adds_no_attacker_association",
+    "mornlea_client_core::presentation_contract::actors_projectile::combat_hit_publishes_no_projectile_link_or_hit_marker"
    ]
   },
   {
@@ -7686,13 +8471,11 @@
    ],
    "rust_node": "2.6d",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7710,13 +8493,11 @@
    ],
    "rust_node": "2.6d",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7734,13 +8515,11 @@
    ],
    "rust_node": "2.6d",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
+    "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   },
   {
@@ -7758,13 +8537,11 @@
    ],
    "rust_node": "2.6e",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7782,13 +8559,11 @@
    ],
    "rust_node": "2.6e",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
    ]
   },
   {
@@ -7806,13 +8581,11 @@
    ],
    "rust_node": "2.6e",
    "rust_test": [
-    "presentation_contract::actors_remote",
-    "presentation_contract::actors_hostile",
-    "presentation_contract::actors_passive",
-    "presentation_contract::actors_projectile",
-    "presentation_contract::actors_companion",
-    "presentation_contract::actors_drop",
-    "presentation_contract::actors"
+    "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
+    "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
    ]
   }
  ],
@@ -7823,6 +8596,8 @@
   "Packet 02 token rules: MoveContainer/CloseContainer require ContainerToken; MoveCrafting/TakeCraftingOutput require CraftingViewToken; MovePartial/QuickMove/DropStack require the matching token only when the accepted region is the external container or StackView::Crafting; supplying an irrelevant token or missing a required one rejects the whole batch.",
   "The rare-actor, rare-task and container rows bind real mirror transcripts (hostile 64, passive 32, projectile 128, companion 4, drop 800, chat ring 32); resets bind the runtime reset oracle; LOD binds the scheduler and app wiring oracles.",
   "No supported over-limit row was found for the frozen revision; the only packet-00 proposal revised by measurement is inbound_observations 4104 -> 8192 (measured pilot receiver capacity).",
-  "The later-F2 live:: parity failures are outside the accepted S2 identity and outside this node; they are recorded verbatim and must not be read as a client-core or S2 regression claim."
+  "The later-F2 live:: parity failures are outside the accepted S2 identity and outside this node; they are recorded verbatim and must not be read as a client-core or S2 regression claim.",
+  "Current Rust test references use crate::registered_target::exact_test_name; focused owner cases and actual Memory/TCP CoreArena integration cases are distinct. Source-SHA and native-process acceptance remain in the qualification ledger, not this historical seal.",
+  "Limit rust_tests link related current owners without replacing historical measured values. Go host-only packing/upload and species-capacity ceilings are compatibility observations, not assertions that the Rust selected limits have those values; native 100-process qualification is not claimed here."
  ]
 }
