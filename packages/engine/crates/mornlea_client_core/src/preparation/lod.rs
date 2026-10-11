@@ -311,7 +311,8 @@ impl LodSelection {
     /// First the ready results drain and classify: a result of another
     /// epoch or an old seed/config generation is stale and releases exactly
     /// once — the poll itself consumed it — a current-generation result of
-    /// a tracked tile is retained, and a current-generation result of an
+    /// a tracked tile is retained only on success; a failure restores its
+    /// pending slot and returns the error. A current-generation result of an
     /// untracked tile (its ring left it behind) is released. Then pending
     /// tiles dispatch in the deterministic total order, Chebyshev distance
     /// first, then x, then z: each next job is precharged its full static
@@ -341,6 +342,11 @@ impl LodSelection {
             };
             if let Some(index) = self.in_flight.iter().position(|wanted| *wanted == tile) {
                 self.in_flight.swap_remove(index);
+                if let Err(error) = result.outcome() {
+                    // A failed build still owns a pending tile, never completed geometry.
+                    self.pending.push_back(tile);
+                    return Err(*error);
+                }
                 self.retained.push(tile);
                 report.accepted_results += 1;
             } else {

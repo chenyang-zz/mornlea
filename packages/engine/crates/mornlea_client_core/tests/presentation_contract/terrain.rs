@@ -1556,3 +1556,47 @@ fn actual_native_capacity_failure_preserves_previous_publication() {
     assert_eq!(h.publisher.published_resources(), &[old]);
     assert!(h.queue.prepared_resource(&old).is_ok());
 }
+
+#[test]
+fn failed_native_far_build_keeps_tile_retryable() {
+    let b = frozen_limits();
+    let limits = ClientLimits::try_new_with(
+        b.queued_input_events(),
+        b.inbound_observations(),
+        b.inbound_bytes(),
+        b.outbound_commands(),
+        b.outbound_bytes(),
+        b.prediction_journal(),
+        b.message_work(),
+        b.mesh_work(),
+        1,
+        10000,
+        b.family_records(),
+        b.frame_bytes(),
+    )
+    .unwrap();
+    let mut h = new_harness(1, 1, far_config(true, 2, 3, charge()), limits);
+    let center = ChunkPos::new(0, 0);
+    let budget = ClientWorkBudget::try_new(0, 1).unwrap();
+    publish(&mut h, center, budget).unwrap();
+    let pending = h.selection.pending_len();
+    let issued = h.queue.tickets_issued();
+    assert_eq!(h.selection.in_flight_len(), 1);
+    assert_eq!(
+        publish(&mut h, center, budget).unwrap_err(),
+        ClientError::Capacity
+    );
+    assert_eq!(h.selection.retained_len(), 0);
+    assert_eq!(h.selection.in_flight_len(), 0);
+    assert_eq!(h.selection.pending_len(), pending + 1);
+    assert!(h.publisher.published_resources().is_empty());
+    publish(&mut h, center, budget).unwrap();
+    assert_eq!(h.queue.tickets_issued(), issued + 1);
+    assert_eq!(h.selection.in_flight_len(), 1);
+    assert_eq!(h.selection.pending_len(), pending);
+    assert_eq!(
+        publish(&mut h, center, budget).unwrap_err(),
+        ClientError::Capacity
+    );
+    assert_eq!(h.selection.retained_len(), 0);
+}
