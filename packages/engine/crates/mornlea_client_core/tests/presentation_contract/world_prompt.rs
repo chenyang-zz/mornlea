@@ -1,20 +1,4 @@
-//! Prompt (current ray target and registered display name) projection
-//! contract tests.
-//!
-//! Partial landing under the controller's deferral ruling. The prompt fact
-//! needs three links: the id→name link is landed (the crate contracts'
-//! registered block display-name registry behind the checked
-//! `registered_label_text` lookup), the ray→position link is landed (the
-//! replay-step recorded ray targets on the player projection state), and the
-//! middle position→block-id link does not exist on any projection input, so
-//! no truthful `PromptView` is constructible and the provider projects the
-//! schema's empty prompt state — no record — for every input. The table pins
-//! exactly what the landed inputs express: no fabrication from recorded
-//! positions alone (target-present, stale and predicted-only states all
-//! project empty), purity over the immutable view, the whole-projection
-//! queue rejections every sibling world-UI provider shares (old epoch,
-//! non-event packet), and the checked registered-text boundary the deferred
-//! label chain will consume (64/65 bytes, unknown-id absence).
+//! Prompt projection tests over real confirmed block content and recorded targets.
 
 use mornlea_client_core::contracts::{
     ClientError, ClientLimits, ConfirmedRevision, ObservationKey, SessionEpoch,
@@ -22,18 +6,21 @@ use mornlea_client_core::contracts::{
 };
 use mornlea_client_core::input::InputProjectionState;
 use mornlea_client_core::prediction::{PlayerProjectionState, RayTarget};
+use mornlea_client_core::presentation::frame::WorldUiRecord;
 use mornlea_client_core::presentation::world_ui::prompt::project_prompt;
 use mornlea_client_core::presentation::{
     AcceptedObservation, AudioProjectionState, BoundedText, DiagnosticProjectionState,
-    ErrorClassCounters, LifecycleProjectionState, MovementIntent, Pose, ProducerIdentity,
-    ProjectionView, QueueCounters, TextKind,
+    ErrorClassCounters, LifecycleProjectionState, MovementIntent, OrderedRecord, Pose,
+    ProducerIdentity, ProjectionOrder, ProjectionView, PromptView, QueueCounters, StableRecordKey,
+    TextKind, WorldTopic, WorldUiView,
 };
 use mornlea_client_core::session::ConfirmedMirror;
 use mornlea_client_core::session::mirror::MirrorProvider;
 use mornlea_domain::{
-    BlockPos, Dimension, Event, FiniteVec3, LookAngles, MiningState, MotionState, MotionStateParts,
-    PlayerState, PlayerStateParts, Season, SurvivalState, SurvivalStateParts, Weather, WorldState,
-    WorldStateParts,
+    BlockPos, ChunkPos, ChunkSnapshot, ChunkSnapshotParts, Dimension, Event, FiniteVec3,
+    ForgetChunks, ForgetChunksParts, LookAngles, MiningState, MotionState, MotionStateParts,
+    PalettedSection, PlayerState, PlayerStateParts, Season, SurvivalState, SurvivalStateParts,
+    Weather, WorldState, WorldStateParts,
 };
 use mornlea_protocol::{KeepAlive, ServerPacket};
 
@@ -134,13 +121,17 @@ struct ViewFixture {
 
 impl ViewFixture {
     fn new() -> Self {
+        Self::with_pose(None)
+    }
+
+    fn with_pose(predicted: Option<Pose>) -> Self {
         Self {
             input: InputProjectionState::try_new(1).expect("input projection state"),
             player: PlayerProjectionState::try_new(
                 SessionEpoch::try_new(EPOCH).expect("epoch"),
                 ConfirmedRevision::new(1),
                 Pose::try_new([0.0, 64.0, 0.0], 0.0, 0.0).expect("finite pose"),
-                None,
+                predicted,
                 Vec::new(),
                 None,
                 None,
@@ -157,6 +148,11 @@ impl ViewFixture {
             .expect("diagnostics projection state"),
             limits: ClientLimits::try_new().expect("limits"),
         }
+    }
+
+    fn with_dimension(mut self, dimension: Dimension) -> Self {
+        self.player = self.player.with_world_dimension(dimension);
+        self
     }
 
     /// Publishes the recorded target of the confirmed pose's look ray
@@ -217,61 +213,199 @@ fn view_fixture() -> ViewFixture {
     ViewFixture::new()
 }
 
-/// `no target`: a projection state with no recorded ray target beside an
-/// empty observation queue projects no prompt record at all — the schema's
-/// empty prompt state, never a fabricated empty prompt.
+/// An absent world context emits no prompt fact, even with an empty queue.
 #[test]
-fn no_target_projects_no_record() {
+fn missing_world_context_projects_no_record() {
     let provider = admitted_mirror(EPOCH);
     let fixture = view_fixture();
     let records = project_prompt(&fixture.view_of(&provider)).expect("no target projects empty");
     assert!(
         records.is_empty(),
-        "a targetless projection state fabricates no prompt record"
+        "an absent world context fabricates no prompt fact"
     );
 }
 
-/// `no fabrication from positions alone`: recorded confirmed and predicted
-/// ray targets never become prompt records while the position→block-id link
-/// is absent — a current confirmed target beside an attributed predicted
-/// one, a confirmed target older than the frame revision, and a
-/// predicted-only state all project empty, proving no record is fabricated
-/// from a recorded position and no label text is invented.
+fn load(provider: &mut MirrorProvider, dimension: Dimension, block: u16) {
+    commit(
+        provider,
+        Event::ChunkSnapshot(
+            ChunkSnapshot::try_new(ChunkSnapshotParts {
+                dimension,
+                chunk: ChunkPos::new(0, 0),
+                revision: 1,
+                sections: Box::new(std::array::from_fn(|_| {
+                    PalettedSection::single(block).unwrap()
+                })),
+            })
+            .unwrap(),
+        ),
+    );
+}
+
+fn assert_prompt(
+    records: &[OrderedRecord<WorldUiRecord>],
+    revision: u64,
+    expected: Option<PromptView>,
+) {
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].record().view(), &WorldUiView::Prompt(expected));
+    assert_eq!(records[0].record().header().source_tick(), None);
+    assert_eq!(
+        records[0].record().header().revision(),
+        ConfirmedRevision::new(revision)
+    );
+    assert_eq!(
+        records[0].stable_key(),
+        &StableRecordKey::World {
+            topic: WorldTopic::Prompt,
+            identity: None
+        }
+    );
+    assert_eq!(
+        records[0].order(),
+        &ProjectionOrder::AfterConfirmed {
+            epoch: SessionEpoch::try_new(EPOCH).unwrap(),
+            revision: ConfirmedRevision::new(revision),
+            local_sequence: 1,
+            record_ordinal: 0,
+        }
+    );
+}
+
 #[test]
-fn recorded_targets_never_fabricate_a_record() {
-    let provider = admitted_mirror(EPOCH);
-    let frame_revision = provider.mirror().revision().get() + 1;
+fn loaded_targets_use_actual_dimension_and_registered_label() {
+    let mut provider = admitted_mirror(EPOCH);
+    load(&mut provider, Dimension::OVERWORLD, 2);
+    load(&mut provider, Dimension::DEPTHS, 3);
+    let revision = provider.mirror().revision().get() + 1;
+    for (dimension, label) in [(Dimension::OVERWORLD, "石头"), (Dimension::DEPTHS, "泥土")] {
+        let fixture = view_fixture()
+            .with_dimension(dimension)
+            .with_confirmed_target(Some(recorded_target(1, 64, 2, revision)));
+        assert_prompt(
+            &project_prompt(&fixture.view_of(&provider)).unwrap(),
+            revision,
+            Some(
+                PromptView::try_new(
+                    BlockPos::new(1, 64, 2),
+                    BoundedText::try_new(label.to_owned(), TextKind::Target).unwrap(),
+                )
+                .unwrap(),
+            ),
+        );
+    }
+    let missing_dimension =
+        view_fixture().with_confirmed_target(Some(recorded_target(1, 64, 2, revision)));
+    assert!(
+        project_prompt(&missing_dimension.view_of(&provider))
+            .unwrap()
+            .is_empty()
+    );
+}
 
-    // A current confirmed target beside an attributed predicted one: both
-    // positions are recorded, and neither becomes a prompt record.
+#[test]
+fn absent_stale_future_and_unknown_targets_clear() {
+    let mut provider = admitted_mirror(EPOCH);
+    load(&mut provider, Dimension::OVERWORLD, 2);
+    let revision = provider.mirror().revision().get() + 1;
+    for target in [
+        None,
+        Some(recorded_target(1, 64, 2, revision - 1)),
+        Some(recorded_target(1, 64, 2, revision + 1)),
+        Some(recorded_target(32, 64, 2, revision)),
+    ] {
+        let fixture = view_fixture()
+            .with_dimension(Dimension::OVERWORLD)
+            .with_confirmed_target(target);
+        assert_prompt(
+            &project_prompt(&fixture.view_of(&provider)).unwrap(),
+            revision,
+            None,
+        );
+    }
+    commit(
+        &mut provider,
+        Event::ForgetChunks(
+            ForgetChunks::try_new(ForgetChunksParts {
+                dimension: Dimension::OVERWORLD,
+                chunks: vec![ChunkPos::new(0, 0)].into_boxed_slice(),
+            })
+            .unwrap(),
+        ),
+    );
+    let revision = provider.mirror().revision().get() + 1;
     let fixture = view_fixture()
-        .with_confirmed_target(Some(recorded_target(1, 64, -2, frame_revision)))
-        .with_predicted_target(Some(recorded_target(2, 65, -3, frame_revision)));
-    let records =
-        project_prompt(&fixture.view_of(&provider)).expect("target-present projects empty");
-    assert!(
-        records.is_empty(),
-        "a recorded position alone fabricates no prompt record"
+        .with_dimension(Dimension::OVERWORLD)
+        .with_confirmed_target(Some(recorded_target(1, 64, 2, revision)));
+    assert_prompt(
+        &project_prompt(&fixture.view_of(&provider)).unwrap(),
+        revision,
+        None,
     );
+}
 
-    // A confirmed target older than the frame revision is stale and never
-    // projects as current.
-    let stale = view_fixture().with_confirmed_target(Some(recorded_target(1, 64, -2, 0)));
-    let records = project_prompt(&stale.view_of(&provider)).expect("stale target projects empty");
-    assert!(
-        records.is_empty(),
-        "a stale confirmed target never projects as current"
-    );
+#[test]
+fn non_interaction_blocks_clear() {
+    for block in [0, 1, 27, 28, 29, 30, 31, 32, 33, 34, 63, 65, 67, 69] {
+        let mut provider = admitted_mirror(EPOCH);
+        load(&mut provider, Dimension::OVERWORLD, block);
+        let revision = provider.mirror().revision().get() + 1;
+        let fixture = view_fixture()
+            .with_dimension(Dimension::OVERWORLD)
+            .with_confirmed_target(Some(recorded_target(1, 64, 2, revision)));
+        assert_prompt(
+            &project_prompt(&fixture.view_of(&provider)).unwrap(),
+            revision,
+            None,
+        );
+    }
+}
 
-    // A predicted-only state carries one explicitly unconfirmed position and
-    // projects the same empty prompt state.
-    let predicted_only =
-        view_fixture().with_predicted_target(Some(recorded_target(2, 65, -3, frame_revision)));
-    let records =
-        project_prompt(&predicted_only.view_of(&provider)).expect("predicted-only projects empty");
-    assert!(
-        records.is_empty(),
-        "an unconfirmed recorded position fabricates no prompt record"
+#[test]
+fn predicted_pose_selects_its_target_without_confirmed_fallback() {
+    let mut provider = admitted_mirror(EPOCH);
+    load(&mut provider, Dimension::OVERWORLD, 2);
+    let revision = provider.mirror().revision().get() + 1;
+    let predicted = Some(Pose::try_new([1.0, 64.0, 0.0], 0.0, 0.0).unwrap());
+    for target in [
+        None,
+        Some(recorded_target(2, 64, 3, revision - 1)),
+        Some(recorded_target(2, 64, 3, revision + 1)),
+        Some(recorded_target(2, 64, 3, revision)),
+    ] {
+        let fixture = ViewFixture::with_pose(predicted)
+            .with_dimension(Dimension::OVERWORLD)
+            .with_confirmed_target(Some(recorded_target(1, 64, 2, revision)))
+            .with_predicted_target(target);
+        let expected = target
+            .filter(|target| target.source_revision().get() == revision)
+            .map(|target| {
+                PromptView::try_new(
+                    target.position(),
+                    registered_label_text(2).unwrap().unwrap(),
+                )
+                .unwrap()
+            });
+        assert_prompt(
+            &project_prompt(&fixture.view_of(&provider)).unwrap(),
+            revision,
+            expected,
+        );
+    }
+    let fixture = view_fixture()
+        .with_dimension(Dimension::OVERWORLD)
+        .with_confirmed_target(Some(recorded_target(1, 64, 2, revision)))
+        .with_predicted_target(Some(recorded_target(2, 64, 3, revision)));
+    assert_prompt(
+        &project_prompt(&fixture.view_of(&provider)).unwrap(),
+        revision,
+        Some(
+            PromptView::try_new(
+                BlockPos::new(1, 64, 2),
+                registered_label_text(2).unwrap().unwrap(),
+            )
+            .unwrap(),
+        ),
     );
 }
 
@@ -280,7 +414,8 @@ fn recorded_targets_never_fabricate_a_record() {
 /// and target-absent states alike.
 #[test]
 fn projection_is_pure() {
-    let provider = admitted_mirror(EPOCH);
+    let mut provider = admitted_mirror(EPOCH);
+    load(&mut provider, Dimension::OVERWORLD, 2);
     let fixture = view_fixture();
     let view = fixture.view_of(&provider);
     let first = project_prompt(&view).expect("first projection succeeds");
@@ -288,8 +423,9 @@ fn projection_is_pure() {
     assert_eq!(first, second, "repeated calls over one view agree");
 
     let targeted = view_fixture()
-        .with_confirmed_target(Some(recorded_target(1, 64, -2, 1)))
-        .with_predicted_target(Some(recorded_target(2, 65, -3, 1)));
+        .with_dimension(Dimension::OVERWORLD)
+        .with_confirmed_target(Some(recorded_target(1, 64, 2, 2)))
+        .with_predicted_target(Some(recorded_target(2, 65, 3, 2)));
     let view = targeted.view_of(&provider);
     let first = project_prompt(&view).expect("third projection succeeds");
     let second = project_prompt(&view).expect("fourth projection succeeds");
@@ -304,7 +440,7 @@ fn old_epoch_observation_rejects_whole() {
     let mut provider = admitted_mirror(EPOCH);
     commit(&mut provider, player_event(1));
     let next_epoch = SessionEpoch::try_new(EPOCH + 1).expect("next epoch");
-    let fixture = view_fixture();
+    let fixture = view_fixture().with_dimension(Dimension::OVERWORLD);
     assert_eq!(
         project_prompt(&fixture.view(
             provider.mirror(),
@@ -333,7 +469,7 @@ fn non_event_packet_rejects_whole() {
         Vec::new(),
     )
     .expect("staged with a non-publication packet");
-    let fixture = view_fixture();
+    let fixture = view_fixture().with_dimension(Dimension::OVERWORLD);
     assert_eq!(
         project_prompt(&fixture.view(
             provider.mirror(),
@@ -347,7 +483,7 @@ fn non_event_packet_rejects_whole() {
 }
 
 /// `label boundary pins`: the checked registered-text constructor the
-/// deferred label chain will consume. A registered id checks through the
+/// prompt label chain consumes. A registered id checks through the
 /// `Target` bound with its registered kind, the first unregistered id and
 /// the far-outside id stay absent (None, never invented text), and at the
 /// checked byte boundary 64 bytes admit while 65 reject typed.
@@ -385,4 +521,27 @@ fn registered_label_boundary_pins() {
         Err(ClientError::InvalidInput),
         "65 bytes reject typed at the checked boundary"
     );
+}
+
+#[test]
+fn registered_non_collision_targets_keep_their_labels() {
+    for block in [37, 70, 84, 89] {
+        let mut provider = admitted_mirror(EPOCH);
+        load(&mut provider, Dimension::OVERWORLD, block);
+        let revision = provider.mirror().revision().get() + 1;
+        let fixture = view_fixture()
+            .with_dimension(Dimension::OVERWORLD)
+            .with_confirmed_target(Some(recorded_target(1, 64, 2, revision)));
+        assert_prompt(
+            &project_prompt(&fixture.view_of(&provider)).unwrap(),
+            revision,
+            Some(
+                PromptView::try_new(
+                    BlockPos::new(1, 64, 2),
+                    registered_label_text(block).unwrap().unwrap(),
+                )
+                .unwrap(),
+            ),
+        );
+    }
 }

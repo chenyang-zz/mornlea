@@ -8,8 +8,8 @@
 //! assemble together in actual source order. The bounded chat window the
 //! chat provider exposes is merged exactly as emitted, never re-derived,
 //! extended or re-filtered here. The derived prompt topic invents no source
-//! event: the landed prompt provider publishes the schema's empty prompt
-//! state, and a schema-admitted derived prompt envelope under the
+//! event: without an actual dimension the prompt provider emits no fact,
+//! and a derived prompt envelope under the
 //! `AfterConfirmed` order validates under the same rules and merges after
 //! every confirmed entry at its sampled revision. Repeated stable keys
 //! across observations are the accepted latest-wins lifecycles of the
@@ -376,7 +376,7 @@ fn view_tag(record: &WorldUiRecord) -> WorldTopic {
     }
 }
 
-// --- hand-built envelope fixtures for shapes the landed providers never emit ---
+// Hand-built envelopes isolate assembly ordering and rejection cases.
 
 /// The rebased coherent candidate header of one hand-built record.
 fn hand_header(operation: FamilyOperation) -> RecordHeader {
@@ -419,9 +419,8 @@ fn envelope(
 
 /// One locally derived envelope at the named epoch, sampled revision, local
 /// sequence and packet record ordinal, wrapping the given record under the
-/// given stable identity. No landed world-UI provider emits this order
-/// variant today; the envelope schema admits it and the derived prompt is
-/// its natural kind, so the assembler's rules for it stay pinned here.
+/// given stable identity. The derived prompt uses this order variant,
+/// whose assembly rules stay pinned here.
 fn after_envelope(
     epoch_value: u64,
     sampled_revision: u64,
@@ -666,28 +665,19 @@ fn equal_or_absent_ticks_retain_actual_source_order() {
     assert_eq!(assembled[5].view(), &WorldUiView::Environment(third));
 }
 
-/// `derived prompt follows the sampled confirmed revision`: the prompt is a
-/// derived local value with no source event of its own — the landed provider
-/// publishes the schema's empty prompt state even beside a current recorded
-/// ray target, and the assembled family carries no invented prompt record;
-/// and a schema-admitted derived prompt envelope under the `AfterConfirmed`
-/// order validates under the confirmed rules and merges after every
-/// confirmed entry at its sampled revision, carrying no source tick and no
-/// fabricated observation identity.
+/// Derived prompts clear absent targets after confirmed records without
+/// inventing a source event, tick or observation identity.
 #[test]
 fn derived_prompt_merges_after_confirmed_without_invented_event() {
-    // The real half: a target-present player projection state contributes no
-    // prompt record and no invented source event to the assembled family.
     let mut provider = admitted_mirror();
     let world = world_state(500, 6_000, Weather::Clear, Season::Spring, 0, 0);
     commit(&mut provider, player_event(7, world, survival(20, 0)));
-    let fixture = view_fixture();
+    let mut fixture = view_fixture();
+    fixture.player = fixture.player.with_world_dimension(Dimension::OVERWORLD);
     let view = fixture.view_of(&provider);
     let parts = provider_parts(&view);
-    assert!(
-        parts[4].is_empty(),
-        "the landed prompt provider publishes the empty prompt state"
-    );
+    assert_eq!(parts[4].len(), 1);
+    assert_eq!(parts[4][0].record().view(), &WorldUiView::Prompt(None));
     let assembled = assemble_world_ui(
         view.frame_epoch(),
         view.frame_revision(),
@@ -695,12 +685,8 @@ fn derived_prompt_merges_after_confirmed_without_invented_event() {
         &ClientLimits::try_new().expect("limits"),
     )
     .expect("the real providers assemble");
-    assert!(
-        !assembled
-            .iter()
-            .any(|record| view_tag(record) == WorldTopic::Prompt),
-        "no prompt record is invented from a recorded position alone"
-    );
+    assert_eq!(assembled.last().unwrap().view(), &WorldUiView::Prompt(None));
+    assert_eq!(assembled.last().unwrap().header().source_tick(), None);
 
     // The schema-admitted derived shape: two confirmed environment
     // republications and one confirmed chat fact beside two derived prompt
