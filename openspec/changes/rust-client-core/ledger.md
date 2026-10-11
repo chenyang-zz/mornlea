@@ -1,5 +1,27 @@
 # rust-client-core ledger
 
+## 2026-10-11 — remaining runtime qualification authorized
+
+- User request: finish the explicitly outstanding native, 100-process, real F2
+  integration and stage-closeout work. Earlier code-only launch constraints apply
+  to the completed prior batch, not this authorized headless round.
+- Baseline: `4fc470aad7df1a9d1a5ed5cf771957599b3f5533`; product
+  `8e561c4122e179bd17d4bbf1cb2a730822fd4cd2`. Clean dev; unrelated worktrees preserved.
+- Controller-owned Superpowers design/plan: `plans/17-runtime-qualification.md`.
+  No shared runtime contract change; normative F2:4.2 dependency is checked at
+  local F2 stage acceptance `aab9b0f0c998924124567bdbe2d22003e1a55b78`. Pending whole
+  F2 executable/gameplay composition remains separately owned.
+- Isolation rationale: fresh read-only agents bounded native and F2 discovery;
+  isolated host worker owns Python conversion/release only. Controller serially
+  owns native integration, fixtures/registrations, runner and acceptance/status.
+- Baseline `make rust` passed, log `/private/tmp/mornlea-f3-runtime-baseline-rust.log`.
+  Actual headless `build-extension.sh --verify` passed, log
+  `/private/tmp/mornlea-f3-runtime-native-baseline.log`; this qualifies bootstrap
+  only. Installed Py4Godot rejects plain dict/list arguments and returns native
+  containers, exposing a previously unqualified host representation defect.
+- No foreground process, production server/default switch or remote publication.
+  Architecture skill: no change pending verified discoveries.
+
 ## 2026-09-20 — target architecture planning synchronization
 
 - Baseline: `8d9cc122486097fb7d7788abdb523ecd13f5a75a`.

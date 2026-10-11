@@ -228,3 +228,17 @@ Review of `b383673e383dcf1f6177998854e4752a28304a2b` invalidated the earlier com
 The selected repair composes the accepted owners through the actual endpoint. Terrain preparation becomes a staged reference transaction whose commit follows complete-frame acceptance; partial provider validation remains separate. Actual retained observations and provenance metadata are bounded; arbitrary confirmed audio IDs are never silently evicted. Prediction failures stage all owner state before replacement. LifecycleOwner is the sole epoch/release authority; the unchanged reset result exposes the fresh epoch only, with old consumers released before reset and dying records internally validated/consumed before the new Open. CPU geometry is produced by the accepted native numerical facade. Native input and host frame validation preserve the exact frozen G1 schema.
 
 Prompt position-to-block data now exists in the confirmed owner. [Packet16](plans/16-prompt-repair.md) completes the code-only prompt with actual dimension and current target stamps; original runtime qualification remains separate.
+
+## Authorized runtime qualification round
+
+On 2026-10-11 the user requested completion of the explicitly outstanding native,
+100-process, real F2 integration and closeout gates. The earlier no-Godot batch
+is historical. [Packet17](plans/17-runtime-qualification.md) resolves the native
+Dictionary/Array representation, shutdown retry, actual provider fixtures,
+loopback-only sandbox and immutable artifact evidence. No C1/C2/G1 schema, runtime
+default, production server composition, save/wire version or product feature changes.
+
+The refined dependency register's F2:4.2 prerequisite is now checked at the local
+F2 stage acceptance. F3 qualifies the real library providers at its current source;
+it does not accept separately pending whole F2 executable/gameplay composition.
+Shared runtime contracts are unchanged, so no extra interface landing is needed.

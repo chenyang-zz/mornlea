@@ -62,6 +62,11 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 
 ## Current execution packet and qualification boundary
 
+The user authorized completion of the outstanding runtime gates on 2026-10-11;
+[17-runtime-qualification.md](plans/17-runtime-qualification.md) is the current
+execution packet. The code-only restrictions below describe the completed prior
+batch. Original checkboxes close only after actual prescribed runtime evidence.
+
 The approved complete code-only scope is detailed in [07-code-only-implementation-handoff.md](plans/07-code-only-implementation-handoff.md). It refines allowed code-level checks without removing original qualification gates. This file remains the sole checkbox/status source. Native Godot marshalling/real bridge checks, 3.3c, 3.4, and full closeout remain pending; any node whose complete prescribed acceptance has not run remains unchecked. Local branch integration and aggregate code checks do not close those gates. The F2 implementation and P8–P14 product work are separately owned.
 
 ## 5. Comprehensive-review repairs

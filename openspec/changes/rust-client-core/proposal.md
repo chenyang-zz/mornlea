@@ -4,6 +4,12 @@ The Godot pilot still receives its session, mirror, prediction and presentation 
 
 ## Status and prerequisites
 
+The user authorized the outstanding headless native/runtime qualification and
+closeout on 2026-10-11. [Runtime qualification plan](plans/17-runtime-qualification.md)
+supersedes the earlier code-only launch restriction for this round and binds F2's
+checked stage prerequisite without claiming its separate gameplay executable is
+complete. Defaults, production server scope and remote publication remain unchanged.
+
 The code-only implementation batch for F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md) has been repaired after comprehensive review of source `b383673e383dcf1f6177998854e4752a28304a2b`; the [repair handoff](review-repair-handoff.md) binds current code evidence to `8e561c4122e179bd17d4bbf1cb2a730822fd4cd2` while full runtime acceptance remains pending. Its implementation entry bound completed [F1](../archive/2026-10-08-rust-runtime-foundation-acceptance/proposal.md) and the jointly accepted [F2](../rust-authoritative-server/proposal.md) common/Memory/TCP S2 contract to accepted source identities in `ledger.md`. Full F3 final integration acceptance still requires the F2 Rust server parity evidence and the pending native/runtime qualification gates. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
 
 ## What Changes
